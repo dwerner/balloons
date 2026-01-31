@@ -2,9 +2,11 @@
 """Balloons - A TUI wrapper for Claude CLI."""
 
 import argparse
+import os
 import sys
 
 from app import BalloonsApp
+from config import get_config
 from session import Session
 
 
@@ -28,8 +30,35 @@ def main():
         action="store_true",
         help="List available sessions and exit",
     )
+    parser.add_argument(
+        "--backend", "-b",
+        metavar="NAME",
+        help="Use a specific backend from config (e.g., llama70b)",
+    )
+    parser.add_argument(
+        "--list-backends",
+        action="store_true",
+        help="List available backends and exit",
+    )
 
     args = parser.parse_args()
+
+    # Load config and set up backend
+    config = get_config()
+
+    if args.list_backends:
+        print(f"Available backends (default: {config.default_backend}):")
+        for name, backend in config.backends.items():
+            marker = " *" if name == config.default_backend else ""
+            if backend.base_url:
+                print(f"  {name}{marker} -> {backend.base_url}")
+            else:
+                print(f"  {name}{marker} (native Claude API)")
+        return
+
+    # Get backend environment (will be passed to child processes)
+    backend_name = args.backend or config.default_backend
+    backend_env = config.get_env_for_backend(backend_name)
 
     if args.list:
         sessions = Session.list_sessions()
@@ -56,7 +85,7 @@ def main():
         session = Session()
         show_picker = False
 
-    app = BalloonsApp(session=session, show_picker=show_picker)
+    app = BalloonsApp(session=session, show_picker=show_picker, backend_env=backend_env)
     app.run()
 
 

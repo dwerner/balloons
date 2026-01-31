@@ -45,10 +45,11 @@ class SessionManager:
                 # Handle event
     """
 
-    def __init__(self):
+    def __init__(self, backend_env: dict[str, str] | None = None):
         self._sessions: Dict[str, Session] = {}
         self._runners: Dict[str, SessionRunner] = {}
         self._active_session_id: Optional[str] = None
+        self._backend_env = backend_env
 
     @property
     def active_session(self) -> Optional[Session]:
@@ -79,7 +80,7 @@ class SessionManager:
         session.save()
 
         self._sessions[session.id] = session
-        self._runners[session.id] = SessionRunner(session)
+        self._runners[session.id] = SessionRunner(session, backend_env=self._backend_env)
 
         return session
 
@@ -98,7 +99,7 @@ class SessionManager:
         session = Session.load(session_id)
         if session:
             self._sessions[session.id] = session
-            self._runners[session.id] = SessionRunner(session)
+            self._runners[session.id] = SessionRunner(session, backend_env=self._backend_env)
 
         return session
 
@@ -181,7 +182,7 @@ class SessionManager:
 
         # Track in manager
         self._sessions[child.id] = child
-        self._runners[child.id] = SessionRunner(child)
+        self._runners[child.id] = SessionRunner(child, backend_env=self._backend_env)
 
         return child
 

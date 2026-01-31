@@ -124,21 +124,22 @@ class BalloonsApp(App):
         Binding("ctrl+end", "scroll_to_bottom", "Follow", show=False),
     ]
 
-    def __init__(self, session: Session = None, show_picker: bool = False):
+    def __init__(self, session: Session = None, show_picker: bool = False, backend_env: dict[str, str] | None = None):
         super().__init__()
         self._initial_session = session  # Will be loaded into manager
         self.streaming = False  # True if active session is streaming
         self._tree_width = 50
         self._show_picker = show_picker
         self._shell_process: asyncio.subprocess.Process | None = None
+        self._backend_env = backend_env
         # Core components
         self._command_parser = CommandParser()
         self._formatter = Formatter()
         self._context_builder = ContextBuilder()
         # Session manager handles all sessions and runners
-        self._manager = SessionManager()
+        self._manager = SessionManager(backend_env=backend_env)
         # Simple runner for helper streaming (summaries, etc.)
-        self._helper_runner = ClaudeRunner()
+        self._helper_runner = ClaudeRunner(backend_env=backend_env)
         # Timer for polling background sessions
         self._poll_timer = None
         # Per-session streaming contexts (session_id -> StreamingContext)
@@ -464,7 +465,7 @@ class BalloonsApp(App):
         else:
             # Register picked session with manager and set active
             self._manager._sessions[session.id] = session
-            self._manager._runners[session.id] = SessionRunner(session)
+            self._manager._runners[session.id] = SessionRunner(session, backend_env=self._backend_env)
             self._manager.set_active(session.id)
             self._initialize_session()
 
@@ -477,7 +478,7 @@ class BalloonsApp(App):
         elif self._initial_session is not None:
             # Load initial session into manager
             self._manager._sessions[self._initial_session.id] = self._initial_session
-            self._manager._runners[self._initial_session.id] = SessionRunner(self._initial_session)
+            self._manager._runners[self._initial_session.id] = SessionRunner(self._initial_session, backend_env=self._backend_env)
             self._manager.set_active(self._initial_session.id)
             self._initial_session = None  # Clear so we don't reload on subsequent calls
 
@@ -864,7 +865,7 @@ class BalloonsApp(App):
         # Switch to new session through manager
         chat_log.clear()
         self._manager._sessions[new_session.id] = new_session
-        self._manager._runners[new_session.id] = SessionRunner(new_session)
+        self._manager._runners[new_session.id] = SessionRunner(new_session, backend_env=self._backend_env)
         self._manager.set_active(new_session.id)
         context_tree.load_all_sessions(new_session)
         chat_log.load_history(new_session.messages)
@@ -1030,7 +1031,7 @@ class BalloonsApp(App):
 
         # Register child session with manager
         self._manager._sessions[child_session.id] = child_session
-        self._manager._runners[child_session.id] = SessionRunner(child_session)
+        self._manager._runners[child_session.id] = SessionRunner(child_session, backend_env=self._backend_env)
 
         if background:
             # Background mode - stay in parent, create streaming context for child
@@ -1125,7 +1126,7 @@ class BalloonsApp(App):
 
         # Register child session with manager
         self._manager._sessions[child_session.id] = child_session
-        self._manager._runners[child_session.id] = SessionRunner(child_session)
+        self._manager._runners[child_session.id] = SessionRunner(child_session, backend_env=self._backend_env)
 
         if background:
             # Background mode - stay in parent, create streaming context for child
@@ -1205,7 +1206,7 @@ class BalloonsApp(App):
 
         # Switch to parent session through manager
         self._manager._sessions[parent.id] = parent
-        self._manager._runners[parent.id] = SessionRunner(parent)
+        self._manager._runners[parent.id] = SessionRunner(parent, backend_env=self._backend_env)
         self._manager.set_active(parent.id)
         chat_log.clear()
         chat_log.load_history(parent.messages)
@@ -1310,7 +1311,7 @@ class BalloonsApp(App):
         # Register session with manager if not already known
         if session.id not in self._manager._sessions:
             self._manager._sessions[session.id] = session
-            self._manager._runners[session.id] = SessionRunner(session)
+            self._manager._runners[session.id] = SessionRunner(session, backend_env=self._backend_env)
         self._manager.set_active(session.id)
         context_tree.set_active_session(session.id)
 
@@ -1428,7 +1429,7 @@ class BalloonsApp(App):
         # Register session with manager and initialize
         if session.id not in self._manager._sessions:
             self._manager._sessions[session.id] = session
-            self._manager._runners[session.id] = SessionRunner(session)
+            self._manager._runners[session.id] = SessionRunner(session, backend_env=self._backend_env)
         self._manager.set_active(session.id)
         self._initialize_session()
 

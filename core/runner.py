@@ -80,9 +80,9 @@ class SessionRunner:
             result = runner.get_result()
     """
 
-    def __init__(self, session: Session):
+    def __init__(self, session: Session, backend_env: dict[str, str] | None = None):
         self.session = session
-        self._claude_runner = ClaudeRunner()
+        self._claude_runner = ClaudeRunner(backend_env=backend_env)
         self._status = RunnerStatus.IDLE
         self._event_queue: asyncio.Queue[StreamEvent] = asyncio.Queue()
         self._background_task: Optional[asyncio.Task] = None

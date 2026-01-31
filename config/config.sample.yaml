@@ -1,0 +1,30 @@
+# Balloons Configuration
+# ----------------------
+# This file configures the LLM backend for balloons.
+# Copy to ~/.balloons/config.yaml or set BALLOONS_CONFIG env var.
+
+# Default backend to use (must match a key in 'backends' below)
+default_backend: claude
+
+# Available backends
+backends:
+  # Direct Claude API (default)
+  claude:
+    # Uses your ANTHROPIC_API_KEY from environment
+    # No additional configuration needed
+
+  # LiteLLM proxy to llama70b
+  llama70b:
+    base_url: http://localhost:4000
+    api_key: sk-litellm  # LiteLLM doesn't check this, but Claude CLI requires it
+    # Optional: specify model to use (defaults to claude-sonnet-4-20250514)
+    # model: claude-sonnet-4-20250514
+
+  # Example: Add more backends here
+  # llama8b:
+  #   base_url: http://192.168.0.121:8000
+  #   api_key: sk-litellm
+
+  # ollama:
+  #   base_url: http://localhost:11434/v1
+  #   api_key: ollama

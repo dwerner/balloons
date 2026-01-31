@@ -41,11 +41,12 @@ async def readline_unlimited(stream: asyncio.StreamReader) -> bytes:
 
 
 class ClaudeRunner:
-    def __init__(self):
+    def __init__(self, backend_env: dict[str, str] | None = None):
         self.process: asyncio.subprocess.Process | None = None
         self._terminated = False
         self._current_tool_use: dict | None = None  # Track tool use being built
         self._run_id: str = ""  # Current process PID for debug logging
+        self._backend_env = backend_env or {}  # Environment overrides for LLM backend
 
     @staticmethod
     def build_context(messages: list[Message], new_prompt: str) -> str:
@@ -127,12 +128,20 @@ class ClaudeRunner:
         if allowed_tools:
             cmd.extend(["--allowedTools", ",".join(allowed_tools)])
 
+        # Build environment with backend overrides
+        env = None
+        if self._backend_env:
+            import os
+            env = os.environ.copy()
+            env.update(self._backend_env)
+
         self.process = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=working_dir,
+            env=env,
         )
 
         # Track run_id for debug logging
