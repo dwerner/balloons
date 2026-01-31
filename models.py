@@ -5,10 +5,16 @@ from enum import Enum
 
 
 class ContextMode(Enum):
-    """How a turn should be included in context."""
-    COPY = "copy"        # Include verbatim
-    SUMMARIZE = "summarize"  # Include summary (computed lazily)
-    DROP = "drop"        # Exclude from context
+    """How a turn should be included in context when forking.
+
+    COPY: Include turn verbatim in fork
+    COMPRESS: LLM summarizes the turn before fork starts
+    DROP: Exclude from fork context
+    """
+    COPY = "copy"
+    COMPRESS = "compress"  # New name - LLM compresses before fork
+    SUMMARIZE = "summarize"  # Legacy alias for COMPRESS
+    DROP = "drop"
 
 
 @dataclass

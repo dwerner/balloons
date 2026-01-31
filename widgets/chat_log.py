@@ -5,6 +5,7 @@ from textual.widgets import Static
 from textual.containers import VerticalScroll
 from textual.reactive import reactive
 from textual.message import Message
+from textual.events import Click
 from rich.markdown import Markdown
 from rich.console import RenderableType, Group
 from rich.text import Text
@@ -13,8 +14,11 @@ from rich.panel import Panel
 
 from .with_widget import WithWidget
 from .with_result_widget import WithResultWidget
+from .fork_marker import ForkMarker
+from .merge_marker import MergeMarker
 from models import TextBlock, ToolUseBlock, ToolResultBlock
 from core.formatter import format_edit_as_diff, guess_language
+from session import Session
 
 # Re-export for backwards compatibility (used by app.py imports)
 _format_edit_as_diff = format_edit_as_diff
@@ -47,6 +51,24 @@ class ToolUseWidget(Static):
 
     ToolUseWidget.expanded {
         max-height: 10000;
+    }
+
+    /* Context mode visual indicators - use background color to avoid layout shifts */
+    /* COPY is the default - no special styling needed */
+    ToolUseWidget.context-copy {
+    }
+
+    ToolUseWidget.context-compress {
+        background: #2d2a1a;  /* Yellow/orange tint for summarize */
+    }
+
+    ToolUseWidget.context-drop {
+        opacity: 0.4;
+    }
+
+    /* Hover feedback - background change only, no border changes */
+    ToolUseWidget:hover {
+        background: #2a3a2a;
     }
     """
 
@@ -87,9 +109,16 @@ class ToolUseWidget(Static):
             self.refresh()
 
     def on_click(self) -> None:
-        """Handle click to toggle expand/collapse."""
-        if self._full_content is not None:
+        """Handle click - expand if collapsed and expandable, otherwise toggle context mode."""
+        if self._full_content is not None and not self._expanded:
+            # Collapsed expandable widget: expand it
             self.toggle_expand()
+        elif self.turn_id > 0:
+            # Expanded or non-expandable: toggle context mode
+            for ancestor in self.ancestors_with_self:
+                if isinstance(ancestor, ChatLog):
+                    ancestor.post_message(ChatLog.ContextModeToggleRequested(self.turn_id))
+                    break
 
     @property
     def is_expandable(self) -> bool:
@@ -124,6 +153,24 @@ class ToolResultWidget(Static):
 
     ToolResultWidget.expandable {
         border-left: thick $primary;
+    }
+
+    /* Context mode visual indicators - use background color to avoid layout shifts */
+    /* COPY is the default - no special styling needed */
+    ToolResultWidget.context-copy {
+    }
+
+    ToolResultWidget.context-compress {
+        background: #2d2a1a;  /* Yellow/orange tint for summarize */
+    }
+
+    ToolResultWidget.context-drop {
+        opacity: 0.4;
+    }
+
+    /* Hover feedback - background change only, no border changes */
+    ToolResultWidget:hover {
+        background: #2a2a3a;
     }
 
     ToolResultWidget.expanded {
@@ -166,9 +213,16 @@ class ToolResultWidget(Static):
             self.refresh()
 
     def on_click(self) -> None:
-        """Handle click to toggle expand/collapse."""
-        if self._full_content is not None:
+        """Handle click - expand if collapsed and expandable, otherwise toggle context mode."""
+        if self._full_content is not None and not self._expanded:
+            # Collapsed expandable widget: expand it
             self.toggle_expand()
+        elif self.turn_id > 0:
+            # Expanded or non-expandable: toggle context mode
+            for ancestor in self.ancestors_with_self:
+                if isinstance(ancestor, ChatLog):
+                    ancestor.post_message(ChatLog.ContextModeToggleRequested(self.turn_id))
+                    break
 
     @property
     def is_expandable(self) -> bool:
@@ -210,6 +264,24 @@ class MessageWidget(Static):
         background: #2a3a2a;
         border: wide $warning;
     }
+
+    /* Context mode visual indicators - use background color to avoid layout shifts */
+    /* COPY is the default - no special styling needed */
+    MessageWidget.context-copy {
+    }
+
+    MessageWidget.context-compress {
+        background: #2d2a1a;  /* Yellow/orange tint for summarize */
+    }
+
+    MessageWidget.context-drop {
+        opacity: 0.4;
+    }
+
+    /* Hover feedback - background change only, no border changes */
+    MessageWidget:hover {
+        background: #2a3a3a;
+    }
     """
 
     def __init__(self, role: str, content: str = "", streaming: bool = False, turn_id: int = 0, block_idx: int = -1, **kwargs):
@@ -245,6 +317,16 @@ class MessageWidget(Static):
         """Set the full message content."""
         self._content = content
         self.refresh()
+
+    def on_click(self) -> None:
+        """Toggle context mode when clicked."""
+        if self.turn_id > 0:
+            # Find the ChatLog parent and post the toggle message
+            chat_log = self.ancestors_with_self
+            for ancestor in chat_log:
+                if isinstance(ancestor, ChatLog):
+                    ancestor.post_message(ChatLog.ContextModeToggleRequested(self.turn_id))
+                    break
 
     @property
     def content(self) -> str:
@@ -296,6 +378,13 @@ class ChatLog(VerticalScroll):
         def __init__(self, following: bool) -> None:
             super().__init__()
             self.following = following
+
+    class ContextModeToggleRequested(Message):
+        """Posted when user clicks a widget to toggle its context mode."""
+
+        def __init__(self, turn_id: int) -> None:
+            super().__init__()
+            self.turn_id = turn_id
 
     following: reactive[bool] = reactive(True)  # True when auto-scrolling to new content
 
@@ -530,9 +619,22 @@ class ChatLog(VerticalScroll):
         formatter = Formatter()
         return formatter.format_tool_result_block(block)
 
-    def load_history(self, messages: list) -> None:
-        """Load message history from a list of Message objects."""
-        for msg in messages:
+    def load_history(self, messages: list, session: Session | None = None) -> None:
+        """Load message history from a list of Message objects.
+
+        If session is provided, also reconstructs merge markers from the
+        session's children list.
+        """
+        # Build merge points map: turn_index -> child info
+        merge_points: dict[int, dict] = {}
+        if session:
+            for child in session.children:
+                if child.get("status") == "merged":
+                    merge_point = child.get("merge_point", -1)
+                    if merge_point >= 0:
+                        merge_points[merge_point] = child
+
+        for turn_idx, msg in enumerate(messages):
             self._turn_counter += 1
             turn_id = self._turn_counter
 
@@ -571,6 +673,19 @@ class ChatLog(VerticalScroll):
                 # Fallback: just use msg.content
                 widget = MessageWidget(msg.role, msg.content, turn_id=turn_id)
                 self.mount(widget)
+
+            # Check if there's a merge marker after this turn
+            if turn_idx in merge_points:
+                child_info = merge_points[turn_idx]
+                child_session = Session.load(child_info["session_id"])
+                if child_session:
+                    self.mount(MergeMarker(
+                        message=child_session.merge_message,
+                        child_session_id=child_session.id,
+                        fork_name=child_info.get("name") or child_session.get_fork_display_name(),
+                        turn_id=turn_id,
+                    ))
+
         self.scroll_end(animate=False)
 
     def add_with_widget(
@@ -619,11 +734,91 @@ class ChatLog(VerticalScroll):
         return None
 
     def filter_by_turns(self, turn_ids: list[int], show_all: bool = False) -> None:
-        """Show only specified turns, or all if show_all is True."""
+        """Show only specified turns, or all if show_all is True.
+
+        DEPRECATED: Use set_turn_context_modes instead for visual indication without hiding.
+        """
         for child in self.children:
-            if isinstance(child, (MessageWidget, ToolUseWidget, ToolResultWidget, WithWidget, WithResultWidget)):
+            if isinstance(child, (MessageWidget, ToolUseWidget, ToolResultWidget, WithWidget, WithResultWidget, ForkMarker, MergeMarker)):
                 if show_all or child.turn_id in turn_ids:
                     child.remove_class("hidden")
                 else:
                     child.add_class("hidden")
         self._smart_scroll()
+
+    def set_turn_context_modes(self, turn_modes: dict[int, str]) -> None:
+        """Apply visual context mode indicators to turns.
+
+        Instead of hiding turns, this shows all turns but with visual indication
+        of their context state:
+        - COPY: green border (included in full)
+        - COMPRESS: yellow border, slightly faded (will be summarized)
+        - DROP: very faded (not included in context)
+
+        Args:
+            turn_modes: Dict mapping turn_id (1-indexed) to mode name ("COPY", "COMPRESS", "DROP")
+        """
+        context_classes = ("context-copy", "context-compress", "context-drop")
+
+        for child in self.children:
+            if isinstance(child, (MessageWidget, ToolUseWidget, ToolResultWidget, WithWidget, WithResultWidget, ForkMarker, MergeMarker)):
+                # Remove any existing context classes
+                for cls in context_classes:
+                    child.remove_class(cls)
+                # Remove hidden class - we show everything now
+                child.remove_class("hidden")
+
+                # Get mode for this turn (default to no visual if not specified)
+                mode = turn_modes.get(child.turn_id, None)
+                if mode == "COPY":
+                    child.add_class("context-copy")
+                elif mode in ("COMPRESS", "SUMMARIZE"):
+                    child.add_class("context-compress")
+                elif mode == "DROP":
+                    child.add_class("context-drop")
+                # If mode is None, no context class is applied (normal appearance)
+
+    def add_fork_marker(
+        self,
+        prompt: str,
+        child_session_id: str,
+        fork_name: str,
+        status: str = "active",
+    ) -> ForkMarker:
+        """Add a fork marker to the log (shows where a fork started)."""
+        turn_id = self._turn_counter
+        widget = ForkMarker(
+            prompt=prompt,
+            child_session_id=child_session_id,
+            fork_name=fork_name,
+            status=status,
+            turn_id=turn_id,
+        )
+        self.mount(widget)
+        self._smart_scroll()
+        return widget
+
+    def add_merge_marker(
+        self,
+        message: str,
+        child_session_id: str,
+        fork_name: str,
+    ) -> MergeMarker:
+        """Add a merge marker to the log (shows where a fork merged back)."""
+        turn_id = self._turn_counter
+        widget = MergeMarker(
+            message=message,
+            child_session_id=child_session_id,
+            fork_name=fork_name,
+            turn_id=turn_id,
+        )
+        self.mount(widget)
+        self._smart_scroll()
+        return widget
+
+    def find_fork_marker(self, child_session_id: str) -> ForkMarker | None:
+        """Find a ForkMarker by its child session ID."""
+        for child in self.children:
+            if isinstance(child, ForkMarker) and child.child_session_id == child_session_id:
+                return child
+        return None

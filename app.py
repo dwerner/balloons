@@ -30,7 +30,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLog, InputBox, StatusBar, ContextTree, VerticalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane
+from widgets import ChatLog, InputBox, StatusBar, ContextTree, VerticalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, Breadcrumb
 from claude_runner import ClaudeRunner
 from session import Session
 from models import (
@@ -49,6 +49,11 @@ from core import (
     QueryWithCommand,
     SuspendCommand,
     ShellCommand,
+    ForkCommand,
+    MergeCommand,
+    DeriveCommand,
+    SwitchCommand,
+    # Legacy
     WithCommand,
     WithCopyCommand,
     ReturnCommand,
@@ -159,6 +164,7 @@ class BalloonsApp(App):
                 yield ContextTree(id="context-tree")
                 yield VerticalSplitter(id="splitter")
                 with Vertical(id="chat-container"):
+                    yield Breadcrumb(id="breadcrumb")
                     yield ChatLog(id="chat-log")
                 yield RequestPane(id="request-pane")
             yield ToolBar(id="tool-bar")
@@ -204,7 +210,7 @@ class BalloonsApp(App):
                     debug_log.error(
                         f"Event dispatch failed: {e}",
                         session_id=session_id,
-                        category="event",
+                        category="llm",
                         details={"event_type": event.event_type},
                     )
                     # Continue processing other events
@@ -469,17 +475,21 @@ class BalloonsApp(App):
         context_tree = self.query_one("#context-tree", ContextTree)
         status_bar = self.query_one("#status-bar", StatusBar)
         input_box = self.query_one("#input-box", InputBox)
+        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
 
         # Load all sessions into tree (current session's turns auto-selected)
         context_tree.load_all_sessions(self.session)
 
         # Load current session's messages into chat view
         if self.session.messages:
-            chat_log.load_history(self.session.messages)
+            chat_log.load_history(self.session.messages, session=self.session)
 
         # Set session title in chat header
         if self.session.title:
             chat_log.set_session_title(self.session.title)
+
+        # Update breadcrumb to show current position in hierarchy
+        breadcrumb.set_session(self.session)
 
         # Show session info in request pane
         request_pane = self.query_one("#request-pane", RequestPane)
@@ -612,7 +622,7 @@ class BalloonsApp(App):
         debug_log.info(f"Command: {cmd_name}", category="command")
 
         if isinstance(cmd, NewSessionCommand):
-            await self._handle_new_session(cmd.initial_prompt)
+            await self._handle_new_session(cmd.prompt)
         elif isinstance(cmd, CopyTurnsCommand):
             self._handle_copy_turns()
         elif isinstance(cmd, QueryWithCommand):
@@ -621,6 +631,16 @@ class BalloonsApp(App):
             self._handle_suspend(cmd.shell_cmd)
         elif isinstance(cmd, ShellCommand):
             await self._handle_shell_command(cmd.shell_cmd)
+        # New fork/merge commands
+        elif isinstance(cmd, ForkCommand):
+            await self._handle_fork_command(cmd.prompt, cmd.name, cmd.background)
+        elif isinstance(cmd, MergeCommand):
+            await self._handle_merge_command(cmd.prompt)
+        elif isinstance(cmd, DeriveCommand):
+            await self._handle_derive_command(cmd.prompt)
+        elif isinstance(cmd, SwitchCommand):
+            self._handle_switch_command(cmd.name)
+        # Legacy commands (still work for backwards compat)
         elif isinstance(cmd, WithCommand):
             await self._handle_with_command(cmd.prompt, cmd.return_condition, cmd.background)
         elif isinstance(cmd, WithCopyCommand):
@@ -662,10 +682,12 @@ class BalloonsApp(App):
                     break
         return self._formatter.format_tool_result(event, last_tool_use)
 
-    async def _handle_new_session(self, initial_prompt: str = "") -> None:
+    async def _handle_new_session(self, prompt: str = "") -> None:
         """Create a new session, optionally with an initial prompt."""
         chat_log = self.query_one("#chat-log", ChatLog)
         context_tree = self.query_one("#context-tree", ContextTree)
+        status_bar = self.query_one("#status-bar", StatusBar)
+        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
 
         # Create new session through manager
         new_session = self._manager.create_session()
@@ -674,12 +696,12 @@ class BalloonsApp(App):
         # Clear and reload UI
         chat_log.clear()
         context_tree.load_all_sessions(self.session)
+        breadcrumb.set_session(self.session)
+        status_bar.set_status("New session created")
 
-        # If an initial prompt was provided, send it
-        if initial_prompt:
-            # Reuse the normal message flow
-            event = InputBox.Submitted(initial_prompt)
-            await self.on_input_box_submitted(event)
+        # If a prompt was provided, send it
+        if prompt:
+            self._start_streaming(prompt)
 
     def _handle_pwd_command(self) -> None:
         """Show the current working directory for the session."""
@@ -846,12 +868,14 @@ class BalloonsApp(App):
         new_session.save()
 
         # Switch to new session through manager
+        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
         chat_log.clear()
         self._manager._sessions[new_session.id] = new_session
         self._manager._runners[new_session.id] = SessionRunner(new_session, backend_env=self._backend_env)
         self._manager.set_active(new_session.id)
         context_tree.load_all_sessions(new_session)
-        chat_log.load_history(new_session.messages)
+        chat_log.load_history(new_session.messages, session=new_session)
+        breadcrumb.set_session(new_session)
 
     async def _handle_query_with(self, prompt: str) -> None:
         """Query with selected turns as context, only response goes to new session.
@@ -864,6 +888,7 @@ class BalloonsApp(App):
         input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
         tool_bar = self.query_one("#tool-bar", ToolBar)
+        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
 
         # Get selected messages for context (before creating new session)
         selected_messages = context_tree.get_selected_messages()
@@ -876,6 +901,7 @@ class BalloonsApp(App):
         # Clear chat log and switch to new session
         chat_log.clear()
         context_tree.load_all_sessions(new_session)
+        breadcrumb.set_session(new_session)
 
         # Create streaming context for query_with (special: no user turn saved)
         # assistant_turn_idx is 0 since we don't save the user message
@@ -956,7 +982,7 @@ class BalloonsApp(App):
         self._start_streaming(prompt)
 
     async def _handle_with_command(self, prompt: str, return_condition: str = "manual", background: bool = False) -> None:
-        """Fork a child session, respecting context modes (COPY verbatim, SUMMARIZE via Claude)."""
+        """Fork a child session, respecting context modes (COPY verbatim, COMPRESS via Claude)."""
         chat_log = self.query_one("#chat-log", ChatLog)
         context_tree = self.query_one("#context-tree", ContextTree)
         input_box = self.query_one("#input-box", InputBox)
@@ -969,7 +995,7 @@ class BalloonsApp(App):
 
         # Separate messages by context mode
         copy_messages = [m for m in selected_messages if m.context_mode == ContextMode.COPY]
-        summarize_messages = [m for m in selected_messages if m.context_mode == ContextMode.SUMMARIZE]
+        compress_messages = [m for m in selected_messages if m.context_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE)]
 
         # Create child session with parent reference
         child_session = Session()
@@ -980,12 +1006,12 @@ class BalloonsApp(App):
         for msg in copy_messages:
             child_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
-        # Generate summaries for SUMMARIZE-marked messages
-        if summarize_messages:
-            status_bar.set_status("Summarizing context...")
+        # Generate summaries for COMPRESS-marked messages
+        if compress_messages:
+            status_bar.set_status("Compressing context...")
             input_box.set_disabled(True)
 
-            summary = await self._generate_context_summary(summarize_messages)
+            summary = await self._generate_context_summary(compress_messages)
 
             if summary:
                 # Add summary as a system-like user message at the start
@@ -1045,10 +1071,12 @@ class BalloonsApp(App):
             status_bar.set_status(f"Background: {prompt[:30]}...")
         else:
             # Foreground mode - switch to child session and stream
+            breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
             self._manager.set_active(child_session.id)
             chat_log.clear()
-            chat_log.load_history(child_session.messages)
+            chat_log.load_history(child_session.messages, session=child_session)
             context_tree.load_all_sessions(child_session)
+            breadcrumb.set_session(child_session)
 
             # Use _start_streaming which handles all the setup
             self._start_streaming(prompt)
@@ -1072,6 +1100,61 @@ class BalloonsApp(App):
             return f"Error generating summary: {e}\n\nRaw context:\n" + "\n\n".join(context_parts)
 
         return "".join(summary_parts) if summary_parts else ""
+
+    async def _generate_merge_summary(self, fork_session: Session, user_prompt: str = "") -> str:
+        """Generate a summary of what was accomplished in a fork.
+
+        Args:
+            fork_session: The fork session to summarize
+            user_prompt: Optional user guidance for the summary
+
+        Returns:
+            A concise summary of the fork's work
+        """
+        # Build conversation context from the fork
+        messages_text = []
+        for msg in fork_session.messages:
+            role = "User" if msg.role == "user" else "Assistant"
+            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            # Truncate very long messages
+            if len(content) > 2000:
+                content = content[:2000] + "... [truncated]"
+            messages_text.append(f"{role}: {content}")
+
+        conversation = "\n\n".join(messages_text)
+
+        # Build the summary prompt
+        if user_prompt:
+            summary_prompt = f"""Summarize the following conversation, focusing on: {user_prompt}
+
+The summary should be 1-3 sentences describing what was accomplished or discovered.
+Be specific about outcomes, not process.
+
+Conversation:
+{conversation}
+
+Summary:"""
+        else:
+            summary_prompt = f"""Summarize the following conversation in 1-3 sentences.
+Focus on what was accomplished or discovered, not the process.
+Be specific about outcomes.
+
+Conversation:
+{conversation}
+
+Summary:"""
+
+        # Stream response from Claude
+        summary_parts = []
+        try:
+            async for event in self._helper_runner.stream_response([], summary_prompt):
+                if isinstance(event, TextDelta):
+                    summary_parts.append(event.text)
+        except Exception as e:
+            # Fall back to a simple message
+            return f"Merge completed (summary generation failed: {e})"
+
+        return "".join(summary_parts).strip() if summary_parts else "Merge completed"
 
     async def _handle_with_copy_command(self, prompt: str, return_condition: str = "manual", background: bool = False) -> None:
         """Fork a child session, copying selected nodes directly."""
@@ -1140,13 +1223,320 @@ class BalloonsApp(App):
             status_bar.set_status(f"Background: {prompt[:30]}...")
         else:
             # Foreground mode - switch to child session and stream
+            breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
             self._manager.set_active(child_session.id)
             chat_log.clear()
-            chat_log.load_history(child_session.messages)
+            chat_log.load_history(child_session.messages, session=child_session)
             context_tree.load_all_sessions(child_session)
+            breadcrumb.set_session(child_session)
 
             # Use _start_streaming which handles all the setup
             self._start_streaming(prompt)
+
+    # ===== NEW FORK/MERGE COMMANDS =====
+
+    async def _handle_fork_command(self, prompt: str, name: str = "", background: bool = False) -> None:
+        """Fork a child session from current session.
+
+        Uses context modes from tree selection:
+        - COPY: Include verbatim
+        - COMPRESS: LLM summarizes first
+        - DROP: Exclude
+
+        Args:
+            prompt: Initial prompt for the fork
+            name: Optional name for easy reference (e.g., "auth-bug")
+            background: If True, run in background and stay in parent
+        """
+        chat_log = self.query_one("#chat-log", ChatLog)
+        context_tree = self.query_one("#context-tree", ContextTree)
+        input_box = self.query_one("#input-box", InputBox)
+        status_bar = self.query_one("#status-bar", StatusBar)
+        tool_bar = self.query_one("#tool-bar", ToolBar)
+
+        # Check if current session is read-only (merged fork)
+        if self.session.is_read_only():
+            status_bar.set_error("Cannot fork from a merged session")
+            return
+
+        # Get selected messages with context modes
+        selected_messages = context_tree.get_selected_messages()
+        allowed_tools = tool_bar.get_enabled_tools()
+
+        # Separate by context mode
+        copy_messages = [m for m in selected_messages if m.context_mode == ContextMode.COPY]
+        compress_messages = [m for m in selected_messages if m.context_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE)]
+
+        # Track fork point (current turn count in parent)
+        fork_point = len(self.session.messages)
+
+        # Create child session with fork metadata
+        child_session = Session()
+        child_session.parent_id = self.session.id
+        child_session.fork_name = name
+        child_session.fork_status = "active"
+        child_session.fork_point_turn = fork_point
+
+        # Copy COPY-marked messages verbatim
+        for msg in copy_messages:
+            child_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
+
+        # Generate summaries for COMPRESS-marked messages
+        if compress_messages:
+            status_bar.set_status("Compressing context...")
+            input_box.set_disabled(True)
+
+            summary = await self._generate_context_summary(compress_messages)
+
+            if summary:
+                # Add summary as context at the start
+                child_session.messages.insert(0, Message(
+                    role="user",
+                    content=f"[Context Summary]\n{summary}",
+                    content_blocks=[TextBlock(text=f"[Context Summary]\n{summary}")],
+                ))
+
+            status_bar.set_status("")
+            input_box.set_disabled(False)
+
+        child_session.save()
+
+        # Register child in parent
+        self.session.add_child(
+            child_session.id,
+            prompt,
+            name=name,
+            fork_point=fork_point,
+        )
+        self.session.save()
+
+        # Add fork marker to parent's chat log
+        chat_log.add_fork_marker(
+            prompt=prompt,
+            child_session_id=child_session.id,
+            fork_name=name or child_session.id[:8],
+            status="active" if not background else "background",
+        )
+
+        # Register child session with manager
+        self._manager._sessions[child_session.id] = child_session
+        self._manager._runners[child_session.id] = SessionRunner(child_session, backend_env=self._backend_env)
+
+        if background:
+            # Background mode - stay in parent
+            turn_idx = len(child_session.messages)
+            ctx = StreamingContext(
+                session_id=child_session.id,
+                user_turn_idx=turn_idx,
+                assistant_turn_idx=turn_idx + 1,
+                prompt=prompt,
+                is_active=False,
+            )
+            self._streaming_contexts[child_session.id] = ctx
+
+            # Start tree turns for child
+            context_tree.start_turn(child_session.id, turn_idx, "user")
+            context_tree.finish_turn(
+                child_session.id, turn_idx, prompt, [TextBlock(text=prompt)], []
+            )
+            context_tree.start_turn(child_session.id, turn_idx + 1, "assistant")
+
+            # Start background streaming
+            child_runner = self._manager._runners[child_session.id]
+            child_runner.start_background(
+                prompt=prompt,
+                messages=child_session.messages,
+                allowed_tools=allowed_tools,
+            )
+            status_bar.set_status(f"Fork '{name or child_session.id[:8]}' started in background")
+        else:
+            # Foreground mode - switch to child
+            breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
+            self._manager.set_active(child_session.id)
+            chat_log.clear()
+            chat_log.load_history(child_session.messages, session=child_session)
+            context_tree.load_all_sessions(child_session)
+            breadcrumb.set_session(child_session)
+
+            # Start streaming
+            self._start_streaming(prompt)
+
+    async def _handle_merge_command(self, prompt: str = "") -> None:
+        """Merge fork back to parent.
+
+        The LLM generates a summary of what was accomplished in the fork.
+        Optional prompt guides the summary generation.
+        After merge:
+        - Fork becomes read-only
+        - View switches to parent
+        - Merge marker appears in parent with LLM summary
+        """
+        chat_log = self.query_one("#chat-log", ChatLog)
+        context_tree = self.query_one("#context-tree", ContextTree)
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        # Check we're in a fork
+        if not self.session.is_fork():
+            status_bar.set_error("Not in a fork - use :new for blank session")
+            return
+
+        # Check not already merged
+        if self.session.is_merged():
+            status_bar.set_error("This fork is already merged")
+            return
+
+        # Load parent
+        parent = self.session.get_parent()
+        if not parent:
+            status_bar.set_error("Parent session not found")
+            return
+
+        # Generate merge summary via LLM
+        status_bar.set_status("Generating merge summary...")
+        merge_message = await self._generate_merge_summary(self.session, prompt)
+
+        # Track merge point in parent
+        merge_point = len(parent.messages)
+
+        # Mark fork as merged
+        self.session.mark_merged(merge_message, merge_point)
+        self.session.save()
+
+        # Update parent's child record
+        parent.mark_child_merged(self.session.id, merge_point)
+        parent.save()
+
+        fork_id = self.session.id
+        fork_name = self.session.get_fork_display_name()
+
+        # Switch to parent
+        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
+        self._manager._sessions[parent.id] = parent
+        self._manager._runners[parent.id] = SessionRunner(parent, backend_env=self._backend_env)
+        self._manager.set_active(parent.id)
+        chat_log.clear()
+        chat_log.load_history(parent.messages, session=parent)
+        context_tree.load_all_sessions(parent)
+        breadcrumb.set_session(parent)
+
+        # Note: merge marker is reconstructed by load_history from parent.children
+
+        status_bar.set_status(f"Merged from '{fork_name}'")
+
+    async def _handle_derive_command(self, prompt: str) -> None:
+        """Create a new independent session with selected context.
+
+        Like fork but no parent relationship - won't merge back.
+        """
+        chat_log = self.query_one("#chat-log", ChatLog)
+        context_tree = self.query_one("#context-tree", ContextTree)
+        input_box = self.query_one("#input-box", InputBox)
+        status_bar = self.query_one("#status-bar", StatusBar)
+        tool_bar = self.query_one("#tool-bar", ToolBar)
+
+        # Get selected messages with context modes
+        selected_messages = context_tree.get_selected_messages()
+        allowed_tools = tool_bar.get_enabled_tools()
+
+        # Separate by context mode
+        copy_messages = [m for m in selected_messages if m.context_mode == ContextMode.COPY]
+        compress_messages = [m for m in selected_messages if m.context_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE)]
+
+        # Create new independent session (no parent_id)
+        new_session = Session()
+
+        # Copy COPY-marked messages verbatim
+        for msg in copy_messages:
+            new_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
+
+        # Generate summaries for COMPRESS-marked messages
+        if compress_messages:
+            status_bar.set_status("Compressing context...")
+            input_box.set_disabled(True)
+
+            summary = await self._generate_context_summary(compress_messages)
+
+            if summary:
+                new_session.messages.insert(0, Message(
+                    role="user",
+                    content=f"[Context Summary]\n{summary}",
+                    content_blocks=[TextBlock(text=f"[Context Summary]\n{summary}")],
+                ))
+
+            status_bar.set_status("")
+            input_box.set_disabled(False)
+
+        new_session.save()
+
+        # Register and switch to new session
+        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
+        self._manager._sessions[new_session.id] = new_session
+        self._manager._runners[new_session.id] = SessionRunner(new_session, backend_env=self._backend_env)
+        self._manager.set_active(new_session.id)
+
+        chat_log.clear()
+        chat_log.load_history(new_session.messages, session=new_session)
+        context_tree.load_all_sessions(new_session)
+        breadcrumb.set_session(new_session)
+
+        # Start streaming
+        self._start_streaming(prompt)
+
+    def _handle_switch_command(self, name: str = "") -> None:
+        """Switch view to a different session or fork.
+
+        Args:
+            name: Fork name or session ID prefix. Empty shows picker.
+        """
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        if not name:
+            # TODO: Show picker UI
+            # For now, list available forks
+            forks = self.session.get_all_forks()
+            if forks:
+                fork_list = ", ".join(
+                    f.get("name") or f.get("session_id", "")[:8]
+                    for f in forks
+                )
+                status_bar.set_status(f"Forks: {fork_list}")
+            else:
+                status_bar.set_status("No forks in current session")
+            return
+
+        # Find matching fork by name or ID prefix
+        target_session = None
+
+        # First check current session's forks
+        for fork in self.session.get_all_forks():
+            fork_name = fork.get("name", "")
+            fork_id = fork.get("session_id", "")
+            if fork_name == name or fork_id.startswith(name):
+                target_session = Session.load(fork_id)
+                break
+
+        # If not found and we're in a fork, check parent's forks
+        if not target_session and self.session.is_fork():
+            parent = self.session.get_parent()
+            if parent:
+                for fork in parent.get_all_forks():
+                    fork_name = fork.get("name", "")
+                    fork_id = fork.get("session_id", "")
+                    if fork_name == name or fork_id.startswith(name):
+                        target_session = Session.load(fork_id)
+                        break
+
+        # Also check if it's a request to go to parent
+        if not target_session and name in ("parent", ".."):
+            if self.session.is_fork():
+                target_session = self.session.get_parent()
+
+        if target_session:
+            self._switch_to_session(target_session)
+        else:
+            status_bar.set_error(f"No fork found matching '{name}'")
+
+    # ===== END NEW COMMANDS =====
 
     async def _handle_return_command(self, return_prompt: str = "") -> None:
         """Return from child session to parent."""
@@ -1188,12 +1578,14 @@ class BalloonsApp(App):
         child_id = self.session.id
 
         # Switch to parent session through manager
+        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
         self._manager._sessions[parent.id] = parent
         self._manager._runners[parent.id] = SessionRunner(parent, backend_env=self._backend_env)
         self._manager.set_active(parent.id)
         chat_log.clear()
-        chat_log.load_history(parent.messages)
+        chat_log.load_history(parent.messages, session=parent)
         context_tree.load_all_sessions(parent)
+        breadcrumb.set_session(parent)
 
         # Find and update the WithWidget
         with_widget = chat_log.find_with_widget(child_id)
@@ -1285,11 +1677,43 @@ class BalloonsApp(App):
         if child_session:
             self._switch_to_session(child_session)
 
+    def on_fork_marker_child_clicked(self, event: ForkMarker.ChildClicked) -> None:
+        """Handle clicking on ForkMarker to navigate to the fork."""
+        if self.streaming:
+            return
+
+        child_session = Session.load(event.child_session_id)
+        if child_session:
+            self._switch_to_session(child_session)
+
+    def on_merge_marker_child_clicked(self, event: MergeMarker.ChildClicked) -> None:
+        """Handle clicking on MergeMarker to navigate to the (read-only) fork."""
+        if self.streaming:
+            return
+
+        child_session = Session.load(event.child_session_id)
+        if child_session:
+            self._switch_to_session(child_session)
+
     def _switch_to_session(self, session: Session) -> None:
         """Switch to a different session."""
+        old_session_id = self._manager._active_session_id
+        debug_log.info(
+            f"Switching session: {old_session_id[:8] if old_session_id else 'none'}... → {session.id[:8]}...",
+            category="session",
+            session_id=session.id,
+            details={
+                "from_session": old_session_id,
+                "to_session": session.id,
+                "title": session.title or "(untitled)",
+                "messages": len(session.messages),
+            },
+        )
+
         chat_log = self.query_one("#chat-log", ChatLog)
         context_tree = self.query_one("#context-tree", ContextTree)
         request_pane = self.query_one("#request-pane", RequestPane)
+        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
 
         # Register session with manager if not already known
         if session.id not in self._manager._sessions:
@@ -1298,9 +1722,12 @@ class BalloonsApp(App):
         self._manager.set_active(session.id)
         context_tree.set_active_session(session.id)
 
+        # Update breadcrumb to show current position in hierarchy
+        breadcrumb.set_session(session)
+
         # Load session messages and filter by selection
         chat_log.clear()
-        chat_log.load_history(session.messages)
+        chat_log.load_history(session.messages, session=session)
 
         # Update header and request pane with session info
         chat_log.set_session_title(session.title)
@@ -1311,23 +1738,66 @@ class BalloonsApp(App):
             session.model,
         )
 
-        # Get included turn IDs for this session (not DROP)
+        # Build turn_modes dict for visual indication
         session_data = context_tree._sessions.get(session.id)
         if session_data:
-            included_turn_ids = [
-                turn["idx"] + 1  # 1-indexed for chat_log
-                for turn in session_data["turns"]
-                if context_tree._context_modes.get(
+            turn_modes = {}
+            for turn in session_data["turns"]:
+                turn_id = turn["idx"] + 1  # 1-indexed for chat_log
+                mode = context_tree._context_modes.get(
                     (session.id, turn["idx"]), ContextMode.DROP
-                ) != ContextMode.DROP
-            ]
-            show_all = len(included_turn_ids) == 0
-            chat_log.filter_by_turns(included_turn_ids, show_all)
+                )
+                turn_modes[turn_id] = mode.name
+            chat_log.set_turn_context_modes(turn_modes)
 
     def on_context_tree_selection_changed(self, event: ContextTree.SelectionChanged) -> None:
-        """Handle tree selection changes - filter chat view."""
+        """Handle tree selection changes - apply visual context mode indicators."""
         chat_log = self.query_one("#chat-log", ChatLog)
-        chat_log.filter_by_turns(event.selected_turn_ids, event.show_all)
+        # Use visual indication instead of hiding
+        chat_log.set_turn_context_modes(event.turn_modes)
+
+    def on_chat_log_context_mode_toggle_requested(self, event: ChatLog.ContextModeToggleRequested) -> None:
+        """Handle click on chat widget to toggle its context mode."""
+        if not self.session:
+            return
+
+        context_tree = self.query_one("#context-tree", ContextTree)
+        # Convert 1-indexed turn_id to 0-indexed turn_idx
+        turn_idx = event.turn_id - 1
+        turn_key = (self.session.id, turn_idx)
+
+        # Cycle through context modes: COPY -> COMPRESS -> DROP -> COPY
+        current_mode = context_tree._context_modes.get(turn_key, ContextMode.DROP)
+        if current_mode == ContextMode.COPY:
+            new_mode = ContextMode.COMPRESS
+            context_tree._context_modes[turn_key] = new_mode
+        elif current_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
+            new_mode = ContextMode.DROP
+            context_tree._context_modes.pop(turn_key, None)  # DROP
+        else:  # DROP
+            new_mode = ContextMode.COPY
+            context_tree._context_modes[turn_key] = new_mode
+
+        # Persist to session message and save
+        if turn_idx < len(self.session.messages):
+            self.session.messages[turn_idx].context_mode = new_mode
+            self.session.save()
+
+        # Update tree label and trigger SelectionChanged to update chat visuals
+        context_tree._update_turn_label(self.session.id, turn_idx)
+        context_tree._update_root_label()
+
+    def on_context_tree_context_mode_changed(self, event: ContextTree.ContextModeChanged) -> None:
+        """Handle context mode change from tree - persist to session."""
+        # Use in-memory session if it's the current one, otherwise load from disk
+        if self.session and self.session.id == event.session_id:
+            session = self.session
+        else:
+            session = Session.load(event.session_id)
+
+        if session and event.turn_idx < len(session.messages):
+            session.messages[event.turn_idx].context_mode = event.new_mode
+            session.save()
 
     def on_context_tree_session_activated(self, event: ContextTree.SessionActivated) -> None:
         """Handle clicking on a session - switch to it."""
@@ -1338,12 +1808,27 @@ class BalloonsApp(App):
         self._switch_to_session(event.session)
 
     def on_context_tree_turn_inspected(self, event: ContextTree.TurnInspected) -> None:
-        """Handle turn inspection - show in request pane and highlight tool uses."""
+        """Handle turn inspection - show in request pane and highlight tool uses.
+
+        If the turn belongs to a different session, switch to that session first.
+        All turns are now always visible (with visual context mode indication),
+        so we just need to scroll to and highlight the inspected turn.
+        """
         request_pane = self.query_one("#request-pane", RequestPane)
         chat_log = self.query_one("#chat-log", ChatLog)
 
-        # Handle summary nodes specially
-        if event.turn_data.get("type") == "summary":
+        # Check if we need to switch sessions
+        turn_session_id = event.session_id
+        if turn_session_id and turn_session_id != self.session.id:
+            # Switch to the turn's session first
+            target_session = Session.load(turn_session_id)
+            if target_session:
+                self._switch_to_session(target_session)
+
+        # Handle different node types
+        node_type = event.turn_data.get("type")
+
+        if node_type == "summary":
             request_pane.show_session_info(
                 event.turn_data.get("title", ""),
                 event.turn_data.get("summary", ""),
@@ -1351,28 +1836,51 @@ class BalloonsApp(App):
                 "",  # No model for this view
             )
             chat_log.clear_highlights()
-        elif event.turn_data.get("type") == "text":
+        elif node_type == "turn":
+            # Whole turn inspection - scroll to it and show in request pane
+            turn_id = event.turn_data.get("turn_idx", 0) + 1
+            # Find any widget with this turn_id and scroll to it
+            for child in chat_log.children:
+                if hasattr(child, 'turn_id') and child.turn_id == turn_id:
+                    child.scroll_visible(animate=True)
+                    break
+            chat_log.clear_highlights()
+            request_pane.show_json(event.turn_data)
+        elif node_type == "text":
             # Highlight the text block in the chat log
             # turn_idx is 0-indexed but turn_id is 1-indexed
             turn_id = event.turn_data.get("turn_idx", 0) + 1
             block_idx = event.turn_data.get("block_idx", -1)
             chat_log.highlight_text_block(turn_id, block_idx)
             request_pane.show_json(event.turn_data)
-        elif event.turn_data.get("type") == "tool_use":
+        elif node_type == "tool_use":
             # Highlight the tool use in the chat log
             tool_use_id = event.turn_data.get("tool_use_id", "")
             if tool_use_id:
                 chat_log.highlight_tool(tool_use_id)
             request_pane.show_json(event.turn_data)
-        elif event.turn_data.get("type") == "tool_result":
+        elif node_type == "tool_result":
             # Highlight the tool result and its parent tool use
             tool_use_id = event.turn_data.get("tool_use_id", "")
             if tool_use_id:
                 chat_log.highlight_tool(tool_use_id)
             request_pane.show_json(event.turn_data)
+        elif node_type == "merge":
+            # Show merge summary in request pane
+            chat_log.clear_highlights()
+            request_pane.show_json(event.turn_data)
         else:
             chat_log.clear_highlights()
             request_pane.show_json(event.turn_data)
+
+    def on_breadcrumb_segment_clicked(self, event: Breadcrumb.SegmentClicked) -> None:
+        """Handle clicking a breadcrumb segment to navigate up."""
+        if self.streaming:
+            return
+
+        target_session = Session.load(event.session_id)
+        if target_session:
+            self._switch_to_session(target_session)
 
     def action_toggle_tree(self) -> None:
         """Toggle the context tree visibility."""

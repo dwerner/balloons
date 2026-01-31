@@ -208,8 +208,8 @@ class ClaudeRunner:
                 event_subtype = data.get("subtype", "")
 
             debug_log.debug(
-                f"Event: {event_type}" + (f"/{event_subtype}" if event_subtype else ""),
-                category="event",
+                f"{event_type}" + (f"/{event_subtype}" if event_subtype else ""),
+                category="llm",
                 run_id=self._run_id,
                 details=event_details if event_details else None,
             )
@@ -325,7 +325,7 @@ class ClaudeRunner:
             if not has_tool_result:
                 debug_log.warning(
                     "Received user event without tool_result - Claude may be asking a question",
-                    category="event",
+                    category="llm",
                     run_id=self._run_id,
                     details={"content_types": [c.get("type") for c in message.get("content", [])]},
                 )

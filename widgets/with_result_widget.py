@@ -26,6 +26,21 @@ class WithResultWidget(Static):
     WithResultWidget.hidden {
         display: none;
     }
+
+    /* Context mode visual indicators */
+    WithResultWidget.context-copy {
+        border-left: thick $success;
+    }
+
+    WithResultWidget.context-compress {
+        border-left: thick $warning;
+        opacity: 0.85;
+    }
+
+    WithResultWidget.context-drop {
+        opacity: 0.4;
+        border-left: thick $surface-darken-1;
+    }
     """
 
     class ChildClicked(Message):

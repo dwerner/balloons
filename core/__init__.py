@@ -8,6 +8,11 @@ from .commands import (
     QueryWithCommand,
     SuspendCommand,
     ShellCommand,
+    ForkCommand,
+    MergeCommand,
+    DeriveCommand,
+    SwitchCommand,
+    # Legacy aliases
     WithCommand,
     WithCopyCommand,
     ReturnCommand,
@@ -31,6 +36,11 @@ __all__ = [
     "QueryWithCommand",
     "SuspendCommand",
     "ShellCommand",
+    "ForkCommand",
+    "MergeCommand",
+    "DeriveCommand",
+    "SwitchCommand",
+    # Legacy aliases
     "WithCommand",
     "WithCopyCommand",
     "ReturnCommand",

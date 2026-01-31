@@ -9,5 +9,23 @@ from .tool_bar import ToolBar
 from .with_widget import WithWidget
 from .with_result_widget import WithResultWidget
 from .debug_pane import DebugPane
+from .fork_marker import ForkMarker
+from .merge_marker import MergeMarker
+from .breadcrumb import Breadcrumb
 
-__all__ = ["ChatLog", "InputBox", "StatusBar", "ContextTree", "VerticalSplitter", "ContextPreview", "RequestPane", "ToolBar", "WithWidget", "WithResultWidget", "DebugPane"]
+__all__ = [
+    "ChatLog",
+    "InputBox",
+    "StatusBar",
+    "ContextTree",
+    "VerticalSplitter",
+    "ContextPreview",
+    "RequestPane",
+    "ToolBar",
+    "WithWidget",
+    "WithResultWidget",
+    "DebugPane",
+    "ForkMarker",
+    "MergeMarker",
+    "Breadcrumb",
+]

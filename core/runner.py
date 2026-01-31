@@ -428,7 +428,7 @@ class SessionRunner:
             debug_log.warning(
                 f"Failed to process event: {e}",
                 session_id=self.session.id,
-                category="event",
+                category="llm",
             )
             return None  # Skip bad event
 
