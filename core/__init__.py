@@ -20,6 +20,7 @@ from .context import ContextBuilder
 from .formatter import Formatter, format_edit_as_diff, guess_language
 from .runner import SessionRunner, RunnerStatus, StreamEvent, StreamResult
 from .manager import SessionManager, SessionInfo
+from .debug_log import debug_log, DebugLog, LogLevel, LogEntry
 
 __all__ = [
     # Commands
@@ -51,4 +52,9 @@ __all__ = [
     # Manager
     "SessionManager",
     "SessionInfo",
+    # Debug
+    "debug_log",
+    "DebugLog",
+    "LogLevel",
+    "LogEntry",
 ]

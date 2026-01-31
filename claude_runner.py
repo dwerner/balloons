@@ -7,6 +7,12 @@ from models import (
     Message, TextDelta, ResultEvent, InitEvent, RawEvent, ToolUseEvent, ToolResultEvent,
     TextBlock, ToolUseBlock, ToolResultBlock, ContextMode,
 )
+from core.debug_log import debug_log
+
+
+class RateLimitError(Exception):
+    """Raised when Claude CLI reports hitting the rate limit."""
+    pass
 
 
 async def readline_unlimited(stream: asyncio.StreamReader) -> bytes:
@@ -34,6 +40,7 @@ class ClaudeRunner:
         self.process: asyncio.subprocess.Process | None = None
         self._terminated = False
         self._current_tool_use: dict | None = None  # Track tool use being built
+        self._run_id: str = ""  # Current process PID for debug logging
 
     @staticmethod
     def build_context(messages: list[Message], new_prompt: str) -> str:
@@ -123,6 +130,17 @@ class ClaudeRunner:
             cwd=working_dir,
         )
 
+        # Track run_id for debug logging
+        self._run_id = str(self.process.pid)
+
+        # Log process start
+        debug_log.info(
+            f"Claude started (pid {self.process.pid})",
+            category="process",
+            details={"cwd": working_dir or "default", "prompt_len": len(full_prompt)},
+            run_id=self._run_id,
+        )
+
         # Send prompt via stdin
         self.process.stdin.write(full_prompt.encode("utf-8"))
         await self.process.stdin.drain()
@@ -143,8 +161,28 @@ class ClaudeRunner:
 
             try:
                 data = json.loads(line)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
+                debug_log.warning(
+                    f"JSON decode error: {e}",
+                    category="json",
+                    details={"line": line[:100] if len(line) > 100 else line},
+                    run_id=self._run_id,
+                )
                 continue
+
+            # Log raw event type for debugging
+            event_type = data.get("type", "unknown")
+            event_subtype = ""
+            if event_type == "stream_event":
+                event_subtype = data.get("event", {}).get("type", "")
+            elif event_type == "system":
+                event_subtype = data.get("subtype", "")
+
+            debug_log.debug(
+                f"Event: {event_type}" + (f"/{event_subtype}" if event_subtype else ""),
+                category="event",
+                run_id=self._run_id,
+            )
 
             # Always yield raw event for inspection
             yield RawEvent(data=data)
@@ -156,7 +194,28 @@ class ClaudeRunner:
                 # Give event loop a chance to process UI updates
                 await asyncio.sleep(0)
 
+        # Check for rate limit error before waiting
+        stderr_output = await self.process.stderr.read()
         await self.process.wait()
+
+        # Log process exit
+        exit_code = self.process.returncode
+        stderr_text = stderr_output.decode("utf-8", errors="replace") if stderr_output else ""
+
+        if exit_code != 0:
+            debug_log.error(
+                f"Claude exited (code {exit_code})",
+                category="process",
+                details={"stderr": stderr_text[:500] if len(stderr_text) > 500 else stderr_text},
+                run_id=self._run_id,
+            )
+            # Check for rate limit
+            if "hit your limit" in stderr_text.lower() or "resets" in stderr_text.lower():
+                raise RateLimitError(stderr_text.strip())
+        else:
+            debug_log.info(f"Claude exited (code 0)", category="process", run_id=self._run_id)
+
+        self._run_id = ""
         self.process = None
 
     def _parse_event(self, data: dict) -> Union[TextDelta, ResultEvent, InitEvent, ToolUseEvent, ToolResultEvent, None]:

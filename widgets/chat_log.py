@@ -406,21 +406,21 @@ class ChatLog(VerticalScroll):
 
         Since text may be split across multiple MessageWidgets (due to tool uses
         in between), we collect content from all assistant messages in the current turn.
+        Finishes ALL streaming messages in the turn, not just _current_assistant_message.
         """
-        # Finish any active streaming message
-        if self._current_assistant_message:
-            self._current_assistant_message.remove_class("streaming")
-            self._current_assistant_message.finish_streaming()
-            self._current_assistant_message = None
-
-        # Collect text from all assistant messages in current turn
         turn_id = self._turn_counter
         content_parts = []
+
+        # Finish ALL streaming assistant messages in this turn
         for child in self.children:
             if isinstance(child, MessageWidget) and child.role == "assistant" and child.turn_id == turn_id:
+                if child._streaming:
+                    child.remove_class("streaming")
+                    child.finish_streaming()
                 if child.content.strip():
                     content_parts.append(child.content)
 
+        self._current_assistant_message = None
         return "\n\n".join(content_parts)
 
     def clear(self) -> None:

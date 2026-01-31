@@ -13,8 +13,9 @@ from models import (
     Message, TextDelta, ResultEvent, InitEvent, RawEvent,
     ToolUseEvent, ToolResultEvent, TextBlock, ToolUseBlock, ToolResultBlock,
 )
-from claude_runner import ClaudeRunner
+from claude_runner import ClaudeRunner, RateLimitError
 from session import Session
+from .debug_log import debug_log
 
 
 class RunnerStatus(Enum):
@@ -39,6 +40,7 @@ class StreamEvent:
         - "raw": Raw JSON event
         - "done": Stream complete, data is StreamResult
         - "error": Error occurred, data is error message
+        - "rate_limit": Rate limit hit, data is error message with reset time
         - "cancelled": Stream was cancelled
     """
     event_type: str
@@ -153,8 +155,19 @@ class SessionRunner:
         except asyncio.CancelledError:
             self._status = RunnerStatus.CANCELLED
             raise
+        except RateLimitError as e:
+            self._status = RunnerStatus.ERROR
+            debug_log.warning(f"Rate limit: {e}", session_id=self.session.id, category="stream")
+            self._result = StreamResult(
+                content=self._text_buffer,
+                content_blocks=self._content_blocks,
+                raw_events=self._raw_events,
+                error=str(e),
+            )
+            yield self._make_event("rate_limit", str(e))
         except Exception as e:
             self._status = RunnerStatus.ERROR
+            debug_log.error(f"Stream error: {e}", session_id=self.session.id, category="stream")
             self._result = StreamResult(
                 content=self._text_buffer,
                 content_blocks=self._content_blocks,
@@ -213,14 +226,26 @@ class SessionRunner:
 
             # Finalize
             self._finalize_stream()
+            debug_log.info("Emitting done event", category="stream", session_id=self.session.id)
             await self._event_queue.put(self._make_event("done", self._result))
             self._status = RunnerStatus.IDLE
 
         except asyncio.CancelledError:
             self._status = RunnerStatus.CANCELLED
             await self._event_queue.put(self._make_event("cancelled", None))
+        except RateLimitError as e:
+            self._status = RunnerStatus.ERROR
+            debug_log.warning(f"Rate limit: {e}", session_id=self.session.id, category="stream")
+            self._result = StreamResult(
+                content=self._text_buffer,
+                content_blocks=self._content_blocks,
+                raw_events=self._raw_events,
+                error=str(e),
+            )
+            await self._event_queue.put(self._make_event("rate_limit", str(e)))
         except Exception as e:
             self._status = RunnerStatus.ERROR
+            debug_log.error(f"Stream error: {e}", session_id=self.session.id, category="stream")
             self._result = StreamResult(
                 content=self._text_buffer,
                 content_blocks=self._content_blocks,
@@ -302,88 +327,97 @@ class SessionRunner:
         Returns:
             StreamEvent to emit, or None
         """
-        if isinstance(event, RawEvent):
-            self._raw_events.append(event.data)
-            return self._make_event("raw", event.data)
+        try:
+            if isinstance(event, RawEvent):
+                self._raw_events.append(event.data)
+                return self._make_event("raw", event.data)
 
-        elif isinstance(event, InitEvent):
-            self.session.model = event.model
-            self.session.context_window = event.context_window
-            return self._make_event("init", {
-                "model": event.model,
-                "context_window": event.context_window,
-            })
+            elif isinstance(event, InitEvent):
+                self.session.model = event.model
+                self.session.context_window = event.context_window
+                return self._make_event("init", {
+                    "model": event.model,
+                    "context_window": event.context_window,
+                })
 
-        elif isinstance(event, TextDelta):
-            self._text_buffer += event.text
-            return self._make_event("text", event.text)
+            elif isinstance(event, TextDelta):
+                self._text_buffer += event.text
+                return self._make_event("text", event.text)
 
-        elif isinstance(event, ToolUseEvent):
-            # Flush text buffer to content block
-            if self._text_buffer.strip():
-                self._content_blocks.append(TextBlock(text=self._text_buffer))
-                self._text_buffer = ""
+            elif isinstance(event, ToolUseEvent):
+                # Flush text buffer to content block
+                if self._text_buffer.strip():
+                    self._content_blocks.append(TextBlock(text=self._text_buffer))
+                    self._text_buffer = ""
 
-            # Create tool use block
-            self._current_tool_use_id = event.tool_use_id
-            tool_block = ToolUseBlock(
-                id=event.tool_use_id,
-                name=event.tool_name,
-                input=event.tool_input,
+                # Create tool use block
+                self._current_tool_use_id = event.tool_use_id
+                tool_block = ToolUseBlock(
+                    id=event.tool_use_id,
+                    name=event.tool_name,
+                    input=event.tool_input,
+                )
+                self._content_blocks.append(tool_block)
+
+                tool_idx = self._tool_index
+                self._tool_index += 1
+
+                return self._make_event("tool_use", {
+                    "tool_use_id": event.tool_use_id,
+                    "tool_name": event.tool_name,
+                    "tool_input": event.tool_input,
+                    "tool_index": tool_idx,
+                    "tool_block": tool_block,
+                })
+
+            elif isinstance(event, ToolResultEvent):
+                result_block = ToolResultBlock(
+                    tool_use_id=event.tool_use_id,
+                    content=event.result,
+                    is_error=False,
+                )
+                self._content_blocks.append(result_block)
+
+                # Find the tool_index for this result (matches the tool_use_id)
+                tool_idx = None
+                for i, block in enumerate(self._content_blocks):
+                    if isinstance(block, ToolUseBlock) and block.id == event.tool_use_id:
+                        # Count how many tool uses came before this one
+                        tool_idx = sum(
+                            1 for b in self._content_blocks[:i]
+                            if isinstance(b, ToolUseBlock)
+                        )
+                        break
+
+                return self._make_event("tool_result", {
+                    "tool_use_id": event.tool_use_id,
+                    "result": event.result,
+                    "tool_index": tool_idx,
+                    "result_block": result_block,
+                })
+
+            elif isinstance(event, ResultEvent):
+                self.session.update_usage(
+                    event.input_tokens,
+                    event.output_tokens,
+                    event.total_cost_usd,
+                    event.context_window,
+                )
+                return self._make_event("result", {
+                    "input_tokens": event.input_tokens,
+                    "output_tokens": event.output_tokens,
+                    "total_cost": event.total_cost_usd,
+                })
+
+            return None
+
+        except Exception as e:
+            debug_log.warning(
+                f"Failed to process event: {e}",
+                session_id=self.session.id,
+                category="event",
             )
-            self._content_blocks.append(tool_block)
-
-            tool_idx = self._tool_index
-            self._tool_index += 1
-
-            return self._make_event("tool_use", {
-                "tool_use_id": event.tool_use_id,
-                "tool_name": event.tool_name,
-                "tool_input": event.tool_input,
-                "tool_index": tool_idx,
-                "tool_block": tool_block,
-            })
-
-        elif isinstance(event, ToolResultEvent):
-            result_block = ToolResultBlock(
-                tool_use_id=event.tool_use_id,
-                content=event.result,
-                is_error=False,
-            )
-            self._content_blocks.append(result_block)
-
-            # Find the tool_index for this result (matches the tool_use_id)
-            tool_idx = None
-            for i, block in enumerate(self._content_blocks):
-                if isinstance(block, ToolUseBlock) and block.id == event.tool_use_id:
-                    # Count how many tool uses came before this one
-                    tool_idx = sum(
-                        1 for b in self._content_blocks[:i]
-                        if isinstance(b, ToolUseBlock)
-                    )
-                    break
-
-            return self._make_event("tool_result", {
-                "tool_use_id": event.tool_use_id,
-                "result": event.result,
-                "tool_index": tool_idx,
-                "result_block": result_block,
-            })
-
-        elif isinstance(event, ResultEvent):
-            self.session.update_usage(
-                event.input_tokens,
-                event.output_tokens,
-                event.total_cost_usd,
-                event.context_window,
-            )
-            return self._make_event("result", {
-                "input_tokens": event.input_tokens,
-                "output_tokens": event.output_tokens,
-                "total_cost": event.total_cost_usd,
-            })
-
-        return None
+            return None  # Skip bad event
 
     def _finalize_stream(self) -> None:
         """Finalize stream and create result."""
@@ -391,8 +425,15 @@ class SessionRunner:
         if self._text_buffer.strip():
             self._content_blocks.append(TextBlock(text=self._text_buffer))
 
+        # Reconstruct full text content from all TextBlocks
+        text_parts = []
+        for block in self._content_blocks:
+            if isinstance(block, TextBlock) and block.text.strip():
+                text_parts.append(block.text)
+        full_content = "\n\n".join(text_parts)
+
         self._result = StreamResult(
-            content=self._text_buffer if not self._content_blocks else "",
+            content=full_content,
             content_blocks=self._content_blocks,
             raw_events=self._raw_events,
             input_tokens=self.session.total_input_tokens,

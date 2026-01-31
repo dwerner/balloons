@@ -30,7 +30,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLog, InputBox, StatusBar, ContextTree, VerticalSplitter, SessionPicker, RequestPane, ToolBar, WithWidget, WithResultWidget
+from widgets import ChatLog, InputBox, StatusBar, ContextTree, VerticalSplitter, SessionPicker, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane
 from claude_runner import ClaudeRunner
 from session import Session
 from models import (
@@ -56,6 +56,7 @@ from core import (
     CdCommand,
     ReloadCommand,
     SummarizeCommand,
+    debug_log,
 )
 
 
@@ -116,6 +117,7 @@ class BalloonsApp(App):
         Binding("ctrl+q", "quit", "Quit", show=False),
         Binding("ctrl+t", "toggle_tree", "Toggle Tree", show=True),
         Binding("ctrl+r", "toggle_requests", "Toggle Requests", show=True),
+        Binding("ctrl+g", "toggle_debug", "Debug", show=True),
         Binding("ctrl+o", "open_session", "Sessions", show=True),
         Binding("ctrl+left", "resize_tree(-5)", "Shrink Tree", show=False),
         Binding("ctrl+right", "resize_tree(5)", "Grow Tree", show=False),
@@ -160,6 +162,7 @@ class BalloonsApp(App):
                     yield ChatLog(id="chat-log")
                 yield RequestPane(id="request-pane")
             yield ToolBar(id="tool-bar")
+            yield DebugPane(id="debug-pane")
             yield StatusBar(id="status-bar")
             yield InputBox(id="input-box")
 
@@ -189,10 +192,26 @@ class BalloonsApp(App):
         for session_id, events in self._manager.poll_all():
             ctx = self._streaming_contexts.get(session_id)
             if not ctx:
+                if events:
+                    debug_log.warning(
+                        f"Got {len(events)} events but no streaming context",
+                        category="stream",
+                        session_id=session_id,
+                        details={"event_types": [e.event_type for e in events[:5]]},
+                    )
                 continue  # No context, skip
 
             for event in events:
-                self._dispatch_polled_event(session_id, event, ctx, chat_log, context_tree, status_bar)
+                try:
+                    self._dispatch_polled_event(session_id, event, ctx, chat_log, context_tree, status_bar)
+                except Exception as e:
+                    debug_log.error(
+                        f"Event dispatch failed: {e}",
+                        session_id=session_id,
+                        category="event",
+                        details={"event_type": event.event_type},
+                    )
+                    # Continue processing other events
 
     def _dispatch_polled_event(
         self,
@@ -306,12 +325,20 @@ class BalloonsApp(App):
 
         elif event.event_type == "done":
             debug_event(f"done: session={session_id[:8]}")
+            debug_log.info("Received done event, calling finalize", category="stream", session_id=session_id)
             self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar)
 
         elif event.event_type == "error":
             debug_event(f"error: session={session_id[:8]} {event.data}")
+            debug_log.error(event.data, session_id=session_id, category="stream")
             if is_active:
                 chat_log.append_to_current(f"\n\n[Error: {event.data}]")
+            self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar, error=event.data)
+
+        elif event.event_type == "rate_limit":
+            debug_event(f"rate_limit: session={session_id[:8]} {event.data}")
+            if is_active:
+                chat_log.append_to_current(f"\n\n[Rate Limit] {event.data}")
             self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar, error=event.data)
 
         elif event.event_type == "cancelled":
@@ -329,72 +356,98 @@ class BalloonsApp(App):
         cancelled: bool = False,
     ) -> None:
         """Finalize a streaming session - save messages, update UI."""
-        session = self._manager._sessions.get(session_id)
-        runner = self._manager._runners.get(session_id)
+        debug_log.info(
+            f"Finalizing stream (is_active={ctx.is_active})",
+            category="stream",
+            session_id=session_id,
+        )
+        try:
+            session = self._manager._sessions.get(session_id)
+            runner = self._manager._runners.get(session_id)
 
-        if ctx.is_active:
-            # Finish the message display
-            final_content = chat_log.finish_current_message()
-            if not ctx.content:
-                ctx.content = final_content
+            if ctx.is_active:
+                # Finish the message display
+                final_content = chat_log.finish_current_message()
+                if not ctx.content:
+                    ctx.content = final_content
 
-        # Get result from runner for content blocks
-        content = ctx.content
-        if runner:
-            result = runner.get_result()
-            if result:
-                assistant_blocks = result.content_blocks if result.content_blocks else [TextBlock(text=content)]
-                raw_events = result.raw_events
+            # Get result from runner for content blocks
+            content = ctx.content
+            if runner:
+                result = runner.get_result()
+                if result:
+                    assistant_blocks = result.content_blocks if result.content_blocks else [TextBlock(text=content)]
+                    raw_events = result.raw_events
+                else:
+                    assistant_blocks = [TextBlock(text=content)]
+                    raw_events = []
             else:
                 assistant_blocks = [TextBlock(text=content)]
                 raw_events = []
-        else:
-            assistant_blocks = [TextBlock(text=content)]
-            raw_events = []
 
-        # Finish the assistant turn in tree
-        context_tree.finish_turn(
-            session_id,
-            ctx.assistant_turn_idx,
-            content,
-            assistant_blocks,
-            raw_events,
-        )
+            # Finish the assistant turn in tree
+            context_tree.finish_turn(
+                session_id,
+                ctx.assistant_turn_idx,
+                content,
+                assistant_blocks,
+                raw_events,
+            )
 
-        # Save messages to session
-        if session:
-            if ctx.query_with:
-                # query_with: only save assistant response, no user message
-                session.add_message("assistant", content, content_blocks=assistant_blocks)
+            # Save messages to session
+            if session:
+                if ctx.query_with:
+                    # query_with: only save assistant response, no user message
+                    session.add_message("assistant", content, content_blocks=assistant_blocks)
+                else:
+                    # Normal case: save both user and assistant messages
+                    user_blocks = [TextBlock(text=ctx.prompt)]
+                    session.add_message("user", ctx.prompt, content_blocks=user_blocks)
+                    session.add_message("assistant", content, content_blocks=assistant_blocks)
+                session.save()
+
+            if ctx.is_active:
+                # Re-enable input
+                debug_log.info("Re-enabling input (active session)", category="stream", session_id=session_id)
+                self.streaming = False
+                status_bar.set_streaming(False)
+                input_box = self.query_one("#input-box", InputBox)
+                input_box.set_disabled(False)
+
+                # Check for auto-return conditions
+                if session and self._check_auto_return(content):
+                    asyncio.create_task(self._handle_return_command("Auto-return: condition met"))
             else:
-                # Normal case: save both user and assistant messages
-                user_blocks = [TextBlock(text=ctx.prompt)]
-                session.add_message("user", ctx.prompt, content_blocks=user_blocks)
-                session.add_message("assistant", content, content_blocks=assistant_blocks)
-            session.save()
+                # Background session finished - update WithWidget
+                with_widget = chat_log.find_with_widget(session_id)
+                if with_widget:
+                    with_widget.mark_done()
+                if error:
+                    status_bar.set_error(f"Background error: {error}")
+                elif not cancelled:
+                    status_bar.set_status(f"Background session done: {session_id[:8]}")
 
-        if ctx.is_active:
-            # Re-enable input
-            self.streaming = False
-            status_bar.set_streaming(False)
-            input_box = self.query_one("#input-box", InputBox)
-            input_box.set_disabled(False)
+        except Exception as e:
+            debug_log.error(
+                f"Finalize failed: {e}",
+                session_id=session_id,
+                category="stream",
+            )
+            # Try to re-enable input on failure
+            if ctx.is_active:
+                try:
+                    self.streaming = False
+                    status_bar.set_streaming(False)
+                    input_box = self.query_one("#input-box", InputBox)
+                    input_box.set_disabled(False)
+                except Exception:
+                    pass
 
-            # Check for auto-return conditions
-            if session and self._check_auto_return(content):
-                asyncio.create_task(self._handle_return_command("Auto-return: condition met"))
-        else:
-            # Background session finished - update WithWidget
-            with_widget = chat_log.find_with_widget(session_id)
-            if with_widget:
-                with_widget.mark_done()
-            if error:
-                status_bar.set_error(f"Background error: {error}")
-            elif not cancelled:
-                status_bar.set_status(f"Background session done: {session_id[:8]}")
-
-        # Clean up streaming context
-        del self._streaming_contexts[session_id]
+        finally:
+            # Always clean up streaming context
+            if session_id in self._streaming_contexts:
+                del self._streaming_contexts[session_id]
+                debug_log.info("Finalization complete, context cleaned up", category="stream", session_id=session_id)
 
     def _on_session_picked(self, session: Session | None) -> None:
         """Handle session picker result."""
@@ -1304,6 +1357,11 @@ class BalloonsApp(App):
         """Toggle the request pane visibility."""
         pane = self.query_one("#request-pane", RequestPane)
         pane.display = not pane.display
+
+    def action_toggle_debug(self) -> None:
+        """Toggle the debug pane visibility."""
+        pane = self.query_one("#debug-pane", DebugPane)
+        pane.toggle()
 
     def action_open_session(self) -> None:
         """Open the session picker."""

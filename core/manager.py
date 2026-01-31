@@ -251,13 +251,16 @@ class SessionManager:
 
         Returns:
             List of (session_id, events) tuples for sessions with events
+
+        Note: We drain events from ALL runners, not just streaming ones,
+        because a runner may have finished (status=IDLE) but still have
+        the "done" event in its queue waiting to be polled.
         """
         results = []
         for session_id, runner in self._runners.items():
-            if runner.is_streaming:
-                events = runner.drain_events()
-                if events:
-                    results.append((session_id, events))
+            events = runner.drain_events()
+            if events:
+                results.append((session_id, events))
         return results
 
     def get_streaming_sessions(self) -> List[str]:

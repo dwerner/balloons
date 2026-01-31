@@ -170,11 +170,16 @@ class Formatter:
 
         elif tool_name == "Read":
             file_path = tool_input.get("file_path", "")
-            offset = tool_input.get("offset", "")
-            limit = tool_input.get("limit", "")
+            offset = tool_input.get("offset")
+            limit = tool_input.get("limit")
             range_info = ""
             if offset or limit:
-                range_info = f" (lines {offset or 1}-{(offset or 0) + (limit or 'end')})"
+                start = offset if offset else 1
+                if limit:
+                    end = (offset or 0) + limit
+                    range_info = f" (lines {start}-{end})"
+                else:
+                    range_info = f" (from line {start})"
             return f"**Read** `{file_path}`{range_info}"
 
         elif tool_name == "Bash":
