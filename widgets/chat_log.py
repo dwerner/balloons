@@ -203,14 +203,20 @@ class MessageWidget(Static):
     MessageWidget.hidden {
         display: none;
     }
+
+    MessageWidget.highlighted {
+        background: #2a3a2a;
+        border: wide $warning;
+    }
     """
 
-    def __init__(self, role: str, content: str = "", streaming: bool = False, turn_id: int = 0, **kwargs):
+    def __init__(self, role: str, content: str = "", streaming: bool = False, turn_id: int = 0, block_idx: int = -1, **kwargs):
         super().__init__(**kwargs)
         self.role = role
         self._content = content
         self._streaming = streaming
         self.turn_id = turn_id
+        self.block_idx = block_idx  # Index within content_blocks, -1 if not set
         self.add_class(role)
 
     def render(self) -> RenderableType:
@@ -433,9 +439,7 @@ class ChatLog(VerticalScroll):
     def highlight_tool(self, tool_use_id: str) -> None:
         """Highlight a tool use and its result by tool_use_id, scrolling to it."""
         # First clear any existing highlights
-        for child in self.children:
-            if isinstance(child, (ToolUseWidget, ToolResultWidget)):
-                child.remove_class("highlighted")
+        self.clear_highlights()
 
         # Find and highlight the matching widgets
         for child in self.children:
@@ -445,10 +449,32 @@ class ChatLog(VerticalScroll):
             elif isinstance(child, ToolResultWidget) and child.tool_use_id == tool_use_id:
                 child.add_class("highlighted")
 
-    def clear_highlights(self) -> None:
-        """Remove all tool highlights."""
+    def highlight_text_block(self, turn_id: int, block_idx: int) -> None:
+        """Highlight a text block by turn_id and block_idx, scrolling to it."""
+        from core.debug_log import debug_log
+        debug_log.info(f"highlight_text_block: looking for turn_id={turn_id}, block_idx={block_idx}", category="chat_log")
+
+        # First clear any existing highlights
+        self.clear_highlights()
+
+        # Find and highlight the matching widget
+        found = False
         for child in self.children:
-            if isinstance(child, (ToolUseWidget, ToolResultWidget)):
+            if isinstance(child, MessageWidget):
+                debug_log.debug(f"  checking MessageWidget: turn_id={child.turn_id}, block_idx={child.block_idx}", category="chat_log")
+                if child.turn_id == turn_id and child.block_idx == block_idx:
+                    child.add_class("highlighted")
+                    child.scroll_visible(animate=True)
+                    found = True
+                    debug_log.info(f"  -> FOUND and highlighted!", category="chat_log")
+                    break
+        if not found:
+            debug_log.warning(f"  -> NOT FOUND!", category="chat_log")
+
+    def clear_highlights(self) -> None:
+        """Remove all highlights from tools and messages."""
+        for child in self.children:
+            if isinstance(child, (ToolUseWidget, ToolResultWidget, MessageWidget)):
                 child.remove_class("highlighted")
 
     def _format_tool_use(
@@ -481,22 +507,14 @@ class ChatLog(VerticalScroll):
 
             # Render content blocks properly if available
             if msg.content_blocks:
-                # Collect consecutive text blocks, flush when hitting tool use/result
-                text_buffer = []
-
-                def flush_text():
-                    if text_buffer:
-                        combined = "\n\n".join(text_buffer)
-                        widget = MessageWidget(msg.role, combined, turn_id=turn_id)
-                        self.mount(widget)
-                        text_buffer.clear()
-
-                for block in msg.content_blocks:
+                for block_idx, block in enumerate(msg.content_blocks):
                     if isinstance(block, TextBlock):
                         if block.text.strip():
-                            text_buffer.append(block.text)
+                            widget = MessageWidget(
+                                msg.role, block.text, turn_id=turn_id, block_idx=block_idx
+                            )
+                            self.mount(widget)
                     elif isinstance(block, ToolUseBlock):
-                        flush_text()
                         formatted = self._format_tool_use(block)
                         if isinstance(formatted, tuple):
                             content, full_content = formatted
@@ -518,9 +536,6 @@ class ChatLog(VerticalScroll):
                             tool_use_id=block.tool_use_id, full_content=full_content
                         )
                         self.mount(widget)
-
-                # Flush any remaining text
-                flush_text()
             else:
                 # Fallback: just use msg.content
                 widget = MessageWidget(msg.role, msg.content, turn_id=turn_id)

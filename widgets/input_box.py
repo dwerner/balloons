@@ -38,13 +38,25 @@ class InputBox(TextArea):
         self._current_input: str = ""
 
     # Keys that should bubble up to the app (not handled by TextArea)
-    APP_KEYS = {"ctrl+t", "ctrl+o", "ctrl+q", "escape"}
+    APP_KEYS = {"ctrl+t", "ctrl+o", "ctrl+q", "ctrl+r", "ctrl+g", "ctrl+c"}
 
     async def _on_key(self, event: Key) -> None:
         """Intercept key events before TextArea processes them."""
         # Let app-level shortcuts pass through
         if event.key in self.APP_KEYS:
             return  # Don't stop, let it bubble up
+
+        # Escape: if disabled, always bubble up; if has text, clear it; otherwise bubble up
+        if event.key == "escape":
+            if self._disabled:
+                return  # Bubble up to app for cancel
+            if self.text:
+                event.prevent_default()
+                event.stop()
+                self.clear()
+                return
+            else:
+                return  # Bubble up to app (will focus us anyway)
 
         if event.key == "enter":
             # Submit on Enter

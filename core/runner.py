@@ -13,7 +13,7 @@ from models import (
     Message, TextDelta, ResultEvent, InitEvent, RawEvent,
     ToolUseEvent, ToolResultEvent, TextBlock, ToolUseBlock, ToolResultBlock,
 )
-from claude_runner import ClaudeRunner, RateLimitError
+from claude_runner import ClaudeRunner, RateLimitError, InputRequiredError
 from session import Session
 from .debug_log import debug_log
 
@@ -42,6 +42,7 @@ class StreamEvent:
         - "error": Error occurred, data is error message
         - "rate_limit": Rate limit hit, data is error message with reset time
         - "cancelled": Stream was cancelled
+        - "input_required": Claude is asking a question (non-interactive mode), data is message
     """
     event_type: str
     data: Any = None
@@ -165,6 +166,12 @@ class SessionRunner:
                 error=str(e),
             )
             yield self._make_event("rate_limit", str(e))
+        except InputRequiredError as e:
+            self._status = RunnerStatus.IDLE  # Not an error - just needs input
+            debug_log.info(f"Input required: {e}", session_id=self.session.id, category="stream")
+            self._finalize_stream()
+            self._result.error = "Claude is asking a question"
+            yield self._make_event("input_required", str(e))
         except Exception as e:
             self._status = RunnerStatus.ERROR
             debug_log.error(f"Stream error: {e}", session_id=self.session.id, category="stream")
@@ -243,6 +250,12 @@ class SessionRunner:
                 error=str(e),
             )
             await self._event_queue.put(self._make_event("rate_limit", str(e)))
+        except InputRequiredError as e:
+            self._status = RunnerStatus.IDLE  # Not an error - just needs input
+            debug_log.info(f"Input required: {e}", session_id=self.session.id, category="stream")
+            self._finalize_stream()
+            self._result.error = "Claude is asking a question"
+            await self._event_queue.put(self._make_event("input_required", str(e)))
         except Exception as e:
             self._status = RunnerStatus.ERROR
             debug_log.error(f"Stream error: {e}", session_id=self.session.id, category="stream")

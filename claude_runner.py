@@ -15,6 +15,11 @@ class RateLimitError(Exception):
     pass
 
 
+class InputRequiredError(Exception):
+    """Raised when Claude CLI is waiting for user input (question asked)."""
+    pass
+
+
 async def readline_unlimited(stream: asyncio.StreamReader) -> bytes:
     """Read a line from stream without size limit."""
     chunks = []
@@ -173,8 +178,23 @@ class ClaudeRunner:
             # Log raw event type for debugging
             event_type = data.get("type", "unknown")
             event_subtype = ""
+            event_details = {}
+
             if event_type == "stream_event":
-                event_subtype = data.get("event", {}).get("type", "")
+                event_obj = data.get("event", {})
+                event_subtype = event_obj.get("type", "")
+
+                # Capture delta content for debugging
+                if event_subtype == "content_block_delta":
+                    delta = event_obj.get("delta", {})
+                    delta_type = delta.get("type", "")
+                    if delta_type == "text_delta":
+                        text = delta.get("text", "")
+                        event_details["text"] = text[:100] if len(text) > 100 else text
+                    elif delta_type == "input_json_delta":
+                        partial = delta.get("partial_json", "")
+                        event_details["json"] = partial[:50] if len(partial) > 50 else partial
+
             elif event_type == "system":
                 event_subtype = data.get("subtype", "")
 
@@ -182,17 +202,28 @@ class ClaudeRunner:
                 f"Event: {event_type}" + (f"/{event_subtype}" if event_subtype else ""),
                 category="event",
                 run_id=self._run_id,
+                details=event_details if event_details else None,
             )
 
             # Always yield raw event for inspection
             yield RawEvent(data=data)
 
             # Also yield parsed event if recognized
-            event = self._parse_event(data)
-            if event:
-                yield event
-                # Give event loop a chance to process UI updates
-                await asyncio.sleep(0)
+            try:
+                event = self._parse_event(data)
+                if event:
+                    yield event
+                    # Give event loop a chance to process UI updates
+                    await asyncio.sleep(0)
+            except InputRequiredError:
+                # Claude is asking a question - terminate the process
+                debug_log.info(
+                    "Terminating: Claude is asking a question",
+                    category="process",
+                    run_id=self._run_id,
+                )
+                self.terminate()
+                raise
 
         # Check for rate limit error before waiting
         stderr_output = await self.process.stderr.read()
@@ -270,14 +301,26 @@ class ClaudeRunner:
                     return event
 
         # Tool result from user message (Claude CLI returns tool results as user messages)
+        # A "user" event without tool_result content means Claude is asking a question
         if msg_type == "user" and data.get("message"):
             message = data.get("message", {})
+            has_tool_result = False
             for content in message.get("content", []):
                 if content.get("type") == "tool_result":
+                    has_tool_result = True
                     return ToolResultEvent(
                         tool_use_id=content.get("tool_use_id", ""),
                         result=content.get("content", ""),
                     )
+            # If we got a user message but no tool_result, Claude is asking a question
+            if not has_tool_result:
+                debug_log.warning(
+                    "Received user event without tool_result - Claude may be asking a question",
+                    category="event",
+                    run_id=self._run_id,
+                    details={"content_types": [c.get("type") for c in message.get("content", [])]},
+                )
+                raise InputRequiredError("Claude is asking a question (user event without tool_result)")
 
         if msg_type == "result":
             usage = data.get("usage", {})

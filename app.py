@@ -345,6 +345,13 @@ class BalloonsApp(App):
             debug_event(f"cancelled: session={session_id[:8]}")
             self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar, cancelled=True)
 
+        elif event.event_type == "input_required":
+            debug_event(f"input_required: session={session_id[:8]} {event.data}")
+            if is_active:
+                chat_log.append_to_current("\n\n[Claude is asking a question - session ended]")
+                status_bar.set_status("Claude asked a question (not supported in non-interactive mode)")
+            self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar)
+
     def _finalize_streaming(
         self,
         session_id: str,
@@ -535,7 +542,12 @@ class BalloonsApp(App):
             await self._execute_command(cmd)
             return
 
-        # Start streaming in background (event-driven)
+        # Log and start streaming in background (event-driven)
+        debug_log.info(
+            f"Prompt submitted ({len(prompt)} chars)",
+            category="command",
+            session_id=self.session.id if self.session else "",
+        )
         self._start_streaming(prompt)
 
     def _start_streaming(self, prompt: str, is_active: bool = True) -> None:
@@ -610,6 +622,10 @@ class BalloonsApp(App):
 
     async def _execute_command(self, cmd) -> None:
         """Execute a parsed command."""
+        # Log command execution
+        cmd_name = type(cmd).__name__.replace("Command", "").lower()
+        debug_log.info(f"Command: {cmd_name}", category="command")
+
         if isinstance(cmd, NewSessionCommand):
             await self._handle_new_session(cmd.initial_prompt)
         elif isinstance(cmd, CopyTurnsCommand):
@@ -747,6 +763,7 @@ class BalloonsApp(App):
 
         status_bar.set_status(f"Generating {mode} summary...")
         input_box.set_disabled(True)
+        debug_log.info(f"Starting {mode} summary generation", category="command")
 
         try:
             # Build prompt using context builder
@@ -758,9 +775,14 @@ class BalloonsApp(App):
                     result_parts.append(event.text)
 
             result = "".join(result_parts)
+            debug_log.debug(
+                f"Summary response: {result[:200]}..." if len(result) > 200 else f"Summary response: {result}",
+                category="command",
+            )
 
             # Parse the result
             title, summary = self._context_builder.parse_summary_response(result)
+            debug_log.info(f"Parsed title='{title}', summary='{summary[:50]}...'" if summary else f"Parsed title='{title}', summary=''", category="command")
 
             self.session.title = title
             self.session.summary = summary
@@ -785,8 +807,10 @@ class BalloonsApp(App):
             status_bar.set_status(f"Session titled: {title}")
 
         except Exception as e:
+            debug_log.error(f"Summary failed: {e}", category="command")
             status_bar.set_error(f"Summary failed: {e}")
         finally:
+            debug_log.info("Summary generation finished", category="command")
             input_box.set_disabled(False)
 
     def _handle_suspend(self, cmd: str) -> None:
@@ -799,14 +823,26 @@ class BalloonsApp(App):
                 os.system(cmd)
 
     def action_cancel_stream(self) -> None:
-        """Cancel the current streaming response or shell command."""
+        """Cancel streaming/shell and focus input box. Double-tap clears input."""
+        # Cancel any running shell process
         if self._shell_process and self._shell_process.returncode is None:
             self._shell_process.kill()
             self._shell_process = None
             self.query_one("#status-bar", StatusBar).set_status("")
             self.query_one("#input-box", InputBox).set_disabled(False)
+
+        # Cancel any streaming (main runner)
         if self.streaming and self._session_runner and self._session_runner.is_streaming:
             self._session_runner.cancel()
+
+        # Cancel helper runner (used for summaries, etc.)
+        if self._helper_runner.is_running:
+            debug_log.info("Cancelling helper runner", category="command")
+            self._helper_runner.terminate()
+
+        # Always focus the input box
+        input_box = self.query_one("#input-box", InputBox)
+        input_box.focus()
 
     def _handle_copy_turns(self) -> None:
         """Copy selected turns to a new session."""
@@ -1330,6 +1366,13 @@ class BalloonsApp(App):
                 "",  # No model for this view
             )
             chat_log.clear_highlights()
+        elif event.turn_data.get("type") == "text":
+            # Highlight the text block in the chat log
+            # turn_idx is 0-indexed but turn_id is 1-indexed
+            turn_id = event.turn_data.get("turn_idx", 0) + 1
+            block_idx = event.turn_data.get("block_idx", -1)
+            chat_log.highlight_text_block(turn_id, block_idx)
+            request_pane.show_json(event.turn_data)
         elif event.turn_data.get("type") == "tool_use":
             # Highlight the tool use in the chat log
             tool_use_id = event.turn_data.get("tool_use_id", "")

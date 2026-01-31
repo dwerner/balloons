@@ -212,7 +212,7 @@ class ContextTree(Vertical):
         }
 
     def _add_content_block_nodes(self, turn_node, session_id: str, turn_idx: int, content_blocks: list) -> None:
-        """Add child nodes for tool uses and results within a turn."""
+        """Add child nodes for text blocks, tool uses and results within a turn."""
         if not content_blocks:
             return
 
@@ -221,7 +221,24 @@ class ContextTree(Vertical):
         tool_use_nodes: dict[str, any] = {}
 
         for block_idx, block in enumerate(content_blocks):
-            if isinstance(block, ToolUseBlock):
+            if isinstance(block, TextBlock):
+                # Only add text blocks with meaningful content
+                if block.text.strip():
+                    text_preview = block.text[:50].replace("\n", " ")
+                    if len(block.text) > 50:
+                        text_preview += "..."
+                    label = f"[dim]💬[/] {text_preview}"
+                    turn_node.add(
+                        label,
+                        data={
+                            "type": "text",
+                            "session_id": session_id,
+                            "turn_idx": turn_idx,
+                            "block_idx": block_idx,
+                            "text": block.text,
+                        }
+                    )
+            elif isinstance(block, ToolUseBlock):
                 # Truncate input preview
                 input_preview = json.dumps(block.input)[:50]
                 if len(json.dumps(block.input)) > 50:
@@ -557,7 +574,7 @@ class ContextTree(Vertical):
         """Finalize a streaming turn when complete.
 
         Called when a 'done' event is received from SessionRunner.
-        Updates the turn label with final content.
+        Updates the turn label with final content and rebuilds child nodes in order.
         """
         session_data = self._sessions.get(session_id)
         if not session_data:
@@ -577,6 +594,10 @@ class ContextTree(Vertical):
         turn["content_blocks"] = content_blocks
         turn["events"] = raw_events
         turn["_streaming"] = False
+
+        # Clear existing children (added during streaming) and rebuild in correct order
+        turn["node"].remove_children()
+        self._add_content_block_nodes(turn["node"], session_id, turn_idx, content_blocks)
 
         # Update label with final content
         mode = self._context_modes.get((session_id, turn_idx), ContextMode.DROP)
@@ -625,10 +646,22 @@ class ContextTree(Vertical):
                             "events": turn.get("events", []),
                         }))
                         break
+        elif node_type == "text":
+            # Send text block data for inspection and highlighting
+            self.post_message(self.TurnInspected({
+                "type": "text",
+                "session_id": node_data.get("session_id"),
+                "turn_idx": node_data.get("turn_idx"),
+                "block_idx": node_data.get("block_idx"),
+                "text": node_data.get("text"),
+            }))
         elif node_type == "tool_use":
             # Send tool use data for inspection and highlighting
             self.post_message(self.TurnInspected({
                 "type": "tool_use",
+                "session_id": node_data.get("session_id"),
+                "turn_idx": node_data.get("turn_idx"),
+                "block_idx": node_data.get("block_idx"),
                 "tool_name": node_data.get("tool_name"),
                 "tool_input": node_data.get("tool_input"),
                 "tool_use_id": node_data.get("tool_use_id"),
@@ -637,6 +670,9 @@ class ContextTree(Vertical):
             # Send tool result data for inspection and highlighting
             self.post_message(self.TurnInspected({
                 "type": "tool_result",
+                "session_id": node_data.get("session_id"),
+                "turn_idx": node_data.get("turn_idx"),
+                "block_idx": node_data.get("block_idx"),
                 "content": node_data.get("content"),
                 "is_error": node_data.get("is_error"),
                 "tool_use_id": node_data.get("tool_use_id"),
