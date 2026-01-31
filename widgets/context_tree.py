@@ -6,7 +6,7 @@ from datetime import datetime
 
 from tokenizer import count_tokens
 from session import Session
-from models import ContextMode
+from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock
 
 
 class SelectableTree(Tree):
@@ -126,7 +126,7 @@ class ContextTree(Vertical):
             self._add_session_to_tree(tree, current_session, is_current=True)
 
         # Add all sessions (newest first - already sorted)
-        for session_id, created, model in all_sessions:
+        for session_id, created, model, _title in all_sessions:
             session = Session.load(session_id)
             if session:
                 is_current = session_id == current_session.id
@@ -153,11 +153,18 @@ class ContextTree(Vertical):
         else:
             prefix = ""
 
+        # Build label: title (if present), msg count, datetime
+        if session.title:
+            title_part = session.title[:25] + "..." if len(session.title) > 25 else session.title
+            label = f"{title_part} ({msg_count}) {date_str}"
+        else:
+            label = f"{date_str} ({msg_count} msgs)"
+
         # Highlight active session
         if is_active:
-            return f"{prefix}[bold cyan]{date_str} ({msg_count} msgs)[/]"
+            return f"{prefix}[bold cyan]{label}[/]"
         else:
-            return f"{prefix}{date_str} ({msg_count} msgs)"
+            return f"{prefix}{label}"
 
     def _add_session_to_tree(self, tree: SelectableTree, session: Session, is_current: bool) -> None:
         """Add a session and its turns to the tree."""
@@ -178,15 +185,21 @@ class ContextTree(Vertical):
                 self._context_modes[turn_key] = ContextMode.COPY
 
             mode = self._context_modes.get(turn_key, ContextMode.DROP)
-            label = self._make_turn_label(msg.role, msg.content, mode)
+            content_blocks = msg.content_blocks if hasattr(msg, 'content_blocks') else []
+            label = self._make_turn_label(msg.role, msg.content, mode, content_blocks)
             turn_node = session_node.add(
                 label,
                 data={"type": "turn", "session_id": session.id, "turn_idx": idx}
             )
+
+            # Add child nodes for tool uses and results
+            self._add_content_block_nodes(turn_node, session.id, idx, content_blocks)
+
             turns.append({
                 "idx": idx,
                 "role": msg.role,
                 "content": msg.content,
+                "content_blocks": content_blocks,
                 "node": turn_node,
                 "events": [],  # Could load from storage if we save them
             })
@@ -198,7 +211,57 @@ class ContextTree(Vertical):
             "is_current": is_current,
         }
 
-    def _make_turn_label(self, role: str, content: str, mode: ContextMode) -> str:
+    def _add_content_block_nodes(self, turn_node, session_id: str, turn_idx: int, content_blocks: list) -> None:
+        """Add child nodes for tool uses and results within a turn."""
+        if not content_blocks:
+            return
+
+        import json
+        # Track tool use nodes by their id so we can nest results under them
+        tool_use_nodes: dict[str, any] = {}
+
+        for block_idx, block in enumerate(content_blocks):
+            if isinstance(block, ToolUseBlock):
+                # Truncate input preview
+                input_preview = json.dumps(block.input)[:50]
+                if len(json.dumps(block.input)) > 50:
+                    input_preview += "..."
+                label = f"[cyan]🔧 {block.name}[/] {input_preview}"
+                tool_node = turn_node.add(
+                    label,
+                    data={
+                        "type": "tool_use",
+                        "session_id": session_id,
+                        "turn_idx": turn_idx,
+                        "block_idx": block_idx,
+                        "tool_name": block.name,
+                        "tool_input": block.input,
+                        "tool_use_id": block.id,
+                    }
+                )
+                tool_use_nodes[block.id] = tool_node
+            elif isinstance(block, ToolResultBlock):
+                content_preview = str(block.content)[:50]
+                if len(str(block.content)) > 50:
+                    content_preview += "..."
+                error_indicator = "[red]❌[/] " if block.is_error else ""
+                label = f"{error_indicator}[blue]📋 Result[/] {content_preview}"
+                # Find parent tool use node, or fall back to turn node
+                parent_node = tool_use_nodes.get(block.tool_use_id, turn_node)
+                parent_node.add(
+                    label,
+                    data={
+                        "type": "tool_result",
+                        "session_id": session_id,
+                        "turn_idx": turn_idx,
+                        "block_idx": block_idx,
+                        "content": block.content,
+                        "is_error": block.is_error,
+                        "tool_use_id": block.tool_use_id,
+                    }
+                )
+
+    def _make_turn_label(self, role: str, content: str, mode: ContextMode, content_blocks: list = None) -> str:
         # Mode indicator: copy=green check, summarize=yellow S, drop=empty box
         if mode == ContextMode.COPY:
             indicator = "[green]☑[/]"
@@ -208,9 +271,18 @@ class ContextTree(Vertical):
             indicator = "☐"
 
         icon = "👤" if role == "user" else "🤖"
-        preview = content[:40] + "..." if len(content) > 40 else content
+
+        # Count tool uses if content_blocks provided
+        tool_count = 0
+        if content_blocks:
+            tool_count = sum(1 for b in content_blocks if isinstance(b, ToolUseBlock))
+
+        preview = content[:30] + "..." if len(content) > 30 else content
         preview = preview.replace("\n", " ")
-        return f"{indicator} {icon} {preview}"
+
+        # Add tool indicator
+        tool_indicator = f" [cyan]🔧{tool_count}[/]" if tool_count > 0 else ""
+        return f"{indicator} {icon}{tool_indicator} {preview}"
 
     def _update_root_label(self) -> None:
         """Update root label with selected/total tokens."""
@@ -251,7 +323,7 @@ class ContextTree(Vertical):
                 turn_key = (session_id, turn_idx)
                 mode = self._context_modes.get(turn_key, ContextMode.DROP)
                 turn["node"].label = self._make_turn_label(
-                    turn["role"], turn["content"], mode
+                    turn["role"], turn["content"], mode, turn.get("content_blocks")
                 )
                 break
 
@@ -284,7 +356,7 @@ class ContextTree(Vertical):
 
         return False
 
-    def add_turn_to_current(self, role: str, content: str, raw_events: list[dict]) -> None:
+    def add_turn_to_current(self, role: str, content: str, raw_events: list[dict], content_blocks: list = None) -> None:
         """Add a new turn to the current session."""
         if not self._current_session_id:
             return
@@ -297,16 +369,21 @@ class ContextTree(Vertical):
         turn_key = (self._current_session_id, idx)
         self._context_modes[turn_key] = ContextMode.COPY  # Auto-include new turns as COPY
 
-        label = self._make_turn_label(role, content, ContextMode.COPY)
+        label = self._make_turn_label(role, content, ContextMode.COPY, content_blocks)
         turn_node = session_data["node"].add(
             label,
             data={"type": "turn", "session_id": self._current_session_id, "turn_idx": idx}
         )
 
+        # Add child nodes for tool uses and results
+        if content_blocks:
+            self._add_content_block_nodes(turn_node, self._current_session_id, idx, content_blocks)
+
         session_data["turns"].append({
             "idx": idx,
             "role": role,
             "content": content,
+            "content_blocks": content_blocks or [],
             "node": turn_node,
             "events": raw_events,
         })
@@ -331,6 +408,18 @@ class ContextTree(Vertical):
             session_data = self._sessions.get(session_id)
             if session_data:
                 self.post_message(self.SessionActivated(session_data["session"]))
+        elif node_type == "summary":
+            # Show full summary in the inspection pane
+            session_id = node_data.get("session_id")
+            session_data = self._sessions.get(session_id)
+            if session_data:
+                session = session_data["session"]
+                self.post_message(self.TurnInspected({
+                    "type": "summary",
+                    "title": session.title,
+                    "summary": session.summary,
+                    "session_id": session_id,
+                }))
         elif node_type == "turn":
             session_id = node_data.get("session_id")
             turn_idx = node_data.get("turn_idx")
@@ -345,6 +434,22 @@ class ContextTree(Vertical):
                             "events": turn.get("events", []),
                         }))
                         break
+        elif node_type == "tool_use":
+            # Send tool use data for inspection and highlighting
+            self.post_message(self.TurnInspected({
+                "type": "tool_use",
+                "tool_name": node_data.get("tool_name"),
+                "tool_input": node_data.get("tool_input"),
+                "tool_use_id": node_data.get("tool_use_id"),
+            }))
+        elif node_type == "tool_result":
+            # Send tool result data for inspection and highlighting
+            self.post_message(self.TurnInspected({
+                "type": "tool_result",
+                "content": node_data.get("content"),
+                "is_error": node_data.get("is_error"),
+                "tool_use_id": node_data.get("tool_use_id"),
+            }))
 
     def on_selectable_tree_toggle_requested(self, event: SelectableTree.ToggleRequested) -> None:
         """Handle space bar toggle - cycle through COPY -> SUMMARIZE -> DROP."""

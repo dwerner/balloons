@@ -93,3 +93,20 @@ class RequestPane(Vertical):
         """Display raw text in the viewer."""
         viewer = self.query_one("#json-viewer", Static)
         viewer.update(Text(content))
+
+    def show_session_info(self, title: str, summary: str, created: str, model: str) -> None:
+        """Display session title and summary."""
+        viewer = self.query_one("#json-viewer", Static)
+        parts = []
+        if title:
+            parts.append(Text(f"Title: {title}", style="bold"))
+        if summary:
+            parts.append(Text(f"\nSummary: {summary}", style="italic"))
+        parts.append(Text(f"\nCreated: {created[:16]}", style="dim"))
+        if model:
+            parts.append(Text(f"\nModel: {model}", style="dim"))
+
+        combined = Text()
+        for part in parts:
+            combined.append_text(part)
+        viewer.update(combined)

@@ -28,7 +28,10 @@ def debug_event(msg: str) -> None:
     if _log:
         _log.debug(msg)
 
+from rich.console import RenderableType, Group
+from rich.text import Text
 from widgets import ChatLog, InputBox, StatusBar, ContextTree, VerticalSplitter, SessionPicker, RequestPane, ToolBar, WithWidget, WithResultWidget
+from widgets.chat_log import _format_edit_as_diff, _guess_language
 from claude_runner import ClaudeRunner
 from session import Session
 from models import (
@@ -141,6 +144,19 @@ class BalloonsApp(App):
         if self.session.messages:
             chat_log.load_history(self.session.messages)
 
+        # Set session title in chat header
+        if self.session.title:
+            chat_log.set_session_title(self.session.title)
+
+        # Show session info in request pane
+        request_pane = self.query_one("#request-pane", RequestPane)
+        request_pane.show_session_info(
+            self.session.title,
+            self.session.summary,
+            self.session.created,
+            self.session.model,
+        )
+
         # Update status bar with session info
         if self.session.model:
             status_bar.update_stats(
@@ -221,6 +237,12 @@ class BalloonsApp(App):
             return
         elif prompt == ":reload":
             self._handle_reload()
+            return
+        elif prompt.startswith(":summarize"):
+            # :summarize [quick|detailed]
+            args = prompt[10:].strip() if len(prompt) > 10 else ""
+            mode = args if args in ("quick", "detailed") else "quick"
+            await self._handle_summarize_command(mode)
             return
         elif prompt.startswith(":"):
             # Unknown command
@@ -338,12 +360,11 @@ class BalloonsApp(App):
                         )
                         self._current_text_buffer = ""
 
-                    # Create tool use block - generate ID from name + index
-                    tool_id = f"{event.tool_name}_{len(self._current_content_blocks)}"
-                    self._current_tool_use_id = tool_id
+                    # Create tool use block using Claude's tool_use_id
+                    self._current_tool_use_id = event.tool_use_id
                     self._current_content_blocks.append(
                         ToolUseBlock(
-                            id=tool_id,
+                            id=event.tool_use_id,
                             name=event.tool_name,
                             input=event.tool_input,
                         )
@@ -352,14 +373,14 @@ class BalloonsApp(App):
                     # Display tool use as separate widget
                     tool_content = self._format_tool_use(event)
                     debug_event(f"  -> add_tool_use widget for {event.tool_name}")
-                    chat_log.add_tool_use(event.tool_name, tool_content)
+                    chat_log.add_tool_use(event.tool_name, tool_content, tool_use_id=event.tool_use_id)
 
                 elif isinstance(event, ToolResultEvent):
                     debug_event(f"ToolResultEvent: {len(event.result)} chars")
-                    # Create tool result block
+                    # Create tool result block using the tool_use_id from the event
                     self._current_content_blocks.append(
                         ToolResultBlock(
-                            tool_use_id=self._current_tool_use_id,
+                            tool_use_id=event.tool_use_id,
                             content=event.result,
                             is_error=False,
                         )
@@ -368,7 +389,7 @@ class BalloonsApp(App):
                     # Display tool result
                     result_content = self._format_tool_result(event)
                     if result_content:
-                        chat_log.add_tool_result(result_content)
+                        chat_log.add_tool_result(result_content, tool_use_id=event.tool_use_id)
 
         except Exception as e:
             chat_log.append_to_current(f"\n\n[Error: {e}]")
@@ -387,8 +408,8 @@ class BalloonsApp(App):
             user_blocks = [TextBlock(text=prompt)]
             assistant_blocks = self._current_content_blocks if self._current_content_blocks else [TextBlock(text=content)]
 
-            # Add assistant turn to tree with raw events
-            context_tree.add_turn_to_current("assistant", content, self._current_raw_events)
+            # Add assistant turn to tree with raw events and content blocks
+            context_tree.add_turn_to_current("assistant", content, self._current_raw_events, assistant_blocks)
 
             # Save messages to session with rich content
             self.session.add_message("user", prompt, content_blocks=user_blocks)
@@ -409,18 +430,19 @@ class BalloonsApp(App):
                 # Schedule auto-return (can't await in finally)
                 asyncio.create_task(self._handle_return_command("Auto-return: condition met"))
 
-    def _format_tool_use(self, event: ToolUseEvent) -> str:
+    def _format_tool_use(self, event: ToolUseEvent) -> RenderableType:
         """Format a tool use event for display."""
         tool = event.tool_name
         inp = event.tool_input
 
         if tool == "Edit":
             file_path = inp.get("file_path", "")
-            old = inp.get("old_string", "")
-            new = inp.get("new_string", "")
-            old_lines = "\n".join(f"- {line}" for line in old.split("\n"))
-            new_lines = "\n".join(f"+ {line}" for line in new.split("\n"))
-            return f"**Edit** `{file_path}`\n```diff\n{old_lines}\n{new_lines}\n```"
+            _, diff_text = _format_edit_as_diff(inp, _guess_language(file_path))
+            header = Text()
+            header.append("Edit ", style="bold")
+            header.append(file_path, style="cyan")
+            header.append("\n")
+            return Group(header, diff_text)
 
         elif tool == "Write":
             file_path = inp.get("file_path", "")
@@ -448,12 +470,51 @@ class BalloonsApp(App):
             import json
             return f"**{tool}**\n```json\n{json.dumps(inp, indent=2)[:300]}\n```"
 
-    def _format_tool_result(self, event: ToolResultEvent) -> str:
+    def _format_tool_result(self, event: ToolResultEvent) -> RenderableType:
         """Format a tool result for display."""
         result = event.result
         if not result:
             return ""
-        # Truncate long results
+
+        # Check if this is a Read result by looking at the last tool use
+        last_tool_use = None
+        for block in reversed(self._current_content_blocks):
+            if isinstance(block, ToolUseBlock):
+                last_tool_use = block
+                break
+
+        if last_tool_use and last_tool_use.name == "Read":
+            # Parse Read output format: "    1→content" where → is a tab
+            file_path = last_tool_use.input.get("file_path", "")
+            language = _guess_language(file_path)
+
+            lines = result.split("\n")
+            formatted = Text()
+
+            from rich.syntax import Syntax
+
+            for line in lines[:100]:  # Limit to first 100 lines
+                # Parse line number prefix: spaces + number + tab + content
+                if "→" in line:
+                    prefix, content = line.split("→", 1)
+                    line_num = prefix.strip()
+                    # Format line number in dim style
+                    formatted.append(f"{line_num:>5} ", style="dim")
+                    # Apply syntax highlighting to content
+                    syntax = Syntax(content, language, theme="monokai")
+                    highlighted = syntax.highlight(content)
+                    highlighted.rstrip()  # Remove trailing newline
+                    formatted.append_text(highlighted)
+                    formatted.append("\n")
+                else:
+                    formatted.append(line + "\n", style="dim")
+
+            if len(lines) > 100:
+                formatted.append(f"... ({len(lines) - 100} more lines)", style="dim italic")
+
+            return formatted
+
+        # Default: truncate and show as code block
         if len(result) > 500:
             result = result[:500] + "..."
         return f"```\n{result}\n```"
@@ -528,6 +589,101 @@ class BalloonsApp(App):
         """Reload the app by re-executing the process."""
         self.session.save()
         os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    async def _handle_summarize_command(self, mode: str) -> None:
+        """Generate a title and summary for the current session.
+
+        mode: 'quick' - summarize only user messages
+              'detailed' - summarize all messages including assistant responses
+        """
+        status_bar = self.query_one("#status-bar", StatusBar)
+        input_box = self.query_one("#input-box", InputBox)
+
+        if not self.session.messages:
+            status_bar.set_error("No messages to summarize")
+            return
+
+        status_bar.set_status(f"Generating {mode} summary...")
+        input_box.set_disabled(True)
+
+        try:
+            # Build context based on mode
+            if mode == "quick":
+                # Only include user messages
+                context_parts = []
+                for msg in self.session.messages:
+                    if msg.role == "user":
+                        content = msg.content[:500] if len(msg.content) > 500 else msg.content
+                        context_parts.append(f"User: {content}")
+                context = "\n\n".join(context_parts)
+            else:
+                # Include all messages, but truncate long ones
+                context_parts = []
+                for msg in self.session.messages:
+                    prefix = "User" if msg.role == "user" else "Assistant"
+                    content = msg.content[:1000] if len(msg.content) > 1000 else msg.content
+                    context_parts.append(f"{prefix}: {content}")
+                context = "\n\n".join(context_parts)
+
+            # Generate title and summary via LLM
+            prompt = f"""Based on this conversation, provide:
+1. A short title (max 50 chars) that captures the main topic
+2. A brief summary (2-3 sentences) of what was discussed/accomplished
+
+Respond in this exact format:
+TITLE: <title here>
+SUMMARY: <summary here>
+
+Conversation:
+{context}"""
+
+            result_parts = []
+            async for event in self.runner.stream_response([], prompt):
+                if isinstance(event, TextDelta):
+                    result_parts.append(event.text)
+
+            result = "".join(result_parts)
+
+            # Parse the result
+            title = ""
+            summary = ""
+            for line in result.split("\n"):
+                if line.startswith("TITLE:"):
+                    title = line[6:].strip()[:50]
+                elif line.startswith("SUMMARY:"):
+                    summary = line[8:].strip()
+
+            # If we got multi-line summary (continuation after SUMMARY:), grab it
+            if "SUMMARY:" in result:
+                summary_start = result.find("SUMMARY:") + 8
+                summary = result[summary_start:].strip()
+
+            self.session.title = title
+            self.session.summary = summary
+            self.session.save()
+
+            # Update UI with new title/summary
+            chat_log = self.query_one("#chat-log", ChatLog)
+            chat_log.set_session_title(title)
+
+            request_pane = self.query_one("#request-pane", RequestPane)
+            request_pane.show_session_info(
+                title,
+                summary,
+                self.session.created,
+                self.session.model,
+            )
+
+            # Reload context tree to show summary
+            context_tree = self.query_one("#context-tree", ContextTree)
+            context_tree.load_all_sessions(self.session)
+
+            status_bar.set_status(f"Session titled: {title}")
+
+        except Exception as e:
+            status_bar.set_error(f"Summary failed: {e}")
+        finally:
+            input_box.set_disabled(False)
 
     def _handle_suspend(self, cmd: str) -> None:
         """Suspend TUI and run interactive command in session's working directory."""
@@ -634,7 +790,7 @@ class BalloonsApp(App):
             if self._current_text_buffer.strip():
                 self._current_content_blocks.append(TextBlock(text=self._current_text_buffer))
             assistant_blocks = self._current_content_blocks if self._current_content_blocks else [TextBlock(text=content)]
-            context_tree.add_turn_to_current("assistant", content, self._current_raw_events)
+            context_tree.add_turn_to_current("assistant", content, self._current_raw_events, assistant_blocks)
 
             # Only save assistant response to new session with rich content
             self.session.add_message("assistant", content, content_blocks=assistant_blocks)
@@ -1053,6 +1209,7 @@ Provide a clear, actionable summary that can be used as context for continuing t
         """Switch to a different session."""
         chat_log = self.query_one("#chat-log", ChatLog)
         context_tree = self.query_one("#context-tree", ContextTree)
+        request_pane = self.query_one("#request-pane", RequestPane)
 
         self.session = session
         context_tree.set_active_session(session.id)
@@ -1060,6 +1217,15 @@ Provide a clear, actionable summary that can be used as context for continuing t
         # Load session messages and filter by selection
         chat_log.clear()
         chat_log.load_history(session.messages)
+
+        # Update header and request pane with session info
+        chat_log.set_session_title(session.title)
+        request_pane.show_session_info(
+            session.title,
+            session.summary,
+            session.created,
+            session.model,
+        )
 
         # Get included turn IDs for this session (not DROP)
         session_data = context_tree._sessions.get(session.id)
@@ -1088,9 +1254,34 @@ Provide a clear, actionable summary that can be used as context for continuing t
         self._switch_to_session(event.session)
 
     def on_context_tree_turn_inspected(self, event: ContextTree.TurnInspected) -> None:
-        """Handle turn inspection - show in request pane."""
+        """Handle turn inspection - show in request pane and highlight tool uses."""
         request_pane = self.query_one("#request-pane", RequestPane)
-        request_pane.show_json(event.turn_data)
+        chat_log = self.query_one("#chat-log", ChatLog)
+
+        # Handle summary nodes specially
+        if event.turn_data.get("type") == "summary":
+            request_pane.show_session_info(
+                event.turn_data.get("title", ""),
+                event.turn_data.get("summary", ""),
+                "",  # No created date for this view
+                "",  # No model for this view
+            )
+            chat_log.clear_highlights()
+        elif event.turn_data.get("type") == "tool_use":
+            # Highlight the tool use in the chat log
+            tool_use_id = event.turn_data.get("tool_use_id", "")
+            if tool_use_id:
+                chat_log.highlight_tool(tool_use_id)
+            request_pane.show_json(event.turn_data)
+        elif event.turn_data.get("type") == "tool_result":
+            # Highlight the tool result and its parent tool use
+            tool_use_id = event.turn_data.get("tool_use_id", "")
+            if tool_use_id:
+                chat_log.highlight_tool(tool_use_id)
+            request_pane.show_json(event.turn_data)
+        else:
+            chat_log.clear_highlights()
+            request_pane.show_json(event.turn_data)
 
     def action_toggle_tree(self) -> None:
         """Toggle the context tree visibility."""

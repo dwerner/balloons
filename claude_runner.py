@@ -108,7 +108,8 @@ class ClaudeRunner:
             "-p",
             "--output-format", "stream-json",
             "--include-partial-messages",
-            "--disallowedTools", "Task",  # Prevent task spawning - we manage our own sessions
+            "--no-session-persistence",  # Don't save sessions in Claude - we manage our own
+            "--disallowedTools", "Task,TodoWrite,NotebookEdit,AskUserQuestion",  # Prevent task spawning, todo lists, notebook, questions - we manage our own sessions
         ]
 
         if allowed_tools:
@@ -185,8 +186,9 @@ class ClaudeRunner:
             if event_type == "content_block_start":
                 content_block = event.get("content_block", {})
                 if content_block.get("type") == "tool_use":
-                    # Start tracking a new tool use
+                    # Start tracking a new tool use (capture Claude's tool_use_id)
                     self._current_tool_use = {
+                        "id": content_block.get("id", ""),
                         "name": content_block.get("name", ""),
                         "input_json": "",
                     }
@@ -201,19 +203,20 @@ class ClaudeRunner:
                         tool_input = {"raw": self._current_tool_use["input_json"]}
 
                     event = ToolUseEvent(
+                        tool_use_id=self._current_tool_use["id"],
                         tool_name=self._current_tool_use["name"],
                         tool_input=tool_input,
                     )
                     self._current_tool_use = None
                     return event
 
-        # Tool result from assistant message
-        if msg_type == "assistant" and data.get("message"):
+        # Tool result from user message (Claude CLI returns tool results as user messages)
+        if msg_type == "user" and data.get("message"):
             message = data.get("message", {})
             for content in message.get("content", []):
                 if content.get("type") == "tool_result":
                     return ToolResultEvent(
-                        tool_name=content.get("tool_use_id", ""),
+                        tool_use_id=content.get("tool_use_id", ""),
                         result=content.get("content", ""),
                     )
 

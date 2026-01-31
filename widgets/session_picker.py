@@ -9,14 +9,18 @@ from session import Session
 class SessionItem(ListItem):
     """A session item in the list."""
 
-    def __init__(self, session_id: str, created: str, model: str, **kwargs):
+    def __init__(self, session_id: str, created: str, model: str, title: str = "", **kwargs):
         super().__init__(**kwargs)
         self.session_id = session_id
         self.created = created
         self.model = model
+        self.title = title
 
     def compose(self):
-        yield Label(f"{self.created[:16]}  {self.model or 'unknown'}")
+        if self.title:
+            yield Label(f"{self.created[:16]}  {self.title[:30]}")
+        else:
+            yield Label(f"{self.created[:16]}  {self.model or 'unknown'}")
 
 
 class SessionPicker(ModalScreen[Session | None]):
@@ -73,7 +77,7 @@ class SessionPicker(ModalScreen[Session | None]):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self._sessions: list[tuple[str, str, str]] = []
+        self._sessions: list[tuple[str, str, str, str]] = []
 
     def compose(self):
         with Vertical(id="dialog"):
@@ -83,8 +87,8 @@ class SessionPicker(ModalScreen[Session | None]):
 
             if self._sessions:
                 with ListView(id="session-list"):
-                    for session_id, created, model in self._sessions:
-                        yield SessionItem(session_id, created, model)
+                    for session_id, created, model, title in self._sessions:
+                        yield SessionItem(session_id, created, model, title)
             else:
                 yield Static("No previous sessions", id="no-sessions")
 

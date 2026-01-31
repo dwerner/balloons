@@ -83,6 +83,7 @@ class RawEvent:
 @dataclass
 class ToolUseEvent:
     """Claude is using a tool."""
+    tool_use_id: str
     tool_name: str
     tool_input: dict
 
@@ -90,5 +91,5 @@ class ToolUseEvent:
 @dataclass
 class ToolResultEvent:
     """Result from a tool use."""
-    tool_name: str
+    tool_use_id: str
     result: str

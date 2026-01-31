@@ -22,7 +22,7 @@ class ToolBar(Horizontal):
     }
     """
 
-    TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch", "NotebookEdit"]
+    TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch"]
 
     class ToolsChanged(Message):
         """Fired when tools change."""

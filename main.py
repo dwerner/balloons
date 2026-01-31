@@ -36,10 +36,11 @@ def main():
         if not sessions:
             print("No sessions found.")
         else:
-            print(f"{'ID':<40} {'Created':<25} {'Model'}")
+            print(f"{'ID':<40} {'Created':<20} {'Title/Model'}")
             print("-" * 80)
-            for session_id, created, model in sessions:
-                print(f"{session_id:<40} {created[:19]:<25} {model}")
+            for session_id, created, model, title in sessions:
+                display = title[:30] if title else model
+                print(f"{session_id:<40} {created[:19]:<20} {display}")
         return
 
     session = None
