@@ -609,11 +609,14 @@ class ContextTree(Vertical):
 
     def on_tree_node_selected(self, event) -> None:
         """Handle node selection - switch session or inspect turn."""
+        from core.debug_log import debug_log
         node_data = event.node.data
         if not node_data:
+            debug_log.debug("on_tree_node_selected: no node_data", category="tree")
             return
 
         node_type = node_data.get("type")
+        debug_log.info(f"on_tree_node_selected: type={node_type}, data={node_data}", category="tree")
 
         if node_type == "session":
             session_id = node_data.get("session_id")
