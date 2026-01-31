@@ -395,6 +395,197 @@ class ContextTree(Vertical):
 
         self._update_root_label()
 
+    # --- Streaming-aware methods for incremental tree updates ---
+
+    def start_turn(self, session_id: str, turn_idx: int, role: str) -> None:
+        """Start a new turn node when streaming begins.
+
+        Called when a 'turn_started' event is received from SessionRunner.
+        Creates a placeholder turn node that will be populated as events arrive.
+        """
+        session_data = self._sessions.get(session_id)
+        if not session_data:
+            return
+
+        turn_key = (session_id, turn_idx)
+        self._context_modes[turn_key] = ContextMode.COPY  # Auto-include as COPY
+
+        # Create placeholder label
+        label = self._make_turn_label(role, "[dim]streaming...[/]", ContextMode.COPY)
+        turn_node = session_data["node"].add(
+            label,
+            data={"type": "turn", "session_id": session_id, "turn_idx": turn_idx}
+        )
+        turn_node.expand()
+
+        # Track the streaming turn
+        session_data["turns"].append({
+            "idx": turn_idx,
+            "role": role,
+            "content": "",  # Will be updated when streaming completes
+            "content_blocks": [],
+            "node": turn_node,
+            "events": [],
+            "_streaming": True,  # Mark as streaming
+            "_tool_use_nodes": {},  # Track tool use nodes by id for nesting results
+        })
+
+        # Update session label with new count
+        session = session_data["session"]
+        is_active = session.id == self._current_session_id
+        session_data["node"].label = self._make_session_label(session, is_active)
+
+        self._update_root_label()
+
+    def add_tool_use_to_turn(
+        self,
+        session_id: str,
+        turn_idx: int,
+        tool_use_id: str,
+        tool_name: str,
+        tool_input: dict,
+        tool_index: int,
+    ) -> None:
+        """Add a tool use node during streaming.
+
+        Called when a 'tool_use' event is received from SessionRunner.
+        """
+        session_data = self._sessions.get(session_id)
+        if not session_data:
+            return
+
+        # Find the streaming turn
+        turn = None
+        for t in session_data["turns"]:
+            if t["idx"] == turn_idx:
+                turn = t
+                break
+        if not turn:
+            return
+
+        import json
+        input_preview = json.dumps(tool_input)[:50]
+        if len(json.dumps(tool_input)) > 50:
+            input_preview += "..."
+        label = f"[cyan]🔧 {tool_name}[/] {input_preview}"
+
+        tool_node = turn["node"].add(
+            label,
+            data={
+                "type": "tool_use",
+                "session_id": session_id,
+                "turn_idx": turn_idx,
+                "block_idx": tool_index,  # Use tool_index as block_idx
+                "tool_name": tool_name,
+                "tool_input": tool_input,
+                "tool_use_id": tool_use_id,
+            }
+        )
+
+        # Track for nesting results
+        turn.get("_tool_use_nodes", {})[tool_use_id] = tool_node
+
+        # Update turn label to show tool count
+        tool_count = len(turn.get("_tool_use_nodes", {}))
+        icon = "👤" if turn["role"] == "user" else "🤖"
+        mode = self._context_modes.get((session_id, turn_idx), ContextMode.DROP)
+        if mode == ContextMode.COPY:
+            indicator = "[green]☑[/]"
+        elif mode == ContextMode.SUMMARIZE:
+            indicator = "[yellow]Σ[/]"
+        else:
+            indicator = "☐"
+        turn["node"].label = f"{indicator} {icon} [cyan]🔧{tool_count}[/] [dim]streaming...[/]"
+
+    def add_tool_result_to_turn(
+        self,
+        session_id: str,
+        turn_idx: int,
+        tool_use_id: str,
+        result: str,
+        is_error: bool = False,
+        tool_index: int = None,
+    ) -> None:
+        """Add a tool result node during streaming.
+
+        Called when a 'tool_result' event is received from SessionRunner.
+        Results are nested under their corresponding tool use.
+        """
+        session_data = self._sessions.get(session_id)
+        if not session_data:
+            return
+
+        # Find the streaming turn
+        turn = None
+        for t in session_data["turns"]:
+            if t["idx"] == turn_idx:
+                turn = t
+                break
+        if not turn:
+            return
+
+        content_preview = str(result)[:50]
+        if len(str(result)) > 50:
+            content_preview += "..."
+        error_indicator = "[red]❌[/] " if is_error else ""
+        label = f"{error_indicator}[blue]📋 Result[/] {content_preview}"
+
+        # Find parent tool use node, or fall back to turn node
+        tool_use_nodes = turn.get("_tool_use_nodes", {})
+        parent_node = tool_use_nodes.get(tool_use_id, turn["node"])
+        parent_node.add(
+            label,
+            data={
+                "type": "tool_result",
+                "session_id": session_id,
+                "turn_idx": turn_idx,
+                "block_idx": tool_index,
+                "content": result,
+                "is_error": is_error,
+                "tool_use_id": tool_use_id,
+            }
+        )
+
+    def finish_turn(
+        self,
+        session_id: str,
+        turn_idx: int,
+        content: str,
+        content_blocks: list,
+        raw_events: list[dict],
+    ) -> None:
+        """Finalize a streaming turn when complete.
+
+        Called when a 'done' event is received from SessionRunner.
+        Updates the turn label with final content.
+        """
+        session_data = self._sessions.get(session_id)
+        if not session_data:
+            return
+
+        # Find the streaming turn
+        turn = None
+        for t in session_data["turns"]:
+            if t["idx"] == turn_idx:
+                turn = t
+                break
+        if not turn:
+            return
+
+        # Update turn data
+        turn["content"] = content
+        turn["content_blocks"] = content_blocks
+        turn["events"] = raw_events
+        turn["_streaming"] = False
+
+        # Update label with final content
+        mode = self._context_modes.get((session_id, turn_idx), ContextMode.DROP)
+        turn["node"].label = self._make_turn_label(
+            turn["role"], content, mode, content_blocks
+        )
+
+        self._update_root_label()
+
     def on_tree_node_selected(self, event) -> None:
         """Handle node selection - switch session or inspect turn."""
         node_data = event.node.data

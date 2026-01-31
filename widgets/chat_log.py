@@ -1,5 +1,4 @@
 import json
-import difflib
 from pathlib import Path
 
 from textual.widgets import Static
@@ -13,104 +12,11 @@ from rich.panel import Panel
 from .with_widget import WithWidget
 from .with_result_widget import WithResultWidget
 from models import TextBlock, ToolUseBlock, ToolResultBlock
+from core.formatter import format_edit_as_diff, guess_language
 
-
-def _format_edit_as_diff(tool_input: dict, language: str = "python") -> tuple[str, Text]:
-    """Format an Edit tool use as a unified diff with syntax highlighting and colored backgrounds.
-
-    Returns (file_path, rich_text) for display.
-    """
-    file_path = tool_input.get("file_path", "unknown")
-    old_string = tool_input.get("old_string", "")
-    new_string = tool_input.get("new_string", "")
-
-    # Generate unified diff with keepends to preserve line structure
-    old_lines = old_string.splitlines(keepends=True)
-    new_lines = new_string.splitlines(keepends=True)
-
-    diff = list(difflib.unified_diff(
-        old_lines, new_lines,
-        fromfile=f"a/{Path(file_path).name}",
-        tofile=f"b/{Path(file_path).name}",
-    ))
-
-    if not diff:
-        # If no diff (strings are equal), show simple message
-        return file_path, Text("(no changes)")
-
-    # Build rich text with syntax highlighting and colored backgrounds
-    result = Text()
-
-    for line in diff:
-        line_text = line.rstrip("\n\r")
-
-        if line.startswith("+++") or line.startswith("---"):
-            # Header lines - bold cyan
-            result.append(line_text + "\n", style="bold cyan")
-        elif line.startswith("@@"):
-            # Hunk headers - magenta
-            result.append(line_text + "\n", style="magenta")
-        elif line.startswith("+"):
-            # Added lines - syntax highlight with green background
-            code = line_text[1:]  # Strip the + prefix
-            result.append("+", style="bold green on #1a3a1a")
-            # Get syntax-highlighted text and append it
-            syntax = Syntax(code, language, theme="monokai", background_color="#1a3a1a")
-            highlighted = syntax.highlight(code)
-            # Remove trailing newline from highlight output
-            highlighted.rstrip()
-            result.append_text(highlighted)
-            result.append("\n")
-        elif line.startswith("-"):
-            # Removed lines - syntax highlight with red background
-            code = line_text[1:]  # Strip the - prefix
-            result.append("-", style="bold red on #3a1a1a")
-            syntax = Syntax(code, language, theme="monokai", background_color="#3a1a1a")
-            highlighted = syntax.highlight(code)
-            highlighted.rstrip()
-            result.append_text(highlighted)
-            result.append("\n")
-        else:
-            # Context lines - syntax highlight with no special background
-            code = line_text[1:] if line_text.startswith(" ") else line_text
-            result.append(" ", style="dim")
-            syntax = Syntax(code, language, theme="monokai")
-            highlighted = syntax.highlight(code)
-            highlighted.rstrip()
-            result.append_text(highlighted)
-            result.append("\n")
-
-    return file_path, result
-
-
-def _guess_language(file_path: str) -> str:
-    """Guess language from file extension for syntax highlighting."""
-    ext_map = {
-        ".py": "python",
-        ".js": "javascript",
-        ".ts": "typescript",
-        ".tsx": "typescript",
-        ".jsx": "javascript",
-        ".rs": "rust",
-        ".go": "go",
-        ".rb": "ruby",
-        ".java": "java",
-        ".c": "c",
-        ".cpp": "cpp",
-        ".h": "c",
-        ".hpp": "cpp",
-        ".css": "css",
-        ".html": "html",
-        ".json": "json",
-        ".yaml": "yaml",
-        ".yml": "yaml",
-        ".md": "markdown",
-        ".sh": "bash",
-        ".bash": "bash",
-        ".sql": "sql",
-    }
-    ext = Path(file_path).suffix.lower()
-    return ext_map.get(ext, "text")
+# Re-export for backwards compatibility (used by app.py imports)
+_format_edit_as_diff = format_edit_as_diff
+_guess_language = guess_language
 
 
 class ToolUseWidget(Static):
@@ -132,20 +38,64 @@ class ToolUseWidget(Static):
         background: #2a4a2a;
         border: wide $warning;
     }
+
+    ToolUseWidget.expandable {
+        border-left: thick $success;
+    }
+
+    ToolUseWidget.expanded {
+        max-height: 10000;
+    }
     """
 
-    def __init__(self, tool_name: str, content: RenderableType, turn_id: int = 0, tool_use_id: str = "", **kwargs):
+    def __init__(
+        self,
+        tool_name: str,
+        content: RenderableType,
+        turn_id: int = 0,
+        tool_use_id: str = "",
+        full_content: RenderableType | None = None,
+        **kwargs
+    ):
         super().__init__(**kwargs)
         self.tool_name = tool_name
         self._content = content
+        self._full_content = full_content  # Store full content if truncated
+        self._expanded = False
         self.turn_id = turn_id
         self.tool_use_id = tool_use_id
+        if full_content is not None:
+            self.add_class("expandable")
 
     def render(self) -> RenderableType:
+        content = self._full_content if self._expanded and self._full_content else self._content
         # Content can be Markdown, Text, or other Rich renderables
-        if isinstance(self._content, str):
-            return Markdown(self._content, code_theme="monokai")
-        return self._content
+        if isinstance(content, str):
+            return Markdown(content, code_theme="monokai")
+        return content
+
+    def toggle_expand(self) -> None:
+        """Toggle between expanded and collapsed state."""
+        if self._full_content is not None:
+            self._expanded = not self._expanded
+            if self._expanded:
+                self.add_class("expanded")
+            else:
+                self.remove_class("expanded")
+            self.refresh()
+
+    def on_click(self) -> None:
+        """Handle click to toggle expand/collapse."""
+        if self._full_content is not None:
+            self.toggle_expand()
+
+    @property
+    def is_expandable(self) -> bool:
+        return self._full_content is not None
+
+    @property
+    def is_expanded(self) -> bool:
+        return self._expanded
 
 
 class ToolResultWidget(Static):
@@ -169,19 +119,62 @@ class ToolResultWidget(Static):
         background: #2a2a4a;
         border: wide $warning;
     }
+
+    ToolResultWidget.expandable {
+        border-left: thick $primary;
+    }
+
+    ToolResultWidget.expanded {
+        max-height: 10000;
+    }
     """
 
-    def __init__(self, content: RenderableType, turn_id: int = 0, tool_use_id: str = "", **kwargs):
+    def __init__(
+        self,
+        content: RenderableType,
+        turn_id: int = 0,
+        tool_use_id: str = "",
+        full_content: RenderableType | None = None,
+        **kwargs
+    ):
         super().__init__(**kwargs)
         self._content = content
+        self._full_content = full_content  # Store full content if truncated
+        self._expanded = False
         self.turn_id = turn_id
         self.tool_use_id = tool_use_id
+        if full_content is not None:
+            self.add_class("expandable")
 
     def render(self) -> RenderableType:
+        content = self._full_content if self._expanded and self._full_content else self._content
         # Content can be Markdown, Text, or other Rich renderables
-        if isinstance(self._content, str):
-            return Markdown(self._content, code_theme="monokai")
-        return self._content
+        if isinstance(content, str):
+            return Markdown(content, code_theme="monokai")
+        return content
+
+    def toggle_expand(self) -> None:
+        """Toggle between expanded and collapsed state."""
+        if self._full_content is not None:
+            self._expanded = not self._expanded
+            if self._expanded:
+                self.add_class("expanded")
+            else:
+                self.remove_class("expanded")
+            self.refresh()
+
+    def on_click(self) -> None:
+        """Handle click to toggle expand/collapse."""
+        if self._full_content is not None:
+            self.toggle_expand()
+
+    @property
+    def is_expandable(self) -> bool:
+        return self._full_content is not None
+
+    @property
+    def is_expanded(self) -> bool:
+        return self._expanded
 
 
 class MessageWidget(Static):
@@ -302,10 +295,22 @@ class ChatLog(VerticalScroll):
         self._current_assistant_message: MessageWidget | None = None
         self._turn_counter = 0
         self._header: SessionHeader | None = None
+        self._user_scrolled_up = False  # Track if user scrolled away from bottom
 
     def compose(self):
         self._header = SessionHeader("", id="session-header")
         yield self._header
+
+    def on_scroll_y(self, event) -> None:
+        """Track when user scrolls away from bottom."""
+        # Check if we're near the bottom (within 50 pixels)
+        at_bottom = (self.max_scroll_y - self.scroll_y) < 50
+        self._user_scrolled_up = not at_bottom
+
+    def _smart_scroll(self) -> None:
+        """Scroll to end only if user hasn't scrolled up."""
+        if not self._user_scrolled_up:
+            self.scroll_end(animate=False)
 
     def set_session_title(self, title: str) -> None:
         """Set the session title displayed in the header."""
@@ -315,6 +320,8 @@ class ChatLog(VerticalScroll):
     def add_user_message(self, content: str) -> MessageWidget:
         """Add a user message to the log."""
         self._turn_counter += 1
+        # User sending message means they want to see response - reset scroll state
+        self._user_scrolled_up = False
         widget = MessageWidget("user", content, turn_id=self._turn_counter)
         self.mount(widget)
         self.scroll_end(animate=False)
@@ -327,7 +334,7 @@ class ChatLog(VerticalScroll):
         widget.add_class("streaming")
         self._current_assistant_message = widget
         self.mount(widget)
-        self.scroll_end(animate=False)
+        self._smart_scroll()
         return widget
 
     def append_to_current(self, text: str) -> None:
@@ -344,9 +351,15 @@ class ChatLog(VerticalScroll):
             self.mount(widget)
 
         self._current_assistant_message.append_text(text)
-        self.scroll_end(animate=False)
+        self._smart_scroll()
 
-    def add_tool_use(self, tool_name: str, content: RenderableType, tool_use_id: str = "") -> ToolUseWidget:
+    def add_tool_use(
+        self,
+        tool_name: str,
+        content: RenderableType,
+        tool_use_id: str = "",
+        full_content: RenderableType | None = None,
+    ) -> ToolUseWidget:
         """Add a tool use widget to the log.
 
         When there's a streaming message with content, we finalize it first
@@ -366,17 +379,26 @@ class ChatLog(VerticalScroll):
                 self._current_assistant_message.remove()
             self._current_assistant_message = None
 
-        widget = ToolUseWidget(tool_name, content, turn_id=turn_id, tool_use_id=tool_use_id)
+        widget = ToolUseWidget(
+            tool_name, content, turn_id=turn_id, tool_use_id=tool_use_id, full_content=full_content
+        )
         self.mount(widget)
-        self.scroll_end(animate=False)
+        self._smart_scroll()
         return widget
 
-    def add_tool_result(self, content: RenderableType, tool_use_id: str = "") -> ToolResultWidget:
+    def add_tool_result(
+        self,
+        content: RenderableType,
+        tool_use_id: str = "",
+        full_content: RenderableType | None = None,
+    ) -> ToolResultWidget:
         """Add a tool result widget to the log."""
         turn_id = self._turn_counter
-        widget = ToolResultWidget(content, turn_id=turn_id, tool_use_id=tool_use_id)
+        widget = ToolResultWidget(
+            content, turn_id=turn_id, tool_use_id=tool_use_id, full_content=full_content
+        )
         self.mount(widget)
-        self.scroll_end(animate=False)
+        self._smart_scroll()
         return widget
 
     def finish_current_message(self) -> str:
@@ -429,61 +451,27 @@ class ChatLog(VerticalScroll):
             if isinstance(child, (ToolUseWidget, ToolResultWidget)):
                 child.remove_class("highlighted")
 
-    def _format_tool_use(self, block: ToolUseBlock) -> RenderableType:
-        """Format a tool use block for display."""
-        tool_name = block.name
-        tool_input = block.input
+    def _format_tool_use(
+        self, block: ToolUseBlock
+    ) -> RenderableType | tuple[RenderableType, RenderableType]:
+        """Format a tool use block for display.
 
-        if tool_name == "Edit":
-            # Show as diff with colored backgrounds
-            file_path = tool_input.get("file_path", "unknown")
-            _, diff_text = _format_edit_as_diff(tool_input, _guess_language(file_path))
-            header = Text()
-            header.append("Edit ", style="bold")
-            header.append(file_path, style="cyan")
-            header.append("\n")
-            return Group(header, diff_text)
+        Returns either a single renderable, or tuple of (truncated, full) if content was truncated.
+        """
+        from core.formatter import Formatter
+        formatter = Formatter()
+        return formatter.format_tool_use_block(block)
 
-        elif tool_name == "Read":
-            file_path = tool_input.get("file_path", "unknown")
-            offset = tool_input.get("offset", "")
-            limit = tool_input.get("limit", "")
-            range_info = ""
-            if offset or limit:
-                range_info = f" (lines {offset or 1}-{(offset or 0) + (limit or 'end')})"
-            return f"**Read** `{file_path}`{range_info}"
+    def _format_tool_result(
+        self, block: ToolResultBlock
+    ) -> RenderableType | tuple[RenderableType, RenderableType]:
+        """Format a tool result block for display.
 
-        elif tool_name == "Write":
-            file_path = tool_input.get("file_path", "unknown")
-            content = tool_input.get("content", "")
-            lang = _guess_language(file_path)
-            preview = content[:500]
-            if len(content) > 500:
-                preview += "\n... [truncated]"
-            return f"**Write** `{file_path}`\n```{lang}\n{preview}\n```"
-
-        elif tool_name == "Bash":
-            cmd = tool_input.get("command", "")
-            desc = tool_input.get("description", "")
-            header = f"**Bash**"
-            if desc:
-                header += f" - {desc}"
-            return f"{header}\n```bash\n{cmd}\n```"
-
-        elif tool_name == "Grep":
-            pattern = tool_input.get("pattern", "")
-            path = tool_input.get("path", ".")
-            return f"**Grep** `{pattern}` in `{path}`"
-
-        elif tool_name == "Glob":
-            pattern = tool_input.get("pattern", "")
-            path = tool_input.get("path", ".")
-            return f"**Glob** `{pattern}` in `{path}`"
-
-        else:
-            # Default: show as JSON
-            input_str = json.dumps(tool_input, indent=2)
-            return f"**{tool_name}**\n```json\n{input_str}\n```"
+        Returns either a single renderable, or tuple of (truncated, full) if content was truncated.
+        """
+        from core.formatter import Formatter
+        formatter = Formatter()
+        return formatter.format_tool_result_block(block)
 
     def load_history(self, messages: list) -> None:
         """Load message history from a list of Message objects."""
@@ -509,16 +497,26 @@ class ChatLog(VerticalScroll):
                             text_buffer.append(block.text)
                     elif isinstance(block, ToolUseBlock):
                         flush_text()
-                        content = self._format_tool_use(block)
-                        widget = ToolUseWidget(block.name, content, turn_id=turn_id, tool_use_id=block.id)
+                        formatted = self._format_tool_use(block)
+                        if isinstance(formatted, tuple):
+                            content, full_content = formatted
+                        else:
+                            content, full_content = formatted, None
+                        widget = ToolUseWidget(
+                            block.name, content, turn_id=turn_id,
+                            tool_use_id=block.id, full_content=full_content
+                        )
                         self.mount(widget)
                     elif isinstance(block, ToolResultBlock):
-                        # Truncate long results for display
-                        result = block.content
-                        if len(result) > 2000:
-                            result = result[:2000] + "\n... [truncated]"
-                        content = f"```\n{result}\n```"
-                        widget = ToolResultWidget(content, turn_id=turn_id, tool_use_id=block.tool_use_id)
+                        formatted = self._format_tool_result(block)
+                        if isinstance(formatted, tuple):
+                            content, full_content = formatted
+                        else:
+                            content, full_content = formatted, None
+                        widget = ToolResultWidget(
+                            content, turn_id=turn_id,
+                            tool_use_id=block.tool_use_id, full_content=full_content
+                        )
                         self.mount(widget)
 
                 # Flush any remaining text
@@ -546,7 +544,7 @@ class ChatLog(VerticalScroll):
             turn_id=turn_id,
         )
         self.mount(widget)
-        self.scroll_end(animate=False)
+        self._smart_scroll()
         return widget
 
     def add_with_result_widget(
@@ -564,7 +562,7 @@ class ChatLog(VerticalScroll):
             turn_id=turn_id,
         )
         self.mount(widget)
-        self.scroll_end(animate=False)
+        self._smart_scroll()
         return widget
 
     def find_with_widget(self, child_session_id: str) -> WithWidget | None:
@@ -582,4 +580,4 @@ class ChatLog(VerticalScroll):
                     child.remove_class("hidden")
                 else:
                     child.add_class("hidden")
-        self.scroll_end(animate=False)
+        self._smart_scroll()

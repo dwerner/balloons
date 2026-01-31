@@ -46,9 +46,10 @@ class WithWidget(Static):
         super().__init__(**kwargs)
         self.prompt = prompt
         self.child_session_id = child_session_id
-        self.status = status  # "active" or "returned"
+        self.status = status  # "active", "background", "streaming", or "returned"
         self.return_condition = return_condition
         self.turn_id = turn_id
+        self._streaming_preview = ""  # Preview of streaming content
         if status == "returned":
             self.add_class("returned")
 
@@ -57,6 +58,12 @@ class WithWidget(Static):
         if self.status == "returned":
             status_icon = "[green]✓[/]"
             status_text = "returned"
+        elif self.status == "background":
+            status_icon = "[cyan]⋯[/]"
+            status_text = "background"
+        elif self.status == "streaming":
+            status_icon = "[yellow]▶[/]"
+            status_text = "streaming"
         else:
             status_icon = "[magenta]→[/]"
             status_text = "active"
@@ -82,8 +89,15 @@ class WithWidget(Static):
         text.append(f'"{prompt_preview}"', style="italic")
         text.append(condition_text)
         text.append(f" [{status_text}]", style="dim")
-        text.append("\n")
-        text.append("  Click to view child session", style="dim italic")
+
+        # Show streaming preview if available
+        if self._streaming_preview and self.status == "streaming":
+            preview = self._streaming_preview.replace("\n", " ")
+            text.append("\n")
+            text.append(f"  {preview}", style="dim cyan")
+        else:
+            text.append("\n")
+            text.append("  Click to view child session", style="dim italic")
 
         return text
 
@@ -95,4 +109,17 @@ class WithWidget(Static):
         """Update widget to show returned status."""
         self.status = "returned"
         self.add_class("returned")
+        self.refresh()
+
+    def update_streaming(self, text: str = "") -> None:
+        """Update widget with streaming progress."""
+        self.status = "streaming"
+        if text:
+            self._streaming_preview = text[-50:]  # Keep last 50 chars as preview
+        self.refresh()
+
+    def mark_done(self) -> None:
+        """Mark background streaming as done (waiting for return)."""
+        self.status = "background"
+        self._streaming_preview = ""
         self.refresh()

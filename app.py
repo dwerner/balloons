@@ -3,6 +3,7 @@ import logging
 import os
 import subprocess
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -28,16 +29,50 @@ def debug_event(msg: str) -> None:
     if _log:
         _log.debug(msg)
 
-from rich.console import RenderableType, Group
-from rich.text import Text
+from rich.console import RenderableType
 from widgets import ChatLog, InputBox, StatusBar, ContextTree, VerticalSplitter, SessionPicker, RequestPane, ToolBar, WithWidget, WithResultWidget
-from widgets.chat_log import _format_edit_as_diff, _guess_language
 from claude_runner import ClaudeRunner
 from session import Session
 from models import (
-    TextDelta, ResultEvent, InitEvent, RawEvent, ToolUseEvent, ToolResultEvent,
-    TextBlock, ToolUseBlock, ToolResultBlock, ContentBlock, Message, ContextMode,
+    TextDelta, ToolUseEvent, ToolResultEvent,
+    TextBlock, ToolUseBlock, Message, ContextMode,
 )
+from core import (
+    CommandParser,
+    Formatter,
+    ContextBuilder,
+    SessionRunner,
+    SessionManager,
+    StreamEvent,
+    NewSessionCommand,
+    CopyTurnsCommand,
+    QueryWithCommand,
+    SuspendCommand,
+    ShellCommand,
+    WithCommand,
+    WithCopyCommand,
+    ReturnCommand,
+    PwdCommand,
+    CdCommand,
+    ReloadCommand,
+    SummarizeCommand,
+)
+
+
+@dataclass
+class StreamingContext:
+    """Tracks streaming state for a session.
+
+    Each streaming session needs to track its own state for proper
+    event handling and UI updates.
+    """
+    session_id: str
+    user_turn_idx: int  # Index of user turn in session.messages (-1 for query_with)
+    assistant_turn_idx: int  # Index of assistant turn
+    prompt: str  # Original prompt for saving
+    content: str = ""  # Accumulated text content
+    is_active: bool = True  # Is this the active/foreground session?
+    query_with: bool = False  # Special case: no user message saved
 
 
 class BalloonsApp(App):
@@ -88,17 +123,33 @@ class BalloonsApp(App):
 
     def __init__(self, session: Session = None, show_picker: bool = False):
         super().__init__()
-        self.session = session
-        self.runner = ClaudeRunner()
-        self.streaming = False
-        self._stream_task: asyncio.Task | None = None
-        self._current_raw_events: list[dict] = []
-        self._current_content_blocks: list[ContentBlock] = []  # Rich content blocks
-        self._current_text_buffer: str = ""  # Accumulate text between tool calls
-        self._current_tool_use_id: str = ""  # Track current tool use for matching results
+        self._initial_session = session  # Will be loaded into manager
+        self.streaming = False  # True if active session is streaming
         self._tree_width = 50
         self._show_picker = show_picker
         self._shell_process: asyncio.subprocess.Process | None = None
+        # Core components
+        self._command_parser = CommandParser()
+        self._formatter = Formatter()
+        self._context_builder = ContextBuilder()
+        # Session manager handles all sessions and runners
+        self._manager = SessionManager()
+        # Simple runner for helper streaming (summaries, etc.)
+        self._helper_runner = ClaudeRunner()
+        # Timer for polling background sessions
+        self._poll_timer = None
+        # Per-session streaming contexts (session_id -> StreamingContext)
+        self._streaming_contexts: dict[str, StreamingContext] = {}
+
+    @property
+    def session(self) -> Session | None:
+        """Get the active session from the manager."""
+        return self._manager.active_session
+
+    @property
+    def _session_runner(self) -> SessionRunner | None:
+        """Get the active session's runner from the manager."""
+        return self._manager.active_runner
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -114,23 +165,260 @@ class BalloonsApp(App):
 
     def on_mount(self) -> None:
         """Initialize the app after mounting."""
+        # Start the background session polling timer
+        self._poll_timer = self.set_interval(0.1, self._poll_background_sessions)
+
         if self._show_picker:
             self.push_screen(SessionPicker(), self._on_session_picked)
         else:
             self._initialize_session()
+
+    def _poll_background_sessions(self) -> None:
+        """Poll ALL streaming sessions for events and update UI.
+
+        This is the core of the event-driven architecture:
+        - All sessions stream in background mode
+        - This timer polls for events from all sessions
+        - Events are dispatched to appropriate UI components
+        """
+        chat_log = self.query_one("#chat-log", ChatLog)
+        context_tree = self.query_one("#context-tree", ContextTree)
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        # Get events from all streaming sessions
+        for session_id, events in self._manager.poll_all():
+            ctx = self._streaming_contexts.get(session_id)
+            if not ctx:
+                continue  # No context, skip
+
+            for event in events:
+                self._dispatch_polled_event(session_id, event, ctx, chat_log, context_tree, status_bar)
+
+    def _dispatch_polled_event(
+        self,
+        session_id: str,
+        event: StreamEvent,
+        ctx: StreamingContext,
+        chat_log: ChatLog,
+        context_tree: ContextTree,
+        status_bar: StatusBar,
+    ) -> None:
+        """Dispatch a polled event to appropriate UI components.
+
+        Handles events for both active (foreground) and background sessions.
+        """
+        is_active = ctx.is_active
+
+        if event.event_type == "turn_started":
+            debug_event(f"turn_started: session={session_id[:8]} turn={event.data.get('turn_index')}")
+
+        elif event.event_type == "text":
+            text = event.data
+            debug_event(f"text: session={session_id[:8]} len={len(text)}")
+            ctx.content += text
+            if is_active:
+                chat_log.append_to_current(text)
+            else:
+                # Update WithWidget for background session
+                with_widget = chat_log.find_with_widget(session_id)
+                if with_widget:
+                    with_widget.update_streaming(text)
+
+        elif event.event_type == "init":
+            debug_event(f"init: session={session_id[:8]} model={event.data.get('model')}")
+            if is_active:
+                status_bar.update_stats(
+                    model=event.data.get("model"),
+                    context_window=event.data.get("context_window"),
+                )
+
+        elif event.event_type == "result":
+            debug_event(f"result: session={session_id[:8]} in={event.data.get('input_tokens')} out={event.data.get('output_tokens')}")
+            if is_active:
+                # Get session from manager for token totals
+                session = self._manager._sessions.get(session_id)
+                if session:
+                    status_bar.update_stats(
+                        input_tokens=session.total_input_tokens,
+                        output_tokens=session.total_output_tokens,
+                        cost=session.total_cost,
+                    )
+
+        elif event.event_type == "tool_use":
+            data = event.data
+            debug_event(f"tool_use: session={session_id[:8]} {data.get('tool_name')}")
+
+            # Add to tree
+            context_tree.add_tool_use_to_turn(
+                session_id,
+                ctx.assistant_turn_idx,
+                data.get("tool_use_id"),
+                data.get("tool_name"),
+                data.get("tool_input"),
+                data.get("tool_index"),
+            )
+
+            if is_active:
+                # Display tool use widget
+                tool_event = ToolUseEvent(
+                    tool_use_id=data.get("tool_use_id"),
+                    tool_name=data.get("tool_name"),
+                    tool_input=data.get("tool_input"),
+                )
+                formatted = self._format_tool_use(tool_event)
+                if isinstance(formatted, tuple):
+                    tool_content, full_content = formatted
+                else:
+                    tool_content, full_content = formatted, None
+                chat_log.add_tool_use(
+                    data.get("tool_name"), tool_content,
+                    tool_use_id=data.get("tool_use_id"), full_content=full_content
+                )
+
+        elif event.event_type == "tool_result":
+            data = event.data
+            debug_event(f"tool_result: session={session_id[:8]} len={len(data.get('result', ''))}")
+
+            # Add to tree
+            context_tree.add_tool_result_to_turn(
+                session_id,
+                ctx.assistant_turn_idx,
+                data.get("tool_use_id"),
+                data.get("result"),
+                data.get("tool_index"),
+            )
+
+            if is_active:
+                # Display tool result widget
+                tool_result_event = ToolResultEvent(
+                    tool_use_id=data.get("tool_use_id"),
+                    result=data.get("result"),
+                )
+                formatted = self._format_tool_result(tool_result_event, session_id)
+                if isinstance(formatted, tuple):
+                    result_content, full_content = formatted
+                else:
+                    result_content, full_content = formatted, None
+                chat_log.add_tool_result(
+                    result_content,
+                    tool_use_id=data.get("tool_use_id"), full_content=full_content
+                )
+
+        elif event.event_type == "done":
+            debug_event(f"done: session={session_id[:8]}")
+            self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar)
+
+        elif event.event_type == "error":
+            debug_event(f"error: session={session_id[:8]} {event.data}")
+            if is_active:
+                chat_log.append_to_current(f"\n\n[Error: {event.data}]")
+            self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar, error=event.data)
+
+        elif event.event_type == "cancelled":
+            debug_event(f"cancelled: session={session_id[:8]}")
+            self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar, cancelled=True)
+
+    def _finalize_streaming(
+        self,
+        session_id: str,
+        ctx: StreamingContext,
+        chat_log: ChatLog,
+        context_tree: ContextTree,
+        status_bar: StatusBar,
+        error: str = None,
+        cancelled: bool = False,
+    ) -> None:
+        """Finalize a streaming session - save messages, update UI."""
+        session = self._manager._sessions.get(session_id)
+        runner = self._manager._runners.get(session_id)
+
+        if ctx.is_active:
+            # Finish the message display
+            final_content = chat_log.finish_current_message()
+            if not ctx.content:
+                ctx.content = final_content
+
+        # Get result from runner for content blocks
+        content = ctx.content
+        if runner:
+            result = runner.get_result()
+            if result:
+                assistant_blocks = result.content_blocks if result.content_blocks else [TextBlock(text=content)]
+                raw_events = result.raw_events
+            else:
+                assistant_blocks = [TextBlock(text=content)]
+                raw_events = []
+        else:
+            assistant_blocks = [TextBlock(text=content)]
+            raw_events = []
+
+        # Finish the assistant turn in tree
+        context_tree.finish_turn(
+            session_id,
+            ctx.assistant_turn_idx,
+            content,
+            assistant_blocks,
+            raw_events,
+        )
+
+        # Save messages to session
+        if session:
+            if ctx.query_with:
+                # query_with: only save assistant response, no user message
+                session.add_message("assistant", content, content_blocks=assistant_blocks)
+            else:
+                # Normal case: save both user and assistant messages
+                user_blocks = [TextBlock(text=ctx.prompt)]
+                session.add_message("user", ctx.prompt, content_blocks=user_blocks)
+                session.add_message("assistant", content, content_blocks=assistant_blocks)
+            session.save()
+
+        if ctx.is_active:
+            # Re-enable input
+            self.streaming = False
+            status_bar.set_streaming(False)
+            input_box = self.query_one("#input-box", InputBox)
+            input_box.set_disabled(False)
+
+            # Check for auto-return conditions
+            if session and self._check_auto_return(content):
+                asyncio.create_task(self._handle_return_command("Auto-return: condition met"))
+        else:
+            # Background session finished - update WithWidget
+            with_widget = chat_log.find_with_widget(session_id)
+            if with_widget:
+                with_widget.mark_done()
+            if error:
+                status_bar.set_error(f"Background error: {error}")
+            elif not cancelled:
+                status_bar.set_status(f"Background session done: {session_id[:8]}")
+
+        # Clean up streaming context
+        del self._streaming_contexts[session_id]
 
     def _on_session_picked(self, session: Session | None) -> None:
         """Handle session picker result."""
         if session is None:
             self.exit()
         else:
-            self.session = session
+            # Register picked session with manager and set active
+            self._manager._sessions[session.id] = session
+            self._manager._runners[session.id] = SessionRunner(session)
+            self._manager.set_active(session.id)
             self._initialize_session()
 
     def _initialize_session(self) -> None:
         """Initialize the UI with the current session."""
         if self.session is None:
-            self.session = Session()
+            # Create new session through manager
+            session = self._manager.create_session()
+            self._manager.set_active(session.id)
+        elif self._initial_session is not None:
+            # Load initial session into manager
+            self._manager._sessions[self._initial_session.id] = self._initial_session
+            self._manager._runners[self._initial_session.id] = SessionRunner(self._initial_session)
+            self._manager.set_active(self._initial_session.id)
+            self._initial_session = None  # Clear so we don't reload on subsequent calls
 
         chat_log = self.query_one("#chat-log", ChatLog)
         context_tree = self.query_one("#context-tree", ContextTree)
@@ -180,105 +468,33 @@ class BalloonsApp(App):
 
         prompt = event.value.strip()
 
-        # Handle commands (: prefix)
-        if prompt == ":copy-turns":
-            self._handle_copy_turns()
-            return
-        elif prompt == ":new" or prompt.startswith(":new "):
-            initial_prompt = prompt[4:].strip() if len(prompt) > 4 else ""
-            await self._handle_new_session(initial_prompt)
-            return
-        elif prompt.startswith(":query-with "):
-            query_prompt = prompt[len(":query-with "):].strip()
-            if query_prompt:
-                await self._handle_query_with(query_prompt)
-            return
-        elif prompt.startswith(":suspend "):
-            # Suspend and run interactive command
-            shell_cmd = prompt[9:].strip()
-            if shell_cmd:
-                self._handle_suspend(shell_cmd)
-            return
-        elif prompt.startswith(":!"):
-            # Capture output and send to Claude
-            shell_cmd = prompt[2:].strip()
-            if shell_cmd:
-                await self._handle_shell_command(shell_cmd)
-            return
-        elif prompt.startswith(":with-copy"):
-            # Fork a child session, copying nodes directly
-            args = prompt[10:].strip()
-            if not args:
-                status_bar = self.query_one("#status-bar", StatusBar)
-                status_bar.set_error(":with-copy requires a prompt")
-                return
-            await self._handle_with_copy_command(args)
-            return
-        elif prompt.startswith(":with"):
-            # Fork a child session, summarizing context via Claude
-            args = prompt[5:].strip()
-            if not args:
-                status_bar = self.query_one("#status-bar", StatusBar)
-                status_bar.set_error(":with requires a prompt")
-                return
-            await self._handle_with_command(args)
-            return
-        elif prompt.startswith(":return"):
-            # Return from child to parent
-            return_prompt = prompt[7:].strip() if len(prompt) > 7 else ""
-            await self._handle_return_command(return_prompt)
-            return
-        elif prompt == ":pwd":
-            self._handle_pwd_command()
-            return
-        elif prompt.startswith(":cd"):
-            path_arg = prompt[3:].strip() if len(prompt) > 3 else ""
-            self._handle_cd_command(path_arg)
-            return
-        elif prompt == ":reload":
-            self._handle_reload()
-            return
-        elif prompt.startswith(":summarize"):
-            # :summarize [quick|detailed]
-            args = prompt[10:].strip() if len(prompt) > 10 else ""
-            mode = args if args in ("quick", "detailed") else "quick"
-            await self._handle_summarize_command(mode)
-            return
-        elif prompt.startswith(":"):
-            # Unknown command
+        # Try to parse as a command
+        try:
+            cmd = self._command_parser.parse(prompt)
+        except ValueError as e:
+            # Invalid command
             status_bar = self.query_one("#status-bar", StatusBar)
-            status_bar.set_error(f"Unknown command: {prompt.split()[0]}")
+            status_bar.set_error(str(e))
             return
 
-        chat_log = self.query_one("#chat-log", ChatLog)
-        context_tree = self.query_one("#context-tree", ContextTree)
-        input_box = self.query_one("#input-box", InputBox)
-        status_bar = self.query_one("#status-bar", StatusBar)
+        # Dispatch to command handlers
+        if cmd is not None:
+            await self._execute_command(cmd)
+            return
 
-        # Add user message to display and tree
-        chat_log.add_user_message(prompt)
-        context_tree.add_turn_to_current("user", prompt, [{"type": "user_input", "content": prompt}])
+        # Start streaming in background (event-driven)
+        self._start_streaming(prompt)
 
-        # Disable input during streaming
-        input_box.set_disabled(True)
-        status_bar.set_streaming(True)
-        self.streaming = True
-        self._current_raw_events = []
-        self._current_content_blocks = []
-        self._current_text_buffer = ""
-        self._current_tool_use_id = ""
+    def _start_streaming(self, prompt: str, is_active: bool = True) -> None:
+        """Start a streaming response in background mode.
 
-        # Start assistant message
-        debug_event("add_assistant_message (streaming starts)")
-        chat_log.add_assistant_message()
+        This is the event-driven approach: start the background stream,
+        then the poll timer picks up events and updates the UI.
 
-        # Start streaming response
-        self._stream_task = asyncio.create_task(
-            self._handle_stream(prompt)
-        )
-
-    async def _handle_stream(self, prompt: str) -> None:
-        """Handle the streaming response from Claude."""
+        Args:
+            prompt: User prompt to send
+            is_active: True if this is the active/foreground session
+        """
         chat_log = self.query_one("#chat-log", ChatLog)
         context_tree = self.query_one("#context-tree", ContextTree)
         input_box = self.query_one("#input-box", InputBox)
@@ -300,233 +516,106 @@ class BalloonsApp(App):
             "allowed_tools": allowed_tools,
         })
 
-        try:
-            async for event in self.runner.stream_response(
-                selected_messages, prompt, allowed_tools,
-                working_dir=self.session.working_directory
-            ):
-                if isinstance(event, RawEvent):
-                    # Collect raw events for tree inspection
-                    self._current_raw_events.append(event.data)
-                    # Debug: log raw event type
-                    raw_type = event.data.get("type", "?")
-                    if raw_type == "stream_event":
-                        inner = event.data.get("event", {})
-                        inner_type = inner.get("type", "?")
-                        if inner_type == "content_block_start":
-                            cb = inner.get("content_block", {})
-                            debug_event(f"RawEvent: stream_event/{inner_type} -> {cb.get('type', '?')}")
-                        elif inner_type == "content_block_delta":
-                            delta = inner.get("delta", {})
-                            debug_event(f"RawEvent: stream_event/{inner_type} -> {delta.get('type', '?')}")
-                        else:
-                            debug_event(f"RawEvent: stream_event/{inner_type}")
-                    else:
-                        debug_event(f"RawEvent: {raw_type}")
+        # Track the turn index for tree updates
+        turn_idx = len(self.session.messages)  # Next turn will be at this index
 
-                elif isinstance(event, InitEvent):
-                    self.session.model = event.model
-                    self.session.context_window = event.context_window
-                    status_bar.update_stats(
-                        model=event.model,
-                        context_window=event.context_window,
-                    )
+        # Start the user turn in tree immediately
+        context_tree.start_turn(self.session.id, turn_idx, "user")
+        context_tree.finish_turn(
+            self.session.id, turn_idx, prompt, [TextBlock(text=prompt)], []
+        )
 
-                elif isinstance(event, TextDelta):
-                    debug_event(f"TextDelta: {repr(event.text[:50] if len(event.text) > 50 else event.text)}")
-                    chat_log.append_to_current(event.text)
-                    self._current_text_buffer += event.text
+        # Start the assistant turn in tree
+        assistant_turn_idx = turn_idx + 1
+        context_tree.start_turn(self.session.id, assistant_turn_idx, "assistant")
 
-                elif isinstance(event, ResultEvent):
-                    debug_event(f"ResultEvent: in={event.input_tokens} out={event.output_tokens}")
-                    self.session.update_usage(
-                        event.input_tokens,
-                        event.output_tokens,
-                        event.total_cost_usd,
-                        event.context_window,
-                    )
-                    status_bar.update_stats(
-                        input_tokens=event.input_tokens,
-                        output_tokens=event.output_tokens,
-                        cost=event.total_cost_usd,
-                    )
+        # Create streaming context for this session
+        ctx = StreamingContext(
+            session_id=self.session.id,
+            user_turn_idx=turn_idx,
+            assistant_turn_idx=assistant_turn_idx,
+            prompt=prompt,
+            is_active=is_active,
+        )
+        self._streaming_contexts[self.session.id] = ctx
 
-                elif isinstance(event, ToolUseEvent):
-                    debug_event(f"ToolUseEvent: {event.tool_name} (text_buffer={len(self._current_text_buffer)} chars)")
-                    # Flush any accumulated text to a TextBlock
-                    if self._current_text_buffer.strip():
-                        self._current_content_blocks.append(
-                            TextBlock(text=self._current_text_buffer)
-                        )
-                        self._current_text_buffer = ""
+        if is_active:
+            # Add user message to display
+            chat_log.add_user_message(prompt)
 
-                    # Create tool use block using Claude's tool_use_id
-                    self._current_tool_use_id = event.tool_use_id
-                    self._current_content_blocks.append(
-                        ToolUseBlock(
-                            id=event.tool_use_id,
-                            name=event.tool_name,
-                            input=event.tool_input,
-                        )
-                    )
+            # Disable input during streaming
+            input_box.set_disabled(True)
+            status_bar.set_streaming(True)
+            self.streaming = True
 
-                    # Display tool use as separate widget
-                    tool_content = self._format_tool_use(event)
-                    debug_event(f"  -> add_tool_use widget for {event.tool_name}")
-                    chat_log.add_tool_use(event.tool_name, tool_content, tool_use_id=event.tool_use_id)
+            # Start assistant message
+            debug_event("add_assistant_message (streaming starts)")
+            chat_log.add_assistant_message()
 
-                elif isinstance(event, ToolResultEvent):
-                    debug_event(f"ToolResultEvent: {len(event.result)} chars")
-                    # Create tool result block using the tool_use_id from the event
-                    self._current_content_blocks.append(
-                        ToolResultBlock(
-                            tool_use_id=event.tool_use_id,
-                            content=event.result,
-                            is_error=False,
-                        )
-                    )
+        # Start background streaming - poll timer will pick up events
+        self._session_runner.start_background(prompt, selected_messages, allowed_tools)
 
-                    # Display tool result
-                    result_content = self._format_tool_result(event)
-                    if result_content:
-                        chat_log.add_tool_result(result_content, tool_use_id=event.tool_use_id)
+    async def _execute_command(self, cmd) -> None:
+        """Execute a parsed command."""
+        if isinstance(cmd, NewSessionCommand):
+            await self._handle_new_session(cmd.initial_prompt)
+        elif isinstance(cmd, CopyTurnsCommand):
+            self._handle_copy_turns()
+        elif isinstance(cmd, QueryWithCommand):
+            await self._handle_query_with(cmd.prompt)
+        elif isinstance(cmd, SuspendCommand):
+            self._handle_suspend(cmd.shell_cmd)
+        elif isinstance(cmd, ShellCommand):
+            await self._handle_shell_command(cmd.shell_cmd)
+        elif isinstance(cmd, WithCommand):
+            await self._handle_with_command(cmd.prompt, cmd.return_condition, cmd.background)
+        elif isinstance(cmd, WithCopyCommand):
+            await self._handle_with_copy_command(cmd.prompt, cmd.return_condition, cmd.background)
+        elif isinstance(cmd, ReturnCommand):
+            await self._handle_return_command(cmd.return_prompt)
+        elif isinstance(cmd, PwdCommand):
+            self._handle_pwd_command()
+        elif isinstance(cmd, CdCommand):
+            self._handle_cd_command(cmd.path)
+        elif isinstance(cmd, ReloadCommand):
+            self._handle_reload()
+        elif isinstance(cmd, SummarizeCommand):
+            await self._handle_summarize_command(cmd.mode)
 
-        except Exception as e:
-            chat_log.append_to_current(f"\n\n[Error: {e}]")
+    def _format_tool_use(
+        self, event: ToolUseEvent
+    ) -> RenderableType | tuple[RenderableType, RenderableType]:
+        """Format a tool use event for display.
 
-        finally:
-            # Finish the message and save
-            content = chat_log.finish_current_message()
+        Returns single renderable, or tuple of (truncated, full) if content was truncated.
+        """
+        return self._formatter.format_tool_use(event)
 
-            # Flush any remaining text to content blocks
-            if self._current_text_buffer.strip():
-                self._current_content_blocks.append(
-                    TextBlock(text=self._current_text_buffer)
-                )
+    def _format_tool_result(
+        self, event: ToolResultEvent, session_id: str = None
+    ) -> RenderableType | tuple[RenderableType, RenderableType]:
+        """Format a tool result for display.
 
-            # Build content blocks for user and assistant
-            user_blocks = [TextBlock(text=prompt)]
-            assistant_blocks = self._current_content_blocks if self._current_content_blocks else [TextBlock(text=content)]
-
-            # Add assistant turn to tree with raw events and content blocks
-            context_tree.add_turn_to_current("assistant", content, self._current_raw_events, assistant_blocks)
-
-            # Save messages to session with rich content
-            self.session.add_message("user", prompt, content_blocks=user_blocks)
-            self.session.add_message("assistant", content, content_blocks=assistant_blocks)
-            self.session.save()
-
-            # Re-enable input
-            self.streaming = False
-            status_bar.set_streaming(False)
-            input_box.set_disabled(False)
-            self._stream_task = None
-            self._current_raw_events = []
-            self._current_content_blocks = []
-            self._current_text_buffer = ""
-
-            # Check for auto-return conditions
-            if self._check_auto_return(content):
-                # Schedule auto-return (can't await in finally)
-                asyncio.create_task(self._handle_return_command("Auto-return: condition met"))
-
-    def _format_tool_use(self, event: ToolUseEvent) -> RenderableType:
-        """Format a tool use event for display."""
-        tool = event.tool_name
-        inp = event.tool_input
-
-        if tool == "Edit":
-            file_path = inp.get("file_path", "")
-            _, diff_text = _format_edit_as_diff(inp, _guess_language(file_path))
-            header = Text()
-            header.append("Edit ", style="bold")
-            header.append(file_path, style="cyan")
-            header.append("\n")
-            return Group(header, diff_text)
-
-        elif tool == "Write":
-            file_path = inp.get("file_path", "")
-            content = inp.get("content", "")[:200]
-            return f"**Write** `{file_path}`\n```\n{content}...\n```"
-
-        elif tool == "Read":
-            file_path = inp.get("file_path", "")
-            return f"**Read** `{file_path}`"
-
-        elif tool == "Bash":
-            cmd = inp.get("command", "")
-            return f"**Bash**\n```bash\n{cmd}\n```"
-
-        elif tool == "Glob":
-            pattern = inp.get("pattern", "")
-            return f"**Glob** `{pattern}`"
-
-        elif tool == "Grep":
-            pattern = inp.get("pattern", "")
-            path = inp.get("path", "")
-            return f"**Grep** `{pattern}` in `{path}`"
-
-        else:
-            import json
-            return f"**{tool}**\n```json\n{json.dumps(inp, indent=2)[:300]}\n```"
-
-    def _format_tool_result(self, event: ToolResultEvent) -> RenderableType:
-        """Format a tool result for display."""
-        result = event.result
-        if not result:
-            return ""
-
-        # Check if this is a Read result by looking at the last tool use
+        Returns single renderable, or tuple of (truncated, full) if content was truncated.
+        """
+        # Find the last tool use for context from SessionRunner's content blocks
         last_tool_use = None
-        for block in reversed(self._current_content_blocks):
-            if isinstance(block, ToolUseBlock):
-                last_tool_use = block
-                break
-
-        if last_tool_use and last_tool_use.name == "Read":
-            # Parse Read output format: "    1→content" where → is a tab
-            file_path = last_tool_use.input.get("file_path", "")
-            language = _guess_language(file_path)
-
-            lines = result.split("\n")
-            formatted = Text()
-
-            from rich.syntax import Syntax
-
-            for line in lines[:100]:  # Limit to first 100 lines
-                # Parse line number prefix: spaces + number + tab + content
-                if "→" in line:
-                    prefix, content = line.split("→", 1)
-                    line_num = prefix.strip()
-                    # Format line number in dim style
-                    formatted.append(f"{line_num:>5} ", style="dim")
-                    # Apply syntax highlighting to content
-                    syntax = Syntax(content, language, theme="monokai")
-                    highlighted = syntax.highlight(content)
-                    highlighted.rstrip()  # Remove trailing newline
-                    formatted.append_text(highlighted)
-                    formatted.append("\n")
-                else:
-                    formatted.append(line + "\n", style="dim")
-
-            if len(lines) > 100:
-                formatted.append(f"... ({len(lines) - 100} more lines)", style="dim italic")
-
-            return formatted
-
-        # Default: truncate and show as code block
-        if len(result) > 500:
-            result = result[:500] + "..."
-        return f"```\n{result}\n```"
+        runner = self._manager._runners.get(session_id) if session_id else self._session_runner
+        if runner:
+            for block in reversed(runner._content_blocks):
+                if isinstance(block, ToolUseBlock):
+                    last_tool_use = block
+                    break
+        return self._formatter.format_tool_result(event, last_tool_use)
 
     async def _handle_new_session(self, initial_prompt: str = "") -> None:
         """Create a new session, optionally with an initial prompt."""
         chat_log = self.query_one("#chat-log", ChatLog)
         context_tree = self.query_one("#context-tree", ContextTree)
 
-        # Create new session
-        self.session = Session()
-        self.session.save()
+        # Create new session through manager
+        new_session = self._manager.create_session()
+        self._manager.set_active(new_session.id)
 
         # Clear and reload UI
         chat_log.clear()
@@ -607,56 +696,18 @@ class BalloonsApp(App):
         input_box.set_disabled(True)
 
         try:
-            # Build context based on mode
-            if mode == "quick":
-                # Only include user messages
-                context_parts = []
-                for msg in self.session.messages:
-                    if msg.role == "user":
-                        content = msg.content[:500] if len(msg.content) > 500 else msg.content
-                        context_parts.append(f"User: {content}")
-                context = "\n\n".join(context_parts)
-            else:
-                # Include all messages, but truncate long ones
-                context_parts = []
-                for msg in self.session.messages:
-                    prefix = "User" if msg.role == "user" else "Assistant"
-                    content = msg.content[:1000] if len(msg.content) > 1000 else msg.content
-                    context_parts.append(f"{prefix}: {content}")
-                context = "\n\n".join(context_parts)
-
-            # Generate title and summary via LLM
-            prompt = f"""Based on this conversation, provide:
-1. A short title (max 50 chars) that captures the main topic
-2. A brief summary (2-3 sentences) of what was discussed/accomplished
-
-Respond in this exact format:
-TITLE: <title here>
-SUMMARY: <summary here>
-
-Conversation:
-{context}"""
+            # Build prompt using context builder
+            prompt = self._context_builder.build_summary_prompt(self.session.messages, mode)
 
             result_parts = []
-            async for event in self.runner.stream_response([], prompt):
+            async for event in self._helper_runner.stream_response([], prompt):
                 if isinstance(event, TextDelta):
                     result_parts.append(event.text)
 
             result = "".join(result_parts)
 
             # Parse the result
-            title = ""
-            summary = ""
-            for line in result.split("\n"):
-                if line.startswith("TITLE:"):
-                    title = line[6:].strip()[:50]
-                elif line.startswith("SUMMARY:"):
-                    summary = line[8:].strip()
-
-            # If we got multi-line summary (continuation after SUMMARY:), grab it
-            if "SUMMARY:" in result:
-                summary_start = result.find("SUMMARY:") + 8
-                summary = result[summary_start:].strip()
+            title, summary = self._context_builder.parse_summary_response(result)
 
             self.session.title = title
             self.session.summary = summary
@@ -701,8 +752,8 @@ Conversation:
             self._shell_process = None
             self.query_one("#status-bar", StatusBar).set_status("")
             self.query_one("#input-box", InputBox).set_disabled(False)
-        if self.streaming and self.runner.is_running:
-            self.runner.terminate()
+        if self.streaming and self._session_runner and self._session_runner.is_streaming:
+            self._session_runner.cancel()
 
     def _handle_copy_turns(self) -> None:
         """Copy selected turns to a new session."""
@@ -720,88 +771,64 @@ Conversation:
             new_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
         new_session.save()
 
-        # Switch to new session
+        # Switch to new session through manager
         chat_log.clear()
-        self.session = new_session
+        self._manager._sessions[new_session.id] = new_session
+        self._manager._runners[new_session.id] = SessionRunner(new_session)
+        self._manager.set_active(new_session.id)
         context_tree.load_all_sessions(new_session)
         chat_log.load_history(new_session.messages)
 
     async def _handle_query_with(self, prompt: str) -> None:
-        """Query with selected turns as context, only response goes to new session."""
+        """Query with selected turns as context, only response goes to new session.
+
+        This is a special case: no user message is saved, only the assistant response.
+        Uses the event-driven background streaming approach.
+        """
         context_tree = self.query_one("#context-tree", ContextTree)
         chat_log = self.query_one("#chat-log", ChatLog)
         input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
         tool_bar = self.query_one("#tool-bar", ToolBar)
 
-        # Get selected messages for context
+        # Get selected messages for context (before creating new session)
         selected_messages = context_tree.get_selected_messages()
         allowed_tools = tool_bar.get_enabled_tools()
 
-        # Create new session for the response
-        new_session = Session()
-        new_session.save()
+        # Create new session for the response through manager
+        new_session = self._manager.create_session()
+        self._manager.set_active(new_session.id)
 
         # Clear chat log and switch to new session
         chat_log.clear()
-        self.session = new_session
         context_tree.load_all_sessions(new_session)
+
+        # Create streaming context for query_with (special: no user turn saved)
+        # assistant_turn_idx is 0 since we don't save the user message
+        ctx = StreamingContext(
+            session_id=new_session.id,
+            user_turn_idx=-1,  # No user turn
+            assistant_turn_idx=0,  # First turn is assistant
+            prompt=prompt,
+            is_active=True,
+        )
+        # Mark this as a query_with special case
+        ctx.query_with = True
+        self._streaming_contexts[new_session.id] = ctx
 
         # Disable input during streaming
         input_box.set_disabled(True)
         status_bar.set_streaming(True)
         self.streaming = True
-        self._current_raw_events = []
-        self._current_content_blocks = []
-        self._current_text_buffer = ""
 
         # Start assistant message (no user message shown - it's ephemeral)
         chat_log.add_assistant_message()
 
-        # Stream response using selected context
-        try:
-            async for event in self.runner.stream_response(
-                selected_messages, prompt, allowed_tools,
-                working_dir=self.session.working_directory
-            ):
-                if isinstance(event, RawEvent):
-                    self._current_raw_events.append(event.data)
-                elif isinstance(event, InitEvent):
-                    self.session.model = event.model
-                    self.session.context_window = event.context_window
-                    status_bar.update_stats(model=event.model, context_window=event.context_window)
-                elif isinstance(event, TextDelta):
-                    chat_log.append_to_current(event.text)
-                    self._current_text_buffer += event.text
-                elif isinstance(event, ResultEvent):
-                    self.session.update_usage(
-                        event.input_tokens, event.output_tokens,
-                        event.total_cost_usd, event.context_window
-                    )
-                    status_bar.update_stats(
-                        input_tokens=event.input_tokens,
-                        output_tokens=event.output_tokens,
-                        cost=event.total_cost_usd
-                    )
-        except Exception as e:
-            chat_log.append_to_current(f"\n\n[Error: {e}]")
-        finally:
-            content = chat_log.finish_current_message()
-            if self._current_text_buffer.strip():
-                self._current_content_blocks.append(TextBlock(text=self._current_text_buffer))
-            assistant_blocks = self._current_content_blocks if self._current_content_blocks else [TextBlock(text=content)]
-            context_tree.add_turn_to_current("assistant", content, self._current_raw_events, assistant_blocks)
+        # Start assistant turn in tree (no user turn for query_with)
+        context_tree.start_turn(new_session.id, 0, "assistant")
 
-            # Only save assistant response to new session with rich content
-            self.session.add_message("assistant", content, content_blocks=assistant_blocks)
-            self.session.save()
-
-            self.streaming = False
-            status_bar.set_streaming(False)
-            input_box.set_disabled(False)
-            self._current_content_blocks = []
-            self._current_text_buffer = ""
-            self._current_raw_events = []
+        # Start background streaming - poll timer will handle events
+        self._session_runner.start_background(prompt, selected_messages, allowed_tools)
 
     async def _handle_shell_command(self, cmd: str) -> None:
         """Run a shell command and submit output to Claude."""
@@ -851,43 +878,16 @@ Conversation:
         # Format with explanatory header
         prompt = f"# User executed shell command:\n```bash\n$ {cmd}\n```\n# Output:\n```\n{output}\n```"
 
-        # Now submit through normal flow (add user msg, stream Claude response)
-        chat_log.add_user_message(prompt)
-        context_tree.add_turn_to_current("user", prompt, [{"type": "shell_command", "cmd": cmd}])
+        # Use event-driven streaming (same as normal input)
+        self._start_streaming(prompt)
 
-        # Stream Claude's response
-        status_bar.set_streaming(True)
-        self.streaming = True
-        self._current_raw_events = []
-        chat_log.add_assistant_message()
-
-        self._stream_task = asyncio.create_task(
-            self._handle_stream(prompt)
-        )
-
-    async def _handle_with_command(self, args: str) -> None:
+    async def _handle_with_command(self, prompt: str, return_condition: str = "manual", background: bool = False) -> None:
         """Fork a child session, respecting context modes (COPY verbatim, SUMMARIZE via Claude)."""
         chat_log = self.query_one("#chat-log", ChatLog)
         context_tree = self.query_one("#context-tree", ContextTree)
         input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
         tool_bar = self.query_one("#tool-bar", ToolBar)
-
-        # Parse args: prompt [--until condition]
-        return_condition = "manual"
-        prompt = args
-
-        if " --until " in args:
-            parts = args.split(" --until ", 1)
-            prompt = parts[0].strip()
-            return_condition = parts[1].strip()
-        elif args.endswith(" --until"):
-            prompt = args[:-8].strip()
-            return_condition = "manual"
-
-        if not prompt:
-            status_bar.set_error(":with requires a prompt")
-            return
 
         # Get selected messages from context tree (includes context_mode)
         selected_messages = context_tree.get_selected_messages()
@@ -934,87 +934,82 @@ Conversation:
         chat_log.add_with_widget(
             prompt=prompt,
             child_session_id=child_session.id,
-            status="active",
+            status="active" if not background else "background",
             return_condition=return_condition,
         )
 
-        # Switch to child session
-        self.session = child_session
-        chat_log.clear()
-        chat_log.load_history(child_session.messages)
-        context_tree.load_all_sessions(child_session)
+        # Register child session with manager
+        self._manager._sessions[child_session.id] = child_session
+        self._manager._runners[child_session.id] = SessionRunner(child_session)
 
-        # Now submit the prompt in the child session
-        input_box.set_disabled(True)
-        status_bar.set_streaming(True)
-        self.streaming = True
-        self._current_raw_events = []
-        self._current_content_blocks = []
-        self._current_text_buffer = ""
-        self._current_tool_use_id = ""
+        if background:
+            # Background mode - stay in parent, create streaming context for child
+            turn_idx = len(child_session.messages)
+            ctx = StreamingContext(
+                session_id=child_session.id,
+                user_turn_idx=turn_idx,
+                assistant_turn_idx=turn_idx + 1,
+                prompt=prompt,
+                is_active=False,  # Background session
+            )
+            self._streaming_contexts[child_session.id] = ctx
 
-        chat_log.add_user_message(prompt)
-        context_tree.add_turn_to_current("user", prompt, [{"type": "with_prompt", "prompt": prompt}])
-        chat_log.add_assistant_message()
+            # Start the child's tree turns
+            context_tree.start_turn(child_session.id, turn_idx, "user")
+            context_tree.finish_turn(
+                child_session.id, turn_idx, prompt, [TextBlock(text=prompt)], []
+            )
+            context_tree.start_turn(child_session.id, turn_idx + 1, "assistant")
 
-        self._stream_task = asyncio.create_task(
-            self._handle_stream(prompt)
-        )
+            # Start background streaming
+            child_runner = self._manager._runners[child_session.id]
+            child_runner.start_background(
+                prompt=prompt,
+                messages=child_session.messages,
+                allowed_tools=allowed_tools,
+            )
+            status_bar.set_status(f"Background: {prompt[:30]}...")
+        else:
+            # Foreground mode - switch to child session and stream
+            self._manager.set_active(child_session.id)
+            chat_log.clear()
+            chat_log.load_history(child_session.messages)
+            context_tree.load_all_sessions(child_session)
+
+            # Use _start_streaming which handles all the setup
+            self._start_streaming(prompt)
 
     async def _generate_context_summary(self, messages: list) -> str:
         """Generate a summary of messages marked for summarization."""
         if not messages:
             return ""
 
-        # Build context from messages
-        context_parts = []
-        for msg in messages:
-            prefix = "User" if msg.role == "user" else "Assistant"
-            context_parts.append(f"{prefix}: {msg.content}")
-        context = "\n\n".join(context_parts)
-
-        summary_prompt = f"""Summarize the following conversation context concisely, preserving key information, decisions, and any important technical details:
-
-{context}
-
-Provide a clear, actionable summary that can be used as context for continuing this work."""
+        summary_prompt = self._context_builder.build_context_summary_prompt(messages)
 
         # Stream response from Claude
         summary_parts = []
         try:
-            async for event in self.runner.stream_response([], summary_prompt):
+            async for event in self._helper_runner.stream_response([], summary_prompt):
                 if isinstance(event, TextDelta):
                     summary_parts.append(event.text)
         except Exception as e:
-            return f"Error generating summary: {e}\n\nRaw context:\n{context}"
+            # Fall back to raw content
+            context_parts = [f"{'User' if m.role == 'user' else 'Assistant'}: {m.content}" for m in messages]
+            return f"Error generating summary: {e}\n\nRaw context:\n" + "\n\n".join(context_parts)
 
-        return "".join(summary_parts) if summary_parts else context
+        return "".join(summary_parts) if summary_parts else ""
 
-    async def _handle_with_copy_command(self, args: str) -> None:
+    async def _handle_with_copy_command(self, prompt: str, return_condition: str = "manual", background: bool = False) -> None:
         """Fork a child session, copying selected nodes directly."""
         chat_log = self.query_one("#chat-log", ChatLog)
         context_tree = self.query_one("#context-tree", ContextTree)
         input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
-
-        # Parse args: prompt [--until condition]
-        return_condition = "manual"
-        prompt = args
-
-        if " --until " in args:
-            parts = args.split(" --until ", 1)
-            prompt = parts[0].strip()
-            return_condition = parts[1].strip()
-        elif args.endswith(" --until"):
-            prompt = args[:-8].strip()
-            return_condition = "manual"
-
-        if not prompt:
-            status_bar.set_error(":with-copy requires a prompt")
-            return
+        tool_bar = self.query_one("#tool-bar", ToolBar)
 
         # Get selected messages from context tree
         selected_messages = context_tree.get_selected_messages()
+        allowed_tools = tool_bar.get_enabled_tools()
 
         # Create child session with parent reference
         child_session = Session()
@@ -1034,32 +1029,50 @@ Provide a clear, actionable summary that can be used as context for continuing t
         chat_log.add_with_widget(
             prompt=prompt,
             child_session_id=child_session.id,
-            status="active",
+            status="active" if not background else "background",
             return_condition=return_condition,
         )
 
-        # Switch to child session
-        self.session = child_session
-        chat_log.clear()
-        chat_log.load_history(child_session.messages)
-        context_tree.load_all_sessions(child_session)
+        # Register child session with manager
+        self._manager._sessions[child_session.id] = child_session
+        self._manager._runners[child_session.id] = SessionRunner(child_session)
 
-        # Submit fork prompt in child
-        input_box.set_disabled(True)
-        status_bar.set_streaming(True)
-        self.streaming = True
-        self._current_raw_events = []
-        self._current_content_blocks = []
-        self._current_text_buffer = ""
-        self._current_tool_use_id = ""
+        if background:
+            # Background mode - stay in parent, create streaming context for child
+            turn_idx = len(child_session.messages)
+            ctx = StreamingContext(
+                session_id=child_session.id,
+                user_turn_idx=turn_idx,
+                assistant_turn_idx=turn_idx + 1,
+                prompt=prompt,
+                is_active=False,  # Background session
+            )
+            self._streaming_contexts[child_session.id] = ctx
 
-        chat_log.add_user_message(prompt)
-        context_tree.add_turn_to_current("user", prompt, [{"type": "fork_prompt", "prompt": prompt}])
-        chat_log.add_assistant_message()
+            # Start the child's tree turns
+            context_tree.start_turn(child_session.id, turn_idx, "user")
+            context_tree.finish_turn(
+                child_session.id, turn_idx, prompt, [TextBlock(text=prompt)], []
+            )
+            context_tree.start_turn(child_session.id, turn_idx + 1, "assistant")
 
-        self._stream_task = asyncio.create_task(
-            self._handle_stream(prompt)
-        )
+            # Start background streaming
+            child_runner = self._manager._runners[child_session.id]
+            child_runner.start_background(
+                prompt=prompt,
+                messages=child_session.messages,
+                allowed_tools=allowed_tools,
+            )
+            status_bar.set_status(f"Background: {prompt[:30]}...")
+        else:
+            # Foreground mode - switch to child session and stream
+            self._manager.set_active(child_session.id)
+            chat_log.clear()
+            chat_log.load_history(child_session.messages)
+            context_tree.load_all_sessions(child_session)
+
+            # Use _start_streaming which handles all the setup
+            self._start_streaming(prompt)
 
     async def _handle_return_command(self, return_prompt: str = "") -> None:
         """Return from child session to parent."""
@@ -1100,8 +1113,10 @@ Provide a clear, actionable summary that can be used as context for continuing t
 
         child_id = self.session.id
 
-        # Switch to parent session
-        self.session = parent
+        # Switch to parent session through manager
+        self._manager._sessions[parent.id] = parent
+        self._manager._runners[parent.id] = SessionRunner(parent)
+        self._manager.set_active(parent.id)
         chat_log.clear()
         chat_log.load_history(parent.messages)
         context_tree.load_all_sessions(parent)
@@ -1125,29 +1140,20 @@ Provide a clear, actionable summary that can be used as context for continuing t
         if not messages:
             return ""
 
-        # Build context from messages
-        context_parts = []
-        for msg in messages:
-            prefix = "User" if msg.role == "user" else "Assistant"
-            context_parts.append(f"{prefix}: {msg.content}")
-        context = "\n\n".join(context_parts)
-
-        # Build summary prompt
-        if return_prompt:
-            prompt = f"{return_prompt}\n\nContext:\n{context}"
-        else:
-            prompt = f"Summarize the key findings and conclusions from this conversation:\n\n{context}"
+        prompt = self._context_builder.build_return_summary_prompt(messages, return_prompt)
 
         # Stream response from Claude
         summary_parts = []
         try:
-            async for event in self.runner.stream_response([], prompt):
+            async for event in self._helper_runner.stream_response([], prompt):
                 if isinstance(event, TextDelta):
                     summary_parts.append(event.text)
         except Exception as e:
-            return f"Error generating summary: {e}\n\nRaw content:\n{context}"
+            # Fall back to raw content
+            context_parts = [f"{'User' if m.role == 'user' else 'Assistant'}: {m.content}" for m in messages]
+            return f"Error generating summary: {e}\n\nRaw content:\n" + "\n\n".join(context_parts)
 
-        return "".join(summary_parts) if summary_parts else context
+        return "".join(summary_parts) if summary_parts else ""
 
     def _check_auto_return(self, response_content: str) -> bool:
         """Check if auto-return condition is met. Returns True if should auto-return."""
@@ -1211,7 +1217,11 @@ Provide a clear, actionable summary that can be used as context for continuing t
         context_tree = self.query_one("#context-tree", ContextTree)
         request_pane = self.query_one("#request-pane", RequestPane)
 
-        self.session = session
+        # Register session with manager if not already known
+        if session.id not in self._manager._sessions:
+            self._manager._sessions[session.id] = session
+            self._manager._runners[session.id] = SessionRunner(session)
+        self._manager.set_active(session.id)
         context_tree.set_active_session(session.id)
 
         # Load session messages and filter by selection
@@ -1313,8 +1323,11 @@ Provide a clear, actionable summary that can be used as context for continuing t
         chat_log.clear()
         context_tree.clear()
 
-        # Set new session and initialize
-        self.session = session
+        # Register session with manager and initialize
+        if session.id not in self._manager._sessions:
+            self._manager._sessions[session.id] = session
+            self._manager._runners[session.id] = SessionRunner(session)
+        self._manager.set_active(session.id)
         self._initialize_session()
 
     def action_resize_tree(self, delta: int) -> None:
@@ -1329,6 +1342,9 @@ Provide a clear, actionable summary that can be used as context for continuing t
 
     def action_quit(self) -> None:
         """Quit the application."""
-        if self.streaming:
-            self.runner.terminate()
+        # Cancel all streaming sessions
+        self._manager.cancel_all()
+        # Stop polling timer
+        if self._poll_timer:
+            self._poll_timer.stop()
         self.exit()

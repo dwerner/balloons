@@ -53,9 +53,9 @@ class Session:
         return msg
 
     def update_usage(self, input_tokens: int, output_tokens: int, cost: float, context_window: int = 0):
-        self.total_input_tokens = input_tokens
-        self.total_output_tokens = output_tokens
-        self.total_cost = cost
+        self.total_input_tokens += input_tokens
+        self.total_output_tokens += output_tokens
+        self.total_cost += cost
         if context_window:
             self.context_window = context_window
 
