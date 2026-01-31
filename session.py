@@ -1,14 +1,15 @@
 import json
 import uuid
+import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from models import Message
+from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, ContentBlock, ContextMode
 
 
-SESSIONS_DIR = Path.home() / ".baloons" / "sessions"
+SESSIONS_DIR = Path.home() / ".balloons" / "sessions"
 
 
 @dataclass
@@ -21,13 +22,30 @@ class Session:
     total_output_tokens: int = 0
     total_cost: float = 0.0
     context_window: int = 200000
+    # Session forking fields
+    parent_id: Optional[str] = None
+    children: list[dict] = field(default_factory=list)  # [{session_id, status, return_condition, prompt}]
+    returned: bool = False
+    return_condition: str = "manual"
+    # Working directory for the session
+    working_directory: Optional[str] = None
 
     @property
     def total_tokens(self) -> int:
         return self.total_input_tokens + self.total_output_tokens
 
-    def add_message(self, role: str, content: str, tokens: int = 0) -> Message:
-        msg = Message(role=role, content=content, tokens=tokens)
+    def add_message(
+        self,
+        role: str,
+        content: str,
+        content_blocks: list[ContentBlock] | None = None,
+        tokens: int = 0,
+    ) -> Message:
+        """Add a message with optional rich content blocks."""
+        if content_blocks is None:
+            # Default to a single text block
+            content_blocks = [TextBlock(text=content)] if content else []
+        msg = Message(role=role, content=content, content_blocks=content_blocks, tokens=tokens)
         self.messages.append(msg)
         return msg
 
@@ -38,6 +56,54 @@ class Session:
         if context_window:
             self.context_window = context_window
 
+    def add_child(self, child_id: str, prompt: str, return_condition: str = "manual") -> None:
+        """Register a child session spawned from this session."""
+        self.children.append({
+            "session_id": child_id,
+            "status": "active",
+            "return_condition": return_condition,
+            "prompt": prompt,
+        })
+
+    def mark_child_returned(self, child_id: str) -> None:
+        """Mark a child session as returned."""
+        for child in self.children:
+            if child["session_id"] == child_id:
+                child["status"] = "returned"
+                break
+
+    def get_parent(self) -> Optional["Session"]:
+        """Load and return the parent session if this is a child."""
+        if not self.parent_id:
+            return None
+        return Session.load(self.parent_id)
+
+    def is_child_session(self) -> bool:
+        """Check if this session is a child of another session."""
+        return self.parent_id is not None
+
+    def _serialize_content_block(self, block: ContentBlock) -> dict:
+        """Serialize a content block to a dict."""
+        if isinstance(block, TextBlock):
+            return {"type": "text", "text": block.text}
+        elif isinstance(block, ToolUseBlock):
+            return {"type": "tool_use", "id": block.id, "name": block.name, "input": block.input}
+        elif isinstance(block, ToolResultBlock):
+            return {"type": "tool_result", "tool_use_id": block.tool_use_id, "content": block.content, "is_error": block.is_error}
+        return {"type": "unknown"}
+
+    def _serialize_message(self, msg: Message) -> dict:
+        """Serialize a message with content blocks."""
+        return {
+            "role": msg.role,
+            "content": msg.content,
+            "content_blocks": [self._serialize_content_block(b) for b in msg.content_blocks],
+            "tokens": msg.tokens,
+            "timestamp": msg.timestamp,
+            "context_mode": msg.context_mode.value,
+            "summary": msg.summary,
+        }
+
     def save(self):
         SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
         path = SESSIONS_DIR / f"{self.id}.json"
@@ -45,13 +111,39 @@ class Session:
             "id": self.id,
             "created": self.created,
             "model": self.model,
-            "messages": [asdict(m) for m in self.messages],
+            "messages": [self._serialize_message(m) for m in self.messages],
             "total_input_tokens": self.total_input_tokens,
             "total_output_tokens": self.total_output_tokens,
             "total_cost": self.total_cost,
             "context_window": self.context_window,
+            "parent_id": self.parent_id,
+            "children": self.children,
+            "returned": self.returned,
+            "return_condition": self.return_condition,
+            "working_directory": self.working_directory,
         }
         path.write_text(json.dumps(data, indent=2))
+
+    @classmethod
+    def _deserialize_content_block(cls, data: dict) -> ContentBlock:
+        """Deserialize a content block from a dict."""
+        block_type = data.get("type", "text")
+        if block_type == "text":
+            return TextBlock(text=data.get("text", ""))
+        elif block_type == "tool_use":
+            return ToolUseBlock(
+                id=data.get("id", ""),
+                name=data.get("name", ""),
+                input=data.get("input", {}),
+            )
+        elif block_type == "tool_result":
+            return ToolResultBlock(
+                tool_use_id=data.get("tool_use_id", ""),
+                content=data.get("content", ""),
+                is_error=data.get("is_error", False),
+            )
+        # Fallback to text
+        return TextBlock(text=str(data))
 
     @classmethod
     def load(cls, session_id: str) -> Optional["Session"]:
@@ -67,13 +159,36 @@ class Session:
             total_output_tokens=data.get("total_output_tokens", 0),
             total_cost=data.get("total_cost", 0.0),
             context_window=data.get("context_window", 200000),
+            parent_id=data.get("parent_id"),
+            children=data.get("children", []),
+            returned=data.get("returned", False),
+            return_condition=data.get("return_condition", "manual"),
+            working_directory=data.get("working_directory"),
         )
         for m in data.get("messages", []):
+            # Parse content_blocks if present, otherwise create from content
+            raw_blocks = m.get("content_blocks", [])
+            if raw_blocks:
+                content_blocks = [cls._deserialize_content_block(b) for b in raw_blocks]
+            else:
+                # Backwards compat: create text block from content
+                content_blocks = [TextBlock(text=m.get("content", ""))] if m.get("content") else []
+
+            # Parse context_mode
+            mode_str = m.get("context_mode", "copy")
+            try:
+                context_mode = ContextMode(mode_str)
+            except ValueError:
+                context_mode = ContextMode.COPY
+
             session.messages.append(Message(
                 role=m["role"],
-                content=m["content"],
+                content=m.get("content", ""),
+                content_blocks=content_blocks,
                 tokens=m.get("tokens", 0),
                 timestamp=m.get("timestamp", ""),
+                context_mode=context_mode,
+                summary=m.get("summary", ""),
             ))
         return session
 

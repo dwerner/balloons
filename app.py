@@ -1,19 +1,46 @@
 import asyncio
+import logging
+import os
 import subprocess
+import sys
+from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 
-from widgets import ChatLog, InputBox, StatusBar, ContextTree, VerticalSplitter, SessionPicker, RequestPane, ToolBar
+# Debug logging for event ordering
+DEBUG_EVENTS = os.environ.get("BALLOONS_DEBUG_EVENTS", "").lower() in ("1", "true", "yes")
+if DEBUG_EVENTS:
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
+        filename="/tmp/balloons_events.log",
+        filemode="w",
+    )
+    _log = logging.getLogger("balloons.events")
+else:
+    _log = None
+
+
+def debug_event(msg: str) -> None:
+    """Log a debug event if DEBUG_EVENTS is enabled."""
+    if _log:
+        _log.debug(msg)
+
+from widgets import ChatLog, InputBox, StatusBar, ContextTree, VerticalSplitter, SessionPicker, RequestPane, ToolBar, WithWidget, WithResultWidget
 from claude_runner import ClaudeRunner
 from session import Session
-from models import TextDelta, ResultEvent, InitEvent, RawEvent, ToolUseEvent, ToolResultEvent
+from models import (
+    TextDelta, ResultEvent, InitEvent, RawEvent, ToolUseEvent, ToolResultEvent,
+    TextBlock, ToolUseBlock, ToolResultBlock, ContentBlock, Message, ContextMode,
+)
 
 
-class BaloonsApp(App):
+class BalloonsApp(App):
     """A TUI chat interface for Claude."""
 
-    TITLE = "Baloons"
+    TITLE = "Balloons"
     SUB_TITLE = "Claude TUI"
 
     CSS = """
@@ -63,6 +90,9 @@ class BaloonsApp(App):
         self.streaming = False
         self._stream_task: asyncio.Task | None = None
         self._current_raw_events: list[dict] = []
+        self._current_content_blocks: list[ContentBlock] = []  # Rich content blocks
+        self._current_text_buffer: str = ""  # Accumulate text between tool calls
+        self._current_tool_use_id: str = ""  # Track current tool use for matching results
         self._tree_width = 50
         self._show_picker = show_picker
         self._shell_process: asyncio.subprocess.Process | None = None
@@ -121,6 +151,9 @@ class BaloonsApp(App):
                 cost=self.session.total_cost,
             )
 
+        # Update working directory in status bar
+        status_bar.update_working_directory(self.session.working_directory or "")
+
         # Focus the input box
         input_box.focus()
 
@@ -135,8 +168,9 @@ class BaloonsApp(App):
         if prompt == ":copy-turns":
             self._handle_copy_turns()
             return
-        elif prompt == ":new":
-            self._handle_new_session()
+        elif prompt == ":new" or prompt.startswith(":new "):
+            initial_prompt = prompt[4:].strip() if len(prompt) > 4 else ""
+            await self._handle_new_session(initial_prompt)
             return
         elif prompt.startswith(":query-with "):
             query_prompt = prompt[len(":query-with "):].strip()
@@ -154,6 +188,39 @@ class BaloonsApp(App):
             shell_cmd = prompt[2:].strip()
             if shell_cmd:
                 await self._handle_shell_command(shell_cmd)
+            return
+        elif prompt.startswith(":with-copy"):
+            # Fork a child session, copying nodes directly
+            args = prompt[10:].strip()
+            if not args:
+                status_bar = self.query_one("#status-bar", StatusBar)
+                status_bar.set_error(":with-copy requires a prompt")
+                return
+            await self._handle_with_copy_command(args)
+            return
+        elif prompt.startswith(":with"):
+            # Fork a child session, summarizing context via Claude
+            args = prompt[5:].strip()
+            if not args:
+                status_bar = self.query_one("#status-bar", StatusBar)
+                status_bar.set_error(":with requires a prompt")
+                return
+            await self._handle_with_command(args)
+            return
+        elif prompt.startswith(":return"):
+            # Return from child to parent
+            return_prompt = prompt[7:].strip() if len(prompt) > 7 else ""
+            await self._handle_return_command(return_prompt)
+            return
+        elif prompt == ":pwd":
+            self._handle_pwd_command()
+            return
+        elif prompt.startswith(":cd"):
+            path_arg = prompt[3:].strip() if len(prompt) > 3 else ""
+            self._handle_cd_command(path_arg)
+            return
+        elif prompt == ":reload":
+            self._handle_reload()
             return
         elif prompt.startswith(":"):
             # Unknown command
@@ -175,8 +242,12 @@ class BaloonsApp(App):
         status_bar.set_streaming(True)
         self.streaming = True
         self._current_raw_events = []
+        self._current_content_blocks = []
+        self._current_text_buffer = ""
+        self._current_tool_use_id = ""
 
         # Start assistant message
+        debug_event("add_assistant_message (streaming starts)")
         chat_log.add_assistant_message()
 
         # Start streaming response
@@ -209,11 +280,27 @@ class BaloonsApp(App):
 
         try:
             async for event in self.runner.stream_response(
-                selected_messages, prompt, allowed_tools
+                selected_messages, prompt, allowed_tools,
+                working_dir=self.session.working_directory
             ):
                 if isinstance(event, RawEvent):
                     # Collect raw events for tree inspection
                     self._current_raw_events.append(event.data)
+                    # Debug: log raw event type
+                    raw_type = event.data.get("type", "?")
+                    if raw_type == "stream_event":
+                        inner = event.data.get("event", {})
+                        inner_type = inner.get("type", "?")
+                        if inner_type == "content_block_start":
+                            cb = inner.get("content_block", {})
+                            debug_event(f"RawEvent: stream_event/{inner_type} -> {cb.get('type', '?')}")
+                        elif inner_type == "content_block_delta":
+                            delta = inner.get("delta", {})
+                            debug_event(f"RawEvent: stream_event/{inner_type} -> {delta.get('type', '?')}")
+                        else:
+                            debug_event(f"RawEvent: stream_event/{inner_type}")
+                    else:
+                        debug_event(f"RawEvent: {raw_type}")
 
                 elif isinstance(event, InitEvent):
                     self.session.model = event.model
@@ -224,9 +311,12 @@ class BaloonsApp(App):
                     )
 
                 elif isinstance(event, TextDelta):
+                    debug_event(f"TextDelta: {repr(event.text[:50] if len(event.text) > 50 else event.text)}")
                     chat_log.append_to_current(event.text)
+                    self._current_text_buffer += event.text
 
                 elif isinstance(event, ResultEvent):
+                    debug_event(f"ResultEvent: in={event.input_tokens} out={event.output_tokens}")
                     self.session.update_usage(
                         event.input_tokens,
                         event.output_tokens,
@@ -240,11 +330,41 @@ class BaloonsApp(App):
                     )
 
                 elif isinstance(event, ToolUseEvent):
+                    debug_event(f"ToolUseEvent: {event.tool_name} (text_buffer={len(self._current_text_buffer)} chars)")
+                    # Flush any accumulated text to a TextBlock
+                    if self._current_text_buffer.strip():
+                        self._current_content_blocks.append(
+                            TextBlock(text=self._current_text_buffer)
+                        )
+                        self._current_text_buffer = ""
+
+                    # Create tool use block - generate ID from name + index
+                    tool_id = f"{event.tool_name}_{len(self._current_content_blocks)}"
+                    self._current_tool_use_id = tool_id
+                    self._current_content_blocks.append(
+                        ToolUseBlock(
+                            id=tool_id,
+                            name=event.tool_name,
+                            input=event.tool_input,
+                        )
+                    )
+
                     # Display tool use as separate widget
                     tool_content = self._format_tool_use(event)
+                    debug_event(f"  -> add_tool_use widget for {event.tool_name}")
                     chat_log.add_tool_use(event.tool_name, tool_content)
 
                 elif isinstance(event, ToolResultEvent):
+                    debug_event(f"ToolResultEvent: {len(event.result)} chars")
+                    # Create tool result block
+                    self._current_content_blocks.append(
+                        ToolResultBlock(
+                            tool_use_id=self._current_tool_use_id,
+                            content=event.result,
+                            is_error=False,
+                        )
+                    )
+
                     # Display tool result
                     result_content = self._format_tool_result(event)
                     if result_content:
@@ -257,12 +377,22 @@ class BaloonsApp(App):
             # Finish the message and save
             content = chat_log.finish_current_message()
 
+            # Flush any remaining text to content blocks
+            if self._current_text_buffer.strip():
+                self._current_content_blocks.append(
+                    TextBlock(text=self._current_text_buffer)
+                )
+
+            # Build content blocks for user and assistant
+            user_blocks = [TextBlock(text=prompt)]
+            assistant_blocks = self._current_content_blocks if self._current_content_blocks else [TextBlock(text=content)]
+
             # Add assistant turn to tree with raw events
             context_tree.add_turn_to_current("assistant", content, self._current_raw_events)
 
-            # Save messages to session
-            self.session.add_message("user", prompt)
-            self.session.add_message("assistant", content)
+            # Save messages to session with rich content
+            self.session.add_message("user", prompt, content_blocks=user_blocks)
+            self.session.add_message("assistant", content, content_blocks=assistant_blocks)
             self.session.save()
 
             # Re-enable input
@@ -271,6 +401,13 @@ class BaloonsApp(App):
             input_box.set_disabled(False)
             self._stream_task = None
             self._current_raw_events = []
+            self._current_content_blocks = []
+            self._current_text_buffer = ""
+
+            # Check for auto-return conditions
+            if self._check_auto_return(content):
+                # Schedule auto-return (can't await in finally)
+                asyncio.create_task(self._handle_return_command("Auto-return: condition met"))
 
     def _format_tool_use(self, event: ToolUseEvent) -> str:
         """Format a tool use event for display."""
@@ -321,8 +458,8 @@ class BaloonsApp(App):
             result = result[:500] + "..."
         return f"```\n{result}\n```"
 
-    def _handle_new_session(self) -> None:
-        """Create a new empty session."""
+    async def _handle_new_session(self, initial_prompt: str = "") -> None:
+        """Create a new session, optionally with an initial prompt."""
         chat_log = self.query_one("#chat-log", ChatLog)
         context_tree = self.query_one("#context-tree", ContextTree)
 
@@ -334,11 +471,72 @@ class BaloonsApp(App):
         chat_log.clear()
         context_tree.load_all_sessions(self.session)
 
+        # If an initial prompt was provided, send it
+        if initial_prompt:
+            # Reuse the normal message flow
+            event = InputBox.Submitted(initial_prompt)
+            await self.on_input_box_submitted(event)
+
+    def _handle_pwd_command(self) -> None:
+        """Show the current working directory for the session."""
+        status_bar = self.query_one("#status-bar", StatusBar)
+        if self.session.working_directory:
+            status_bar.set_status(f"Working directory: {self.session.working_directory}")
+        else:
+            status_bar.set_status(f"No working directory set (process cwd: {os.getcwd()})")
+
+    def _handle_cd_command(self, path_arg: str) -> None:
+        """Change the working directory for the session."""
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        if not path_arg:
+            # No argument - clear working directory or show current
+            if self.session.working_directory:
+                status_bar.set_status(f"Working directory: {self.session.working_directory}")
+            else:
+                status_bar.set_status("No working directory set. Use :cd <path> to set one.")
+            return
+
+        # Expand ~ and resolve relative paths
+        try:
+            target_path = Path(path_arg).expanduser()
+            if not target_path.is_absolute():
+                # Resolve relative to current working directory or session's working directory
+                base = Path(self.session.working_directory) if self.session.working_directory else Path.cwd()
+                target_path = (base / target_path).resolve()
+            else:
+                target_path = target_path.resolve()
+
+            if not target_path.exists():
+                status_bar.set_error(f"Path does not exist: {target_path}")
+                return
+
+            if not target_path.is_dir():
+                status_bar.set_error(f"Not a directory: {target_path}")
+                return
+
+            # Set the working directory
+            self.session.working_directory = str(target_path)
+            self.session.save()
+            status_bar.update_working_directory(str(target_path))
+            status_bar.set_status(f"Changed to: {target_path}")
+
+        except Exception as e:
+            status_bar.set_error(f"Invalid path: {e}")
+
+    def _handle_reload(self) -> None:
+        """Reload the app by re-executing the process."""
+        self.session.save()
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
     def _handle_suspend(self, cmd: str) -> None:
-        """Suspend TUI and run interactive command."""
-        import os
+        """Suspend TUI and run interactive command in session's working directory."""
+        cwd = self.session.working_directory
         with self.suspend():
-            os.system(cmd)
+            if cwd:
+                os.system(f"cd {cwd!r} && {cmd}")
+            else:
+                os.system(cmd)
 
     def action_cancel_stream(self) -> None:
         """Cancel the current streaming response or shell command."""
@@ -360,10 +558,10 @@ class BaloonsApp(App):
         if not selected_messages:
             return
 
-        # Create new session with selected messages
+        # Create new session with selected messages (preserve content_blocks)
         new_session = Session()
         for msg in selected_messages:
-            new_session.add_message(msg.role, msg.content)
+            new_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
         new_session.save()
 
         # Switch to new session
@@ -398,13 +596,18 @@ class BaloonsApp(App):
         status_bar.set_streaming(True)
         self.streaming = True
         self._current_raw_events = []
+        self._current_content_blocks = []
+        self._current_text_buffer = ""
 
         # Start assistant message (no user message shown - it's ephemeral)
         chat_log.add_assistant_message()
 
         # Stream response using selected context
         try:
-            async for event in self.runner.stream_response(selected_messages, prompt, allowed_tools):
+            async for event in self.runner.stream_response(
+                selected_messages, prompt, allowed_tools,
+                working_dir=self.session.working_directory
+            ):
                 if isinstance(event, RawEvent):
                     self._current_raw_events.append(event.data)
                 elif isinstance(event, InitEvent):
@@ -413,6 +616,7 @@ class BaloonsApp(App):
                     status_bar.update_stats(model=event.model, context_window=event.context_window)
                 elif isinstance(event, TextDelta):
                     chat_log.append_to_current(event.text)
+                    self._current_text_buffer += event.text
                 elif isinstance(event, ResultEvent):
                     self.session.update_usage(
                         event.input_tokens, event.output_tokens,
@@ -427,15 +631,20 @@ class BaloonsApp(App):
             chat_log.append_to_current(f"\n\n[Error: {e}]")
         finally:
             content = chat_log.finish_current_message()
+            if self._current_text_buffer.strip():
+                self._current_content_blocks.append(TextBlock(text=self._current_text_buffer))
+            assistant_blocks = self._current_content_blocks if self._current_content_blocks else [TextBlock(text=content)]
             context_tree.add_turn_to_current("assistant", content, self._current_raw_events)
 
-            # Only save assistant response to new session
-            self.session.add_message("assistant", content)
+            # Only save assistant response to new session with rich content
+            self.session.add_message("assistant", content, content_blocks=assistant_blocks)
             self.session.save()
 
             self.streaming = False
             status_bar.set_streaming(False)
             input_box.set_disabled(False)
+            self._current_content_blocks = []
+            self._current_text_buffer = ""
             self._current_raw_events = []
 
     async def _handle_shell_command(self, cmd: str) -> None:
@@ -457,12 +666,15 @@ class BaloonsApp(App):
             "CLICOLOR_FORCE": "1",
             "TERM": "xterm-256color",
         })
+        # Use session's working directory if set
+        cwd = self.session.working_directory if self.session.working_directory else None
         try:
             self._shell_process = await asyncio.create_subprocess_shell(
                 cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 env=env,
+                cwd=cwd,
             )
             stdout, _ = await self._shell_process.communicate()
             output = stdout.decode("utf-8", errors="replace").rstrip()
@@ -497,21 +709,383 @@ class BaloonsApp(App):
             self._handle_stream(prompt)
         )
 
+    async def _handle_with_command(self, args: str) -> None:
+        """Fork a child session, respecting context modes (COPY verbatim, SUMMARIZE via Claude)."""
+        chat_log = self.query_one("#chat-log", ChatLog)
+        context_tree = self.query_one("#context-tree", ContextTree)
+        input_box = self.query_one("#input-box", InputBox)
+        status_bar = self.query_one("#status-bar", StatusBar)
+        tool_bar = self.query_one("#tool-bar", ToolBar)
+
+        # Parse args: prompt [--until condition]
+        return_condition = "manual"
+        prompt = args
+
+        if " --until " in args:
+            parts = args.split(" --until ", 1)
+            prompt = parts[0].strip()
+            return_condition = parts[1].strip()
+        elif args.endswith(" --until"):
+            prompt = args[:-8].strip()
+            return_condition = "manual"
+
+        if not prompt:
+            status_bar.set_error(":with requires a prompt")
+            return
+
+        # Get selected messages from context tree (includes context_mode)
+        selected_messages = context_tree.get_selected_messages()
+        allowed_tools = tool_bar.get_enabled_tools()
+
+        # Separate messages by context mode
+        copy_messages = [m for m in selected_messages if m.context_mode == ContextMode.COPY]
+        summarize_messages = [m for m in selected_messages if m.context_mode == ContextMode.SUMMARIZE]
+
+        # Create child session with parent reference
+        child_session = Session()
+        child_session.parent_id = self.session.id
+        child_session.return_condition = return_condition
+
+        # Copy COPY-marked messages verbatim to child
+        for msg in copy_messages:
+            child_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
+
+        # Generate summaries for SUMMARIZE-marked messages
+        if summarize_messages:
+            status_bar.set_status("Summarizing context...")
+            input_box.set_disabled(True)
+
+            summary = await self._generate_context_summary(summarize_messages)
+
+            if summary:
+                # Add summary as a system-like user message at the start
+                child_session.messages.insert(0, Message(
+                    role="user",
+                    content=f"[Context Summary]\n{summary}",
+                    content_blocks=[TextBlock(text=f"[Context Summary]\n{summary}")],
+                ))
+
+            status_bar.set_status("")
+            input_box.set_disabled(False)
+
+        child_session.save()
+
+        # Register child in parent
+        self.session.add_child(child_session.id, prompt, return_condition)
+        self.session.save()
+
+        # Add WithWidget to parent's chat log
+        chat_log.add_with_widget(
+            prompt=prompt,
+            child_session_id=child_session.id,
+            status="active",
+            return_condition=return_condition,
+        )
+
+        # Switch to child session
+        self.session = child_session
+        chat_log.clear()
+        chat_log.load_history(child_session.messages)
+        context_tree.load_all_sessions(child_session)
+
+        # Now submit the prompt in the child session
+        input_box.set_disabled(True)
+        status_bar.set_streaming(True)
+        self.streaming = True
+        self._current_raw_events = []
+        self._current_content_blocks = []
+        self._current_text_buffer = ""
+        self._current_tool_use_id = ""
+
+        chat_log.add_user_message(prompt)
+        context_tree.add_turn_to_current("user", prompt, [{"type": "with_prompt", "prompt": prompt}])
+        chat_log.add_assistant_message()
+
+        self._stream_task = asyncio.create_task(
+            self._handle_stream(prompt)
+        )
+
+    async def _generate_context_summary(self, messages: list) -> str:
+        """Generate a summary of messages marked for summarization."""
+        if not messages:
+            return ""
+
+        # Build context from messages
+        context_parts = []
+        for msg in messages:
+            prefix = "User" if msg.role == "user" else "Assistant"
+            context_parts.append(f"{prefix}: {msg.content}")
+        context = "\n\n".join(context_parts)
+
+        summary_prompt = f"""Summarize the following conversation context concisely, preserving key information, decisions, and any important technical details:
+
+{context}
+
+Provide a clear, actionable summary that can be used as context for continuing this work."""
+
+        # Stream response from Claude
+        summary_parts = []
+        try:
+            async for event in self.runner.stream_response([], summary_prompt):
+                if isinstance(event, TextDelta):
+                    summary_parts.append(event.text)
+        except Exception as e:
+            return f"Error generating summary: {e}\n\nRaw context:\n{context}"
+
+        return "".join(summary_parts) if summary_parts else context
+
+    async def _handle_with_copy_command(self, args: str) -> None:
+        """Fork a child session, copying selected nodes directly."""
+        chat_log = self.query_one("#chat-log", ChatLog)
+        context_tree = self.query_one("#context-tree", ContextTree)
+        input_box = self.query_one("#input-box", InputBox)
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        # Parse args: prompt [--until condition]
+        return_condition = "manual"
+        prompt = args
+
+        if " --until " in args:
+            parts = args.split(" --until ", 1)
+            prompt = parts[0].strip()
+            return_condition = parts[1].strip()
+        elif args.endswith(" --until"):
+            prompt = args[:-8].strip()
+            return_condition = "manual"
+
+        if not prompt:
+            status_bar.set_error(":with-copy requires a prompt")
+            return
+
+        # Get selected messages from context tree
+        selected_messages = context_tree.get_selected_messages()
+
+        # Create child session with parent reference
+        child_session = Session()
+        child_session.parent_id = self.session.id
+        child_session.return_condition = return_condition
+
+        # Copy selected messages to child (preserve content_blocks)
+        for msg in selected_messages:
+            child_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
+        child_session.save()
+
+        # Register child in parent
+        self.session.add_child(child_session.id, prompt, return_condition)
+        self.session.save()
+
+        # Add WithWidget to parent's chat log
+        chat_log.add_with_widget(
+            prompt=prompt,
+            child_session_id=child_session.id,
+            status="active",
+            return_condition=return_condition,
+        )
+
+        # Switch to child session
+        self.session = child_session
+        chat_log.clear()
+        chat_log.load_history(child_session.messages)
+        context_tree.load_all_sessions(child_session)
+
+        # Submit fork prompt in child
+        input_box.set_disabled(True)
+        status_bar.set_streaming(True)
+        self.streaming = True
+        self._current_raw_events = []
+        self._current_content_blocks = []
+        self._current_text_buffer = ""
+        self._current_tool_use_id = ""
+
+        chat_log.add_user_message(prompt)
+        context_tree.add_turn_to_current("user", prompt, [{"type": "fork_prompt", "prompt": prompt}])
+        chat_log.add_assistant_message()
+
+        self._stream_task = asyncio.create_task(
+            self._handle_stream(prompt)
+        )
+
+    async def _handle_return_command(self, return_prompt: str = "") -> None:
+        """Return from child session to parent."""
+        chat_log = self.query_one("#chat-log", ChatLog)
+        context_tree = self.query_one("#context-tree", ContextTree)
+        status_bar = self.query_one("#status-bar", StatusBar)
+        input_box = self.query_one("#input-box", InputBox)
+
+        # Check we're in a child session
+        if not self.session.is_child_session():
+            status_bar.set_error("Not in a child session")
+            return
+
+        # Get selected messages from context tree for return content
+        selected_messages = context_tree.get_selected_messages()
+
+        # Generate LLM summary of the child session
+        status_bar.set_status("Generating summary...")
+        input_box.set_disabled(True)
+
+        return_content = await self._generate_return_summary(selected_messages, return_prompt)
+
+        input_box.set_disabled(False)
+        status_bar.set_status("")
+
+        # Mark child as returned
+        self.session.returned = True
+        self.session.save()
+
+        # Load parent and update it
+        parent = self.session.get_parent()
+        if not parent:
+            status_bar.set_error("Parent session not found")
+            return
+
+        parent.mark_child_returned(self.session.id)
+        parent.save()
+
+        child_id = self.session.id
+
+        # Switch to parent session
+        self.session = parent
+        chat_log.clear()
+        chat_log.load_history(parent.messages)
+        context_tree.load_all_sessions(parent)
+
+        # Find and update the WithWidget
+        with_widget = chat_log.find_with_widget(child_id)
+        if with_widget:
+            with_widget.mark_returned()
+
+        # Add WithResultWidget to parent
+        chat_log.add_with_result_widget(
+            content=return_content,
+            child_session_id=child_id,
+            return_prompt=return_prompt,
+        )
+
+        status_bar.set_status("Returned from child session", animate=False)
+
+    async def _generate_return_summary(self, messages: list, return_prompt: str) -> str:
+        """Generate a summary of selected messages using Claude."""
+        if not messages:
+            return ""
+
+        # Build context from messages
+        context_parts = []
+        for msg in messages:
+            prefix = "User" if msg.role == "user" else "Assistant"
+            context_parts.append(f"{prefix}: {msg.content}")
+        context = "\n\n".join(context_parts)
+
+        # Build summary prompt
+        if return_prompt:
+            prompt = f"{return_prompt}\n\nContext:\n{context}"
+        else:
+            prompt = f"Summarize the key findings and conclusions from this conversation:\n\n{context}"
+
+        # Stream response from Claude
+        summary_parts = []
+        try:
+            async for event in self.runner.stream_response([], prompt):
+                if isinstance(event, TextDelta):
+                    summary_parts.append(event.text)
+        except Exception as e:
+            return f"Error generating summary: {e}\n\nRaw content:\n{context}"
+
+        return "".join(summary_parts) if summary_parts else context
+
+    def _check_auto_return(self, response_content: str) -> bool:
+        """Check if auto-return condition is met. Returns True if should auto-return."""
+        if not self.session.is_child_session():
+            return False
+
+        condition = self.session.return_condition
+
+        if condition == "manual":
+            return False
+
+        if condition == "done":
+            # Look for completion indicators
+            done_indicators = [
+                "task complete",
+                "task is complete",
+                "completed the task",
+                "finished",
+                "done",
+                "all set",
+            ]
+            lower_content = response_content.lower()
+            for indicator in done_indicators:
+                if indicator in lower_content:
+                    return True
+            return False
+
+        if condition.startswith("turns:"):
+            try:
+                max_turns = int(condition.split(":")[1])
+                # Count assistant messages in this child session
+                assistant_count = sum(1 for m in self.session.messages if m.role == "assistant")
+                # +1 for the current response not yet saved
+                return assistant_count + 1 >= max_turns
+            except (ValueError, IndexError):
+                return False
+
+        return False
+
+    def on_with_widget_child_clicked(self, event: WithWidget.ChildClicked) -> None:
+        """Handle clicking on WithWidget to navigate to child session."""
+        if self.streaming:
+            return
+
+        child_session = Session.load(event.child_session_id)
+        if child_session:
+            self._switch_to_session(child_session)
+
+    def on_with_result_widget_child_clicked(self, event: WithResultWidget.ChildClicked) -> None:
+        """Handle clicking on WithResultWidget to navigate to child session."""
+        if self.streaming:
+            return
+
+        child_session = Session.load(event.child_session_id)
+        if child_session:
+            self._switch_to_session(child_session)
+
+    def _switch_to_session(self, session: Session) -> None:
+        """Switch to a different session."""
+        chat_log = self.query_one("#chat-log", ChatLog)
+        context_tree = self.query_one("#context-tree", ContextTree)
+
+        self.session = session
+        context_tree.set_active_session(session.id)
+
+        # Load session messages and filter by selection
+        chat_log.clear()
+        chat_log.load_history(session.messages)
+
+        # Get included turn IDs for this session (not DROP)
+        session_data = context_tree._sessions.get(session.id)
+        if session_data:
+            included_turn_ids = [
+                turn["idx"] + 1  # 1-indexed for chat_log
+                for turn in session_data["turns"]
+                if context_tree._context_modes.get(
+                    (session.id, turn["idx"]), ContextMode.DROP
+                ) != ContextMode.DROP
+            ]
+            show_all = len(included_turn_ids) == 0
+            chat_log.filter_by_turns(included_turn_ids, show_all)
+
     def on_context_tree_selection_changed(self, event: ContextTree.SelectionChanged) -> None:
         """Handle tree selection changes - filter chat view."""
         chat_log = self.query_one("#chat-log", ChatLog)
         chat_log.filter_by_turns(event.selected_turn_ids, event.show_all)
 
     def on_context_tree_session_activated(self, event: ContextTree.SessionActivated) -> None:
-        """Handle clicking on a session to view it."""
+        """Handle clicking on a session - switch to it."""
         if self.streaming:
             return
 
-        chat_log = self.query_one("#chat-log", ChatLog)
-
-        # Load the activated session's messages
-        chat_log.clear()
-        chat_log.load_history(event.session.messages)
+        # Switch to this session
+        self._switch_to_session(event.session)
 
     def on_context_tree_turn_inspected(self, event: ContextTree.TurnInspected) -> None:
         """Handle turn inspection - show in request pane."""

@@ -13,7 +13,9 @@ class StatusBar(Static):
     cost: reactive[float] = reactive(0.0)
     streaming: reactive[bool] = reactive(False)
     status: reactive[str] = reactive("")
+    _status_animated: bool = True
     error: reactive[str] = reactive("")
+    working_directory: reactive[str] = reactive("")
     _spinner_frame: reactive[int] = reactive(0)
     _spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     _spinner_timer: Timer | None = None
@@ -40,18 +42,30 @@ class StatusBar(Static):
         if self.error:
             status_indicator = f" [bold orange1]{self.error}[/]"
         elif self.status:
-            spinner = self._spinner_chars[self._spinner_frame]
-            status_indicator = f" [bold cyan]{spinner} {self.status}[/]"
+            if self._status_animated:
+                spinner = self._spinner_chars[self._spinner_frame]
+                status_indicator = f" [bold cyan]{spinner} {self.status}[/]"
+            else:
+                status_indicator = f" [bold cyan]{self.status}[/]"
         elif self.streaming:
             spinner = self._spinner_chars[self._spinner_frame]
             status_indicator = f" [bold green]{spinner} streaming[/]"
         else:
             status_indicator = ""
 
+        # Show working directory (always displayed)
+        wd_path = self.working_directory or "."
+        parts = wd_path.split("/")
+        if len(parts) > 2:
+            wd_display = f" [dim]@.../{'/'.join(parts[-2:])}[/]"
+        else:
+            wd_display = f" [dim]@{wd_path}[/]"
+
         return (
             f"[{model_display}] "
             f"{total_tokens:,} / {self.context_window:,} tokens ({percent:.1f}%) | "
             f"${self.cost:.4f}"
+            f"{wd_display}"
             f"{status_indicator}"
         )
 
@@ -81,10 +95,11 @@ class StatusBar(Static):
         else:
             self._stop_spinner()
 
-    def set_status(self, status: str):
+    def set_status(self, status: str, animate: bool = True):
         self.status = status
+        self._status_animated = animate
         self.error = ""  # Clear error when setting status
-        if status:
+        if status and animate:
             self._start_spinner()
         else:
             self._stop_spinner()
@@ -109,3 +124,7 @@ class StatusBar(Static):
     def _advance_spinner(self) -> None:
         """Advance the spinner to the next frame."""
         self._spinner_frame = (self._spinner_frame + 1) % len(self._spinner_chars)
+
+    def update_working_directory(self, path: str) -> None:
+        """Update the displayed working directory."""
+        self.working_directory = path

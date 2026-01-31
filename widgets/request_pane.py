@@ -1,5 +1,5 @@
 from textual.widgets import Static, Tree
-from textual.containers import Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.message import Message
 from rich.json import JSON
 from rich.text import Text
@@ -23,11 +23,13 @@ class RequestPane(Vertical):
         background: $background;
     }
 
-    RequestPane > #json-viewer {
+    RequestPane > #json-viewer-scroll {
         height: 1fr;
         border-top: solid $primary;
+    }
+
+    RequestPane > #json-viewer-scroll > #json-viewer {
         padding: 1;
-        overflow-y: auto;
     }
     """
 
@@ -39,7 +41,8 @@ class RequestPane(Vertical):
         tree = Tree("[bold]Requests[/]", id="request-list")
         tree.root.expand()
         yield tree
-        yield Static("Select a request or turn to inspect", id="json-viewer")
+        with VerticalScroll(id="json-viewer-scroll"):
+            yield Static("Select a request or turn to inspect", id="json-viewer")
 
     def add_request(self, request_type: str, data: dict) -> None:
         """Add a request to the history."""

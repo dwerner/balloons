@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Baloons - A TUI wrapper for Claude CLI."""
+"""Balloons - A TUI wrapper for Claude CLI."""
 
 import argparse
 import sys
 
-from app import BaloonsApp
+from app import BalloonsApp
 from session import Session
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Baloons - A TUI chat interface for Claude",
+        description="Balloons - A TUI chat interface for Claude",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
@@ -55,7 +55,7 @@ def main():
         session = Session()
         show_picker = False
 
-    app = BaloonsApp(session=session, show_picker=show_picker)
+    app = BalloonsApp(session=session, show_picker=show_picker)
     app.run()
 
 

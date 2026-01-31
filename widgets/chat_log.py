@@ -4,6 +4,9 @@ from rich.markdown import Markdown
 from rich.console import RenderableType
 from rich.text import Text
 
+from .with_widget import WithWidget
+from .with_result_widget import WithResultWidget
+
 
 class ToolUseWidget(Static):
     """A tool use display in the chat log."""
@@ -159,44 +162,75 @@ class ChatLog(VerticalScroll):
         return widget
 
     def append_to_current(self, text: str) -> None:
-        """Append text to the current assistant message."""
-        if self._current_assistant_message:
-            self._current_assistant_message.append_text(text)
-            self.scroll_end(animate=False)
+        """Append text to the current assistant message.
+
+        If there's no current streaming message (e.g., after a tool use finalized it),
+        create a new one to receive text that comes after tools.
+        """
+        if not self._current_assistant_message:
+            # Create a new streaming message for text after tool use
+            widget = MessageWidget("assistant", "", streaming=True, turn_id=self._turn_counter)
+            widget.add_class("streaming")
+            self._current_assistant_message = widget
+            self.mount(widget)
+
+        self._current_assistant_message.append_text(text)
+        self.scroll_end(animate=False)
 
     def add_tool_use(self, tool_name: str, content: str) -> ToolUseWidget:
-        """Add a tool use widget to the log, before any streaming message."""
+        """Add a tool use widget to the log.
+
+        When there's a streaming message with content, we finalize it first
+        so that text appears before the tool, then create a new streaming
+        message for any text that comes after.
+        """
         turn_id = self._turn_counter
-        widget = ToolUseWidget(tool_name, content, turn_id=turn_id)
-        # Insert before streaming message if one exists
+
+        # Handle current streaming message
         if self._current_assistant_message:
-            self.mount(widget, before=self._current_assistant_message)
-        else:
-            self.mount(widget)
+            if self._current_assistant_message._content.strip():
+                # Has content - finalize it so text stays above tool widget
+                self._current_assistant_message.remove_class("streaming")
+                self._current_assistant_message.finish_streaming()
+            else:
+                # Empty message - remove it
+                self._current_assistant_message.remove()
+            self._current_assistant_message = None
+
+        widget = ToolUseWidget(tool_name, content, turn_id=turn_id)
+        self.mount(widget)
         self.scroll_end(animate=False)
         return widget
 
     def add_tool_result(self, content: str) -> ToolResultWidget:
-        """Add a tool result widget to the log, before any streaming message."""
+        """Add a tool result widget to the log."""
         turn_id = self._turn_counter
         widget = ToolResultWidget(content, turn_id=turn_id)
-        # Insert before streaming message if one exists
-        if self._current_assistant_message:
-            self.mount(widget, before=self._current_assistant_message)
-        else:
-            self.mount(widget)
+        self.mount(widget)
         self.scroll_end(animate=False)
         return widget
 
     def finish_current_message(self) -> str:
-        """Mark the current assistant message as complete and return its content."""
-        content = ""
+        """Mark streaming complete and return combined text from all assistant messages in this turn.
+
+        Since text may be split across multiple MessageWidgets (due to tool uses
+        in between), we collect content from all assistant messages in the current turn.
+        """
+        # Finish any active streaming message
         if self._current_assistant_message:
             self._current_assistant_message.remove_class("streaming")
-            self._current_assistant_message.finish_streaming()  # Re-render with markdown
-            content = self._current_assistant_message.content
+            self._current_assistant_message.finish_streaming()
             self._current_assistant_message = None
-        return content
+
+        # Collect text from all assistant messages in current turn
+        turn_id = self._turn_counter
+        content_parts = []
+        for child in self.children:
+            if isinstance(child, MessageWidget) and child.role == "assistant" and child.turn_id == turn_id:
+                if child.content.strip():
+                    content_parts.append(child.content)
+
+        return "\n\n".join(content_parts)
 
     def clear(self) -> None:
         """Clear all messages and reset counter."""
@@ -213,10 +247,55 @@ class ChatLog(VerticalScroll):
             self.mount(widget)
         self.scroll_end(animate=False)
 
+    def add_with_widget(
+        self,
+        prompt: str,
+        child_session_id: str,
+        status: str = "active",
+        return_condition: str = "manual",
+    ) -> WithWidget:
+        """Add a with widget to the log (fork point marker)."""
+        turn_id = self._turn_counter
+        widget = WithWidget(
+            prompt=prompt,
+            child_session_id=child_session_id,
+            status=status,
+            return_condition=return_condition,
+            turn_id=turn_id,
+        )
+        self.mount(widget)
+        self.scroll_end(animate=False)
+        return widget
+
+    def add_with_result_widget(
+        self,
+        content: str,
+        child_session_id: str,
+        return_prompt: str = "",
+    ) -> WithResultWidget:
+        """Add a with result widget to the log (returned content)."""
+        turn_id = self._turn_counter
+        widget = WithResultWidget(
+            content=content,
+            child_session_id=child_session_id,
+            return_prompt=return_prompt,
+            turn_id=turn_id,
+        )
+        self.mount(widget)
+        self.scroll_end(animate=False)
+        return widget
+
+    def find_with_widget(self, child_session_id: str) -> WithWidget | None:
+        """Find a WithWidget by its child session ID."""
+        for child in self.children:
+            if isinstance(child, WithWidget) and child.child_session_id == child_session_id:
+                return child
+        return None
+
     def filter_by_turns(self, turn_ids: list[int], show_all: bool = False) -> None:
         """Show only specified turns, or all if show_all is True."""
         for child in self.children:
-            if isinstance(child, (MessageWidget, ToolUseWidget, ToolResultWidget)):
+            if isinstance(child, (MessageWidget, ToolUseWidget, ToolResultWidget, WithWidget, WithResultWidget)):
                 if show_all or child.turn_id in turn_ids:
                     child.remove_class("hidden")
                 else:

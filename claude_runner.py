@@ -3,7 +3,30 @@ import json
 import signal
 from typing import AsyncIterator, Union
 
-from models import Message, TextDelta, ResultEvent, InitEvent, RawEvent, ToolUseEvent, ToolResultEvent
+from models import (
+    Message, TextDelta, ResultEvent, InitEvent, RawEvent, ToolUseEvent, ToolResultEvent,
+    TextBlock, ToolUseBlock, ToolResultBlock, ContextMode,
+)
+
+
+async def readline_unlimited(stream: asyncio.StreamReader) -> bytes:
+    """Read a line from stream without size limit."""
+    chunks = []
+    while True:
+        try:
+            # Read up to separator
+            chunk = await stream.readuntil(b'\n')
+            chunks.append(chunk)
+            break
+        except asyncio.IncompleteReadError as e:
+            # EOF reached
+            chunks.append(e.partial)
+            break
+        except asyncio.LimitOverrunError as e:
+            # Line too long, read what we can and continue
+            chunk = await stream.read(e.consumed)
+            chunks.append(chunk)
+    return b''.join(chunks)
 
 
 class ClaudeRunner:
@@ -14,16 +37,57 @@ class ClaudeRunner:
 
     @staticmethod
     def build_context(messages: list[Message], new_prompt: str) -> str:
-        """Build the full context string from message history + new prompt."""
+        """Build the full context string from message history + new prompt.
+
+        Reconstructs tool calls and results so Claude has proper context.
+        Respects ContextMode for each message (copy, summarize, drop).
+        """
         parts = []
         for msg in messages:
+            # Respect context mode
+            if msg.context_mode == ContextMode.DROP:
+                continue
+
             prefix = "User" if msg.role == "user" else "Assistant"
-            parts.append(f"{prefix}: {msg.content}")
+
+            # Use summary if in SUMMARIZE mode and summary exists
+            if msg.context_mode == ContextMode.SUMMARIZE and msg.summary:
+                parts.append(f"{prefix}: [Summary] {msg.summary}")
+                continue
+
+            # Build content from blocks if available
+            if msg.content_blocks:
+                block_parts = []
+                for block in msg.content_blocks:
+                    if isinstance(block, TextBlock):
+                        if block.text:
+                            block_parts.append(block.text)
+                    elif isinstance(block, ToolUseBlock):
+                        # Format tool use so Claude knows what it did
+                        import json
+                        input_str = json.dumps(block.input, indent=2)
+                        block_parts.append(f"[Tool Use: {block.name}]\n{input_str}")
+                    elif isinstance(block, ToolResultBlock):
+                        # Format tool result so Claude sees what the tool returned
+                        error_prefix = "[Error] " if block.is_error else ""
+                        # Truncate very long results
+                        content = block.content
+                        if len(content) > 10000:
+                            content = content[:10000] + "\n... [truncated]"
+                        block_parts.append(f"[Tool Result]{error_prefix}\n{content}")
+
+                if block_parts:
+                    parts.append(f"{prefix}: " + "\n\n".join(block_parts))
+            else:
+                # Fallback to plain content
+                parts.append(f"{prefix}: {msg.content}")
+
         parts.append(f"User: {new_prompt}")
         return "\n\n".join(parts)
 
     async def stream_response(
-        self, messages: list[Message], prompt: str, allowed_tools: list[str] | None = None
+        self, messages: list[Message], prompt: str, allowed_tools: list[str] | None = None,
+        working_dir: str | None = None
     ) -> AsyncIterator[Union[TextDelta, ResultEvent, InitEvent, RawEvent]]:
         """
         Stream a response from Claude.
@@ -44,6 +108,7 @@ class ClaudeRunner:
             "-p",
             "--output-format", "stream-json",
             "--include-partial-messages",
+            "--disallowedTools", "Task",  # Prevent task spawning - we manage our own sessions
         ]
 
         if allowed_tools:
@@ -54,6 +119,7 @@ class ClaudeRunner:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            cwd=working_dir,
         )
 
         # Send prompt via stdin
@@ -66,7 +132,7 @@ class ClaudeRunner:
             if self._terminated:
                 break
 
-            line = await self.process.stdout.readline()
+            line = await readline_unlimited(self.process.stdout)
             if not line:  # EOF
                 break
 

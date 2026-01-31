@@ -1,14 +1,54 @@
 from dataclasses import dataclass, field
-from typing import Optional, Any
+from typing import Optional, Any, Union
 from datetime import datetime
+from enum import Enum
+
+
+class ContextMode(Enum):
+    """How a turn should be included in context."""
+    COPY = "copy"        # Include verbatim
+    SUMMARIZE = "summarize"  # Include summary (computed lazily)
+    DROP = "drop"        # Exclude from context
+
+
+@dataclass
+class TextBlock:
+    """Plain text content."""
+    type: str = "text"
+    text: str = ""
+
+
+@dataclass
+class ToolUseBlock:
+    """Tool invocation by the assistant."""
+    type: str = "tool_use"
+    id: str = ""
+    name: str = ""
+    input: dict = field(default_factory=dict)
+
+
+@dataclass
+class ToolResultBlock:
+    """Result from a tool invocation."""
+    type: str = "tool_result"
+    tool_use_id: str = ""
+    content: str = ""
+    is_error: bool = False
+
+
+# Union type for all content block types
+ContentBlock = Union[TextBlock, ToolUseBlock, ToolResultBlock]
 
 
 @dataclass
 class Message:
     role: str  # "user" or "assistant"
-    content: str
+    content: str  # Text-only summary for display/backwards compat
+    content_blocks: list[ContentBlock] = field(default_factory=list)  # Rich content
     tokens: int = 0
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+    context_mode: ContextMode = ContextMode.COPY
+    summary: str = ""  # Cached summary for SUMMARIZE mode
 
 
 @dataclass

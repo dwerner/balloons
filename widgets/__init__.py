@@ -7,5 +7,7 @@ from .session_picker import SessionPicker
 from .context_preview import ContextPreview
 from .request_pane import RequestPane
 from .tool_bar import ToolBar
+from .with_widget import WithWidget
+from .with_result_widget import WithResultWidget
 
-__all__ = ["ChatLog", "InputBox", "StatusBar", "ContextTree", "VerticalSplitter", "SessionPicker", "ContextPreview", "RequestPane", "ToolBar"]
+__all__ = ["ChatLog", "InputBox", "StatusBar", "ContextTree", "VerticalSplitter", "SessionPicker", "ContextPreview", "RequestPane", "ToolBar", "WithWidget", "WithResultWidget"]
