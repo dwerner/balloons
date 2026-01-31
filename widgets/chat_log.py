@@ -3,6 +3,8 @@ from pathlib import Path
 
 from textual.widgets import Static
 from textual.containers import VerticalScroll
+from textual.reactive import reactive
+from textual.message import Message
 from rich.markdown import Markdown
 from rich.console import RenderableType, Group
 from rich.text import Text
@@ -288,6 +290,15 @@ class SessionHeader(Static):
 class ChatLog(VerticalScroll):
     """Scrolling container for chat messages."""
 
+    class FollowingChanged(Message):
+        """Posted when the following state changes."""
+
+        def __init__(self, following: bool) -> None:
+            super().__init__()
+            self.following = following
+
+    following: reactive[bool] = reactive(True)  # True when auto-scrolling to new content
+
     DEFAULT_CSS = """
     ChatLog {
         height: 1fr;
@@ -301,21 +312,41 @@ class ChatLog(VerticalScroll):
         self._current_assistant_message: MessageWidget | None = None
         self._turn_counter = 0
         self._header: SessionHeader | None = None
-        self._user_scrolled_up = False  # Track if user scrolled away from bottom
+
+    def watch_following(self, following: bool) -> None:
+        """Post a message when following state changes."""
+        if self.is_mounted:
+            self.post_message(self.FollowingChanged(following))
 
     def compose(self):
         self._header = SessionHeader("", id="session-header")
         yield self._header
 
-    def on_scroll_y(self, event) -> None:
-        """Track when user scrolls away from bottom."""
-        # Check if we're near the bottom (within 50 pixels)
-        at_bottom = (self.max_scroll_y - self.scroll_y) < 50
-        self._user_scrolled_up = not at_bottom
+    def _check_at_bottom(self) -> None:
+        """Check if we're at the bottom and update following state."""
+        if not self.is_mounted:
+            return
+        # If max_scroll_y is 0 or very small, content fits in viewport - always following
+        max_y = self.max_scroll_y
+        if max_y <= 1:
+            at_bottom = True
+        else:
+            at_bottom = (max_y - self.scroll_y) < 50
+        # Only update if changed to avoid message spam
+        if self.following != at_bottom:
+            self.following = at_bottom
+
+    def on_mouse_scroll_down(self, event) -> None:
+        """Track scrolling down (toward bottom)."""
+        self._check_at_bottom()
+
+    def on_mouse_scroll_up(self, event) -> None:
+        """Track scrolling up (toward top)."""
+        self._check_at_bottom()
 
     def _smart_scroll(self) -> None:
         """Scroll to end only if user hasn't scrolled up."""
-        if not self._user_scrolled_up:
+        if self.following:
             self.scroll_end(animate=False)
 
     def set_session_title(self, title: str) -> None:
@@ -327,7 +358,7 @@ class ChatLog(VerticalScroll):
         """Add a user message to the log."""
         self._turn_counter += 1
         # User sending message means they want to see response - reset scroll state
-        self._user_scrolled_up = False
+        self.following = True
         widget = MessageWidget("user", content, turn_id=self._turn_counter)
         self.mount(widget)
         self.scroll_end(animate=False)

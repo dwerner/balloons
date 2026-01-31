@@ -1,10 +1,15 @@
 from textual.widgets import Static
 from textual.reactive import reactive
+from textual.message import Message
 from textual.timer import Timer
 
 
 class StatusBar(Static):
     """Status bar showing model, token usage, and cost."""
+
+    class FollowClicked(Message):
+        """Posted when the Follow indicator is clicked."""
+        pass
 
     model: reactive[str] = reactive("")
     input_tokens: reactive[int] = reactive(0)
@@ -16,6 +21,7 @@ class StatusBar(Static):
     _status_animated: bool = True
     error: reactive[str] = reactive("")
     working_directory: reactive[str] = reactive("")
+    following: reactive[bool] = reactive(True)  # Whether chat is following new content
     _spinner_frame: reactive[int] = reactive(0)
     _spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     _spinner_timer: Timer | None = None
@@ -61,11 +67,15 @@ class StatusBar(Static):
         else:
             wd_display = f" [dim]@{wd_path}[/]"
 
+        # Show follow indicator when not following (clickable to jump to bottom)
+        follow_indicator = "" if self.following else " [bold yellow]↓ Follow[/]"
+
         return (
             f"[{model_display}] "
             f"{total_tokens:,} / {self.context_window:,} tokens ({percent:.1f}%) | "
             f"${self.cost:.4f}"
             f"{wd_display}"
+            f"{follow_indicator}"
             f"{status_indicator}"
         )
 
@@ -128,3 +138,8 @@ class StatusBar(Static):
     def update_working_directory(self, path: str) -> None:
         """Update the displayed working directory."""
         self.working_directory = path
+
+    def on_click(self) -> None:
+        """Handle click - if not following, post message to follow."""
+        if not self.following:
+            self.post_message(self.FollowClicked())

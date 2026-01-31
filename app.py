@@ -121,6 +121,7 @@ class BalloonsApp(App):
         Binding("ctrl+o", "open_session", "Sessions", show=True),
         Binding("ctrl+left", "resize_tree(-5)", "Shrink Tree", show=False),
         Binding("ctrl+right", "resize_tree(5)", "Grow Tree", show=False),
+        Binding("ctrl+end", "scroll_to_bottom", "Follow", show=False),
     ]
 
     def __init__(self, session: Session = None, show_picker: bool = False):
@@ -1440,6 +1441,21 @@ class BalloonsApp(App):
     def on_vertical_splitter_resized(self, event: VerticalSplitter.Resized) -> None:
         """Handle splitter drag."""
         self.action_resize_tree(event.delta_x)
+
+    def on_chat_log_following_changed(self, event: ChatLog.FollowingChanged) -> None:
+        """Update status bar when chat log following state changes."""
+        status_bar = self.query_one("#status-bar", StatusBar)
+        status_bar.following = event.following
+
+    def on_status_bar_follow_clicked(self, event: StatusBar.FollowClicked) -> None:
+        """Handle click on Follow indicator - scroll to bottom."""
+        self.action_scroll_to_bottom()
+
+    def action_scroll_to_bottom(self) -> None:
+        """Scroll to bottom of chat and re-enable following."""
+        chat_log = self.query_one("#chat-log", ChatLog)
+        chat_log.following = True
+        chat_log.scroll_end(animate=False)
 
     def action_quit(self) -> None:
         """Quit the application."""
