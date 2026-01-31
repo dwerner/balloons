@@ -22,6 +22,7 @@ class Config:
     """Balloons configuration."""
     default_backend: str = "claude"
     backends: dict[str, BackendConfig] = field(default_factory=dict)
+    debug_log_file: Optional[str] = None  # Path to persist debug logs
 
     @classmethod
     def load(cls) -> "Config":
@@ -72,6 +73,7 @@ class Config:
         return cls(
             default_backend=data.get("default_backend", "claude"),
             backends=backends,
+            debug_log_file=data.get("debug_log_file"),
         )
 
     def get_backend(self, name: Optional[str] = None) -> BackendConfig:

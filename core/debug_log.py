@@ -4,9 +4,11 @@ Provides a singleton debug log that collects entries from across the app.
 Listeners can subscribe for real-time updates (used by DebugPane).
 """
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Callable
 
 
@@ -52,11 +54,45 @@ class DebugLog:
             cls._instance = super().__new__(cls)
             cls._instance._entries = []
             cls._instance._listeners = []
+            cls._instance._log_file: Path | None = None
         return cls._instance
+
+    def set_log_file(self, path: str | Path | None) -> None:
+        """Enable file persistence for debug logs.
+
+        Args:
+            path: File path to write logs to, or None to disable.
+        """
+        if path is None:
+            self._log_file = None
+        else:
+            self._log_file = Path(path).expanduser()
+            self._log_file.parent.mkdir(parents=True, exist_ok=True)
+
+    def _write_to_file(self, entry: LogEntry) -> None:
+        """Write entry to log file if configured."""
+        if self._log_file is None:
+            return
+        try:
+            log_line = json.dumps({
+                "timestamp": entry.timestamp,
+                "level": entry.level.value,
+                "message": entry.message,
+                "category": entry.category,
+                "session_id": entry.session_id,
+                "run_id": entry.run_id,
+                "details": entry.details,
+            })
+            with open(self._log_file, "a") as f:
+                f.write(log_line + "\n")
+        except Exception:
+            pass  # Don't let file errors crash logging
 
     def _add_entry(self, entry: LogEntry) -> None:
         """Add entry and notify listeners."""
         self._entries.append(entry)
+        # Write to file if configured
+        self._write_to_file(entry)
         # Prune oldest if over limit
         if len(self._entries) > self.MAX_ENTRIES:
             self._entries = self._entries[-self.MAX_ENTRIES:]

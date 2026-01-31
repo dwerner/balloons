@@ -6,6 +6,11 @@
 # Default backend to use (must match a key in 'backends' below)
 default_backend: claude
 
+# Debug log file (optional)
+# When set, all debug log entries are written to this file as JSON lines.
+# Useful for postmortems when the in-memory log (500 entries) isn't enough.
+# debug_log_file: ~/.balloons/debug.log
+
 # Available backends
 backends:
   # Direct Claude API (default)

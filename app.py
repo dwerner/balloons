@@ -30,7 +30,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLog, InputBox, StatusBar, ContextTree, VerticalSplitter, SessionPicker, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane
+from widgets import ChatLog, InputBox, StatusBar, ContextTree, VerticalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane
 from claude_runner import ClaudeRunner
 from session import Session
 from models import (
@@ -118,18 +118,16 @@ class BalloonsApp(App):
         Binding("ctrl+t", "toggle_tree", "Toggle Tree", show=True),
         Binding("ctrl+r", "toggle_requests", "Toggle Requests", show=True),
         Binding("ctrl+g", "toggle_debug", "Debug", show=True),
-        Binding("ctrl+o", "open_session", "Sessions", show=True),
         Binding("ctrl+left", "resize_tree(-5)", "Shrink Tree", show=False),
         Binding("ctrl+right", "resize_tree(5)", "Grow Tree", show=False),
         Binding("ctrl+end", "scroll_to_bottom", "Follow", show=False),
     ]
 
-    def __init__(self, session: Session = None, show_picker: bool = False, backend_env: dict[str, str] | None = None):
+    def __init__(self, session: Session = None, backend_env: dict[str, str] | None = None):
         super().__init__()
         self._initial_session = session  # Will be loaded into manager
         self.streaming = False  # True if active session is streaming
         self._tree_width = 50
-        self._show_picker = show_picker
         self._shell_process: asyncio.subprocess.Process | None = None
         self._backend_env = backend_env
         # Core components
@@ -172,11 +170,7 @@ class BalloonsApp(App):
         """Initialize the app after mounting."""
         # Start the background session polling timer
         self._poll_timer = self.set_interval(0.1, self._poll_background_sessions)
-
-        if self._show_picker:
-            self.push_screen(SessionPicker(), self._on_session_picked)
-        else:
-            self._initialize_session()
+        self._initialize_session()
 
     def _poll_background_sessions(self) -> None:
         """Poll ALL streaming sessions for events and update UI.
@@ -457,17 +451,6 @@ class BalloonsApp(App):
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
                 debug_log.info("Finalization complete, context cleaned up", category="stream", session_id=session_id)
-
-    def _on_session_picked(self, session: Session | None) -> None:
-        """Handle session picker result."""
-        if session is None:
-            self.exit()
-        else:
-            # Register picked session with manager and set active
-            self._manager._sessions[session.id] = session
-            self._manager._runners[session.id] = SessionRunner(session, backend_env=self._backend_env)
-            self._manager.set_active(session.id)
-            self._initialize_session()
 
     def _initialize_session(self) -> None:
         """Initialize the UI with the current session."""
@@ -1407,31 +1390,6 @@ class BalloonsApp(App):
         """Toggle the debug pane visibility."""
         pane = self.query_one("#debug-pane", DebugPane)
         pane.toggle()
-
-    def action_open_session(self) -> None:
-        """Open the session picker."""
-        if not self.streaming:
-            self.push_screen(SessionPicker(), self._on_session_switched)
-
-    def _on_session_switched(self, session: Session | None) -> None:
-        """Handle session switch from picker."""
-        if session is None:
-            return  # User cancelled
-
-        # Clear current display
-        chat_log = self.query_one("#chat-log", ChatLog)
-        context_tree = self.query_one("#context-tree", ContextTree)
-
-        # Clear displays
-        chat_log.clear()
-        context_tree.clear()
-
-        # Register session with manager and initialize
-        if session.id not in self._manager._sessions:
-            self._manager._sessions[session.id] = session
-            self._manager._runners[session.id] = SessionRunner(session, backend_env=self._backend_env)
-        self._manager.set_active(session.id)
-        self._initialize_session()
 
     def action_resize_tree(self, delta: int) -> None:
         """Resize the context tree by delta columns."""
