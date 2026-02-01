@@ -11,7 +11,8 @@ from typing import AsyncIterator, Any, Optional
 
 from models import (
     Message, TextDelta, ResultEvent, InitEvent, RawEvent,
-    ToolUseEvent, ToolResultEvent, TextBlock, ToolUseBlock, ToolResultBlock,
+    ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultEvent,
+    TextBlock, ToolUseBlock, ToolResultBlock,
 )
 from claude_runner import ClaudeRunner, RateLimitError, InputRequiredError
 from session import Session
@@ -33,7 +34,9 @@ class StreamEvent:
     Event types:
         - "turn_started": Stream began, data has session_id and turn_index
         - "text": Text delta, data is the text string
-        - "tool_use": Tool invocation, data has tool_use_id, tool_name, tool_input, tool_index
+        - "tool_use_start": Tool use began, data has tool_use_id, tool_name (input still streaming)
+        - "tool_input_delta": Partial tool input JSON, data has tool_use_id, partial_json
+        - "tool_use": Tool input complete, data has tool_use_id, tool_name, tool_input, tool_index
         - "tool_result": Tool completed, data has tool_use_id, result, tool_index
         - "init": Init event, data has model, context_window
         - "result": Usage stats, data has input_tokens, output_tokens, total_cost
@@ -357,14 +360,33 @@ class SessionRunner:
                 self._text_buffer += event.text
                 return self._make_event("text", event.text)
 
-            elif isinstance(event, ToolUseEvent):
-                # Flush text buffer to content block
+            elif isinstance(event, ToolUseStartEvent):
+                # Tool use started - input is still streaming
+                # Flush text buffer before tool
                 if self._text_buffer.strip():
                     self._content_blocks.append(TextBlock(text=self._text_buffer))
                     self._text_buffer = ""
 
-                # Create tool use block
                 self._current_tool_use_id = event.tool_use_id
+                tool_idx = self._tool_index
+                self._tool_index += 1
+
+                return self._make_event("tool_use_start", {
+                    "tool_use_id": event.tool_use_id,
+                    "tool_name": event.tool_name,
+                    "tool_index": tool_idx,
+                })
+
+            elif isinstance(event, ToolInputDeltaEvent):
+                # Partial tool input JSON
+                return self._make_event("tool_input_delta", {
+                    "tool_use_id": event.tool_use_id,
+                    "partial_json": event.partial_json,
+                })
+
+            elif isinstance(event, ToolUseEvent):
+                # Tool input complete - create the block
+                # Note: text was already flushed and tool_index incremented in tool_use_start
                 tool_block = ToolUseBlock(
                     id=event.tool_use_id,
                     name=event.tool_name,
@@ -372,8 +394,11 @@ class SessionRunner:
                 )
                 self._content_blocks.append(tool_block)
 
-                tool_idx = self._tool_index
-                self._tool_index += 1
+                # Find the tool_index that was assigned at start
+                tool_idx = sum(
+                    1 for b in self._content_blocks
+                    if isinstance(b, ToolUseBlock) and b.id != event.tool_use_id
+                )
 
                 return self._make_event("tool_use", {
                     "tool_use_id": event.tool_use_id,

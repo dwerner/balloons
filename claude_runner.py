@@ -4,7 +4,8 @@ import signal
 from typing import AsyncIterator, Union
 
 from models import (
-    Message, TextDelta, ResultEvent, InitEvent, RawEvent, ToolUseEvent, ToolResultEvent,
+    Message, TextDelta, ResultEvent, InitEvent, RawEvent,
+    ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultEvent,
     TextBlock, ToolUseBlock, ToolResultBlock, ContextMode,
 )
 from core.debug_log import debug_log
@@ -282,20 +283,32 @@ class ClaudeRunner:
                 delta = event.get("delta", {})
                 if delta.get("type") == "text_delta":
                     return TextDelta(text=delta.get("text", ""))
-                # Accumulate tool input JSON
+                # Stream tool input JSON delta
                 if delta.get("type") == "input_json_delta":
                     if self._current_tool_use:
-                        self._current_tool_use["input_json"] += delta.get("partial_json", "")
+                        partial = delta.get("partial_json", "")
+                        self._current_tool_use["input_json"] += partial
+                        return ToolInputDeltaEvent(
+                            tool_use_id=self._current_tool_use["id"],
+                            partial_json=partial,
+                        )
 
             if event_type == "content_block_start":
                 content_block = event.get("content_block", {})
                 if content_block.get("type") == "tool_use":
                     # Start tracking a new tool use (capture Claude's tool_use_id)
+                    tool_use_id = content_block.get("id", "")
+                    tool_name = content_block.get("name", "")
                     self._current_tool_use = {
-                        "id": content_block.get("id", ""),
-                        "name": content_block.get("name", ""),
+                        "id": tool_use_id,
+                        "name": tool_name,
                         "input_json": "",
                     }
+                    # Emit start event immediately
+                    return ToolUseStartEvent(
+                        tool_use_id=tool_use_id,
+                        tool_name=tool_name,
+                    )
 
             if event_type == "content_block_stop":
                 # Tool use complete - emit event

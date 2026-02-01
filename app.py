@@ -30,7 +30,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLog, MoreBelowIndicator, InputBox, StatusBar, ContextTree, VerticalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, Breadcrumb, ConfirmDialog, HelpModal
+from widgets import ChatLog, MoreBelowIndicator, InputBox, StatusBar, ContextTree, NestedSessionTree, VerticalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, Breadcrumb, ConfirmDialog, HelpModal
 from claude_runner import ClaudeRunner
 from session import Session
 from config import get_config
@@ -66,6 +66,7 @@ from core import (
     HelpCommand,
     debug_log,
 )
+from core.tree_state import TreeState
 
 
 @dataclass
@@ -112,6 +113,11 @@ class BalloonsApp(App):
         width: 50;
     }
 
+    NestedSessionTree {
+        width: 50;
+        display: none;
+    }
+
     #chat-container {
         height: 1fr;
     }
@@ -137,6 +143,7 @@ class BalloonsApp(App):
         Binding("ctrl+c", "quit", "Quit", show=True),
         Binding("ctrl+q", "quit", "Quit", show=False),
         Binding("ctrl+t", "toggle_tree", "Toggle Tree", show=True),
+        Binding("ctrl+n", "switch_tree_view", "Switch Tree", show=True),
         Binding("ctrl+r", "toggle_requests", "Toggle Requests", show=True),
         Binding("ctrl+g", "toggle_debug", "Debug", show=True),
         Binding("ctrl+left", "resize_tree(-5)", "Shrink Tree", show=False),
@@ -156,6 +163,8 @@ class BalloonsApp(App):
         self._command_parser = CommandParser()
         self._formatter = Formatter()
         self._context_builder = ContextBuilder()
+        # Shared tree state - used by ContextTree and (future) NestedSessionTree
+        self._tree_state = TreeState()
         # Session manager handles all sessions and runners
         self._manager = SessionManager(backend_env=backend_env)
         # Simple runner for helper streaming (summaries, etc.) - used for blocking operations
@@ -183,7 +192,12 @@ class BalloonsApp(App):
             with Horizontal(id="main-split"):
                 yield ContextTree(
                     initial_sort_order=config.session_sort_order,
+                    tree_state=self._tree_state,
                     id="context-tree"
+                )
+                yield NestedSessionTree(
+                    tree_state=self._tree_state,
+                    id="nested-tree"
                 )
                 yield VerticalSplitter(id="splitter")
                 with Vertical(id="chat-container"):
@@ -292,6 +306,14 @@ class BalloonsApp(App):
             text = event.data
             debug_event(f"text: session={session_id[:8]} len={len(text)}")
             ctx.content += text
+
+            # Update tree with streaming text
+            context_tree.update_streaming_text(
+                session_id,
+                ctx.assistant_turn_idx,
+                text,
+            )
+
             if is_active:
                 chat_log.append_to_current(text)
             else:
@@ -320,20 +342,73 @@ class BalloonsApp(App):
                         cost=session.total_cost,
                     )
 
-        elif event.event_type == "tool_use":
+        elif event.event_type == "tool_use_start":
+            # Tool use started - input is still streaming
             data = event.data
             tool_use_id = data.get("tool_use_id")
-            debug_event(f"tool_use: session={session_id[:8]} {data.get('tool_name')}")
+            tool_name = data.get("tool_name")
+            debug_event(f"tool_use_start: session={session_id[:8]} {tool_name}")
 
-            # Track tool use for session resume
+            # Initialize tracking (will be updated when tool_use completes)
             ctx.tool_events[tool_use_id] = {
-                "name": data.get("tool_name"),
-                "input": data.get("tool_input"),
+                "name": tool_name,
+                "input": {},  # Will be filled on tool_use
                 "index": data.get("tool_index"),
                 "result": None,
             }
 
-            # Add to tree
+            # Add placeholder to tree
+            context_tree.add_tool_use_to_turn(
+                session_id,
+                ctx.assistant_turn_idx,
+                tool_use_id,
+                tool_name,
+                {},  # Empty input for now
+                data.get("tool_index"),
+            )
+
+            if is_active:
+                # Add streaming tool widget
+                chat_log.add_streaming_tool_use(tool_name, tool_use_id)
+
+        elif event.event_type == "tool_input_delta":
+            # Partial tool input JSON
+            data = event.data
+            tool_use_id = data.get("tool_use_id")
+            partial_json = data.get("partial_json", "")
+
+            # Update tree with streaming input
+            tool_name = ctx.tool_events.get(tool_use_id, {}).get("name", "Tool")
+            context_tree.update_tool_input_streaming(
+                session_id,
+                ctx.assistant_turn_idx,
+                tool_use_id,
+                tool_name,
+                partial_json,
+            )
+
+            if is_active:
+                # Update streaming tool widget
+                chat_log.update_streaming_tool(tool_use_id, partial_json)
+
+        elif event.event_type == "tool_use":
+            # Tool input complete
+            data = event.data
+            tool_use_id = data.get("tool_use_id")
+            debug_event(f"tool_use: session={session_id[:8]} {data.get('tool_name')}")
+
+            # Update tracking with final input
+            if tool_use_id in ctx.tool_events:
+                ctx.tool_events[tool_use_id]["input"] = data.get("tool_input")
+            else:
+                ctx.tool_events[tool_use_id] = {
+                    "name": data.get("tool_name"),
+                    "input": data.get("tool_input"),
+                    "index": data.get("tool_index"),
+                    "result": None,
+                }
+
+            # Update tree with final input
             context_tree.add_tool_use_to_turn(
                 session_id,
                 ctx.assistant_turn_idx,
@@ -344,7 +419,7 @@ class BalloonsApp(App):
             )
 
             if is_active:
-                # Display tool use widget
+                # Finish streaming tool widget with formatted content
                 tool_event = ToolUseEvent(
                     tool_use_id=data.get("tool_use_id"),
                     tool_name=data.get("tool_name"),
@@ -355,9 +430,11 @@ class BalloonsApp(App):
                     tool_content, full_content = formatted
                 else:
                     tool_content, full_content = formatted, None
-                chat_log.add_tool_use(
-                    data.get("tool_name"), tool_content,
-                    tool_use_id=data.get("tool_use_id"), full_content=full_content
+                chat_log.finish_streaming_tool(
+                    tool_use_id=data.get("tool_use_id"),
+                    content=tool_content,
+                    full_content=full_content,
+                    tool_name=data.get("tool_name"),
                 )
 
         elif event.event_type == "tool_result":
@@ -795,6 +872,7 @@ class BalloonsApp(App):
                 del self._streaming_contexts[session_id]
                 # Update tree streaming indicator and status bar count
                 context_tree.set_session_streaming(session_id, False)
+                self._tree_state.stop_streaming(session_id)
                 self._update_streaming_count()
                 debug_log.info("Finalization complete, context cleaned up", category="stream", session_id=session_id)
 
@@ -978,6 +1056,7 @@ class BalloonsApp(App):
 
         # Update tree streaming indicator and status bar count
         context_tree.set_session_streaming(self.session.id, True)
+        self._tree_state.start_streaming(self.session.id)
         self._update_streaming_count()
 
         if is_active:
@@ -1851,6 +1930,10 @@ Summary:"""
                 status_bar.set_status(f"Fork '{name or child_session.id[:8]}' started in background", animate=False)
             else:
                 # Foreground mode - switch to child
+                # Save child again so it has a more recent timestamp than parent
+                # (parent was saved after child to register the fork relationship)
+                child_session.save()
+
                 breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
                 self._manager.set_active(child_session.id)
                 chat_log.clear()
@@ -2648,6 +2731,74 @@ Summary:"""
             chat_log.clear_highlights()
             request_pane.show_json(event.turn_data)
 
+    # --- NestedSessionTree Event Handlers ---
+    # These mirror the ContextTree handlers since both trees emit the same message types
+
+    def on_nested_session_tree_selection_changed(self, event: NestedSessionTree.SelectionChanged) -> None:
+        """Handle nested tree selection changes - apply visual context mode indicators."""
+        chat_log = self.query_one("#chat-log", ChatLog)
+        chat_log.set_turn_context_modes(event.turn_modes)
+
+    def on_nested_session_tree_context_mode_changed(self, event: NestedSessionTree.ContextModeChanged) -> None:
+        """Handle context mode change from nested tree - persist to session."""
+        # Also update ContextTree's local state to keep them in sync
+        context_tree = self.query_one("#context-tree", ContextTree)
+        turn_key = (event.session_id, event.turn_idx)
+        if event.new_mode == ContextMode.DROP:
+            context_tree._context_modes.pop(turn_key, None)
+        else:
+            context_tree._context_modes[turn_key] = event.new_mode
+        context_tree._update_turn_label(event.session_id, event.turn_idx)
+        context_tree._update_root_label()
+
+        # Persist to session
+        if self.session and self.session.id == event.session_id:
+            session = self.session
+        else:
+            session = Session.load(event.session_id)
+
+        if session and event.turn_idx < len(session.messages):
+            session.messages[event.turn_idx].context_mode = event.new_mode
+            session.save()
+
+    def on_nested_session_tree_session_activated(self, event: NestedSessionTree.SessionActivated) -> None:
+        """Handle clicking on a session in nested tree - switch to it."""
+        self._switch_to_session(event.session)
+
+    def on_nested_session_tree_turn_inspected(self, event: NestedSessionTree.TurnInspected) -> None:
+        """Handle turn inspection from nested tree."""
+        request_pane = self.query_one("#request-pane", RequestPane)
+        chat_log = self.query_one("#chat-log", ChatLog)
+
+        # Check if we need to switch sessions
+        turn_session_id = event.session_id
+        if turn_session_id and self.session and turn_session_id != self.session.id:
+            target_session = Session.load(turn_session_id)
+            if target_session:
+                self._switch_to_session(target_session)
+
+        node_type = event.turn_data.get("type")
+        if node_type == "turn":
+            turn_id = event.turn_data.get("turn_idx", 0) + 1
+            chat_log.scroll_to_turn(turn_id)
+            chat_log.clear_highlights()
+            request_pane.show_json(event.turn_data)
+        else:
+            chat_log.clear_highlights()
+            request_pane.show_json(event.turn_data)
+
+    def on_nested_session_tree_turn_delete_requested(self, event: NestedSessionTree.TurnDeleteRequested) -> None:
+        """Handle turn delete request from nested tree."""
+        # Reuse the ContextTree handler logic
+        context_tree_event = ContextTree.TurnDeleteRequested(event.session_id, event.turn_index)
+        self.on_context_tree_turn_delete_requested(context_tree_event)
+
+    def on_nested_session_tree_session_delete_requested(self, event: NestedSessionTree.SessionDeleteRequested) -> None:
+        """Handle session delete request from nested tree."""
+        # Reuse the ContextTree handler logic
+        context_tree_event = ContextTree.SessionDeleteRequested(event.session_id)
+        self.on_context_tree_session_delete_requested(context_tree_event)
+
     def on_breadcrumb_segment_clicked(self, event: Breadcrumb.SegmentClicked) -> None:
         """Handle clicking a breadcrumb segment to navigate up."""
         target_session = Session.load(event.session_id)
@@ -2655,11 +2806,53 @@ Summary:"""
             self._switch_to_session(target_session)
 
     def action_toggle_tree(self) -> None:
-        """Toggle the context tree visibility."""
-        tree = self.query_one("#context-tree", ContextTree)
+        """Toggle the tree sidebar visibility."""
+        context_tree = self.query_one("#context-tree", ContextTree)
+        nested_tree = self.query_one("#nested-tree", NestedSessionTree)
         splitter = self.query_one("#splitter", VerticalSplitter)
-        tree.display = not tree.display
-        splitter.display = tree.display
+
+        # If either tree is visible, hide both; otherwise show the active one
+        either_visible = context_tree.display or nested_tree.display
+        if either_visible:
+            context_tree.display = False
+            nested_tree.display = False
+            splitter.display = False
+        else:
+            # Show whichever was last active (context_tree by default)
+            if getattr(self, "_nested_tree_active", False):
+                nested_tree.display = True
+            else:
+                context_tree.display = True
+            splitter.display = True
+
+    def action_switch_tree_view(self) -> None:
+        """Switch between flat (ContextTree) and nested (NestedSessionTree) views."""
+        context_tree = self.query_one("#context-tree", ContextTree)
+        nested_tree = self.query_one("#nested-tree", NestedSessionTree)
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        # Toggle which tree is active
+        if context_tree.display:
+            context_tree.display = False
+            nested_tree.display = True
+            self._nested_tree_active = True
+            status_bar.set_message("Switched to nested tree view")
+        elif nested_tree.display:
+            nested_tree.display = False
+            context_tree.display = True
+            self._nested_tree_active = False
+            status_bar.set_message("Switched to flat tree view")
+        else:
+            # Neither visible - show the opposite of what was last active
+            if getattr(self, "_nested_tree_active", False):
+                context_tree.display = True
+                self._nested_tree_active = False
+                status_bar.set_message("Showing flat tree view")
+            else:
+                nested_tree.display = True
+                self._nested_tree_active = True
+                status_bar.set_message("Showing nested tree view")
+            self.query_one("#splitter", VerticalSplitter).display = True
 
     def action_toggle_requests(self) -> None:
         """Toggle the request pane visibility."""
@@ -2676,10 +2869,12 @@ Summary:"""
         self.push_screen(HelpModal())
 
     def action_resize_tree(self, delta: int) -> None:
-        """Resize the context tree by delta columns."""
+        """Resize the active tree by delta columns."""
         self._tree_width = max(20, min(100, self._tree_width + delta))
-        tree = self.query_one("#context-tree", ContextTree)
-        tree.styles.width = self._tree_width
+        context_tree = self.query_one("#context-tree", ContextTree)
+        nested_tree = self.query_one("#nested-tree", NestedSessionTree)
+        context_tree.styles.width = self._tree_width
+        nested_tree.styles.width = self._tree_width
 
     def on_vertical_splitter_resized(self, event: VerticalSplitter.Resized) -> None:
         """Handle splitter drag."""

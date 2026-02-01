@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from textual.widgets import Tree, Input, Select
 from textual.containers import Vertical, Horizontal
 from textual.message import Message
@@ -6,10 +8,15 @@ from textual.binding import Binding
 from datetime import datetime
 from rich.text import Text
 from rich.style import Style
+from typing import TYPE_CHECKING
 
 from tokenizer import count_tokens
 from session import Session
 from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock
+from core.tree_state import TreeState, TreeEvent
+
+if TYPE_CHECKING:
+    from typing import Any
 
 
 # Sorting options for sessions
@@ -58,6 +65,9 @@ class SelectableTree(Tree):
 
     def render_label(self, node, base_style: Style, style: Style) -> Text:
         """Render label with colored expand/collapse icons based on session."""
+        # TOGGLE_STYLE adds meta={"toggle": True} so clicking the icon triggers expand/collapse
+        TOGGLE_STYLE = Style.from_meta({"toggle": True})
+
         node_label = node._label.copy()
         node_label.stylize(style)
 
@@ -72,10 +82,10 @@ class SelectableTree(Tree):
                     session_color = self._get_session_color_callback(session_id)
 
             if session_color:
-                # Color the expand/collapse icon
-                prefix = Text(icon, style=Style(color=session_color))
+                # Color the expand/collapse icon, include TOGGLE_STYLE for click handling
+                prefix = Text(icon, style=Style(color=session_color) + TOGGLE_STYLE)
             else:
-                prefix = Text(icon, style=base_style)
+                prefix = Text(icon, style=base_style + TOGGLE_STYLE)
         else:
             prefix = Text("", style=base_style)
 
@@ -125,10 +135,20 @@ class SelectableTree(Tree):
                 event.stop()
                 return
         elif event.key == "enter":
-            # Use Enter for activation instead of letting Tree toggle expand
+            # Enter activates AND toggles expand
             node = self.cursor_node
             if node and node.data:
                 self.post_message(self.ActivateRequested(node.data))
+                if node._allow_expand:
+                    node.toggle()
+                event.prevent_default()
+                event.stop()
+                return
+        elif event.key == "e":
+            # Toggle expand/collapse
+            node = self.cursor_node
+            if node and node._allow_expand:
+                node.toggle()
                 event.prevent_default()
                 event.stop()
                 return
@@ -163,6 +183,29 @@ class SelectableTree(Tree):
                     self.post_message(self.SessionDeleteRequested(
                         session_id=node.data.get("session_id"),
                     ))
+                    event.prevent_default()
+                    event.stop()
+                    return
+        elif event.key == "right":
+            # Expand current node
+            node = self.cursor_node
+            if node and node._allow_expand and not node.is_expanded:
+                node.expand()
+                event.prevent_default()
+                event.stop()
+                return
+        elif event.key == "left":
+            # Collapse current node, or go to parent if already collapsed
+            node = self.cursor_node
+            if node:
+                if node.is_expanded:
+                    node.collapse()
+                    event.prevent_default()
+                    event.stop()
+                    return
+                elif node.parent and node.parent != self.root:
+                    # Move to parent node
+                    self.select_node(node.parent)
                     event.prevent_default()
                     event.stop()
                     return
@@ -286,8 +329,31 @@ class ContextTree(Vertical):
             self.session_id = session_id
             super().__init__()
 
-    def __init__(self, initial_sort_order: str = "modified_desc", **kwargs):
+    def __init__(
+        self,
+        initial_sort_order: str = "modified_desc",
+        tree_state: TreeState | None = None,
+        **kwargs
+    ):
         super().__init__(**kwargs)
+
+        # Use provided TreeState or create internal one
+        self._state = tree_state if tree_state is not None else TreeState()
+        self._owns_state = tree_state is None  # Track if we created it
+
+        # Node references (Textual-specific, not in TreeState)
+        # session_id -> tree node
+        self._session_nodes: dict[str, Any] = {}
+        # (session_id, turn_idx) -> tree node
+        self._turn_nodes: dict[tuple[str, int], Any] = {}
+
+        # Local UI state (not shared)
+        self._search_query: str = ""
+        self._sort_order: str = initial_sort_order
+
+        # Legacy compatibility - these now delegate to TreeState
+        # Keep as properties for gradual migration
+
         # Context mode per turn: (session_id, turn_idx) -> ContextMode
         # Missing entries default to DROP (not in context)
         self._context_modes: dict[tuple[str, int], ContextMode] = {}
@@ -301,8 +367,6 @@ class ContextTree(Vertical):
         # session_id -> {session: Session, turns: list[dict]}
         self._loaded_sessions: dict[str, dict] = {}
         self._current_session_id: str | None = None
-        self._search_query: str = ""
-        self._sort_order: str = initial_sort_order
         # Sessions currently streaming (for visual indicator)
         self._streaming_sessions: set[str] = set()
         # Session color assignments (session_id -> color name)
@@ -328,6 +392,169 @@ class ContextTree(Vertical):
         tree.auto_expand = False  # Don't auto-expand on selection
         # Set callback for tree to get session colors for node icons
         tree.set_color_callback(self._get_session_color)
+
+        # Register as observer of TreeState
+        self._state.add_observer(self._on_tree_state_event)
+
+    def on_unmount(self) -> None:
+        """Clean up observer registration."""
+        self._state.remove_observer(self._on_tree_state_event)
+
+    def _on_tree_state_event(self, event: TreeEvent, data: dict) -> None:
+        """Handle state change notifications from TreeState.
+
+        This is the observer callback - translates state changes to UI updates.
+
+        NOTE: Currently using dual-write pattern. The ContextTree methods
+        (start_turn, finish_turn, etc.) both update TreeState AND update UI.
+        So we skip TURN_STARTED/TURN_FINISHED here to avoid duplicate work.
+        Once we migrate to app calling TreeState directly, these handlers
+        will be enabled.
+        """
+        if event == TreeEvent.STREAMING_STARTED:
+            session_id = data.get("session_id")
+            if session_id:
+                self._streaming_sessions.add(session_id)
+                self._update_session_label(session_id)
+
+        elif event == TreeEvent.STREAMING_STOPPED:
+            session_id = data.get("session_id")
+            if session_id:
+                self._streaming_sessions.discard(session_id)
+                self._update_session_label(session_id)
+
+        # NOTE: TURN_STARTED and TURN_FINISHED are handled directly by
+        # start_turn() and finish_turn() methods for now. When we migrate
+        # to having the app call TreeState directly, uncomment these:
+        #
+        # elif event == TreeEvent.TURN_STARTED:
+        #     session_id = data.get("session_id")
+        #     turn_idx = data.get("turn_idx")
+        #     role = data.get("role")
+        #     if session_id and turn_idx is not None and role:
+        #         self._add_streaming_turn_node(session_id, turn_idx, role)
+        #
+        # elif event == TreeEvent.TURN_FINISHED:
+        #     session_id = data.get("session_id")
+        #     turn_idx = data.get("turn_idx")
+        #     content = data.get("content", "")
+        #     content_blocks = data.get("content_blocks", [])
+        #     if session_id and turn_idx is not None:
+        #         self._finalize_turn_node(session_id, turn_idx, content, content_blocks)
+
+        # NOTE: CONTEXT_MODE_CHANGED is handled directly by toggle methods
+        # which call _update_turn_label after TreeState update. Skip here
+        # to avoid duplicate label updates.
+        #
+        # elif event == TreeEvent.CONTEXT_MODE_CHANGED:
+        #     session_id = data.get("session_id")
+        #     turn_idx = data.get("turn_idx")
+        #     if session_id and turn_idx is not None:
+        #         self._update_turn_label(session_id, turn_idx)
+        #         self._update_root_label()
+
+        elif event == TreeEvent.SESSION_SELECTED:
+            # Current session changed - update labels
+            session_id = data.get("session_id")
+            prev_session_id = data.get("prev_session_id")
+            if prev_session_id:
+                self._update_session_label(prev_session_id)
+            if session_id:
+                self._update_session_label(session_id)
+            self._update_root_label()
+
+    def _update_session_label(self, session_id: str) -> None:
+        """Update a session node's label (for streaming indicator, etc.)."""
+        metadata = self._sessions.get(session_id)
+        if not metadata or not metadata.get("node"):
+            return
+        is_active = session_id == self._current_session_id
+        metadata["node"].label = self._make_session_label_from_metadata(metadata, is_active)
+
+    def _add_streaming_turn_node(self, session_id: str, turn_idx: int, role: str) -> None:
+        """Add a placeholder turn node when streaming starts.
+
+        Called via observer when TreeState.start_turn() is called.
+        """
+        metadata = self._sessions.get(session_id)
+        loaded_data = self._loaded_sessions.get(session_id)
+        if not metadata or not loaded_data:
+            return
+
+        # Create placeholder label
+        label = self._make_turn_label(role, "[dim]streaming...[/]", ContextMode.COMPRESS, session_id=session_id)
+        session_node = metadata.get("node")
+        if session_node:
+            turn_node = session_node.add(
+                label,
+                data={"type": "turn", "session_id": session_id, "turn_idx": turn_idx}
+            )
+            turn_node.expand()
+            self._turn_nodes[(session_id, turn_idx)] = turn_node
+        else:
+            turn_node = None
+
+        # Update local tracking (will be migrated to use TreeState fully later)
+        loaded_data["turns"].append({
+            "idx": turn_idx,
+            "role": role,
+            "content": "",
+            "content_blocks": [],
+            "node": turn_node,
+            "events": [],
+            "_streaming": True,
+            "_tool_use_nodes": {},
+        })
+
+        # Update metadata message count
+        metadata["message_count"] = metadata.get("message_count", 0) + 1
+
+        if session_node:
+            is_active = session_id == self._current_session_id
+            session_node.label = self._make_session_label_from_metadata(metadata, is_active)
+
+        self._update_root_label()
+
+    def _finalize_turn_node(self, session_id: str, turn_idx: int, content: str, content_blocks: list) -> None:
+        """Finalize a streaming turn node with final content.
+
+        Called via observer when TreeState.finish_turn() is called.
+        """
+        loaded_data = self._loaded_sessions.get(session_id)
+        if not loaded_data:
+            return
+
+        # Find the turn
+        turn = None
+        for t in loaded_data["turns"]:
+            if t["idx"] == turn_idx:
+                turn = t
+                break
+        if not turn:
+            return
+
+        # Update turn data
+        turn["content"] = content
+        turn["content_blocks"] = content_blocks
+        turn["_streaming"] = False
+
+        # Clear existing children and rebuild
+        if turn.get("node"):
+            turn["node"].remove_children()
+            self._add_content_block_nodes(turn["node"], session_id, turn_idx, content_blocks)
+
+            # Update label with final content
+            mode = self._context_modes.get((session_id, turn_idx), ContextMode.DROP)
+            turn["node"].label = self._make_turn_label(
+                turn["role"], content, mode, content_blocks, session_id=session_id
+            )
+
+        self._update_root_label()
+
+    @property
+    def state(self) -> TreeState:
+        """Access the underlying TreeState."""
+        return self._state
 
     def _get_session_color(self, session_id: str) -> str:
         """Get the color assigned to a session, assigning one if needed."""
@@ -357,6 +584,11 @@ class ContextTree(Vertical):
         self._merge_modes.clear()
         self._session_colors.clear()
         self._color_index = 0
+        self._session_nodes.clear()
+        self._turn_nodes.clear()
+
+        # Also clear TreeState
+        self._state.clear()
 
         # Build metadata index
         session_ids_in_list = {s["id"] for s in all_session_metadata}
@@ -380,15 +612,30 @@ class ContextTree(Vertical):
                 "node": None,
                 "is_current": True,
             }
+            # Add to TreeState
+            self._state.add_session(current_session, is_current=True)
 
         # Store all session metadata
         for metadata in all_session_metadata:
             is_current = metadata["id"] == current_session.id
-            self._sessions[metadata["id"]] = {
-                **metadata,
-                "node": None,
-                "is_current": is_current,
-            }
+            if is_current:
+                # Use in-memory current session data (may be more recent than disk)
+                self._sessions[metadata["id"]] = {
+                    **metadata,
+                    "last_modified": current_session.last_modified,
+                    "node": None,
+                    "is_current": True,
+                }
+                # Add to TreeState
+                self._state.add_session(current_session, is_current=True)
+            else:
+                self._sessions[metadata["id"]] = {
+                    **metadata,
+                    "node": None,
+                    "is_current": False,
+                }
+                # Add to TreeState (from metadata for lazy loading)
+                self._state.add_session_from_metadata(metadata, is_current=False)
 
         # Fully load the current session (always needed for chat)
         self._load_full_session(current_session.id, current_session)
@@ -516,8 +763,8 @@ class ContextTree(Vertical):
             if hasattr(msg, 'context_mode'):
                 self._context_modes[turn_key] = msg.context_mode
             elif is_current:
-                # Default: current session turns are COPY
-                self._context_modes[turn_key] = ContextMode.COPY
+                # Default: current session turns are COMPRESS
+                self._context_modes[turn_key] = ContextMode.COMPRESS
 
             content_blocks = msg.content_blocks if hasattr(msg, 'content_blocks') else []
 
@@ -542,6 +789,10 @@ class ContextTree(Vertical):
             "session": session,
             "turns": turns,
         }
+
+        # Also load into TreeState
+        self._state.load_session(session_id, session)
+
         return True
 
     def _is_session_loaded(self, session_id: str) -> bool:
@@ -620,8 +871,8 @@ class ContextTree(Vertical):
             if hasattr(msg, 'context_mode'):
                 self._context_modes[turn_key] = msg.context_mode
             elif is_current:
-                # Default: current session turns are COPY
-                self._context_modes[turn_key] = ContextMode.COPY
+                # Default: current session turns are COMPRESS
+                self._context_modes[turn_key] = ContextMode.COMPRESS
 
             mode = self._context_modes.get(turn_key, ContextMode.DROP)
             content_blocks = msg.content_blocks if hasattr(msg, 'content_blocks') else []
@@ -674,7 +925,11 @@ class ContextTree(Vertical):
         }
 
     def _add_fork_node(self, parent_node, parent_session_id: str, fork: dict, tree: SelectableTree) -> None:
-        """Add a fork node (with its contents) inline in the parent session."""
+        """Add a fork link node inline in the parent session.
+
+        This is just a reference/link to the forked session - the actual session
+        content is shown in the session's own node in the main tree.
+        """
         fork_id = fork.get("session_id", "")
         fork_name = fork.get("name", "") or fork_id[:8]
         status = fork.get("status", "active")
@@ -688,7 +943,7 @@ class ContextTree(Vertical):
             status_text = f"[dim][{status}][/]"
 
         label = f"[bold]🔀 {fork_name}[/] {status_text}"
-        fork_node = parent_node.add(
+        parent_node.add(
             label,
             data={
                 "type": "fork",
@@ -696,28 +951,9 @@ class ContextTree(Vertical):
                 "parent_session_id": parent_session_id,
                 "fork_name": fork_name,
                 "status": status,
-            }
+            },
+            allow_expand=False,  # No children - just a link
         )
-
-        # Load and add the fork's turns as children
-        fork_session = Session.load(fork_id)
-        if fork_session:
-            for idx, msg in enumerate(fork_session.messages):
-                content_blocks = msg.content_blocks if hasattr(msg, 'content_blocks') else []
-                # Fork turns don't have context modes - they're just for viewing
-                turn_label = self._make_turn_label(msg.role, msg.content, ContextMode.DROP, content_blocks, session_id=fork_id)
-                turn_node = fork_node.add(
-                    turn_label,
-                    data={"type": "turn", "session_id": fork_id, "turn_idx": idx}
-                )
-                self._add_content_block_nodes(turn_node, fork_id, idx, content_blocks)
-
-            # Recursively add nested forks
-            for nested_fork in fork_session.children:
-                nested_fork_point = nested_fork.get("fork_point", -1)
-                if nested_fork_point >= 0:
-                    # For simplicity, add nested forks at the end
-                    self._add_fork_node(fork_node, fork_id, nested_fork, tree)
 
     def _add_merge_node(self, parent_node, parent_session_id: str, merge: dict) -> None:
         """Add a merge result node inline in the parent session."""
@@ -987,9 +1223,12 @@ class ContextTree(Vertical):
 
         idx = len(loaded_data["turns"])
         turn_key = (self._current_session_id, idx)
-        self._context_modes[turn_key] = ContextMode.COPY  # Auto-include new turns as COPY
 
-        label = self._make_turn_label(role, content, ContextMode.COPY, content_blocks, session_id=self._current_session_id)
+        # Update both local and TreeState
+        self._context_modes[turn_key] = ContextMode.COMPRESS  # Auto-include new turns as COMPRESS
+        self._state.set_context_mode(self._current_session_id, idx, ContextMode.COMPRESS)
+
+        label = self._make_turn_label(role, content, ContextMode.COMPRESS, content_blocks, session_id=self._current_session_id)
         session_node = metadata.get("node")
         if session_node:
             turn_node = session_node.add(
@@ -1134,6 +1373,9 @@ class ContextTree(Vertical):
 
         Called when a 'turn_started' event is received from SessionRunner.
         Creates a placeholder turn node that will be populated as events arrive.
+
+        Note: This method also notifies TreeState. In the future, the app
+        should call TreeState directly, and ContextTree will react via observer.
         """
         metadata = self._sessions.get(session_id)
         loaded_data = self._loaded_sessions.get(session_id)
@@ -1141,10 +1383,13 @@ class ContextTree(Vertical):
             return
 
         turn_key = (session_id, turn_idx)
-        self._context_modes[turn_key] = ContextMode.COPY  # Auto-include as COPY
+        self._context_modes[turn_key] = ContextMode.COMPRESS  # Auto-include as COMPRESS
+
+        # Also notify TreeState (it will fire TURN_STARTED event)
+        self._state.start_turn(session_id, turn_idx, role)
 
         # Create placeholder label
-        label = self._make_turn_label(role, "[dim]streaming...[/]", ContextMode.COPY, session_id=session_id)
+        label = self._make_turn_label(role, "[dim]streaming...[/]", ContextMode.COMPRESS, session_id=session_id)
         session_node = metadata.get("node")
         if session_node:
             turn_node = session_node.add(
@@ -1209,6 +1454,15 @@ class ContextTree(Vertical):
             input_preview += "..."
         label = f"[cyan]🔧 {tool_name}[/] {input_preview}"
 
+        # Check if node already exists (from tool_use_start) - update instead of creating
+        tool_use_nodes = turn.get("_tool_use_nodes", {})
+        if tool_use_id in tool_use_nodes:
+            # Update existing node
+            existing_node = tool_use_nodes[tool_use_id]
+            existing_node.label = label
+            existing_node.data["tool_input"] = tool_input
+            return
+
         tool_node = turn["node"].add(
             label,
             data={
@@ -1223,7 +1477,9 @@ class ContextTree(Vertical):
         )
 
         # Track for nesting results
-        turn.get("_tool_use_nodes", {})[tool_use_id] = tool_node
+        if "_tool_use_nodes" not in turn:
+            turn["_tool_use_nodes"] = {}
+        turn["_tool_use_nodes"][tool_use_id] = tool_node
 
         # Update turn label to show tool count
         tool_count = len(turn.get("_tool_use_nodes", {}))
@@ -1237,6 +1493,100 @@ class ContextTree(Vertical):
             indicator = "☐"
         if turn.get("node"):
             turn["node"].label = f"{indicator} {icon} [cyan]🔧{tool_count}[/] [dim]streaming...[/]"
+
+    def update_tool_input_streaming(
+        self,
+        session_id: str,
+        turn_idx: int,
+        tool_use_id: str,
+        tool_name: str,
+        partial_json: str,
+    ) -> None:
+        """Update tool use node label with streaming partial JSON.
+
+        Called when 'tool_input_delta' events arrive.
+        """
+        loaded_data = self._loaded_sessions.get(session_id)
+        if not loaded_data:
+            return
+
+        # Find the streaming turn
+        turn = None
+        for t in loaded_data["turns"]:
+            if t["idx"] == turn_idx:
+                turn = t
+                break
+        if not turn:
+            return
+
+        # Find the tool node
+        tool_use_nodes = turn.get("_tool_use_nodes", {})
+        if tool_use_id not in tool_use_nodes:
+            return
+
+        node = tool_use_nodes[tool_use_id]
+
+        # Accumulate partial JSON in node data
+        if "_streaming_input" not in node.data:
+            node.data["_streaming_input"] = ""
+        node.data["_streaming_input"] += partial_json
+
+        # Update label with preview of accumulated input
+        accumulated = node.data["_streaming_input"]
+        preview = accumulated[:50]
+        if len(accumulated) > 50:
+            preview += "..."
+        node.label = f"[cyan]🔧 {tool_name}[/] [dim]{preview}[/]"
+
+    def update_streaming_text(
+        self,
+        session_id: str,
+        turn_idx: int,
+        text_delta: str,
+    ) -> None:
+        """Update turn node to reflect streaming text content.
+
+        Called when 'text_delta' events arrive.
+        """
+        loaded_data = self._loaded_sessions.get(session_id)
+        if not loaded_data:
+            return
+
+        # Find the streaming turn
+        turn = None
+        for t in loaded_data["turns"]:
+            if t["idx"] == turn_idx:
+                turn = t
+                break
+        if not turn or not turn.get("node"):
+            return
+
+        # Accumulate text
+        if "_streaming_text" not in turn:
+            turn["_streaming_text"] = ""
+        turn["_streaming_text"] += text_delta
+
+        # Update turn label with text preview
+        text = turn["_streaming_text"]
+        preview = text[:30].replace("\n", " ")
+        if len(text) > 30:
+            preview += "..."
+
+        icon = "👤" if turn["role"] == "user" else "🤖"
+        mode = self._context_modes.get((session_id, turn_idx), ContextMode.DROP)
+        if mode == ContextMode.COPY:
+            indicator = "[green]☑[/]"
+        elif mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
+            indicator = "[yellow]Σ[/]"
+        else:
+            indicator = "☐"
+
+        # Show tool count if any
+        tool_count = len(turn.get("_tool_use_nodes", {}))
+        if tool_count > 0:
+            turn["node"].label = f"{indicator} {icon} [cyan]🔧{tool_count}[/] [dim]{preview}[/]"
+        else:
+            turn["node"].label = f"{indicator} {icon} [dim]{preview}[/]"
 
     def add_tool_result_to_turn(
         self,
@@ -1299,6 +1649,9 @@ class ContextTree(Vertical):
 
         Called when a 'done' event is received from SessionRunner.
         Updates the turn label with final content and rebuilds child nodes in order.
+
+        Note: This method also notifies TreeState. In the future, the app
+        should call TreeState directly, and ContextTree will react via observer.
         """
         loaded_data = self._loaded_sessions.get(session_id)
         if not loaded_data:
@@ -1312,6 +1665,9 @@ class ContextTree(Vertical):
                 break
         if not turn:
             return
+
+        # Also notify TreeState (it will fire TURN_FINISHED event)
+        self._state.finish_turn(session_id, turn_idx, content, content_blocks, raw_events)
 
         # Update turn data
         turn["content"] = content
@@ -1547,17 +1903,17 @@ class ContextTree(Vertical):
             # Toggle context mode on Enter for turns (same as space)
             session_id = node_data.get("session_id")
             turn_idx = node_data.get("turn_idx")
+
+            # Use TreeState to toggle - it fires CONTEXT_MODE_CHANGED event
+            new_mode = self._state.toggle_context_mode(session_id, turn_idx)
+
+            # Keep local state in sync (will be removed when fully migrated)
             turn_key = (session_id, turn_idx)
-            current_mode = self._context_modes.get(turn_key, ContextMode.DROP)
-            if current_mode == ContextMode.COPY:
-                new_mode = ContextMode.COMPRESS
-                self._context_modes[turn_key] = new_mode
-            elif current_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
-                new_mode = ContextMode.DROP
+            if new_mode == ContextMode.DROP:
                 self._context_modes.pop(turn_key, None)
             else:
-                new_mode = ContextMode.COPY
                 self._context_modes[turn_key] = new_mode
+
             self._update_turn_label(session_id, turn_idx)
             self._update_root_label()
             # Notify app to persist the change
@@ -1570,19 +1926,15 @@ class ContextTree(Vertical):
         if node_type == "turn":
             session_id = event.node_data.get("session_id")
             turn_idx = event.node_data.get("turn_idx")
-            turn_key = (session_id, turn_idx)
 
-            # Cycle: COPY -> COMPRESS -> DROP -> COPY
-            current_mode = self._context_modes.get(turn_key, ContextMode.DROP)
-            if current_mode == ContextMode.COPY:
-                new_mode = ContextMode.COMPRESS
-                self._context_modes[turn_key] = new_mode
-            elif current_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
-                # Remove from dict means DROP
-                new_mode = ContextMode.DROP
+            # Use TreeState to toggle - it fires CONTEXT_MODE_CHANGED event
+            new_mode = self._state.toggle_context_mode(session_id, turn_idx)
+
+            # Keep local state in sync (will be removed when fully migrated)
+            turn_key = (session_id, turn_idx)
+            if new_mode == ContextMode.DROP:
                 self._context_modes.pop(turn_key, None)
-            else:  # DROP
-                new_mode = ContextMode.COPY
+            else:
                 self._context_modes[turn_key] = new_mode
 
             self._update_turn_label(session_id, turn_idx)
@@ -1595,14 +1947,20 @@ class ContextTree(Vertical):
             parent_session_id = event.node_data.get("parent_session_id")
             merge_key = ("merge", parent_session_id, fork_id)
 
-            # Cycle: COPY -> COMPRESS -> DROP -> COPY
+            # Get current mode and cycle
             current_mode = self._merge_modes.get(merge_key, ContextMode.COPY)
             if current_mode == ContextMode.COPY:
-                self._merge_modes[merge_key] = ContextMode.COMPRESS
+                new_mode = ContextMode.COMPRESS
             elif current_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
-                self._merge_modes[merge_key] = ContextMode.DROP
+                new_mode = ContextMode.DROP
             else:  # DROP
-                self._merge_modes[merge_key] = ContextMode.COPY
+                new_mode = ContextMode.COPY
+
+            # Update TreeState
+            self._state.set_merge_mode(parent_session_id, fork_id, new_mode)
+
+            # Keep local state in sync
+            self._merge_modes[merge_key] = new_mode
 
             self._update_merge_label(parent_session_id, fork_id, event.node_data)
             self._update_root_label()
@@ -1616,7 +1974,9 @@ class ContextTree(Vertical):
             return
         for turn in loaded_data["turns"]:
             turn_key = (self._current_session_id, turn["idx"])
+            # Update both local and TreeState
             self._context_modes[turn_key] = ContextMode.COPY
+            self._state.set_context_mode(self._current_session_id, turn["idx"], ContextMode.COPY)
             self._update_turn_label(self._current_session_id, turn["idx"])
         self._update_root_label()
 
@@ -1629,7 +1989,9 @@ class ContextTree(Vertical):
             return
         for turn in loaded_data["turns"]:
             turn_key = (self._current_session_id, turn["idx"])
+            # Update both local and TreeState
             self._context_modes.pop(turn_key, None)
+            self._state.set_context_mode(self._current_session_id, turn["idx"], ContextMode.DROP)
             self._update_turn_label(self._current_session_id, turn["idx"])
         self._update_root_label()
 

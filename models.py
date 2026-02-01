@@ -53,7 +53,7 @@ class Message:
     content_blocks: list[ContentBlock] = field(default_factory=list)  # Rich content
     tokens: int = 0
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
-    context_mode: ContextMode = ContextMode.COPY
+    context_mode: ContextMode = ContextMode.COMPRESS
     summary: str = ""  # Cached summary for SUMMARIZE mode
 
 
@@ -87,8 +87,22 @@ class RawEvent:
 
 
 @dataclass
+class ToolUseStartEvent:
+    """Tool use started - name known but input still streaming."""
+    tool_use_id: str
+    tool_name: str
+
+
+@dataclass
+class ToolInputDeltaEvent:
+    """Partial tool input JSON."""
+    tool_use_id: str
+    partial_json: str
+
+
+@dataclass
 class ToolUseEvent:
-    """Claude is using a tool."""
+    """Claude finished defining a tool use (input complete)."""
     tool_use_id: str
     tool_name: str
     tool_input: dict

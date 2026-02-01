@@ -2,6 +2,7 @@ from .chat_log import ChatLog, MoreBelowIndicator, NewMessagesIndicator
 from .input_box import InputBox
 from .status_bar import StatusBar
 from .context_tree import ContextTree
+from .nested_tree import NestedSessionTree
 from .splitter import VerticalSplitter
 from .context_preview import ContextPreview, ConfirmDialog, HelpModal
 from .request_pane import RequestPane
@@ -20,6 +21,7 @@ __all__ = [
     "InputBox",
     "StatusBar",
     "ContextTree",
+    "NestedSessionTree",
     "VerticalSplitter",
     "ContextPreview",
     "ConfirmDialog",

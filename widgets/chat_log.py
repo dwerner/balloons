@@ -53,6 +53,10 @@ class ToolUseWidget(Static):
         max-height: 10000;
     }
 
+    ToolUseWidget.streaming {
+        border-left: thick $accent;
+    }
+
     /* Context mode visual indicators - use background color to avoid layout shifts */
     /* COPY is the default - no special styling needed */
     ToolUseWidget.context-copy {
@@ -79,10 +83,11 @@ class ToolUseWidget(Static):
     def __init__(
         self,
         tool_name: str,
-        content: RenderableType,
+        content: RenderableType = None,
         turn_id: int = 0,
         tool_use_id: str = "",
         full_content: RenderableType | None = None,
+        streaming: bool = False,
         **kwargs
     ):
         super().__init__(**kwargs)
@@ -92,15 +97,42 @@ class ToolUseWidget(Static):
         self._expanded = False
         self.turn_id = turn_id
         self.tool_use_id = tool_use_id
+        self._streaming = streaming
+        self._partial_json = ""  # Accumulated JSON during streaming
         if full_content is not None:
             self.add_class("expandable")
+        if streaming:
+            self.add_class("streaming")
 
     def render(self) -> RenderableType:
+        if self._streaming:
+            # Show tool name + partial JSON with cursor
+            text = Text()
+            text.append(f"[{self.tool_name}] ", style="bold cyan")
+            text.append(self._partial_json, style="dim")
+            text.append("▌", style="bold")
+            return text
+
         content = self._full_content if self._expanded and self._full_content else self._content
         # Content can be Markdown, Text, or other Rich renderables
         if isinstance(content, str):
             return Markdown(content, code_theme="monokai")
         return content
+
+    def append_input(self, partial_json: str) -> None:
+        """Append partial JSON to streaming tool use."""
+        self._partial_json += partial_json
+        self.refresh()
+
+    def finish_streaming(self, content: RenderableType, full_content: RenderableType | None = None) -> None:
+        """Complete streaming with final formatted content."""
+        self._streaming = False
+        self._content = content
+        self._full_content = full_content
+        self.remove_class("streaming")
+        if full_content is not None:
+            self.add_class("expandable")
+        self.refresh()
 
     def toggle_expand(self) -> None:
         """Toggle between expanded and collapsed state."""
@@ -131,6 +163,10 @@ class ToolUseWidget(Static):
     @property
     def is_expanded(self) -> bool:
         return self._expanded
+
+    @property
+    def is_streaming(self) -> bool:
+        return self._streaming
 
 
 class ToolResultWidget(Static):
@@ -727,6 +763,68 @@ class ChatLog(VerticalScroll):
         self._smart_scroll()
         self._notify_new_content()
         return widget
+
+    def add_streaming_tool_use(
+        self,
+        tool_name: str,
+        tool_use_id: str,
+    ) -> ToolUseWidget:
+        """Add a streaming tool use widget (input still being received).
+
+        When there's a streaming message with content, we finalize it first
+        so that text appears before the tool.
+        """
+        turn_id = self._turn_counter
+
+        # Handle current streaming message (same as add_tool_use)
+        if self._current_assistant_message:
+            if self._current_assistant_message._content.strip():
+                self._current_assistant_message.remove_class("streaming")
+                self._current_assistant_message.finish_streaming()
+            else:
+                self._current_assistant_message.remove()
+            self._current_assistant_message = None
+
+        widget = ToolUseWidget(
+            tool_name=tool_name,
+            turn_id=turn_id,
+            tool_use_id=tool_use_id,
+            streaming=True,
+        )
+        self.mount(widget)
+        self._smart_scroll()
+        self._notify_new_content()
+        return widget
+
+    def update_streaming_tool(self, tool_use_id: str, partial_json: str) -> None:
+        """Append partial JSON to a streaming tool use widget."""
+        for child in self.children:
+            if isinstance(child, ToolUseWidget) and child.tool_use_id == tool_use_id:
+                child.append_input(partial_json)
+                self._smart_scroll()
+                return
+
+    def finish_streaming_tool(
+        self,
+        tool_use_id: str,
+        content: RenderableType,
+        full_content: RenderableType | None = None,
+        tool_name: str = "",
+    ) -> None:
+        """Complete a streaming tool use with final formatted content.
+
+        If no streaming widget exists for this tool_use_id, creates one with the
+        final content (fallback for when tool_use_start wasn't received).
+        """
+        for child in self.children:
+            if isinstance(child, ToolUseWidget) and child.tool_use_id == tool_use_id:
+                child.finish_streaming(content, full_content)
+                return
+
+        # Fallback: widget doesn't exist, create it with final content
+        # This happens if tool_use_start event wasn't processed
+        if tool_name:
+            self.add_tool_use(tool_name, content, tool_use_id=tool_use_id, full_content=full_content)
 
     def finish_current_message(self) -> str:
         """Mark streaming complete and return combined text from all assistant messages in this turn.

@@ -170,8 +170,17 @@ class Formatter:
 
         elif tool_name == "Read":
             file_path = tool_input.get("file_path", "")
-            offset = tool_input.get("offset")
-            limit = tool_input.get("limit")
+            offset_raw = tool_input.get("offset")
+            limit_raw = tool_input.get("limit")
+            # Safely convert to int (handle malformed string values)
+            try:
+                offset = int(offset_raw) if offset_raw is not None else None
+            except (ValueError, TypeError):
+                offset = None
+            try:
+                limit = int(limit_raw) if limit_raw is not None else None
+            except (ValueError, TypeError):
+                limit = None
             range_info = ""
             if offset or limit:
                 start = offset if offset else 1
