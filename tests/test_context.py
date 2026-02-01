@@ -160,63 +160,6 @@ class TestContextBuilder:
         assert "hello world program" in result
 
 
-class TestSummaryPromptBuilding:
-    """Tests for summary-related prompts."""
-
-    def test_build_summary_prompt_quick(self, builder):
-        """Quick mode includes only user messages."""
-        messages = [
-            Message(role="user", content="user question"),
-            Message(role="assistant", content="assistant answer"),
-        ]
-        result = builder.build_summary_prompt(messages, "quick")
-        assert "User: user question" in result
-        assert "assistant answer" not in result
-        assert "TITLE:" in result
-        assert "SUMMARY:" in result
-
-    def test_build_summary_prompt_detailed(self, builder):
-        """Detailed mode includes all messages."""
-        messages = [
-            Message(role="user", content="user question"),
-            Message(role="assistant", content="assistant answer"),
-        ]
-        result = builder.build_summary_prompt(messages, "detailed")
-        assert "User: user question" in result
-        assert "Assistant: assistant answer" in result
-
-    def test_build_summary_prompt_truncates_long(self, builder):
-        """Long messages are truncated in summary prompts."""
-        long_content = "x" * 2000
-        messages = [
-            Message(role="user", content=long_content),
-        ]
-        result = builder.build_summary_prompt(messages, "quick")
-        assert len(result) < 2000  # Should be truncated
-
-    def test_parse_summary_response(self, builder):
-        """Parse TITLE: and SUMMARY: from response."""
-        response = "TITLE: My Session\nSUMMARY: This is what happened."
-        title, summary = builder.parse_summary_response(response)
-        assert title == "My Session"
-        assert summary == "This is what happened."
-
-    def test_parse_summary_response_multiline(self, builder):
-        """Multi-line summaries are captured."""
-        response = "TITLE: My Title\nSUMMARY: Line 1\nLine 2\nLine 3"
-        title, summary = builder.parse_summary_response(response)
-        assert title == "My Title"
-        assert "Line 1" in summary
-        assert "Line 2" in summary
-        assert "Line 3" in summary
-
-    def test_parse_summary_title_truncated(self, builder):
-        """Titles over 50 chars are truncated."""
-        response = "TITLE: " + "x" * 100 + "\nSUMMARY: short"
-        title, summary = builder.parse_summary_response(response)
-        assert len(title) == 50
-
-
 class TestContextSummaryPrompt:
     """Tests for :with context summarization."""
 

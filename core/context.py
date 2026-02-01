@@ -71,44 +71,6 @@ class ContextBuilder:
         parts.append(f"User: {new_prompt}")
         return "\n\n".join(parts)
 
-    def build_summary_prompt(self, messages: list[Message], mode: str = "quick") -> str:
-        """Build a prompt for generating session title and summary.
-
-        Args:
-            messages: Messages to summarize
-            mode: "quick" for user messages only, "detailed" for all messages
-
-        Returns:
-            Prompt string for LLM summarization
-        """
-        if mode == "quick":
-            # Only include user messages
-            context_parts = []
-            for msg in messages:
-                if msg.role == "user":
-                    content = msg.content[:500] if len(msg.content) > 500 else msg.content
-                    context_parts.append(f"User: {content}")
-            context = "\n\n".join(context_parts)
-        else:
-            # Include all messages, but truncate long ones
-            context_parts = []
-            for msg in messages:
-                prefix = "User" if msg.role == "user" else "Assistant"
-                content = msg.content[:1000] if len(msg.content) > 1000 else msg.content
-                context_parts.append(f"{prefix}: {content}")
-            context = "\n\n".join(context_parts)
-
-        return f"""Based on this conversation, provide:
-1. A short title (max 50 chars) that captures the main topic
-2. A brief summary (2-3 sentences) of what was discussed/accomplished
-
-Respond in this exact format:
-TITLE: <title here>
-SUMMARY: <summary here>
-
-Conversation:
-{context}"""
-
     def build_context_summary_prompt(self, messages: list[Message]) -> str:
         """Build a prompt for summarizing context for :with command.
 
@@ -150,31 +112,6 @@ Provide a clear, actionable summary that can be used as context for continuing t
             return f"{return_prompt}\n\nContext:\n{context}"
         else:
             return f"Summarize the key findings and conclusions from this conversation:\n\n{context}"
-
-    def parse_summary_response(self, response: str) -> tuple[str, str]:
-        """Parse LLM response into title and summary.
-
-        Args:
-            response: Raw LLM response
-
-        Returns:
-            Tuple of (title, summary)
-        """
-        title = ""
-        summary = ""
-
-        for line in response.split("\n"):
-            if line.startswith("TITLE:"):
-                title = line[6:].strip()[:50]
-            elif line.startswith("SUMMARY:"):
-                summary = line[8:].strip()
-
-        # If we got multi-line summary (continuation after SUMMARY:), grab it
-        if "SUMMARY:" in response:
-            summary_start = response.find("SUMMARY:") + 8
-            summary = response[summary_start:].strip()
-
-        return title, summary
 
     def count_tokens(self, text: str) -> int:
         """Count tokens in text using tiktoken.

@@ -19,11 +19,11 @@ from .commands import (
     PwdCommand,
     CdCommand,
     ReloadCommand,
-    SummarizeCommand,
+    TitleCommand,
 )
 from .context import ContextBuilder
 from .formatter import Formatter, format_edit_as_diff, guess_language
-from .runner import SessionRunner, RunnerStatus, StreamEvent, StreamResult
+from .runner import SessionRunner, RunnerStatus, StreamEvent, StreamResult, HelperRunner
 from .manager import SessionManager, SessionInfo
 from .debug_log import debug_log, DebugLog, LogLevel, LogEntry
 
@@ -47,7 +47,7 @@ __all__ = [
     "PwdCommand",
     "CdCommand",
     "ReloadCommand",
-    "SummarizeCommand",
+    "TitleCommand",
     # Context
     "ContextBuilder",
     # Formatting
@@ -59,6 +59,7 @@ __all__ = [
     "RunnerStatus",
     "StreamEvent",
     "StreamResult",
+    "HelperRunner",
     # Manager
     "SessionManager",
     "SessionInfo",

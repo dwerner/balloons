@@ -454,3 +454,96 @@ class SessionRunner:
             total_cost=self.session.total_cost,
         )
         self._status = RunnerStatus.IDLE
+
+
+class HelperRunner:
+    """Lightweight runner for helper tasks (summaries, compression).
+
+    Unlike SessionRunner, this doesn't track session state - just streams
+    text and queues events for the poll timer.
+    """
+
+    def __init__(self, helper_id: str, backend_env: dict[str, str] | None = None):
+        self.helper_id = helper_id  # Unique ID for this helper task
+        self._claude_runner = ClaudeRunner(backend_env=backend_env)
+        self._status = RunnerStatus.IDLE
+        self._event_queue: asyncio.Queue[StreamEvent] = asyncio.Queue()
+        self._background_task: Optional[asyncio.Task] = None
+        self._text_buffer: str = ""
+        self._result: Optional[str] = None  # Just the text result
+
+    @property
+    def status(self) -> RunnerStatus:
+        return self._status
+
+    @property
+    def is_streaming(self) -> bool:
+        return self._status == RunnerStatus.STREAMING
+
+    @property
+    def is_done(self) -> bool:
+        return self._status in (RunnerStatus.IDLE, RunnerStatus.ERROR, RunnerStatus.CANCELLED)
+
+    def _make_event(self, event_type: str, data: Any = None) -> StreamEvent:
+        """Create an event tagged with this helper's ID."""
+        return StreamEvent(event_type, data, session_id=self.helper_id)
+
+    def start_background(self, prompt: str) -> None:
+        """Start helper streaming in background.
+
+        Args:
+            prompt: The prompt to send (no message history for helpers)
+        """
+        if self._status == RunnerStatus.STREAMING:
+            raise RuntimeError("Helper is already streaming")
+
+        self._text_buffer = ""
+        self._result = None
+        self._status = RunnerStatus.STREAMING
+        self._background_task = asyncio.create_task(
+            self._background_stream(prompt)
+        )
+
+    async def _background_stream(self, prompt: str) -> None:
+        """Internal: background streaming task."""
+        try:
+            async for event in self._claude_runner.stream_response(
+                [], prompt, disable_tools=True
+            ):
+                if isinstance(event, TextDelta):
+                    self._text_buffer += event.text
+                    await self._event_queue.put(self._make_event("text", event.text))
+
+            # Done - emit result
+            self._result = self._text_buffer
+            self._status = RunnerStatus.IDLE
+            await self._event_queue.put(self._make_event("done", self._result))
+
+        except asyncio.CancelledError:
+            self._status = RunnerStatus.CANCELLED
+            await self._event_queue.put(self._make_event("cancelled", None))
+        except Exception as e:
+            self._status = RunnerStatus.ERROR
+            debug_log.error(f"Helper stream error: {e}", category="stream")
+            await self._event_queue.put(self._make_event("error", str(e)))
+
+    def drain_events(self) -> list[StreamEvent]:
+        """Get all queued events without blocking."""
+        events = []
+        while not self._event_queue.empty():
+            try:
+                events.append(self._event_queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        return events
+
+    def get_result(self) -> Optional[str]:
+        """Get the text result of a completed stream."""
+        return self._result if self.is_done else None
+
+    def cancel(self) -> None:
+        """Cancel an ongoing stream."""
+        if self._background_task and not self._background_task.done():
+            self._background_task.cancel()
+        self._claude_runner.terminate()
+        self._status = RunnerStatus.CANCELLED

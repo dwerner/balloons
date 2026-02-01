@@ -96,13 +96,20 @@ class ClaudeRunner:
 
     async def stream_response(
         self, messages: list[Message], prompt: str, allowed_tools: list[str] | None = None,
-        working_dir: str | None = None
+        working_dir: str | None = None, disable_tools: bool = False
     ) -> AsyncIterator[Union[TextDelta, ResultEvent, InitEvent, RawEvent]]:
         """
         Stream a response from Claude.
 
         Sends full conversation history + new prompt each time.
         Yields both parsed events and RawEvent for all JSON lines.
+
+        Args:
+            messages: Message history for context
+            prompt: The new prompt to send
+            allowed_tools: List of tool names to allow, or None for all
+            working_dir: Working directory for the Claude process
+            disable_tools: If True, disable all tools (for simple text responses)
         """
         self._terminated = False
 
@@ -121,7 +128,9 @@ class ClaudeRunner:
             "--disallowedTools", "Task,TodoWrite,NotebookEdit,AskUserQuestion",  # Prevent task spawning, todo lists, notebook, questions - we manage our own sessions
         ]
 
-        if allowed_tools:
+        if disable_tools:
+            cmd.extend(["--tools", ""])
+        elif allowed_tools:
             cmd.extend(["--allowedTools", ",".join(allowed_tools)])
 
         # Build environment with backend overrides

@@ -127,9 +127,9 @@ class ReloadCommand(Command):
 
 
 @dataclass
-class SummarizeCommand(Command):
-    """Generate title and summary for session."""
-    mode: str = "quick"  # "quick" or "detailed"
+class TitleCommand(Command):
+    """Set session title."""
+    title: str = ""
 
 
 class CommandParser:
@@ -251,11 +251,12 @@ class CommandParser:
         if text == ":reload":
             return ReloadCommand()
 
-        # Handle :summarize [quick|detailed]
-        if text.startswith(":summarize"):
-            args = text[10:].strip() if len(text) > 10 else ""
-            mode = args if args in ("quick", "detailed") else "quick"
-            return SummarizeCommand(mode=mode)
+        # Handle :title <title>
+        if text.startswith(":title"):
+            title = text[6:].strip() if len(text) > 6 else ""
+            if not title:
+                raise ValueError(":title requires a title")
+            return TitleCommand(title=title)
 
         # Unknown command
         cmd_name = text.split()[0]

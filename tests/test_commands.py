@@ -14,7 +14,7 @@ from core.commands import (
     PwdCommand,
     CdCommand,
     ReloadCommand,
-    SummarizeCommand,
+    TitleCommand,
 )
 
 
@@ -184,29 +184,16 @@ class TestCommandParser:
         cmd = parser.parse(":reload")
         assert isinstance(cmd, ReloadCommand)
 
-    def test_summarize_default(self, parser):
-        """':summarize' defaults to quick mode."""
-        cmd = parser.parse(":summarize")
-        assert isinstance(cmd, SummarizeCommand)
-        assert cmd.mode == "quick"
+    def test_title(self, parser):
+        """':title <title>' sets the session title."""
+        cmd = parser.parse(":title My Session Title")
+        assert isinstance(cmd, TitleCommand)
+        assert cmd.title == "My Session Title"
 
-    def test_summarize_quick(self, parser):
-        """':summarize quick' sets quick mode."""
-        cmd = parser.parse(":summarize quick")
-        assert isinstance(cmd, SummarizeCommand)
-        assert cmd.mode == "quick"
-
-    def test_summarize_detailed(self, parser):
-        """':summarize detailed' sets detailed mode."""
-        cmd = parser.parse(":summarize detailed")
-        assert isinstance(cmd, SummarizeCommand)
-        assert cmd.mode == "detailed"
-
-    def test_summarize_invalid_mode_defaults(self, parser):
-        """':summarize <invalid>' defaults to quick."""
-        cmd = parser.parse(":summarize foo")
-        assert isinstance(cmd, SummarizeCommand)
-        assert cmd.mode == "quick"
+    def test_title_no_title_raises(self, parser):
+        """':title' without a title raises ValueError."""
+        with pytest.raises(ValueError, match=":title requires a title"):
+            parser.parse(":title")
 
     def test_unknown_command_raises(self, parser):
         """Unknown commands raise ValueError."""

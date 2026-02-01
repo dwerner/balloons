@@ -45,6 +45,7 @@ from core import (
     SessionRunner,
     SessionManager,
     StreamEvent,
+    HelperRunner,
     NewSessionCommand,
     CopyTurnsCommand,
     QueryWithCommand,
@@ -61,7 +62,7 @@ from core import (
     PwdCommand,
     CdCommand,
     ReloadCommand,
-    SummarizeCommand,
+    TitleCommand,
     debug_log,
 )
 
@@ -82,10 +83,17 @@ class StreamingContext:
     query_with: bool = False  # Special case: no user message saved
     # Track tool events for session resume (tool_use_id -> (name, input, result))
     tool_events: dict = None
+    # Helper task tracking (for context compression, merge summaries)
+    is_helper: bool = False  # True if this is a helper task, not a normal prompt
+    helper_type: str = ""  # "compress", "merge", etc.
+    # For fork context compression: data needed to complete the fork after compression
+    fork_data: dict = None  # Contains indexed_messages, allowed_tools, name, background, etc.
 
     def __post_init__(self):
         if self.tool_events is None:
             self.tool_events = {}
+        if self.fork_data is None:
+            self.fork_data = {}
 
 
 class BalloonsApp(App):
@@ -148,12 +156,14 @@ class BalloonsApp(App):
         self._context_builder = ContextBuilder()
         # Session manager handles all sessions and runners
         self._manager = SessionManager(backend_env=backend_env)
-        # Simple runner for helper streaming (summaries, etc.)
+        # Simple runner for helper streaming (summaries, etc.) - used for blocking operations
         self._helper_runner = ClaudeRunner(backend_env=backend_env)
         # Timer for polling background sessions
         self._poll_timer = None
         # Per-session streaming contexts (session_id -> StreamingContext)
         self._streaming_contexts: dict[str, StreamingContext] = {}
+        # Helper runners for non-blocking helper tasks (helper_id -> HelperRunner)
+        self._helper_runners: dict[str, HelperRunner] = {}
 
     @property
     def session(self) -> Session | None:
@@ -231,6 +241,32 @@ class BalloonsApp(App):
                         details={"event_type": event.event_type},
                     )
                     # Continue processing other events
+
+        # Poll helper runners (for context compression, merge summaries, etc.)
+        helper_ids_to_remove = []
+        for helper_id, runner in self._helper_runners.items():
+            ctx = self._streaming_contexts.get(helper_id)
+            if not ctx:
+                continue  # No context, skip
+
+            events = runner.drain_events()
+            for event in events:
+                try:
+                    self._dispatch_helper_event(helper_id, event, ctx, chat_log, status_bar)
+                except Exception as e:
+                    debug_log.error(
+                        f"Helper event dispatch failed: {e}",
+                        category="llm",
+                        details={"event_type": event.event_type, "helper_id": helper_id},
+                    )
+
+            # Mark for removal if done
+            if runner.is_done:
+                helper_ids_to_remove.append(helper_id)
+
+        # Clean up completed helpers
+        for helper_id in helper_ids_to_remove:
+            del self._helper_runners[helper_id]
 
     def _dispatch_polled_event(
         self,
@@ -384,6 +420,274 @@ class BalloonsApp(App):
                 chat_log.append_to_current("\n\n[Claude is asking a question - session ended]")
                 status_bar.set_status("Claude asked a question (not supported in non-interactive mode)", animate=False)
             self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar)
+
+    def _dispatch_helper_event(
+        self,
+        helper_id: str,
+        event: StreamEvent,
+        ctx: StreamingContext,
+        chat_log: ChatLog,
+        status_bar: StatusBar,
+    ) -> None:
+        """Dispatch a helper event (context compression, merge summary).
+
+        Helper events stream into the chat like regular messages, but when done
+        trigger the next phase (e.g., start the actual fork prompt).
+        """
+        if event.event_type == "text":
+            text = event.data
+            debug_event(f"helper text: helper={helper_id[:8]} len={len(text)}")
+            ctx.content += text
+            if ctx.is_active:
+                chat_log.append_to_current(text)
+
+        elif event.event_type == "done":
+            debug_event(f"helper done: helper={helper_id[:8]}")
+            self._finalize_helper(helper_id, ctx, chat_log, status_bar)
+
+        elif event.event_type == "error":
+            debug_event(f"helper error: helper={helper_id[:8]} {event.data}")
+            if ctx.is_active:
+                chat_log.append_to_current(f"\n\n[Error: {event.data}]")
+            self._finalize_helper(helper_id, ctx, chat_log, status_bar, error=event.data)
+
+        elif event.event_type == "cancelled":
+            debug_event(f"helper cancelled: helper={helper_id[:8]}")
+            self._finalize_helper(helper_id, ctx, chat_log, status_bar, cancelled=True)
+
+    def _finalize_helper(
+        self,
+        helper_id: str,
+        ctx: StreamingContext,
+        chat_log: ChatLog,
+        status_bar: StatusBar,
+        error: str = None,
+        cancelled: bool = False,
+    ) -> None:
+        """Finalize a helper task and trigger the next phase."""
+        debug_log.info(
+            f"Finalizing helper (type={ctx.helper_type})",
+            category="stream",
+            details={"helper_id": helper_id},
+        )
+
+        if ctx.is_active:
+            # Finish the helper message display
+            chat_log.finish_current_message()
+
+        # Clean up streaming context
+        if helper_id in self._streaming_contexts:
+            del self._streaming_contexts[helper_id]
+
+        if error or cancelled:
+            # Helper failed - clean up and re-enable input
+            input_box = self.query_one("#input-box", InputBox)
+            input_box.set_disabled(False)
+            status_bar.set_streaming(False)
+            self.streaming = False
+            if error:
+                status_bar.set_error(f"Helper failed: {error}")
+            return
+
+        # Success - trigger next phase based on helper type
+        if ctx.helper_type == "compress":
+            # Context compression complete - now start the actual fork
+            self._complete_fork_after_compression(ctx, chat_log, status_bar)
+        elif ctx.helper_type == "derive":
+            # Context compression complete - now start the derived session
+            self._complete_derive_after_compression(ctx, chat_log, status_bar)
+
+    def _complete_fork_after_compression(
+        self,
+        ctx: StreamingContext,
+        chat_log: ChatLog,
+        status_bar: StatusBar,
+    ) -> None:
+        """Complete a fork after context compression finishes.
+
+        The compression result is in ctx.content, and fork_data has the original params.
+        """
+        fork_data = ctx.fork_data
+        if not fork_data:
+            debug_log.error("No fork_data in context after compression", category="stream")
+            # Clean up UI state
+            input_box = self.query_one("#input-box", InputBox)
+            input_box.set_disabled(False)
+            status_bar.set_streaming(False)
+            self.streaming = False
+            status_bar.set_error("Fork failed: missing context data")
+            return
+
+        context_tree = self.query_one("#context-tree", ContextTree)
+        input_box = self.query_one("#input-box", InputBox)
+
+        # Extract fork params
+        child_session = fork_data["child_session"]
+        prompt = fork_data["prompt"]
+        name = fork_data["name"]
+        background = fork_data["background"]
+        allowed_tools = fork_data["allowed_tools"]
+        copy_items = fork_data["copy_items"]
+        compress_group_positions = fork_data["compress_group_positions"]  # list of (summary_text, first_idx)
+
+        # Build the summary items from compression result
+        # For now, we only support one compress group streaming at a time
+        summary_text = ctx.content.strip()
+        summary_items = []
+        if summary_text and compress_group_positions:
+            first_idx = compress_group_positions[0]
+            summary_msg = Message(
+                role="user",
+                content=f"[Context Summary]\n{summary_text}",
+                content_blocks=[TextBlock(text=f"[Context Summary]\n{summary_text}")],
+            )
+            summary_items.append((summary_msg, first_idx))
+
+        # Combine COPY messages and summaries, sorted by original index
+        all_items = copy_items + summary_items
+        all_items.sort(key=lambda x: x[1])
+        context_messages = [msg for msg, _ in all_items]
+
+        # Add all context messages to the child session
+        for msg in context_messages:
+            child_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
+
+        child_session.save()
+
+        # Register child in parent
+        parent_session = fork_data["parent_session"]
+        fork_point = fork_data["fork_point"]
+        parent_session.add_child(
+            child_session.id,
+            prompt,
+            name=name,
+            fork_point=fork_point,
+        )
+        parent_session.save()
+
+        # Add fork marker to parent's chat log
+        chat_log.add_fork_marker(
+            prompt=prompt,
+            child_session_id=child_session.id,
+            fork_name=name or child_session.id[:8],
+            status="active" if not background else "background",
+        )
+
+        # Register child session with manager
+        self._manager._sessions[child_session.id] = child_session
+        self._manager._runners[child_session.id] = SessionRunner(child_session, backend_env=self._backend_env)
+
+        if background:
+            # Background mode - stay in parent
+            turn_idx = len(child_session.messages)
+            new_ctx = StreamingContext(
+                session_id=child_session.id,
+                user_turn_idx=turn_idx,
+                assistant_turn_idx=turn_idx + 1,
+                prompt=prompt,
+                is_active=False,
+            )
+            self._streaming_contexts[child_session.id] = new_ctx
+
+            # Update tree streaming indicator and status bar count
+            context_tree.set_session_streaming(child_session.id, True)
+            self._update_streaming_count()
+
+            # Start tree turns for child
+            context_tree.start_turn(child_session.id, turn_idx, "user")
+            context_tree.finish_turn(
+                child_session.id, turn_idx, prompt, [TextBlock(text=prompt)], []
+            )
+            context_tree.start_turn(child_session.id, turn_idx + 1, "assistant")
+
+            # Start background streaming
+            child_runner = self._manager._runners[child_session.id]
+            child_runner.start_background(
+                prompt=prompt,
+                messages=child_session.messages,
+                allowed_tools=allowed_tools,
+            )
+            status_bar.set_status(f"Fork '{name or child_session.id[:8]}' started in background", animate=False)
+            input_box.set_disabled(False)
+            self.streaming = False
+        else:
+            # Foreground mode - switch to child
+            breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
+            self._manager.set_active(child_session.id)
+            chat_log.clear()
+            chat_log.load_history(child_session.messages, session=child_session)
+            context_tree.load_all_sessions(child_session)
+            breadcrumb.set_session(child_session)
+
+            # Start streaming the actual prompt
+            self._start_streaming(prompt)
+
+    def _complete_derive_after_compression(
+        self,
+        ctx: StreamingContext,
+        chat_log: ChatLog,
+        status_bar: StatusBar,
+    ) -> None:
+        """Complete a derive after context compression finishes.
+
+        Similar to fork completion but simpler - no parent/child relationship.
+        """
+        fork_data = ctx.fork_data
+        if not fork_data:
+            debug_log.error("No fork_data in context after derive compression", category="stream")
+            input_box = self.query_one("#input-box", InputBox)
+            input_box.set_disabled(False)
+            status_bar.set_streaming(False)
+            self.streaming = False
+            status_bar.set_error("Derive failed: missing context data")
+            return
+
+        context_tree = self.query_one("#context-tree", ContextTree)
+        input_box = self.query_one("#input-box", InputBox)
+
+        # Extract params
+        new_session = fork_data["new_session"]
+        prompt = fork_data["prompt"]
+        allowed_tools = fork_data["allowed_tools"]
+        copy_items = fork_data["copy_items"]
+        compress_group_positions = fork_data["compress_group_positions"]
+
+        # Build the summary items from compression result
+        summary_text = ctx.content.strip()
+        summary_items = []
+        if summary_text and compress_group_positions:
+            first_idx = compress_group_positions[0]
+            summary_msg = Message(
+                role="user",
+                content=f"[Context Summary]\n{summary_text}",
+                content_blocks=[TextBlock(text=f"[Context Summary]\n{summary_text}")],
+            )
+            summary_items.append((summary_msg, first_idx))
+
+        # Combine COPY messages and summaries, sorted by original index
+        all_items = copy_items + summary_items
+        all_items.sort(key=lambda x: x[1])
+        context_messages = [msg for msg, _ in all_items]
+
+        # Add all context messages to the new session
+        for msg in context_messages:
+            new_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
+
+        new_session.save()
+
+        # Register and switch to new session
+        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
+        self._manager._sessions[new_session.id] = new_session
+        self._manager._runners[new_session.id] = SessionRunner(new_session, backend_env=self._backend_env)
+        self._manager.set_active(new_session.id)
+
+        chat_log.clear()
+        chat_log.load_history(new_session.messages, session=new_session)
+        context_tree.load_all_sessions(new_session)
+        breadcrumb.set_session(new_session)
+
+        # Start streaming the actual prompt
+        self._start_streaming(prompt)
 
     def _finalize_streaming(
         self,
@@ -728,8 +1032,8 @@ class BalloonsApp(App):
             self._handle_cd_command(cmd.path)
         elif isinstance(cmd, ReloadCommand):
             self._handle_reload()
-        elif isinstance(cmd, SummarizeCommand):
-            await self._handle_summarize_command(cmd.mode)
+        elif isinstance(cmd, TitleCommand):
+            self._handle_title_command(cmd.title)
 
     def _format_tool_use(
         self, event: ToolUseEvent
@@ -858,73 +1162,30 @@ class BalloonsApp(App):
         self.session.save()
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
-    async def _handle_summarize_command(self, mode: str) -> None:
-        """Generate a title and summary for the current session.
-
-        mode: 'quick' - summarize only user messages
-              'detailed' - summarize all messages including assistant responses
-        """
+    def _handle_title_command(self, title: str) -> None:
+        """Set the session title."""
         status_bar = self.query_one("#status-bar", StatusBar)
-        input_box = self.query_one("#input-box", InputBox)
 
-        if not self.session.messages:
-            status_bar.set_error("No messages to summarize")
-            return
+        self.session.title = title
+        self.session.save()
 
-        status_bar.set_status(f"Generating {mode} summary...", animate=True)
-        input_box.set_disabled(True)
-        # Force UI refresh before starting long operation
-        self.refresh()
-        await asyncio.sleep(0)
-        debug_log.info(f"Starting {mode} summary generation", category="command")
+        # Update UI with new title
+        chat_log = self.query_one("#chat-log", ChatLog)
+        chat_log.set_session_title(title)
 
-        try:
-            # Build prompt using context builder
-            prompt = self._context_builder.build_summary_prompt(self.session.messages, mode)
+        request_pane = self.query_one("#request-pane", RequestPane)
+        request_pane.show_session_info(
+            title,
+            self.session.summary,
+            self.session.created,
+            self.session.model,
+        )
 
-            result_parts = []
-            async for event in self._helper_runner.stream_response([], prompt):
-                if isinstance(event, TextDelta):
-                    result_parts.append(event.text)
+        # Reload context tree to show title
+        context_tree = self.query_one("#context-tree", ContextTree)
+        context_tree.load_all_sessions(self.session)
 
-            result = "".join(result_parts)
-            debug_log.debug(
-                f"Summary response: {result[:200]}..." if len(result) > 200 else f"Summary response: {result}",
-                category="command",
-            )
-
-            # Parse the result
-            title, summary = self._context_builder.parse_summary_response(result)
-            debug_log.info(f"Parsed title='{title}', summary='{summary[:50]}...'" if summary else f"Parsed title='{title}', summary=''", category="command")
-
-            self.session.title = title
-            self.session.summary = summary
-            self.session.save()
-
-            # Update UI with new title/summary
-            chat_log = self.query_one("#chat-log", ChatLog)
-            chat_log.set_session_title(title)
-
-            request_pane = self.query_one("#request-pane", RequestPane)
-            request_pane.show_session_info(
-                title,
-                summary,
-                self.session.created,
-                self.session.model,
-            )
-
-            # Reload context tree to show summary
-            context_tree = self.query_one("#context-tree", ContextTree)
-            context_tree.load_all_sessions(self.session)
-
-            status_bar.set_status(f"Session titled: {title}", animate=False)
-
-        except Exception as e:
-            debug_log.error(f"Summary failed: {e}", category="command")
-            status_bar.set_error(f"Summary failed: {e}")
-        finally:
-            debug_log.info("Summary generation finished", category="command")
-            input_box.set_disabled(False)
+        status_bar.set_status(f"Session titled: {title}", animate=False)
 
     def _handle_suspend(self, cmd: str) -> None:
         """Suspend TUI and run interactive command in session's working directory."""
@@ -948,7 +1209,7 @@ class BalloonsApp(App):
         if self.streaming and self._session_runner and self._session_runner.is_streaming:
             self._session_runner.cancel()
 
-        # Cancel helper runner (used for summaries, etc.)
+        # Cancel helper runner (used for context summaries, etc.)
         if self._helper_runner.is_running:
             debug_log.info("Cancelling helper runner", category="command")
             self._helper_runner.terminate()
@@ -1461,6 +1722,9 @@ Summary:"""
         - COMPRESS: LLM summarizes first (with summaries at original positions)
         - DROP: Exclude
 
+        If COMPRESS messages exist, shows the compression streaming in the UI
+        before creating the fork. This avoids UI blocking.
+
         Args:
             prompt: Initial prompt for the fork
             name: Optional name for easy reference (e.g., "auth-bug")
@@ -1484,87 +1748,164 @@ Summary:"""
         # Track fork point (current turn count in parent)
         fork_point = len(self.session.messages)
 
-        # Create child session with fork metadata
+        # Separate COPY and COMPRESS messages
+        copy_items = []  # (msg, idx)
+        compress_items = []  # (msg, idx)
+
+        for msg, idx in indexed_messages:
+            if msg.context_mode == ContextMode.COPY:
+                copy_items.append((msg, idx))
+            elif msg.context_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
+                compress_items.append((msg, idx))
+
+        # Group contiguous COMPRESS messages
+        compress_groups = []  # list of [(msg, idx), ...]
+        if compress_items:
+            compress_items.sort(key=lambda x: x[1])
+            current_group = [compress_items[0]]
+
+            for i in range(1, len(compress_items)):
+                msg, idx = compress_items[i]
+                _, prev_idx = current_group[-1]
+
+                # Check if contiguous (no COPY messages between them)
+                copy_indices = {i for _, i in copy_items}
+                has_copy_between = any(prev_idx < ci < idx for ci in copy_indices)
+
+                if has_copy_between:
+                    compress_groups.append(current_group)
+                    current_group = [(msg, idx)]
+                else:
+                    current_group.append((msg, idx))
+
+            compress_groups.append(current_group)
+
+        # Create child session with fork metadata (but don't populate yet)
         child_session = Session()
         child_session.parent_id = self.session.id
         child_session.fork_name = name
         child_session.fork_status = "active"
         child_session.fork_point_turn = fork_point
 
-        # Build context with proper interleaving of COPY and summarized COMPRESS messages
-        context_messages = await self._build_context_with_summaries(
-            indexed_messages, status_bar, input_box
-        )
+        if not compress_groups:
+            # No compression needed - proceed immediately
+            # Add COPY messages to child
+            copy_items.sort(key=lambda x: x[1])
+            for msg, _ in copy_items:
+                child_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
-        # Add all context messages to the child session
-        for msg in context_messages:
-            child_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
+            child_session.save()
 
-        child_session.save()
+            # Register child in parent
+            self.session.add_child(
+                child_session.id,
+                prompt,
+                name=name,
+                fork_point=fork_point,
+            )
+            self.session.save()
 
-        # Register child in parent
-        self.session.add_child(
-            child_session.id,
-            prompt,
-            name=name,
-            fork_point=fork_point,
-        )
-        self.session.save()
-
-        # Add fork marker to parent's chat log
-        chat_log.add_fork_marker(
-            prompt=prompt,
-            child_session_id=child_session.id,
-            fork_name=name or child_session.id[:8],
-            status="active" if not background else "background",
-        )
-
-        # Register child session with manager
-        self._manager._sessions[child_session.id] = child_session
-        self._manager._runners[child_session.id] = SessionRunner(child_session, backend_env=self._backend_env)
-
-        if background:
-            # Background mode - stay in parent
-            turn_idx = len(child_session.messages)
-            ctx = StreamingContext(
-                session_id=child_session.id,
-                user_turn_idx=turn_idx,
-                assistant_turn_idx=turn_idx + 1,
+            # Add fork marker to parent's chat log
+            chat_log.add_fork_marker(
                 prompt=prompt,
-                is_active=False,
+                child_session_id=child_session.id,
+                fork_name=name or child_session.id[:8],
+                status="active" if not background else "background",
             )
-            self._streaming_contexts[child_session.id] = ctx
 
-            # Update tree streaming indicator and status bar count
-            context_tree.set_session_streaming(child_session.id, True)
-            self._update_streaming_count()
+            # Register child session with manager
+            self._manager._sessions[child_session.id] = child_session
+            self._manager._runners[child_session.id] = SessionRunner(child_session, backend_env=self._backend_env)
 
-            # Start tree turns for child
-            context_tree.start_turn(child_session.id, turn_idx, "user")
-            context_tree.finish_turn(
-                child_session.id, turn_idx, prompt, [TextBlock(text=prompt)], []
-            )
-            context_tree.start_turn(child_session.id, turn_idx + 1, "assistant")
+            if background:
+                # Background mode - stay in parent
+                turn_idx = len(child_session.messages)
+                ctx = StreamingContext(
+                    session_id=child_session.id,
+                    user_turn_idx=turn_idx,
+                    assistant_turn_idx=turn_idx + 1,
+                    prompt=prompt,
+                    is_active=False,
+                )
+                self._streaming_contexts[child_session.id] = ctx
 
-            # Start background streaming
-            child_runner = self._manager._runners[child_session.id]
-            child_runner.start_background(
-                prompt=prompt,
-                messages=child_session.messages,
-                allowed_tools=allowed_tools,
-            )
-            status_bar.set_status(f"Fork '{name or child_session.id[:8]}' started in background", animate=False)
+                context_tree.set_session_streaming(child_session.id, True)
+                self._update_streaming_count()
+
+                context_tree.start_turn(child_session.id, turn_idx, "user")
+                context_tree.finish_turn(
+                    child_session.id, turn_idx, prompt, [TextBlock(text=prompt)], []
+                )
+                context_tree.start_turn(child_session.id, turn_idx + 1, "assistant")
+
+                child_runner = self._manager._runners[child_session.id]
+                child_runner.start_background(
+                    prompt=prompt,
+                    messages=child_session.messages,
+                    allowed_tools=allowed_tools,
+                )
+                status_bar.set_status(f"Fork '{name or child_session.id[:8]}' started in background", animate=False)
+            else:
+                # Foreground mode - switch to child
+                breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
+                self._manager.set_active(child_session.id)
+                chat_log.clear()
+                chat_log.load_history(child_session.messages, session=child_session)
+                context_tree.load_all_sessions(child_session)
+                breadcrumb.set_session(child_session)
+
+                self._start_streaming(prompt)
         else:
-            # Foreground mode - switch to child
-            breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
-            self._manager.set_active(child_session.id)
-            chat_log.clear()
-            chat_log.load_history(child_session.messages, session=child_session)
-            context_tree.load_all_sessions(child_session)
-            breadcrumb.set_session(child_session)
+            # Compression needed - start helper streaming
+            # For now, only support one compress group (most common case)
+            # TODO: Support multiple compress groups with sequential streaming
+            group = compress_groups[0]
+            group_messages = [msg for msg, _ in group]
+            first_idx = group[0][1]
 
-            # Start streaming
-            self._start_streaming(prompt)
+            # Build summary prompt
+            summary_prompt = self._context_builder.build_context_summary_prompt(group_messages)
+
+            # Create helper runner
+            import uuid
+            helper_id = f"compress-{uuid.uuid4().hex[:8]}"
+            helper_runner = HelperRunner(helper_id, backend_env=self._backend_env)
+            self._helper_runners[helper_id] = helper_runner
+
+            # Create streaming context for the helper
+            ctx = StreamingContext(
+                session_id=helper_id,
+                user_turn_idx=-1,  # Not a real turn
+                assistant_turn_idx=-1,
+                prompt="",
+                is_active=True,
+                is_helper=True,
+                helper_type="compress",
+                fork_data={
+                    "child_session": child_session,
+                    "parent_session": self.session,
+                    "prompt": prompt,
+                    "name": name,
+                    "background": background,
+                    "allowed_tools": allowed_tools,
+                    "copy_items": copy_items,
+                    "compress_group_positions": [first_idx],  # Just first group for now
+                    "fork_point": fork_point,
+                },
+            )
+            self._streaming_contexts[helper_id] = ctx
+
+            # Set up UI for compression streaming
+            input_box.set_disabled(True)
+            status_bar.set_streaming(True)
+            self.streaming = True
+
+            # Add a "Compressing context..." message to chat
+            chat_log.add_user_message("[Compressing context for fork...]")
+            chat_log.add_assistant_message()
+
+            # Start the helper
+            helper_runner.start_background(summary_prompt)
 
     async def _handle_merge_command(self, prompt: str = "") -> None:
         """Merge fork back to parent.
@@ -1636,6 +1977,9 @@ Summary:"""
         Like fork but no parent relationship - won't merge back.
         Context is built with summaries inserted at their original positions,
         preserving message order and interleaving.
+
+        If COMPRESS messages exist, shows the compression streaming in the UI
+        before creating the derived session. This avoids UI blocking.
         """
         chat_log = self.query_one("#chat-log", ChatLog)
         context_tree = self.query_one("#context-tree", ContextTree)
@@ -1647,33 +1991,99 @@ Summary:"""
         indexed_messages = context_tree.get_selected_messages_with_indices()
         allowed_tools = tool_bar.get_enabled_tools()
 
+        # Separate COPY and COMPRESS messages
+        copy_items = []  # (msg, idx)
+        compress_items = []  # (msg, idx)
+
+        for msg, idx in indexed_messages:
+            if msg.context_mode == ContextMode.COPY:
+                copy_items.append((msg, idx))
+            elif msg.context_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
+                compress_items.append((msg, idx))
+
+        # Group contiguous COMPRESS messages
+        compress_groups = []
+        if compress_items:
+            compress_items.sort(key=lambda x: x[1])
+            current_group = [compress_items[0]]
+
+            for i in range(1, len(compress_items)):
+                msg, idx = compress_items[i]
+                _, prev_idx = current_group[-1]
+
+                copy_indices = {i for _, i in copy_items}
+                has_copy_between = any(prev_idx < ci < idx for ci in copy_indices)
+
+                if has_copy_between:
+                    compress_groups.append(current_group)
+                    current_group = [(msg, idx)]
+                else:
+                    current_group.append((msg, idx))
+
+            compress_groups.append(current_group)
+
         # Create new independent session (no parent_id)
         new_session = Session()
 
-        # Build context with proper interleaving of COPY and summarized COMPRESS messages
-        context_messages = await self._build_context_with_summaries(
-            indexed_messages, status_bar, input_box
-        )
+        if not compress_groups:
+            # No compression needed - proceed immediately
+            copy_items.sort(key=lambda x: x[1])
+            for msg, _ in copy_items:
+                new_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
-        # Add all context messages to the new session
-        for msg in context_messages:
-            new_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
+            new_session.save()
 
-        new_session.save()
+            # Register and switch to new session
+            breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
+            self._manager._sessions[new_session.id] = new_session
+            self._manager._runners[new_session.id] = SessionRunner(new_session, backend_env=self._backend_env)
+            self._manager.set_active(new_session.id)
 
-        # Register and switch to new session
-        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
-        self._manager._sessions[new_session.id] = new_session
-        self._manager._runners[new_session.id] = SessionRunner(new_session, backend_env=self._backend_env)
-        self._manager.set_active(new_session.id)
+            chat_log.clear()
+            chat_log.load_history(new_session.messages, session=new_session)
+            context_tree.load_all_sessions(new_session)
+            breadcrumb.set_session(new_session)
 
-        chat_log.clear()
-        chat_log.load_history(new_session.messages, session=new_session)
-        context_tree.load_all_sessions(new_session)
-        breadcrumb.set_session(new_session)
+            self._start_streaming(prompt)
+        else:
+            # Compression needed - start helper streaming
+            group = compress_groups[0]
+            group_messages = [msg for msg, _ in group]
+            first_idx = group[0][1]
 
-        # Start streaming
-        self._start_streaming(prompt)
+            summary_prompt = self._context_builder.build_context_summary_prompt(group_messages)
+
+            import uuid
+            helper_id = f"derive-compress-{uuid.uuid4().hex[:8]}"
+            helper_runner = HelperRunner(helper_id, backend_env=self._backend_env)
+            self._helper_runners[helper_id] = helper_runner
+
+            ctx = StreamingContext(
+                session_id=helper_id,
+                user_turn_idx=-1,
+                assistant_turn_idx=-1,
+                prompt="",
+                is_active=True,
+                is_helper=True,
+                helper_type="derive",
+                fork_data={
+                    "new_session": new_session,
+                    "prompt": prompt,
+                    "allowed_tools": allowed_tools,
+                    "copy_items": copy_items,
+                    "compress_group_positions": [first_idx],
+                },
+            )
+            self._streaming_contexts[helper_id] = ctx
+
+            input_box.set_disabled(True)
+            status_bar.set_streaming(True)
+            self.streaming = True
+
+            chat_log.add_user_message("[Compressing context for new session...]")
+            chat_log.add_assistant_message()
+
+            helper_runner.start_background(summary_prompt)
 
     def _handle_switch_command(self, name: str = "") -> None:
         """Switch view to a different session or fork.
