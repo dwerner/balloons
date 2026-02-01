@@ -18,6 +18,10 @@ class RequestPane(Vertical):
         border-left: solid $primary;
     }
 
+    RequestPane.hidden {
+        display: none;
+    }
+
     RequestPane > #request-list {
         height: 1fr;
         background: $background;

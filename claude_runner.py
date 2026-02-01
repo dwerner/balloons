@@ -83,11 +83,7 @@ class ClaudeRunner:
                     elif isinstance(block, ToolResultBlock):
                         # Format tool result so Claude sees what the tool returned
                         error_prefix = "[Error] " if block.is_error else ""
-                        # Truncate very long results
-                        content = block.content
-                        if len(content) > 10000:
-                            content = content[:10000] + "\n... [truncated]"
-                        block_parts.append(f"[Tool Result]{error_prefix}\n{content}")
+                        block_parts.append(f"[Tool Result]{error_prefix}\n{block.content}")
 
                 if block_parts:
                     parts.append(f"{prefix}: " + "\n\n".join(block_parts))

@@ -30,7 +30,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLog, InputBox, StatusBar, ContextTree, VerticalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, Breadcrumb
+from widgets import ChatLog, MoreBelowIndicator, InputBox, StatusBar, ContextTree, VerticalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, Breadcrumb
 from claude_runner import ClaudeRunner
 from session import Session
 from config import get_config
@@ -80,6 +80,12 @@ class StreamingContext:
     content: str = ""  # Accumulated text content
     is_active: bool = True  # Is this the active/foreground session?
     query_with: bool = False  # Special case: no user message saved
+    # Track tool events for session resume (tool_use_id -> (name, input, result))
+    tool_events: dict = None
+
+    def __post_init__(self):
+        if self.tool_events is None:
+            self.tool_events = {}
 
 
 class BalloonsApp(App):
@@ -171,7 +177,8 @@ class BalloonsApp(App):
                 with Vertical(id="chat-container"):
                     yield Breadcrumb(id="breadcrumb")
                     yield ChatLog(id="chat-log")
-                yield RequestPane(id="request-pane")
+                    yield MoreBelowIndicator(id="more-below")
+                yield RequestPane(id="request-pane", classes="hidden")
             yield ToolBar(id="tool-bar")
             yield DebugPane(id="debug-pane")
             yield StatusBar(id="status-bar")
@@ -182,6 +189,11 @@ class BalloonsApp(App):
         # Start the background session polling timer
         self._poll_timer = self.set_interval(0.1, self._poll_background_sessions)
         self._initialize_session()
+
+    def _update_streaming_count(self) -> None:
+        """Update the status bar with total streaming sessions count."""
+        status_bar = self.query_one("#status-bar", StatusBar)
+        status_bar.set_streaming_count(len(self._streaming_contexts))
 
     def _poll_background_sessions(self) -> None:
         """Poll ALL streaming sessions for events and update UI.
@@ -272,13 +284,22 @@ class BalloonsApp(App):
 
         elif event.event_type == "tool_use":
             data = event.data
+            tool_use_id = data.get("tool_use_id")
             debug_event(f"tool_use: session={session_id[:8]} {data.get('tool_name')}")
+
+            # Track tool use for session resume
+            ctx.tool_events[tool_use_id] = {
+                "name": data.get("tool_name"),
+                "input": data.get("tool_input"),
+                "index": data.get("tool_index"),
+                "result": None,
+            }
 
             # Add to tree
             context_tree.add_tool_use_to_turn(
                 session_id,
                 ctx.assistant_turn_idx,
-                data.get("tool_use_id"),
+                tool_use_id,
                 data.get("tool_name"),
                 data.get("tool_input"),
                 data.get("tool_index"),
@@ -303,13 +324,18 @@ class BalloonsApp(App):
 
         elif event.event_type == "tool_result":
             data = event.data
+            tool_use_id = data.get("tool_use_id")
             debug_event(f"tool_result: session={session_id[:8]} len={len(data.get('result', ''))}")
+
+            # Track tool result for session resume
+            if tool_use_id in ctx.tool_events:
+                ctx.tool_events[tool_use_id]["result"] = data.get("result")
 
             # Add to tree
             context_tree.add_tool_result_to_turn(
                 session_id,
                 ctx.assistant_turn_idx,
-                data.get("tool_use_id"),
+                tool_use_id,
                 data.get("result"),
                 data.get("tool_index"),
             )
@@ -356,7 +382,7 @@ class BalloonsApp(App):
             debug_event(f"input_required: session={session_id[:8]} {event.data}")
             if is_active:
                 chat_log.append_to_current("\n\n[Claude is asking a question - session ended]")
-                status_bar.set_status("Claude asked a question (not supported in non-interactive mode)")
+                status_bar.set_status("Claude asked a question (not supported in non-interactive mode)", animate=False)
             self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar)
 
     def _finalize_streaming(
@@ -439,7 +465,7 @@ class BalloonsApp(App):
                 if error:
                     status_bar.set_error(f"Background error: {error}")
                 elif not cancelled:
-                    status_bar.set_status(f"Background session done: {session_id[:8]}")
+                    status_bar.set_status(f"Background session done: {session_id[:8]}", animate=False)
 
         except Exception as e:
             debug_log.error(
@@ -461,20 +487,60 @@ class BalloonsApp(App):
             # Always clean up streaming context
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
+                # Update tree streaming indicator and status bar count
+                context_tree.set_session_streaming(session_id, False)
+                self._update_streaming_count()
                 debug_log.info("Finalization complete, context cleaned up", category="stream", session_id=session_id)
+
+    def _load_most_recent_session(self) -> Session | None:
+        """Load the most recently modified session based on config sort order.
+
+        Returns None if no sessions exist.
+        """
+        all_sessions = Session.list_sessions()
+        if not all_sessions:
+            return None
+
+        config = get_config()
+        sort_order = config.session_sort_order
+
+        # Sort sessions according to preference
+        # list_sessions returns: (id, created, model, title, last_modified)
+        if sort_order == "modified_desc":
+            all_sessions.sort(key=lambda x: x[4], reverse=True)
+        elif sort_order == "modified_asc":
+            all_sessions.sort(key=lambda x: x[4])
+        elif sort_order == "date_desc":
+            all_sessions.sort(key=lambda x: x[1], reverse=True)
+        elif sort_order == "date_asc":
+            all_sessions.sort(key=lambda x: x[1])
+        elif sort_order in ("title_asc", "title_desc"):
+            # For title sort, still default to most recently modified
+            all_sessions.sort(key=lambda x: x[4], reverse=True)
+        else:
+            # Default: most recently modified
+            all_sessions.sort(key=lambda x: x[4], reverse=True)
+
+        # Load the first session (top of sorted list)
+        session_id = all_sessions[0][0]
+        session = self._manager.load_session(session_id)
+        return session
 
     def _initialize_session(self) -> None:
         """Initialize the UI with the current session."""
-        if self.session is None:
-            # Create new session through manager
-            session = self._manager.create_session()
-            self._manager.set_active(session.id)
-        elif self._initial_session is not None:
-            # Load initial session into manager
+        if self._initial_session is not None:
+            # Load initial session into manager (passed via --resume)
             self._manager._sessions[self._initial_session.id] = self._initial_session
             self._manager._runners[self._initial_session.id] = SessionRunner(self._initial_session, backend_env=self._backend_env)
             self._manager.set_active(self._initial_session.id)
             self._initial_session = None  # Clear so we don't reload on subsequent calls
+        elif self.session is None:
+            # No session passed - try to load the most recently modified one
+            session = self._load_most_recent_session()
+            if session is None:
+                # No sessions exist - create a new one
+                session = self._manager.create_session()
+            self._manager.set_active(session.id)
 
         chat_log = self.query_one("#chat-log", ChatLog)
         context_tree = self.query_one("#context-tree", ContextTree)
@@ -604,6 +670,10 @@ class BalloonsApp(App):
         )
         self._streaming_contexts[self.session.id] = ctx
 
+        # Update tree streaming indicator and status bar count
+        context_tree.set_session_streaming(self.session.id, True)
+        self._update_streaming_count()
+
         if is_active:
             # Add user message to display
             chat_log.add_user_message(prompt)
@@ -670,6 +740,20 @@ class BalloonsApp(App):
         """
         return self._formatter.format_tool_use(event)
 
+    def _format_tool_use_for_resume(
+        self, tool_name: str, tool_input: dict
+    ) -> RenderableType | tuple[RenderableType, RenderableType]:
+        """Format a tool use for display during session resume.
+
+        Simple wrapper that creates a ToolUseEvent from raw data.
+        """
+        event = ToolUseEvent(
+            tool_use_id="",  # Not needed for formatting
+            tool_name=tool_name,
+            tool_input=tool_input,
+        )
+        return self._formatter.format_tool_use(event)
+
     def _format_tool_result(
         self, event: ToolResultEvent, session_id: str = None
     ) -> RenderableType | tuple[RenderableType, RenderableType]:
@@ -687,6 +771,20 @@ class BalloonsApp(App):
                     break
         return self._formatter.format_tool_result(event, last_tool_use)
 
+    def _format_tool_result_for_resume(
+        self, result: str
+    ) -> RenderableType | tuple[RenderableType, RenderableType]:
+        """Format a tool result for display during session resume.
+
+        Simple wrapper that creates a ToolResultEvent from raw data.
+        """
+        event = ToolResultEvent(
+            tool_use_id="",  # Not needed for formatting
+            result=result,
+        )
+        # No last_tool_use context available during resume
+        return self._formatter.format_tool_result(event, None)
+
     async def _handle_new_session(self, prompt: str = "") -> None:
         """Create a new session, optionally with an initial prompt."""
         chat_log = self.query_one("#chat-log", ChatLog)
@@ -702,7 +800,7 @@ class BalloonsApp(App):
         chat_log.clear()
         context_tree.load_all_sessions(self.session)
         breadcrumb.set_session(self.session)
-        status_bar.set_status("New session created")
+        status_bar.set_status("New session created", animate=False)
 
         # If a prompt was provided, send it
         if prompt:
@@ -712,9 +810,9 @@ class BalloonsApp(App):
         """Show the current working directory for the session."""
         status_bar = self.query_one("#status-bar", StatusBar)
         if self.session.working_directory:
-            status_bar.set_status(f"Working directory: {self.session.working_directory}")
+            status_bar.set_status(f"Working directory: {self.session.working_directory}", animate=False)
         else:
-            status_bar.set_status(f"No working directory set (process cwd: {os.getcwd()})")
+            status_bar.set_status(f"No working directory set (process cwd: {os.getcwd()})", animate=False)
 
     def _handle_cd_command(self, path_arg: str) -> None:
         """Change the working directory for the session."""
@@ -723,9 +821,9 @@ class BalloonsApp(App):
         if not path_arg:
             # No argument - clear working directory or show current
             if self.session.working_directory:
-                status_bar.set_status(f"Working directory: {self.session.working_directory}")
+                status_bar.set_status(f"Working directory: {self.session.working_directory}", animate=False)
             else:
-                status_bar.set_status("No working directory set. Use :cd <path> to set one.")
+                status_bar.set_status("No working directory set. Use :cd <path> to set one.", animate=False)
             return
 
         # Expand ~ and resolve relative paths
@@ -750,7 +848,7 @@ class BalloonsApp(App):
             self.session.working_directory = str(target_path)
             self.session.save()
             status_bar.update_working_directory(str(target_path))
-            status_bar.set_status(f"Changed to: {target_path}")
+            status_bar.set_status(f"Changed to: {target_path}", animate=False)
 
         except Exception as e:
             status_bar.set_error(f"Invalid path: {e}")
@@ -773,8 +871,11 @@ class BalloonsApp(App):
             status_bar.set_error("No messages to summarize")
             return
 
-        status_bar.set_status(f"Generating {mode} summary...")
+        status_bar.set_status(f"Generating {mode} summary...", animate=True)
         input_box.set_disabled(True)
+        # Force UI refresh before starting long operation
+        self.refresh()
+        await asyncio.sleep(0)
         debug_log.info(f"Starting {mode} summary generation", category="command")
 
         try:
@@ -816,7 +917,7 @@ class BalloonsApp(App):
             context_tree = self.query_one("#context-tree", ContextTree)
             context_tree.load_all_sessions(self.session)
 
-            status_bar.set_status(f"Session titled: {title}")
+            status_bar.set_status(f"Session titled: {title}", animate=False)
 
         except Exception as e:
             debug_log.error(f"Summary failed: {e}", category="command")
@@ -920,6 +1021,10 @@ class BalloonsApp(App):
         # Mark this as a query_with special case
         ctx.query_with = True
         self._streaming_contexts[new_session.id] = ctx
+
+        # Update tree streaming indicator and status bar count
+        context_tree.set_session_streaming(new_session.id, True)
+        self._update_streaming_count()
 
         # Disable input during streaming
         input_box.set_disabled(True)
@@ -1059,6 +1164,10 @@ class BalloonsApp(App):
             )
             self._streaming_contexts[child_session.id] = ctx
 
+            # Update tree streaming indicator and status bar count
+            context_tree.set_session_streaming(child_session.id, True)
+            self._update_streaming_count()
+
             # Start the child's tree turns
             context_tree.start_turn(child_session.id, turn_idx, "user")
             context_tree.finish_turn(
@@ -1105,6 +1214,106 @@ class BalloonsApp(App):
             return f"Error generating summary: {e}\n\nRaw context:\n" + "\n\n".join(context_parts)
 
         return "".join(summary_parts) if summary_parts else ""
+
+    async def _build_context_with_summaries(
+        self,
+        indexed_messages: list[tuple],
+        status_bar,
+        input_box,
+    ) -> list[Message]:
+        """Build context messages with summaries inserted at their original positions.
+
+        This handles the interleaving of COPY messages (kept verbatim) and COMPRESS
+        messages (summarized). Non-contiguous COMPRESS groups become separate summaries,
+        each inserted at the position of the first message in that group.
+
+        Args:
+            indexed_messages: List of (Message, original_index) tuples from
+                              get_selected_messages_with_indices()
+            status_bar: StatusBar widget for progress updates
+            input_box: InputBox widget to disable during summarization
+
+        Returns:
+            List of Message objects in correct order, with COMPRESS messages
+            replaced by summary messages at appropriate positions.
+        """
+        if not indexed_messages:
+            return []
+
+        # Separate COPY and COMPRESS messages, keeping indices
+        copy_items = []  # (msg, idx)
+        compress_items = []  # (msg, idx)
+
+        for msg, idx in indexed_messages:
+            if msg.context_mode == ContextMode.COPY:
+                copy_items.append((msg, idx))
+            elif msg.context_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
+                compress_items.append((msg, idx))
+
+        # Group contiguous COMPRESS messages
+        # Contiguous = consecutive original indices
+        compress_groups = []  # list of [(msg, idx), ...]
+        if compress_items:
+            compress_items.sort(key=lambda x: x[1])
+            current_group = [compress_items[0]]
+
+            for i in range(1, len(compress_items)):
+                msg, idx = compress_items[i]
+                _, prev_idx = current_group[-1]
+
+                # Check if contiguous (allowing for gaps where COPY messages are)
+                # Two COMPRESS messages are in the same group if there are no
+                # COPY messages between them
+                copy_indices = {i for _, i in copy_items}
+                has_copy_between = any(prev_idx < ci < idx for ci in copy_indices)
+
+                if has_copy_between:
+                    # Start new group
+                    compress_groups.append(current_group)
+                    current_group = [(msg, idx)]
+                else:
+                    # Continue current group
+                    current_group.append((msg, idx))
+
+            compress_groups.append(current_group)
+
+        # Generate summaries for each COMPRESS group
+        summary_items = []  # (summary_msg, insert_idx)
+        if compress_groups:
+            status_bar.set_status("Compressing context...", animate=True)
+            input_box.set_disabled(True)
+            # Force UI refresh before starting long operation
+            self.refresh()
+            await asyncio.sleep(0)
+
+            for i, group in enumerate(compress_groups):
+                group_messages = [msg for msg, _ in group]
+                first_idx = group[0][1]  # Position of first message in group
+
+                # Update status with progress
+                if len(compress_groups) > 1:
+                    status_bar.set_status(f"Compressing context ({i+1}/{len(compress_groups)})...", animate=True)
+                    self.refresh()
+                    await asyncio.sleep(0)
+
+                summary = await self._generate_context_summary(group_messages)
+
+                if summary:
+                    summary_msg = Message(
+                        role="user",
+                        content=f"[Context Summary]\n{summary}",
+                        content_blocks=[TextBlock(text=f"[Context Summary]\n{summary}")],
+                    )
+                    summary_items.append((summary_msg, first_idx))
+
+            status_bar.set_status("", animate=False)
+            input_box.set_disabled(False)
+
+        # Combine COPY messages and summaries, sorted by original index
+        all_items = copy_items + summary_items
+        all_items.sort(key=lambda x: x[1])
+
+        return [msg for msg, _ in all_items]
 
     async def _generate_merge_summary(self, fork_session: Session, user_prompt: str = "") -> str:
         """Generate a summary of what was accomplished in a fork.
@@ -1211,6 +1420,10 @@ Summary:"""
             )
             self._streaming_contexts[child_session.id] = ctx
 
+            # Update tree streaming indicator and status bar count
+            context_tree.set_session_streaming(child_session.id, True)
+            self._update_streaming_count()
+
             # Start the child's tree turns
             context_tree.start_turn(child_session.id, turn_idx, "user")
             context_tree.finish_turn(
@@ -1245,7 +1458,7 @@ Summary:"""
 
         Uses context modes from tree selection:
         - COPY: Include verbatim
-        - COMPRESS: LLM summarizes first
+        - COMPRESS: LLM summarizes first (with summaries at original positions)
         - DROP: Exclude
 
         Args:
@@ -1264,13 +1477,9 @@ Summary:"""
             status_bar.set_error("Cannot fork from a merged session")
             return
 
-        # Get selected messages with context modes
-        selected_messages = context_tree.get_selected_messages()
+        # Get selected messages with their original indices
+        indexed_messages = context_tree.get_selected_messages_with_indices()
         allowed_tools = tool_bar.get_enabled_tools()
-
-        # Separate by context mode
-        copy_messages = [m for m in selected_messages if m.context_mode == ContextMode.COPY]
-        compress_messages = [m for m in selected_messages if m.context_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE)]
 
         # Track fork point (current turn count in parent)
         fork_point = len(self.session.messages)
@@ -1282,27 +1491,14 @@ Summary:"""
         child_session.fork_status = "active"
         child_session.fork_point_turn = fork_point
 
-        # Copy COPY-marked messages verbatim
-        for msg in copy_messages:
+        # Build context with proper interleaving of COPY and summarized COMPRESS messages
+        context_messages = await self._build_context_with_summaries(
+            indexed_messages, status_bar, input_box
+        )
+
+        # Add all context messages to the child session
+        for msg in context_messages:
             child_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
-
-        # Generate summaries for COMPRESS-marked messages
-        if compress_messages:
-            status_bar.set_status("Compressing context...")
-            input_box.set_disabled(True)
-
-            summary = await self._generate_context_summary(compress_messages)
-
-            if summary:
-                # Add summary as context at the start
-                child_session.messages.insert(0, Message(
-                    role="user",
-                    content=f"[Context Summary]\n{summary}",
-                    content_blocks=[TextBlock(text=f"[Context Summary]\n{summary}")],
-                ))
-
-            status_bar.set_status("")
-            input_box.set_disabled(False)
 
         child_session.save()
 
@@ -1339,6 +1535,10 @@ Summary:"""
             )
             self._streaming_contexts[child_session.id] = ctx
 
+            # Update tree streaming indicator and status bar count
+            context_tree.set_session_streaming(child_session.id, True)
+            self._update_streaming_count()
+
             # Start tree turns for child
             context_tree.start_turn(child_session.id, turn_idx, "user")
             context_tree.finish_turn(
@@ -1353,7 +1553,7 @@ Summary:"""
                 messages=child_session.messages,
                 allowed_tools=allowed_tools,
             )
-            status_bar.set_status(f"Fork '{name or child_session.id[:8]}' started in background")
+            status_bar.set_status(f"Fork '{name or child_session.id[:8]}' started in background", animate=False)
         else:
             # Foreground mode - switch to child
             breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
@@ -1397,7 +1597,9 @@ Summary:"""
             return
 
         # Generate merge summary via LLM
-        status_bar.set_status("Generating merge summary...")
+        status_bar.set_status("Generating merge summary...", animate=True)
+        self.refresh()
+        await asyncio.sleep(0)
         merge_message = await self._generate_merge_summary(self.session, prompt)
 
         # Track merge point in parent
@@ -1426,12 +1628,14 @@ Summary:"""
 
         # Note: merge marker is reconstructed by load_history from parent.children
 
-        status_bar.set_status(f"Merged from '{fork_name}'")
+        status_bar.set_status(f"Merged from '{fork_name}'", animate=False)
 
     async def _handle_derive_command(self, prompt: str) -> None:
         """Create a new independent session with selected context.
 
         Like fork but no parent relationship - won't merge back.
+        Context is built with summaries inserted at their original positions,
+        preserving message order and interleaving.
         """
         chat_log = self.query_one("#chat-log", ChatLog)
         context_tree = self.query_one("#context-tree", ContextTree)
@@ -1439,37 +1643,21 @@ Summary:"""
         status_bar = self.query_one("#status-bar", StatusBar)
         tool_bar = self.query_one("#tool-bar", ToolBar)
 
-        # Get selected messages with context modes
-        selected_messages = context_tree.get_selected_messages()
+        # Get selected messages with their original indices
+        indexed_messages = context_tree.get_selected_messages_with_indices()
         allowed_tools = tool_bar.get_enabled_tools()
-
-        # Separate by context mode
-        copy_messages = [m for m in selected_messages if m.context_mode == ContextMode.COPY]
-        compress_messages = [m for m in selected_messages if m.context_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE)]
 
         # Create new independent session (no parent_id)
         new_session = Session()
 
-        # Copy COPY-marked messages verbatim
-        for msg in copy_messages:
+        # Build context with proper interleaving of COPY and summarized COMPRESS messages
+        context_messages = await self._build_context_with_summaries(
+            indexed_messages, status_bar, input_box
+        )
+
+        # Add all context messages to the new session
+        for msg in context_messages:
             new_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
-
-        # Generate summaries for COMPRESS-marked messages
-        if compress_messages:
-            status_bar.set_status("Compressing context...")
-            input_box.set_disabled(True)
-
-            summary = await self._generate_context_summary(compress_messages)
-
-            if summary:
-                new_session.messages.insert(0, Message(
-                    role="user",
-                    content=f"[Context Summary]\n{summary}",
-                    content_blocks=[TextBlock(text=f"[Context Summary]\n{summary}")],
-                ))
-
-            status_bar.set_status("")
-            input_box.set_disabled(False)
 
         new_session.save()
 
@@ -1504,9 +1692,9 @@ Summary:"""
                     f.get("name") or f.get("session_id", "")[:8]
                     for f in forks
                 )
-                status_bar.set_status(f"Forks: {fork_list}")
+                status_bar.set_status(f"Forks: {fork_list}", animate=False)
             else:
-                status_bar.set_status("No forks in current session")
+                status_bar.set_status("No forks in current session", animate=False)
             return
 
         # Find matching fork by name or ID prefix
@@ -1666,42 +1854,36 @@ Summary:"""
 
     def on_with_widget_child_clicked(self, event: WithWidget.ChildClicked) -> None:
         """Handle clicking on WithWidget to navigate to child session."""
-        if self.streaming:
-            return
-
         child_session = Session.load(event.child_session_id)
         if child_session:
             self._switch_to_session(child_session)
 
     def on_with_result_widget_child_clicked(self, event: WithResultWidget.ChildClicked) -> None:
         """Handle clicking on WithResultWidget to navigate to child session."""
-        if self.streaming:
-            return
-
         child_session = Session.load(event.child_session_id)
         if child_session:
             self._switch_to_session(child_session)
 
     def on_fork_marker_child_clicked(self, event: ForkMarker.ChildClicked) -> None:
         """Handle clicking on ForkMarker to navigate to the fork."""
-        if self.streaming:
-            return
-
         child_session = Session.load(event.child_session_id)
         if child_session:
             self._switch_to_session(child_session)
 
     def on_merge_marker_child_clicked(self, event: MergeMarker.ChildClicked) -> None:
         """Handle clicking on MergeMarker to navigate to the (read-only) fork."""
-        if self.streaming:
-            return
-
         child_session = Session.load(event.child_session_id)
         if child_session:
             self._switch_to_session(child_session)
 
     def _switch_to_session(self, session: Session) -> None:
-        """Switch to a different session."""
+        """Switch to a different session.
+
+        Supports switching while other sessions stream in background:
+        - Marks old session's streaming context as inactive (continues streaming)
+        - If new session is streaming, resumes display and marks it active
+        - Updates input/status based on whether NEW session is streaming
+        """
         old_session_id = self._manager._active_session_id
         debug_log.info(
             f"Switching session: {old_session_id[:8] if old_session_id else 'none'}... → {session.id[:8]}...",
@@ -1719,6 +1901,19 @@ Summary:"""
         context_tree = self.query_one("#context-tree", ContextTree)
         request_pane = self.query_one("#request-pane", RequestPane)
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
+        input_box = self.query_one("#input-box", InputBox)
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        # Mark OLD session's streaming context as inactive (if streaming)
+        if old_session_id:
+            old_ctx = self._streaming_contexts.get(old_session_id)
+            if old_ctx:
+                old_ctx.is_active = False
+                debug_log.info(
+                    f"Backgrounding streaming session {old_session_id[:8]}",
+                    category="stream",
+                    session_id=old_session_id,
+                )
 
         # Register session with manager if not already known
         if session.id not in self._manager._sessions:
@@ -1733,6 +1928,35 @@ Summary:"""
         # Load session messages and filter by selection
         chat_log.clear()
         chat_log.load_history(session.messages, session=session)
+
+        # Check if NEW session is currently streaming
+        new_ctx = self._streaming_contexts.get(session.id)
+        if new_ctx:
+            # Resume streaming display for this session
+            new_ctx.is_active = True
+            self.streaming = True
+            input_box.set_disabled(True)
+            status_bar.set_streaming(True)
+            debug_log.info(
+                f"Resuming streaming session {session.id[:8]} with {len(new_ctx.content)} chars, {len(new_ctx.tool_events)} tools",
+                category="stream",
+                session_id=session.id,
+            )
+            # Resume the streaming display with user prompt, tool events, and accumulated content
+            # For query_with, don't show user message (it's ephemeral)
+            user_prompt = "" if new_ctx.query_with else new_ctx.prompt
+            chat_log.resume_streaming(
+                user_prompt,
+                new_ctx.content,
+                tool_events=new_ctx.tool_events,
+                format_tool_use_fn=self._format_tool_use_for_resume,
+                format_tool_result_fn=self._format_tool_result_for_resume,
+            )
+        else:
+            # New session is not streaming - enable input
+            self.streaming = False
+            input_box.set_disabled(False)
+            status_bar.set_streaming(False)
 
         # Update header and request pane with session info
         chat_log.set_session_title(session.title)
@@ -1812,10 +2036,7 @@ Summary:"""
 
     def on_context_tree_session_activated(self, event: ContextTree.SessionActivated) -> None:
         """Handle clicking on a session - switch to it."""
-        if self.streaming:
-            return
-
-        # Switch to this session
+        # Switch to this session (works even while other sessions stream)
         self._switch_to_session(event.session)
 
     def on_context_tree_turn_inspected(self, event: ContextTree.TurnInspected) -> None:
@@ -1874,7 +2095,10 @@ Summary:"""
                 chat_log.highlight_tool(tool_use_id)
             request_pane.show_json(event.turn_data)
         elif node_type == "merge":
-            # Show merge summary in request pane
+            # Scroll to merge marker in chat and show in request pane
+            child_session_id = event.turn_data.get("session_id", "")
+            if child_session_id:
+                chat_log.scroll_to_merge_marker(child_session_id)
             chat_log.clear_highlights()
             request_pane.show_json(event.turn_data)
         else:
@@ -1883,9 +2107,6 @@ Summary:"""
 
     def on_breadcrumb_segment_clicked(self, event: Breadcrumb.SegmentClicked) -> None:
         """Handle clicking a breadcrumb segment to navigate up."""
-        if self.streaming:
-            return
-
         target_session = Session.load(event.session_id)
         if target_session:
             self._switch_to_session(target_session)
@@ -1918,12 +2139,28 @@ Summary:"""
         self.action_resize_tree(event.delta_x)
 
     def on_chat_log_following_changed(self, event: ChatLog.FollowingChanged) -> None:
-        """Update status bar when chat log following state changes."""
+        """Update status bar and more-below indicator when chat log following state changes."""
         status_bar = self.query_one("#status-bar", StatusBar)
         status_bar.following = event.following
+        indicator = self.query_one("#more-below", MoreBelowIndicator)
+        if event.following:
+            # Hide indicator when following (at bottom)
+            indicator.hide()
+        else:
+            # Show indicator when not following (content below)
+            indicator.show_more_below()
+
+    def on_chat_log_new_content_while_not_following(self, event: ChatLog.NewContentWhileNotFollowing) -> None:
+        """Show new messages indicator when content arrives while not following."""
+        indicator = self.query_one("#more-below", MoreBelowIndicator)
+        indicator.show_new_messages()
 
     def on_status_bar_follow_clicked(self, event: StatusBar.FollowClicked) -> None:
         """Handle click on Follow indicator - scroll to bottom."""
+        self.action_scroll_to_bottom()
+
+    def on_more_below_indicator_clicked(self, event: MoreBelowIndicator.Clicked) -> None:
+        """Handle click on more-below indicator - scroll to bottom."""
         self.action_scroll_to_bottom()
 
     def action_scroll_to_bottom(self) -> None:
@@ -1931,6 +2168,9 @@ Summary:"""
         chat_log = self.query_one("#chat-log", ChatLog)
         chat_log.following = True
         chat_log.scroll_end(animate=False)
+        # Hide the more-below indicator
+        indicator = self.query_one("#more-below", MoreBelowIndicator)
+        indicator.hide()
 
     def action_quit(self) -> None:
         """Quit the application."""

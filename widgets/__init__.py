@@ -1,4 +1,4 @@
-from .chat_log import ChatLog
+from .chat_log import ChatLog, MoreBelowIndicator, NewMessagesIndicator
 from .input_box import InputBox
 from .status_bar import StatusBar
 from .context_tree import ContextTree
@@ -15,6 +15,8 @@ from .breadcrumb import Breadcrumb
 
 __all__ = [
     "ChatLog",
+    "MoreBelowIndicator",
+    "NewMessagesIndicator",
     "InputBox",
     "StatusBar",
     "ContextTree",

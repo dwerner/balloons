@@ -17,6 +17,7 @@ class StatusBar(Static):
     context_window: reactive[int] = reactive(200000)
     cost: reactive[float] = reactive(0.0)
     streaming: reactive[bool] = reactive(False)
+    streaming_count: reactive[int] = reactive(0)  # Total sessions streaming (including background)
     status: reactive[str] = reactive("")
     _status_animated: bool = True
     error: reactive[str] = reactive("")
@@ -59,6 +60,14 @@ class StatusBar(Static):
         else:
             status_indicator = ""
 
+        # Show background streaming count (excluding focused session)
+        background_count = self.streaming_count - (1 if self.streaming else 0)
+        if background_count > 0:
+            spinner = self._spinner_chars[self._spinner_frame]
+            bg_indicator = f" [yellow]{spinner} {background_count} bg[/]"
+        else:
+            bg_indicator = ""
+
         # Show working directory (always displayed)
         wd_path = self.working_directory or "."
         parts = wd_path.split("/")
@@ -76,6 +85,7 @@ class StatusBar(Static):
             f"${self.cost:.4f}"
             f"{wd_display}"
             f"{follow_indicator}"
+            f"{bg_indicator}"
             f"{status_indicator}"
         )
 
@@ -103,6 +113,15 @@ class StatusBar(Static):
         if streaming:
             self._start_spinner()
         else:
+            self._stop_spinner()
+
+    def set_streaming_count(self, count: int):
+        """Set total number of streaming sessions (foreground + background)."""
+        self.streaming_count = count
+        # Start spinner if any sessions streaming
+        if count > 0:
+            self._start_spinner()
+        elif not self.streaming and not self.status:
             self._stop_spinner()
 
     def set_status(self, status: str, animate: bool = True):

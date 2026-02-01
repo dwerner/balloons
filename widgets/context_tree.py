@@ -106,6 +106,21 @@ class ContextTree(Vertical):
         background: $background;
     }
 
+    /* Subtle hover - slight darkening to preserve colored text visibility */
+    ContextTree > SelectableTree > .tree--highlight {
+        /* no text-style change - preserve original colors */
+    }
+
+    ContextTree > SelectableTree > .tree--highlight-line {
+        background: #1a1a2e;
+    }
+
+    /* Override cursor (focused node) - slightly more visible dark background */
+    ContextTree > SelectableTree > .tree--cursor {
+        background: #252540;
+        text-style: none;
+    }
+
     ContextTree > #search-input {
         dock: top;
         display: none;
@@ -193,6 +208,8 @@ class ContextTree(Vertical):
         self._current_session_id: str | None = None
         self._search_query: str = ""
         self._sort_order: str = initial_sort_order
+        # Sessions currently streaming (for visual indicator)
+        self._streaming_sessions: set[str] = set()
 
     def compose(self):
         yield Input(placeholder="Search sessions...", id="search-input")
@@ -232,7 +249,7 @@ class ContextTree(Vertical):
             self._load_session_data(current_session, is_current=True)
 
         # Load all sessions into _sessions dict
-        for session_id, created, model, _title in all_sessions:
+        for session_id, created, model, _title, _last_modified in all_sessions:
             session = Session.load(session_id)
             if session:
                 is_current = session_id == current_session.id
@@ -263,6 +280,13 @@ class ContextTree(Vertical):
             prefix = ""
             status = ""
 
+        # Show streaming indicator
+        is_streaming = session.id in self._streaming_sessions
+        if is_streaming:
+            streaming_indicator = "[yellow]⟳[/] "
+        else:
+            streaming_indicator = ""
+
         # Build label: fork name or title (if present), session ID prefix, msg count, datetime
         if session.fork_name:
             name_part = session.fork_name
@@ -281,9 +305,9 @@ class ContextTree(Vertical):
 
         # Highlight active session
         if is_active:
-            return f"{prefix}[bold cyan]{label}[/]"
+            return f"{prefix}{streaming_indicator}[bold cyan]{label}[/]"
         else:
-            return f"{prefix}{label}"
+            return f"{prefix}{streaming_indicator}{label}"
 
     def _load_session_data(self, session: Session, is_current: bool) -> None:
         """Load session data into _sessions dict without adding to tree.
@@ -392,9 +416,13 @@ class ContextTree(Vertical):
             for merge in merge_points.get(idx, []):
                 self._add_merge_node(session_node, session.id, merge)
 
-        # Add any forks at the end (fork_point >= len(messages))
+        # Add any forks at the end (fork_point == len(messages))
         for fork in fork_points.get(len(session.messages), []):
             self._add_fork_node(session_node, session.id, fork, tree)
+
+        # Add any merges at the end (merge_point == len(messages))
+        for merge in merge_points.get(len(session.messages), []):
+            self._add_merge_node(session_node, session.id, merge)
 
         self._sessions[session.id] = {
             "session": session,
@@ -1196,6 +1224,16 @@ class ContextTree(Vertical):
         # Get session data sorted according to current order
         sorted_session_ids = self._get_sorted_session_ids()
 
+        # Determine which sessions to expand:
+        # - Always expand current session
+        # - Also expand parent session if current is a fork
+        sessions_to_expand = {self._current_session_id}
+        current_data = self._sessions.get(self._current_session_id)
+        if current_data:
+            current_session = current_data["session"]
+            if current_session.parent_id:
+                sessions_to_expand.add(current_session.parent_id)
+
         # Rebuild tree nodes for each session
         for session_id in sorted_session_ids:
             session_data = self._sessions[session_id]
@@ -1210,8 +1248,8 @@ class ContextTree(Vertical):
             )
             session_data["node"] = session_node
 
-            # Expand current session
-            if is_current:
+            # Expand current session and its parent (if current is a fork)
+            if session_id in sessions_to_expand:
                 session_node.expand()
 
             # Rebuild turn nodes
@@ -1318,6 +1356,16 @@ class ContextTree(Vertical):
         tree = self.query_one("#turn-tree", SelectableTree)
         tree.root.remove_children()
 
+        # Determine which sessions to expand:
+        # - Always expand current session
+        # - Also expand parent session if current is a fork
+        sessions_to_expand = {self._current_session_id}
+        current_data = self._sessions.get(self._current_session_id)
+        if current_data:
+            current_session = current_data["session"]
+            if current_session.parent_id:
+                sessions_to_expand.add(current_session.parent_id)
+
         # Use sorted session order
         sorted_session_ids = self._get_sorted_session_ids()
 
@@ -1360,8 +1408,8 @@ class ContextTree(Vertical):
                 # Add content block children
                 self._add_content_block_nodes(turn_node, session.id, idx, content_blocks)
 
-            # Expand session if it has matches or is current
-            if matching_turns or is_current:
+            # Expand session if it has matches, is current, or is parent of current fork
+            if matching_turns or session_id in sessions_to_expand:
                 session_node.expand()
 
         self._update_root_label()
@@ -1393,16 +1441,32 @@ class ContextTree(Vertical):
         Returns Message objects with context_mode and content_blocks set
         from the original session message data.
         """
+        # Use the indexed version and strip the indices
+        indexed = self.get_selected_messages_with_indices()
+        return [msg for msg, _idx in indexed]
+
+    def get_selected_messages_with_indices(self) -> list[tuple]:
+        """Get included messages with their original indices for context building.
+
+        Returns list of (Message, original_index) tuples, sorted by original index.
+        This preserves positioning information for proper context reconstruction
+        when some messages are summarized and others are copied.
+
+        Also includes merge marker content at their merge points, so the LLM
+        knows about work done in merged forks.
+        """
         from models import Message, TextBlock
-        messages = []
+        results = []
 
         # Collect all included turns with their session order
         # Only include turns from the current session
-        included_turns = []
+        included_items = []  # Will hold both turns and merge markers
         for session_id, session_data in self._sessions.items():
             if session_id != self._current_session_id:
                 continue
             session = session_data["session"]
+
+            # Collect turns
             for turn in session_data["turns"]:
                 turn_key = (session_id, turn["idx"])
                 mode = self._context_modes.get(turn_key, ContextMode.DROP)
@@ -1412,8 +1476,10 @@ class ContextTree(Vertical):
                     if turn["idx"] < len(session.messages):
                         orig_msg = session.messages[turn["idx"]]
 
-                    included_turns.append({
+                    included_items.append({
+                        "type": "turn",
                         "session_created": session.created,
+                        "sort_key": turn["idx"],  # Integer for turns
                         "turn_idx": turn["idx"],
                         "role": turn["role"],
                         "content": turn["content"],
@@ -1421,34 +1487,90 @@ class ContextTree(Vertical):
                         "orig_msg": orig_msg,
                     })
 
-        # Sort by session date then turn index
-        included_turns.sort(key=lambda t: (t["session_created"], t["turn_idx"]))
+            # Collect merge markers from session's children
+            for child in session.children:
+                if child.get("status") != "merged":
+                    continue
+                fork_id = child.get("session_id", "")
+                merge_point = child.get("merge_point", -1)
+                if merge_point < 0:
+                    continue
 
-        for turn in included_turns:
-            orig = turn["orig_msg"]
+                merge_key = ("merge", session.id, fork_id)
+                mode = self._merge_modes.get(merge_key, ContextMode.COPY)
+                if mode == ContextMode.DROP:
+                    continue
+
+                # Load the fork session to get the merge message
+                fork_session = Session.load(fork_id)
+                if not fork_session or not fork_session.merge_message:
+                    continue
+
+                fork_name = child.get("name") or fork_session.get_fork_display_name()
+                merge_content = f"[Merged from fork '{fork_name}']\n{fork_session.merge_message}"
+
+                included_items.append({
+                    "type": "merge",
+                    "session_created": session.created,
+                    "sort_key": merge_point + 0.5,  # Place after the turn at merge_point
+                    "turn_idx": merge_point,  # Use merge_point for index
+                    "role": "user",  # Treat as user message for context
+                    "content": merge_content,
+                    "mode": mode,
+                    "orig_msg": None,
+                    "fork_id": fork_id,
+                    "fork_name": fork_name,
+                })
+
+        # Sort by session date then sort_key (turns are integers, merges are .5)
+        included_items.sort(key=lambda t: (t["session_created"], t["sort_key"]))
+
+        for item in included_items:
+            orig = item.get("orig_msg")
             if orig:
                 # Use rich content from original message
                 msg = Message(
-                    role=turn["role"],
-                    content=turn["content"],
+                    role=item["role"],
+                    content=item["content"],
                     content_blocks=orig.content_blocks,
-                    context_mode=turn["mode"],
+                    context_mode=item["mode"],
                     summary=orig.summary,
                 )
             else:
-                # Fallback to text-only
+                # Fallback to text-only (includes merge markers)
                 msg = Message(
-                    role=turn["role"],
-                    content=turn["content"],
-                    content_blocks=[TextBlock(text=turn["content"])],
-                    context_mode=turn["mode"],
+                    role=item["role"],
+                    content=item["content"],
+                    content_blocks=[TextBlock(text=item["content"])],
+                    context_mode=item["mode"],
                 )
-            messages.append(msg)
+            results.append((msg, item["turn_idx"]))
 
-        return messages
+        return results
+
+    def set_session_streaming(self, session_id: str, is_streaming: bool) -> None:
+        """Update the streaming indicator for a session.
+
+        Called when a session starts or stops streaming.
+        """
+        if is_streaming:
+            self._streaming_sessions.add(session_id)
+        else:
+            self._streaming_sessions.discard(session_id)
+
+        # Update session label to show/hide streaming indicator
+        if session_id in self._sessions:
+            session_data = self._sessions[session_id]
+            is_active = session_data.get("is_current", False)
+            session_data["node"].label = self._make_session_label(
+                session_data["session"], is_active
+            )
 
     def set_active_session(self, session_id: str) -> None:
-        """Set the active session and update visual highlighting."""
+        """Set the active session and update visual highlighting.
+
+        Also sets context modes for the new session's turns to COPY (default include).
+        """
         old_session_id = self._current_session_id
         self._current_session_id = session_id
 
@@ -1458,11 +1580,19 @@ class ContextTree(Vertical):
             old_data["is_current"] = False
             old_data["node"].label = self._make_session_label(old_data["session"], False)
 
-        # Update new session's label (add highlight)
+        # Update new session's label (add highlight) and set context modes
         if session_id in self._sessions:
             new_data = self._sessions[session_id]
             new_data["is_current"] = True
             new_data["node"].label = self._make_session_label(new_data["session"], True)
+
+            # Set context modes for new session's turns to COPY if not already set
+            # This ensures turns are included when forking
+            for turn in new_data["turns"]:
+                turn_key = (session_id, turn["idx"])
+                if turn_key not in self._context_modes:
+                    self._context_modes[turn_key] = ContextMode.COPY
+                    self._update_turn_label(session_id, turn["idx"])
 
     def create_new_session(self) -> Session:
         """Create a new session and make it current."""

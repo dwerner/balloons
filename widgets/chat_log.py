@@ -32,7 +32,7 @@ class ToolUseWidget(Static):
     ToolUseWidget {
         padding: 0 1;
         margin: 0 0 0 2;
-        background: #1a2a1a;
+        background: #1e1e1e;
         border-left: thick $success;
     }
 
@@ -41,7 +41,7 @@ class ToolUseWidget(Static):
     }
 
     ToolUseWidget.highlighted {
-        background: #2a4a2a;
+        background: #2a2a2a;
         border: wide $warning;
     }
 
@@ -68,7 +68,11 @@ class ToolUseWidget(Static):
 
     /* Hover feedback - background change only, no border changes */
     ToolUseWidget:hover {
-        background: #2a3a2a;
+        background: #252525;
+    }
+
+    ToolUseWidget:focus {
+        background: #232323;
     }
     """
 
@@ -136,7 +140,7 @@ class ToolResultWidget(Static):
     ToolResultWidget {
         padding: 0 1;
         margin: 0 0 1 4;
-        background: #1a1a2a;
+        background: #1a1a1a;
         border-left: thick $primary;
         max-height: 15;
         overflow-y: auto;
@@ -147,7 +151,7 @@ class ToolResultWidget(Static):
     }
 
     ToolResultWidget.highlighted {
-        background: #2a2a4a;
+        background: #2a2a2a;
         border: wide $warning;
     }
 
@@ -170,7 +174,11 @@ class ToolResultWidget(Static):
 
     /* Hover feedback - background change only, no border changes */
     ToolResultWidget:hover {
-        background: #2a2a3a;
+        background: #252525;
+    }
+
+    ToolResultWidget:focus {
+        background: #232323;
     }
 
     ToolResultWidget.expanded {
@@ -243,13 +251,25 @@ class MessageWidget(Static):
     }
 
     MessageWidget.user {
-        background: $surface;
+        background: #1a1a1a;
         color: $text-muted;
     }
 
     MessageWidget.assistant {
-        background: $panel;
+        background: #1e1e1e;
         color: $text;
+    }
+
+    MessageWidget:focus {
+        background: #252525;
+    }
+
+    MessageWidget.user:focus {
+        background: #1f1f1f;
+    }
+
+    MessageWidget.assistant:focus {
+        background: #232323;
     }
 
     MessageWidget.streaming {
@@ -280,7 +300,15 @@ class MessageWidget(Static):
 
     /* Hover feedback - background change only, no border changes */
     MessageWidget:hover {
-        background: #2a3a3a;
+        background: #252525;
+    }
+
+    MessageWidget.user:hover {
+        background: #222222;
+    }
+
+    MessageWidget.assistant:hover {
+        background: #262626;
     }
     """
 
@@ -369,6 +397,72 @@ class SessionHeader(Static):
         self.refresh()
 
 
+class MoreBelowIndicator(Static):
+    """Floating indicator shown when there's more content below the viewport."""
+
+    DEFAULT_CSS = """
+    MoreBelowIndicator {
+        dock: bottom;
+        height: 1;
+        width: auto;
+        margin: 0 2 1 2;
+        padding: 0 2;
+        background: $primary-darken-2;
+        color: $text;
+        text-style: bold;
+        text-align: center;
+        display: none;
+    }
+
+    MoreBelowIndicator.visible {
+        display: block;
+    }
+
+    MoreBelowIndicator.new-messages {
+        background: $warning;
+    }
+    """
+
+    class Clicked(Message):
+        """Posted when the indicator is clicked."""
+        pass
+
+    def __init__(self, **kwargs):
+        super().__init__("↓ More below ↓", **kwargs)
+        self._new_message_count = 0
+
+    def show_more_below(self) -> None:
+        """Show the indicator for content below viewport."""
+        if self._new_message_count == 0:
+            self.update("↓ More below ↓")
+            self.remove_class("new-messages")
+        self.add_class("visible")
+
+    def show_new_messages(self) -> None:
+        """Show with new message styling."""
+        self._new_message_count += 1
+        self.add_class("new-messages")
+        if self._new_message_count == 1:
+            self.update("↓ New messages below ↓")
+        else:
+            self.update(f"↓ {self._new_message_count} new messages below ↓")
+        self.add_class("visible")
+
+    def hide(self) -> None:
+        """Hide the indicator and reset count."""
+        self.remove_class("visible")
+        self.remove_class("new-messages")
+        self._new_message_count = 0
+
+    def on_click(self) -> None:
+        """Handle click to scroll to bottom."""
+        self.post_message(self.Clicked())
+
+
+# Keep old name for backwards compatibility
+NewMessagesIndicator = MoreBelowIndicator
+
+
 class ChatLog(VerticalScroll):
     """Scrolling container for chat messages."""
 
@@ -385,6 +479,10 @@ class ChatLog(VerticalScroll):
         def __init__(self, turn_id: int) -> None:
             super().__init__()
             self.turn_id = turn_id
+
+    class NewContentWhileNotFollowing(Message):
+        """Posted when new content arrives while user is not following."""
+        pass
 
     following: reactive[bool] = reactive(True)  # True when auto-scrolling to new content
 
@@ -406,6 +504,14 @@ class ChatLog(VerticalScroll):
         """Post a message when following state changes."""
         if self.is_mounted:
             self.post_message(self.FollowingChanged(following))
+            # Clear new messages flag when we start following again
+            if following:
+                self._has_new_messages = False
+
+    def _notify_new_content(self) -> None:
+        """Called when new content is added - posts message if not following."""
+        if not self.following:
+            self.post_message(self.NewContentWhileNotFollowing())
 
     def compose(self):
         self._header = SessionHeader("", id="session-header")
@@ -436,7 +542,14 @@ class ChatLog(VerticalScroll):
     def _smart_scroll(self) -> None:
         """Scroll to end only if user hasn't scrolled up."""
         if self.following:
-            self.scroll_end(animate=False)
+            # Defer scroll until after layout refresh so scroll_end knows the true max_scroll_y
+            self.call_after_refresh(self._scroll_end_and_verify)
+
+    def _scroll_end_and_verify(self) -> None:
+        """Scroll to end and re-check if we're actually at the bottom."""
+        self.scroll_end(animate=False)
+        # Re-check after scroll in case content grew during the frame
+        self.call_later(self._check_at_bottom)
 
     def scroll_to_turn(self, turn_id: int) -> bool:
         """Scroll to a turn by ID and disable follow mode if not at the bottom.
@@ -481,6 +594,7 @@ class ChatLog(VerticalScroll):
         self._current_assistant_message = widget
         self.mount(widget)
         self._smart_scroll()
+        self._notify_new_content()
         return widget
 
     def append_to_current(self, text: str) -> None:
@@ -497,6 +611,71 @@ class ChatLog(VerticalScroll):
             self.mount(widget)
 
         self._current_assistant_message.append_text(text)
+        self._smart_scroll()
+        self._notify_new_content()
+
+    def resume_streaming(
+        self,
+        user_prompt: str,
+        accumulated_content: str,
+        tool_events: dict | None = None,
+        format_tool_use_fn=None,
+        format_tool_result_fn=None,
+    ) -> None:
+        """Resume streaming display when switching to a mid-stream session.
+
+        This is called when switching to a session that is currently streaming.
+        It shows the user message that started the turn, replays any tool events,
+        then creates a new assistant message with the accumulated content so far,
+        so subsequent `append_to_current` calls continue from where it left off.
+
+        Args:
+            user_prompt: The user's message that started this turn (empty for query_with)
+            accumulated_content: Text accumulated so far in the assistant response
+            tool_events: Dict of tool_use_id -> {name, input, result, index} for replay
+            format_tool_use_fn: Function to format tool use for display
+            format_tool_result_fn: Function to format tool result for display
+        """
+        # Add user message if present (not for query_with)
+        if user_prompt:
+            self._turn_counter += 1
+            user_widget = MessageWidget("user", user_prompt, turn_id=self._turn_counter)
+            self.mount(user_widget)
+
+        # Replay tool events in order (sorted by index)
+        if tool_events and format_tool_use_fn:
+            # Sort by index to preserve order
+            sorted_tools = sorted(tool_events.items(), key=lambda x: x[1].get("index", 0))
+            for tool_use_id, tool_data in sorted_tools:
+                # Add tool use
+                formatted = format_tool_use_fn(tool_data["name"], tool_data["input"])
+                if isinstance(formatted, tuple):
+                    tool_content, full_content = formatted
+                else:
+                    tool_content, full_content = formatted, None
+                self.add_tool_use(
+                    tool_data["name"], tool_content,
+                    tool_use_id=tool_use_id, full_content=full_content
+                )
+                # Add tool result if available
+                if tool_data.get("result") is not None and format_tool_result_fn:
+                    result_formatted = format_tool_result_fn(tool_data["result"])
+                    if isinstance(result_formatted, tuple):
+                        result_content, result_full = result_formatted
+                    else:
+                        result_content, result_full = result_formatted, None
+                    self.add_tool_result(
+                        result_content, tool_use_id=tool_use_id, full_content=result_full
+                    )
+
+        # Add partial assistant message with any accumulated text
+        self._turn_counter += 1
+        widget = MessageWidget(
+            "assistant", accumulated_content, streaming=True, turn_id=self._turn_counter
+        )
+        widget.add_class("streaming")
+        self._current_assistant_message = widget
+        self.mount(widget)
         self._smart_scroll()
 
     def add_tool_use(
@@ -530,6 +709,7 @@ class ChatLog(VerticalScroll):
         )
         self.mount(widget)
         self._smart_scroll()
+        self._notify_new_content()
         return widget
 
     def add_tool_result(
@@ -545,6 +725,7 @@ class ChatLog(VerticalScroll):
         )
         self.mount(widget)
         self._smart_scroll()
+        self._notify_new_content()
         return widget
 
     def finish_current_message(self) -> str:
@@ -645,17 +826,48 @@ class ChatLog(VerticalScroll):
     def load_history(self, messages: list, session: Session | None = None) -> None:
         """Load message history from a list of Message objects.
 
-        If session is provided, also reconstructs merge markers from the
-        session's children list.
+        If session is provided, also reconstructs fork and merge markers from
+        the session's children list.
         """
-        # Build merge points map: turn_index -> child info
-        merge_points: dict[int, dict] = {}
+        # Build fork and merge points maps: turn_index -> list of child infos
+        fork_points: dict[int, list[dict]] = {}
+        merge_points: dict[int, list[dict]] = {}
         if session:
             for child in session.children:
+                # Fork markers: all children have fork points
+                fork_point = child.get("fork_point", -1)
+                if fork_point >= 0:
+                    fork_points.setdefault(fork_point, []).append(child)
+                # Merge markers: only merged children
                 if child.get("status") == "merged":
                     merge_point = child.get("merge_point", -1)
                     if merge_point >= 0:
-                        merge_points[merge_point] = child
+                        merge_points.setdefault(merge_point, []).append(child)
+
+        def mount_forks(fork_point_idx: int, turn_id: int) -> None:
+            """Mount fork markers for a given fork point."""
+            for child_info in fork_points.get(fork_point_idx, []):
+                child_session = Session.load(child_info["session_id"])
+                if child_session:
+                    self.mount(ForkMarker(
+                        prompt=child_info.get("prompt", ""),
+                        child_session_id=child_session.id,
+                        fork_name=child_info.get("name") or child_session.get_fork_display_name(),
+                        status=child_info.get("status", "active"),
+                        turn_id=turn_id,
+                    ))
+
+        def mount_merges(merge_point_idx: int, turn_id: int) -> None:
+            """Mount merge markers for a given merge point."""
+            for child_info in merge_points.get(merge_point_idx, []):
+                child_session = Session.load(child_info["session_id"])
+                if child_session:
+                    self.mount(MergeMarker(
+                        message=child_session.merge_message,
+                        child_session_id=child_session.id,
+                        fork_name=child_info.get("name") or child_session.get_fork_display_name(),
+                        turn_id=turn_id,
+                    ))
 
         for turn_idx, msg in enumerate(messages):
             self._turn_counter += 1
@@ -697,17 +909,14 @@ class ChatLog(VerticalScroll):
                 widget = MessageWidget(msg.role, msg.content, turn_id=turn_id)
                 self.mount(widget)
 
-            # Check if there's a merge marker after this turn
-            if turn_idx in merge_points:
-                child_info = merge_points[turn_idx]
-                child_session = Session.load(child_info["session_id"])
-                if child_session:
-                    self.mount(MergeMarker(
-                        message=child_session.merge_message,
-                        child_session_id=child_session.id,
-                        fork_name=child_info.get("name") or child_session.get_fork_display_name(),
-                        turn_id=turn_id,
-                    ))
+            # Add any fork markers after this turn (forks start after the turn)
+            mount_forks(turn_idx, turn_id)
+            # Add any merge markers after this turn
+            mount_merges(turn_idx, turn_id)
+
+        # Add any markers at the end (point == len(messages))
+        mount_forks(len(messages), self._turn_counter)
+        mount_merges(len(messages), self._turn_counter)
 
         self.scroll_end(animate=False)
 
@@ -845,3 +1054,21 @@ class ChatLog(VerticalScroll):
             if isinstance(child, ForkMarker) and child.child_session_id == child_session_id:
                 return child
         return None
+
+    def find_merge_marker(self, child_session_id: str) -> MergeMarker | None:
+        """Find a MergeMarker by its child session ID."""
+        for child in self.children:
+            if isinstance(child, MergeMarker) and child.child_session_id == child_session_id:
+                return child
+        return None
+
+    def scroll_to_merge_marker(self, child_session_id: str) -> bool:
+        """Scroll to a merge marker by its child session ID.
+
+        Returns True if the marker was found and scrolled to, False otherwise.
+        """
+        marker = self.find_merge_marker(child_session_id)
+        if marker:
+            self.scroll_to_widget_and_check_follow(marker)
+            return True
+        return False
