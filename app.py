@@ -2382,10 +2382,10 @@ Summary:"""
         )
 
         # Build turn_modes dict for visual indication
-        session_data = context_tree._sessions.get(session.id)
-        if session_data:
+        loaded_data = context_tree._loaded_sessions.get(session.id)
+        if loaded_data:
             turn_modes = {}
-            for turn in session_data["turns"]:
+            for turn in loaded_data["turns"]:
                 turn_id = turn["idx"] + 1  # 1-indexed for chat_log
                 mode = context_tree._context_modes.get(
                     (session.id, turn["idx"]), ContextMode.DROP
