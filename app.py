@@ -30,7 +30,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLog, MoreBelowIndicator, InputBox, StatusBar, ContextTree, VerticalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, Breadcrumb
+from widgets import ChatLog, MoreBelowIndicator, InputBox, StatusBar, ContextTree, VerticalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, Breadcrumb, ConfirmDialog, HelpModal
 from claude_runner import ClaudeRunner
 from session import Session
 from config import get_config
@@ -63,6 +63,7 @@ from core import (
     CdCommand,
     ReloadCommand,
     TitleCommand,
+    HelpCommand,
     debug_log,
 )
 
@@ -141,6 +142,7 @@ class BalloonsApp(App):
         Binding("ctrl+left", "resize_tree(-5)", "Shrink Tree", show=False),
         Binding("ctrl+right", "resize_tree(5)", "Grow Tree", show=False),
         Binding("ctrl+end", "scroll_to_bottom", "Follow", show=False),
+        Binding("f1", "show_help", "Help", show=True),
     ]
 
     def __init__(self, session: Session = None, backend_env: dict[str, str] | None = None):
@@ -809,24 +811,24 @@ class BalloonsApp(App):
         sort_order = config.session_sort_order
 
         # Sort sessions according to preference
-        # list_sessions returns: (id, created, model, title, last_modified)
+        # list_sessions returns list of dicts with keys: id, created, last_modified, etc.
         if sort_order == "modified_desc":
-            all_sessions.sort(key=lambda x: x[4], reverse=True)
+            all_sessions.sort(key=lambda x: x["last_modified"], reverse=True)
         elif sort_order == "modified_asc":
-            all_sessions.sort(key=lambda x: x[4])
+            all_sessions.sort(key=lambda x: x["last_modified"])
         elif sort_order == "date_desc":
-            all_sessions.sort(key=lambda x: x[1], reverse=True)
+            all_sessions.sort(key=lambda x: x["created"], reverse=True)
         elif sort_order == "date_asc":
-            all_sessions.sort(key=lambda x: x[1])
+            all_sessions.sort(key=lambda x: x["created"])
         elif sort_order in ("title_asc", "title_desc"):
             # For title sort, still default to most recently modified
-            all_sessions.sort(key=lambda x: x[4], reverse=True)
+            all_sessions.sort(key=lambda x: x["last_modified"], reverse=True)
         else:
             # Default: most recently modified
-            all_sessions.sort(key=lambda x: x[4], reverse=True)
+            all_sessions.sort(key=lambda x: x["last_modified"], reverse=True)
 
         # Load the first session (top of sorted list)
-        session_id = all_sessions[0][0]
+        session_id = all_sessions[0]["id"]
         session = self._manager.load_session(session_id)
         return session
 
@@ -1034,6 +1036,8 @@ class BalloonsApp(App):
             self._handle_reload()
         elif isinstance(cmd, TitleCommand):
             self._handle_title_command(cmd.title)
+        elif isinstance(cmd, HelpCommand):
+            self.push_screen(HelpModal())
 
     def _format_tool_use(
         self, event: ToolUseEvent
@@ -2438,11 +2442,140 @@ Summary:"""
             session.messages[event.turn_idx].context_mode = event.new_mode
             session.save()
 
+    def on_context_tree_turn_delete_requested(self, event: ContextTree.TurnDeleteRequested) -> None:
+        """Handle turn delete request - show confirmation dialog."""
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        # Use in-memory session if it's the current one, otherwise load from disk
+        if self.session and self.session.id == event.session_id:
+            session = self.session
+        else:
+            session = Session.load(event.session_id)
+
+        if not session:
+            status_bar.set_error("Session not found")
+            return
+
+        # Check if session is read-only (merged fork)
+        if session.is_read_only():
+            status_bar.set_error("Cannot delete from merged (read-only) session")
+            return
+
+        # Get turn preview for dialog
+        if event.turn_index < len(session.messages):
+            msg = session.messages[event.turn_index]
+            role = "User" if msg.role == "user" else "Assistant"
+            preview = msg.content[:50] + "..." if len(msg.content) > 50 else msg.content
+            preview = preview.replace("\n", " ")
+            message = f"{role}: {preview}"
+        else:
+            message = f"Turn {event.turn_index + 1}"
+
+        # Show confirmation dialog
+        def on_confirm(confirmed: bool) -> None:
+            if confirmed:
+                self._execute_turn_delete(event.session_id, event.turn_index, session)
+
+        self.push_screen(
+            ConfirmDialog("Delete Turn?", message),
+            on_confirm,
+        )
+
+    def _execute_turn_delete(self, session_id: str, turn_index: int, session: Session) -> None:
+        """Execute the turn deletion after confirmation."""
+        status_bar = self.query_one("#status-bar", StatusBar)
+        context_tree = self.query_one("#context-tree", ContextTree)
+
+        if session.delete_turn(turn_index):
+            debug_log.info(
+                f"Deleted turn {turn_index} from session {session_id[:8]}",
+                session_id=session_id,
+                category="event",
+                details={"turn_index": turn_index},
+            )
+            session.save()
+
+            # Efficiently update the tree without reloading everything
+            context_tree.remove_turn(session_id, turn_index, updated_session=session)
+
+            # Refresh chat log if this is the current session
+            if self.session and self.session.id == session_id:
+                chat_log = self.query_one("#chat-log", ChatLog)
+                chat_log.clear()
+                chat_log.load_history(session.messages, session=session)
+
+            status_bar.set_status(f"Deleted turn {turn_index + 1}", animate=False)
+        else:
+            status_bar.set_error("Could not delete turn")
+
     def on_context_tree_sort_order_changed(self, event: ContextTree.SortOrderChanged) -> None:
         """Handle sort order change - persist to config."""
         config = get_config()
         config.session_sort_order = event.sort_order
         config.save()
+
+    def on_context_tree_session_delete_requested(self, event: ContextTree.SessionDeleteRequested) -> None:
+        """Handle session delete request - show confirmation dialog."""
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        # Load the session to get info for confirmation
+        session = Session.load(event.session_id)
+        if not session:
+            status_bar.set_error("Session not found")
+            return
+
+        is_active = self.session and self.session.id == event.session_id
+
+        # Build confirmation message
+        msg_count = len(session.messages)
+        if session.title:
+            name = session.title[:30] + "..." if len(session.title) > 30 else session.title
+        else:
+            name = session.id[:8]
+        message = f"{name} ({msg_count} messages)"
+
+        # Show confirmation dialog
+        def on_confirm(confirmed: bool) -> None:
+            if confirmed:
+                self._execute_session_delete(event.session_id, session, is_active)
+
+        self.push_screen(
+            ConfirmDialog("Delete Session?", message),
+            on_confirm,
+        )
+
+    def _execute_session_delete(self, session_id: str, session: Session, was_active: bool) -> None:
+        """Execute the session deletion after confirmation."""
+        status_bar = self.query_one("#status-bar", StatusBar)
+        context_tree = self.query_one("#context-tree", ContextTree)
+
+        if session.delete():
+            debug_log.info(
+                f"Deleted session {session_id[:8]}",
+                session_id=session_id,
+                category="event",
+            )
+
+            # Remove from tree
+            context_tree.remove_session(session_id)
+
+            # If we deleted the active session, switch to another one
+            if was_active:
+                # Find another session to switch to
+                remaining_sessions = Session.list_sessions()
+                if remaining_sessions:
+                    # Switch to the first remaining session
+                    next_session = Session.load(remaining_sessions[0]["id"])
+                    if next_session:
+                        self._switch_to_session(next_session)
+                else:
+                    # No sessions left, create a new one
+                    new_session = context_tree.create_new_session()
+                    self._switch_to_session(new_session)
+
+            status_bar.set_status(f"Deleted session {session_id[:8]}", animate=False)
+        else:
+            status_bar.set_error("Could not delete session")
 
     def on_context_tree_session_activated(self, event: ContextTree.SessionActivated) -> None:
         """Handle clicking on a session - switch to it."""
@@ -2537,6 +2670,10 @@ Summary:"""
         """Toggle the debug pane visibility."""
         pane = self.query_one("#debug-pane", DebugPane)
         pane.toggle()
+
+    def action_show_help(self) -> None:
+        """Show the help modal."""
+        self.push_screen(HelpModal())
 
     def action_resize_tree(self, delta: int) -> None:
         """Resize the context tree by delta columns."""

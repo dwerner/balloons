@@ -132,6 +132,38 @@ class TitleCommand(Command):
     title: str = ""
 
 
+@dataclass
+class HelpCommand(Command):
+    """Show help modal with all commands."""
+    pass
+
+
+# Command documentation for help display
+COMMAND_DOCS = [
+    # Session management
+    (":new [prompt]", "Create a new blank session, optionally with initial prompt"),
+    (":title <title>", "Set the session title"),
+    (":switch [name]", "Switch to another session (shows picker if no name)"),
+    # Forking and merging
+    (":fork[=name] <prompt>", "Fork with selected context, start a child session"),
+    (":fork ... --bg", "Fork in background (continue working in parent)"),
+    (":merge [prompt]", "Merge fork back to parent with LLM summary"),
+    (":derive <prompt>", "New independent session with selected context (no merge)"),
+    # Context operations
+    (":query-with <prompt>", "Query with selected context, response in new session"),
+    (":copy-turns", "Copy selected turns to a new session"),
+    # Shell integration
+    (":!<cmd>", "Run shell command and send output to Claude"),
+    (":suspend <cmd>", "Suspend TUI and run interactive shell command"),
+    # Navigation
+    (":pwd", "Show current working directory"),
+    (":cd [path]", "Change working directory"),
+    # Misc
+    (":reload", "Hot reload the app"),
+    (":help", "Show this help"),
+]
+
+
 class CommandParser:
     """Parse user input into Command objects.
 
@@ -257,6 +289,10 @@ class CommandParser:
             if not title:
                 raise ValueError(":title requires a title")
             return TitleCommand(title=title)
+
+        # Handle :help
+        if text == ":help":
+            return HelpCommand()
 
         # Unknown command
         cmd_name = text.split()[0]

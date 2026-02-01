@@ -20,6 +20,8 @@ from .commands import (
     CdCommand,
     ReloadCommand,
     TitleCommand,
+    HelpCommand,
+    COMMAND_DOCS,
 )
 from .context import ContextBuilder
 from .formatter import Formatter, format_edit_as_diff, guess_language
@@ -48,6 +50,8 @@ __all__ = [
     "CdCommand",
     "ReloadCommand",
     "TitleCommand",
+    "HelpCommand",
+    "COMMAND_DOCS",
     # Context
     "ContextBuilder",
     # Formatting

@@ -72,7 +72,11 @@ def main():
         else:
             print(f"{'ID':<40} {'Created':<20} {'Title/Model'}")
             print("-" * 80)
-            for session_id, created, model, title in sessions:
+            for session_metadata in sessions:
+                session_id = session_metadata["id"]
+                created = session_metadata.get("created", "")
+                model = session_metadata.get("model", "")
+                title = session_metadata.get("title", "")
                 display = title[:30] if title else model
                 print(f"{session_id:<40} {created[:19]:<20} {display}")
         return

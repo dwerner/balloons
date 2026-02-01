@@ -128,6 +128,27 @@ class Session:
         else:
             return self.id[:8]
 
+    def delete_turn(self, turn_index: int) -> bool:
+        """Delete a turn from the session history.
+
+        Returns True if deleted, False if index invalid.
+        """
+        if 0 <= turn_index < len(self.messages):
+            del self.messages[turn_index]
+            return True
+        return False
+
+    def delete(self) -> bool:
+        """Delete this session's file from disk.
+
+        Returns True if deleted, False if file didn't exist.
+        """
+        path = SESSIONS_DIR / f"{self.id}.json"
+        if path.exists():
+            path.unlink()
+            return True
+        return False
+
     def get_active_forks(self) -> list[dict]:
         """Get list of active (non-merged) child forks."""
         return [c for c in self.children if c.get("status") == "active"]
@@ -269,8 +290,13 @@ class Session:
         return session
 
     @classmethod
-    def list_sessions(cls) -> list[tuple[str, str, str, str, str]]:
-        """Return list of (id, created, model, title, last_modified) for all sessions."""
+    def list_sessions(cls) -> list[dict]:
+        """Return list of session metadata dicts without loading full messages.
+
+        Returns list of dicts with keys: id, created, last_modified, model, title,
+        message_count, total_input_tokens, total_output_tokens, total_cost,
+        parent_id, children, fork_name, fork_status.
+        """
         if not SESSIONS_DIR.exists():
             return []
         sessions = []
@@ -279,13 +305,21 @@ class Session:
                 data = json.loads(path.read_text())
                 # For backwards compat, use created if last_modified missing
                 last_modified = data.get("last_modified", data.get("created", ""))
-                sessions.append((
-                    data["id"],
-                    data["created"],
-                    data.get("model", ""),
-                    data.get("title", ""),
-                    last_modified,
-                ))
+                sessions.append({
+                    "id": data["id"],
+                    "created": data["created"],
+                    "last_modified": last_modified,
+                    "model": data.get("model", ""),
+                    "title": data.get("title", ""),
+                    "message_count": len(data.get("messages", [])),
+                    "total_input_tokens": data.get("total_input_tokens", 0),
+                    "total_output_tokens": data.get("total_output_tokens", 0),
+                    "total_cost": data.get("total_cost", 0.0),
+                    "parent_id": data.get("parent_id"),
+                    "children": data.get("children", []),
+                    "fork_name": data.get("fork_name", ""),
+                    "fork_status": data.get("fork_status", "active"),
+                })
             except (json.JSONDecodeError, KeyError):
                 continue
-        return sorted(sessions, key=lambda x: x[1], reverse=True)
+        return sorted(sessions, key=lambda x: x["created"], reverse=True)

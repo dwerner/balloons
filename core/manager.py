@@ -227,7 +227,9 @@ class SessionManager:
         infos = []
 
         # Get sessions from disk
-        for session_id, created, model, title in Session.list_sessions():
+        for session_metadata in Session.list_sessions():
+            session_id = session_metadata["id"]
+            title = session_metadata.get("title", "")
             # Load to get more info if not already loaded
             session = self._sessions.get(session_id) or Session.load(session_id)
             if session:
