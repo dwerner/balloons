@@ -33,6 +33,7 @@ from rich.console import RenderableType
 from widgets import ChatLog, InputBox, StatusBar, ContextTree, VerticalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, Breadcrumb
 from claude_runner import ClaudeRunner
 from session import Session
+from config import get_config
 from models import (
     TextDelta, ToolUseEvent, ToolResultEvent,
     TextBlock, ToolUseBlock, Message, ContextMode,
@@ -159,9 +160,13 @@ class BalloonsApp(App):
         return self._manager.active_runner
 
     def compose(self) -> ComposeResult:
+        config = get_config()
         with Vertical():
             with Horizontal(id="main-split"):
-                yield ContextTree(id="context-tree")
+                yield ContextTree(
+                    initial_sort_order=config.session_sort_order,
+                    id="context-tree"
+                )
                 yield VerticalSplitter(id="splitter")
                 with Vertical(id="chat-container"):
                     yield Breadcrumb(id="breadcrumb")
@@ -1799,6 +1804,12 @@ Summary:"""
             session.messages[event.turn_idx].context_mode = event.new_mode
             session.save()
 
+    def on_context_tree_sort_order_changed(self, event: ContextTree.SortOrderChanged) -> None:
+        """Handle sort order change - persist to config."""
+        config = get_config()
+        config.session_sort_order = event.sort_order
+        config.save()
+
     def on_context_tree_session_activated(self, event: ContextTree.SessionActivated) -> None:
         """Handle clicking on a session - switch to it."""
         if self.streaming:
@@ -1839,11 +1850,8 @@ Summary:"""
         elif node_type == "turn":
             # Whole turn inspection - scroll to it and show in request pane
             turn_id = event.turn_data.get("turn_idx", 0) + 1
-            # Find any widget with this turn_id and scroll to it
-            for child in chat_log.children:
-                if hasattr(child, 'turn_id') and child.turn_id == turn_id:
-                    child.scroll_visible(animate=True)
-                    break
+            # Scroll to turn and disable follow mode if not at bottom
+            chat_log.scroll_to_turn(turn_id)
             chat_log.clear_highlights()
             request_pane.show_json(event.turn_data)
         elif node_type == "text":

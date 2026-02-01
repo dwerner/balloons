@@ -23,6 +23,8 @@ class Config:
     default_backend: str = "claude"
     backends: dict[str, BackendConfig] = field(default_factory=dict)
     debug_log_file: Optional[str] = None  # Path to persist debug logs
+    session_sort_order: str = "modified_desc"  # Default sort order for sessions
+    _config_path: Optional[Path] = field(default=None, repr=False)  # Where config was loaded from
 
     @classmethod
     def load(cls) -> "Config":
@@ -74,6 +76,8 @@ class Config:
             default_backend=data.get("default_backend", "claude"),
             backends=backends,
             debug_log_file=data.get("debug_log_file"),
+            session_sort_order=data.get("session_sort_order", "modified_desc"),
+            _config_path=path,
         )
 
     def get_backend(self, name: Optional[str] = None) -> BackendConfig:
@@ -94,6 +98,33 @@ class Config:
             env["ANTHROPIC_API_KEY"] = backend.api_key
 
         return env
+
+    def save(self) -> None:
+        """Save configuration to file.
+
+        Only saves user-modifiable settings (session_sort_order, etc).
+        Creates config file if it doesn't exist.
+        """
+        # Determine path to save to
+        if self._config_path:
+            path = self._config_path
+        else:
+            # Default to ~/.balloons/config.yaml
+            path = Path.home() / ".balloons" / "config.yaml"
+
+        # Load existing data if file exists, to preserve other settings
+        if path.exists():
+            with open(path) as f:
+                data = yaml.safe_load(f) or {}
+        else:
+            data = {}
+            path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Update user-modifiable settings
+        data["session_sort_order"] = self.session_sort_order
+
+        with open(path, "w") as f:
+            yaml.safe_dump(data, f, default_flow_style=False)
 
 
 # Global config instance

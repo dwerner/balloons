@@ -16,6 +16,7 @@ SESSIONS_DIR = Path.home() / ".balloons" / "sessions"
 class Session:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     created: str = field(default_factory=lambda: datetime.now().isoformat())
+    last_modified: str = field(default_factory=lambda: datetime.now().isoformat())
     model: str = ""
     messages: list[Message] = field(default_factory=list)
     total_input_tokens: int = 0
@@ -160,9 +161,12 @@ class Session:
     def save(self):
         SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
         path = SESSIONS_DIR / f"{self.id}.json"
+        # Update last_modified timestamp on every save
+        self.last_modified = datetime.now().isoformat()
         data = {
             "id": self.id,
             "created": self.created,
+            "last_modified": self.last_modified,
             "model": self.model,
             "messages": [self._serialize_message(m) for m in self.messages],
             "total_input_tokens": self.total_input_tokens,
@@ -212,9 +216,12 @@ class Session:
         if not path.exists():
             return None
         data = json.loads(path.read_text())
+        # For backwards compat, use created if last_modified missing
+        last_modified = data.get("last_modified", data.get("created", ""))
         session = cls(
             id=data["id"],
             created=data["created"],
+            last_modified=last_modified,
             model=data.get("model", ""),
             total_input_tokens=data.get("total_input_tokens", 0),
             total_output_tokens=data.get("total_output_tokens", 0),
@@ -262,15 +269,23 @@ class Session:
         return session
 
     @classmethod
-    def list_sessions(cls) -> list[tuple[str, str, str, str]]:
-        """Return list of (id, created, model, title) for all sessions."""
+    def list_sessions(cls) -> list[tuple[str, str, str, str, str]]:
+        """Return list of (id, created, model, title, last_modified) for all sessions."""
         if not SESSIONS_DIR.exists():
             return []
         sessions = []
         for path in SESSIONS_DIR.glob("*.json"):
             try:
                 data = json.loads(path.read_text())
-                sessions.append((data["id"], data["created"], data.get("model", ""), data.get("title", "")))
+                # For backwards compat, use created if last_modified missing
+                last_modified = data.get("last_modified", data.get("created", ""))
+                sessions.append((
+                    data["id"],
+                    data["created"],
+                    data.get("model", ""),
+                    data.get("title", ""),
+                    last_modified,
+                ))
             except (json.JSONDecodeError, KeyError):
                 continue
         return sorted(sessions, key=lambda x: x[1], reverse=True)

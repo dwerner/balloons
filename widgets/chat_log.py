@@ -438,6 +438,26 @@ class ChatLog(VerticalScroll):
         if self.following:
             self.scroll_end(animate=False)
 
+    def scroll_to_turn(self, turn_id: int) -> bool:
+        """Scroll to a turn by ID and disable follow mode if not at the bottom.
+
+        Returns True if the turn was found and scrolled to, False otherwise.
+        """
+        for child in self.children:
+            if hasattr(child, 'turn_id') and child.turn_id == turn_id:
+                child.scroll_visible(animate=True)
+                # After scrolling, check if we're at the bottom
+                # Use call_later to check after scroll animation starts
+                self.call_later(self._check_at_bottom)
+                return True
+        return False
+
+    def scroll_to_widget_and_check_follow(self, widget) -> None:
+        """Scroll to a specific widget and disable follow mode if not at the bottom."""
+        widget.scroll_visible(animate=True)
+        # After scrolling, check if we're at the bottom
+        self.call_later(self._check_at_bottom)
+
     def set_session_title(self, title: str) -> None:
         """Set the session title displayed in the header."""
         if self._header:
@@ -562,10 +582,13 @@ class ChatLog(VerticalScroll):
         self.clear_highlights()
 
         # Find and highlight the matching widgets
+        scrolled = False
         for child in self.children:
             if isinstance(child, ToolUseWidget) and child.tool_use_id == tool_use_id:
                 child.add_class("highlighted")
-                child.scroll_visible(animate=True)
+                if not scrolled:
+                    self.scroll_to_widget_and_check_follow(child)
+                    scrolled = True
             elif isinstance(child, ToolResultWidget) and child.tool_use_id == tool_use_id:
                 child.add_class("highlighted")
 
@@ -584,7 +607,7 @@ class ChatLog(VerticalScroll):
                 debug_log.debug(f"  checking MessageWidget: turn_id={child.turn_id}, block_idx={child.block_idx}", category="chat_log")
                 if child.turn_id == turn_id and child.block_idx == block_idx:
                     child.add_class("highlighted")
-                    child.scroll_visible(animate=True)
+                    self.scroll_to_widget_and_check_follow(child)
                     found = True
                     debug_log.info(f"  -> FOUND and highlighted!", category="chat_log")
                     break

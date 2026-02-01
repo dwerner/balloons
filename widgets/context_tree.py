@@ -1,5 +1,5 @@
-from textual.widgets import Tree, Input
-from textual.containers import Vertical
+from textual.widgets import Tree, Input, Select
+from textual.containers import Vertical, Horizontal
 from textual.message import Message
 from textual.events import Key
 from textual.binding import Binding
@@ -8,6 +8,21 @@ from datetime import datetime
 from tokenizer import count_tokens
 from session import Session
 from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock
+
+
+# Sorting options for sessions
+SORT_OPTIONS = [
+    ("modified_desc", "Recently used"),
+    ("modified_asc", "Least recently used"),
+    ("date_desc", "Newest created"),
+    ("date_asc", "Oldest created"),
+    ("title_asc", "Title A-Z"),
+    ("title_desc", "Title Z-A"),
+    ("messages_desc", "Most messages"),
+    ("messages_asc", "Fewest messages"),
+    ("tokens_desc", "Most tokens"),
+    ("cost_desc", "Highest cost"),
+]
 
 
 class SelectableTree(Tree):
@@ -104,6 +119,18 @@ class ContextTree(Vertical):
     ContextTree > #search-input.visible {
         display: block;
     }
+
+    ContextTree > #sort-container {
+        dock: top;
+        height: auto;
+        padding: 0 1;
+        background: $surface;
+    }
+
+    ContextTree > #sort-container > #sort-select {
+        width: 100%;
+        min-width: 20;
+    }
     """
 
     class SelectionChanged(Message):
@@ -147,7 +174,13 @@ class ContextTree(Vertical):
             self.new_mode = new_mode
             super().__init__()
 
-    def __init__(self, **kwargs):
+    class SortOrderChanged(Message):
+        """Fired when user changes sort order, so app can persist it."""
+        def __init__(self, sort_order: str) -> None:
+            self.sort_order = sort_order
+            super().__init__()
+
+    def __init__(self, initial_sort_order: str = "modified_desc", **kwargs):
         super().__init__(**kwargs)
         # Context mode per turn: (session_id, turn_idx) -> ContextMode
         # Missing entries default to DROP (not in context)
@@ -159,9 +192,17 @@ class ContextTree(Vertical):
         self._sessions: dict[str, dict] = {}  # session_id -> {session, turns, node}
         self._current_session_id: str | None = None
         self._search_query: str = ""
+        self._sort_order: str = initial_sort_order
 
     def compose(self):
         yield Input(placeholder="Search sessions...", id="search-input")
+        with Horizontal(id="sort-container"):
+            yield Select(
+                [(label, key) for key, label in SORT_OPTIONS],
+                value=self._sort_order,
+                id="sort-select",
+                allow_blank=False,
+            )
         tree = SelectableTree("[dim]loading...[/]", id="turn-tree")
         tree.root.data = {"type": "root"}
         yield tree
@@ -185,19 +226,20 @@ class ContextTree(Vertical):
         self._context_modes.clear()
         self._merge_modes.clear()
 
-        # Add current session first if it's new (not in list)
+        # Load current session if it's new (not in list)
         session_ids_in_list = {s[0] for s in all_sessions}
         if current_session.id not in session_ids_in_list:
-            self._add_session_to_tree(tree, current_session, is_current=True)
+            self._load_session_data(current_session, is_current=True)
 
-        # Add all sessions (newest first - already sorted)
+        # Load all sessions into _sessions dict
         for session_id, created, model, _title in all_sessions:
             session = Session.load(session_id)
             if session:
                 is_current = session_id == current_session.id
-                self._add_session_to_tree(tree, session, is_current=is_current)
+                self._load_session_data(session, is_current=is_current)
 
-        self._update_root_label()
+        # Build tree with current sort order
+        self._rebuild_tree_with_sort()
 
     def _make_session_label(self, session: Session, is_active: bool) -> str:
         """Create a label for a session node."""
@@ -243,10 +285,54 @@ class ContextTree(Vertical):
         else:
             return f"{prefix}{label}"
 
+    def _load_session_data(self, session: Session, is_current: bool) -> None:
+        """Load session data into _sessions dict without adding to tree.
+
+        This populates _sessions and _context_modes. Tree nodes are added
+        separately by _rebuild_tree_with_sort().
+        """
+        turns = []
+        for idx, msg in enumerate(session.messages):
+            turn_key = (session.id, idx)
+            # Use persisted context_mode from message
+            if hasattr(msg, 'context_mode'):
+                self._context_modes[turn_key] = msg.context_mode
+            elif is_current:
+                # Default: current session turns are COPY
+                self._context_modes[turn_key] = ContextMode.COPY
+
+            content_blocks = msg.content_blocks if hasattr(msg, 'content_blocks') else []
+
+            turns.append({
+                "idx": idx,
+                "role": msg.role,
+                "content": msg.content,
+                "content_blocks": content_blocks,
+                "node": None,  # Will be set when tree is built
+                "events": [],  # Could load from storage if we save them
+            })
+
+        # Also load merge modes for any merged children
+        for child in session.children:
+            if child.get("status") == "merged":
+                fork_id = child.get("session_id", "")
+                merge_key = ("merge", session.id, fork_id)
+                if merge_key not in self._merge_modes:
+                    self._merge_modes[merge_key] = ContextMode.COPY
+
+        self._sessions[session.id] = {
+            "session": session,
+            "turns": turns,
+            "node": None,  # Will be set when tree is built
+            "is_current": is_current,
+        }
+
     def _add_session_to_tree(self, tree: SelectableTree, session: Session, is_current: bool) -> None:
         """Add a session and its turns to the tree.
 
         Forks are shown inline at their fork point in the parent session.
+        Note: This is kept for backwards compatibility but load_all_sessions
+        now uses _load_session_data + _rebuild_tree_with_sort.
         """
         session_label = self._make_session_label(session, is_current)
 
@@ -1091,6 +1177,118 @@ class ContextTree(Vertical):
         if event.input.id == "search-input":
             self._hide_search()
 
+    def on_select_changed(self, event: Select.Changed) -> None:
+        """Handle sort order change."""
+        if event.select.id == "sort-select":
+            self._sort_order = str(event.value)
+            self._rebuild_tree_with_sort()
+            # Notify app to persist the sort order
+            self.post_message(self.SortOrderChanged(self._sort_order))
+
+    def _rebuild_tree_with_sort(self) -> None:
+        """Rebuild the tree with sessions in the current sort order."""
+        if not self._sessions:
+            return
+
+        tree = self.query_one("#turn-tree", SelectableTree)
+        tree.root.remove_children()
+
+        # Get session data sorted according to current order
+        sorted_session_ids = self._get_sorted_session_ids()
+
+        # Rebuild tree nodes for each session
+        for session_id in sorted_session_ids:
+            session_data = self._sessions[session_id]
+            session = session_data["session"]
+            is_current = session_data["is_current"]
+
+            # Build session label
+            session_label = self._make_session_label(session, is_current)
+            session_node = tree.root.add(
+                session_label,
+                data={"type": "session", "session_id": session.id}
+            )
+            session_data["node"] = session_node
+
+            # Expand current session
+            if is_current:
+                session_node.expand()
+
+            # Rebuild turn nodes
+            for turn in session_data["turns"]:
+                idx = turn["idx"]
+                mode = self._context_modes.get((session_id, idx), ContextMode.DROP)
+                content_blocks = turn.get("content_blocks", [])
+                label = self._make_turn_label(turn["role"], turn["content"], mode, content_blocks)
+                turn_node = session_node.add(
+                    label,
+                    data={"type": "turn", "session_id": session_id, "turn_idx": idx}
+                )
+                turn["node"] = turn_node
+                self._add_content_block_nodes(turn_node, session_id, idx, content_blocks)
+
+            # Rebuild fork and merge nodes
+            fork_points = {}
+            merge_points = {}
+            for child in session.children:
+                fork_point = child.get("fork_point", -1)
+                merge_point = child.get("merge_point", -1)
+                if fork_point >= 0:
+                    fork_points.setdefault(fork_point, []).append(child)
+                if merge_point >= 0 and child.get("status") == "merged":
+                    merge_points.setdefault(merge_point, []).append(child)
+
+            # Add forks at appropriate positions
+            for fork_point, forks in fork_points.items():
+                for fork in forks:
+                    self._add_fork_node(session_node, session_id, fork, tree)
+
+            # Add merges at appropriate positions
+            for merge_point, merges in merge_points.items():
+                for merge in merges:
+                    self._add_merge_node(session_node, session_id, merge)
+
+        self._update_root_label()
+
+    def _get_sorted_session_ids(self) -> list[str]:
+        """Return session IDs sorted according to current sort order."""
+        session_items = []
+        for session_id, session_data in self._sessions.items():
+            session = session_data["session"]
+            session_items.append({
+                "id": session_id,
+                "created": session.created,
+                "last_modified": session.last_modified,
+                "title": session.title.lower() if session.title else "",
+                "messages": len(session.messages),
+                "tokens": session.total_tokens,
+                "cost": session.total_cost,
+            })
+
+        # Sort based on current order
+        if self._sort_order == "modified_desc":
+            session_items.sort(key=lambda x: x["last_modified"], reverse=True)
+        elif self._sort_order == "modified_asc":
+            session_items.sort(key=lambda x: x["last_modified"])
+        elif self._sort_order == "date_desc":
+            session_items.sort(key=lambda x: x["created"], reverse=True)
+        elif self._sort_order == "date_asc":
+            session_items.sort(key=lambda x: x["created"])
+        elif self._sort_order == "title_asc":
+            session_items.sort(key=lambda x: (x["title"] == "", x["title"]))
+        elif self._sort_order == "title_desc":
+            session_items.sort(key=lambda x: (x["title"] == "", x["title"]), reverse=True)
+        elif self._sort_order == "messages_desc":
+            session_items.sort(key=lambda x: x["messages"], reverse=True)
+        elif self._sort_order == "messages_asc":
+            session_items.sort(key=lambda x: x["messages"])
+        elif self._sort_order == "tokens_desc":
+            session_items.sort(key=lambda x: x["tokens"], reverse=True)
+        elif self._sort_order == "cost_desc":
+            session_items.sort(key=lambda x: x["cost"], reverse=True)
+
+        return [item["id"] for item in session_items]
+
     def _on_key(self, event: Key) -> None:
         """Handle Escape to clear search."""
         if event.key == "escape":
@@ -1120,7 +1318,11 @@ class ContextTree(Vertical):
         tree = self.query_one("#turn-tree", SelectableTree)
         tree.root.remove_children()
 
-        for session_id, session_data in self._sessions.items():
+        # Use sorted session order
+        sorted_session_ids = self._get_sorted_session_ids()
+
+        for session_id in sorted_session_ids:
+            session_data = self._sessions[session_id]
             session = session_data["session"]
             is_current = session_data["is_current"]
 
@@ -1195,8 +1397,11 @@ class ContextTree(Vertical):
         messages = []
 
         # Collect all included turns with their session order
+        # Only include turns from the current session
         included_turns = []
         for session_id, session_data in self._sessions.items():
+            if session_id != self._current_session_id:
+                continue
             session = session_data["session"]
             for turn in session_data["turns"]:
                 turn_key = (session_id, turn["idx"])
