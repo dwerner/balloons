@@ -112,6 +112,32 @@ class NestedTree(Tree):
             self.session_id = session_id
             super().__init__()
 
+    class LinkRequested(Message):
+        """Fired when user ctrl+clicks on a session to create a link."""
+        def __init__(self, session_id: str) -> None:
+            self.session_id = session_id
+            super().__init__()
+
+    # --- Click handling ---
+
+    async def _on_click(self, event) -> None:
+        """Handle clicks - ctrl+click on session creates link command."""
+        if event.ctrl:
+            # Get the node under cursor from the line metadata
+            meta = event.style.meta
+            if "line" in meta:
+                node = self.get_node_at_line(meta["line"])
+                if node and node.data:
+                    node_type = node.data.get("type")
+                    if node_type in ("session", "fork", "merge"):
+                        session_id = node.data.get("session_id")
+                        if session_id:
+                            self.post_message(self.LinkRequested(session_id))
+                            event.stop()
+                            return
+        # Default click behavior
+        await super()._on_click(event)
+
     # --- Key handling ---
 
     async def _on_key(self, event: Key) -> None:
@@ -269,6 +295,12 @@ class NestedSessionTree(Vertical):
 
     class SessionDeleteRequested(Message):
         """Fired when user requests to delete a session."""
+        def __init__(self, session_id: str) -> None:
+            self.session_id = session_id
+            super().__init__()
+
+    class SessionLinkRequested(Message):
+        """Fired when user ctrl+clicks a session to create a link command."""
         def __init__(self, session_id: str) -> None:
             self.session_id = session_id
             super().__init__()
@@ -888,6 +920,10 @@ class NestedSessionTree(Vertical):
     def on_nested_tree_session_delete_requested(self, event: NestedTree.SessionDeleteRequested) -> None:
         """Bubble up session delete request."""
         self.post_message(self.SessionDeleteRequested(event.session_id))
+
+    def on_nested_tree_link_requested(self, event: NestedTree.LinkRequested) -> None:
+        """Bubble up link request."""
+        self.post_message(self.SessionLinkRequested(event.session_id))
 
     # --- Public API (for compatibility with app) ---
 

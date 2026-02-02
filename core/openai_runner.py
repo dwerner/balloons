@@ -25,22 +25,23 @@ class OpenAICompatibleRunner(BaseRunner):
     for models that implement OpenAI's function calling API.
     """
 
-    def __init__(self, base_url: str, api_key: str, model: str):
+    def __init__(self, base_url: str, api_key: str, model: str, system_prompt: str | None = None):
         """Initialize the runner.
 
         Args:
             base_url: API base URL (e.g., https://openrouter.ai/api/v1)
             api_key: API key for authentication
             model: Model identifier to use
+            system_prompt: Optional system prompt content to prepend to conversations
         """
         self.client = AsyncOpenAI(base_url=base_url, api_key=api_key)
         self.model = model
+        self.system_prompt = system_prompt
         self._running = False
         self._cancelled = False
         self._run_id = ""
 
-    @staticmethod
-    def build_messages(messages: list[Message], new_prompt: str) -> list[dict]:
+    def build_messages(self, messages: list[Message], new_prompt: str) -> list[dict]:
         """Convert internal Message format to OpenAI chat format.
 
         Args:
@@ -51,6 +52,13 @@ class OpenAICompatibleRunner(BaseRunner):
             List of OpenAI chat message dicts
         """
         openai_messages = []
+
+        # Add system prompt if configured
+        if self.system_prompt:
+            openai_messages.append({
+                "role": "system",
+                "content": self.system_prompt,
+            })
 
         for msg in messages:
             # Respect context mode

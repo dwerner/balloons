@@ -18,6 +18,9 @@ backends:
     type: claude  # optional, this is the default
     # Uses your ANTHROPIC_API_KEY from environment
     # No additional configuration needed
+    #
+    # Optional: Add additional context to Claude's built-in system prompt
+    # system_prompt: ~/.balloons/prompts/additional-context.md
 
   # OpenRouter - access many models via OpenAI-compatible API
   # openrouter:
@@ -25,6 +28,8 @@ backends:
   #   base_url: https://openrouter.ai/api/v1
   #   api_key: ${OPENROUTER_API_KEY}  # env var reference
   #   model: anthropic/claude-sonnet-4  # or any model on OpenRouter
+  #   # Custom system prompt (required for non-Claude backends)
+  #   system_prompt: ~/.balloons/prompts/coding-assistant.md
 
   # Local llamacpp server - OpenAI-compatible API
   # llamacpp:
@@ -32,6 +37,7 @@ backends:
   #   base_url: http://localhost:8080/v1
   #   api_key: not-needed  # llamacpp doesn't require auth
   #   model: local-model  # model name doesn't matter for llamacpp
+  #   system_prompt: ~/.balloons/prompts/minimal.md
 
   # LiteLLM proxy (legacy approach - still works with claude type)
   # llama70b:
@@ -45,3 +51,4 @@ backends:
   #   base_url: http://localhost:11434/v1
   #   api_key: ollama  # ollama requires some value
   #   model: llama3.2  # or any model you've pulled
+  #   system_prompt: ~/.balloons/prompts/minimal.md

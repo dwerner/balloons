@@ -8,6 +8,7 @@ from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
+from textual.widgets import TextArea
 
 # Debug logging for event ordering
 DEBUG_EVENTS = os.environ.get("BALLOONS_DEBUG_EVENTS", "").lower() in ("1", "true", "yes")
@@ -30,7 +31,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLog, MoreBelowIndicator, InputBox, StatusBar, ContextTree, NestedSessionTree, VerticalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult
+from widgets import ChatLog, MoreBelowIndicator, InputBox, StatusBar, ContextTree, NestedSessionTree, VerticalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult
 from claude_runner import ClaudeRunner
 from session import Session
 from config import get_config, BackendConfig
@@ -65,10 +66,12 @@ from core import (
     TitleCommand,
     HelpCommand,
     BackendCommand,
+    LinkCommand,
     debug_log,
     create_runner,
 )
 from core.tree_state import TreeState
+from tokenizer import count_tokens
 
 
 @dataclass
@@ -98,6 +101,10 @@ class StreamingContext:
             self.tool_events = {}
         if self.fork_data is None:
             self.fork_data = {}
+
+
+# Claude CLI system overhead: ~19.3k tokens for built-in tools and system prompt
+CLAUDE_SYSTEM_OVERHEAD = 19300
 
 
 class BalloonsApp(App):
@@ -201,6 +208,62 @@ class BalloonsApp(App):
         """Create a runner for a session, respecting session's backend preference."""
         backend = self._get_backend_for_session(session)
         return SessionRunner(session, runner=create_runner(backend))
+
+    def _calculate_context_tokens(self, pending_prompt: str = "") -> int:
+        """Calculate estimated context tokens for the next API call.
+
+        Includes:
+        - System overhead (Claude's built-in ~19.3k or custom system_prompt)
+        - Selected conversation context
+        - Pending user input
+
+        Args:
+            pending_prompt: Text currently in the input box
+
+        Returns:
+            Estimated total context tokens
+        """
+        backend = self._backend_config
+        if self.session and self.session.backend_name:
+            config = get_config()
+            if self.session.backend_name in config.backends:
+                backend = config.get_backend(self.session.backend_name)
+
+        # System overhead
+        if backend.type == "claude":
+            system_tokens = CLAUDE_SYSTEM_OVERHEAD
+        else:
+            system_tokens = 0
+
+        # Add configured system prompt tokens
+        system_tokens += backend.get_system_prompt_tokens()
+
+        # Conversation context from selected messages
+        conversation_tokens = 0
+        if self.session:
+            try:
+                context_tree = self.query_one("#context-tree", ContextTree)
+                selected_messages = context_tree.get_selected_messages()
+                if selected_messages:
+                    conversation_tokens = self._context_builder.count_messages_tokens(selected_messages)
+            except Exception:
+                # Tree might not be mounted yet
+                pass
+
+        # Pending input tokens
+        input_tokens = count_tokens(pending_prompt) if pending_prompt else 0
+
+        return system_tokens + conversation_tokens + input_tokens
+
+    def _update_context_tokens(self, pending_prompt: str = "") -> None:
+        """Update the status bar with current context token count."""
+        try:
+            status_bar = self.query_one("#status-bar", StatusBar)
+            context_tokens = self._calculate_context_tokens(pending_prompt)
+            status_bar.update_stats(context_tokens=context_tokens)
+        except Exception:
+            # UI might not be ready
+            pass
 
     def compose(self) -> ComposeResult:
         config = get_config()
@@ -349,14 +412,12 @@ class BalloonsApp(App):
         elif event.event_type == "result":
             debug_event(f"result: session={session_id[:8]} in={event.data.get('input_tokens')} out={event.data.get('output_tokens')}")
             if is_active:
-                # Get session from manager for token totals
+                # Get session from manager for cost tracking
                 session = self._manager._sessions.get(session_id)
                 if session:
-                    status_bar.update_stats(
-                        input_tokens=session.total_input_tokens,
-                        output_tokens=session.total_output_tokens,
-                        cost=session.total_cost,
-                    )
+                    status_bar.update_stats(cost=session.total_cost)
+                # Update context tokens now that new messages are added
+                self._update_context_tokens()
 
         elif event.event_type == "tool_use_start":
             # Tool use started - input is still streaming
@@ -977,8 +1038,6 @@ class BalloonsApp(App):
             status_bar.update_stats(
                 model=self.session.model,
                 backend=backend_name,
-                input_tokens=self.session.total_input_tokens,
-                output_tokens=self.session.total_output_tokens,
                 context_window=self.session.context_window,
                 cost=self.session.total_cost,
             )
@@ -990,6 +1049,15 @@ class BalloonsApp(App):
 
         # Focus the input box
         input_box.focus()
+
+        # Initial context token update
+        self._update_context_tokens()
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        """Handle text changes in the input box - update context token count live."""
+        # Only handle events from our input box
+        if event.text_area.id == "input-box":
+            self._update_context_tokens(event.text_area.text)
 
     async def on_input_box_submitted(self, event: InputBox.Submitted) -> None:
         """Handle user input submission."""
@@ -1102,7 +1170,7 @@ class BalloonsApp(App):
         debug_log.info(f"Command: {cmd_name}", category="command")
 
         if isinstance(cmd, NewSessionCommand):
-            await self._handle_new_session(cmd.prompt)
+            await self._handle_new_session(cmd.prompt, cmd.title)
         elif isinstance(cmd, CopyTurnsCommand):
             self._handle_copy_turns()
         elif isinstance(cmd, QueryWithCommand):
@@ -1139,6 +1207,8 @@ class BalloonsApp(App):
             self.push_screen(HelpModal())
         elif isinstance(cmd, BackendCommand):
             await self._handle_backend_command(cmd.backend_name)
+        elif isinstance(cmd, LinkCommand):
+            await self._handle_link_command(cmd.target_session_prefixes, cmd.prompt)
 
     def _format_tool_use(
         self, event: ToolUseEvent
@@ -1194,8 +1264,8 @@ class BalloonsApp(App):
         # No last_tool_use context available during resume
         return self._formatter.format_tool_result(event, None)
 
-    async def _handle_new_session(self, prompt: str = "") -> None:
-        """Create a new session, optionally with an initial prompt."""
+    async def _handle_new_session(self, prompt: str = "", title: str = "") -> None:
+        """Create a new session, optionally with an initial prompt and title."""
         chat_log = self.query_one("#chat-log", ChatLog)
         context_tree = self.query_one("#context-tree", ContextTree)
         status_bar = self.query_one("#status-bar", StatusBar)
@@ -1203,6 +1273,8 @@ class BalloonsApp(App):
 
         # Create new session through manager
         new_session = self._manager.create_session()
+        if title:
+            new_session.title = title
         self._manager.set_active(new_session.id)
 
         # Clear and reload UI
@@ -1210,6 +1282,9 @@ class BalloonsApp(App):
         context_tree.load_all_sessions(self.session)
         breadcrumb.set_session(self.session)
         status_bar.set_status("New session created", animate=False)
+
+        # Update context tokens for new empty session
+        self._update_context_tokens()
 
         # If a prompt was provided, send it
         if prompt:
@@ -1253,10 +1328,10 @@ class BalloonsApp(App):
                 status_bar.set_error(f"Not a directory: {target_path}")
                 return
 
-            # Set the working directory
-            self.session.working_directory = str(target_path)
+            # Set the working directory (resolves to canonical absolute path)
+            self.session.set_working_directory(str(target_path))
             self.session.save()
-            status_bar.update_working_directory(str(target_path))
+            status_bar.update_working_directory(self.session.working_directory)
             status_bar.set_status(f"Changed to: {target_path}", animate=False)
 
         except Exception as e:
@@ -1330,6 +1405,150 @@ class BalloonsApp(App):
         # Use the backend's configured model, or clear it if not set
         status_bar.update_stats(backend=backend_name, model=backend_config.model or "")
         status_bar.set_status(f"Backend set to: {backend_name}", animate=False)
+
+    async def _handle_link_command(self, target_prefixes: list[str], prompt: str) -> None:
+        """Create bidirectional links to one or more sessions.
+
+        Args:
+            target_prefixes: List of 8-char hash prefixes of target sessions
+            prompt: Prompt for generating link summary
+        """
+        import uuid
+        chat_log = self.query_one("#chat-log", ChatLog)
+        context_tree = self.query_one("#context-tree", ContextTree)
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        # Resolve all target sessions first
+        all_sessions = Session.list_sessions()
+        resolved_targets: list[tuple[str, Session]] = []  # (prefix, session)
+
+        for target_prefix in target_prefixes:
+            matches = [s for s in all_sessions if s["id"].startswith(target_prefix)]
+
+            if not matches:
+                status_bar.set_error(f"No session found matching '{target_prefix}'")
+                return
+
+            if len(matches) > 1:
+                match_ids = [s["id"][:8] for s in matches[:5]]
+                status_bar.set_error(f"Multiple sessions match '{target_prefix}': {', '.join(match_ids)}...")
+                return
+
+            target_session_id = matches[0]["id"]
+
+            # Check not linking to self
+            if target_session_id == self.session.id:
+                status_bar.set_error("Cannot link session to itself")
+                return
+
+            # Load target session
+            target_session = Session.load(target_session_id)
+            if not target_session:
+                status_bar.set_error(f"Failed to load session {target_prefix}")
+                return
+
+            resolved_targets.append((target_prefix, target_session))
+
+        # Get selected context for summary generation
+        indexed_messages = context_tree.get_selected_messages_with_indices()
+        if not indexed_messages:
+            status_bar.set_error("No context selected for link summary")
+            return
+
+        # Generate summary using LLM (one summary shared across all links)
+        status_bar.set_status("Generating link summary...", animate=True)
+        self.refresh()
+        await asyncio.sleep(0)
+
+        # Build messages for summary
+        messages = [msg for msg, _ in indexed_messages]
+        summary = await self._generate_link_summary(messages, prompt)
+
+        # Current position in this session (same for all links from this session)
+        current_link_point = len(self.session.messages)
+
+        # Create links to each target
+        linked_names = []
+        for target_prefix, target_session in resolved_targets:
+            # Create unique link ID (same for both sides of this pair)
+            link_id = str(uuid.uuid4())
+            target_link_point = len(target_session.messages)
+
+            # Add link to current session
+            self.session.add_link(
+                link_id=link_id,
+                linked_session_id=target_session.id,
+                link_point=current_link_point,
+                summary=summary,
+            )
+
+            # Add link to target session
+            target_session.add_link(
+                link_id=link_id,
+                linked_session_id=self.session.id,
+                link_point=target_link_point,
+                summary=summary,
+            )
+            target_session.save()
+
+            # Add link marker to current chat log
+            target_name = target_session.title or target_session.fork_name or target_session.id[:8]
+            chat_log.add_link_marker(
+                summary=summary,
+                linked_session_id=target_session.id,
+                linked_session_name=target_name,
+                link_point=target_link_point,
+            )
+            linked_names.append(target_name)
+
+        # Save current session once (after all links added)
+        self.session.save()
+
+        if len(linked_names) == 1:
+            status_bar.set_status(f"Linked to '{linked_names[0]}'", animate=False)
+        else:
+            status_bar.set_status(f"Linked to {len(linked_names)} sessions", animate=False)
+
+    async def _generate_link_summary(self, messages: list[Message], user_prompt: str) -> str:
+        """Generate a summary of context for a link.
+
+        Args:
+            messages: The messages to summarize
+            user_prompt: User's guidance for the summary
+
+        Returns:
+            Generated summary string
+        """
+        # Build conversation context
+        messages_text = []
+        for msg in messages:
+            role = "User" if msg.role == "user" else "Assistant"
+            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            # Truncate very long messages
+            if len(content) > 2000:
+                content = content[:2000] + "..."
+            messages_text.append(f"{role}: {content}")
+
+        context_str = "\n\n".join(messages_text)
+
+        summary_prompt = f"""Summarize the following conversation context in 1-3 concise sentences.
+The summary will be used as a link reference between sessions.
+
+{f"User guidance: {user_prompt}" if user_prompt else ""}
+
+Conversation:
+{context_str}
+
+Provide a brief, informative summary:"""
+
+        # Use the helper runner for summary generation
+        result = await self._helper_runner.run_prompt(summary_prompt)
+
+        if result:
+            return result.strip()
+        else:
+            # Fallback if LLM fails
+            return user_prompt or "Linked context"
 
     def _handle_suspend(self, cmd: str) -> None:
         """Suspend TUI and run interactive command in session's working directory."""
@@ -2428,6 +2647,13 @@ Summary:"""
         if child_session:
             self._switch_to_session(child_session)
 
+    def on_link_marker_linked_session_clicked(self, event: LinkMarker.LinkedSessionClicked) -> None:
+        """Handle clicking on LinkMarker to navigate to the linked session."""
+        linked_session = Session.load(event.linked_session_id)
+        if linked_session:
+            self._switch_to_session(linked_session)
+            # TODO: Could scroll to the link_point turn in the target session
+
     def on_merge_marker_child_clicked(self, event: MergeMarker.ChildClicked) -> None:
         """Handle clicking on MergeMarker to navigate to the (read-only) fork."""
         child_session = Session.load(event.child_session_id)
@@ -2516,6 +2742,9 @@ Summary:"""
             input_box.set_disabled(False)
             status_bar.set_streaming(False)
 
+        # Update working directory in status bar
+        status_bar.update_working_directory(session.working_directory or "")
+
         # Update header and request pane with session info
         chat_log.set_session_title(session.title)
         request_pane.show_session_info(
@@ -2537,11 +2766,16 @@ Summary:"""
                 turn_modes[turn_id] = mode.name
             chat_log.set_turn_context_modes(turn_modes)
 
+        # Update context tokens for the new session
+        self._update_context_tokens()
+
     def on_context_tree_selection_changed(self, event: ContextTree.SelectionChanged) -> None:
         """Handle tree selection changes - apply visual context mode indicators."""
         chat_log = self.query_one("#chat-log", ChatLog)
         # Use visual indication instead of hiding
         chat_log.set_turn_context_modes(event.turn_modes)
+        # Update context tokens when selection changes
+        self._update_context_tokens()
 
     def on_chat_log_context_mode_toggle_requested(self, event: ChatLog.ContextModeToggleRequested) -> None:
         """Handle click on chat widget to toggle its context mode."""
@@ -2573,6 +2807,8 @@ Summary:"""
         # Update tree label and trigger SelectionChanged to update chat visuals
         context_tree._update_turn_label(self.session.id, turn_idx)
         context_tree._update_root_label()
+        # Update context tokens when mode changes
+        self._update_context_tokens()
 
     def on_context_tree_context_mode_changed(self, event: ContextTree.ContextModeChanged) -> None:
         """Handle context mode change from tree - persist to session."""
@@ -2678,6 +2914,12 @@ Summary:"""
             name = session.id[:8]
         message = f"{name} ({msg_count} messages)"
 
+        # Check for active (non-orphaned) links
+        active_links = session.get_active_links()
+        if active_links:
+            link_count = len(active_links)
+            message += f"\n\nThis session has {link_count} active link(s) that will be orphaned."
+
         # Show confirmation dialog
         def on_confirm(confirmed: bool) -> None:
             if confirmed:
@@ -2692,6 +2934,13 @@ Summary:"""
         """Execute the session deletion after confirmation."""
         status_bar = self.query_one("#status-bar", StatusBar)
         context_tree = self.query_one("#context-tree", ContextTree)
+
+        # Mark links as orphaned in linked sessions before deletion
+        for link in session.get_active_links():
+            linked_session = Session.load(link.get("linked_session_id", ""))
+            if linked_session:
+                linked_session.mark_link_orphaned(link.get("link_id", ""))
+                linked_session.save()
 
         if session.delete():
             debug_log.info(
@@ -2725,6 +2974,48 @@ Summary:"""
         """Handle clicking on a session - switch to it."""
         # Switch to this session (works even while other sessions stream)
         self._switch_to_session(event.session)
+
+    def on_context_tree_session_link_requested(self, event: ContextTree.SessionLinkRequested) -> None:
+        """Handle ctrl+click on a session - populate or append to link command."""
+        import re
+
+        # Don't allow linking to the current session
+        if self.session and event.session_id == self.session.id:
+            status_bar = self.query_one("#status-bar", StatusBar)
+            status_bar.set_error("Cannot link to current session")
+            return
+
+        input_box = self.query_one("#input-box", InputBox)
+        new_hash = event.session_id[:8]
+        current_text = input_box.text
+
+        # Check if there's already a :link= command in the input
+        link_match = re.match(r'^:link=([a-f0-9,]+)(\s.*)?$', current_text)
+
+        if link_match:
+            # Existing link command - append to the hash list
+            existing_hashes = link_match.group(1)
+            rest = link_match.group(2) or " "
+
+            # Check if this hash is already in the list
+            hash_list = [h.strip() for h in existing_hashes.split(",")]
+            if new_hash in hash_list:
+                status_bar = self.query_one("#status-bar", StatusBar)
+                status_bar.set_error(f"Session {new_hash} already in link list")
+                return
+
+            # Append the new hash
+            new_hashes = f"{existing_hashes},{new_hash}"
+            new_text = f":link={new_hashes}{rest}"
+            input_box.clear()
+            input_box.insert(new_text)
+        else:
+            # No existing link command - create new one
+            link_cmd = f":link={new_hash} "
+            input_box.clear()
+            input_box.insert(link_cmd)
+
+        input_box.focus()
 
     def on_context_tree_turn_inspected(self, event: ContextTree.TurnInspected) -> None:
         """Handle turn inspection - show in request pane and highlight tool uses.
@@ -2799,6 +3090,8 @@ Summary:"""
         """Handle nested tree selection changes - apply visual context mode indicators."""
         chat_log = self.query_one("#chat-log", ChatLog)
         chat_log.set_turn_context_modes(event.turn_modes)
+        # Update context tokens when selection changes
+        self._update_context_tokens()
 
     def on_nested_session_tree_context_mode_changed(self, event: NestedSessionTree.ContextModeChanged) -> None:
         """Handle context mode change from nested tree - persist to session."""
@@ -2821,6 +3114,9 @@ Summary:"""
         if session and event.turn_idx < len(session.messages):
             session.messages[event.turn_idx].context_mode = event.new_mode
             session.save()
+
+        # Update context tokens when mode changes
+        self._update_context_tokens()
 
     def on_nested_session_tree_session_activated(self, event: NestedSessionTree.SessionActivated) -> None:
         """Handle clicking on a session in nested tree - switch to it."""
@@ -2859,6 +3155,12 @@ Summary:"""
         # Reuse the ContextTree handler logic
         context_tree_event = ContextTree.SessionDeleteRequested(event.session_id)
         self.on_context_tree_session_delete_requested(context_tree_event)
+
+    def on_nested_session_tree_session_link_requested(self, event: NestedSessionTree.SessionLinkRequested) -> None:
+        """Handle ctrl+click link request from nested tree."""
+        # Reuse the ContextTree handler logic
+        context_tree_event = ContextTree.SessionLinkRequested(event.session_id)
+        self.on_context_tree_session_link_requested(context_tree_event)
 
     def on_breadcrumb_segment_clicked(self, event: Breadcrumb.SegmentClicked) -> None:
         """Handle clicking a breadcrumb segment to navigate up."""

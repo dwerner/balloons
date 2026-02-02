@@ -22,6 +22,7 @@ from .commands import (
     TitleCommand,
     HelpCommand,
     BackendCommand,
+    LinkCommand,
     COMMAND_DOCS,
 )
 from .context import ContextBuilder
@@ -58,6 +59,7 @@ __all__ = [
     "TitleCommand",
     "HelpCommand",
     "BackendCommand",
+    "LinkCommand",
     "COMMAND_DOCS",
     # Context
     "ContextBuilder",

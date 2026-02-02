@@ -16,6 +16,7 @@ from .with_widget import WithWidget
 from .with_result_widget import WithResultWidget
 from .fork_marker import ForkMarker
 from .merge_marker import MergeMarker
+from .link_marker import LinkMarker
 from models import TextBlock, ToolUseBlock, ToolResultBlock
 from core.formatter import format_edit_as_diff, guess_language
 from session import Session
@@ -924,12 +925,13 @@ class ChatLog(VerticalScroll):
     def load_history(self, messages: list, session: Session | None = None) -> None:
         """Load message history from a list of Message objects.
 
-        If session is provided, also reconstructs fork and merge markers from
-        the session's children list.
+        If session is provided, also reconstructs fork, merge, and link markers from
+        the session's children and links lists.
         """
         # Build fork and merge points maps: turn_index -> list of child infos
         fork_points: dict[int, list[dict]] = {}
         merge_points: dict[int, list[dict]] = {}
+        link_points: dict[int, list[dict]] = {}
         if session:
             for child in session.children:
                 # Fork markers: all children have fork points
@@ -941,6 +943,11 @@ class ChatLog(VerticalScroll):
                     merge_point = child.get("merge_point", -1)
                     if merge_point >= 0:
                         merge_points.setdefault(merge_point, []).append(child)
+            # Link markers
+            for link in session.links:
+                link_point = link.get("link_point", -1)
+                if link_point >= 0:
+                    link_points.setdefault(link_point, []).append(link)
 
         def mount_forks(fork_point_idx: int, turn_id: int) -> None:
             """Mount fork markers for a given fork point."""
@@ -966,6 +973,27 @@ class ChatLog(VerticalScroll):
                         fork_name=child_info.get("name") or child_session.get_fork_display_name(),
                         turn_id=turn_id,
                     ))
+
+        def mount_links(link_point_idx: int, turn_id: int) -> None:
+            """Mount link markers for a given link point."""
+            for link_info in link_points.get(link_point_idx, []):
+                linked_session_id = link_info.get("linked_session_id", "")
+                linked_session = Session.load(linked_session_id)
+                is_orphaned = link_info.get("is_orphaned", False)
+                # Check if linked session exists
+                if linked_session:
+                    linked_name = linked_session.title or linked_session.fork_name or linked_session_id[:8]
+                else:
+                    linked_name = linked_session_id[:8] if linked_session_id else "[unknown]"
+                    is_orphaned = True  # Session doesn't exist anymore
+                self.mount(LinkMarker(
+                    summary=link_info.get("summary", ""),
+                    linked_session_id=linked_session_id,
+                    linked_session_name=linked_name,
+                    link_point=link_info.get("link_point", 0),
+                    turn_id=turn_id,
+                    is_orphaned=is_orphaned,
+                ))
 
         for turn_idx, msg in enumerate(messages):
             self._turn_counter += 1
@@ -1011,10 +1039,13 @@ class ChatLog(VerticalScroll):
             mount_forks(turn_idx, turn_id)
             # Add any merge markers after this turn
             mount_merges(turn_idx, turn_id)
+            # Add any link markers after this turn
+            mount_links(turn_idx, turn_id)
 
         # Add any markers at the end (point == len(messages))
         mount_forks(len(messages), self._turn_counter)
         mount_merges(len(messages), self._turn_counter)
+        mount_links(len(messages), self._turn_counter)
 
         self.scroll_end(animate=False)
 
@@ -1069,7 +1100,7 @@ class ChatLog(VerticalScroll):
         DEPRECATED: Use set_turn_context_modes instead for visual indication without hiding.
         """
         for child in self.children:
-            if isinstance(child, (MessageWidget, ToolUseWidget, ToolResultWidget, WithWidget, WithResultWidget, ForkMarker, MergeMarker)):
+            if isinstance(child, (MessageWidget, ToolUseWidget, ToolResultWidget, WithWidget, WithResultWidget, ForkMarker, MergeMarker, LinkMarker)):
                 if show_all or child.turn_id in turn_ids:
                     child.remove_class("hidden")
                 else:
@@ -1091,7 +1122,7 @@ class ChatLog(VerticalScroll):
         context_classes = ("context-copy", "context-compress", "context-drop")
 
         for child in self.children:
-            if isinstance(child, (MessageWidget, ToolUseWidget, ToolResultWidget, WithWidget, WithResultWidget, ForkMarker, MergeMarker)):
+            if isinstance(child, (MessageWidget, ToolUseWidget, ToolResultWidget, WithWidget, WithResultWidget, ForkMarker, MergeMarker, LinkMarker)):
                 # Remove any existing context classes
                 for cls in context_classes:
                     child.remove_class(cls)
@@ -1166,6 +1197,46 @@ class ChatLog(VerticalScroll):
         Returns True if the marker was found and scrolled to, False otherwise.
         """
         marker = self.find_merge_marker(child_session_id)
+        if marker:
+            self.scroll_to_widget_and_check_follow(marker)
+            return True
+        return False
+
+    def add_link_marker(
+        self,
+        summary: str,
+        linked_session_id: str,
+        linked_session_name: str,
+        link_point: int,
+        is_orphaned: bool = False,
+    ) -> LinkMarker:
+        """Add a link marker to the log (shows bidirectional link to another session)."""
+        turn_id = self._turn_counter
+        widget = LinkMarker(
+            summary=summary,
+            linked_session_id=linked_session_id,
+            linked_session_name=linked_session_name,
+            link_point=link_point,
+            turn_id=turn_id,
+            is_orphaned=is_orphaned,
+        )
+        self.mount(widget)
+        self._smart_scroll()
+        return widget
+
+    def find_link_marker(self, linked_session_id: str) -> LinkMarker | None:
+        """Find a LinkMarker by its linked session ID."""
+        for child in self.children:
+            if isinstance(child, LinkMarker) and child.linked_session_id == linked_session_id:
+                return child
+        return None
+
+    def scroll_to_link_marker(self, linked_session_id: str) -> bool:
+        """Scroll to a link marker by its linked session ID.
+
+        Returns True if the marker was found and scrolled to, False otherwise.
+        """
+        marker = self.find_link_marker(linked_session_id)
         if marker:
             self.scroll_to_widget_and_check_follow(marker)
             return True

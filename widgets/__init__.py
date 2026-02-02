@@ -12,6 +12,7 @@ from .with_result_widget import WithResultWidget
 from .debug_pane import DebugPane
 from .fork_marker import ForkMarker
 from .merge_marker import MergeMarker
+from .link_marker import LinkMarker
 from .breadcrumb import Breadcrumb
 
 __all__ = [
@@ -35,5 +36,6 @@ __all__ = [
     "DebugPane",
     "ForkMarker",
     "MergeMarker",
+    "LinkMarker",
     "Breadcrumb",
 ]

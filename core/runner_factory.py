@@ -56,10 +56,14 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
 
         api_key = resolve_env_var(backend.api_key or "")
 
+        # Load system prompt if configured
+        system_prompt = backend.load_system_prompt()
+
         return OpenAICompatibleRunner(
             base_url=backend.base_url,
             api_key=api_key,
             model=backend.model,
+            system_prompt=system_prompt,
         )
 
     elif backend_type == "claude":
@@ -73,7 +77,10 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
         if backend.api_key:
             env["ANTHROPIC_API_KEY"] = resolve_env_var(backend.api_key)
 
-        return ClaudeRunner(backend_env=env if env else None)
+        # Load system prompt if configured
+        system_prompt = backend.load_system_prompt()
+
+        return ClaudeRunner(backend_env=env if env else None, system_prompt=system_prompt)
 
     else:
         raise ValueError(f"Unknown backend type: {backend_type}. Valid types: 'claude', 'openai'")

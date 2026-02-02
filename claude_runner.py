@@ -43,12 +43,13 @@ async def readline_unlimited(stream: asyncio.StreamReader) -> bytes:
 
 
 class ClaudeRunner(BaseRunner):
-    def __init__(self, backend_env: dict[str, str] | None = None):
+    def __init__(self, backend_env: dict[str, str] | None = None, system_prompt: str | None = None):
         self.process: asyncio.subprocess.Process | None = None
         self._terminated = False
         self._current_tool_use: dict | None = None  # Track tool use being built
         self._run_id: str = ""  # Current process PID for debug logging
         self._backend_env = backend_env or {}  # Environment overrides for LLM backend
+        self.system_prompt = system_prompt  # Additional system context to prepend
 
     @staticmethod
     def build_context(messages: list[Message], new_prompt: str) -> str:
@@ -120,6 +121,10 @@ class ClaudeRunner(BaseRunner):
             full_prompt = self.build_context(messages, prompt)
         else:
             full_prompt = prompt
+
+        # Prepend additional system context if configured
+        if self.system_prompt:
+            full_prompt = f"[Additional Context]\n{self.system_prompt}\n\n{full_prompt}"
 
         cmd = [
             "claude",

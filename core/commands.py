@@ -18,6 +18,7 @@ class Command:
 class NewSessionCommand(Command):
     """Create a new blank session, optionally with an initial prompt."""
     prompt: str = ""
+    title: str = ""
 
 
 @dataclass
@@ -144,10 +145,26 @@ class BackendCommand(Command):
     backend_name: str = ""  # Empty = show current, non-empty = set
 
 
+@dataclass
+class LinkCommand(Command):
+    """Create bidirectional link to one or more sessions.
+
+    Links both sessions at their current positions with a shared summary.
+    Unlike forks, links are symmetric - neither session is "parent".
+    Multiple targets can be specified as comma-separated hashes.
+    """
+    target_session_prefixes: list[str] = None  # List of 8-char hash prefixes
+    prompt: str = ""  # Prompt for generating link summary
+
+    def __post_init__(self):
+        if self.target_session_prefixes is None:
+            self.target_session_prefixes = []
+
+
 # Command documentation for help display
 COMMAND_DOCS = [
     # Session management
-    (":new [prompt]", "Create a new blank session, optionally with initial prompt"),
+    (":new[=title] [prompt]", "Create a new blank session, optionally with title and prompt"),
     (":title <title>", "Set the session title"),
     (":switch [name]", "Switch to another session (shows picker if no name)"),
     # Forking and merging
@@ -155,6 +172,7 @@ COMMAND_DOCS = [
     (":fork ... --bg", "Fork in background (continue working in parent)"),
     (":merge [prompt]", "Merge fork back to parent with LLM summary"),
     (":derive <prompt>", "New independent session with selected context (no merge)"),
+    (":link=<hash>[,hash,...] <prompt>", "Create bidirectional links to other sessions"),
     # Context operations
     (":query-with <prompt>", "Query with selected context, response in new session"),
     (":copy-turns", "Copy selected turns to a new session"),
@@ -183,7 +201,7 @@ class CommandParser:
             # Regular prompt, send to Claude
 
     Commands:
-        :new [prompt]           - Create new session, optionally with initial prompt
+        :new[=title] [prompt]   - Create new session, optionally with title and prompt
         :fork[=name] <prompt>   - Fork with selected context, start working
         :merge [prompt]         - Merge fork back to parent (LLM summarizes)
         :derive <prompt>        - New independent session with selected context
@@ -209,10 +227,9 @@ class CommandParser:
         if text == ":copy-turns":
             return CopyTurnsCommand()
 
-        # Handle :new [prompt]
-        if text == ":new" or text.startswith(":new "):
-            prompt = text[4:].strip() if len(text) > 4 else ""
-            return NewSessionCommand(prompt=prompt)
+        # Handle :new[=title] [prompt]
+        if text == ":new" or text.startswith(":new ") or text.startswith(":new="):
+            return self._parse_new(text)
 
         # Handle :fork[=name] <prompt> [--bg]
         if text.startswith(":fork"):
@@ -306,6 +323,10 @@ class CommandParser:
             backend_name = text[8:].strip() if len(text) > 8 else ""
             return BackendCommand(backend_name=backend_name)
 
+        # Handle :link=<hash> <prompt>
+        if text.startswith(":link"):
+            return self._parse_link(text)
+
         # Unknown command
         cmd_name = text.split()[0]
         raise ValueError(f"Unknown command: {cmd_name}")
@@ -342,6 +363,25 @@ class CommandParser:
 
         return ForkCommand(prompt=prompt, name=name, background=background)
 
+    def _parse_new(self, text: str) -> NewSessionCommand:
+        """Parse :new[=title] [prompt] command."""
+        title = ""
+        remaining = text[4:]  # Remove ":new"
+
+        if remaining.startswith("="):
+            # Extract title until space
+            eq_part = remaining[1:]  # Remove "="
+            if " " in eq_part:
+                title, remaining = eq_part.split(" ", 1)
+            else:
+                title = eq_part
+                remaining = ""
+        else:
+            remaining = remaining.strip()
+
+        prompt = remaining.strip()
+        return NewSessionCommand(prompt=prompt, title=title)
+
     def _parse_with_args(self, args: str) -> tuple[str, str, bool]:
         """Parse :with/:with-copy arguments into (prompt, return_condition, background).
 
@@ -366,3 +406,31 @@ class CommandParser:
             return_condition = "manual"
 
         return prompt, return_condition, background
+
+    def _parse_link(self, text: str) -> LinkCommand:
+        """Parse :link=<hash>[,hash,...] <prompt> command."""
+        remaining = text[5:]  # Remove ":link"
+
+        if not remaining.startswith("="):
+            raise ValueError(":link requires =<session-hash> (e.g., :link=abc12345 <prompt>)")
+
+        # Extract hashes until space
+        eq_part = remaining[1:]  # Remove "="
+        if " " in eq_part:
+            hashes_str, prompt = eq_part.split(" ", 1)
+            prompt = prompt.strip()
+        else:
+            hashes_str = eq_part
+            prompt = ""
+
+        if not hashes_str:
+            raise ValueError(":link requires at least one session hash prefix")
+        if not prompt:
+            raise ValueError(":link requires a prompt")
+
+        # Parse comma-separated hashes
+        target_prefixes = [h.strip() for h in hashes_str.split(",") if h.strip()]
+        if not target_prefixes:
+            raise ValueError(":link requires at least one session hash prefix")
+
+        return LinkCommand(target_session_prefixes=target_prefixes, prompt=prompt)

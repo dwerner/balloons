@@ -7,6 +7,8 @@ from typing import Optional
 
 import yaml
 
+from tokenizer import count_tokens
+
 
 @dataclass
 class BackendConfig:
@@ -18,12 +20,46 @@ class BackendConfig:
         base_url: API base URL (required for openai type, optional for claude)
         api_key: API key (supports ${ENV_VAR} syntax)
         model: Model identifier (required for openai type)
+        system_prompt: Path to system prompt file (supports ~ expansion)
     """
     name: str
     type: str = "claude"  # "claude" or "openai"
     base_url: Optional[str] = None
     api_key: Optional[str] = None
     model: Optional[str] = None
+    system_prompt: Optional[str] = None  # Path to system prompt file
+
+    # Cached at runtime (not persisted)
+    _system_prompt_content: Optional[str] = field(default=None, repr=False, compare=False)
+    _system_prompt_tokens: int = field(default=0, repr=False, compare=False)
+
+    def load_system_prompt(self) -> Optional[str]:
+        """Load and cache system prompt from file.
+
+        Returns:
+            System prompt content, or None if not configured or file not found.
+        """
+        if self._system_prompt_content is not None:
+            return self._system_prompt_content
+        if not self.system_prompt:
+            return None
+        path = Path(self.system_prompt).expanduser()
+        if path.exists():
+            self._system_prompt_content = path.read_text()
+            self._system_prompt_tokens = count_tokens(self._system_prompt_content)
+        return self._system_prompt_content
+
+    def get_system_prompt_tokens(self) -> int:
+        """Get the token count for the system prompt.
+
+        Loads the prompt if not already cached.
+
+        Returns:
+            Token count, or 0 if no system prompt configured.
+        """
+        if self._system_prompt_content is None:
+            self.load_system_prompt()
+        return self._system_prompt_tokens
 
 
 @dataclass
@@ -76,6 +112,7 @@ class Config:
                 base_url=backend_data.get("base_url"),
                 api_key=backend_data.get("api_key"),
                 model=backend_data.get("model"),
+                system_prompt=backend_data.get("system_prompt"),
             )
 
         # Ensure claude backend always exists

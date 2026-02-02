@@ -3,6 +3,7 @@
 Manages multiple sessions and their runners, enabling background execution.
 """
 
+import os
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List
 from datetime import datetime
@@ -77,8 +78,8 @@ class SessionManager:
             New Session instance
         """
         session = Session()
-        if working_directory:
-            session.working_directory = working_directory
+        # Default to current working directory if not specified
+        session.set_working_directory(working_directory or os.getcwd())
         session.save()
 
         self._sessions[session.id] = session
@@ -170,7 +171,7 @@ class SessionManager:
         child = Session()
         child.parent_id = parent_id
         child.return_condition = return_condition
-        child.working_directory = parent.working_directory
+        child.working_directories = parent.working_directories.copy()
 
         # Copy messages to child
         for msg in messages:

@@ -5,7 +5,7 @@ from textual.timer import Timer
 
 
 class StatusBar(Static):
-    """Status bar showing model, token usage, and cost."""
+    """Status bar showing model, context usage, and cost."""
 
     class FollowClicked(Message):
         """Posted when the Follow indicator is clicked."""
@@ -13,8 +13,7 @@ class StatusBar(Static):
 
     model: reactive[str] = reactive("")
     backend: reactive[str] = reactive("")  # Backend name (e.g., "openrouter", "claude")
-    input_tokens: reactive[int] = reactive(0)
-    output_tokens: reactive[int] = reactive(0)
+    context_tokens: reactive[int] = reactive(0)  # Estimated tokens for next API call
     context_window: reactive[int] = reactive(200000)
     cost: reactive[float] = reactive(0.0)
     streaming: reactive[bool] = reactive(False)
@@ -38,9 +37,8 @@ class StatusBar(Static):
     """
 
     def render(self) -> str:
-        total_tokens = self.input_tokens + self.output_tokens
         if self.context_window > 0:
-            percent = (total_tokens / self.context_window) * 100
+            percent = (self.context_tokens / self.context_window) * 100
         else:
             percent = 0
 
@@ -102,7 +100,7 @@ class StatusBar(Static):
 
         return (
             f"[{backend_display}{model_display}] "
-            f"{total_tokens:,} / {self.context_window:,} tokens ({percent:.1f}%) | "
+            f"{self.context_tokens:,} / {self.context_window:,} ctx ({percent:.1f}%) | "
             f"${self.cost:.4f}"
             f"{wd_display}"
             f"{follow_indicator}"
@@ -114,8 +112,7 @@ class StatusBar(Static):
         self,
         model: str = None,
         backend: str = None,
-        input_tokens: int = None,
-        output_tokens: int = None,
+        context_tokens: int = None,
         context_window: int = None,
         cost: float = None,
     ):
@@ -123,10 +120,8 @@ class StatusBar(Static):
             self.model = model
         if backend is not None:
             self.backend = backend
-        if input_tokens is not None:
-            self.input_tokens = input_tokens
-        if output_tokens is not None:
-            self.output_tokens = output_tokens
+        if context_tokens is not None:
+            self.context_tokens = context_tokens
         if context_window is not None:
             self.context_window = context_window
         if cost is not None:

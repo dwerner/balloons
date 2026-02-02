@@ -13,7 +13,7 @@ from models import Message, TextDelta, InitEvent, ResultEvent, ToolUseEvent, Too
 def session():
     """Create a test session."""
     s = Session()
-    s.working_directory = "/test"
+    s.set_working_directory("/test")
     return s
 
 

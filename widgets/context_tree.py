@@ -127,6 +127,30 @@ class SelectableTree(Tree):
             self.session_id = session_id
             super().__init__()
 
+    class LinkRequested(Message):
+        """Fired when user ctrl+clicks on a session to create a link."""
+        def __init__(self, session_id: str) -> None:
+            self.session_id = session_id
+            super().__init__()
+
+    async def _on_click(self, event) -> None:
+        """Handle clicks - ctrl+click on session creates link command."""
+        if event.ctrl:
+            # Get the node under cursor from the line metadata
+            meta = event.style.meta
+            if "line" in meta:
+                node = self.get_node_at_line(meta["line"])
+                if node and node.data:
+                    node_type = node.data.get("type")
+                    if node_type in ("session", "fork", "merge"):
+                        session_id = node.data.get("session_id")
+                        if session_id:
+                            self.post_message(self.LinkRequested(session_id))
+                            event.stop()
+                            return
+        # Default click behavior
+        await super()._on_click(event)
+
     async def _on_key(self, event: Key) -> None:
         if event.key == "space":
             node = self.cursor_node
@@ -326,6 +350,12 @@ class ContextTree(Vertical):
 
     class SessionDeleteRequested(Message):
         """Fired when user requests to delete a session."""
+        def __init__(self, session_id: str) -> None:
+            self.session_id = session_id
+            super().__init__()
+
+    class SessionLinkRequested(Message):
+        """Fired when user ctrl+clicks a session to create a link command."""
         def __init__(self, session_id: str) -> None:
             self.session_id = session_id
             super().__init__()
@@ -2047,6 +2077,10 @@ class ContextTree(Vertical):
     def on_selectable_tree_session_delete_requested(self, event: SelectableTree.SessionDeleteRequested) -> None:
         """Handle session delete request - bubble up to app."""
         self.post_message(self.SessionDeleteRequested(event.session_id))
+
+    def on_selectable_tree_link_requested(self, event: SelectableTree.LinkRequested) -> None:
+        """Handle ctrl+click link request - bubble up to app."""
+        self.post_message(self.SessionLinkRequested(event.session_id))
 
     def on_input_changed(self, event: Input.Changed) -> None:
         """Filter tree nodes as user types."""

@@ -92,6 +92,7 @@ def main():
             sys.exit(1)
     elif args.new:
         session = Session()
+        session.set_working_directory(os.getcwd())
 
     app = BalloonsApp(session=session, backend_config=backend_config)
     app.run()
