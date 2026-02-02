@@ -3,7 +3,7 @@ from .input_box import InputBox
 from .status_bar import StatusBar
 from .context_tree import ContextTree
 from .nested_tree import NestedSessionTree
-from .splitter import VerticalSplitter
+from .splitter import VerticalSplitter, HorizontalSplitter
 from .context_preview import ContextPreview, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult
 from .request_pane import RequestPane
 from .tool_bar import ToolBar
@@ -24,6 +24,7 @@ __all__ = [
     "ContextTree",
     "NestedSessionTree",
     "VerticalSplitter",
+    "HorizontalSplitter",
     "ContextPreview",
     "ConfirmDialog",
     "HelpModal",

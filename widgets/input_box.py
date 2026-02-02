@@ -1,17 +1,24 @@
 from textual.widgets import TextArea
 from textual.message import Message
 from textual.events import Key
+from textual.reactive import reactive
 
 
 class InputBox(TextArea):
-    """Multi-line input box for user messages."""
+    """Multi-line input box for user messages.
+
+    Features:
+    - Auto-expands height as content grows
+    - Bounded by max_height (adjustable via drag)
+    - Shows scrollbar when content exceeds max_height
+    """
 
     DEFAULT_CSS = """
     InputBox {
         height: auto;
-        max-height: 5;
         border: solid $primary;
         background: $surface;
+        overflow-y: auto;
     }
 
     InputBox:focus {
@@ -22,6 +29,12 @@ class InputBox(TextArea):
         opacity: 0.5;
     }
     """
+
+    MIN_HEIGHT = 3
+    MAX_HEIGHT_LIMIT = 20
+    DEFAULT_MAX_HEIGHT = 5
+
+    max_height = reactive(DEFAULT_MAX_HEIGHT)
 
     class Submitted(Message):
         """Message sent when user submits input."""
@@ -36,6 +49,20 @@ class InputBox(TextArea):
         self._history: list[str] = []
         self._history_index: int = -1
         self._current_input: str = ""
+
+    def watch_max_height(self, new_max: int) -> None:
+        """Update CSS when max_height changes."""
+        self.styles.max_height = new_max
+
+    def on_mount(self) -> None:
+        """Set initial max-height."""
+        self.styles.max_height = self.max_height
+
+    def adjust_max_height(self, delta: int) -> None:
+        """Adjust max_height by delta, respecting bounds."""
+        new_height = self.max_height - delta  # Negative delta = drag up = increase height
+        new_height = max(self.MIN_HEIGHT, min(self.MAX_HEIGHT_LIMIT, new_height))
+        self.max_height = new_height
 
     # Keys that should bubble up to the app (not handled by TextArea)
     APP_KEYS = {"ctrl+t", "ctrl+o", "ctrl+q", "ctrl+r", "ctrl+g", "ctrl+c"}

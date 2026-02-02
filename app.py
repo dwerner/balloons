@@ -31,7 +31,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLog, MoreBelowIndicator, InputBox, StatusBar, ContextTree, NestedSessionTree, VerticalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult
+from widgets import ChatLog, MoreBelowIndicator, InputBox, StatusBar, ContextTree, NestedSessionTree, VerticalSplitter, HorizontalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult
 from claude_runner import ClaudeRunner
 from session import Session
 from config import get_config, BackendConfig, save_last_view
@@ -143,7 +143,14 @@ class BalloonsApp(App):
 
     InputBox {
         height: auto;
-        max-height: 5;
+    }
+
+    HorizontalSplitter {
+        dock: bottom;
+    }
+
+    #input-area {
+        height: auto;
     }
     """
 
@@ -287,7 +294,9 @@ class BalloonsApp(App):
             yield ToolBar(id="tool-bar")
             yield DebugPane(id="debug-pane")
             yield StatusBar(id="status-bar")
-            yield InputBox(id="input-box")
+            with Vertical(id="input-area"):
+                yield HorizontalSplitter(id="input-splitter")
+                yield InputBox(id="input-box")
 
     def on_mount(self) -> None:
         """Initialize the app after mounting."""
@@ -3348,6 +3357,11 @@ Summary:"""
     def on_vertical_splitter_resized(self, event: VerticalSplitter.Resized) -> None:
         """Handle splitter drag."""
         self.action_resize_tree(event.delta_x)
+
+    def on_horizontal_splitter_resized(self, event: HorizontalSplitter.Resized) -> None:
+        """Handle input box height resize via splitter drag."""
+        input_box = self.query_one("#input-box", InputBox)
+        input_box.adjust_max_height(event.delta_y)
 
     def on_chat_log_following_changed(self, event: ChatLog.FollowingChanged) -> None:
         """Update status bar and more-below indicator when chat log following state changes."""

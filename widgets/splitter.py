@@ -54,3 +54,56 @@ class VerticalSplitter(Static):
             self.remove_class("dragging")
             self.release_mouse()
             event.stop()
+
+
+class HorizontalSplitter(Static):
+    """A draggable horizontal splitter for resizing height."""
+
+    DEFAULT_CSS = """
+    HorizontalSplitter {
+        width: 100%;
+        height: 1;
+        background: $primary;
+    }
+
+    HorizontalSplitter:hover {
+        background: $accent;
+    }
+
+    HorizontalSplitter.dragging {
+        background: $accent;
+    }
+    """
+
+    class Resized(Message):
+        """Message sent when splitter is dragged."""
+        def __init__(self, delta_y: int) -> None:
+            self.delta_y = delta_y
+            super().__init__()
+
+    def __init__(self, **kwargs):
+        super().__init__("─" * 200, **kwargs)
+        self._dragging = False
+        self._drag_start_y = 0
+
+    def on_mouse_down(self, event: MouseDown) -> None:
+        self._dragging = True
+        self._drag_start_y = event.screen_y
+        self.add_class("dragging")
+        self.capture_mouse()
+        event.stop()
+
+    def on_mouse_move(self, event: MouseMove) -> None:
+        if self._dragging:
+            delta = event.screen_y - self._drag_start_y
+            if delta != 0:
+                self.post_message(self.Resized(delta))
+                self._drag_start_y = event.screen_y
+            event.stop()
+
+    def on_mouse_up(self, event: MouseUp) -> None:
+        if self._dragging:
+            self._dragging = False
+            self.remove_class("dragging")
+            self.release_mouse()
+            event.stop()
