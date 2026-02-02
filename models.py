@@ -59,8 +59,18 @@ class ErrorBlock:
     details: str = ""  # Error message or other details
 
 
+@dataclass
+class LinkBlock:
+    """Marker indicating a bidirectional link to another session."""
+    type: str = "link"
+    link_id: str = ""  # UUID for this link pair (same in both sessions)
+    linked_session_id: str = ""  # The other session's ID
+    summary: str = ""  # LLM-generated summary
+    is_orphaned: bool = False  # True if linked session was deleted
+
+
 # Union type for all content block types
-ContentBlock = Union[TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock]
+ContentBlock = Union[TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock]
 
 
 @dataclass

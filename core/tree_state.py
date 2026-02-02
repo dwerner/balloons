@@ -428,6 +428,36 @@ class TreeState:
                 return turn
         return None
 
+    def get_turns_grouped_by_exchange(self, session_id: str) -> list[list[TurnData]]:
+        """Get turns grouped by exchange_id.
+
+        Returns a list of groups, where each group is a list of TurnData
+        sharing the same exchange_id. Turns without an exchange_id are
+        placed in their own single-turn group.
+
+        Groups are returned in order of their first turn's index.
+        """
+        session_data = self._sessions.get(session_id)
+        if not session_data or session_data.turns is None:
+            return []
+
+        groups: list[list[TurnData]] = []
+        exchange_to_group: dict[str, list[TurnData]] = {}
+
+        for turn in session_data.turns:
+            if turn.exchange_id:
+                if turn.exchange_id in exchange_to_group:
+                    exchange_to_group[turn.exchange_id].append(turn)
+                else:
+                    group = [turn]
+                    exchange_to_group[turn.exchange_id] = group
+                    groups.append(group)
+            else:
+                # No exchange_id - own group
+                groups.append([turn])
+
+        return groups
+
     # --- Tool Use Operations ---
 
     def add_tool_use(

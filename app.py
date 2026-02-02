@@ -1531,29 +1531,23 @@ class BalloonsApp(App):
         messages = [msg for msg, _ in indexed_messages]
         summary = await self._generate_link_summary(messages, prompt)
 
-        # Current position in this session (same for all links from this session)
-        current_link_point = len(self.session.messages)
-
         # Create links to each target
         linked_names = []
         for target_prefix, target_session in resolved_targets:
             # Create unique link ID (same for both sides of this pair)
             link_id = str(uuid.uuid4())
-            target_link_point = len(target_session.messages)
 
-            # Add link to current session
-            self.session.add_link(
+            # Add link as a turn in current session (preserves ordering)
+            self.session.add_link_turn(
                 link_id=link_id,
                 linked_session_id=target_session.id,
-                link_point=current_link_point,
                 summary=summary,
             )
 
-            # Add link to target session
-            target_session.add_link(
+            # Add link as a turn in target session (preserves ordering)
+            target_session.add_link_turn(
                 link_id=link_id,
                 linked_session_id=self.session.id,
-                link_point=target_link_point,
                 summary=summary,
             )
             target_session.save()
@@ -1564,7 +1558,7 @@ class BalloonsApp(App):
                 summary=summary,
                 linked_session_id=target_session.id,
                 linked_session_name=target_name,
-                link_point=target_link_point,
+                link_point=len(self.session.messages) - 1,  # Current turn index
             )
             linked_names.append(target_name)
 
@@ -3028,7 +3022,8 @@ Summary:"""
         context_tree = self.query_one("#context-tree", ContextTree)
 
         # Mark links as orphaned in linked sessions before deletion
-        for link in session.get_active_links():
+        # Check both legacy links and turn-based LinkBlocks
+        for link in session.get_all_active_links():
             linked_session = Session.load(link.get("linked_session_id", ""))
             if linked_session:
                 linked_session.mark_link_orphaned(link.get("link_id", ""))

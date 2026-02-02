@@ -554,18 +554,60 @@ class NestedSessionTree(Vertical):
         session_id: str,
         turns: list[TurnData]
     ) -> None:
-        """Add turn nodes to a session node."""
-        for turn in turns:
-            mode = self._state.get_context_mode(session_id, turn.idx)
-            label = self._make_turn_label(turn.role, turn.content, mode, turn.content_blocks)
-            turn_node = session_node.add(
-                label,
-                data={"type": "turn", "session_id": session_id, "turn_idx": turn.idx}
-            )
-            self._turn_nodes[(session_id, turn.idx)] = turn_node
+        """Add turn nodes to a session node, grouped by exchange_id.
 
-            # Add tool use blocks as children
-            self._add_content_block_nodes(turn_node, session_id, turn.idx, turn.content_blocks)
+        Turns with the same exchange_id are nested under an exchange group node.
+        Single-turn groups (or turns without exchange_id) are added directly.
+        """
+        groups = self._state.get_turns_grouped_by_exchange(session_id)
+
+        for group in groups:
+            if len(group) == 1:
+                # Single turn - add directly to session
+                turn = group[0]
+                self._add_single_turn_node(session_node, session_id, turn)
+            else:
+                # Multi-turn exchange - create a group node
+                exchange_id = group[0].exchange_id
+                first_turn = group[0]
+
+                # Create exchange label from first turn's role/content
+                user_content = first_turn.content if first_turn.role == "user" else ""
+                preview = user_content[:25] + "..." if len(user_content) > 25 else user_content
+                preview = preview.replace("\n", " ")
+                exchange_label = f"[dim]⟨{len(group)}⟩[/] {preview or 'Exchange'}"
+
+                exchange_node = session_node.add(
+                    exchange_label,
+                    data={
+                        "type": "exchange",
+                        "session_id": session_id,
+                        "exchange_id": exchange_id,
+                        "first_turn_idx": first_turn.idx,
+                    }
+                )
+
+                # Add turns as children of the exchange node
+                for turn in group:
+                    self._add_single_turn_node(exchange_node, session_id, turn)
+
+    def _add_single_turn_node(
+        self,
+        parent_node,
+        session_id: str,
+        turn: TurnData
+    ) -> None:
+        """Add a single turn node to a parent (session or exchange group)."""
+        mode = self._state.get_context_mode(session_id, turn.idx)
+        label = self._make_turn_label(turn.role, turn.content, mode, turn.content_blocks)
+        turn_node = parent_node.add(
+            label,
+            data={"type": "turn", "session_id": session_id, "turn_idx": turn.idx}
+        )
+        self._turn_nodes[(session_id, turn.idx)] = turn_node
+
+        # Add tool use blocks as children
+        self._add_content_block_nodes(turn_node, session_id, turn.idx, turn.content_blocks)
 
     def _add_content_block_nodes(
         self,

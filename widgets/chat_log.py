@@ -17,7 +17,7 @@ from .with_result_widget import WithResultWidget
 from .fork_marker import ForkMarker
 from .merge_marker import MergeMarker
 from .link_marker import LinkMarker
-from models import TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock
+from models import TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock
 from core.formatter import format_edit_as_diff, guess_language
 from session import Session
 
@@ -1139,6 +1139,24 @@ class ChatLog(VerticalScroll):
                             partial_tool_name=block.partial_tool_name,
                             details=block.details,
                             turn_id=turn_id,
+                        )
+                        self.mount(widget)
+                    elif isinstance(block, LinkBlock):
+                        # Render LinkBlock as LinkMarker
+                        linked_session = Session.load(block.linked_session_id)
+                        is_orphaned = block.is_orphaned
+                        if linked_session:
+                            linked_name = linked_session.title or linked_session.fork_name or block.linked_session_id[:8]
+                        else:
+                            linked_name = block.linked_session_id[:8] if block.linked_session_id else "[unknown]"
+                            is_orphaned = True
+                        widget = LinkMarker(
+                            summary=block.summary,
+                            linked_session_id=block.linked_session_id,
+                            linked_session_name=linked_name,
+                            link_point=turn_idx,  # The turn index where this link exists
+                            turn_id=turn_id,
+                            is_orphaned=is_orphaned,
                         )
                         self.mount(widget)
             else:

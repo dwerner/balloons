@@ -36,6 +36,7 @@ class MockMessage:
     content: str
     content_blocks: list = field(default_factory=list)
     context_mode: ContextMode = None
+    exchange_id: str | None = None
 
 
 @dataclass
@@ -457,3 +458,154 @@ class TestTreeStateClear:
         state.request_rebuild()
 
         assert TreeEvent.FULL_REBUILD in events
+
+
+class TestTreeStateExchangeGrouping:
+    """Test grouping turns by exchange_id."""
+
+    def test_empty_session_returns_empty_list(self):
+        state = TreeState()
+        session = MockSession(id="s1", messages=[])
+        state.load_session("s1", session)
+
+        groups = state.get_turns_grouped_by_exchange("s1")
+
+        assert groups == []
+
+    def test_nonexistent_session_returns_empty_list(self):
+        state = TreeState()
+
+        groups = state.get_turns_grouped_by_exchange("nonexistent")
+
+        assert groups == []
+
+    def test_turns_without_exchange_id_each_in_own_group(self):
+        state = TreeState()
+        session = MockSession(
+            id="s1",
+            messages=[
+                MockMessage(role="user", content="Hello"),
+                MockMessage(role="assistant", content="Hi"),
+                MockMessage(role="user", content="Bye"),
+            ]
+        )
+        state.load_session("s1", session)
+
+        groups = state.get_turns_grouped_by_exchange("s1")
+
+        assert len(groups) == 3
+        assert len(groups[0]) == 1
+        assert len(groups[1]) == 1
+        assert len(groups[2]) == 1
+        assert groups[0][0].content == "Hello"
+        assert groups[1][0].content == "Hi"
+        assert groups[2][0].content == "Bye"
+
+    def test_turns_with_same_exchange_id_grouped_together(self):
+        state = TreeState()
+        session = MockSession(
+            id="s1",
+            messages=[
+                MockMessage(role="user", content="Do something", exchange_id="ex1"),
+                MockMessage(role="assistant", content="Thinking...", exchange_id="ex1"),
+                MockMessage(role="assistant", content="Done!", exchange_id="ex1"),
+            ]
+        )
+        state.load_session("s1", session)
+
+        groups = state.get_turns_grouped_by_exchange("s1")
+
+        assert len(groups) == 1
+        assert len(groups[0]) == 3
+        assert groups[0][0].content == "Do something"
+        assert groups[0][1].content == "Thinking..."
+        assert groups[0][2].content == "Done!"
+
+    def test_mixed_exchange_ids(self):
+        """Multiple exchanges interleaved - each grouped separately."""
+        state = TreeState()
+        session = MockSession(
+            id="s1",
+            messages=[
+                MockMessage(role="user", content="Q1", exchange_id="ex1"),
+                MockMessage(role="assistant", content="A1", exchange_id="ex1"),
+                MockMessage(role="user", content="Q2", exchange_id="ex2"),
+                MockMessage(role="assistant", content="Tool call", exchange_id="ex2"),
+                MockMessage(role="assistant", content="Tool result", exchange_id="ex2"),
+                MockMessage(role="assistant", content="A2", exchange_id="ex2"),
+            ]
+        )
+        state.load_session("s1", session)
+
+        groups = state.get_turns_grouped_by_exchange("s1")
+
+        assert len(groups) == 2
+        # First exchange: Q1, A1
+        assert len(groups[0]) == 2
+        assert [t.content for t in groups[0]] == ["Q1", "A1"]
+        # Second exchange: Q2, Tool call, Tool result, A2
+        assert len(groups[1]) == 4
+        assert [t.content for t in groups[1]] == ["Q2", "Tool call", "Tool result", "A2"]
+
+    def test_turns_without_exchange_id_between_exchanges(self):
+        """Turns without exchange_id are isolated from grouped turns."""
+        state = TreeState()
+        session = MockSession(
+            id="s1",
+            messages=[
+                MockMessage(role="user", content="Q1", exchange_id="ex1"),
+                MockMessage(role="assistant", content="A1", exchange_id="ex1"),
+                MockMessage(role="system", content="System note"),  # No exchange_id
+                MockMessage(role="user", content="Q2", exchange_id="ex2"),
+                MockMessage(role="assistant", content="A2", exchange_id="ex2"),
+            ]
+        )
+        state.load_session("s1", session)
+
+        groups = state.get_turns_grouped_by_exchange("s1")
+
+        assert len(groups) == 3
+        # First exchange
+        assert len(groups[0]) == 2
+        assert [t.content for t in groups[0]] == ["Q1", "A1"]
+        # Isolated turn
+        assert len(groups[1]) == 1
+        assert groups[1][0].content == "System note"
+        # Second exchange
+        assert len(groups[2]) == 2
+        assert [t.content for t in groups[2]] == ["Q2", "A2"]
+
+    def test_groups_preserve_turn_order(self):
+        """Within a group, turns stay in original index order."""
+        state = TreeState()
+        session = MockSession(
+            id="s1",
+            messages=[
+                MockMessage(role="user", content="First", exchange_id="ex1"),
+                MockMessage(role="assistant", content="Second", exchange_id="ex1"),
+                MockMessage(role="assistant", content="Third", exchange_id="ex1"),
+            ]
+        )
+        state.load_session("s1", session)
+
+        groups = state.get_turns_grouped_by_exchange("s1")
+
+        assert len(groups) == 1
+        indices = [t.idx for t in groups[0]]
+        assert indices == [0, 1, 2]
+
+    def test_exchange_id_preserved_on_turns(self):
+        """Exchange IDs are preserved on TurnData."""
+        state = TreeState()
+        session = MockSession(
+            id="s1",
+            messages=[
+                MockMessage(role="user", content="Q", exchange_id="ex123"),
+                MockMessage(role="assistant", content="A", exchange_id="ex123"),
+            ]
+        )
+        state.load_session("s1", session)
+
+        groups = state.get_turns_grouped_by_exchange("s1")
+
+        assert all(t.exchange_id == "ex123" for t in groups[0])

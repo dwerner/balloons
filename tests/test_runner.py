@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from core.runner import SessionRunner, RunnerStatus, StreamEvent, StreamResult
 from session import Session
-from models import Message, TextDelta, InitEvent, ResultEvent, ToolUseEvent, ToolResultEvent, RawEvent
+from models import Message, TextDelta, InitEvent, ResultEvent, ToolUseStartEvent, ToolUseEvent, ToolResultEvent, RawEvent
 
 
 @pytest.fixture
@@ -67,7 +67,13 @@ class TestStreamProcessing:
         # First add some text
         runner._process_event(TextDelta(text="some text"))
 
-        # Then tool use
+        # Then tool use start (flushes text)
+        runner._process_event(ToolUseStartEvent(
+            tool_use_id="123",
+            tool_name="Read",
+        ))
+
+        # Then tool use complete
         event = ToolUseEvent(
             tool_use_id="123",
             tool_name="Read",
@@ -78,7 +84,7 @@ class TestStreamProcessing:
         assert result is not None
         assert result.event_type == "tool_use"
         assert result.data["tool_name"] == "Read"
-        # Text should be flushed to content block
+        # Text should be flushed to content block by ToolUseStartEvent
         assert len(runner._content_blocks) == 2  # TextBlock + ToolUseBlock
 
     def test_process_tool_result_event(self, runner):
@@ -144,13 +150,13 @@ class TestCancel:
 
     def test_cancel_terminates_runner(self, runner):
         """Cancel terminates the underlying runner."""
-        with patch.object(runner._claude_runner, 'terminate') as mock_terminate:
+        with patch.object(runner._runner, 'terminate') as mock_terminate:
             runner.cancel()
             mock_terminate.assert_called_once()
 
     def test_cancel_sets_status(self, runner):
         """Cancel sets status to CANCELLED."""
-        with patch.object(runner._claude_runner, 'terminate'):
+        with patch.object(runner._runner, 'terminate'):
             runner.cancel()
             assert runner.status == RunnerStatus.CANCELLED
 

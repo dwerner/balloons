@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ContentBlock, ContextMode
+from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ContentBlock, ContextMode
 
 
 SESSIONS_DIR = Path.home() / ".balloons" / "sessions"
@@ -185,7 +185,7 @@ class Session:
         return self.children
 
     def add_link(self, link_id: str, linked_session_id: str, link_point: int, summary: str) -> None:
-        """Add a bidirectional link to another session."""
+        """Add a bidirectional link to another session (legacy - stored in links list)."""
         self.links.append({
             "link_id": link_id,
             "linked_session_id": linked_session_id,
@@ -195,24 +195,89 @@ class Session:
             "is_orphaned": False,
         })
 
+    def add_link_turn(self, link_id: str, linked_session_id: str, summary: str) -> Message:
+        """Add a link as a turn in the conversation.
+
+        This is the new preferred way to add links - as actual turns that preserve
+        ordering with other messages.
+        """
+        link_block = LinkBlock(
+            link_id=link_id,
+            linked_session_id=linked_session_id,
+            summary=summary,
+            is_orphaned=False,
+        )
+        # Use role "system" for metadata turns like links
+        msg = Message(
+            role="system",
+            content=f"Link: {summary}",
+            content_blocks=[link_block],
+        )
+        self.messages.append(msg)
+        return msg
+
     def get_links(self) -> list[dict]:
-        """Get all links from this session."""
+        """Get all links from this session (legacy links list only)."""
         return self.links
 
+    def get_all_link_ids(self) -> list[str]:
+        """Get all link IDs from both legacy links and turn-based LinkBlocks."""
+        link_ids = []
+        # Legacy links
+        for link in self.links:
+            link_ids.append(link.get("link_id", ""))
+        # Turn-based LinkBlocks
+        for msg in self.messages:
+            for block in msg.content_blocks:
+                if isinstance(block, LinkBlock):
+                    link_ids.append(block.link_id)
+        return link_ids
+
     def get_active_links(self) -> list[dict]:
-        """Get non-orphaned links from this session."""
+        """Get non-orphaned links from this session (legacy links list only)."""
         return [link for link in self.links if not link.get("is_orphaned", False)]
 
+    def get_all_active_links(self) -> list[dict]:
+        """Get all non-orphaned links from both legacy links and turn-based LinkBlocks."""
+        active = []
+        # Legacy links
+        for link in self.links:
+            if not link.get("is_orphaned", False):
+                active.append(link)
+        # Turn-based LinkBlocks
+        for msg in self.messages:
+            for block in msg.content_blocks:
+                if isinstance(block, LinkBlock) and not block.is_orphaned:
+                    active.append({
+                        "link_id": block.link_id,
+                        "linked_session_id": block.linked_session_id,
+                        "summary": block.summary,
+                        "is_orphaned": block.is_orphaned,
+                    })
+        return active
+
     def mark_link_orphaned(self, link_id: str) -> None:
-        """Mark a link as orphaned (linked session was deleted)."""
+        """Mark a link as orphaned (linked session was deleted).
+
+        Handles both legacy links (in session.links list) and new link turns
+        (LinkBlock in message content_blocks).
+        """
+        # Mark in legacy links list
         for link in self.links:
             if link["link_id"] == link_id:
                 link["is_orphaned"] = True
                 break
 
+        # Mark in message content blocks (new turn-based links)
+        for msg in self.messages:
+            for block in msg.content_blocks:
+                if isinstance(block, LinkBlock) and block.link_id == link_id:
+                    block.is_orphaned = True
+                    return
+
     def has_active_links(self) -> bool:
-        """Check if this session has any non-orphaned links."""
-        return len(self.get_active_links()) > 0
+        """Check if this session has any non-orphaned links (legacy or turn-based)."""
+        return len(self.get_all_active_links()) > 0
 
     @property
     def working_directory(self) -> Optional[str]:
@@ -244,6 +309,14 @@ class Session:
                 "partial_tool_name": block.partial_tool_name,
                 "partial_tool_input": block.partial_tool_input,
                 "details": block.details,
+            }
+        elif isinstance(block, LinkBlock):
+            return {
+                "type": "link",
+                "link_id": block.link_id,
+                "linked_session_id": block.linked_session_id,
+                "summary": block.summary,
+                "is_orphaned": block.is_orphaned,
             }
         return {"type": "unknown"}
 
@@ -335,6 +408,13 @@ class Session:
                 partial_tool_name=data.get("partial_tool_name", ""),
                 partial_tool_input=data.get("partial_tool_input", ""),
                 details=data.get("details", ""),
+            )
+        elif block_type == "link":
+            return LinkBlock(
+                link_id=data.get("link_id", ""),
+                linked_session_id=data.get("linked_session_id", ""),
+                summary=data.get("summary", ""),
+                is_orphaned=data.get("is_orphaned", False),
             )
         # Fallback to text
         return TextBlock(text=str(data))
