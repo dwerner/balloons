@@ -47,6 +47,7 @@ class TurnData:
     events: list = field(default_factory=list)
     streaming: bool = False
     tool_use_ids: list[str] = field(default_factory=list)
+    exchange_id: str | None = None  # Groups turns in an agentic loop
 
 
 @dataclass
@@ -320,12 +321,14 @@ class TreeState:
                 self._context_modes[turn_key] = ContextMode.COMPRESS
 
             content_blocks = msg.content_blocks if hasattr(msg, 'content_blocks') else []
+            exchange_id = msg.exchange_id if hasattr(msg, 'exchange_id') else None
 
             turns.append(TurnData(
                 idx=idx,
                 role=msg.role,
                 content=msg.content,
                 content_blocks=content_blocks,
+                exchange_id=exchange_id,
             ))
 
         session_data.turns = turns
@@ -347,7 +350,7 @@ class TreeState:
 
     # --- Turn Operations ---
 
-    def start_turn(self, session_id: str, turn_idx: int, role: str) -> None:
+    def start_turn(self, session_id: str, turn_idx: int, role: str, exchange_id: str | None = None) -> None:
         """Start a new turn when streaming begins."""
         session_data = self._sessions.get(session_id)
         if not session_data or session_data.turns is None:
@@ -361,6 +364,7 @@ class TreeState:
             role=role,
             content="",
             streaming=True,
+            exchange_id=exchange_id,
         )
         session_data.turns.append(turn)
         session_data.message_count += 1

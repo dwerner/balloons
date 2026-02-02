@@ -133,10 +133,14 @@ class SelectableTree(Tree):
             self.session_id = session_id
             super().__init__()
 
-    async def _on_click(self, event) -> None:
-        """Handle clicks - ctrl+click on session creates link command."""
+    def on_click(self, event: Click) -> None:
+        """Handle ctrl+click on session to create link command.
+
+        Uses on_click (message handler) rather than _on_click (override)
+        to avoid interfering with the Tree's default click handling.
+        Only stops propagation for ctrl+click on valid sessions.
+        """
         if event.ctrl:
-            # Get the node under cursor from the line metadata
             meta = event.style.meta
             if "line" in meta:
                 node = self.get_node_at_line(meta["line"])
@@ -147,9 +151,6 @@ class SelectableTree(Tree):
                         if session_id:
                             self.post_message(self.LinkRequested(session_id))
                             event.stop()
-                            return
-        # Default click behavior
-        await super()._on_click(event)
 
     async def _on_key(self, event: Key) -> None:
         if event.key == "space":

@@ -132,7 +132,7 @@ class ClaudeRunner(BaseRunner):
             "--output-format", "stream-json",
             "--include-partial-messages",
             "--no-session-persistence",  # Don't save sessions in Claude - we manage our own
-            "--disallowedTools", "Task,TodoWrite,NotebookEdit,AskUserQuestion",  # Prevent task spawning, todo lists, notebook, questions - we manage our own sessions
+            "--disallowedTools", "Task,TodoWrite,NotebookEdit,AskUserQuestion,EnterPlanMode,ExitPlanMode",  # Prevent task spawning, todo lists, notebook, questions, plan mode - we manage our own sessions
         ]
 
         if disable_tools:

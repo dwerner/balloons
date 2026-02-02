@@ -5,7 +5,9 @@ Each SessionRunner wraps a BaseRunner and maintains an event queue.
 """
 
 import asyncio
+import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import AsyncIterator, Any, Optional
 
@@ -55,14 +57,21 @@ class StreamEvent:
 
 @dataclass
 class StreamResult:
-    """Result of a completed stream operation."""
-    content: str  # Full text content
-    content_blocks: list  # Rich content blocks (TextBlock, ToolUseBlock, etc.)
+    """Result of a completed stream operation.
+
+    Contains both the legacy flat structure (content, content_blocks) for
+    backwards compatibility, and the new per-turn structure (turns, exchange_id).
+    """
+    content: str  # Full text content (legacy - combined from all turns)
+    content_blocks: list  # Rich content blocks (legacy - all blocks flat)
     raw_events: list[dict]  # Raw JSON events
     input_tokens: int = 0
     output_tokens: int = 0
     total_cost: float = 0.0
     error: Optional[str] = None
+    # New per-turn structure
+    exchange_id: str = ""  # UUID grouping all turns in this exchange
+    turns: list[Message] = field(default_factory=list)  # Individual turns (Messages)
 
 
 class SessionRunner:
@@ -100,11 +109,15 @@ class SessionRunner:
 
         # Accumulation state during streaming
         self._raw_events: list[dict] = []
-        self._content_blocks: list = []
+        self._content_blocks: list = []  # Legacy flat list
         self._text_buffer: str = ""
         self._current_tool_use_id: str = ""
         self._tool_index: int = 0  # Track tool order within turn
         self._turn_index: int = 0  # Track current turn in session
+
+        # New per-turn tracking
+        self._exchange_id: str = ""  # UUID for current exchange
+        self._turns: list[Message] = []  # Completed turns in this exchange
 
     @property
     def status(self) -> RunnerStatus:
@@ -334,12 +347,44 @@ class SessionRunner:
         self._current_tool_use_id = ""
         self._tool_index = 0
         self._result = None
+        # New per-turn tracking
+        self._exchange_id = str(uuid.uuid4())
+        self._turns = []
         # Clear event queue
         while not self._event_queue.empty():
             try:
                 self._event_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+
+    def _create_turn(self, role: str, content: str, content_blocks: list) -> Message:
+        """Create a turn (Message) with the current exchange_id.
+
+        Args:
+            role: "user", "assistant", or "tool"
+            content: Text summary for display
+            content_blocks: Rich content blocks
+
+        Returns:
+            Message with exchange_id set
+        """
+        return Message(
+            role=role,
+            content=content,
+            content_blocks=content_blocks,
+            timestamp=datetime.now().isoformat(),
+            exchange_id=self._exchange_id,
+        )
+
+    def _flush_text_as_turn(self) -> None:
+        """Flush accumulated text buffer as a text turn if non-empty."""
+        if self._text_buffer.strip():
+            text_block = TextBlock(text=self._text_buffer)
+            self._content_blocks.append(text_block)  # Legacy
+            # Create turn
+            turn = self._create_turn("assistant", self._text_buffer, [text_block])
+            self._turns.append(turn)
+            self._text_buffer = ""
 
     def _process_event(self, event: Any) -> Optional[StreamEvent]:
         """Process a raw event from ClaudeRunner.
@@ -369,10 +414,8 @@ class SessionRunner:
 
             elif isinstance(event, ToolUseStartEvent):
                 # Tool use started - input is still streaming
-                # Flush text buffer before tool
-                if self._text_buffer.strip():
-                    self._content_blocks.append(TextBlock(text=self._text_buffer))
-                    self._text_buffer = ""
+                # Flush text buffer before tool (both legacy and new turn)
+                self._flush_text_as_turn()
 
                 self._current_tool_use_id = event.tool_use_id
                 tool_idx = self._tool_index
@@ -392,14 +435,21 @@ class SessionRunner:
                 })
 
             elif isinstance(event, ToolUseEvent):
-                # Tool input complete - create the block
-                # Note: text was already flushed and tool_index incremented in tool_use_start
+                # Tool input complete - create the block and turn
                 tool_block = ToolUseBlock(
                     id=event.tool_use_id,
                     name=event.tool_name,
                     input=event.tool_input,
                 )
-                self._content_blocks.append(tool_block)
+                self._content_blocks.append(tool_block)  # Legacy
+
+                # Create tool_use turn
+                turn = self._create_turn(
+                    "assistant",
+                    f"[Tool: {event.tool_name}]",
+                    [tool_block]
+                )
+                self._turns.append(turn)
 
                 # Find the tool_index that was assigned at start
                 tool_idx = sum(
@@ -421,7 +471,15 @@ class SessionRunner:
                     content=event.result,
                     is_error=False,
                 )
-                self._content_blocks.append(result_block)
+                self._content_blocks.append(result_block)  # Legacy
+
+                # Create tool_result turn (role="tool")
+                turn = self._create_turn(
+                    "tool",
+                    f"[Result: {len(event.result)} chars]",
+                    [result_block]
+                )
+                self._turns.append(turn)
 
                 # Find the tool_index for this result (matches the tool_use_id)
                 tool_idx = None
@@ -466,11 +524,10 @@ class SessionRunner:
 
     def _finalize_stream(self) -> None:
         """Finalize stream and create result."""
-        # Flush remaining text
-        if self._text_buffer.strip():
-            self._content_blocks.append(TextBlock(text=self._text_buffer))
+        # Flush remaining text as turn (also adds to legacy content_blocks)
+        self._flush_text_as_turn()
 
-        # Reconstruct full text content from all TextBlocks
+        # Reconstruct full text content from all TextBlocks (legacy)
         text_parts = []
         for block in self._content_blocks:
             if isinstance(block, TextBlock) and block.text.strip():
@@ -484,6 +541,8 @@ class SessionRunner:
             input_tokens=self.session.total_input_tokens,
             output_tokens=self.session.total_output_tokens,
             total_cost=self.session.total_cost,
+            exchange_id=self._exchange_id,
+            turns=self._turns,
         )
         self._status = RunnerStatus.IDLE
 

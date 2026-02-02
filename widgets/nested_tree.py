@@ -13,7 +13,7 @@ from __future__ import annotations
 from textual.widgets import Tree
 from textual.containers import Vertical
 from textual.message import Message
-from textual.events import Key
+from textual.events import Key, Click
 from textual.timer import Timer
 from rich.text import Text
 from rich.style import Style
@@ -120,10 +120,14 @@ class NestedTree(Tree):
 
     # --- Click handling ---
 
-    async def _on_click(self, event) -> None:
-        """Handle clicks - ctrl+click on session creates link command."""
+    def on_click(self, event: Click) -> None:
+        """Handle ctrl+click on session to create link command.
+
+        Uses on_click (message handler) rather than _on_click (override)
+        to avoid interfering with the Tree's default click handling.
+        Only stops propagation for ctrl+click on valid sessions.
+        """
         if event.ctrl:
-            # Get the node under cursor from the line metadata
             meta = event.style.meta
             if "line" in meta:
                 node = self.get_node_at_line(meta["line"])
@@ -134,9 +138,6 @@ class NestedTree(Tree):
                         if session_id:
                             self.post_message(self.LinkRequested(session_id))
                             event.stop()
-                            return
-        # Default click behavior
-        await super()._on_click(event)
 
     # --- Key handling ---
 

@@ -17,7 +17,7 @@ from .with_result_widget import WithResultWidget
 from .fork_marker import ForkMarker
 from .merge_marker import MergeMarker
 from .link_marker import LinkMarker
-from models import TextBlock, ToolUseBlock, ToolResultBlock
+from models import TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock
 from core.formatter import format_edit_as_diff, guess_language
 from session import Session
 
@@ -276,6 +276,34 @@ class ToolResultWidget(Static):
     @property
     def is_expanded(self) -> bool:
         return self._expanded
+
+
+class InterruptionMarkerWidget(Static):
+    """A marker showing that the response was interrupted."""
+
+    DEFAULT_CSS = """
+    InterruptionMarkerWidget {
+        padding: 0 1;
+        margin: 0 0 1 2;
+        background: #2a1a1a;
+        border-left: thick $error;
+        color: $error;
+        text-style: italic;
+    }
+    """
+
+    def __init__(self, reason: str = "user_cancelled", turn_id: int = 0, **kwargs):
+        super().__init__(**kwargs)
+        self.reason = reason
+        self.turn_id = turn_id
+
+    def render(self) -> RenderableType:
+        if self.reason == "user_cancelled":
+            return Text("[Response interrupted by user]", style="italic dim")
+        elif self.reason == "timeout":
+            return Text("[Response timed out]", style="italic dim")
+        else:
+            return Text(f"[Response interrupted: {self.reason}]", style="italic dim")
 
 
 class MessageWidget(Static):
@@ -849,6 +877,14 @@ class ChatLog(VerticalScroll):
         self._current_assistant_message = None
         return "\n\n".join(content_parts)
 
+    def add_interruption_marker(self, reason: str = "user_cancelled") -> InterruptionMarkerWidget:
+        """Add an interruption marker to the log."""
+        turn_id = self._turn_counter
+        widget = InterruptionMarkerWidget(reason=reason, turn_id=turn_id)
+        self.mount(widget)
+        self._smart_scroll()
+        return widget
+
     def clear(self) -> None:
         """Clear all messages and reset counter."""
         for child in list(self.children):
@@ -1030,6 +1066,11 @@ class ChatLog(VerticalScroll):
                             tool_use_id=block.tool_use_id, full_content=full_content
                         )
                         self.mount(widget)
+                    elif isinstance(block, InterruptionBlock):
+                        widget = InterruptionMarkerWidget(
+                            reason=block.reason, turn_id=turn_id
+                        )
+                        self.mount(widget)
             else:
                 # Fallback: just use msg.content
                 widget = MessageWidget(msg.role, msg.content, turn_id=turn_id)
@@ -1100,7 +1141,7 @@ class ChatLog(VerticalScroll):
         DEPRECATED: Use set_turn_context_modes instead for visual indication without hiding.
         """
         for child in self.children:
-            if isinstance(child, (MessageWidget, ToolUseWidget, ToolResultWidget, WithWidget, WithResultWidget, ForkMarker, MergeMarker, LinkMarker)):
+            if isinstance(child, (MessageWidget, ToolUseWidget, ToolResultWidget, InterruptionMarkerWidget, WithWidget, WithResultWidget, ForkMarker, MergeMarker, LinkMarker)):
                 if show_all or child.turn_id in turn_ids:
                     child.remove_class("hidden")
                 else:
@@ -1122,7 +1163,7 @@ class ChatLog(VerticalScroll):
         context_classes = ("context-copy", "context-compress", "context-drop")
 
         for child in self.children:
-            if isinstance(child, (MessageWidget, ToolUseWidget, ToolResultWidget, WithWidget, WithResultWidget, ForkMarker, MergeMarker, LinkMarker)):
+            if isinstance(child, (MessageWidget, ToolUseWidget, ToolResultWidget, InterruptionMarkerWidget, WithWidget, WithResultWidget, ForkMarker, MergeMarker, LinkMarker)):
                 # Remove any existing context classes
                 for cls in context_classes:
                     child.remove_class(cls)

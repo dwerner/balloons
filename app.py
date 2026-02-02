@@ -34,10 +34,10 @@ from rich.console import RenderableType
 from widgets import ChatLog, MoreBelowIndicator, InputBox, StatusBar, ContextTree, NestedSessionTree, VerticalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult
 from claude_runner import ClaudeRunner
 from session import Session
-from config import get_config, BackendConfig
+from config import get_config, BackendConfig, save_last_view
 from models import (
     TextDelta, ToolUseEvent, ToolResultEvent,
-    TextBlock, ToolUseBlock, Message, ContextMode,
+    TextBlock, ToolUseBlock, InterruptionBlock, Message, ContextMode,
 )
 from core import (
     CommandParser,
@@ -885,6 +885,13 @@ class BalloonsApp(App):
                 assistant_blocks = [TextBlock(text=content)]
                 raw_events = []
 
+            # Add interruption marker if cancelled
+            if cancelled:
+                assistant_blocks.append(InterruptionBlock(reason="user_cancelled"))
+                # Also add the visual marker to the chat log
+                if ctx.is_active:
+                    chat_log.add_interruption_marker("user_cancelled")
+
             # Finish the assistant turn in tree
             context_tree.finish_turn(
                 session_id,
@@ -896,14 +903,32 @@ class BalloonsApp(App):
 
             # Save messages to session
             if session:
+                # Get exchange_id and turns from result (if available)
+                exchange_id = result.exchange_id if result else None
+                turns = result.turns if result else []
+
                 if ctx.query_with:
                     # query_with: only save assistant response, no user message
-                    session.add_message("assistant", content, content_blocks=assistant_blocks)
+                    if turns:
+                        # New model: save individual turns
+                        for turn in turns:
+                            session.messages.append(turn)
+                    else:
+                        # Legacy: single assistant message
+                        session.add_message("assistant", content, content_blocks=assistant_blocks, exchange_id=exchange_id)
                 else:
-                    # Normal case: save both user and assistant messages
+                    # Normal case: save user message + assistant turns
                     user_blocks = [TextBlock(text=ctx.prompt)]
-                    session.add_message("user", ctx.prompt, content_blocks=user_blocks)
-                    session.add_message("assistant", content, content_blocks=assistant_blocks)
+                    session.add_message("user", ctx.prompt, content_blocks=user_blocks, exchange_id=exchange_id)
+
+                    if turns:
+                        # New model: save individual assistant turns
+                        for turn in turns:
+                            session.messages.append(turn)
+                    else:
+                        # Legacy: single assistant message
+                        session.add_message("assistant", content, content_blocks=assistant_blocks, exchange_id=exchange_id)
+
                 session.save()
 
             if ctx.is_active:
@@ -953,16 +978,25 @@ class BalloonsApp(App):
                 self._update_streaming_count()
                 debug_log.info("Finalization complete, context cleaned up", category="stream", session_id=session_id)
 
-    def _load_most_recent_session(self) -> Session | None:
-        """Load the most recently modified session based on config sort order.
+    def _load_last_viewed_session(self) -> tuple[Session | None, int | None]:
+        """Load the last viewed session and turn index from config.
 
-        Returns None if no sessions exist.
+        Returns (session, turn_index) where turn_index may be None.
+        Falls back to most recently modified session if last view doesn't exist.
         """
+        config = get_config()
+
+        # Try last viewed session first
+        if config.last_view_session_id:
+            session = self._manager.load_session(config.last_view_session_id)
+            if session:
+                return session, config.last_view_turn_index
+
+        # Fall back to most recently modified
         all_sessions = Session.list_sessions()
         if not all_sessions:
-            return None
+            return None, None
 
-        config = get_config()
         sort_order = config.session_sort_order
 
         # Sort sessions according to preference
@@ -985,10 +1019,12 @@ class BalloonsApp(App):
         # Load the first session (top of sorted list)
         session_id = all_sessions[0]["id"]
         session = self._manager.load_session(session_id)
-        return session
+        return session, None  # No saved turn index for fallback
 
     def _initialize_session(self) -> None:
         """Initialize the UI with the current session."""
+        restore_turn_index = None  # Turn index to scroll to after init
+
         if self._initial_session is not None:
             # Load initial session into manager (passed via --resume)
             self._manager._sessions[self._initial_session.id] = self._initial_session
@@ -996,8 +1032,8 @@ class BalloonsApp(App):
             self._manager.set_active(self._initial_session.id)
             self._initial_session = None  # Clear so we don't reload on subsequent calls
         elif self.session is None:
-            # No session passed - try to load the most recently modified one
-            session = self._load_most_recent_session()
+            # No session passed - try to load the last viewed session
+            session, restore_turn_index = self._load_last_viewed_session()
             if session is None:
                 # No sessions exist - create a new one
                 session = self._manager.create_session()
@@ -1049,6 +1085,14 @@ class BalloonsApp(App):
 
         # Focus the input box
         input_box.focus()
+
+        # Scroll to restored turn if we have one
+        if restore_turn_index is not None and restore_turn_index < len(self.session.messages):
+            # Turn IDs in chat_log are 1-indexed
+            turn_id = restore_turn_index + 1
+            # Use call_after_refresh to ensure widgets are laid out before scrolling
+            # Use default argument to capture turn_id value (avoid late binding)
+            self.call_after_refresh(lambda tid=turn_id: chat_log.scroll_to_turn(tid))
 
         # Initial context token update
         self._update_context_tokens()
@@ -1340,6 +1384,9 @@ class BalloonsApp(App):
     def _handle_reload(self) -> None:
         """Reload the app by re-executing the process."""
         self.session.save()
+        # Save current view position so we return here after reload
+        turn_index = len(self.session.messages) - 1 if self.session.messages else None
+        save_last_view(self.session.id, turn_index)
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
     def _handle_title_command(self, title: str) -> None:
@@ -1542,8 +1589,16 @@ Conversation:
 Provide a brief, informative summary:"""
 
         # Use the helper runner for summary generation
-        result = await self._helper_runner.run_prompt(summary_prompt)
+        summary_parts = []
+        try:
+            async for event in self._helper_runner.stream_response([], summary_prompt, disable_tools=True):
+                if isinstance(event, TextDelta):
+                    summary_parts.append(event.text)
+        except Exception as e:
+            debug_log.error(f"Link summary generation failed: {e}", category="link")
+            return user_prompt or "Linked context"
 
+        result = "".join(summary_parts)
         if result:
             return result.strip()
         else:
@@ -2660,13 +2715,17 @@ Summary:"""
         if child_session:
             self._switch_to_session(child_session)
 
-    def _switch_to_session(self, session: Session) -> None:
+    def _switch_to_session(self, session: Session, target_turn_index: int | None = None) -> None:
         """Switch to a different session.
 
         Supports switching while other sessions stream in background:
         - Marks old session's streaming context as inactive (continues streaming)
         - If new session is streaming, resumes display and marks it active
         - Updates input/status based on whether NEW session is streaming
+
+        Args:
+            session: The session to switch to
+            target_turn_index: Optional turn index to scroll to (0-based)
         """
         old_session_id = self._manager._active_session_id
         debug_log.info(
@@ -2768,6 +2827,19 @@ Summary:"""
 
         # Update context tokens for the new session
         self._update_context_tokens()
+
+        # Save the new view position
+        # Default to last turn if no target specified
+        turn_index = target_turn_index
+        if turn_index is None and session.messages:
+            turn_index = len(session.messages) - 1
+        save_last_view(session.id, turn_index)
+
+        # Scroll to target turn if specified
+        if target_turn_index is not None and target_turn_index < len(session.messages):
+            turn_id = target_turn_index + 1  # 1-indexed for chat_log
+            # Use default argument to capture turn_id value (avoid late binding)
+            self.call_after_refresh(lambda tid=turn_id: chat_log.scroll_to_turn(tid))
 
     def on_context_tree_selection_changed(self, event: ContextTree.SelectionChanged) -> None:
         """Handle tree selection changes - apply visual context mode indicators."""
@@ -3027,16 +3099,17 @@ Summary:"""
         request_pane = self.query_one("#request-pane", RequestPane)
         chat_log = self.query_one("#chat-log", ChatLog)
 
+        # Handle different node types
+        node_type = event.turn_data.get("type")
+        turn_idx = event.turn_data.get("turn_idx", 0) if node_type == "turn" else None
+
         # Check if we need to switch sessions
         turn_session_id = event.session_id
         if turn_session_id and turn_session_id != self.session.id:
             # Switch to the turn's session first
             target_session = Session.load(turn_session_id)
             if target_session:
-                self._switch_to_session(target_session)
-
-        # Handle different node types
-        node_type = event.turn_data.get("type")
+                self._switch_to_session(target_session, target_turn_index=turn_idx)
 
         if node_type == "summary":
             request_pane.show_session_info(
@@ -3048,11 +3121,13 @@ Summary:"""
             chat_log.clear_highlights()
         elif node_type == "turn":
             # Whole turn inspection - scroll to it and show in request pane
-            turn_id = event.turn_data.get("turn_idx", 0) + 1
+            turn_id = turn_idx + 1
             # Scroll to turn and disable follow mode if not at bottom
             chat_log.scroll_to_turn(turn_id)
             chat_log.clear_highlights()
             request_pane.show_json(event.turn_data)
+            # Save last view position
+            save_last_view(self.session.id, turn_idx)
         elif node_type == "text":
             # Highlight the text block in the chat log
             # turn_idx is 0-indexed but turn_id is 1-indexed
@@ -3127,19 +3202,31 @@ Summary:"""
         request_pane = self.query_one("#request-pane", RequestPane)
         chat_log = self.query_one("#chat-log", ChatLog)
 
+        node_type = event.turn_data.get("type")
+        turn_idx = event.turn_data.get("turn_idx", 0) if node_type == "turn" else None
+
         # Check if we need to switch sessions
         turn_session_id = event.session_id
         if turn_session_id and self.session and turn_session_id != self.session.id:
             target_session = Session.load(turn_session_id)
             if target_session:
-                self._switch_to_session(target_session)
+                self._switch_to_session(target_session, target_turn_index=turn_idx)
+                # Return early - _switch_to_session handles scrolling
+                if node_type == "turn":
+                    chat_log.clear_highlights()
+                    request_pane.show_json(event.turn_data)
+                else:
+                    chat_log.clear_highlights()
+                    request_pane.show_json(event.turn_data)
+                return
 
-        node_type = event.turn_data.get("type")
         if node_type == "turn":
-            turn_id = event.turn_data.get("turn_idx", 0) + 1
+            turn_id = turn_idx + 1
             chat_log.scroll_to_turn(turn_id)
             chat_log.clear_highlights()
             request_pane.show_json(event.turn_data)
+            # Save last view position
+            save_last_view(self.session.id, turn_idx)
         else:
             chat_log.clear_highlights()
             request_pane.show_json(event.turn_data)

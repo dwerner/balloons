@@ -1,7 +1,6 @@
 from textual.widgets import Static
 from textual.events import MouseDown, MouseMove, MouseUp
 from textual.message import Message
-from textual.reactive import reactive
 
 
 class VerticalSplitter(Static):

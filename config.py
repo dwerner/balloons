@@ -69,6 +69,8 @@ class Config:
     backends: dict[str, BackendConfig] = field(default_factory=dict)
     debug_log_file: Optional[str] = None  # Path to persist debug logs
     session_sort_order: str = "modified_desc"  # Default sort order for sessions
+    last_view_session_id: Optional[str] = None  # Last viewed session ID
+    last_view_turn_index: Optional[int] = None  # Last viewed turn index (0-based)
     _config_path: Optional[Path] = field(default=None, repr=False)  # Where config was loaded from
 
     @classmethod
@@ -119,11 +121,15 @@ class Config:
         if "claude" not in backends:
             backends["claude"] = BackendConfig(name="claude")
 
+        # Load last_view as dict if present
+        last_view = data.get("last_view", {})
         return cls(
             default_backend=data.get("default_backend", "claude"),
             backends=backends,
             debug_log_file=data.get("debug_log_file"),
             session_sort_order=data.get("session_sort_order", "modified_desc"),
+            last_view_session_id=last_view.get("session_id") if last_view else None,
+            last_view_turn_index=last_view.get("turn_index") if last_view else None,
             _config_path=path,
         )
 
@@ -170,6 +176,15 @@ class Config:
         # Update user-modifiable settings
         data["session_sort_order"] = self.session_sort_order
 
+        # Save last view position
+        if self.last_view_session_id:
+            data["last_view"] = {
+                "session_id": self.last_view_session_id,
+                "turn_index": self.last_view_turn_index,
+            }
+        elif "last_view" in data:
+            del data["last_view"]
+
         with open(path, "w") as f:
             yaml.safe_dump(data, f, default_flow_style=False)
 
@@ -192,3 +207,11 @@ def set_backend(name: str) -> None:
     if name not in config.backends:
         raise ValueError(f"Unknown backend: {name}. Available: {list(config.backends.keys())}")
     config.default_backend = name
+
+
+def save_last_view(session_id: str, turn_index: Optional[int] = None) -> None:
+    """Save the last viewed session and turn position."""
+    config = get_config()
+    config.last_view_session_id = session_id
+    config.last_view_turn_index = turn_index
+    config.save()

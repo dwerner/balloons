@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, ContentBlock, ContextMode
+from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ContentBlock, ContextMode
 
 
 SESSIONS_DIR = Path.home() / ".balloons" / "sessions"
@@ -63,12 +63,21 @@ class Session:
         content: str,
         content_blocks: list[ContentBlock] | None = None,
         tokens: int = 0,
+        exchange_id: str | None = None,
     ) -> Message:
-        """Add a message with optional rich content blocks."""
+        """Add a message with optional rich content blocks.
+
+        Args:
+            role: "user", "assistant", or "tool"
+            content: Text-only summary for display/backwards compat
+            content_blocks: Rich content blocks (TextBlock, ToolUseBlock, etc.)
+            tokens: Token count for this message
+            exchange_id: Groups turns in an agentic loop (user prompt + all responses)
+        """
         if content_blocks is None:
             # Default to a single text block
             content_blocks = [TextBlock(text=content)] if content else []
-        msg = Message(role=role, content=content, content_blocks=content_blocks, tokens=tokens)
+        msg = Message(role=role, content=content, content_blocks=content_blocks, tokens=tokens, exchange_id=exchange_id)
         self.messages.append(msg)
         return msg
 
@@ -226,11 +235,13 @@ class Session:
             return {"type": "tool_use", "id": block.id, "name": block.name, "input": block.input}
         elif isinstance(block, ToolResultBlock):
             return {"type": "tool_result", "tool_use_id": block.tool_use_id, "content": block.content, "is_error": block.is_error}
+        elif isinstance(block, InterruptionBlock):
+            return {"type": "interruption", "reason": block.reason}
         return {"type": "unknown"}
 
     def _serialize_message(self, msg: Message) -> dict:
         """Serialize a message with content blocks."""
-        return {
+        data = {
             "role": msg.role,
             "content": msg.content,
             "content_blocks": [self._serialize_content_block(b) for b in msg.content_blocks],
@@ -239,6 +250,10 @@ class Session:
             "context_mode": msg.context_mode.value,
             "summary": msg.summary,
         }
+        # Only include exchange_id if set (backwards compat)
+        if msg.exchange_id:
+            data["exchange_id"] = msg.exchange_id
+        return data
 
     def save(self):
         SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
@@ -302,6 +317,10 @@ class Session:
                 content=data.get("content", ""),
                 is_error=data.get("is_error", False),
             )
+        elif block_type == "interruption":
+            return InterruptionBlock(
+                reason=data.get("reason", "user_cancelled"),
+            )
         # Fallback to text
         return TextBlock(text=str(data))
 
@@ -362,6 +381,7 @@ class Session:
                 timestamp=m.get("timestamp", ""),
                 context_mode=context_mode,
                 summary=m.get("summary", ""),
+                exchange_id=m.get("exchange_id"),  # None for old sessions
             ))
         return session
 

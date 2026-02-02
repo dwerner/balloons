@@ -42,19 +42,27 @@ class ToolResultBlock:
     is_error: bool = False
 
 
+@dataclass
+class InterruptionBlock:
+    """Marker indicating the response was interrupted by the user."""
+    type: str = "interruption"
+    reason: str = "user_cancelled"  # e.g., "user_cancelled", "timeout"
+
+
 # Union type for all content block types
-ContentBlock = Union[TextBlock, ToolUseBlock, ToolResultBlock]
+ContentBlock = Union[TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock]
 
 
 @dataclass
 class Message:
-    role: str  # "user" or "assistant"
+    role: str  # "user", "assistant", or "tool"
     content: str  # Text-only summary for display/backwards compat
     content_blocks: list[ContentBlock] = field(default_factory=list)  # Rich content
     tokens: int = 0
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
     context_mode: ContextMode = ContextMode.COMPRESS
     summary: str = ""  # Cached summary for SUMMARIZE mode
+    exchange_id: Optional[str] = None  # Groups turns in an agentic loop (user prompt + all responses)
 
 
 @dataclass
