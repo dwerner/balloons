@@ -1,8 +1,8 @@
 from .chat_log import ChatLog, MoreBelowIndicator, NewMessagesIndicator
 from .input_box import InputBox
 from .status_bar import StatusBar
-from .context_tree import ContextTree
-from .nested_tree import NestedSessionTree
+from .context_tree import ContextTreeView
+from .nested_tree import NestedTreeView
 from .splitter import VerticalSplitter, HorizontalSplitter
 from .context_preview import ContextPreview, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult
 from .request_pane import RequestPane
@@ -15,12 +15,19 @@ from .merge_marker import MergeMarker
 from .link_marker import LinkMarker
 from .breadcrumb import Breadcrumb
 
+# Backwards compatibility aliases
+ContextTree = ContextTreeView
+NestedSessionTree = NestedTreeView
+
 __all__ = [
     "ChatLog",
     "MoreBelowIndicator",
     "NewMessagesIndicator",
     "InputBox",
     "StatusBar",
+    "ContextTreeView",
+    "NestedTreeView",
+    # Backwards compatibility
     "ContextTree",
     "NestedSessionTree",
     "VerticalSplitter",

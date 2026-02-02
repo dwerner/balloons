@@ -1,6 +1,6 @@
 """Nested session tree - shows fork sessions inline at their fork points.
 
-This is an alternative view to the flat ContextTree. Instead of showing all
+This is an alternative view to the flat ContextTreeView. Instead of showing all
 sessions as siblings at the root level, this tree embeds fork sessions
 directly under their parent sessions at the fork point.
 
@@ -29,8 +29,8 @@ if TYPE_CHECKING:
     pass
 
 
-class NestedTree(Tree):
-    """Tree with nested fork sessions shown inline.
+class NestedTreeWidget(Tree):
+    """Tree widget with nested fork sessions shown inline.
 
     Behavior:
     - Space: toggle context mode (COPY -> COMPRESS -> DROP)
@@ -222,8 +222,8 @@ class NestedTree(Tree):
         await super()._on_key(event)
 
 
-class NestedSessionTree(Vertical):
-    """Container for nested session tree view.
+class NestedTreeView(Vertical):
+    """View container for nested session tree.
 
     Shows sessions with forks embedded inline at their fork points,
     rather than as separate root-level nodes.
@@ -234,19 +234,19 @@ class NestedSessionTree(Vertical):
     """
 
     DEFAULT_CSS = """
-    NestedSessionTree {
+    NestedTreeView {
         width: 40;
         height: 100%;
         border-right: solid $primary;
     }
 
-    NestedSessionTree > NestedTree {
+    NestedTreeView > NestedTreeWidget {
         height: 1fr;
         background: $background;
     }
     """
 
-    # --- Messages (mirror ContextTree's interface) ---
+    # --- Messages (mirror ContextTreeView's interface) ---
 
     class SelectionChanged(Message):
         """Fired when selection changes."""
@@ -325,13 +325,13 @@ class NestedSessionTree(Vertical):
         self._spinner_timer: Timer | None = None
 
     def compose(self):
-        tree = NestedTree("[dim]loading...[/]", id="nested-tree")
+        tree = NestedTreeWidget("[dim]loading...[/]", id="nested-tree-widget")
         tree.root.data = {"type": "root"}
         tree.set_color_callback(self._get_session_color)
         yield tree
 
     def on_mount(self) -> None:
-        tree = self.query_one("#nested-tree", NestedTree)
+        tree = self.query_one("#nested-tree-widget", NestedTreeWidget)
         tree.root.expand()
         tree.root.allow_expand = False
         tree.auto_expand = False
@@ -464,7 +464,7 @@ class NestedSessionTree(Vertical):
 
     def _rebuild_tree(self) -> None:
         """Rebuild the entire tree from TreeState."""
-        tree = self.query_one("#nested-tree", NestedTree)
+        tree = self.query_one("#nested-tree-widget", NestedTreeWidget)
         tree.root.remove_children()
         self._session_nodes.clear()
         self._turn_nodes.clear()
@@ -772,7 +772,7 @@ class NestedSessionTree(Vertical):
 
     def _update_root_label(self) -> None:
         """Update root label with token counts."""
-        tree = self.query_one("#nested-tree", NestedTree)
+        tree = self.query_one("#nested-tree-widget", NestedTreeWidget)
 
         current_id = self._state.get_current_session_id()
         if not current_id:
@@ -891,9 +891,9 @@ class NestedSessionTree(Vertical):
         tool_indicator = f" [cyan]🔧{tool_count}[/]" if tool_count > 0 else ""
         return f"{indicator} {icon}{tool_indicator} {preview}"
 
-    # --- Event Handlers (from NestedTree) ---
+    # --- Event Handlers (from NestedTreeWidget) ---
 
-    def on_nested_tree_toggle_requested(self, event: NestedTree.ToggleRequested) -> None:
+    def on_nested_tree_toggle_requested(self, event: NestedTreeWidget.ToggleRequested) -> None:
         """Handle space bar toggle."""
         node_type = event.node_data.get("type")
 
@@ -908,7 +908,7 @@ class NestedSessionTree(Vertical):
             # Also notify app to persist
             self.post_message(self.ContextModeChanged(session_id, turn_idx, new_mode))
 
-    def on_nested_tree_activate_requested(self, event: NestedTree.ActivateRequested) -> None:
+    def on_nested_tree_activate_requested(self, event: NestedTreeWidget.ActivateRequested) -> None:
         """Handle Enter key - activate session."""
         node_type = event.node_data.get("type")
 
@@ -928,9 +928,10 @@ class NestedSessionTree(Vertical):
                     "role": turn_data.role,
                     "content": turn_data.content,
                     "content_blocks": turn_data.content_blocks,
+                    "turn_idx": turn_idx,
                 }, session_id))
 
-    def on_nested_tree_select_all_requested(self, event: NestedTree.SelectAllRequested) -> None:
+    def on_nested_tree_select_all_requested(self, event: NestedTreeWidget.SelectAllRequested) -> None:
         """Set all turns in current session to COPY."""
         current_id = self._state.get_current_session_id()
         if not current_id:
@@ -943,7 +944,7 @@ class NestedSessionTree(Vertical):
         for turn in session_data.turns:
             self._state.set_context_mode(current_id, turn.idx, ContextMode.COPY)
 
-    def on_nested_tree_select_none_requested(self, event: NestedTree.SelectNoneRequested) -> None:
+    def on_nested_tree_select_none_requested(self, event: NestedTreeWidget.SelectNoneRequested) -> None:
         """Set all turns in current session to DROP."""
         current_id = self._state.get_current_session_id()
         if not current_id:
@@ -956,15 +957,15 @@ class NestedSessionTree(Vertical):
         for turn in session_data.turns:
             self._state.set_context_mode(current_id, turn.idx, ContextMode.DROP)
 
-    def on_nested_tree_turn_delete_requested(self, event: NestedTree.TurnDeleteRequested) -> None:
+    def on_nested_tree_turn_delete_requested(self, event: NestedTreeWidget.TurnDeleteRequested) -> None:
         """Bubble up turn delete request."""
         self.post_message(self.TurnDeleteRequested(event.session_id, event.turn_index))
 
-    def on_nested_tree_session_delete_requested(self, event: NestedTree.SessionDeleteRequested) -> None:
+    def on_nested_tree_session_delete_requested(self, event: NestedTreeWidget.SessionDeleteRequested) -> None:
         """Bubble up session delete request."""
         self.post_message(self.SessionDeleteRequested(event.session_id))
 
-    def on_nested_tree_link_requested(self, event: NestedTree.LinkRequested) -> None:
+    def on_nested_tree_link_requested(self, event: NestedTreeWidget.LinkRequested) -> None:
         """Bubble up link request."""
         self.post_message(self.SessionLinkRequested(event.session_id))
 

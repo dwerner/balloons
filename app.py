@@ -31,7 +31,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLog, MoreBelowIndicator, InputBox, StatusBar, ContextTree, NestedSessionTree, VerticalSplitter, HorizontalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult
+from widgets import ChatLog, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult
 from claude_runner import ClaudeRunner
 from session import Session
 from config import get_config, BackendConfig, save_last_view
@@ -118,11 +118,11 @@ class BalloonsApp(App):
         height: 1fr;
     }
 
-    ContextTree {
+    ContextTreeView {
         width: 50;
     }
 
-    NestedSessionTree {
+    NestedTreeView {
         width: 50;
         display: none;
     }
@@ -181,7 +181,7 @@ class BalloonsApp(App):
         self._command_parser = CommandParser()
         self._formatter = Formatter()
         self._context_builder = ContextBuilder()
-        # Shared tree state - used by ContextTree and (future) NestedSessionTree
+        # Shared tree state - used by ContextTreeView and (future) NestedTreeView
         self._tree_state = TreeState()
         # Session manager handles all sessions and runners
         self._manager = SessionManager(backend_config=self._backend_config)
@@ -249,7 +249,7 @@ class BalloonsApp(App):
         conversation_tokens = 0
         if self.session:
             try:
-                context_tree = self.query_one("#context-tree", ContextTree)
+                context_tree = self.query_one("#context-tree", ContextTreeView)
                 selected_messages = context_tree.get_selected_messages()
                 if selected_messages:
                     conversation_tokens = self._context_builder.count_messages_tokens(selected_messages)
@@ -276,12 +276,12 @@ class BalloonsApp(App):
         config = get_config()
         with Vertical():
             with Horizontal(id="main-split"):
-                yield ContextTree(
+                yield ContextTreeView(
                     initial_sort_order=config.session_sort_order,
                     tree_state=self._tree_state,
                     id="context-tree"
                 )
-                yield NestedSessionTree(
+                yield NestedTreeView(
                     tree_state=self._tree_state,
                     id="nested-tree"
                 )
@@ -318,7 +318,7 @@ class BalloonsApp(App):
         - Events are dispatched to appropriate UI components
         """
         chat_log = self.query_one("#chat-log", ChatLog)
-        context_tree = self.query_one("#context-tree", ContextTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
         status_bar = self.query_one("#status-bar", StatusBar)
 
         # Get events from all streaming sessions
@@ -378,7 +378,7 @@ class BalloonsApp(App):
         event: StreamEvent,
         ctx: StreamingContext,
         chat_log: ChatLog,
-        context_tree: ContextTree,
+        context_tree: ContextTreeView,
         status_bar: StatusBar,
     ) -> None:
         """Dispatch a polled event to appropriate UI components.
@@ -683,7 +683,7 @@ class BalloonsApp(App):
             status_bar.set_error("Fork failed: missing context data")
             return
 
-        context_tree = self.query_one("#context-tree", ContextTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
         input_box = self.query_one("#input-box", InputBox)
 
         # Extract fork params
@@ -807,7 +807,7 @@ class BalloonsApp(App):
             status_bar.set_error("Derive failed: missing context data")
             return
 
-        context_tree = self.query_one("#context-tree", ContextTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
         input_box = self.query_one("#input-box", InputBox)
 
         # Extract params
@@ -859,7 +859,7 @@ class BalloonsApp(App):
         session_id: str,
         ctx: StreamingContext,
         chat_log: ChatLog,
-        context_tree: ContextTree,
+        context_tree: ContextTreeView,
         status_bar: StatusBar,
         error: str = None,
         cancelled: bool = False,
@@ -1060,7 +1060,7 @@ class BalloonsApp(App):
             self._manager.set_active(session.id)
 
         chat_log = self.query_one("#chat-log", ChatLog)
-        context_tree = self.query_one("#context-tree", ContextTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
         status_bar = self.query_one("#status-bar", StatusBar)
         input_box = self.query_one("#input-box", InputBox)
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
@@ -1163,7 +1163,7 @@ class BalloonsApp(App):
             is_active: True if this is the active/foreground session
         """
         chat_log = self.query_one("#chat-log", ChatLog)
-        context_tree = self.query_one("#context-tree", ContextTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
         input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
 
@@ -1331,7 +1331,7 @@ class BalloonsApp(App):
     async def _handle_new_session(self, prompt: str = "", title: str = "") -> None:
         """Create a new session, optionally with an initial prompt and title."""
         chat_log = self.query_one("#chat-log", ChatLog)
-        context_tree = self.query_one("#context-tree", ContextTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
         status_bar = self.query_one("#status-bar", StatusBar)
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
 
@@ -1429,7 +1429,7 @@ class BalloonsApp(App):
         )
 
         # Reload context tree to show title
-        context_tree = self.query_one("#context-tree", ContextTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
         context_tree.load_all_sessions(self.session)
 
         status_bar.set_status(f"Session titled: {title}", animate=False)
@@ -1482,7 +1482,7 @@ class BalloonsApp(App):
         """
         import uuid
         chat_log = self.query_one("#chat-log", ChatLog)
-        context_tree = self.query_one("#context-tree", ContextTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
         status_bar = self.query_one("#status-bar", StatusBar)
 
         # Resolve all target sessions first
@@ -1652,7 +1652,7 @@ Provide a brief, informative summary:"""
 
     def _handle_copy_turns(self) -> None:
         """Copy selected turns to a new session."""
-        context_tree = self.query_one("#context-tree", ContextTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
         chat_log = self.query_one("#chat-log", ChatLog)
 
         # Get selected messages
@@ -1682,7 +1682,7 @@ Provide a brief, informative summary:"""
         This is a special case: no user message is saved, only the assistant response.
         Uses the event-driven background streaming approach.
         """
-        context_tree = self.query_one("#context-tree", ContextTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
         chat_log = self.query_one("#chat-log", ChatLog)
         input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
@@ -1736,7 +1736,7 @@ Provide a brief, informative summary:"""
     async def _handle_shell_command(self, cmd: str) -> None:
         """Run a shell command and submit output to Claude."""
         chat_log = self.query_one("#chat-log", ChatLog)
-        context_tree = self.query_one("#context-tree", ContextTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
         input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
 
@@ -1787,7 +1787,7 @@ Provide a brief, informative summary:"""
     async def _handle_with_command(self, prompt: str, return_condition: str = "manual", background: bool = False) -> None:
         """Fork a child session, respecting context modes (COPY verbatim, COMPRESS via Claude)."""
         chat_log = self.query_one("#chat-log", ChatLog)
-        context_tree = self.query_one("#context-tree", ContextTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
         input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
         tool_bar = self.query_one("#tool-bar", ToolBar)
@@ -2066,7 +2066,7 @@ Summary:"""
     async def _handle_with_copy_command(self, prompt: str, return_condition: str = "manual", background: bool = False) -> None:
         """Fork a child session, copying selected nodes directly."""
         chat_log = self.query_one("#chat-log", ChatLog)
-        context_tree = self.query_one("#context-tree", ContextTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
         input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
         tool_bar = self.query_one("#tool-bar", ToolBar)
@@ -2163,7 +2163,7 @@ Summary:"""
             background: If True, run in background and stay in parent
         """
         chat_log = self.query_one("#chat-log", ChatLog)
-        context_tree = self.query_one("#context-tree", ContextTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
         input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
         tool_bar = self.query_one("#tool-bar", ToolBar)
@@ -2354,7 +2354,7 @@ Summary:"""
         - Merge marker appears in parent with LLM summary
         """
         chat_log = self.query_one("#chat-log", ChatLog)
-        context_tree = self.query_one("#context-tree", ContextTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
         status_bar = self.query_one("#status-bar", StatusBar)
 
         # Check we're in a fork
@@ -2418,7 +2418,7 @@ Summary:"""
         before creating the derived session. This avoids UI blocking.
         """
         chat_log = self.query_one("#chat-log", ChatLog)
-        context_tree = self.query_one("#context-tree", ContextTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
         input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
         tool_bar = self.query_one("#tool-bar", ToolBar)
@@ -2580,7 +2580,7 @@ Summary:"""
     async def _handle_return_command(self, return_prompt: str = "") -> None:
         """Return from child session to parent."""
         chat_log = self.query_one("#chat-log", ChatLog)
-        context_tree = self.query_one("#context-tree", ContextTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
         status_bar = self.query_one("#status-bar", StatusBar)
         input_box = self.query_one("#input-box", InputBox)
 
@@ -2755,7 +2755,7 @@ Summary:"""
         )
 
         chat_log = self.query_one("#chat-log", ChatLog)
-        context_tree = self.query_one("#context-tree", ContextTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
         request_pane = self.query_one("#request-pane", RequestPane)
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
         input_box = self.query_one("#input-box", InputBox)
@@ -2833,8 +2833,8 @@ Summary:"""
             turn_modes = {}
             for turn in loaded_data["turns"]:
                 turn_id = turn["idx"] + 1  # 1-indexed for chat_log
-                mode = context_tree._context_modes.get(
-                    (session.id, turn["idx"]), ContextMode.DROP
+                mode = context_tree._state.get_context_mode(
+                    session.id, turn["idx"]
                 )
                 turn_modes[turn_id] = mode.name
             chat_log.set_turn_context_modes(turn_modes)
@@ -2855,7 +2855,7 @@ Summary:"""
             # Use default argument to capture turn_id value (avoid late binding)
             self.call_after_refresh(lambda tid=turn_id: chat_log.scroll_to_turn(tid))
 
-    def on_context_tree_selection_changed(self, event: ContextTree.SelectionChanged) -> None:
+    def on_context_tree_view_selection_changed(self, event: ContextTreeView.SelectionChanged) -> None:
         """Handle tree selection changes - apply visual context mode indicators."""
         chat_log = self.query_one("#chat-log", ChatLog)
         # Use visual indication instead of hiding
@@ -2868,22 +2868,22 @@ Summary:"""
         if not self.session:
             return
 
-        context_tree = self.query_one("#context-tree", ContextTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
         # Convert 1-indexed turn_id to 0-indexed turn_idx
         turn_idx = event.turn_id - 1
         turn_key = (self.session.id, turn_idx)
 
         # Cycle through context modes: COPY -> COMPRESS -> DROP -> COPY
-        current_mode = context_tree._context_modes.get(turn_key, ContextMode.DROP)
+        current_mode = context_tree._state.get_context_mode(self.session.id, turn_idx)
         if current_mode == ContextMode.COPY:
             new_mode = ContextMode.COMPRESS
-            context_tree._context_modes[turn_key] = new_mode
+            context_tree._state.set_context_mode(self.session.id, turn_idx, new_mode)
         elif current_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
             new_mode = ContextMode.DROP
-            context_tree._context_modes.pop(turn_key, None)  # DROP
+            context_tree._state.remove_context_mode(self.session.id, turn_idx)
         else:  # DROP
             new_mode = ContextMode.COPY
-            context_tree._context_modes[turn_key] = new_mode
+            context_tree._state.set_context_mode(self.session.id, turn_idx, new_mode)
 
         # Persist to session message and save
         if turn_idx < len(self.session.messages):
@@ -2896,7 +2896,7 @@ Summary:"""
         # Update context tokens when mode changes
         self._update_context_tokens()
 
-    def on_context_tree_context_mode_changed(self, event: ContextTree.ContextModeChanged) -> None:
+    def on_context_tree_view_context_mode_changed(self, event: ContextTreeView.ContextModeChanged) -> None:
         """Handle context mode change from tree - persist to session."""
         # Use in-memory session if it's the current one, otherwise load from disk
         if self.session and self.session.id == event.session_id:
@@ -2908,7 +2908,7 @@ Summary:"""
             session.messages[event.turn_idx].context_mode = event.new_mode
             session.save()
 
-    def on_context_tree_turn_delete_requested(self, event: ContextTree.TurnDeleteRequested) -> None:
+    def on_context_tree_view_turn_delete_requested(self, event: ContextTreeView.TurnDeleteRequested) -> None:
         """Handle turn delete request - show confirmation dialog."""
         status_bar = self.query_one("#status-bar", StatusBar)
 
@@ -2950,7 +2950,7 @@ Summary:"""
     def _execute_turn_delete(self, session_id: str, turn_index: int, session: Session) -> None:
         """Execute the turn deletion after confirmation."""
         status_bar = self.query_one("#status-bar", StatusBar)
-        context_tree = self.query_one("#context-tree", ContextTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
 
         if session.delete_turn(turn_index):
             debug_log.info(
@@ -2974,13 +2974,13 @@ Summary:"""
         else:
             status_bar.set_error("Could not delete turn")
 
-    def on_context_tree_sort_order_changed(self, event: ContextTree.SortOrderChanged) -> None:
+    def on_context_tree_view_sort_order_changed(self, event: ContextTreeView.SortOrderChanged) -> None:
         """Handle sort order change - persist to config."""
         config = get_config()
         config.session_sort_order = event.sort_order
         config.save()
 
-    def on_context_tree_session_delete_requested(self, event: ContextTree.SessionDeleteRequested) -> None:
+    def on_context_tree_view_session_delete_requested(self, event: ContextTreeView.SessionDeleteRequested) -> None:
         """Handle session delete request - show confirmation dialog."""
         status_bar = self.query_one("#status-bar", StatusBar)
 
@@ -3019,7 +3019,7 @@ Summary:"""
     def _execute_session_delete(self, session_id: str, session: Session, was_active: bool) -> None:
         """Execute the session deletion after confirmation."""
         status_bar = self.query_one("#status-bar", StatusBar)
-        context_tree = self.query_one("#context-tree", ContextTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
 
         # Mark links as orphaned in linked sessions before deletion
         # Check both legacy links and turn-based LinkBlocks
@@ -3057,12 +3057,12 @@ Summary:"""
         else:
             status_bar.set_error("Could not delete session")
 
-    def on_context_tree_session_activated(self, event: ContextTree.SessionActivated) -> None:
+    def on_context_tree_view_session_activated(self, event: ContextTreeView.SessionActivated) -> None:
         """Handle clicking on a session - switch to it."""
         # Switch to this session (works even while other sessions stream)
         self._switch_to_session(event.session)
 
-    def on_context_tree_session_link_requested(self, event: ContextTree.SessionLinkRequested) -> None:
+    def on_context_tree_view_session_link_requested(self, event: ContextTreeView.SessionLinkRequested) -> None:
         """Handle ctrl+click on a session - populate or append to link command."""
         import re
 
@@ -3104,7 +3104,7 @@ Summary:"""
 
         input_box.focus()
 
-    def on_context_tree_turn_inspected(self, event: ContextTree.TurnInspected) -> None:
+    def on_context_tree_view_turn_inspected(self, event: ContextTreeView.TurnInspected) -> None:
         """Handle turn inspection - show in request pane and highlight tool uses.
 
         If the turn belongs to a different session, switch to that session first.
@@ -3121,10 +3121,14 @@ Summary:"""
         # Check if we need to switch sessions
         turn_session_id = event.session_id
         if turn_session_id and turn_session_id != self.session.id:
-            # Switch to the turn's session first
+            # Switch to the turn's session first - it handles scrolling
             target_session = Session.load(turn_session_id)
             if target_session:
                 self._switch_to_session(target_session, target_turn_index=turn_idx)
+                # Show the turn data in request pane (session switch already handles scroll)
+                if node_type == "turn":
+                    request_pane.show_json(event.turn_data)
+                return  # Session switch handles the rest
 
         if node_type == "summary":
             request_pane.show_session_info(
@@ -3173,25 +3177,24 @@ Summary:"""
             chat_log.clear_highlights()
             request_pane.show_json(event.turn_data)
 
-    # --- NestedSessionTree Event Handlers ---
-    # These mirror the ContextTree handlers since both trees emit the same message types
+    # --- NestedTreeView Event Handlers ---
+    # These mirror the ContextTreeView handlers since both trees emit the same message types
 
-    def on_nested_session_tree_selection_changed(self, event: NestedSessionTree.SelectionChanged) -> None:
+    def on_nested_tree_view_selection_changed(self, event: NestedTreeView.SelectionChanged) -> None:
         """Handle nested tree selection changes - apply visual context mode indicators."""
         chat_log = self.query_one("#chat-log", ChatLog)
         chat_log.set_turn_context_modes(event.turn_modes)
         # Update context tokens when selection changes
         self._update_context_tokens()
 
-    def on_nested_session_tree_context_mode_changed(self, event: NestedSessionTree.ContextModeChanged) -> None:
+    def on_nested_tree_view_context_mode_changed(self, event: NestedTreeView.ContextModeChanged) -> None:
         """Handle context mode change from nested tree - persist to session."""
-        # Also update ContextTree's local state to keep them in sync
-        context_tree = self.query_one("#context-tree", ContextTree)
-        turn_key = (event.session_id, event.turn_idx)
+        # Also update ContextTreeView's local state to keep them in sync
+        context_tree = self.query_one("#context-tree", ContextTreeView)
         if event.new_mode == ContextMode.DROP:
-            context_tree._context_modes.pop(turn_key, None)
+            context_tree._state.remove_context_mode(event.session_id, event.turn_idx)
         else:
-            context_tree._context_modes[turn_key] = event.new_mode
+            context_tree._state.set_context_mode(event.session_id, event.turn_idx, event.new_mode)
         context_tree._update_turn_label(event.session_id, event.turn_idx)
         context_tree._update_root_label()
 
@@ -3208,11 +3211,11 @@ Summary:"""
         # Update context tokens when mode changes
         self._update_context_tokens()
 
-    def on_nested_session_tree_session_activated(self, event: NestedSessionTree.SessionActivated) -> None:
+    def on_nested_tree_view_session_activated(self, event: NestedTreeView.SessionActivated) -> None:
         """Handle clicking on a session in nested tree - switch to it."""
         self._switch_to_session(event.session)
 
-    def on_nested_session_tree_turn_inspected(self, event: NestedSessionTree.TurnInspected) -> None:
+    def on_nested_tree_view_turn_inspected(self, event: NestedTreeView.TurnInspected) -> None:
         """Handle turn inspection from nested tree."""
         request_pane = self.query_one("#request-pane", RequestPane)
         chat_log = self.query_one("#chat-log", ChatLog)
@@ -3246,22 +3249,22 @@ Summary:"""
             chat_log.clear_highlights()
             request_pane.show_json(event.turn_data)
 
-    def on_nested_session_tree_turn_delete_requested(self, event: NestedSessionTree.TurnDeleteRequested) -> None:
+    def on_nested_tree_view_turn_delete_requested(self, event: NestedTreeView.TurnDeleteRequested) -> None:
         """Handle turn delete request from nested tree."""
-        # Reuse the ContextTree handler logic
-        context_tree_event = ContextTree.TurnDeleteRequested(event.session_id, event.turn_index)
+        # Reuse the ContextTreeView handler logic
+        context_tree_event = ContextTreeView.TurnDeleteRequested(event.session_id, event.turn_index)
         self.on_context_tree_turn_delete_requested(context_tree_event)
 
-    def on_nested_session_tree_session_delete_requested(self, event: NestedSessionTree.SessionDeleteRequested) -> None:
+    def on_nested_tree_view_session_delete_requested(self, event: NestedTreeView.SessionDeleteRequested) -> None:
         """Handle session delete request from nested tree."""
-        # Reuse the ContextTree handler logic
-        context_tree_event = ContextTree.SessionDeleteRequested(event.session_id)
+        # Reuse the ContextTreeView handler logic
+        context_tree_event = ContextTreeView.SessionDeleteRequested(event.session_id)
         self.on_context_tree_session_delete_requested(context_tree_event)
 
-    def on_nested_session_tree_session_link_requested(self, event: NestedSessionTree.SessionLinkRequested) -> None:
+    def on_nested_tree_view_session_link_requested(self, event: NestedTreeView.SessionLinkRequested) -> None:
         """Handle ctrl+click link request from nested tree."""
-        # Reuse the ContextTree handler logic
-        context_tree_event = ContextTree.SessionLinkRequested(event.session_id)
+        # Reuse the ContextTreeView handler logic
+        context_tree_event = ContextTreeView.SessionLinkRequested(event.session_id)
         self.on_context_tree_session_link_requested(context_tree_event)
 
     def on_breadcrumb_segment_clicked(self, event: Breadcrumb.SegmentClicked) -> None:
@@ -3288,15 +3291,15 @@ Summary:"""
             self.session.title = result.title
             self.session.save()
             # Update UI
-            context_tree = self.query_one("#context-tree", ContextTree)
+            context_tree = self.query_one("#context-tree", ContextTreeView)
             context_tree.load_all_sessions(self.session)
             breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
             breadcrumb.set_session(self.session)
 
     def action_toggle_tree(self) -> None:
         """Toggle the tree sidebar visibility."""
-        context_tree = self.query_one("#context-tree", ContextTree)
-        nested_tree = self.query_one("#nested-tree", NestedSessionTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+        nested_tree = self.query_one("#nested-tree", NestedTreeView)
         splitter = self.query_one("#splitter", VerticalSplitter)
 
         # If either tree is visible, hide both; otherwise show the active one
@@ -3314,9 +3317,9 @@ Summary:"""
             splitter.display = True
 
     def action_switch_tree_view(self) -> None:
-        """Switch between flat (ContextTree) and nested (NestedSessionTree) views."""
-        context_tree = self.query_one("#context-tree", ContextTree)
-        nested_tree = self.query_one("#nested-tree", NestedSessionTree)
+        """Switch between flat (ContextTreeView) and nested (NestedTreeView) views."""
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+        nested_tree = self.query_one("#nested-tree", NestedTreeView)
         status_bar = self.query_one("#status-bar", StatusBar)
 
         # Toggle which tree is active
@@ -3355,8 +3358,8 @@ Summary:"""
     def action_resize_tree(self, delta: int) -> None:
         """Resize the active tree by delta columns."""
         self._tree_width = max(20, min(100, self._tree_width + delta))
-        context_tree = self.query_one("#context-tree", ContextTree)
-        nested_tree = self.query_one("#nested-tree", NestedSessionTree)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+        nested_tree = self.query_one("#nested-tree", NestedTreeView)
         context_tree.styles.width = self._tree_width
         nested_tree.styles.width = self._tree_width
 

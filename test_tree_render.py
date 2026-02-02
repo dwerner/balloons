@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test script to verify ContextTree renders correctly with TreeState.
+"""Test script to verify ContextTreeView renders correctly with TreeState.
 
 Usage:
     python test_tree_render.py [--session SESSION_ID] [--headless]
@@ -11,7 +11,7 @@ import argparse
 import sys
 from io import StringIO
 
-from widgets import ContextTree
+from widgets import ContextTreeView
 from core.tree_state import TreeState
 from session import Session
 
@@ -22,7 +22,7 @@ def test_headless(session: Session):
 
     tree_state = TreeState()
 
-    # Simulate what ContextTree.load_all_sessions does to TreeState
+    # Simulate what ContextTreeView.load_all_sessions does to TreeState
     # First add current session
     tree_state.add_session(session, is_current=True)
 
@@ -59,8 +59,7 @@ def test_headless(session: Session):
         if current_data and current_data.turns:
             print(f"\nContext modes for current session turns:")
             for i in range(min(3, len(current_data.turns))):
-                turn_key = (tree_state._current_session_id, i)
-                mode = tree_state._context_modes.get(turn_key, "NOT SET")
+                mode = tree_state.get_context_mode(tree_state._current_session_id, i)
                 print(f"  Turn {i}: {mode}")
 
     print("\n=== Headless test PASSED ===")
@@ -81,7 +80,7 @@ def test_with_textual(session: Session):
             height: 100%;
             border: solid green;
         }
-        ContextTree {
+        ContextTreeView {
             width: 100%;
             height: 100%;
         }
@@ -94,11 +93,11 @@ def test_with_textual(session: Session):
 
         def compose(self) -> ComposeResult:
             with Container(id="tree-container"):
-                yield ContextTree(tree_state=self._tree_state)
+                yield ContextTreeView(tree_state=self._tree_state)
 
         async def on_mount(self) -> None:
             try:
-                context_tree = self.query_one(ContextTree)
+                context_tree = self.query_one(ContextTreeView)
                 context_tree.load_all_sessions(self._session)
 
                 # Collect info
@@ -133,7 +132,7 @@ def test_with_textual(session: Session):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Test ContextTree rendering")
+    parser = argparse.ArgumentParser(description="Test ContextTreeView rendering")
     parser.add_argument(
         "--session", "-s",
         metavar="SESSION_ID",

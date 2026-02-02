@@ -45,8 +45,8 @@ SESSION_COLORS = [
 ]
 
 
-class SelectableTree(Tree):
-    """Tree with space-bar toggle for multiselect.
+class SelectableTreeWidget(Tree):
+    """Tree widget with space-bar toggle for multiselect.
 
     Behavior:
     - Space: toggle context mode (COPY -> COMPRESS -> DROP)
@@ -238,37 +238,41 @@ class SelectableTree(Tree):
         await super()._on_key(event)
 
 
-class ContextTree(Vertical):
-    """Left panel showing all sessions with selectable turns."""
+class ContextTreeView(Vertical):
+    """Left panel view showing all sessions with selectable turns.
+
+    Note: Class is named ContextTreeView to maintain
+    compatibility with Textual message handler naming conventions in app.py.
+    """
 
     DEFAULT_CSS = """
-    ContextTree {
+    ContextTreeView {
         width: 40;
         height: 100%;
         border-right: solid $primary;
     }
 
-    ContextTree > SelectableTree {
+    ContextTreeView > SelectableTreeWidget {
         height: 1fr;
         background: $background;
     }
 
     /* Subtle hover - slight darkening to preserve colored text visibility */
-    ContextTree > SelectableTree > .tree--highlight {
+    ContextTreeView > SelectableTreeWidget > .tree--highlight {
         /* no text-style change - preserve original colors */
     }
 
-    ContextTree > SelectableTree > .tree--highlight-line {
+    ContextTreeView > SelectableTreeWidget > .tree--highlight-line {
         background: #1a1a2e;
     }
 
     /* Override cursor (focused node) - slightly more visible dark background */
-    ContextTree > SelectableTree > .tree--cursor {
+    ContextTreeView > SelectableTreeWidget > .tree--cursor {
         background: #252540;
         text-style: none;
     }
 
-    ContextTree > #search-input {
+    ContextTreeView > #search-input {
         dock: top;
         display: none;
         height: auto;
@@ -278,18 +282,18 @@ class ContextTree(Vertical):
         background: $surface;
     }
 
-    ContextTree > #search-input.visible {
+    ContextTreeView > #search-input.visible {
         display: block;
     }
 
-    ContextTree > #sort-container {
+    ContextTreeView > #sort-container {
         dock: top;
         height: auto;
         padding: 0 1;
         background: $surface;
     }
 
-    ContextTree > #sort-container > #sort-select {
+    ContextTreeView > #sort-container > #sort-select {
         width: 100%;
         min-width: 20;
     }
@@ -391,11 +395,8 @@ class ContextTree(Vertical):
         self._sort_order: str = initial_sort_order
 
         # Legacy compatibility - these now delegate to TreeState
-        # Keep as properties for gradual migration
+        # Context modes are now fully managed by TreeState
 
-        # Context mode per turn: (session_id, turn_idx) -> ContextMode
-        # Missing entries default to DROP (not in context)
-        self._context_modes: dict[tuple[str, int], ContextMode] = {}
         # Context mode per merge: ("merge", parent_session_id, fork_session_id) -> ContextMode
         # Merges default to COPY (include merge summary in context)
         self._merge_modes: dict[tuple[str, str, str], ContextMode] = {}
@@ -420,12 +421,12 @@ class ContextTree(Vertical):
                 id="sort-select",
                 allow_blank=False,
             )
-        tree = SelectableTree("[dim]loading...[/]", id="turn-tree")
+        tree = SelectableTreeWidget("[dim]loading...[/]", id="turn-tree")
         tree.root.data = {"type": "root"}
         yield tree
 
     def on_mount(self) -> None:
-        tree = self.query_one("#turn-tree", SelectableTree)
+        tree = self.query_one("#turn-tree", SelectableTreeWidget)
         tree.root.expand()
         tree.root.allow_expand = False
         tree.auto_expand = False  # Don't auto-expand on selection
@@ -449,7 +450,7 @@ class ContextTree(Vertical):
 
         This is the observer callback - translates state changes to UI updates.
 
-        NOTE: Currently using dual-write pattern. The ContextTree methods
+        NOTE: Currently using dual-write pattern. The ContextTreeView methods
         (start_turn, finish_turn, etc.) both update TreeState AND update UI.
         So we skip TURN_STARTED/TURN_FINISHED here to avoid duplicate work.
         Once we migrate to app calling TreeState directly, these handlers
@@ -613,7 +614,7 @@ class ContextTree(Vertical):
             self._add_content_block_nodes(turn["node"], session_id, turn_idx, content_blocks)
 
             # Update label with final content
-            mode = self._context_modes.get((session_id, turn_idx), ContextMode.DROP)
+            mode = self._state.get_context_mode(session_id, turn_idx)
             turn["node"].label = self._make_turn_label(
                 turn["role"], content, mode, content_blocks, session_id=session_id
             )
@@ -645,18 +646,17 @@ class ContextTree(Vertical):
         # Get all session metadata (lightweight - no message content)
         all_session_metadata = Session.list_sessions()
 
-        tree = self.query_one("#turn-tree", SelectableTree)
+        tree = self.query_one("#turn-tree", SelectableTreeWidget)
         tree.root.remove_children()
         self._sessions.clear()
         self._loaded_sessions.clear()
-        self._context_modes.clear()
         self._merge_modes.clear()
         self._session_colors.clear()
         self._color_index = 0
         self._session_nodes.clear()
         self._turn_nodes.clear()
 
-        # Also clear TreeState
+        # Clear TreeState (which now owns context modes)
         self._state.clear()
 
         # Build metadata index
@@ -828,13 +828,12 @@ class ContextTree(Vertical):
 
         turns = []
         for idx, msg in enumerate(session.messages):
-            turn_key = (session.id, idx)
             # Use persisted context_mode from message
-            if hasattr(msg, 'context_mode'):
-                self._context_modes[turn_key] = msg.context_mode
+            if hasattr(msg, 'context_mode') and msg.context_mode:
+                self._state.set_context_mode(session.id, idx, msg.context_mode)
             elif is_current:
                 # Default: current session turns are COMPRESS
-                self._context_modes[turn_key] = ContextMode.COMPRESS
+                self._state.set_context_mode(session.id, idx, ContextMode.COMPRESS)
 
             content_blocks = msg.content_blocks if hasattr(msg, 'content_blocks') else []
 
@@ -907,7 +906,7 @@ class ContextTree(Vertical):
         # Also fully load the session
         self._load_full_session(session.id, session)
 
-    def _add_session_to_tree(self, tree: SelectableTree, session: Session, is_current: bool) -> None:
+    def _add_session_to_tree(self, tree: SelectableTreeWidget, session: Session, is_current: bool) -> None:
         """Add a session and its turns to the tree.
 
         Forks are shown inline at their fork point in the parent session.
@@ -936,15 +935,14 @@ class ContextTree(Vertical):
 
         turns = []
         for idx, msg in enumerate(session.messages):
-            turn_key = (session.id, idx)
             # Use persisted context_mode from message
-            if hasattr(msg, 'context_mode'):
-                self._context_modes[turn_key] = msg.context_mode
+            if hasattr(msg, 'context_mode') and msg.context_mode:
+                self._state.set_context_mode(session.id, idx, msg.context_mode)
             elif is_current:
                 # Default: current session turns are COMPRESS
-                self._context_modes[turn_key] = ContextMode.COMPRESS
+                self._state.set_context_mode(session.id, idx, ContextMode.COMPRESS)
 
-            mode = self._context_modes.get(turn_key, ContextMode.DROP)
+            mode = self._state.get_context_mode(session.id, idx)
             content_blocks = msg.content_blocks if hasattr(msg, 'content_blocks') else []
             label = self._make_turn_label(msg.role, msg.content, mode, content_blocks, session_id=session.id)
             turn_node = session_node.add(
@@ -994,7 +992,7 @@ class ContextTree(Vertical):
             "turns": turns,
         }
 
-    def _add_fork_node(self, parent_node, parent_session_id: str, fork: dict, tree: SelectableTree) -> None:
+    def _add_fork_node(self, parent_node, parent_session_id: str, fork: dict, tree: SelectableTreeWidget) -> None:
         """Add a fork link node inline in the parent session.
 
         This is just a reference/link to the forked session - the actual session
@@ -1199,7 +1197,7 @@ class ContextTree(Vertical):
 
     def _update_root_label(self) -> None:
         """Update root label with selected context tokens for current session."""
-        tree = self.query_one("#turn-tree", SelectableTree)
+        tree = self.query_one("#turn-tree", SelectableTreeWidget)
 
         selected_tokens = 0
         current_session_tokens = 0
@@ -1212,11 +1210,10 @@ class ContextTree(Vertical):
             loaded_data = self._loaded_sessions.get(self._current_session_id)
             if loaded_data:
                 for turn in loaded_data["turns"]:
-                    turn_key = (self._current_session_id, turn["idx"])
                     content = f"{'User' if turn['role'] == 'user' else 'Assistant'}: {turn['content']}"
                     tokens = count_tokens(content)
                     current_session_tokens += tokens
-                    mode = self._context_modes.get(turn_key, ContextMode.DROP)
+                    mode = self._state.get_context_mode(self._current_session_id, turn["idx"])
                     if mode != ContextMode.DROP:
                         selected_tokens += tokens
                         current_session_turn_ids.append(turn["idx"] + 1)
@@ -1241,8 +1238,8 @@ class ContextTree(Vertical):
                                 selected_tokens += merge_tokens
 
         included_count = sum(
-            1 for (sid, _), m in self._context_modes.items()
-            if m != ContextMode.DROP and sid == self._current_session_id
+            1 for m in self._state.get_context_modes_for_session(self._current_session_id).values()
+            if m != ContextMode.DROP
         )
         included_count += sum(
             1 for key, m in self._merge_modes.items()
@@ -1264,8 +1261,7 @@ class ContextTree(Vertical):
 
         for turn in loaded_data["turns"]:
             if turn["idx"] == turn_idx:
-                turn_key = (session_id, turn_idx)
-                mode = self._context_modes.get(turn_key, ContextMode.DROP)
+                mode = self._state.get_context_mode(session_id, turn_idx)
                 if turn.get("node"):
                     turn["node"].label = self._make_turn_label(
                         turn["role"], turn["content"], mode, turn.get("content_blocks"), session_id=session_id
@@ -1306,14 +1302,14 @@ class ContextTree(Vertical):
             return False
 
         # Check if any non-current session turns are included
-        for turn_key, mode in self._context_modes.items():
+        all_modes = self._state.get_all_context_modes()
+        for turn_key, mode in all_modes.items():
             if mode != ContextMode.DROP and turn_key[0] != self._current_session_id:
                 return True
 
         # Check if all current session turns are COPY
         for turn in loaded_data["turns"]:
-            turn_key = (self._current_session_id, turn["idx"])
-            mode = self._context_modes.get(turn_key, ContextMode.DROP)
+            mode = self._state.get_context_mode(self._current_session_id, turn["idx"])
             if mode != ContextMode.COPY:
                 return True
 
@@ -1332,8 +1328,7 @@ class ContextTree(Vertical):
         idx = len(loaded_data["turns"])
         turn_key = (self._current_session_id, idx)
 
-        # Update both local and TreeState
-        self._context_modes[turn_key] = ContextMode.COMPRESS  # Auto-include new turns as COMPRESS
+        # Set context mode in TreeState
         self._state.set_context_mode(self._current_session_id, idx, ContextMode.COMPRESS)
 
         label = self._make_turn_label(role, content, ContextMode.COMPRESS, content_blocks, session_id=self._current_session_id)
@@ -1406,19 +1401,9 @@ class ContextTree(Vertical):
                 if turn.get("node") and turn["node"].data:
                     turn["node"].data["turn_idx"] = turn["idx"]
 
-        # Remove context mode for deleted turn and shift others
-        turn_key = (session_id, turn_idx)
-        self._context_modes.pop(turn_key, None)
-
-        # Shift context modes for turns after the removed one
-        keys_to_update = [
-            (sid, idx) for sid, idx in self._context_modes.keys()
-            if sid == session_id and idx > turn_idx
-        ]
-        for old_key in keys_to_update:
-            mode = self._context_modes.pop(old_key)
-            new_key = (session_id, old_key[1] - 1)
-            self._context_modes[new_key] = mode
+        # Remove context mode for deleted turn and shift others in TreeState
+        self._state.remove_context_mode(session_id, turn_idx)
+        self._state.shift_context_modes_after_removal(session_id, turn_idx)
 
         # Update cached session if provided
         if updated_session:
@@ -1455,13 +1440,8 @@ class ContextTree(Vertical):
         # Remove from sessions dict
         del self._sessions[session_id]
 
-        # Remove context modes for this session's turns
-        keys_to_remove = [
-            key for key in self._context_modes.keys()
-            if key[0] == session_id
-        ]
-        for key in keys_to_remove:
-            del self._context_modes[key]
+        # Remove context modes for this session's turns via TreeState
+        self._state.clear_context_modes_for_session(session_id)
 
         # Remove merge modes for this session
         merge_keys_to_remove = [
@@ -1483,15 +1463,15 @@ class ContextTree(Vertical):
         Creates a placeholder turn node that will be populated as events arrive.
 
         Note: This method also notifies TreeState. In the future, the app
-        should call TreeState directly, and ContextTree will react via observer.
+        should call TreeState directly, and ContextTreeView will react via observer.
         """
         metadata = self._sessions.get(session_id)
         loaded_data = self._loaded_sessions.get(session_id)
         if not metadata or not loaded_data:
             return
 
-        turn_key = (session_id, turn_idx)
-        self._context_modes[turn_key] = ContextMode.COMPRESS  # Auto-include as COMPRESS
+        # Set context mode in TreeState - auto-include new turns as COMPRESS
+        self._state.set_context_mode(session_id, turn_idx, ContextMode.COMPRESS)
 
         # Also notify TreeState (it will fire TURN_STARTED event)
         self._state.start_turn(session_id, turn_idx, role)
@@ -1592,7 +1572,7 @@ class ContextTree(Vertical):
         # Update turn label to show tool count
         tool_count = len(turn.get("_tool_use_nodes", {}))
         icon = "👤" if turn["role"] == "user" else "🤖"
-        mode = self._context_modes.get((session_id, turn_idx), ContextMode.DROP)
+        mode = self._state.get_context_mode(session_id, turn_idx)
         if mode == ContextMode.COPY:
             indicator = "[green]☑[/]"
         elif mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
@@ -1681,7 +1661,7 @@ class ContextTree(Vertical):
             preview += "..."
 
         icon = "👤" if turn["role"] == "user" else "🤖"
-        mode = self._context_modes.get((session_id, turn_idx), ContextMode.DROP)
+        mode = self._state.get_context_mode(session_id, turn_idx)
         if mode == ContextMode.COPY:
             indicator = "[green]☑[/]"
         elif mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
@@ -1759,7 +1739,7 @@ class ContextTree(Vertical):
         Updates the turn label with final content and rebuilds child nodes in order.
 
         Note: This method also notifies TreeState. In the future, the app
-        should call TreeState directly, and ContextTree will react via observer.
+        should call TreeState directly, and ContextTreeView will react via observer.
         """
         loaded_data = self._loaded_sessions.get(session_id)
         if not loaded_data:
@@ -1789,7 +1769,7 @@ class ContextTree(Vertical):
             self._add_content_block_nodes(turn["node"], session_id, turn_idx, content_blocks)
 
             # Update label with final content
-            mode = self._context_modes.get((session_id, turn_idx), ContextMode.DROP)
+            mode = self._state.get_context_mode(session_id, turn_idx)
             turn["node"].label = self._make_turn_label(
                 turn["role"], content, mode, content_blocks, session_id=session_id
             )
@@ -1817,12 +1797,12 @@ class ContextTree(Vertical):
             return
 
         loaded_data = self._loaded_sessions[session_id]
-        tree = self.query_one("#turn-tree", SelectableTree)
+        tree = self.query_one("#turn-tree", SelectableTreeWidget)
 
         # Add turn nodes
         for turn in loaded_data["turns"]:
             idx = turn["idx"]
-            mode = self._context_modes.get((session_id, idx), ContextMode.DROP)
+            mode = self._state.get_context_mode(session_id, idx)
             content_blocks = turn.get("content_blocks", [])
             label = self._make_turn_label(turn["role"], turn["content"], mode, content_blocks, session_id=session_id)
             turn_node = session_node.add(
@@ -1896,12 +1876,13 @@ class ContextTree(Vertical):
             session_id = node_data.get("session_id")
             turn_idx = node_data.get("turn_idx")
             loaded_data = self._loaded_sessions.get(session_id)
+            debug_log.debug(f"on_tree_node_selected turn: session_id={session_id}, turn_idx={turn_idx}, loaded_data={loaded_data is not None}", category="tree")
             if loaded_data:
                 for turn in loaded_data["turns"]:
                     if turn["idx"] == turn_idx:
                         # Get context mode for this turn
-                        turn_key = (session_id, turn_idx)
-                        mode = self._context_modes.get(turn_key, ContextMode.DROP)
+                        mode = self._state.get_context_mode(session_id, turn_idx)
+                        debug_log.debug(f"on_tree_node_selected: posting TurnInspected for turn {turn_idx}", category="tree")
                         # Send turn data for inspection (includes session_id for cross-session navigation)
                         self.post_message(self.TurnInspected({
                             "type": "turn",
@@ -1912,12 +1893,15 @@ class ContextTree(Vertical):
                             "context_mode": mode.name,
                         }, session_id=session_id))
                         break
+                else:
+                    debug_log.warning(f"on_tree_node_selected: turn {turn_idx} not found in loaded_data", category="tree")
+            else:
+                debug_log.warning(f"on_tree_node_selected: session {session_id} not loaded", category="tree")
         elif node_type == "text":
             # Send text block data for inspection and highlighting
             session_id = node_data.get("session_id")
             turn_idx = node_data.get("turn_idx")
-            turn_key = (session_id, turn_idx)
-            mode = self._context_modes.get(turn_key, ContextMode.DROP)
+            mode = self._state.get_context_mode(session_id, turn_idx)
             self.post_message(self.TurnInspected({
                 "type": "text",
                 "session_id": session_id,
@@ -1930,8 +1914,7 @@ class ContextTree(Vertical):
             # Send tool use data for inspection and highlighting
             session_id = node_data.get("session_id")
             turn_idx = node_data.get("turn_idx")
-            turn_key = (session_id, turn_idx)
-            mode = self._context_modes.get(turn_key, ContextMode.DROP)
+            mode = self._state.get_context_mode(session_id, turn_idx)
             self.post_message(self.TurnInspected({
                 "type": "tool_use",
                 "session_id": session_id,
@@ -1946,8 +1929,7 @@ class ContextTree(Vertical):
             # Send tool result data for inspection and highlighting
             session_id = node_data.get("session_id")
             turn_idx = node_data.get("turn_idx")
-            turn_key = (session_id, turn_idx)
-            mode = self._context_modes.get(turn_key, ContextMode.DROP)
+            mode = self._state.get_context_mode(session_id, turn_idx)
             self.post_message(self.TurnInspected({
                 "type": "tool_result",
                 "session_id": session_id,
@@ -1990,7 +1972,7 @@ class ContextTree(Vertical):
                 "context_mode": mode.name,
             }, session_id=parent_session_id))
 
-    def on_selectable_tree_activate_requested(self, event: SelectableTree.ActivateRequested) -> None:
+    def on_selectable_tree_activate_requested(self, event: SelectableTreeWidget.ActivateRequested) -> None:
         """Handle Enter key - activate session (load into chat view)."""
         node_data = event.node_data
         node_type = node_data.get("type")
@@ -2015,19 +1997,12 @@ class ContextTree(Vertical):
             # Use TreeState to toggle - it fires CONTEXT_MODE_CHANGED event
             new_mode = self._state.toggle_context_mode(session_id, turn_idx)
 
-            # Keep local state in sync (will be removed when fully migrated)
-            turn_key = (session_id, turn_idx)
-            if new_mode == ContextMode.DROP:
-                self._context_modes.pop(turn_key, None)
-            else:
-                self._context_modes[turn_key] = new_mode
-
             self._update_turn_label(session_id, turn_idx)
             self._update_root_label()
             # Notify app to persist the change
             self.post_message(self.ContextModeChanged(session_id, turn_idx, new_mode))
 
-    def on_selectable_tree_toggle_requested(self, event: SelectableTree.ToggleRequested) -> None:
+    def on_selectable_tree_toggle_requested(self, event: SelectableTreeWidget.ToggleRequested) -> None:
         """Handle space bar toggle - cycle through COPY -> COMPRESS -> DROP."""
         node_type = event.node_data.get("type")
 
@@ -2037,13 +2012,6 @@ class ContextTree(Vertical):
 
             # Use TreeState to toggle - it fires CONTEXT_MODE_CHANGED event
             new_mode = self._state.toggle_context_mode(session_id, turn_idx)
-
-            # Keep local state in sync (will be removed when fully migrated)
-            turn_key = (session_id, turn_idx)
-            if new_mode == ContextMode.DROP:
-                self._context_modes.pop(turn_key, None)
-            else:
-                self._context_modes[turn_key] = new_mode
 
             self._update_turn_label(session_id, turn_idx)
             self._update_root_label()
@@ -2073,7 +2041,7 @@ class ContextTree(Vertical):
             self._update_merge_label(parent_session_id, fork_id, event.node_data)
             self._update_root_label()
 
-    def on_selectable_tree_select_all_requested(self, event: SelectableTree.SelectAllRequested) -> None:
+    def on_selectable_tree_select_all_requested(self, event: SelectableTreeWidget.SelectAllRequested) -> None:
         """Set all turns in CURRENT session to COPY mode."""
         if not self._current_session_id:
             return
@@ -2081,14 +2049,12 @@ class ContextTree(Vertical):
         if not loaded_data:
             return
         for turn in loaded_data["turns"]:
-            turn_key = (self._current_session_id, turn["idx"])
-            # Update both local and TreeState
-            self._context_modes[turn_key] = ContextMode.COPY
+            # Update TreeState
             self._state.set_context_mode(self._current_session_id, turn["idx"], ContextMode.COPY)
             self._update_turn_label(self._current_session_id, turn["idx"])
         self._update_root_label()
 
-    def on_selectable_tree_select_none_requested(self, event: SelectableTree.SelectNoneRequested) -> None:
+    def on_selectable_tree_select_none_requested(self, event: SelectableTreeWidget.SelectNoneRequested) -> None:
         """Set all turns in CURRENT session to DROP mode."""
         if not self._current_session_id:
             return
@@ -2096,28 +2062,26 @@ class ContextTree(Vertical):
         if not loaded_data:
             return
         for turn in loaded_data["turns"]:
-            turn_key = (self._current_session_id, turn["idx"])
-            # Update both local and TreeState
-            self._context_modes.pop(turn_key, None)
+            # Update TreeState
             self._state.set_context_mode(self._current_session_id, turn["idx"], ContextMode.DROP)
             self._update_turn_label(self._current_session_id, turn["idx"])
         self._update_root_label()
 
-    def on_selectable_tree_search_requested(self, event: SelectableTree.SearchRequested) -> None:
+    def on_selectable_tree_search_requested(self, event: SelectableTreeWidget.SearchRequested) -> None:
         """Show the search input when / is pressed."""
         search_input = self.query_one("#search-input", Input)
         search_input.add_class("visible")
         search_input.focus()
 
-    def on_selectable_tree_turn_delete_requested(self, event: SelectableTree.TurnDeleteRequested) -> None:
+    def on_selectable_tree_turn_delete_requested(self, event: SelectableTreeWidget.TurnDeleteRequested) -> None:
         """Handle turn delete request - bubble up to app."""
         self.post_message(self.TurnDeleteRequested(event.session_id, event.turn_index))
 
-    def on_selectable_tree_session_delete_requested(self, event: SelectableTree.SessionDeleteRequested) -> None:
+    def on_selectable_tree_session_delete_requested(self, event: SelectableTreeWidget.SessionDeleteRequested) -> None:
         """Handle session delete request - bubble up to app."""
         self.post_message(self.SessionDeleteRequested(event.session_id))
 
-    def on_selectable_tree_link_requested(self, event: SelectableTree.LinkRequested) -> None:
+    def on_selectable_tree_link_requested(self, event: SelectableTreeWidget.LinkRequested) -> None:
         """Handle ctrl+click link request - bubble up to app."""
         self.post_message(self.SessionLinkRequested(event.session_id))
 
@@ -2149,7 +2113,7 @@ class ContextTree(Vertical):
         if not self._sessions:
             return
 
-        tree = self.query_one("#turn-tree", SelectableTree)
+        tree = self.query_one("#turn-tree", SelectableTreeWidget)
         tree.root.remove_children()
 
         # Get session data sorted according to current order
@@ -2192,7 +2156,7 @@ class ContextTree(Vertical):
                 # Rebuild turn nodes
                 for turn in loaded_data["turns"]:
                     idx = turn["idx"]
-                    mode = self._context_modes.get((session_id, idx), ContextMode.DROP)
+                    mode = self._state.get_context_mode(session_id, idx)
                     content_blocks = turn.get("content_blocks", [])
                     label = self._make_turn_label(turn["role"], turn["content"], mode, content_blocks, session_id=session_id)
                     turn_node = session_node.add(
@@ -2278,7 +2242,7 @@ class ContextTree(Vertical):
         """Hide search input and focus tree."""
         search_input = self.query_one("#search-input", Input)
         search_input.remove_class("visible")
-        tree = self.query_one("#turn-tree", SelectableTree)
+        tree = self.query_one("#turn-tree", SelectableTreeWidget)
         tree.focus()
 
     def _clear_search(self) -> None:
@@ -2294,7 +2258,7 @@ class ContextTree(Vertical):
 
         Note: Search only works for loaded sessions.
         """
-        tree = self.query_one("#turn-tree", SelectableTree)
+        tree = self.query_one("#turn-tree", SelectableTreeWidget)
         tree.root.remove_children()
 
         # Determine which sessions to expand:
@@ -2340,7 +2304,7 @@ class ContextTree(Vertical):
                 turns_to_show = matching_turns if self._search_query else loaded_data["turns"]
                 for turn in turns_to_show:
                     idx = turn["idx"]
-                    mode = self._context_modes.get((session_id, idx), ContextMode.DROP)
+                    mode = self._state.get_context_mode(session_id, idx)
                     content_blocks = turn.get("content_blocks", [])
                     label = self._make_turn_label(turn["role"], turn["content"], mode, content_blocks, session_id=session_id)
                     turn_node = session_node.add(
@@ -2417,8 +2381,7 @@ class ContextTree(Vertical):
 
         # Collect turns
         for turn in loaded_data["turns"]:
-            turn_key = (self._current_session_id, turn["idx"])
-            mode = self._context_modes.get(turn_key, ContextMode.DROP)
+            mode = self._state.get_context_mode(self._current_session_id, turn["idx"])
             if mode != ContextMode.DROP:
                 # Get original message from session if available
                 orig_msg = None
@@ -2540,16 +2503,16 @@ class ContextTree(Vertical):
             loaded_data = self._loaded_sessions.get(session_id)
             if loaded_data:
                 for turn in loaded_data["turns"]:
-                    turn_key = (session_id, turn["idx"])
-                    if turn_key not in self._context_modes:
-                        self._context_modes[turn_key] = ContextMode.COPY
+                    current_mode = self._state.get_context_mode(session_id, turn["idx"])
+                    if current_mode == ContextMode.DROP:
+                        self._state.set_context_mode(session_id, turn["idx"], ContextMode.COPY)
                         self._update_turn_label(session_id, turn["idx"])
 
     def create_new_session(self) -> Session:
         """Create a new session and make it current."""
         new_session = Session()
 
-        tree = self.query_one("#turn-tree", SelectableTree)
+        tree = self.query_one("#turn-tree", SelectableTreeWidget)
 
         # Add new session node (will be highlighted as active)
         session_label = self._make_session_label(new_session, True)
@@ -2598,13 +2561,13 @@ class ContextTree(Vertical):
 
     def clear(self) -> None:
         """Clear all data."""
-        tree = self.query_one("#turn-tree", SelectableTree)
+        tree = self.query_one("#turn-tree", SelectableTreeWidget)
         tree.root.remove_children()
         self._sessions.clear()
         self._loaded_sessions.clear()
-        self._context_modes.clear()
         self._merge_modes.clear()
         self._session_colors.clear()
         self._color_index = 0
         self._current_session_id = None
+        self._state.clear()
         self._update_root_label()

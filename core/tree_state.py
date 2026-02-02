@@ -1,15 +1,34 @@
 """
 TreeState - Framework-agnostic shared state layer for tree views.
 
+Architecture Overview
+=====================
+
 This module implements the Model in an MVC architecture where multiple
-tree views (ContextTree, NestedSessionTree) can observe the same state
+tree views (ContextTreeView, NestedTreeView) can observe the same state
 and render it independently.
+
+Components:
+- TreeState: The central state container (this module)
+- TurnData: Canonical turn data model (dataclass in this module)
+- SessionData: Session metadata and loaded turn data (dataclass in this module)
+- ContextTreeView: View with sorting, search, fork/merge display (widgets/context_tree.py)
+- NestedTreeView: View with inline fork nesting (widgets/nested_tree.py)
 
 The TreeState class:
 - Holds all session and turn data
 - Uses Observer pattern for change notifications
 - Has no Textual/UI dependencies - pure Python
 - Is unit-testable without UI framework
+
+Data Flow:
+1. App loads sessions and calls TreeState.add_session(), load_session()
+2. TreeState notifies observers via callbacks
+3. Views (ContextTreeView, NestedTreeView) receive events and update UI
+
+Current State (Migration in Progress):
+- NestedTreeView: Pure observer, uses TreeState exclusively
+- ContextTreeView: Dual-state (has local dicts + TreeState), being migrated
 """
 
 from dataclasses import dataclass, field
@@ -565,6 +584,51 @@ class TreeState:
     def get_all_context_modes(self) -> dict[tuple[str, int], ContextMode]:
         """Get all context modes (for computing selected tokens, etc.)."""
         return self._context_modes.copy()
+
+    def get_context_modes_for_session(self, session_id: str) -> dict[int, ContextMode]:
+        """Get all context modes for a specific session.
+
+        Returns dict mapping turn_idx -> ContextMode for the given session.
+        """
+        return {
+            idx: mode
+            for (sid, idx), mode in self._context_modes.items()
+            if sid == session_id
+        }
+
+    def remove_context_mode(self, session_id: str, turn_idx: int) -> None:
+        """Remove the context mode for a turn (sets it back to default DROP)."""
+        key = (session_id, turn_idx)
+        if key in self._context_modes:
+            del self._context_modes[key]
+            self._notify(TreeEvent.CONTEXT_MODE_CHANGED, {
+                "session_id": session_id,
+                "turn_idx": turn_idx,
+                "mode": ContextMode.DROP,
+            })
+
+    def shift_context_modes_after_removal(self, session_id: str, removed_idx: int) -> None:
+        """Shift context mode indices down after a turn is removed.
+
+        All turns with idx > removed_idx have their indices decremented by 1.
+        """
+        keys_to_update = [
+            (sid, idx) for sid, idx in self._context_modes.keys()
+            if sid == session_id and idx > removed_idx
+        ]
+        for old_key in keys_to_update:
+            mode = self._context_modes.pop(old_key)
+            new_key = (session_id, old_key[1] - 1)
+            self._context_modes[new_key] = mode
+
+    def clear_context_modes_for_session(self, session_id: str) -> None:
+        """Remove all context modes for a session."""
+        keys_to_remove = [
+            key for key in self._context_modes.keys()
+            if key[0] == session_id
+        ]
+        for key in keys_to_remove:
+            del self._context_modes[key]
 
     # --- Streaming State ---
 

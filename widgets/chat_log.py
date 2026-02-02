@@ -665,13 +665,17 @@ class ChatLog(VerticalScroll):
 
         Returns True if the turn was found and scrolled to, False otherwise.
         """
+        from core.debug_log import debug_log
+        debug_log.info(f"scroll_to_turn: looking for turn_id={turn_id}", category="chat_log")
         for child in self.children:
             if hasattr(child, 'turn_id') and child.turn_id == turn_id:
+                debug_log.info(f"scroll_to_turn: found turn_id={turn_id}, scrolling", category="chat_log")
                 child.scroll_visible(animate=True)
                 # After scrolling, check if we're at the bottom
                 # Use call_later to check after scroll animation starts
                 self.call_later(self._check_at_bottom)
                 return True
+        debug_log.warning(f"scroll_to_turn: turn_id={turn_id} NOT FOUND", category="chat_log")
         return False
 
     def scroll_to_widget_and_check_follow(self, widget) -> None:
