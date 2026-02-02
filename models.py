@@ -49,8 +49,18 @@ class InterruptionBlock:
     reason: str = "user_cancelled"  # e.g., "user_cancelled", "timeout"
 
 
+@dataclass
+class ErrorBlock:
+    """Marker indicating the response ended with an error (truncated, decode error, etc.)."""
+    type: str = "error"
+    reason: str = "stream_error"  # e.g., "truncated", "json_decode_error"
+    partial_tool_name: str = ""  # Tool name if a tool call was in progress
+    partial_tool_input: str = ""  # Partial JSON if tool input was being streamed
+    details: str = ""  # Error message or other details
+
+
 # Union type for all content block types
-ContentBlock = Union[TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock]
+ContentBlock = Union[TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock]
 
 
 @dataclass

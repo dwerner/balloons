@@ -17,7 +17,7 @@ from .with_result_widget import WithResultWidget
 from .fork_marker import ForkMarker
 from .merge_marker import MergeMarker
 from .link_marker import LinkMarker
-from models import TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock
+from models import TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock
 from core.formatter import format_edit_as_diff, guess_language
 from session import Session
 
@@ -304,6 +304,50 @@ class InterruptionMarkerWidget(Static):
             return Text("[Response timed out]", style="italic dim")
         else:
             return Text(f"[Response interrupted: {self.reason}]", style="italic dim")
+
+
+class ErrorMarkerWidget(Static):
+    """A marker showing that the response ended with an error (truncated, etc.)."""
+
+    DEFAULT_CSS = """
+    ErrorMarkerWidget {
+        padding: 0 1;
+        margin: 0 0 1 2;
+        background: #2a1a1a;
+        border-left: thick $warning;
+        color: $warning;
+        text-style: italic;
+    }
+    """
+
+    def __init__(
+        self,
+        reason: str = "stream_error",
+        partial_tool_name: str = "",
+        details: str = "",
+        turn_id: int = 0,
+        **kwargs
+    ):
+        super().__init__(**kwargs)
+        self.reason = reason
+        self.partial_tool_name = partial_tool_name
+        self.details = details
+        self.turn_id = turn_id
+
+    def render(self) -> RenderableType:
+        if self.reason == "truncated" and self.partial_tool_name:
+            msg = f"[Response truncated during {self.partial_tool_name} tool call]"
+        elif self.reason == "truncated":
+            msg = "[Response truncated]"
+        elif self.reason == "json_decode_error":
+            msg = "[Response ended with parse error]"
+        else:
+            msg = f"[Response error: {self.reason}]"
+
+        if self.details:
+            msg += f"\n{self.details[:200]}"  # Truncate long details
+
+        return Text(msg, style="italic dim")
 
 
 class MessageWidget(Static):
@@ -885,6 +929,24 @@ class ChatLog(VerticalScroll):
         self._smart_scroll()
         return widget
 
+    def add_error_marker(
+        self,
+        reason: str = "stream_error",
+        partial_tool_name: str = "",
+        details: str = "",
+    ) -> ErrorMarkerWidget:
+        """Add an error marker to the log (truncated response, etc.)."""
+        turn_id = self._turn_counter
+        widget = ErrorMarkerWidget(
+            reason=reason,
+            partial_tool_name=partial_tool_name,
+            details=details,
+            turn_id=turn_id,
+        )
+        self.mount(widget)
+        self._smart_scroll()
+        return widget
+
     def clear(self) -> None:
         """Clear all messages and reset counter."""
         for child in list(self.children):
@@ -1069,6 +1131,14 @@ class ChatLog(VerticalScroll):
                     elif isinstance(block, InterruptionBlock):
                         widget = InterruptionMarkerWidget(
                             reason=block.reason, turn_id=turn_id
+                        )
+                        self.mount(widget)
+                    elif isinstance(block, ErrorBlock):
+                        widget = ErrorMarkerWidget(
+                            reason=block.reason,
+                            partial_tool_name=block.partial_tool_name,
+                            details=block.details,
+                            turn_id=turn_id,
                         )
                         self.mount(widget)
             else:

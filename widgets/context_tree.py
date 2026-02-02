@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from tokenizer import count_tokens
 from session import Session
-from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock
+from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock
 from core.tree_state import TreeState, TreeEvent
 
 if TYPE_CHECKING:
@@ -1133,6 +1133,44 @@ class ContextTree(Vertical):
                         "content": block.content,
                         "is_error": block.is_error,
                         "tool_use_id": block.tool_use_id,
+                    }
+                )
+            elif isinstance(block, InterruptionBlock):
+                if block.reason == "user_cancelled":
+                    label = "[red]⚠ Interrupted by user[/]"
+                elif block.reason == "timeout":
+                    label = "[red]⚠ Timed out[/]"
+                else:
+                    label = f"[red]⚠ Interrupted: {block.reason}[/]"
+                turn_node.add(
+                    label,
+                    data={
+                        "type": "interruption",
+                        "session_id": session_id,
+                        "turn_idx": turn_idx,
+                        "block_idx": block_idx,
+                        "reason": block.reason,
+                    }
+                )
+            elif isinstance(block, ErrorBlock):
+                if block.reason == "truncated" and block.partial_tool_name:
+                    label = f"[yellow]⚠ Truncated during {block.partial_tool_name}[/]"
+                elif block.reason == "truncated":
+                    label = "[yellow]⚠ Truncated[/]"
+                elif block.reason == "json_decode_error":
+                    label = "[yellow]⚠ Parse error[/]"
+                else:
+                    label = f"[yellow]⚠ Error: {block.reason}[/]"
+                turn_node.add(
+                    label,
+                    data={
+                        "type": "error",
+                        "session_id": session_id,
+                        "turn_idx": turn_idx,
+                        "block_idx": block_idx,
+                        "reason": block.reason,
+                        "partial_tool_name": block.partial_tool_name,
+                        "details": block.details,
                     }
                 )
 

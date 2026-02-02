@@ -50,6 +50,7 @@ class ClaudeRunner(BaseRunner):
         self._run_id: str = ""  # Current process PID for debug logging
         self._backend_env = backend_env or {}  # Environment overrides for LLM backend
         self.system_prompt = system_prompt  # Additional system context to prepend
+        self._json_errors: list[str] = []  # Track JSON decode errors during stream
 
     @staticmethod
     def build_context(messages: list[Message], new_prompt: str) -> str:
@@ -115,6 +116,7 @@ class ClaudeRunner(BaseRunner):
             disable_tools: If True, disable all tools (for simple text responses)
         """
         self._terminated = False
+        self._json_errors = []  # Reset for new stream
 
         # Build full context from history
         if messages:
@@ -188,6 +190,8 @@ class ClaudeRunner(BaseRunner):
             try:
                 data = json.loads(line)
             except json.JSONDecodeError as e:
+                error_detail = f"{e}: {line[:100] if len(line) > 100 else line}"
+                self._json_errors.append(error_detail)
                 debug_log.warning(
                     f"JSON decode error: {e}",
                     category="json",
@@ -378,3 +382,11 @@ class ClaudeRunner(BaseRunner):
     @property
     def is_running(self) -> bool:
         return self.process is not None and self.process.returncode is None
+
+    def get_stream_errors(self) -> tuple[list[str], dict | None]:
+        """Get any errors that occurred during streaming.
+
+        Returns:
+            Tuple of (json_errors list, partial_tool_use dict or None)
+        """
+        return self._json_errors, self._current_tool_use

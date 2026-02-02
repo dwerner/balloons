@@ -14,7 +14,7 @@ from typing import AsyncIterator, Any, Optional
 from models import (
     Message, TextDelta, ResultEvent, InitEvent, RawEvent,
     ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultEvent,
-    TextBlock, ToolUseBlock, ToolResultBlock,
+    TextBlock, ToolUseBlock, ToolResultBlock, ErrorBlock,
 )
 from claude_runner import ClaudeRunner, RateLimitError, InputRequiredError
 from session import Session
@@ -527,6 +527,14 @@ class SessionRunner:
         # Flush remaining text as turn (also adds to legacy content_blocks)
         self._flush_text_as_turn()
 
+        # Check for stream errors (truncated response, JSON decode errors)
+        error_block = self._check_stream_errors()
+        if error_block:
+            self._content_blocks.append(error_block)
+            # Create error turn
+            turn = self._create_turn("assistant", f"[Error: {error_block.reason}]", [error_block])
+            self._turns.append(turn)
+
         # Reconstruct full text content from all TextBlocks (legacy)
         text_parts = []
         for block in self._content_blocks:
@@ -545,6 +553,44 @@ class SessionRunner:
             turns=self._turns,
         )
         self._status = RunnerStatus.IDLE
+
+    def _check_stream_errors(self) -> ErrorBlock | None:
+        """Check if the stream ended with errors and create an ErrorBlock if so.
+
+        Returns:
+            ErrorBlock if errors occurred, None otherwise
+        """
+        # Check if runner supports error tracking (ClaudeRunner does)
+        if not hasattr(self._runner, 'get_stream_errors'):
+            return None
+
+        json_errors, partial_tool = self._runner.get_stream_errors()
+
+        if not json_errors and not partial_tool:
+            return None
+
+        # Build error block
+        reason = "truncated" if partial_tool else "json_decode_error"
+        partial_tool_name = partial_tool.get("name", "") if partial_tool else ""
+        partial_tool_input = partial_tool.get("input_json", "") if partial_tool else ""
+        details = "; ".join(json_errors[:3]) if json_errors else ""  # Limit to first 3 errors
+
+        debug_log.warning(
+            f"Stream ended with errors: {reason}",
+            session_id=self.session.id,
+            category="stream",
+            details={
+                "json_errors": len(json_errors),
+                "partial_tool": partial_tool_name or None,
+            },
+        )
+
+        return ErrorBlock(
+            reason=reason,
+            partial_tool_name=partial_tool_name,
+            partial_tool_input=partial_tool_input[:500] if partial_tool_input else "",  # Truncate long input
+            details=details,
+        )
 
 
 class HelperRunner:

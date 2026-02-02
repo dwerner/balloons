@@ -37,7 +37,7 @@ from session import Session
 from config import get_config, BackendConfig, save_last_view
 from models import (
     TextDelta, ToolUseEvent, ToolResultEvent,
-    TextBlock, ToolUseBlock, InterruptionBlock, Message, ContextMode,
+    TextBlock, ToolUseBlock, InterruptionBlock, ErrorBlock, Message, ContextMode,
 )
 from core import (
     CommandParser,
@@ -900,6 +900,17 @@ class BalloonsApp(App):
                 # Also add the visual marker to the chat log
                 if ctx.is_active:
                     chat_log.add_interruption_marker("user_cancelled")
+
+            # Add visual error marker if there's an ErrorBlock in the result
+            if ctx.is_active:
+                for block in assistant_blocks:
+                    if isinstance(block, ErrorBlock):
+                        chat_log.add_error_marker(
+                            reason=block.reason,
+                            partial_tool_name=block.partial_tool_name,
+                            details=block.details,
+                        )
+                        break
 
             # Finish the assistant turn in tree
             context_tree.finish_turn(

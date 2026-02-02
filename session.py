@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ContentBlock, ContextMode
+from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ContentBlock, ContextMode
 
 
 SESSIONS_DIR = Path.home() / ".balloons" / "sessions"
@@ -237,6 +237,14 @@ class Session:
             return {"type": "tool_result", "tool_use_id": block.tool_use_id, "content": block.content, "is_error": block.is_error}
         elif isinstance(block, InterruptionBlock):
             return {"type": "interruption", "reason": block.reason}
+        elif isinstance(block, ErrorBlock):
+            return {
+                "type": "error",
+                "reason": block.reason,
+                "partial_tool_name": block.partial_tool_name,
+                "partial_tool_input": block.partial_tool_input,
+                "details": block.details,
+            }
         return {"type": "unknown"}
 
     def _serialize_message(self, msg: Message) -> dict:
@@ -320,6 +328,13 @@ class Session:
         elif block_type == "interruption":
             return InterruptionBlock(
                 reason=data.get("reason", "user_cancelled"),
+            )
+        elif block_type == "error":
+            return ErrorBlock(
+                reason=data.get("reason", "stream_error"),
+                partial_tool_name=data.get("partial_tool_name", ""),
+                partial_tool_input=data.get("partial_tool_input", ""),
+                details=data.get("details", ""),
             )
         # Fallback to text
         return TextBlock(text=str(data))
