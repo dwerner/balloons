@@ -39,6 +39,8 @@ class Session:
     fork_point_turn: int = -1  # Turn index in parent where fork was created
     merge_point_turn: int = -1  # Turn index in parent where merge happened
     merge_message: str = ""  # User's summary when merging back
+    # Backend configuration
+    backend_name: str = ""  # Name of backend to use (empty = default)
 
     @property
     def total_tokens(self) -> int:
@@ -110,8 +112,13 @@ class Session:
         return self.fork_status == "merged"
 
     def is_read_only(self) -> bool:
-        """Check if this session is read-only (merged fork)."""
-        return self.is_merged()
+        """Check if this session is read-only.
+
+        Previously, merged forks were read-only. Now they can continue
+        to be edited - the merge marker is just another turn that can
+        be deleted, and re-merging is allowed if context advances.
+        """
+        return False
 
     def mark_merged(self, message: str, merge_turn: int) -> None:
         """Mark this fork as merged."""
@@ -207,6 +214,7 @@ class Session:
             "fork_point_turn": self.fork_point_turn,
             "merge_point_turn": self.merge_point_turn,
             "merge_message": self.merge_message,
+            "backend_name": self.backend_name,
         }
         path.write_text(json.dumps(data, indent=2))
 
@@ -261,6 +269,7 @@ class Session:
             fork_point_turn=data.get("fork_point_turn", -1),
             merge_point_turn=data.get("merge_point_turn", -1),
             merge_message=data.get("merge_message", ""),
+            backend_name=data.get("backend_name", ""),
         )
         for m in data.get("messages", []):
             # Parse content_blocks if present, otherwise create from content

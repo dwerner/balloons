@@ -1,10 +1,106 @@
+from dataclasses import dataclass
+from typing import Optional
+
 from textual.screen import ModalScreen
-from textual.widgets import Static, Button, TextArea, DataTable
+from textual.widgets import Static, Button, TextArea, DataTable, Input, Label
 from textual.containers import Vertical, Horizontal
 
 from claude_runner import ClaudeRunner
 from tokenizer import count_tokens
 from core.commands import COMMAND_DOCS
+
+
+@dataclass
+class NewSessionResult:
+    """Result from NewSessionModal."""
+    title: str
+    prompt: str
+
+
+class NewSessionModal(ModalScreen[Optional[NewSessionResult]]):
+    """Modal for creating a new session with optional title and prompt."""
+
+    DEFAULT_CSS = """
+    NewSessionModal {
+        align: center middle;
+    }
+
+    #new-session-dialog {
+        width: 60;
+        height: auto;
+        background: $surface;
+        border: thick $primary;
+        padding: 1 2;
+    }
+
+    #new-session-title {
+        text-align: center;
+        text-style: bold;
+        padding-bottom: 1;
+    }
+
+    .field-label {
+        margin-top: 1;
+        margin-bottom: 0;
+    }
+
+    #title-input, #prompt-input {
+        margin-bottom: 1;
+    }
+
+    #new-session-buttons {
+        margin-top: 1;
+        align: center middle;
+        height: auto;
+    }
+
+    #new-session-buttons Button {
+        margin: 0 1;
+    }
+    """
+
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+    ]
+
+    def compose(self):
+        with Vertical(id="new-session-dialog"):
+            yield Static("New Session", id="new-session-title")
+            yield Label("Title (optional):", classes="field-label")
+            yield Input(placeholder="Session title...", id="title-input")
+            yield Label("Initial prompt (optional):", classes="field-label")
+            yield Input(placeholder="Start with a prompt...", id="prompt-input")
+            with Horizontal(id="new-session-buttons"):
+                yield Button("Cancel", id="cancel-btn", variant="default")
+                yield Button("Create", id="create-btn", variant="primary")
+
+    def on_mount(self) -> None:
+        """Focus the title input when modal opens."""
+        self.query_one("#title-input", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle Enter key in input fields."""
+        if event.input.id == "title-input":
+            # Move focus to prompt input
+            self.query_one("#prompt-input", Input).focus()
+        elif event.input.id == "prompt-input":
+            # Submit the form
+            self._submit()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "create-btn":
+            self._submit()
+        else:
+            self.dismiss(None)
+
+    def _submit(self) -> None:
+        """Submit the form with current values."""
+        title = self.query_one("#title-input", Input).value.strip()
+        prompt = self.query_one("#prompt-input", Input).value.strip()
+        self.dismiss(NewSessionResult(title=title, prompt=prompt))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class ContextPreview(ModalScreen[None]):

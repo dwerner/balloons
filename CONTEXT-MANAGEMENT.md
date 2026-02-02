@@ -1,0 +1,7 @@
+# Context Management Features
+
+Balloons provides granular control over conversation context through a turn-level selection system. Each message turn can be assigned one of three context modes: **COPY** (include verbatim), **COMPRESS** (LLM-summarized before use), or **DROP** (exclude from context). The left-panel ContextTree widget displays all sessions with their individual turns, allowing users to toggle context modes via spacebar cycling (COPY → COMPRESS → DROP) and see visual indicators for each state (green checkmark for COPY, yellow sigma for COMPRESS, empty box for DROP). The system tracks token counts in real-time, showing both selected and total tokens in the tree root label. Session forking is deeply integrated with context management: when creating a fork, users can curate exactly which turns from the parent session to include, with merge markers preserving summaries of work done in child forks. The ContextBuilder class reconstructs the full conversation context including tool uses and results, respecting each message's context mode to build the final prompt string. A ContextPreview modal allows users to inspect the exact context that will be sent to Claude before submission, with accurate token counts via tiktoken.
+
+---
+
+**TL;DR:** Hierarchical chat sessions let you branch conversations at any point, giving you fine-grained control over which context flows into each fork—ideal for exploring ideas at different levels of detail without polluting unrelated threads.

@@ -9,6 +9,7 @@ from models import (
     TextBlock, ToolUseBlock, ToolResultBlock, ContextMode,
 )
 from core.debug_log import debug_log
+from core.base_runner import BaseRunner, RunnerEvent
 
 
 class RateLimitError(Exception):
@@ -41,7 +42,7 @@ async def readline_unlimited(stream: asyncio.StreamReader) -> bytes:
     return b''.join(chunks)
 
 
-class ClaudeRunner:
+class ClaudeRunner(BaseRunner):
     def __init__(self, backend_env: dict[str, str] | None = None):
         self.process: asyncio.subprocess.Process | None = None
         self._terminated = False
@@ -98,7 +99,7 @@ class ClaudeRunner:
     async def stream_response(
         self, messages: list[Message], prompt: str, allowed_tools: list[str] | None = None,
         working_dir: str | None = None, disable_tools: bool = False
-    ) -> AsyncIterator[Union[TextDelta, ResultEvent, InitEvent, RawEvent]]:
+    ) -> AsyncIterator[RunnerEvent]:
         """
         Stream a response from Claude.
 

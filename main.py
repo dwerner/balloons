@@ -61,8 +61,10 @@ def main():
                 print(f"  {name}{marker} (native Claude API)")
         return
 
-    # Get backend environment (will be passed to child processes)
+    # Get backend config (will be used to create runners)
     backend_name = args.backend or config.default_backend
+    backend_config = config.get_backend(backend_name)
+    # Also get env for backwards compatibility with claude-type backends
     backend_env = config.get_env_for_backend(backend_name)
 
     if args.list:
@@ -91,7 +93,7 @@ def main():
     elif args.new:
         session = Session()
 
-    app = BalloonsApp(session=session, backend_env=backend_env)
+    app = BalloonsApp(session=session, backend_config=backend_config)
     app.run()
 
 

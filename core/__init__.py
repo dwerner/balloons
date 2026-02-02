@@ -21,6 +21,7 @@ from .commands import (
     ReloadCommand,
     TitleCommand,
     HelpCommand,
+    BackendCommand,
     COMMAND_DOCS,
 )
 from .context import ContextBuilder
@@ -28,6 +29,11 @@ from .formatter import Formatter, format_edit_as_diff, guess_language
 from .runner import SessionRunner, RunnerStatus, StreamEvent, StreamResult, HelperRunner
 from .manager import SessionManager, SessionInfo
 from .debug_log import debug_log, DebugLog, LogLevel, LogEntry
+from .base_runner import BaseRunner, RunnerEvent
+from .openai_runner import OpenAICompatibleRunner
+from .runner_factory import create_runner, resolve_env_var
+from .tools import TOOLS, get_tools_for_request
+from .tool_executor import execute_tool
 
 __all__ = [
     # Commands
@@ -51,6 +57,7 @@ __all__ = [
     "ReloadCommand",
     "TitleCommand",
     "HelpCommand",
+    "BackendCommand",
     "COMMAND_DOCS",
     # Context
     "ContextBuilder",
@@ -72,4 +79,14 @@ __all__ = [
     "DebugLog",
     "LogLevel",
     "LogEntry",
+    # Base runner
+    "BaseRunner",
+    "RunnerEvent",
+    "OpenAICompatibleRunner",
+    "create_runner",
+    "resolve_env_var",
+    # Tools
+    "TOOLS",
+    "get_tools_for_request",
+    "execute_tool",
 ]

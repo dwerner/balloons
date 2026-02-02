@@ -10,8 +10,17 @@ import yaml
 
 @dataclass
 class BackendConfig:
-    """Configuration for an LLM backend."""
+    """Configuration for an LLM backend.
+
+    Attributes:
+        name: Backend identifier
+        type: Backend type - "claude" (CLI subprocess) or "openai" (OpenAI-compatible API)
+        base_url: API base URL (required for openai type, optional for claude)
+        api_key: API key (supports ${ENV_VAR} syntax)
+        model: Model identifier (required for openai type)
+    """
     name: str
+    type: str = "claude"  # "claude" or "openai"
     base_url: Optional[str] = None
     api_key: Optional[str] = None
     model: Optional[str] = None
@@ -63,6 +72,7 @@ class Config:
                 backend_data = {}
             backends[name] = BackendConfig(
                 name=name,
+                type=backend_data.get("type", "claude"),
                 base_url=backend_data.get("base_url"),
                 api_key=backend_data.get("api_key"),
                 model=backend_data.get("model"),

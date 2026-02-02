@@ -13,23 +13,35 @@ default_backend: claude
 
 # Available backends
 backends:
-  # Direct Claude API (default)
+  # Direct Claude API (default) - uses claude CLI
   claude:
+    type: claude  # optional, this is the default
     # Uses your ANTHROPIC_API_KEY from environment
     # No additional configuration needed
 
-  # LiteLLM proxy to llama70b
-  llama70b:
-    base_url: http://localhost:4000
-    api_key: sk-litellm  # LiteLLM doesn't check this, but Claude CLI requires it
-    # Optional: specify model to use (defaults to claude-sonnet-4-20250514)
-    # model: claude-sonnet-4-20250514
+  # OpenRouter - access many models via OpenAI-compatible API
+  # openrouter:
+  #   type: openai
+  #   base_url: https://openrouter.ai/api/v1
+  #   api_key: ${OPENROUTER_API_KEY}  # env var reference
+  #   model: anthropic/claude-sonnet-4  # or any model on OpenRouter
 
-  # Example: Add more backends here
-  # llama8b:
-  #   base_url: http://192.168.0.121:8000
-  #   api_key: sk-litellm
+  # Local llamacpp server - OpenAI-compatible API
+  # llamacpp:
+  #   type: openai
+  #   base_url: http://localhost:8080/v1
+  #   api_key: not-needed  # llamacpp doesn't require auth
+  #   model: local-model  # model name doesn't matter for llamacpp
 
+  # LiteLLM proxy (legacy approach - still works with claude type)
+  # llama70b:
+  #   type: claude  # uses claude CLI pointed at LiteLLM
+  #   base_url: http://localhost:4000
+  #   api_key: sk-litellm  # LiteLLM doesn't check this, but Claude CLI requires it
+
+  # Ollama - OpenAI-compatible API
   # ollama:
+  #   type: openai
   #   base_url: http://localhost:11434/v1
-  #   api_key: ollama
+  #   api_key: ollama  # ollama requires some value
+  #   model: llama3.2  # or any model you've pulled

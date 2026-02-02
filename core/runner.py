@@ -1,7 +1,7 @@
 """Session runner for Balloons.
 
 Manages async streaming for individual sessions, enabling background execution.
-Each SessionRunner wraps a ClaudeRunner and maintains an event queue.
+Each SessionRunner wraps a BaseRunner and maintains an event queue.
 """
 
 import asyncio
@@ -17,6 +17,7 @@ from models import (
 from claude_runner import ClaudeRunner, RateLimitError, InputRequiredError
 from session import Session
 from .debug_log import debug_log
+from .base_runner import BaseRunner
 
 
 class RunnerStatus(Enum):
@@ -83,9 +84,15 @@ class SessionRunner:
             result = runner.get_result()
     """
 
-    def __init__(self, session: Session, backend_env: dict[str, str] | None = None):
+    def __init__(
+        self,
+        session: Session,
+        backend_env: dict[str, str] | None = None,
+        runner: BaseRunner | None = None,
+    ):
         self.session = session
-        self._claude_runner = ClaudeRunner(backend_env=backend_env)
+        # Use provided runner, or create ClaudeRunner for backwards compatibility
+        self._runner = runner or ClaudeRunner(backend_env=backend_env)
         self._status = RunnerStatus.IDLE
         self._event_queue: asyncio.Queue[StreamEvent] = asyncio.Queue()
         self._background_task: Optional[asyncio.Task] = None
@@ -144,7 +151,7 @@ class SessionRunner:
         })
 
         try:
-            async for event in self._claude_runner.stream_response(
+            async for event in self._runner.stream_response(
                 messages, prompt, allowed_tools,
                 working_dir=self.session.working_directory
             ):
@@ -226,7 +233,7 @@ class SessionRunner:
         }))
 
         try:
-            async for event in self._claude_runner.stream_response(
+            async for event in self._runner.stream_response(
                 messages, prompt, allowed_tools,
                 working_dir=self.session.working_directory
             ):
@@ -316,7 +323,7 @@ class SessionRunner:
         """Cancel an ongoing stream."""
         if self._background_task and not self._background_task.done():
             self._background_task.cancel()
-        self._claude_runner.terminate()
+        self._runner.terminate()
         self._status = RunnerStatus.CANCELLED
 
     def _reset_state(self) -> None:
@@ -488,9 +495,15 @@ class HelperRunner:
     text and queues events for the poll timer.
     """
 
-    def __init__(self, helper_id: str, backend_env: dict[str, str] | None = None):
+    def __init__(
+        self,
+        helper_id: str,
+        backend_env: dict[str, str] | None = None,
+        runner: BaseRunner | None = None,
+    ):
         self.helper_id = helper_id  # Unique ID for this helper task
-        self._claude_runner = ClaudeRunner(backend_env=backend_env)
+        # Use provided runner, or create ClaudeRunner for backwards compatibility
+        self._runner = runner or ClaudeRunner(backend_env=backend_env)
         self._status = RunnerStatus.IDLE
         self._event_queue: asyncio.Queue[StreamEvent] = asyncio.Queue()
         self._background_task: Optional[asyncio.Task] = None
@@ -532,7 +545,7 @@ class HelperRunner:
     async def _background_stream(self, prompt: str) -> None:
         """Internal: background streaming task."""
         try:
-            async for event in self._claude_runner.stream_response(
+            async for event in self._runner.stream_response(
                 [], prompt, disable_tools=True
             ):
                 if isinstance(event, TextDelta):
@@ -570,5 +583,5 @@ class HelperRunner:
         """Cancel an ongoing stream."""
         if self._background_task and not self._background_task.done():
             self._background_task.cancel()
-        self._claude_runner.terminate()
+        self._runner.terminate()
         self._status = RunnerStatus.CANCELLED

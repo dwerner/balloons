@@ -5,6 +5,7 @@ from textual.containers import Vertical, Horizontal
 from textual.message import Message
 from textual.events import Key
 from textual.binding import Binding
+from textual.timer import Timer
 from datetime import datetime
 from rich.text import Text
 from rich.style import Style
@@ -329,6 +330,9 @@ class ContextTree(Vertical):
             self.session_id = session_id
             super().__init__()
 
+    # Spinner animation for streaming sessions
+    _spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
     def __init__(
         self,
         initial_sort_order: str = "modified_desc",
@@ -336,6 +340,10 @@ class ContextTree(Vertical):
         **kwargs
     ):
         super().__init__(**kwargs)
+
+        # Spinner animation state
+        self._spinner_frame: int = 0
+        self._spinner_timer: Timer | None = None
 
         # Use provided TreeState or create internal one
         self._state = tree_state if tree_state is not None else TreeState()
@@ -396,9 +404,14 @@ class ContextTree(Vertical):
         # Register as observer of TreeState
         self._state.add_observer(self._on_tree_state_event)
 
+        # Start spinner if any sessions are already streaming
+        if self._streaming_sessions:
+            self._start_spinner()
+
     def on_unmount(self) -> None:
         """Clean up observer registration."""
         self._state.remove_observer(self._on_tree_state_event)
+        self._stop_spinner()
 
     def _on_tree_state_event(self, event: TreeEvent, data: dict) -> None:
         """Handle state change notifications from TreeState.
@@ -416,12 +429,16 @@ class ContextTree(Vertical):
             if session_id:
                 self._streaming_sessions.add(session_id)
                 self._update_session_label(session_id)
+                self._start_spinner()
 
         elif event == TreeEvent.STREAMING_STOPPED:
             session_id = data.get("session_id")
             if session_id:
                 self._streaming_sessions.discard(session_id)
                 self._update_session_label(session_id)
+                # Stop spinner if no sessions are streaming
+                if not self._streaming_sessions:
+                    self._stop_spinner()
 
         # NOTE: TURN_STARTED and TURN_FINISHED are handled directly by
         # start_turn() and finish_turn() methods for now. When we migrate
@@ -462,6 +479,27 @@ class ContextTree(Vertical):
             if session_id:
                 self._update_session_label(session_id)
             self._update_root_label()
+
+    # --- Spinner Animation ---
+
+    def _start_spinner(self) -> None:
+        """Start the spinner animation for streaming sessions."""
+        if self._spinner_timer is None:
+            self._spinner_timer = self.set_interval(0.1, self._advance_spinner)
+
+    def _stop_spinner(self) -> None:
+        """Stop the spinner animation."""
+        if self._spinner_timer is not None:
+            self._spinner_timer.stop()
+            self._spinner_timer = None
+            self._spinner_frame = 0
+
+    def _advance_spinner(self) -> None:
+        """Advance the spinner to the next frame and update streaming labels."""
+        self._spinner_frame = (self._spinner_frame + 1) % len(self._spinner_chars)
+        # Update labels for all streaming sessions
+        for session_id in self._streaming_sessions:
+            self._update_session_label(session_id)
 
     def _update_session_label(self, session_id: str) -> None:
         """Update a session node's label (for streaming indicator, etc.)."""
@@ -675,10 +713,11 @@ class ContextTree(Vertical):
             prefix = ""
             status = ""
 
-        # Show streaming indicator
+        # Animated streaming indicator
         is_streaming = session_id in self._streaming_sessions
         if is_streaming:
-            streaming_indicator = "[yellow]⟳[/] "
+            spinner = self._spinner_chars[self._spinner_frame]
+            streaming_indicator = f"[yellow]{spinner}[/] "
         else:
             streaming_indicator = ""
 

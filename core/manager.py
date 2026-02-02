@@ -9,7 +9,9 @@ from datetime import datetime
 
 from session import Session
 from models import Message, TextBlock
+from config import BackendConfig
 from .runner import SessionRunner, RunnerStatus, StreamEvent, StreamResult
+from .runner_factory import create_runner
 
 
 @dataclass
@@ -45,11 +47,11 @@ class SessionManager:
                 # Handle event
     """
 
-    def __init__(self, backend_env: dict[str, str] | None = None):
+    def __init__(self, backend_config: BackendConfig | None = None):
         self._sessions: Dict[str, Session] = {}
         self._runners: Dict[str, SessionRunner] = {}
         self._active_session_id: Optional[str] = None
-        self._backend_env = backend_env
+        self._backend_config = backend_config or BackendConfig(name="claude")
 
     @property
     def active_session(self) -> Optional[Session]:
@@ -80,7 +82,7 @@ class SessionManager:
         session.save()
 
         self._sessions[session.id] = session
-        self._runners[session.id] = SessionRunner(session, backend_env=self._backend_env)
+        self._runners[session.id] = SessionRunner(session, runner=create_runner(self._backend_config))
 
         return session
 
@@ -99,7 +101,7 @@ class SessionManager:
         session = Session.load(session_id)
         if session:
             self._sessions[session.id] = session
-            self._runners[session.id] = SessionRunner(session, backend_env=self._backend_env)
+            self._runners[session.id] = SessionRunner(session, runner=create_runner(self._backend_config))
 
         return session
 
@@ -182,7 +184,7 @@ class SessionManager:
 
         # Track in manager
         self._sessions[child.id] = child
-        self._runners[child.id] = SessionRunner(child, backend_env=self._backend_env)
+        self._runners[child.id] = SessionRunner(child, runner=create_runner(self._backend_config))
 
         return child
 

@@ -552,6 +552,10 @@ class TreeState:
         """Check if a session is currently streaming."""
         return session_id in self._streaming_sessions
 
+    def get_streaming_sessions(self) -> set[str]:
+        """Get all session IDs that are currently streaming."""
+        return self._streaming_sessions.copy()
+
     # --- Bulk Operations ---
 
     def clear(self) -> None:

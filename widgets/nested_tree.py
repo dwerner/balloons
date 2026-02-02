@@ -14,6 +14,7 @@ from textual.widgets import Tree
 from textual.containers import Vertical
 from textual.message import Message
 from textual.events import Key
+from textual.timer import Timer
 from rich.text import Text
 from rich.style import Style
 from typing import TYPE_CHECKING, Any
@@ -272,6 +273,9 @@ class NestedSessionTree(Vertical):
             self.session_id = session_id
             super().__init__()
 
+    # Spinner animation for streaming sessions
+    _spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
     def __init__(self, tree_state: TreeState, **kwargs):
         super().__init__(**kwargs)
         # TreeState is the ONLY source of truth
@@ -282,6 +286,10 @@ class NestedSessionTree(Vertical):
         self._session_nodes: dict[str, Any] = {}
         # (session_id, turn_idx) -> tree node
         self._turn_nodes: dict[tuple[str, int], Any] = {}
+
+        # Spinner animation state
+        self._spinner_frame: int = 0
+        self._spinner_timer: Timer | None = None
 
     def compose(self):
         tree = NestedTree("[dim]loading...[/]", id="nested-tree")
@@ -301,8 +309,13 @@ class NestedSessionTree(Vertical):
         # Initial build from current state
         self._rebuild_tree()
 
+        # Start spinner if any sessions are already streaming
+        if self._state.get_streaming_sessions():
+            self._start_spinner()
+
     def on_unmount(self) -> None:
         self._state.remove_observer(self._on_tree_state_event)
+        self._stop_spinner()
 
     # --- Observer Event Handler ---
 
@@ -349,11 +362,15 @@ class NestedSessionTree(Vertical):
             session_id = data.get("session_id")
             if session_id:
                 self._update_session_label(session_id)
+                self._start_spinner()
 
         elif event == TreeEvent.STREAMING_STOPPED:
             session_id = data.get("session_id")
             if session_id:
                 self._update_session_label(session_id)
+                # Stop spinner if no sessions are streaming
+                if not self._state.get_streaming_sessions():
+                    self._stop_spinner()
 
         elif event == TreeEvent.TURN_STARTED:
             session_id = data.get("session_id")
@@ -384,6 +401,27 @@ class NestedSessionTree(Vertical):
         elif event == TreeEvent.TOOL_RESULT_ADDED:
             # Could add tool result nodes
             pass
+
+    # --- Spinner Animation ---
+
+    def _start_spinner(self) -> None:
+        """Start the spinner animation for streaming sessions."""
+        if self._spinner_timer is None:
+            self._spinner_timer = self.set_interval(0.1, self._advance_spinner)
+
+    def _stop_spinner(self) -> None:
+        """Stop the spinner animation."""
+        if self._spinner_timer is not None:
+            self._spinner_timer.stop()
+            self._spinner_timer = None
+            self._spinner_frame = 0
+
+    def _advance_spinner(self) -> None:
+        """Advance the spinner to the next frame and update streaming labels."""
+        self._spinner_frame = (self._spinner_frame + 1) % len(self._spinner_chars)
+        # Update labels for all streaming sessions
+        for session_id in self._state.get_streaming_sessions():
+            self._update_session_label(session_id)
 
     # --- Helper Methods ---
 
@@ -723,9 +761,10 @@ class NestedSessionTree(Vertical):
         else:
             prefix = ""
 
-        # Streaming indicator
+        # Animated streaming indicator
         if self._state.is_streaming(session_data.id):
-            streaming = "[yellow]⟳[/] "
+            spinner = self._spinner_chars[self._spinner_frame]
+            streaming = f"[yellow]{spinner}[/] "
         else:
             streaming = ""
 

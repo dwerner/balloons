@@ -4,7 +4,7 @@ from .status_bar import StatusBar
 from .context_tree import ContextTree
 from .nested_tree import NestedSessionTree
 from .splitter import VerticalSplitter
-from .context_preview import ContextPreview, ConfirmDialog, HelpModal
+from .context_preview import ContextPreview, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult
 from .request_pane import RequestPane
 from .tool_bar import ToolBar
 from .with_widget import WithWidget
@@ -26,6 +26,8 @@ __all__ = [
     "ContextPreview",
     "ConfirmDialog",
     "HelpModal",
+    "NewSessionModal",
+    "NewSessionResult",
     "RequestPane",
     "ToolBar",
     "WithWidget",

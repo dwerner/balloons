@@ -30,10 +30,10 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLog, MoreBelowIndicator, InputBox, StatusBar, ContextTree, NestedSessionTree, VerticalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, Breadcrumb, ConfirmDialog, HelpModal
+from widgets import ChatLog, MoreBelowIndicator, InputBox, StatusBar, ContextTree, NestedSessionTree, VerticalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult
 from claude_runner import ClaudeRunner
 from session import Session
-from config import get_config
+from config import get_config, BackendConfig
 from models import (
     TextDelta, ToolUseEvent, ToolResultEvent,
     TextBlock, ToolUseBlock, Message, ContextMode,
@@ -64,7 +64,9 @@ from core import (
     ReloadCommand,
     TitleCommand,
     HelpCommand,
+    BackendCommand,
     debug_log,
+    create_runner,
 )
 from core.tree_state import TreeState
 
@@ -142,6 +144,7 @@ class BalloonsApp(App):
         Binding("escape", "cancel_stream", "Cancel", show=True),
         Binding("ctrl+c", "quit", "Quit", show=True),
         Binding("ctrl+q", "quit", "Quit", show=False),
+        Binding("ctrl+space", "new_session", "New Session", show=True),
         Binding("ctrl+t", "toggle_tree", "Toggle Tree", show=True),
         Binding("ctrl+n", "switch_tree_view", "Switch Tree", show=True),
         Binding("ctrl+r", "toggle_requests", "Toggle Requests", show=True),
@@ -152,13 +155,14 @@ class BalloonsApp(App):
         Binding("f1", "show_help", "Help", show=True),
     ]
 
-    def __init__(self, session: Session = None, backend_env: dict[str, str] | None = None):
+    def __init__(self, session: Session = None, backend_config: BackendConfig | None = None):
         super().__init__()
         self._initial_session = session  # Will be loaded into manager
         self.streaming = False  # True if active session is streaming
         self._tree_width = 50
         self._shell_process: asyncio.subprocess.Process | None = None
-        self._backend_env = backend_env
+        # Store backend config for creating runners
+        self._backend_config = backend_config or BackendConfig(name="claude")
         # Core components
         self._command_parser = CommandParser()
         self._formatter = Formatter()
@@ -166,9 +170,9 @@ class BalloonsApp(App):
         # Shared tree state - used by ContextTree and (future) NestedSessionTree
         self._tree_state = TreeState()
         # Session manager handles all sessions and runners
-        self._manager = SessionManager(backend_env=backend_env)
+        self._manager = SessionManager(backend_config=self._backend_config)
         # Simple runner for helper streaming (summaries, etc.) - used for blocking operations
-        self._helper_runner = ClaudeRunner(backend_env=backend_env)
+        self._helper_runner = create_runner(self._backend_config)
         # Timer for polling background sessions
         self._poll_timer = None
         # Per-session streaming contexts (session_id -> StreamingContext)
@@ -185,6 +189,18 @@ class BalloonsApp(App):
     def _session_runner(self) -> SessionRunner | None:
         """Get the active session's runner from the manager."""
         return self._manager.active_runner
+
+    def _get_backend_for_session(self, session: Session) -> BackendConfig:
+        """Get the backend config for a session, respecting session override."""
+        config = get_config()
+        if session.backend_name and session.backend_name in config.backends:
+            return config.get_backend(session.backend_name)
+        return self._backend_config
+
+    def _create_session_runner(self, session: Session) -> SessionRunner:
+        """Create a runner for a session, respecting session's backend preference."""
+        backend = self._get_backend_for_session(session)
+        return SessionRunner(session, runner=create_runner(backend))
 
     def compose(self) -> ComposeResult:
         config = get_config()
@@ -654,7 +670,7 @@ class BalloonsApp(App):
 
         # Register child session with manager
         self._manager._sessions[child_session.id] = child_session
-        self._manager._runners[child_session.id] = SessionRunner(child_session, backend_env=self._backend_env)
+        self._manager._runners[child_session.id] = self._create_session_runner(child_session)
 
         if background:
             # Background mode - stay in parent
@@ -757,7 +773,7 @@ class BalloonsApp(App):
         # Register and switch to new session
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
         self._manager._sessions[new_session.id] = new_session
-        self._manager._runners[new_session.id] = SessionRunner(new_session, backend_env=self._backend_env)
+        self._manager._runners[new_session.id] = self._create_session_runner(new_session)
         self._manager.set_active(new_session.id)
 
         chat_log.clear()
@@ -915,7 +931,7 @@ class BalloonsApp(App):
         if self._initial_session is not None:
             # Load initial session into manager (passed via --resume)
             self._manager._sessions[self._initial_session.id] = self._initial_session
-            self._manager._runners[self._initial_session.id] = SessionRunner(self._initial_session, backend_env=self._backend_env)
+            self._manager._runners[self._initial_session.id] = self._create_session_runner(self._initial_session)
             self._manager.set_active(self._initial_session.id)
             self._initial_session = None  # Clear so we don't reload on subsequent calls
         elif self.session is None:
@@ -1117,6 +1133,8 @@ class BalloonsApp(App):
             self._handle_title_command(cmd.title)
         elif isinstance(cmd, HelpCommand):
             self.push_screen(HelpModal())
+        elif isinstance(cmd, BackendCommand):
+            await self._handle_backend_command(cmd.backend_name)
 
     def _format_tool_use(
         self, event: ToolUseEvent
@@ -1270,6 +1288,42 @@ class BalloonsApp(App):
 
         status_bar.set_status(f"Session titled: {title}", animate=False)
 
+    async def _handle_backend_command(self, backend_name: str) -> None:
+        """Set or show the backend for this session."""
+        status_bar = self.query_one("#status-bar", StatusBar)
+        config = get_config()
+
+        if not backend_name:
+            # Show current backend
+            current = self.session.backend_name or config.default_backend
+            available = list(config.backends.keys())
+            status_bar.set_status(
+                f"Backend: {current} (available: {', '.join(available)})",
+                animate=False
+            )
+            return
+
+        # Validate backend exists
+        if backend_name not in config.backends:
+            available = list(config.backends.keys())
+            status_bar.set_status(
+                f"Unknown backend: {backend_name}. Available: {', '.join(available)}",
+                animate=False
+            )
+            return
+
+        # Set backend for this session
+        self.session.backend_name = backend_name
+        self.session.save()
+
+        # Recreate the runner for this session with new backend
+        backend_config = config.get_backend(backend_name)
+        self._manager._runners[self.session.id] = SessionRunner(
+            self.session, runner=create_runner(backend_config)
+        )
+
+        status_bar.set_status(f"Backend set to: {backend_name}", animate=False)
+
     def _handle_suspend(self, cmd: str) -> None:
         """Suspend TUI and run interactive command in session's working directory."""
         cwd = self.session.working_directory
@@ -1321,7 +1375,7 @@ class BalloonsApp(App):
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
         chat_log.clear()
         self._manager._sessions[new_session.id] = new_session
-        self._manager._runners[new_session.id] = SessionRunner(new_session, backend_env=self._backend_env)
+        self._manager._runners[new_session.id] = self._create_session_runner(new_session)
         self._manager.set_active(new_session.id)
         context_tree.load_all_sessions(new_session)
         chat_log.load_history(new_session.messages, session=new_session)
@@ -1494,7 +1548,7 @@ class BalloonsApp(App):
 
         # Register child session with manager
         self._manager._sessions[child_session.id] = child_session
-        self._manager._runners[child_session.id] = SessionRunner(child_session, backend_env=self._backend_env)
+        self._manager._runners[child_session.id] = self._create_session_runner(child_session)
 
         if background:
             # Background mode - stay in parent, create streaming context for child
@@ -1750,7 +1804,7 @@ Summary:"""
 
         # Register child session with manager
         self._manager._sessions[child_session.id] = child_session
-        self._manager._runners[child_session.id] = SessionRunner(child_session, backend_env=self._backend_env)
+        self._manager._runners[child_session.id] = self._create_session_runner(child_session)
 
         if background:
             # Background mode - stay in parent, create streaming context for child
@@ -1898,7 +1952,7 @@ Summary:"""
 
             # Register child session with manager
             self._manager._sessions[child_session.id] = child_session
-            self._manager._runners[child_session.id] = SessionRunner(child_session, backend_env=self._backend_env)
+            self._manager._runners[child_session.id] = self._create_session_runner(child_session)
 
             if background:
                 # Background mode - stay in parent
@@ -1956,7 +2010,7 @@ Summary:"""
             # Create helper runner
             import uuid
             helper_id = f"compress-{uuid.uuid4().hex[:8]}"
-            helper_runner = HelperRunner(helper_id, backend_env=self._backend_env)
+            helper_runner = HelperRunner(helper_id, runner=create_runner(self._backend_config))
             self._helper_runners[helper_id] = helper_runner
 
             # Create streaming context for the helper
@@ -2047,7 +2101,7 @@ Summary:"""
         # Switch to parent
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
         self._manager._sessions[parent.id] = parent
-        self._manager._runners[parent.id] = SessionRunner(parent, backend_env=self._backend_env)
+        self._manager._runners[parent.id] = self._create_session_runner(parent)
         self._manager.set_active(parent.id)
         chat_log.clear()
         chat_log.load_history(parent.messages, session=parent)
@@ -2123,7 +2177,7 @@ Summary:"""
             # Register and switch to new session
             breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
             self._manager._sessions[new_session.id] = new_session
-            self._manager._runners[new_session.id] = SessionRunner(new_session, backend_env=self._backend_env)
+            self._manager._runners[new_session.id] = self._create_session_runner(new_session)
             self._manager.set_active(new_session.id)
 
             chat_log.clear()
@@ -2142,7 +2196,7 @@ Summary:"""
 
             import uuid
             helper_id = f"derive-compress-{uuid.uuid4().hex[:8]}"
-            helper_runner = HelperRunner(helper_id, backend_env=self._backend_env)
+            helper_runner = HelperRunner(helper_id, runner=create_runner(self._backend_config))
             self._helper_runners[helper_id] = helper_runner
 
             ctx = StreamingContext(
@@ -2270,7 +2324,7 @@ Summary:"""
         # Switch to parent session through manager
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
         self._manager._sessions[parent.id] = parent
-        self._manager._runners[parent.id] = SessionRunner(parent, backend_env=self._backend_env)
+        self._manager._runners[parent.id] = self._create_session_runner(parent)
         self._manager.set_active(parent.id)
         chat_log.clear()
         chat_log.load_history(parent.messages, session=parent)
@@ -2415,7 +2469,7 @@ Summary:"""
         # Register session with manager if not already known
         if session.id not in self._manager._sessions:
             self._manager._sessions[session.id] = session
-            self._manager._runners[session.id] = SessionRunner(session, backend_env=self._backend_env)
+            self._manager._runners[session.id] = self._create_session_runner(session)
         self._manager.set_active(session.id)
         context_tree.set_active_session(session.id)
 
@@ -2805,6 +2859,29 @@ Summary:"""
         if target_session:
             self._switch_to_session(target_session)
 
+    def action_new_session(self) -> None:
+        """Create a new session from anywhere (ctrl+space)."""
+        def handle_result(result: NewSessionResult | None) -> None:
+            if result is not None:
+                asyncio.create_task(self._create_session_from_modal(result))
+
+        self.push_screen(NewSessionModal(), handle_result)
+
+    async def _create_session_from_modal(self, result: NewSessionResult) -> None:
+        """Handle the result from NewSessionModal."""
+        # Create the session with optional title
+        await self._handle_new_session(result.prompt)
+
+        # Set title if provided
+        if result.title:
+            self.session.title = result.title
+            self.session.save()
+            # Update UI
+            context_tree = self.query_one("#context-tree", ContextTree)
+            context_tree.load_all_sessions(self.session)
+            breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
+            breadcrumb.set_session(self.session)
+
     def action_toggle_tree(self) -> None:
         """Toggle the tree sidebar visibility."""
         context_tree = self.query_one("#context-tree", ContextTree)
@@ -2836,22 +2913,18 @@ Summary:"""
             context_tree.display = False
             nested_tree.display = True
             self._nested_tree_active = True
-            status_bar.set_message("Switched to nested tree view")
         elif nested_tree.display:
             nested_tree.display = False
             context_tree.display = True
             self._nested_tree_active = False
-            status_bar.set_message("Switched to flat tree view")
         else:
             # Neither visible - show the opposite of what was last active
             if getattr(self, "_nested_tree_active", False):
                 context_tree.display = True
                 self._nested_tree_active = False
-                status_bar.set_message("Showing flat tree view")
             else:
                 nested_tree.display = True
                 self._nested_tree_active = True
-                status_bar.set_message("Showing nested tree view")
             self.query_one("#splitter", VerticalSplitter).display = True
 
     def action_toggle_requests(self) -> None:

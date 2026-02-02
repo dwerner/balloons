@@ -138,6 +138,12 @@ class HelpCommand(Command):
     pass
 
 
+@dataclass
+class BackendCommand(Command):
+    """Set or show the backend for this session."""
+    backend_name: str = ""  # Empty = show current, non-empty = set
+
+
 # Command documentation for help display
 COMMAND_DOCS = [
     # Session management
@@ -160,6 +166,7 @@ COMMAND_DOCS = [
     (":cd [path]", "Change working directory"),
     # Misc
     (":reload", "Hot reload the app"),
+    (":backend [name]", "Show or set the backend for this session"),
     (":help", "Show this help"),
 ]
 
@@ -293,6 +300,11 @@ class CommandParser:
         # Handle :help
         if text == ":help":
             return HelpCommand()
+
+        # Handle :backend [name]
+        if text == ":backend" or text.startswith(":backend "):
+            backend_name = text[8:].strip() if len(text) > 8 else ""
+            return BackendCommand(backend_name=backend_name)
 
         # Unknown command
         cmd_name = text.split()[0]
