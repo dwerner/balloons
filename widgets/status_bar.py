@@ -12,6 +12,7 @@ class StatusBar(Static):
         pass
 
     model: reactive[str] = reactive("")
+    backend: reactive[str] = reactive("")  # Backend name (e.g., "openrouter", "claude")
     input_tokens: reactive[int] = reactive(0)
     output_tokens: reactive[int] = reactive(0)
     context_window: reactive[int] = reactive(200000)
@@ -43,7 +44,27 @@ class StatusBar(Static):
         else:
             percent = 0
 
-        model_display = self.model.split("-")[0] if self.model else "claude"
+        # Extract meaningful model name
+        # Claude models: "claude-opus-4-5-20251101" -> "opus-4.5"
+        # Other models: "Qwen3-Coder-30B" -> "Qwen3"
+        if self.model:
+            if self.model.startswith("claude-"):
+                # Extract the model variant (opus, sonnet, haiku) and version
+                parts = self.model.split("-")
+                if len(parts) >= 3:
+                    variant = parts[1]  # e.g., "opus"
+                    # Try to get version like "4.5" from "4-5"
+                    if len(parts) >= 4 and parts[2].isdigit() and parts[3].isdigit():
+                        model_display = f"{variant}-{parts[2]}.{parts[3]}"
+                    else:
+                        model_display = variant
+                else:
+                    model_display = self.model.split("-")[0]
+            else:
+                model_display = self.model.split("-")[0]
+        else:
+            model_display = "?"
+        backend_display = f"{self.backend}:" if self.backend else ""
 
         # Show error, status, or streaming indicator
         if self.error:
@@ -80,7 +101,7 @@ class StatusBar(Static):
         follow_indicator = "" if self.following else " [bold yellow]↓ Follow[/]"
 
         return (
-            f"[{model_display}] "
+            f"[{backend_display}{model_display}] "
             f"{total_tokens:,} / {self.context_window:,} tokens ({percent:.1f}%) | "
             f"${self.cost:.4f}"
             f"{wd_display}"
@@ -92,6 +113,7 @@ class StatusBar(Static):
     def update_stats(
         self,
         model: str = None,
+        backend: str = None,
         input_tokens: int = None,
         output_tokens: int = None,
         context_window: int = None,
@@ -99,6 +121,8 @@ class StatusBar(Static):
     ):
         if model is not None:
             self.model = model
+        if backend is not None:
+            self.backend = backend
         if input_tokens is not None:
             self.input_tokens = input_tokens
         if output_tokens is not None:

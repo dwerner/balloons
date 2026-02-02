@@ -972,14 +972,18 @@ class BalloonsApp(App):
         )
 
         # Update status bar with session info
+        backend_name = self.session.backend_name or get_config().default_backend
         if self.session.model:
             status_bar.update_stats(
                 model=self.session.model,
+                backend=backend_name,
                 input_tokens=self.session.total_input_tokens,
                 output_tokens=self.session.total_output_tokens,
                 context_window=self.session.context_window,
                 cost=self.session.total_cost,
             )
+        else:
+            status_bar.update_stats(backend=backend_name)
 
         # Update working directory in status bar
         status_bar.update_working_directory(self.session.working_directory or "")
@@ -1322,6 +1326,9 @@ class BalloonsApp(App):
             self.session, runner=create_runner(backend_config)
         )
 
+        # Update status bar with new backend and model
+        # Use the backend's configured model, or clear it if not set
+        status_bar.update_stats(backend=backend_name, model=backend_config.model or "")
         status_bar.set_status(f"Backend set to: {backend_name}", animate=False)
 
     def _handle_suspend(self, cmd: str) -> None:

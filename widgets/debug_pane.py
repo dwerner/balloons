@@ -93,7 +93,7 @@ class DebugPane(Tree):
     def _is_delta_event(self, entry: LogEntry) -> bool:
         """Check if this is a content_block_delta event that should be grouped."""
         return (
-            entry.category == "llm" and
+            entry.category == "claude" and
             "content_block_delta" in entry.message
         )
 
@@ -171,7 +171,7 @@ class DebugPane(Tree):
             label = Text()
             label.append(f"[{entry.timestamp}] ", style="dim")
             label.append("[D] ", style="dim white")
-            label.append("llm: ", style="cyan")
+            label.append("claude: ", style="cyan")
             label.append(f"content_block_delta ", style="")
             label.append(f"({count} events)", style="yellow")
             group_node.set_label(label)
@@ -184,7 +184,7 @@ class DebugPane(Tree):
             label = Text()
             label.append(f"[{entry.timestamp}] ", style="dim")
             label.append("[D] ", style="dim white")
-            label.append("llm: ", style="cyan")
+            label.append("claude: ", style="cyan")
             label.append(f"content_block_delta ", style="")
             label.append("(1 event)", style="yellow")
 
