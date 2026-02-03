@@ -8,8 +8,6 @@ from core.commands import (
     QueryWithCommand,
     SuspendCommand,
     ShellCommand,
-    WithCommand,
-    WithCopyCommand,
     ReturnCommand,
     PwdCommand,
     CdCommand,
@@ -36,13 +34,13 @@ class TestCommandParser:
         """':new' creates NewSessionCommand with empty prompt."""
         cmd = parser.parse(":new")
         assert isinstance(cmd, NewSessionCommand)
-        assert cmd.initial_prompt == ""
+        assert cmd.prompt == ""
 
     def test_new_session_with_prompt(self, parser):
         """':new <prompt>' includes the initial prompt."""
         cmd = parser.parse(":new start with this")
         assert isinstance(cmd, NewSessionCommand)
-        assert cmd.initial_prompt == "start with this"
+        assert cmd.prompt == "start with this"
 
     def test_copy_turns(self, parser):
         """':copy-turns' creates CopyTurnsCommand."""
@@ -81,74 +79,6 @@ class TestCommandParser:
         """':!' without command raises ValueError."""
         with pytest.raises(ValueError, match="requires a command"):
             parser.parse(":!")
-
-    def test_with_basic(self, parser):
-        """':with <prompt>' creates WithCommand."""
-        cmd = parser.parse(":with do something")
-        assert isinstance(cmd, WithCommand)
-        assert cmd.prompt == "do something"
-        assert cmd.return_condition == "manual"
-
-    def test_with_until(self, parser):
-        """':with <prompt> --until <condition>' parses condition."""
-        cmd = parser.parse(":with do task --until done")
-        assert isinstance(cmd, WithCommand)
-        assert cmd.prompt == "do task"
-        assert cmd.return_condition == "done"
-
-    def test_with_until_turns(self, parser):
-        """':with <prompt> --until turns:3' parses turn limit."""
-        cmd = parser.parse(":with iterate --until turns:3")
-        assert isinstance(cmd, WithCommand)
-        assert cmd.prompt == "iterate"
-        assert cmd.return_condition == "turns:3"
-
-    def test_with_background(self, parser):
-        """':with <prompt> --bg' sets background flag."""
-        cmd = parser.parse(":with do task --bg")
-        assert isinstance(cmd, WithCommand)
-        assert cmd.prompt == "do task"
-        assert cmd.background is True
-        assert cmd.return_condition == "manual"
-
-    def test_with_background_and_until(self, parser):
-        """':with <prompt> --until <condition> --bg' parses both."""
-        cmd = parser.parse(":with do task --until done --bg")
-        assert isinstance(cmd, WithCommand)
-        assert cmd.prompt == "do task"
-        assert cmd.return_condition == "done"
-        assert cmd.background is True
-
-    def test_with_no_prompt_raises(self, parser):
-        """':with' without prompt raises ValueError."""
-        with pytest.raises(ValueError, match="requires a prompt"):
-            parser.parse(":with")
-
-    def test_with_copy_basic(self, parser):
-        """':with-copy <prompt>' creates WithCopyCommand."""
-        cmd = parser.parse(":with-copy do something")
-        assert isinstance(cmd, WithCopyCommand)
-        assert cmd.prompt == "do something"
-        assert cmd.return_condition == "manual"
-
-    def test_with_copy_until(self, parser):
-        """':with-copy <prompt> --until <condition>' parses condition."""
-        cmd = parser.parse(":with-copy do task --until done")
-        assert isinstance(cmd, WithCopyCommand)
-        assert cmd.prompt == "do task"
-        assert cmd.return_condition == "done"
-
-    def test_with_copy_background(self, parser):
-        """':with-copy <prompt> --bg' sets background flag."""
-        cmd = parser.parse(":with-copy do task --bg")
-        assert isinstance(cmd, WithCopyCommand)
-        assert cmd.prompt == "do task"
-        assert cmd.background is True
-
-    def test_with_copy_no_prompt_raises(self, parser):
-        """':with-copy' without prompt raises ValueError."""
-        with pytest.raises(ValueError, match="requires a prompt"):
-            parser.parse(":with-copy")
 
     def test_return_no_prompt(self, parser):
         """':return' creates ReturnCommand with empty prompt."""
@@ -204,4 +134,4 @@ class TestCommandParser:
         """Commands with extra whitespace are handled correctly."""
         cmd = parser.parse("  :new  hello  ")
         assert isinstance(cmd, NewSessionCommand)
-        assert cmd.initial_prompt == "hello"
+        assert cmd.prompt == "hello"

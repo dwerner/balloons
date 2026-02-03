@@ -86,23 +86,6 @@ class SwitchCommand(Command):
     name: str = ""
 
 
-# Legacy aliases for backwards compatibility
-@dataclass
-class WithCommand(Command):
-    """Fork child session with summarized context. (Legacy - use :fork)"""
-    prompt: str = ""
-    return_condition: str = "manual"
-    background: bool = False
-
-
-@dataclass
-class WithCopyCommand(Command):
-    """Fork child session copying context verbatim. (Legacy - use :fork)"""
-    prompt: str = ""
-    return_condition: str = "manual"
-    background: bool = False
-
-
 @dataclass
 class ReturnCommand(Command):
     """Return from child session to parent. (Legacy - use :merge)"""
@@ -273,22 +256,6 @@ class CommandParser:
                 return ShellCommand(shell_cmd=shell_cmd)
             raise ValueError(":! requires a command")
 
-        # Legacy: :with-copy → convert to ForkCommand
-        if text.startswith(":with-copy"):
-            args = text[10:].strip()
-            if not args:
-                raise ValueError(":with-copy requires a prompt")
-            prompt, return_condition, background = self._parse_with_args(args)
-            return WithCopyCommand(prompt=prompt, return_condition=return_condition, background=background)
-
-        # Legacy: :with → convert to ForkCommand
-        if text.startswith(":with"):
-            args = text[5:].strip()
-            if not args:
-                raise ValueError(":with requires a prompt")
-            prompt, return_condition, background = self._parse_with_args(args)
-            return WithCommand(prompt=prompt, return_condition=return_condition, background=background)
-
         # Legacy: :return → convert to MergeCommand
         if text.startswith(":return"):
             return_prompt = text[7:].strip() if len(text) > 7 else ""
@@ -381,31 +348,6 @@ class CommandParser:
 
         prompt = remaining.strip()
         return NewSessionCommand(prompt=prompt, title=title)
-
-    def _parse_with_args(self, args: str) -> tuple[str, str, bool]:
-        """Parse :with/:with-copy arguments into (prompt, return_condition, background).
-
-        Legacy support - new code should use :fork instead.
-        """
-        return_condition = "manual"
-        background = False
-        prompt = args
-
-        # Check for --bg flag
-        if " --bg" in args or args.endswith("--bg"):
-            background = True
-            args = args.replace(" --bg", "").replace("--bg", "").strip()
-            prompt = args
-
-        if " --until " in args:
-            parts = args.split(" --until ", 1)
-            prompt = parts[0].strip()
-            return_condition = parts[1].strip()
-        elif args.endswith(" --until"):
-            prompt = args[:-8].strip()
-            return_condition = "manual"
-
-        return prompt, return_condition, background
 
     def _parse_link(self, text: str) -> LinkCommand:
         """Parse :link=<hash>[,hash,...] <prompt> command."""

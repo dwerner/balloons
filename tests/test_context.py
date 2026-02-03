@@ -123,8 +123,8 @@ class TestContextBuilder:
         assert "[Tool Result][Error]" in result
         assert "file not found" in result
 
-    def test_long_tool_result_truncated(self, builder):
-        """Tool results over 10000 chars are truncated."""
+    def test_long_tool_result_included_fully(self, builder):
+        """Tool results are included fully (truncation done elsewhere if needed)."""
         long_content = "x" * 15000
         messages = [
             Message(
@@ -136,8 +136,8 @@ class TestContextBuilder:
             ),
         ]
         result = builder.build_context(messages, "new")
-        assert "[truncated]" in result
-        assert len(result) < 15000
+        # Full content is included - truncation is handled at display/save layer
+        assert long_content in result
 
     def test_mixed_content_blocks(self, builder):
         """Mixed text, tool use, and tool result blocks are all included."""

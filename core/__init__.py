@@ -12,9 +12,6 @@ from .commands import (
     MergeCommand,
     DeriveCommand,
     SwitchCommand,
-    # Legacy aliases
-    WithCommand,
-    WithCopyCommand,
     ReturnCommand,
     PwdCommand,
     CdCommand,
@@ -60,6 +57,13 @@ from .streaming import (
     HelperDoneAction,
     NoAction,
 )
+from .fork import (
+    ForkManager,
+    ForkResult,
+    MergeResult,
+    DeriveResult,
+    SwitchResult,
+)
 
 __all__ = [
     # Commands
@@ -74,9 +78,6 @@ __all__ = [
     "MergeCommand",
     "DeriveCommand",
     "SwitchCommand",
-    # Legacy aliases
-    "WithCommand",
-    "WithCopyCommand",
     "ReturnCommand",
     "PwdCommand",
     "CdCommand",
@@ -140,4 +141,10 @@ __all__ = [
     "InputRequiredAction",
     "HelperDoneAction",
     "NoAction",
+    # Fork operations
+    "ForkManager",
+    "ForkResult",
+    "MergeResult",
+    "DeriveResult",
+    "SwitchResult",
 ]
