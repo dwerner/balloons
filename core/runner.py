@@ -37,6 +37,7 @@ class StreamEvent:
     Event types:
         - "turn_started": Stream began, data has session_id and turn_index
         - "text": Text delta, data is the text string
+        - "text_flush": Text segment complete (before tool use), data has text content
         - "tool_use_start": Tool use began, data has tool_use_id, tool_name (input still streaming)
         - "tool_input_delta": Partial tool input JSON, data has tool_use_id, partial_json
         - "tool_use": Tool input complete, data has tool_use_id, tool_name, tool_input, tool_index
@@ -169,8 +170,7 @@ class SessionRunner:
                 messages, prompt, allowed_tools,
                 working_dir=self.session.working_directory
             ):
-                stream_event = self._process_event(event)
-                if stream_event:
+                for stream_event in self._process_event(event):
                     yield stream_event
 
             # Finalize
@@ -252,8 +252,7 @@ class SessionRunner:
                 messages, prompt, allowed_tools,
                 working_dir=self.session.working_directory
             ):
-                stream_event = self._process_event(event)
-                if stream_event:
+                for stream_event in self._process_event(event):
                     await self._event_queue.put(stream_event)
 
             # Finalize
@@ -378,63 +377,79 @@ class SessionRunner:
             exchange_id=self._exchange_id,
         )
 
-    def _flush_text_as_turn(self) -> None:
-        """Flush accumulated text buffer as a text turn if non-empty."""
+    def _flush_text_as_turn(self, emit_event: bool = False) -> Optional[StreamEvent]:
+        """Flush accumulated text buffer as a text turn if non-empty.
+
+        Args:
+            emit_event: If True, return a text_flush event for UI notification
+
+        Returns:
+            StreamEvent if emit_event=True and there was text to flush, else None
+        """
         if self._text_buffer.strip():
-            text_block = TextBlock(text=self._text_buffer)
+            flushed_text = self._text_buffer
+            text_block = TextBlock(text=flushed_text)
             self._content_blocks.append(text_block)  # Legacy
             # Create turn
-            turn = self._create_turn("assistant", self._text_buffer, [text_block])
+            turn = self._create_turn("assistant", flushed_text, [text_block])
             self._turns.append(turn)
             self._text_buffer = ""
 
-    def _process_event(self, event: Any) -> Optional[StreamEvent]:
+            if emit_event:
+                return self._make_event("text_flush", {"text": flushed_text})
+        return None
+
+    def _process_event(self, event: Any) -> list[StreamEvent]:
         """Process a raw event from ClaudeRunner.
 
         Args:
             event: Event from claude_runner stream
 
         Returns:
-            StreamEvent to emit, or None
+            List of StreamEvents to emit (may be empty)
         """
         try:
             if isinstance(event, RawEvent):
                 self._raw_events.append(event.data)
-                return self._make_event("raw", event.data)
+                return [self._make_event("raw", event.data)]
 
             elif isinstance(event, InitEvent):
                 self.session.model = event.model
                 self.session.context_window = event.context_window
-                return self._make_event("init", {
+                return [self._make_event("init", {
                     "model": event.model,
                     "context_window": event.context_window,
-                })
+                })]
 
             elif isinstance(event, TextDelta):
                 self._text_buffer += event.text
-                return self._make_event("text", event.text)
+                return [self._make_event("text", event.text)]
 
             elif isinstance(event, ToolUseStartEvent):
                 # Tool use started - input is still streaming
-                # Flush text buffer before tool (both legacy and new turn)
-                self._flush_text_as_turn()
+                # Flush text buffer before tool (emit event so UI can show it)
+                events = []
+                flush_event = self._flush_text_as_turn(emit_event=True)
+                if flush_event:
+                    events.append(flush_event)
 
                 self._current_tool_use_id = event.tool_use_id
                 tool_idx = self._tool_index
                 self._tool_index += 1
 
-                return self._make_event("tool_use_start", {
+                events.append(self._make_event("tool_use_start", {
                     "tool_use_id": event.tool_use_id,
                     "tool_name": event.tool_name,
                     "tool_index": tool_idx,
-                })
+                }))
+                return events
 
             elif isinstance(event, ToolInputDeltaEvent):
                 # Partial tool input JSON
-                return self._make_event("tool_input_delta", {
+                return [self._make_event("tool_input_delta", {
                     "tool_use_id": event.tool_use_id,
                     "partial_json": event.partial_json,
-                })
+                })]
 
             elif isinstance(event, ToolUseEvent):
                 # Tool input complete - create the block and turn
@@ -459,13 +474,13 @@ class SessionRunner:
                     if isinstance(b, ToolUseBlock) and b.id != event.tool_use_id
                 )
 
-                return self._make_event("tool_use", {
+                return [self._make_event("tool_use", {
                     "tool_use_id": event.tool_use_id,
                     "tool_name": event.tool_name,
                     "tool_input": event.tool_input,
                     "tool_index": tool_idx,
                     "tool_block": tool_block,
-                })
+                })]
 
             elif isinstance(event, ToolResultEvent):
                 result_block = ToolResultBlock(
@@ -494,12 +509,12 @@ class SessionRunner:
                         )
                         break
 
-                return self._make_event("tool_result", {
+                return [self._make_event("tool_result", {
                     "tool_use_id": event.tool_use_id,
                     "result": event.result,
                     "tool_index": tool_idx,
                     "result_block": result_block,
-                })
+                })]
 
             elif isinstance(event, ResultEvent):
                 self.session.update_usage(
@@ -508,13 +523,13 @@ class SessionRunner:
                     event.total_cost_usd,
                     event.context_window,
                 )
-                return self._make_event("result", {
+                return [self._make_event("result", {
                     "input_tokens": event.input_tokens,
                     "output_tokens": event.output_tokens,
                     "total_cost": event.total_cost_usd,
-                })
+                })]
 
-            return None
+            return []
 
         except Exception as e:
             debug_log.warning(
@@ -522,7 +537,7 @@ class SessionRunner:
                 session_id=self.session.id,
                 category="llm",
             )
-            return None  # Skip bad event
+            return []  # Skip bad event
 
     def _finalize_stream(self) -> None:
         """Finalize stream and create result."""

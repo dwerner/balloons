@@ -71,6 +71,7 @@ from core import (
     StreamingContext,
     StreamingCoordinator,
     TextAction,
+    TextFlushAction,
     InitAction,
     ResultAction,
     ToolUseStartAction,
@@ -427,6 +428,14 @@ class BalloonsApp(App):
                 with_widget = chat_log.find_with_widget(session_id)
                 if with_widget:
                     with_widget.update_streaming(action.text)
+
+        elif isinstance(action, TextFlushAction):
+            # Text segment complete before tool use - commit as visible node in tree
+            context_tree.flush_streaming_text(
+                session_id,
+                ctx.assistant_turn_idx,
+                action.text,
+            )
 
         elif isinstance(action, InitAction):
             if is_active:
@@ -2557,15 +2566,24 @@ class BalloonsApp(App):
 
         # Check if we need to switch sessions
         turn_session_id = event.session_id
+        current_session_id = self.session.id if self.session else None
+        debug_log.info(
+            f"on_context_tree_view_turn_inspected: type={node_type}, turn_session_id={turn_session_id}, current_session_id={current_session_id}, turn_idx={turn_idx}",
+            category="tree"
+        )
         if turn_session_id and turn_session_id != self.session.id:
             # Switch to the turn's session first - it handles scrolling
+            debug_log.info(f"Switching to different session: {turn_session_id[:8]}...", category="tree")
             target_session = Session.load(turn_session_id)
             if target_session:
+                debug_log.info(f"Loaded target session, calling _switch_to_session with turn_idx={turn_idx}", category="tree")
                 self._switch_to_session(target_session, target_turn_index=turn_idx)
                 # Show the turn data in request pane (session switch already handles scroll)
                 if node_type == "turn":
                     request_pane.show_json(event.turn_data)
                 return  # Session switch handles the rest
+            else:
+                debug_log.warning(f"Failed to load session {turn_session_id}", category="tree")
 
         if node_type == "summary":
             request_pane.show_session_info(
@@ -2576,11 +2594,9 @@ class BalloonsApp(App):
             )
             chat_log.clear_highlights()
         elif node_type == "turn":
-            # Whole turn inspection - scroll to it and show in request pane
+            # Whole turn inspection - scroll to it, highlight it, and show in request pane
             turn_id = turn_idx + 1
-            # Scroll to turn and disable follow mode if not at bottom
-            chat_log.scroll_to_turn(turn_id)
-            chat_log.clear_highlights()
+            chat_log.highlight_turn(turn_id)
             request_pane.show_json(event.turn_data)
             # Save last view position
             save_last_view(self.session.id, turn_idx)

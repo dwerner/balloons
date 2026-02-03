@@ -34,8 +34,8 @@ class ToolUseWidget(Static):
     ToolUseWidget {
         padding: 0 1;
         margin: 0 0 0 2;
-        background: #1e1e1e;
-        border-left: thick $success;
+        background: #2a2a1a;
+        border-left: thick $warning;
     }
 
     ToolUseWidget.hidden {
@@ -48,7 +48,7 @@ class ToolUseWidget(Static):
     }
 
     ToolUseWidget.expandable {
-        border-left: thick $success;
+        border-left: thick $warning;
     }
 
     ToolUseWidget.expanded {
@@ -213,8 +213,8 @@ class ToolResultWidget(Static):
     ToolResultWidget {
         padding: 0 1;
         margin: 0 0 1 4;
-        background: #1a1a1a;
-        border-left: thick $primary;
+        background: #2a2a20;
+        border-left: thick #d4d422;
         max-height: 15;
         overflow-y: auto;
     }
@@ -229,7 +229,7 @@ class ToolResultWidget(Static):
     }
 
     ToolResultWidget.expandable {
-        border-left: thick $primary;
+        border-left: thick #d4d422;
     }
 
     /* Context mode visual indicators - use background color to avoid layout shifts */
@@ -401,13 +401,17 @@ class MessageWidget(Static):
     }
 
     MessageWidget.user {
-        background: #1a1a1a;
+        background: #1a1a2a;
         color: $text-muted;
+        border-left: thick $primary;
+        margin-left: 2;
     }
 
     MessageWidget.assistant {
-        background: #1e1e1e;
+        background: #2a1a1a;
         color: $text;
+        border-left: thick $error;
+        margin-left: 2;
     }
 
     MessageWidget:focus {
@@ -415,11 +419,11 @@ class MessageWidget(Static):
     }
 
     MessageWidget.user:focus {
-        background: #1f1f1f;
+        background: #1f1f2f;
     }
 
     MessageWidget.assistant:focus {
-        background: #232323;
+        background: #2f1f1f;
     }
 
     MessageWidget.streaming {
@@ -454,11 +458,11 @@ class MessageWidget(Static):
     }
 
     MessageWidget.user:hover {
-        background: #222222;
+        background: #222232;
     }
 
     MessageWidget.assistant:hover {
-        background: #262626;
+        background: #322222;
     }
     """
 
@@ -489,7 +493,9 @@ class MessageWidget(Static):
     def finish_streaming(self) -> None:
         """Mark streaming as complete and re-render with markdown."""
         self._streaming = False
-        self.refresh()
+        # layout=True forces parent to recalculate this widget's size after
+        # switching from plain text to Markdown (which is often much taller)
+        self.refresh(layout=True)
 
     def set_content(self, content: str) -> None:
         """Set the full message content."""
@@ -711,17 +717,51 @@ class ChatLog(VerticalScroll):
         for child in self.children:
             if hasattr(child, 'turn_id') and child.turn_id == turn_id:
                 debug_log.info(f"scroll_to_turn: found turn_id={turn_id}, scrolling", category="chat_log")
-                child.scroll_visible(animate=True)
-                # After scrolling, check if we're at the bottom
-                # Use call_later to check after scroll animation starts
-                self.call_later(self._check_at_bottom)
+                self.scroll_to_widget_and_check_follow(child)
                 return True
         debug_log.warning(f"scroll_to_turn: turn_id={turn_id} NOT FOUND", category="chat_log")
         return False
 
     def scroll_to_widget_and_check_follow(self, widget) -> None:
-        """Scroll to a specific widget and disable follow mode if not at the bottom."""
-        widget.scroll_visible(animate=True)
+        """Scroll to a widget smartly: show entire widget if it fits, else scroll to top.
+
+        If the widget is shorter than the viewport, scroll so the entire widget is visible.
+        If the widget is taller than the viewport, scroll so the top of the widget is at the
+        top of the viewport (so the user can start reading from the beginning).
+
+        Accounts for the floating "more below" indicator (2 lines) at the bottom.
+        """
+        # Reserve space for floating "more below" indicator
+        INDICATOR_HEIGHT = 2
+
+        # Get widget's region relative to this container's virtual content
+        widget_region = widget.region
+        viewport_height = self.size.height
+        effective_viewport = viewport_height - INDICATOR_HEIGHT
+        widget_height = widget_region.height
+        widget_top = widget_region.y
+        widget_bottom = widget_top + widget_height
+
+        if widget_height <= effective_viewport:
+            # Widget fits in viewport - ensure entire widget is visible above indicator
+            current_scroll = self.scroll_y
+            visible_top = current_scroll
+            visible_bottom = current_scroll + effective_viewport
+
+            if widget_top >= visible_top and widget_bottom <= visible_bottom:
+                # Already fully visible - no scroll needed
+                pass
+            elif widget_top < visible_top:
+                # Widget is above viewport - scroll up to show it
+                self.scroll_to(y=widget_top, animate=False)
+            else:
+                # Widget is below viewport - scroll down so bottom of widget
+                # is at bottom of effective viewport (above indicator)
+                self.scroll_to(y=widget_bottom - effective_viewport, animate=False)
+        else:
+            # Widget doesn't fit - scroll so top of widget is at top of viewport
+            self.scroll_to(y=widget_top, animate=False)
+
         # After scrolling, check if we're at the bottom
         self.call_later(self._check_at_bottom)
 
@@ -964,6 +1004,11 @@ class ChatLog(VerticalScroll):
                     content_parts.append(child.content)
 
         self._current_assistant_message = None
+
+        # Scroll after finishing - the Markdown re-render changes widget height significantly,
+        # so we need to scroll after the layout recalculates
+        self._smart_scroll()
+
         return "\n\n".join(content_parts)
 
     def add_interruption_marker(self, reason: str = "user_cancelled") -> InterruptionMarkerWidget:
@@ -1038,6 +1083,22 @@ class ChatLog(VerticalScroll):
                     break
         if not found:
             debug_log.warning(f"  -> NOT FOUND!", category="chat_log")
+
+    def highlight_turn(self, turn_id: int) -> None:
+        """Highlight a turn by turn_id, scrolling to it."""
+        from core.debug_log import debug_log
+        debug_log.info(f"highlight_turn: looking for turn_id={turn_id}", category="chat_log")
+
+        self.clear_highlights()
+
+        # Find and highlight the first widget with matching turn_id
+        for child in self.children:
+            if hasattr(child, 'turn_id') and child.turn_id == turn_id:
+                child.add_class("highlighted")
+                self.scroll_to_widget_and_check_follow(child)
+                debug_log.info(f"highlight_turn: found and highlighted turn_id={turn_id}", category="chat_log")
+                return
+        debug_log.warning(f"highlight_turn: turn_id={turn_id} NOT FOUND", category="chat_log")
 
     def clear_highlights(self) -> None:
         """Remove all highlights from tools and messages."""

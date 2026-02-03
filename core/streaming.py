@@ -71,6 +71,12 @@ class TextAction(StreamingAction):
 
 
 @dataclass
+class TextFlushAction(StreamingAction):
+    """Text segment complete (before tool use). Commit accumulated text as a visible node."""
+    text: str
+
+
+@dataclass
 class InitAction(StreamingAction):
     """Initialize with model info."""
     model: str
@@ -216,6 +222,11 @@ class StreamingCoordinator:
             text = event.data
             ctx.content += text
             return TextAction(session_id=session_id, text=text)
+
+        elif event.event_type == "text_flush":
+            # Text segment complete (before tool use) - commit as visible node
+            text = event.data.get("text", "")
+            return TextFlushAction(session_id=session_id, text=text)
 
         elif event.event_type == "init":
             return InitAction(

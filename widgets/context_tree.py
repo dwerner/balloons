@@ -527,7 +527,7 @@ class ContextTreeView(Vertical):
         session_data = self._state.get_session(session_id)
         session_node = self._session_nodes.get(session_id)
 
-        # Add tree node if session is loaded and has a node
+        # Add tree node if session is loaded and has a visible node
         if session_data and session_data.is_loaded and session_node:
             # Create placeholder label
             label = self._make_turn_label(role, "[dim]streaming...[/]", ContextMode.COMPRESS, session_id=session_id)
@@ -538,7 +538,9 @@ class ContextTreeView(Vertical):
             turn_node.expand()
             self._turn_nodes[(session_id, turn_idx)] = turn_node
 
-            # Update session label (message count already updated by TreeState.start_turn)
+        # Update session label even if turn node wasn't created (session may be visible but collapsed)
+        # Message count already updated by TreeState.start_turn
+        if session_data and session_node:
             is_active = session_id == self._state.get_current_session_id()
             session_node.label = self._make_session_label(session_data, is_active)
 
@@ -564,6 +566,13 @@ class ContextTreeView(Vertical):
             turn_node.label = self._make_turn_label(
                 turn_data.role, content, mode, content_blocks, session_id=session_id
             )
+
+        # Update session label (streaming indicator, token counts) even if turn node wasn't visible
+        session_data = self._state.get_session(session_id)
+        session_node = self._session_nodes.get(session_id)
+        if session_data and session_node:
+            is_active = session_id == self._state.get_current_session_id()
+            session_node.label = self._make_session_label(session_data, is_active)
 
         # Always update token counts when a turn finishes
         self._update_root_label()
@@ -1443,6 +1452,49 @@ class ContextTreeView(Vertical):
         else:
             turn_node.label = f"{indicator} {icon} [dim]{preview}[/]"
 
+    def flush_streaming_text(
+        self,
+        session_id: str,
+        turn_idx: int,
+        text: str,
+    ) -> None:
+        """Commit accumulated streaming text as a visible text node.
+
+        Called when a text segment completes (before tool use starts).
+        Creates a text child node and clears the streaming accumulator.
+        """
+        turn_node = self._turn_nodes.get((session_id, turn_idx))
+        if not turn_node or not text.strip():
+            return
+
+        # Create text node as child of turn
+        text_preview = text[:50].replace("\n", " ")
+        if len(text) > 50:
+            text_preview += "..."
+        label = f"[dim]💬[/] {text_preview}"
+
+        # Track how many text nodes we've added for this turn
+        text_key = (session_id, turn_idx)
+        text_node_count = sum(
+            1 for child in turn_node.children
+            if child.data and child.data.get("type") == "text"
+        )
+
+        turn_node.add(
+            label,
+            data={
+                "type": "text",
+                "session_id": session_id,
+                "turn_idx": turn_idx,
+                "block_idx": text_node_count,  # Index among text blocks
+                "text": text,
+            }
+        )
+
+        # Clear streaming accumulator - subsequent text will be a new segment
+        if text_key in self._streaming_text:
+            del self._streaming_text[text_key]
+
     def add_tool_result_to_turn(
         self,
         session_id: str,
@@ -1566,7 +1618,7 @@ class ContextTreeView(Vertical):
         from core.debug_log import debug_log
         node_data = event.node.data
         if not node_data:
-            debug_log.debug("on_tree_node_selected: no node_data", category="tree")
+            debug_log.info("on_tree_node_selected: no node_data", category="tree")
             return
 
         node_type = node_data.get("type")
@@ -1601,13 +1653,13 @@ class ContextTreeView(Vertical):
             session_id = node_data.get("session_id")
             turn_idx = node_data.get("turn_idx")
             session_data = self._state.get_session(session_id)
-            debug_log.debug(f"on_tree_node_selected turn: session_id={session_id}, turn_idx={turn_idx}, session_data_loaded={session_data.is_loaded if session_data else False}", category="tree")
+            debug_log.info(f"on_tree_node_selected turn: session_id={session_id}, turn_idx={turn_idx}, session_data_loaded={session_data.is_loaded if session_data else False}", category="tree")
             if session_data and session_data.is_loaded and session_data.turns:
                 turn = self._state.get_turn(session_id, turn_idx)
                 if turn:
                     # Get context mode for this turn
                     mode = self._state.get_context_mode(session_id, turn_idx)
-                    debug_log.debug(f"on_tree_node_selected: posting TurnInspected for turn {turn_idx}", category="tree")
+                    debug_log.info(f"on_tree_node_selected: posting TurnInspected for session_id={session_id}, turn_idx={turn_idx}", category="tree")
                     # Send turn data for inspection (includes session_id for cross-session navigation)
                     self.post_message(self.TurnInspected({
                         "type": "turn",
@@ -1679,6 +1731,24 @@ class ContextTreeView(Vertical):
                     "is_fork": True,
                     "status": node_data.get("status", "active"),
                 }))
+        elif node_type == "exchange":
+            # Exchange group selected - scroll to first turn in the group
+            session_id = node_data.get("session_id")
+            first_turn_idx = node_data.get("first_turn_idx")
+            session_data = self._state.get_session(session_id)
+            if session_data and session_data.is_loaded and first_turn_idx is not None:
+                turn = self._state.get_turn(session_id, first_turn_idx)
+                if turn:
+                    mode = self._state.get_context_mode(session_id, first_turn_idx)
+                    self.post_message(self.TurnInspected({
+                        "type": "turn",
+                        "role": turn.role,
+                        "content": turn.content,
+                        "events": turn.events,
+                        "turn_idx": first_turn_idx,
+                        "context_mode": mode.name,
+                        "exchange_id": node_data.get("exchange_id"),
+                    }, session_id=session_id))
         elif node_type == "merge":
             # Show merge details in inspection pane
             fork_id = node_data.get("session_id")

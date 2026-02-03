@@ -6,6 +6,7 @@ from core.streaming import (
     StreamingContext,
     StreamingCoordinator,
     TextAction,
+    TextFlushAction,
     InitAction,
     ResultAction,
     ToolUseStartAction,
@@ -85,6 +86,22 @@ class TestStreamingCoordinator:
         coordinator.dispatch_event(StreamEvent(event_type="text", data=", world!"), ctx)
 
         assert ctx.content == "Hello, world!"
+
+    def test_text_flush_event(self):
+        coordinator = StreamingCoordinator()
+        ctx = StreamingContext(
+            session_id="test-123",
+            user_turn_idx=0,
+            assistant_turn_idx=1,
+            prompt="Hello",
+        )
+
+        event = StreamEvent(event_type="text_flush", data={"text": "Completed text segment"})
+        action = coordinator.dispatch_event(event, ctx)
+
+        assert isinstance(action, TextFlushAction)
+        assert action.session_id == "test-123"
+        assert action.text == "Completed text segment"
 
     def test_init_event(self):
         coordinator = StreamingCoordinator()

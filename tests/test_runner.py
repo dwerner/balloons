@@ -45,21 +45,21 @@ class TestStreamProcessing:
     def test_process_text_delta(self, runner):
         """TextDelta events accumulate text."""
         event = TextDelta(text="hello")
-        result = runner._process_event(event)
+        results = runner._process_event(event)
 
-        assert result is not None
-        assert result.event_type == "text"
-        assert result.data == "hello"
+        assert len(results) == 1
+        assert results[0].event_type == "text"
+        assert results[0].data == "hello"
         assert runner._text_buffer == "hello"
 
     def test_process_init_event(self, runner, session):
         """InitEvent updates session model info."""
         event = InitEvent(model="claude-3", session_id="test", context_window=100000)
-        result = runner._process_event(event)
+        results = runner._process_event(event)
 
-        assert result is not None
-        assert result.event_type == "init"
-        assert result.data["model"] == "claude-3"
+        assert len(results) == 1
+        assert results[0].event_type == "init"
+        assert results[0].data["model"] == "claude-3"
         assert session.model == "claude-3"
 
     def test_process_tool_use_event(self, runner):
@@ -67,11 +67,15 @@ class TestStreamProcessing:
         # First add some text
         runner._process_event(TextDelta(text="some text"))
 
-        # Then tool use start (flushes text)
-        runner._process_event(ToolUseStartEvent(
+        # Then tool use start (flushes text and emits text_flush event)
+        start_results = runner._process_event(ToolUseStartEvent(
             tool_use_id="123",
             tool_name="Read",
         ))
+        # Should have text_flush + tool_use_start
+        assert len(start_results) == 2
+        assert start_results[0].event_type == "text_flush"
+        assert start_results[1].event_type == "tool_use_start"
 
         # Then tool use complete
         event = ToolUseEvent(
@@ -79,22 +83,22 @@ class TestStreamProcessing:
             tool_name="Read",
             tool_input={"file_path": "/test.py"},
         )
-        result = runner._process_event(event)
+        results = runner._process_event(event)
 
-        assert result is not None
-        assert result.event_type == "tool_use"
-        assert result.data["tool_name"] == "Read"
+        assert len(results) == 1
+        assert results[0].event_type == "tool_use"
+        assert results[0].data["tool_name"] == "Read"
         # Text should be flushed to content block by ToolUseStartEvent
         assert len(runner._content_blocks) == 2  # TextBlock + ToolUseBlock
 
     def test_process_tool_result_event(self, runner):
         """ToolResultEvent creates content block."""
         event = ToolResultEvent(tool_use_id="123", result="file contents")
-        result = runner._process_event(event)
+        results = runner._process_event(event)
 
-        assert result is not None
-        assert result.event_type == "tool_result"
-        assert result.data["result"] == "file contents"
+        assert len(results) == 1
+        assert results[0].event_type == "tool_result"
+        assert results[0].data["result"] == "file contents"
 
     def test_process_result_event(self, runner, session):
         """ResultEvent updates session usage."""
@@ -104,21 +108,31 @@ class TestStreamProcessing:
             total_cost_usd=0.01,
             context_window=200000,
         )
-        result = runner._process_event(event)
+        results = runner._process_event(event)
 
-        assert result is not None
-        assert result.event_type == "result"
+        assert len(results) == 1
+        assert results[0].event_type == "result"
         assert session.total_input_tokens == 100
         assert session.total_output_tokens == 50
 
     def test_process_raw_event(self, runner):
         """RawEvent is passed through."""
         event = RawEvent(data={"type": "test"})
-        result = runner._process_event(event)
+        results = runner._process_event(event)
 
-        assert result is not None
-        assert result.event_type == "raw"
-        assert result.data == {"type": "test"}
+        assert len(results) == 1
+        assert results[0].event_type == "raw"
+        assert results[0].data == {"type": "test"}
+
+    def test_tool_use_start_without_text_no_flush(self, runner):
+        """ToolUseStartEvent without prior text only emits tool_use_start."""
+        results = runner._process_event(ToolUseStartEvent(
+            tool_use_id="123",
+            tool_name="Read",
+        ))
+        # No text to flush, so only tool_use_start
+        assert len(results) == 1
+        assert results[0].event_type == "tool_use_start"
 
 
 class TestFinalization:
