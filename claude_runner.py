@@ -6,9 +6,9 @@ from typing import AsyncIterator, Union
 from models import (
     Message, TextDelta, ResultEvent, InitEvent, RawEvent,
     ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultEvent,
-    TextBlock, ToolUseBlock, ToolResultBlock, ContextMode,
+    TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ContextMode,
 )
-from core.debug_log import debug_log
+from core.debug_log import debug_log, dump_failed_json
 from core.base_runner import BaseRunner, RunnerEvent
 
 
@@ -50,7 +50,7 @@ class ClaudeRunner(BaseRunner):
         self._run_id: str = ""  # Current process PID for debug logging
         self._backend_env = backend_env or {}  # Environment overrides for LLM backend
         self.system_prompt = system_prompt  # Additional system context to prepend
-        self._json_errors: list[str] = []  # Track JSON decode errors during stream
+        self._json_errors: list[tuple[str, str | None]] = []  # Track (error_detail, dump_path) tuples
 
     @staticmethod
     def build_context(messages: list[Message], new_prompt: str) -> str:
@@ -88,6 +88,17 @@ class ClaudeRunner(BaseRunner):
                         # Format tool result so Claude sees what the tool returned
                         error_prefix = "[Error] " if block.is_error else ""
                         block_parts.append(f"[Tool Result]{error_prefix}\n{block.content}")
+                    elif isinstance(block, InterruptionBlock):
+                        # Mark that the response was interrupted
+                        block_parts.append(f"[Response interrupted: {block.reason}]")
+                    elif isinstance(block, ErrorBlock):
+                        # Mark that the response was truncated due to error
+                        error_info = f"[Response truncated: {block.reason}]"
+                        if block.partial_tool_name:
+                            error_info += f"\n[Incomplete tool call: {block.partial_tool_name}]"
+                        if block.partial_tool_input:
+                            error_info += f"\n[Partial input: {block.partial_tool_input}]"
+                        block_parts.append(error_info)
 
                 if block_parts:
                     parts.append(f"{prefix}: " + "\n\n".join(block_parts))
@@ -190,12 +201,13 @@ class ClaudeRunner(BaseRunner):
             try:
                 data = json.loads(line)
             except json.JSONDecodeError as e:
+                dump_path = dump_failed_json(line, "sse_line")
                 error_detail = f"{e}: {line[:100] if len(line) > 100 else line}"
-                self._json_errors.append(error_detail)
+                self._json_errors.append((error_detail, str(dump_path) if dump_path else None))
                 debug_log.warning(
-                    f"JSON decode error: {e}",
+                    f"JSON decode error: {e}" + (f" (dumped to {dump_path})" if dump_path else ""),
                     category="json",
-                    details={"line": line[:100] if len(line) > 100 else line},
+                    details={"line": line[:100] if len(line) > 100 else line, "dump_file": str(dump_path) if dump_path else None},
                     run_id=self._run_id,
                 )
                 continue
@@ -323,11 +335,18 @@ class ClaudeRunner(BaseRunner):
             if event_type == "content_block_stop":
                 # Tool use complete - emit event
                 if self._current_tool_use:
-                    import json
                     try:
                         tool_input = json.loads(self._current_tool_use["input_json"]) if self._current_tool_use["input_json"] else {}
-                    except json.JSONDecodeError:
-                        tool_input = {"raw": self._current_tool_use["input_json"]}
+                    except json.JSONDecodeError as e:
+                        raw_input = self._current_tool_use["input_json"]
+                        dump_path = dump_failed_json(raw_input, "tool_input")
+                        debug_log.warning(
+                            f"Tool input JSON decode error: {e}" + (f" (dumped to {dump_path})" if dump_path else ""),
+                            category="json",
+                            details={"tool_name": self._current_tool_use["name"], "dump_file": str(dump_path) if dump_path else None},
+                            run_id=self._run_id,
+                        )
+                        tool_input = {"raw": raw_input, "_dump_file": str(dump_path) if dump_path else None}
 
                     event = ToolUseEvent(
                         tool_use_id=self._current_tool_use["id"],
@@ -383,10 +402,10 @@ class ClaudeRunner(BaseRunner):
     def is_running(self) -> bool:
         return self.process is not None and self.process.returncode is None
 
-    def get_stream_errors(self) -> tuple[list[str], dict | None]:
+    def get_stream_errors(self) -> tuple[list[tuple[str, str | None]], dict | None]:
         """Get any errors that occurred during streaming.
 
         Returns:
-            Tuple of (json_errors list, partial_tool_use dict or None)
+            Tuple of (json_errors list of (error_detail, dump_path) tuples, partial_tool_use dict or None)
         """
         return self._json_errors, self._current_tool_use

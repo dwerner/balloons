@@ -161,6 +161,7 @@ class SessionRunner:
         yield self._make_event("turn_started", {
             "turn_index": self._turn_index,
             "prompt": prompt,
+            "exchange_id": self._exchange_id,
         })
 
         try:
@@ -243,6 +244,7 @@ class SessionRunner:
         await self._event_queue.put(self._make_event("turn_started", {
             "turn_index": self._turn_index,
             "prompt": prompt,
+            "exchange_id": self._exchange_id,
         }))
 
         try:
@@ -573,7 +575,12 @@ class SessionRunner:
         reason = "truncated" if partial_tool else "json_decode_error"
         partial_tool_name = partial_tool.get("name", "") if partial_tool else ""
         partial_tool_input = partial_tool.get("input_json", "") if partial_tool else ""
-        details = "; ".join(json_errors[:3]) if json_errors else ""  # Limit to first 3 errors
+
+        # Extract error details and dump file paths from tuples
+        error_details = [err[0] for err in json_errors[:3]]  # Limit to first 3
+        dump_files = [err[1] for err in json_errors if err[1]]  # Get non-None dump paths
+        details = "; ".join(error_details) if error_details else ""
+        dump_file = dump_files[0] if dump_files else ""  # Use first dump file
 
         debug_log.warning(
             f"Stream ended with errors: {reason}",
@@ -582,6 +589,7 @@ class SessionRunner:
             details={
                 "json_errors": len(json_errors),
                 "partial_tool": partial_tool_name or None,
+                "dump_file": dump_file or None,
             },
         )
 
@@ -590,6 +598,7 @@ class SessionRunner:
             partial_tool_name=partial_tool_name,
             partial_tool_input=partial_tool_input[:500] if partial_tool_input else "",  # Truncate long input
             details=details,
+            dump_file=dump_file,
         )
 
 

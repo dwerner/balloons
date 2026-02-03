@@ -3,6 +3,7 @@ import logging
 import os
 import subprocess
 import sys
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from textual.app import App, ComposeResult
@@ -708,12 +709,14 @@ class BalloonsApp(App):
         if background:
             # Background mode - stay in parent
             turn_idx = len(child_session.messages)
+            exchange_id = str(uuid.uuid4())  # Group user + assistant turns
             new_ctx = StreamingContext(
                 session_id=child_session.id,
                 user_turn_idx=turn_idx,
                 assistant_turn_idx=turn_idx + 1,
                 prompt=prompt,
                 is_active=False,
+                exchange_id=exchange_id,
             )
             self._streaming_contexts[child_session.id] = new_ctx
 
@@ -721,12 +724,12 @@ class BalloonsApp(App):
             context_tree.set_session_streaming(child_session.id, True)
             self._update_streaming_count()
 
-            # Start tree turns for child
-            context_tree.start_turn(child_session.id, turn_idx, "user")
+            # Start tree turns for child (with exchange_id for grouping)
+            context_tree.start_turn(child_session.id, turn_idx, "user", exchange_id=exchange_id)
             context_tree.finish_turn(
                 child_session.id, turn_idx, prompt, [TextBlock(text=prompt)], []
             )
-            context_tree.start_turn(child_session.id, turn_idx + 1, "assistant")
+            context_tree.start_turn(child_session.id, turn_idx + 1, "assistant", exchange_id=exchange_id)
 
             # Start background streaming
             child_runner = self._manager._runners[child_session.id]
@@ -870,6 +873,7 @@ class BalloonsApp(App):
                             reason=block.reason,
                             partial_tool_name=block.partial_tool_name,
                             details=block.details,
+                            dump_file=block.dump_file,
                         )
                         break
 
@@ -884,15 +888,17 @@ class BalloonsApp(App):
 
             # Save messages to session
             if session:
-                # Get exchange_id and turns from result (if available)
-                exchange_id = result.exchange_id if result else None
+                # Use exchange_id from context (set when streaming started)
+                # This ensures tree state and saved messages use the same exchange_id
+                exchange_id = ctx.exchange_id or (result.exchange_id if result else None)
                 turns = result.turns if result else []
 
                 if ctx.query_with:
                     # query_with: only save assistant response, no user message
                     if turns:
-                        # New model: save individual turns
+                        # New model: save individual turns (update exchange_id to match context)
                         for turn in turns:
+                            turn.exchange_id = exchange_id
                             session.messages.append(turn)
                     else:
                         # Legacy: single assistant message
@@ -903,8 +909,9 @@ class BalloonsApp(App):
                     session.add_message("user", ctx.prompt, content_blocks=user_blocks, exchange_id=exchange_id)
 
                     if turns:
-                        # New model: save individual assistant turns
+                        # New model: save individual assistant turns (update exchange_id to match context)
                         for turn in turns:
+                            turn.exchange_id = exchange_id
                             session.messages.append(turn)
                     else:
                         # Legacy: single assistant message
@@ -1147,15 +1154,18 @@ class BalloonsApp(App):
         # Track the turn index for tree updates
         turn_idx = len(self.session.messages)  # Next turn will be at this index
 
-        # Start the user turn in tree immediately
-        context_tree.start_turn(self.session.id, turn_idx, "user")
+        # Generate exchange_id to group user prompt + all assistant responses
+        exchange_id = str(uuid.uuid4())
+
+        # Start the user turn in tree immediately (with exchange_id for grouping)
+        context_tree.start_turn(self.session.id, turn_idx, "user", exchange_id=exchange_id)
         context_tree.finish_turn(
             self.session.id, turn_idx, prompt, [TextBlock(text=prompt)], []
         )
 
-        # Start the assistant turn in tree
+        # Start the assistant turn in tree (with same exchange_id)
         assistant_turn_idx = turn_idx + 1
-        context_tree.start_turn(self.session.id, assistant_turn_idx, "assistant")
+        context_tree.start_turn(self.session.id, assistant_turn_idx, "assistant", exchange_id=exchange_id)
 
         # Create streaming context for this session
         ctx = StreamingContext(
@@ -1164,6 +1174,7 @@ class BalloonsApp(App):
             assistant_turn_idx=assistant_turn_idx,
             prompt=prompt,
             is_active=is_active,
+            exchange_id=exchange_id,
         )
         self._streaming_contexts[self.session.id] = ctx
 
@@ -1615,12 +1626,14 @@ class BalloonsApp(App):
 
         # Create streaming context for query_with (special: no user turn saved)
         # assistant_turn_idx is 0 since we don't save the user message
+        exchange_id = str(uuid.uuid4())
         ctx = StreamingContext(
             session_id=new_session.id,
             user_turn_idx=-1,  # No user turn
             assistant_turn_idx=0,  # First turn is assistant
             prompt=prompt,
             is_active=True,
+            exchange_id=exchange_id,
         )
         # Mark this as a query_with special case
         ctx.query_with = True
@@ -1639,7 +1652,7 @@ class BalloonsApp(App):
         chat_log.add_assistant_message()
 
         # Start assistant turn in tree (no user turn for query_with)
-        context_tree.start_turn(new_session.id, 0, "assistant")
+        context_tree.start_turn(new_session.id, 0, "assistant", exchange_id=exchange_id)
 
         # Start background streaming - poll timer will handle events
         self._session_runner.start_background(prompt, selected_messages, allowed_tools)
@@ -1861,23 +1874,25 @@ class BalloonsApp(App):
         if result.background:
             # Background mode - stay in parent
             turn_idx = len(child_session.messages)
+            exchange_id = str(uuid.uuid4())  # Group user + assistant turns
             ctx = StreamingContext(
                 session_id=child_session.id,
                 user_turn_idx=turn_idx,
                 assistant_turn_idx=turn_idx + 1,
                 prompt=result.prompt,
                 is_active=False,
+                exchange_id=exchange_id,
             )
             self._streaming_contexts[child_session.id] = ctx
 
             context_tree.set_session_streaming(child_session.id, True)
             self._update_streaming_count()
 
-            context_tree.start_turn(child_session.id, turn_idx, "user")
+            context_tree.start_turn(child_session.id, turn_idx, "user", exchange_id=exchange_id)
             context_tree.finish_turn(
                 child_session.id, turn_idx, result.prompt, [TextBlock(text=result.prompt)], []
             )
-            context_tree.start_turn(child_session.id, turn_idx + 1, "assistant")
+            context_tree.start_turn(child_session.id, turn_idx + 1, "assistant", exchange_id=exchange_id)
 
             child_runner = self._manager._runners[child_session.id]
             child_runner.start_background(
@@ -2688,6 +2703,13 @@ class BalloonsApp(App):
         # Reuse the ContextTreeView handler logic
         context_tree_event = ContextTreeView.SessionLinkRequested(event.session_id)
         self.on_context_tree_session_link_requested(context_tree_event)
+
+    def on_nested_tree_view_session_load_requested(self, event: NestedTreeView.SessionLoadRequested) -> None:
+        """Handle request to load a session's data for display in nested tree."""
+        session = Session.load(event.session_id)
+        if session:
+            # Load the session into TreeState
+            self._tree_state.load_session(event.session_id, session)
 
     def on_breadcrumb_segment_clicked(self, event: Breadcrumb.SegmentClicked) -> None:
         """Handle clicking a breadcrumb segment to navigate up."""

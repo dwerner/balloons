@@ -57,6 +57,7 @@ class ErrorBlock:
     partial_tool_name: str = ""  # Tool name if a tool call was in progress
     partial_tool_input: str = ""  # Partial JSON if tool input was being streamed
     details: str = ""  # Error message or other details
+    dump_file: str = ""  # Path to dumped content file for LLM completion
 
 
 @dataclass

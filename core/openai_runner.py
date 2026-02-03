@@ -9,11 +9,11 @@ from openai import AsyncOpenAI
 
 from models import (
     Message, TextDelta, ResultEvent, InitEvent,
-    TextBlock, ToolUseBlock, ToolResultBlock, ContextMode,
+    TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ContextMode,
     ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultEvent,
 )
 from .base_runner import BaseRunner, RunnerEvent
-from .debug_log import debug_log
+from .debug_log import debug_log, dump_failed_json
 from .tools import get_tools_for_request
 from .tool_executor import execute_tool
 
@@ -90,6 +90,17 @@ class OpenAICompatibleRunner(BaseRunner):
                         # Format tool result
                         error_prefix = "[Error] " if block.is_error else ""
                         content_parts.append(f"[Tool Result]{error_prefix}\n{block.content}")
+                    elif isinstance(block, InterruptionBlock):
+                        # Mark that the response was interrupted
+                        content_parts.append(f"[Response interrupted: {block.reason}]")
+                    elif isinstance(block, ErrorBlock):
+                        # Mark that the response was truncated due to error
+                        error_info = f"[Response truncated: {block.reason}]"
+                        if block.partial_tool_name:
+                            error_info += f"\n[Incomplete tool call: {block.partial_tool_name}]"
+                        if block.partial_tool_input:
+                            error_info += f"\n[Partial input: {block.partial_tool_input}]"
+                        content_parts.append(error_info)
 
                 if content_parts:
                     openai_messages.append({
@@ -363,8 +374,15 @@ class OpenAICompatibleRunner(BaseRunner):
         for tc in tool_calls.values():
             try:
                 arguments = json.loads(tc["arguments_json"]) if tc["arguments_json"] else {}
-            except json.JSONDecodeError:
-                arguments = {"raw": tc["arguments_json"]}
+            except json.JSONDecodeError as e:
+                raw_args = tc["arguments_json"]
+                dump_path = dump_failed_json(raw_args, "tool_input")
+                debug_log.warning(
+                    f"Tool input JSON decode error: {e}" + (f" (dumped to {dump_path})" if dump_path else ""),
+                    category="json",
+                    details={"tool_name": tc["name"], "dump_file": str(dump_path) if dump_path else None},
+                )
+                arguments = {"raw": raw_args, "_dump_file": str(dump_path) if dump_path else None}
 
             finalized_tool_calls.append({
                 "id": tc["id"],

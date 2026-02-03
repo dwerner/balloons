@@ -392,6 +392,7 @@ class TreeState:
             "session_id": session_id,
             "turn_idx": turn_idx,
             "role": role,
+            "exchange_id": exchange_id,
         })
 
     def update_turn_content(self, session_id: str, turn_idx: int, content: str) -> None:

@@ -133,7 +133,7 @@ class NestedTreeWidget(Tree):
                 node = self.get_node_at_line(meta["line"])
                 if node and node.data:
                     node_type = node.data.get("type")
-                    if node_type in ("session", "fork", "merge"):
+                    if node_type == "session":
                         session_id = node.data.get("session_id")
                         if session_id:
                             self.post_message(self.LinkRequested(session_id))
@@ -302,6 +302,12 @@ class NestedTreeView(Vertical):
 
     class SessionLinkRequested(Message):
         """Fired when user ctrl+clicks a session to create a link command."""
+        def __init__(self, session_id: str) -> None:
+            self.session_id = session_id
+            super().__init__()
+
+    class SessionLoadRequested(Message):
+        """Fired when a session needs to be loaded to show its turns."""
         def __init__(self, session_id: str) -> None:
             self.session_id = session_id
             super().__init__()
@@ -528,25 +534,17 @@ class NestedTreeView(Vertical):
         if session_data.is_loaded and session_data.turns:
             self._add_turns_to_node(session_node, session_id, session_data.turns)
 
-        # Add child sessions (forks) inline
+        # Add child sessions (forks) directly as children of this session
         child_ids = children_map.get(session_id, [])
         for child_id in child_ids:
-            child_data = all_sessions.get(child_id)
-            if child_data:
-                # Add fork marker before the fork session
-                fork_label = f"[magenta]↳ Fork:[/] {child_data.fork_name or child_id[:8]}"
-                fork_node = session_node.add(
-                    fork_label,
-                    data={"type": "fork_marker", "session_id": child_id}
-                )
-                # Recursively add the fork session under the marker
-                self._add_session_subtree(
-                    fork_node,
-                    child_id,
-                    all_sessions,
-                    children_map,
-                    current_id
-                )
+            # Add fork session directly under parent (no wrapper node)
+            self._add_session_subtree(
+                session_node,
+                child_id,
+                all_sessions,
+                children_map,
+                current_id
+            )
 
     def _add_turns_to_node(
         self,
@@ -667,7 +665,11 @@ class NestedTreeView(Vertical):
                 )
 
     def _populate_session_turns(self, session_id: str) -> None:
-        """Populate a session's turns after it's loaded."""
+        """Populate a session's turns after it's loaded.
+
+        Adds turn nodes at the beginning of the session node's children,
+        before any fork session children.
+        """
         session_node = self._session_nodes.get(session_id)
         if not session_node:
             return
@@ -676,14 +678,17 @@ class NestedTreeView(Vertical):
         if not session_data or not session_data.turns:
             return
 
-        # Clear existing turn nodes for this session
+        # Clear existing turn nodes for this session only
         keys_to_remove = [k for k in self._turn_nodes if k[0] == session_id]
         for key in keys_to_remove:
-            del self._turn_nodes[key]
+            node = self._turn_nodes.pop(key)
+            node.remove()
 
-        # Note: We need to be careful not to remove fork nodes
-        # For now, rebuild entire subtree
-        self._rebuild_tree()
+        # Add turn nodes using the grouping logic
+        self._add_turns_to_node(session_node, session_id, session_data.turns)
+
+        # Update session label (may have new message count)
+        self._update_session_label(session_id)
 
     def _add_turn_node(
         self,
@@ -915,8 +920,13 @@ class NestedTreeView(Vertical):
         if node_type == "session":
             session_id = event.node_data.get("session_id")
             session_data = self._state.get_session(session_id)
-            if session_data and session_data.session_ref:
-                self.post_message(self.SessionActivated(session_data.session_ref))
+            if session_data:
+                # Request session load if not loaded yet
+                if not session_data.is_loaded:
+                    self.post_message(self.SessionLoadRequested(session_id))
+                # Activate if we have the session ref
+                if session_data.session_ref:
+                    self.post_message(self.SessionActivated(session_data.session_ref))
 
         elif node_type == "turn":
             session_id = event.node_data.get("session_id")
@@ -969,9 +979,55 @@ class NestedTreeView(Vertical):
         """Bubble up link request."""
         self.post_message(self.SessionLinkRequested(event.session_id))
 
+    def on_tree_node_expanded(self, event) -> None:
+        """Handle node expansion - request session load if not loaded."""
+        node_data = event.node.data
+        if not node_data:
+            return
+
+        node_type = node_data.get("type")
+        if node_type == "session":
+            session_id = node_data.get("session_id")
+            if session_id:
+                session_data = self._state.get_session(session_id)
+                if session_data and not session_data.is_loaded:
+                    self.post_message(self.SessionLoadRequested(session_id))
+
     # --- Public API (for compatibility with app) ---
 
     @property
     def state(self) -> TreeState:
         """Access the underlying TreeState."""
         return self._state
+
+    def scroll_to_turn(self, session_id: str, turn_idx: int) -> bool:
+        """Scroll to and highlight a specific turn in the tree.
+
+        Args:
+            session_id: The session containing the turn
+            turn_idx: The 0-based turn index
+
+        Returns:
+            True if the turn was found and scrolled to, False otherwise
+        """
+        tree = self.query_one("#nested-tree-widget", NestedTreeWidget)
+
+        # Ensure the session node exists and is expanded
+        session_node = self._session_nodes.get(session_id)
+        if session_node:
+            session_node.expand()
+
+        # Try to find the turn node
+        turn_node = self._turn_nodes.get((session_id, turn_idx))
+        if turn_node:
+            tree.select_node(turn_node)
+            turn_node.scroll_visible()
+            return True
+
+        return False
+
+    def expand_session(self, session_id: str) -> None:
+        """Expand a session node to show its turns."""
+        session_node = self._session_nodes.get(session_id)
+        if session_node:
+            session_node.expand()

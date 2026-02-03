@@ -19,6 +19,7 @@ from .merge_marker import MergeMarker
 from .link_marker import LinkMarker
 from models import TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock
 from core.formatter import format_edit_as_diff, guess_language
+from core.json_stream import StreamingJsonParser
 from session import Session
 
 # Re-export for backwards compatibility (used by app.py imports)
@@ -100,6 +101,7 @@ class ToolUseWidget(Static):
         self.tool_use_id = tool_use_id
         self._streaming = streaming
         self._partial_json = ""  # Accumulated JSON during streaming
+        self._json_parser = StreamingJsonParser()  # Parser for streaming JSON
         if full_content is not None:
             self.add_class("expandable")
         if streaming:
@@ -107,11 +109,21 @@ class ToolUseWidget(Static):
 
     def render(self) -> RenderableType:
         if self._streaming:
-            # Show tool name + partial JSON with cursor
+            # Show tool name + parsed partial JSON
             text = Text()
             text.append(f"[{self.tool_name}] ", style="bold cyan")
-            text.append(self._partial_json, style="dim")
-            text.append("▌", style="bold")
+
+            # Try to parse and format the partial JSON
+            parsed = self._json_parser.get_partial()
+            if parsed:
+                self._render_parsed_input(text, parsed)
+            else:
+                # Fallback to raw JSON if parsing fails
+                text.append(self._partial_json[:100], style="dim")
+                if len(self._partial_json) > 100:
+                    text.append("...", style="dim")
+
+            text.append(" ▌", style="bold")
             return text
 
         content = self._full_content if self._expanded and self._full_content else self._content
@@ -120,9 +132,33 @@ class ToolUseWidget(Static):
             return Markdown(content, code_theme="monokai")
         return content
 
+    def _render_parsed_input(self, text: Text, parsed: dict | list) -> None:
+        """Render parsed JSON input in a readable format."""
+        if isinstance(parsed, dict):
+            # Show key-value pairs in a compact format
+            items = []
+            for key, value in parsed.items():
+                if isinstance(value, str):
+                    # Truncate long strings
+                    if len(value) > 40:
+                        display_val = value[:37] + "..."
+                    else:
+                        display_val = value
+                    items.append(f'{key}="{display_val}"')
+                elif isinstance(value, (dict, list)):
+                    items.append(f"{key}={{...}}")
+                else:
+                    items.append(f"{key}={value}")
+            text.append(", ".join(items), style="dim")
+        elif isinstance(parsed, list):
+            text.append(f"[{len(parsed)} items]", style="dim")
+        else:
+            text.append(str(parsed)[:100], style="dim")
+
     def append_input(self, partial_json: str) -> None:
         """Append partial JSON to streaming tool use."""
         self._partial_json += partial_json
+        self._json_parser.feed(partial_json)
         self.refresh()
 
     def finish_streaming(self, content: RenderableType, full_content: RenderableType | None = None) -> None:
@@ -325,6 +361,7 @@ class ErrorMarkerWidget(Static):
         reason: str = "stream_error",
         partial_tool_name: str = "",
         details: str = "",
+        dump_file: str = "",
         turn_id: int = 0,
         **kwargs
     ):
@@ -332,6 +369,7 @@ class ErrorMarkerWidget(Static):
         self.reason = reason
         self.partial_tool_name = partial_tool_name
         self.details = details
+        self.dump_file = dump_file
         self.turn_id = turn_id
 
     def render(self) -> RenderableType:
@@ -346,6 +384,9 @@ class ErrorMarkerWidget(Static):
 
         if self.details:
             msg += f"\n{self.details[:200]}"  # Truncate long details
+
+        if self.dump_file:
+            msg += f"\nDump: {self.dump_file}"
 
         return Text(msg, style="italic dim")
 
@@ -938,6 +979,7 @@ class ChatLog(VerticalScroll):
         reason: str = "stream_error",
         partial_tool_name: str = "",
         details: str = "",
+        dump_file: str = "",
     ) -> ErrorMarkerWidget:
         """Add an error marker to the log (truncated response, etc.)."""
         turn_id = self._turn_counter
@@ -945,6 +987,7 @@ class ChatLog(VerticalScroll):
             reason=reason,
             partial_tool_name=partial_tool_name,
             details=details,
+            dump_file=dump_file,
             turn_id=turn_id,
         )
         self.mount(widget)
@@ -1142,6 +1185,7 @@ class ChatLog(VerticalScroll):
                             reason=block.reason,
                             partial_tool_name=block.partial_tool_name,
                             details=block.details,
+                            dump_file=block.dump_file,
                             turn_id=turn_id,
                         )
                         self.mount(widget)

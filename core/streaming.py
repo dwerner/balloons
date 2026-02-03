@@ -38,6 +38,7 @@ class StreamingContext:
     content: str = ""  # Accumulated text content
     is_active: bool = True  # Is this the active/foreground session?
     query_with: bool = False  # Special case: no user message saved
+    exchange_id: str = ""  # Groups all turns in this exchange (user + assistant responses)
     # Track tool events for session resume (tool_use_id -> (name, input, result))
     tool_events: dict = None
     # Helper task tracking (for context compression, merge summaries)
