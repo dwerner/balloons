@@ -140,6 +140,51 @@ class Session:
         """
         return False
 
+    def check_auto_return(self, response_content: str) -> bool:
+        """Check if auto-return condition is met for a child session.
+
+        Args:
+            response_content: The assistant's response text to check
+
+        Returns:
+            True if the auto-return condition is satisfied
+        """
+        if not self.is_child_session():
+            return False
+
+        condition = self.return_condition
+
+        if condition == "manual":
+            return False
+
+        if condition == "done":
+            # Look for completion indicators
+            done_indicators = [
+                "task complete",
+                "task is complete",
+                "completed the task",
+                "finished",
+                "done",
+                "all set",
+            ]
+            lower_content = response_content.lower()
+            for indicator in done_indicators:
+                if indicator in lower_content:
+                    return True
+            return False
+
+        if condition.startswith("turns:"):
+            try:
+                max_turns = int(condition.split(":")[1])
+                # Count assistant messages in this child session
+                assistant_count = sum(1 for m in self.messages if m.role == "assistant")
+                # +1 for the current response not yet saved
+                return assistant_count + 1 >= max_turns
+            except (ValueError, IndexError):
+                return False
+
+        return False
+
     def mark_merged(self, message: str, merge_turn: int) -> None:
         """Mark this fork as merged."""
         self.fork_status = "merged"

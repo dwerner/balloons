@@ -69,38 +69,28 @@ from core import (
     LinkCommand,
     debug_log,
     create_runner,
+    # Streaming
+    StreamingContext,
+    StreamingCoordinator,
+    TextAction,
+    InitAction,
+    ResultAction,
+    ToolUseStartAction,
+    ToolInputDeltaAction,
+    ToolUseCompleteAction,
+    ToolResultAction,
+    DoneAction,
+    ErrorAction,
+    RateLimitAction,
+    CancelledAction,
+    InputRequiredAction,
+    HelperDoneAction,
+    NoAction,
 )
+from core.summarizer import Summarizer
+from core.context_grouper import group_messages_by_context_mode, build_context_messages
 from core.tree_state import TreeState
 from tokenizer import count_tokens
-
-
-@dataclass
-class StreamingContext:
-    """Tracks streaming state for a session.
-
-    Each streaming session needs to track its own state for proper
-    event handling and UI updates.
-    """
-    session_id: str
-    user_turn_idx: int  # Index of user turn in session.messages (-1 for query_with)
-    assistant_turn_idx: int  # Index of assistant turn
-    prompt: str  # Original prompt for saving
-    content: str = ""  # Accumulated text content
-    is_active: bool = True  # Is this the active/foreground session?
-    query_with: bool = False  # Special case: no user message saved
-    # Track tool events for session resume (tool_use_id -> (name, input, result))
-    tool_events: dict = None
-    # Helper task tracking (for context compression, merge summaries)
-    is_helper: bool = False  # True if this is a helper task, not a normal prompt
-    helper_type: str = ""  # "compress", "merge", etc.
-    # For fork context compression: data needed to complete the fork after compression
-    fork_data: dict = None  # Contains indexed_messages, allowed_tools, name, background, etc.
-
-    def __post_init__(self):
-        if self.tool_events is None:
-            self.tool_events = {}
-        if self.fork_data is None:
-            self.fork_data = {}
 
 
 # Claude CLI system overhead: ~19.3k tokens for built-in tools and system prompt
@@ -187,12 +177,16 @@ class BalloonsApp(App):
         self._manager = SessionManager(backend_config=self._backend_config)
         # Simple runner for helper streaming (summaries, etc.) - used for blocking operations
         self._helper_runner = create_runner(self._backend_config)
+        # Summarizer for LLM-based summary generation
+        self._summarizer = Summarizer(self._helper_runner)
         # Timer for polling background sessions
         self._poll_timer = None
         # Per-session streaming contexts (session_id -> StreamingContext)
         self._streaming_contexts: dict[str, StreamingContext] = {}
         # Helper runners for non-blocking helper tasks (helper_id -> HelperRunner)
         self._helper_runners: dict[str, HelperRunner] = {}
+        # Streaming coordinator for dispatching events to actions
+        self._streaming_coordinator = StreamingCoordinator()
 
     @property
     def session(self) -> Session | None:
@@ -383,43 +377,64 @@ class BalloonsApp(App):
     ) -> None:
         """Dispatch a polled event to appropriate UI components.
 
-        Handles events for both active (foreground) and background sessions.
+        Uses StreamingCoordinator to convert events to actions, then handles
+        the actions with UI-specific code.
         """
+        # Get action from coordinator (also updates ctx state)
+        action = self._streaming_coordinator.dispatch_event(event, ctx)
         is_active = ctx.is_active
 
+        # Log events for debugging
         if event.event_type == "turn_started":
             debug_event(f"turn_started: session={session_id[:8]} turn={event.data.get('turn_index')}")
+        elif event.event_type in ("text", "tool_use_start", "tool_use", "tool_result", "done", "error", "rate_limit", "cancelled", "input_required"):
+            debug_event(f"{event.event_type}: session={session_id[:8]}")
 
-        elif event.event_type == "text":
-            text = event.data
-            debug_event(f"text: session={session_id[:8]} len={len(text)}")
-            ctx.content += text
+        # Handle action based on type
+        self._handle_streaming_action(action, ctx, chat_log, context_tree, status_bar)
 
+    def _handle_streaming_action(
+        self,
+        action,
+        ctx: StreamingContext,
+        chat_log: ChatLog,
+        context_tree: ContextTreeView,
+        status_bar: StatusBar,
+    ) -> None:
+        """Handle a streaming action by updating UI components.
+
+        This method contains all the UI-specific code for handling streaming actions.
+        """
+        session_id = action.session_id
+        is_active = ctx.is_active
+
+        if isinstance(action, NoAction):
+            pass  # Nothing to do
+
+        elif isinstance(action, TextAction):
             # Update tree with streaming text
             context_tree.update_streaming_text(
                 session_id,
                 ctx.assistant_turn_idx,
-                text,
+                action.text,
             )
 
             if is_active:
-                chat_log.append_to_current(text)
+                chat_log.append_to_current(action.text)
             else:
                 # Update WithWidget for background session
                 with_widget = chat_log.find_with_widget(session_id)
                 if with_widget:
-                    with_widget.update_streaming(text)
+                    with_widget.update_streaming(action.text)
 
-        elif event.event_type == "init":
-            debug_event(f"init: session={session_id[:8]} model={event.data.get('model')}")
+        elif isinstance(action, InitAction):
             if is_active:
                 status_bar.update_stats(
-                    model=event.data.get("model"),
-                    context_window=event.data.get("context_window"),
+                    model=action.model,
+                    context_window=action.context_window,
                 )
 
-        elif event.event_type == "result":
-            debug_event(f"result: session={session_id[:8]} in={event.data.get('input_tokens')} out={event.data.get('output_tokens')}")
+        elif isinstance(action, ResultAction):
             if is_active:
                 # Get session from manager for cost tracking
                 session = self._manager._sessions.get(session_id)
@@ -428,88 +443,52 @@ class BalloonsApp(App):
                 # Update context tokens now that new messages are added
                 self._update_context_tokens()
 
-        elif event.event_type == "tool_use_start":
-            # Tool use started - input is still streaming
-            data = event.data
-            tool_use_id = data.get("tool_use_id")
-            tool_name = data.get("tool_name")
-            debug_event(f"tool_use_start: session={session_id[:8]} {tool_name}")
-
-            # Initialize tracking (will be updated when tool_use completes)
-            ctx.tool_events[tool_use_id] = {
-                "name": tool_name,
-                "input": {},  # Will be filled on tool_use
-                "index": data.get("tool_index"),
-                "result": None,
-            }
-
+        elif isinstance(action, ToolUseStartAction):
             # Add placeholder to tree
             context_tree.add_tool_use_to_turn(
                 session_id,
                 ctx.assistant_turn_idx,
-                tool_use_id,
-                tool_name,
+                action.tool_use_id,
+                action.tool_name,
                 {},  # Empty input for now
-                data.get("tool_index"),
+                action.tool_index,
             )
 
             if is_active:
                 # Add streaming tool widget
-                chat_log.add_streaming_tool_use(tool_name, tool_use_id)
+                chat_log.add_streaming_tool_use(action.tool_name, action.tool_use_id)
 
-        elif event.event_type == "tool_input_delta":
-            # Partial tool input JSON
-            data = event.data
-            tool_use_id = data.get("tool_use_id")
-            partial_json = data.get("partial_json", "")
-
+        elif isinstance(action, ToolInputDeltaAction):
             # Update tree with streaming input
-            tool_name = ctx.tool_events.get(tool_use_id, {}).get("name", "Tool")
             context_tree.update_tool_input_streaming(
                 session_id,
                 ctx.assistant_turn_idx,
-                tool_use_id,
-                tool_name,
-                partial_json,
+                action.tool_use_id,
+                action.tool_name,
+                action.partial_json,
             )
 
             if is_active:
                 # Update streaming tool widget
-                chat_log.update_streaming_tool(tool_use_id, partial_json)
+                chat_log.update_streaming_tool(action.tool_use_id, action.partial_json)
 
-        elif event.event_type == "tool_use":
-            # Tool input complete
-            data = event.data
-            tool_use_id = data.get("tool_use_id")
-            debug_event(f"tool_use: session={session_id[:8]} {data.get('tool_name')}")
-
-            # Update tracking with final input
-            if tool_use_id in ctx.tool_events:
-                ctx.tool_events[tool_use_id]["input"] = data.get("tool_input")
-            else:
-                ctx.tool_events[tool_use_id] = {
-                    "name": data.get("tool_name"),
-                    "input": data.get("tool_input"),
-                    "index": data.get("tool_index"),
-                    "result": None,
-                }
-
+        elif isinstance(action, ToolUseCompleteAction):
             # Update tree with final input
             context_tree.add_tool_use_to_turn(
                 session_id,
                 ctx.assistant_turn_idx,
-                tool_use_id,
-                data.get("tool_name"),
-                data.get("tool_input"),
-                data.get("tool_index"),
+                action.tool_use_id,
+                action.tool_name,
+                action.tool_input,
+                action.tool_index,
             )
 
             if is_active:
                 # Finish streaming tool widget with formatted content
                 tool_event = ToolUseEvent(
-                    tool_use_id=data.get("tool_use_id"),
-                    tool_name=data.get("tool_name"),
-                    tool_input=data.get("tool_input"),
+                    tool_use_id=action.tool_use_id,
+                    tool_name=action.tool_name,
+                    tool_input=action.tool_input,
                 )
                 formatted = self._format_tool_use(tool_event)
                 if isinstance(formatted, tuple):
@@ -517,35 +496,27 @@ class BalloonsApp(App):
                 else:
                     tool_content, full_content = formatted, None
                 chat_log.finish_streaming_tool(
-                    tool_use_id=data.get("tool_use_id"),
+                    tool_use_id=action.tool_use_id,
                     content=tool_content,
                     full_content=full_content,
-                    tool_name=data.get("tool_name"),
+                    tool_name=action.tool_name,
                 )
 
-        elif event.event_type == "tool_result":
-            data = event.data
-            tool_use_id = data.get("tool_use_id")
-            debug_event(f"tool_result: session={session_id[:8]} len={len(data.get('result', ''))}")
-
-            # Track tool result for session resume
-            if tool_use_id in ctx.tool_events:
-                ctx.tool_events[tool_use_id]["result"] = data.get("result")
-
+        elif isinstance(action, ToolResultAction):
             # Add to tree
             context_tree.add_tool_result_to_turn(
                 session_id,
                 ctx.assistant_turn_idx,
-                tool_use_id,
-                data.get("result"),
-                data.get("tool_index"),
+                action.tool_use_id,
+                action.result,
+                action.tool_index,
             )
 
             if is_active:
                 # Display tool result widget
                 tool_result_event = ToolResultEvent(
-                    tool_use_id=data.get("tool_use_id"),
-                    result=data.get("result"),
+                    tool_use_id=action.tool_use_id,
+                    result=action.result,
                 )
                 formatted = self._format_tool_result(tool_result_event, session_id)
                 if isinstance(formatted, tuple):
@@ -554,33 +525,28 @@ class BalloonsApp(App):
                     result_content, full_content = formatted, None
                 chat_log.add_tool_result(
                     result_content,
-                    tool_use_id=data.get("tool_use_id"), full_content=full_content
+                    tool_use_id=action.tool_use_id, full_content=full_content
                 )
 
-        elif event.event_type == "done":
-            debug_event(f"done: session={session_id[:8]}")
-            debug_log.info("Received done event, calling finalize", category="stream", session_id=session_id)
+        elif isinstance(action, DoneAction):
+            debug_log.info("Received done action, calling finalize", category="stream", session_id=session_id)
             self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar)
 
-        elif event.event_type == "error":
-            debug_event(f"error: session={session_id[:8]} {event.data}")
-            debug_log.error(event.data, session_id=session_id, category="stream")
+        elif isinstance(action, ErrorAction):
+            debug_log.error(action.error, session_id=session_id, category="stream")
             if is_active:
-                chat_log.append_to_current(f"\n\n[Error: {event.data}]")
-            self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar, error=event.data)
+                chat_log.append_to_current(f"\n\n[Error: {action.error}]")
+            self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar, error=action.error)
 
-        elif event.event_type == "rate_limit":
-            debug_event(f"rate_limit: session={session_id[:8]} {event.data}")
+        elif isinstance(action, RateLimitAction):
             if is_active:
-                chat_log.append_to_current(f"\n\n[Rate Limit] {event.data}")
-            self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar, error=event.data)
+                chat_log.append_to_current(f"\n\n[Rate Limit] {action.message}")
+            self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar, error=action.message)
 
-        elif event.event_type == "cancelled":
-            debug_event(f"cancelled: session={session_id[:8]}")
+        elif isinstance(action, CancelledAction):
             self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar, cancelled=True)
 
-        elif event.event_type == "input_required":
-            debug_event(f"input_required: session={session_id[:8]} {event.data}")
+        elif isinstance(action, InputRequiredAction):
             if is_active:
                 chat_log.append_to_current("\n\n[Claude is asking a question - session ended]")
                 status_bar.set_status("Claude asked a question (not supported in non-interactive mode)", animate=False)
@@ -596,29 +562,28 @@ class BalloonsApp(App):
     ) -> None:
         """Dispatch a helper event (context compression, merge summary).
 
-        Helper events stream into the chat like regular messages, but when done
-        trigger the next phase (e.g., start the actual fork prompt).
+        Uses StreamingCoordinator to convert events to actions, then handles
+        the actions with UI-specific code.
         """
+        # Log events for debugging
         if event.event_type == "text":
-            text = event.data
-            debug_event(f"helper text: helper={helper_id[:8]} len={len(text)}")
-            ctx.content += text
+            debug_event(f"helper text: helper={helper_id[:8]} len={len(event.data)}")
+        elif event.event_type in ("done", "error", "cancelled"):
+            debug_event(f"helper {event.event_type}: helper={helper_id[:8]}")
+
+        # Get action from coordinator (also updates ctx state)
+        action = self._streaming_coordinator.dispatch_helper_event(event, ctx)
+
+        # Handle action based on type
+        if isinstance(action, TextAction):
             if ctx.is_active:
-                chat_log.append_to_current(text)
+                chat_log.append_to_current(action.text)
 
-        elif event.event_type == "done":
-            debug_event(f"helper done: helper={helper_id[:8]}")
-            self._finalize_helper(helper_id, ctx, chat_log, status_bar)
-
-        elif event.event_type == "error":
-            debug_event(f"helper error: helper={helper_id[:8]} {event.data}")
-            if ctx.is_active:
-                chat_log.append_to_current(f"\n\n[Error: {event.data}]")
-            self._finalize_helper(helper_id, ctx, chat_log, status_bar, error=event.data)
-
-        elif event.event_type == "cancelled":
-            debug_event(f"helper cancelled: helper={helper_id[:8]}")
-            self._finalize_helper(helper_id, ctx, chat_log, status_bar, cancelled=True)
+        elif isinstance(action, HelperDoneAction):
+            self._finalize_helper(
+                helper_id, ctx, chat_log, status_bar,
+                error=action.error, cancelled=action.cancelled
+            )
 
     def _finalize_helper(
         self,
@@ -709,9 +674,7 @@ class BalloonsApp(App):
             summary_items.append((summary_msg, first_idx))
 
         # Combine COPY messages and summaries, sorted by original index
-        all_items = copy_items + summary_items
-        all_items.sort(key=lambda x: x[1])
-        context_messages = [msg for msg, _ in all_items]
+        context_messages = build_context_messages(copy_items, summary_items)
 
         # Add all context messages to the child session
         for msg in context_messages:
@@ -830,9 +793,7 @@ class BalloonsApp(App):
             summary_items.append((summary_msg, first_idx))
 
         # Combine COPY messages and summaries, sorted by original index
-        all_items = copy_items + summary_items
-        all_items.sort(key=lambda x: x[1])
-        context_messages = [msg for msg, _ in all_items]
+        context_messages = build_context_messages(copy_items, summary_items)
 
         # Add all context messages to the new session
         for msg in context_messages:
@@ -1571,53 +1532,8 @@ class BalloonsApp(App):
             status_bar.set_status(f"Linked to {len(linked_names)} sessions", animate=False)
 
     async def _generate_link_summary(self, messages: list[Message], user_prompt: str) -> str:
-        """Generate a summary of context for a link.
-
-        Args:
-            messages: The messages to summarize
-            user_prompt: User's guidance for the summary
-
-        Returns:
-            Generated summary string
-        """
-        # Build conversation context
-        messages_text = []
-        for msg in messages:
-            role = "User" if msg.role == "user" else "Assistant"
-            content = msg.content if isinstance(msg.content, str) else str(msg.content)
-            # Truncate very long messages
-            if len(content) > 2000:
-                content = content[:2000] + "..."
-            messages_text.append(f"{role}: {content}")
-
-        context_str = "\n\n".join(messages_text)
-
-        summary_prompt = f"""Summarize the following conversation context in 1-3 concise sentences.
-The summary will be used as a link reference between sessions.
-
-{f"User guidance: {user_prompt}" if user_prompt else ""}
-
-Conversation:
-{context_str}
-
-Provide a brief, informative summary:"""
-
-        # Use the helper runner for summary generation
-        summary_parts = []
-        try:
-            async for event in self._helper_runner.stream_response([], summary_prompt, disable_tools=True):
-                if isinstance(event, TextDelta):
-                    summary_parts.append(event.text)
-        except Exception as e:
-            debug_log.error(f"Link summary generation failed: {e}", category="link")
-            return user_prompt or "Linked context"
-
-        result = "".join(summary_parts)
-        if result:
-            return result.strip()
-        else:
-            # Fallback if LLM fails
-            return user_prompt or "Linked context"
+        """Generate a summary of context for a link."""
+        return await self._summarizer.generate_link_summary(messages, user_prompt)
 
     def _handle_suspend(self, cmd: str) -> None:
         """Suspend TUI and run interactive command in session's working directory."""
@@ -1890,23 +1806,7 @@ Provide a brief, informative summary:"""
 
     async def _generate_context_summary(self, messages: list) -> str:
         """Generate a summary of messages marked for summarization."""
-        if not messages:
-            return ""
-
-        summary_prompt = self._context_builder.build_context_summary_prompt(messages)
-
-        # Stream response from Claude
-        summary_parts = []
-        try:
-            async for event in self._helper_runner.stream_response([], summary_prompt):
-                if isinstance(event, TextDelta):
-                    summary_parts.append(event.text)
-        except Exception as e:
-            # Fall back to raw content
-            context_parts = [f"{'User' if m.role == 'user' else 'Assistant'}: {m.content}" for m in messages]
-            return f"Error generating summary: {e}\n\nRaw context:\n" + "\n\n".join(context_parts)
-
-        return "".join(summary_parts) if summary_parts else ""
+        return await self._summarizer.generate_context_summary(messages)
 
     async def _build_context_with_summaries(
         self,
@@ -1933,59 +1833,25 @@ Provide a brief, informative summary:"""
         if not indexed_messages:
             return []
 
-        # Separate COPY and COMPRESS messages, keeping indices
-        copy_items = []  # (msg, idx)
-        compress_items = []  # (msg, idx)
-
-        for msg, idx in indexed_messages:
-            if msg.context_mode == ContextMode.COPY:
-                copy_items.append((msg, idx))
-            elif msg.context_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
-                compress_items.append((msg, idx))
-
-        # Group contiguous COMPRESS messages
-        # Contiguous = consecutive original indices
-        compress_groups = []  # list of [(msg, idx), ...]
-        if compress_items:
-            compress_items.sort(key=lambda x: x[1])
-            current_group = [compress_items[0]]
-
-            for i in range(1, len(compress_items)):
-                msg, idx = compress_items[i]
-                _, prev_idx = current_group[-1]
-
-                # Check if contiguous (allowing for gaps where COPY messages are)
-                # Two COMPRESS messages are in the same group if there are no
-                # COPY messages between them
-                copy_indices = {i for _, i in copy_items}
-                has_copy_between = any(prev_idx < ci < idx for ci in copy_indices)
-
-                if has_copy_between:
-                    # Start new group
-                    compress_groups.append(current_group)
-                    current_group = [(msg, idx)]
-                else:
-                    # Continue current group
-                    current_group.append((msg, idx))
-
-            compress_groups.append(current_group)
+        # Use the grouper to separate and group messages
+        groups = group_messages_by_context_mode(indexed_messages)
 
         # Generate summaries for each COMPRESS group
         summary_items = []  # (summary_msg, insert_idx)
-        if compress_groups:
+        if groups.needs_compression:
             status_bar.set_status("Compressing context...", animate=True)
             input_box.set_disabled(True)
             # Force UI refresh before starting long operation
             self.refresh()
             await asyncio.sleep(0)
 
-            for i, group in enumerate(compress_groups):
+            for i, group in enumerate(groups.compress_groups):
                 group_messages = [msg for msg, _ in group]
                 first_idx = group[0][1]  # Position of first message in group
 
                 # Update status with progress
-                if len(compress_groups) > 1:
-                    status_bar.set_status(f"Compressing context ({i+1}/{len(compress_groups)})...", animate=True)
+                if len(groups.compress_groups) > 1:
+                    status_bar.set_status(f"Compressing context ({i+1}/{len(groups.compress_groups)})...", animate=True)
                     self.refresh()
                     await asyncio.sleep(0)
 
@@ -2002,66 +1868,11 @@ Provide a brief, informative summary:"""
             status_bar.set_status("", animate=False)
             input_box.set_disabled(False)
 
-        # Combine COPY messages and summaries, sorted by original index
-        all_items = copy_items + summary_items
-        all_items.sort(key=lambda x: x[1])
-
-        return [msg for msg, _ in all_items]
+        return build_context_messages(groups.copy_items, summary_items)
 
     async def _generate_merge_summary(self, fork_session: Session, user_prompt: str = "") -> str:
-        """Generate a summary of what was accomplished in a fork.
-
-        Args:
-            fork_session: The fork session to summarize
-            user_prompt: Optional user guidance for the summary
-
-        Returns:
-            A concise summary of the fork's work
-        """
-        # Build conversation context from the fork
-        messages_text = []
-        for msg in fork_session.messages:
-            role = "User" if msg.role == "user" else "Assistant"
-            content = msg.content if isinstance(msg.content, str) else str(msg.content)
-            # Truncate very long messages
-            if len(content) > 2000:
-                content = content[:2000] + "... [truncated]"
-            messages_text.append(f"{role}: {content}")
-
-        conversation = "\n\n".join(messages_text)
-
-        # Build the summary prompt
-        if user_prompt:
-            summary_prompt = f"""Summarize the following conversation, focusing on: {user_prompt}
-
-The summary should be 1-3 sentences describing what was accomplished or discovered.
-Be specific about outcomes, not process.
-
-Conversation:
-{conversation}
-
-Summary:"""
-        else:
-            summary_prompt = f"""Summarize the following conversation in 1-3 sentences.
-Focus on what was accomplished or discovered, not the process.
-Be specific about outcomes.
-
-Conversation:
-{conversation}
-
-Summary:"""
-
-        # Stream response from Claude
-        summary_parts = []
-        try:
-            async for event in self._helper_runner.stream_response([], summary_prompt):
-                if isinstance(event, TextDelta):
-                    summary_parts.append(event.text)
-        except Exception as e:
-            # Fall back to a simple message
-            return f"Merge completed (summary generation failed: {e})"
-
-        return "".join(summary_parts).strip() if summary_parts else "Merge completed"
+        """Generate a summary of what was accomplished in a fork."""
+        return await self._summarizer.generate_merge_summary(fork_session, user_prompt)
 
     async def _handle_with_copy_command(self, prompt: str, return_condition: str = "manual", background: bool = False) -> None:
         """Fork a child session, copying selected nodes directly."""
@@ -2180,37 +1991,8 @@ Summary:"""
         # Track fork point (current turn count in parent)
         fork_point = len(self.session.messages)
 
-        # Separate COPY and COMPRESS messages
-        copy_items = []  # (msg, idx)
-        compress_items = []  # (msg, idx)
-
-        for msg, idx in indexed_messages:
-            if msg.context_mode == ContextMode.COPY:
-                copy_items.append((msg, idx))
-            elif msg.context_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
-                compress_items.append((msg, idx))
-
-        # Group contiguous COMPRESS messages
-        compress_groups = []  # list of [(msg, idx), ...]
-        if compress_items:
-            compress_items.sort(key=lambda x: x[1])
-            current_group = [compress_items[0]]
-
-            for i in range(1, len(compress_items)):
-                msg, idx = compress_items[i]
-                _, prev_idx = current_group[-1]
-
-                # Check if contiguous (no COPY messages between them)
-                copy_indices = {i for _, i in copy_items}
-                has_copy_between = any(prev_idx < ci < idx for ci in copy_indices)
-
-                if has_copy_between:
-                    compress_groups.append(current_group)
-                    current_group = [(msg, idx)]
-                else:
-                    current_group.append((msg, idx))
-
-            compress_groups.append(current_group)
+        # Group messages by context mode
+        groups = group_messages_by_context_mode(indexed_messages)
 
         # Create child session with fork metadata (but don't populate yet)
         child_session = Session()
@@ -2219,11 +2001,10 @@ Summary:"""
         child_session.fork_status = "active"
         child_session.fork_point_turn = fork_point
 
-        if not compress_groups:
+        if not groups.needs_compression:
             # No compression needed - proceed immediately
-            # Add COPY messages to child
-            copy_items.sort(key=lambda x: x[1])
-            for msg, _ in copy_items:
+            # Add COPY messages to child (already sorted by the grouper)
+            for msg, _ in sorted(groups.copy_items, key=lambda x: x[1]):
                 child_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
             child_session.save()
@@ -2295,9 +2076,8 @@ Summary:"""
             # Compression needed - start helper streaming
             # For now, only support one compress group (most common case)
             # TODO: Support multiple compress groups with sequential streaming
-            group = compress_groups[0]
+            group = groups.compress_groups[0]
             group_messages = [msg for msg, _ in group]
-            first_idx = group[0][1]
 
             # Build summary prompt
             summary_prompt = self._context_builder.build_context_summary_prompt(group_messages)
@@ -2324,8 +2104,8 @@ Summary:"""
                     "name": name,
                     "background": background,
                     "allowed_tools": allowed_tools,
-                    "copy_items": copy_items,
-                    "compress_group_positions": [first_idx],  # Just first group for now
+                    "copy_items": groups.copy_items,
+                    "compress_group_positions": groups.compress_group_positions[:1],  # Just first group for now
                     "fork_point": fork_point,
                 },
             )
@@ -2427,44 +2207,15 @@ Summary:"""
         indexed_messages = context_tree.get_selected_messages_with_indices()
         allowed_tools = tool_bar.get_enabled_tools()
 
-        # Separate COPY and COMPRESS messages
-        copy_items = []  # (msg, idx)
-        compress_items = []  # (msg, idx)
-
-        for msg, idx in indexed_messages:
-            if msg.context_mode == ContextMode.COPY:
-                copy_items.append((msg, idx))
-            elif msg.context_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
-                compress_items.append((msg, idx))
-
-        # Group contiguous COMPRESS messages
-        compress_groups = []
-        if compress_items:
-            compress_items.sort(key=lambda x: x[1])
-            current_group = [compress_items[0]]
-
-            for i in range(1, len(compress_items)):
-                msg, idx = compress_items[i]
-                _, prev_idx = current_group[-1]
-
-                copy_indices = {i for _, i in copy_items}
-                has_copy_between = any(prev_idx < ci < idx for ci in copy_indices)
-
-                if has_copy_between:
-                    compress_groups.append(current_group)
-                    current_group = [(msg, idx)]
-                else:
-                    current_group.append((msg, idx))
-
-            compress_groups.append(current_group)
+        # Group messages by context mode
+        groups = group_messages_by_context_mode(indexed_messages)
 
         # Create new independent session (no parent_id)
         new_session = Session()
 
-        if not compress_groups:
+        if not groups.needs_compression:
             # No compression needed - proceed immediately
-            copy_items.sort(key=lambda x: x[1])
-            for msg, _ in copy_items:
+            for msg, _ in sorted(groups.copy_items, key=lambda x: x[1]):
                 new_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
             new_session.save()
@@ -2483,9 +2234,8 @@ Summary:"""
             self._start_streaming(prompt)
         else:
             # Compression needed - start helper streaming
-            group = compress_groups[0]
+            group = groups.compress_groups[0]
             group_messages = [msg for msg, _ in group]
-            first_idx = group[0][1]
 
             summary_prompt = self._context_builder.build_context_summary_prompt(group_messages)
 
@@ -2506,8 +2256,8 @@ Summary:"""
                     "new_session": new_session,
                     "prompt": prompt,
                     "allowed_tools": allowed_tools,
-                    "copy_items": copy_items,
-                    "compress_group_positions": [first_idx],
+                    "copy_items": groups.copy_items,
+                    "compress_group_positions": groups.compress_group_positions[:1],
                 },
             )
             self._streaming_contexts[helper_id] = ctx
@@ -2642,61 +2392,11 @@ Summary:"""
 
     async def _generate_return_summary(self, messages: list, return_prompt: str) -> str:
         """Generate a summary of selected messages using Claude."""
-        if not messages:
-            return ""
-
-        prompt = self._context_builder.build_return_summary_prompt(messages, return_prompt)
-
-        # Stream response from Claude
-        summary_parts = []
-        try:
-            async for event in self._helper_runner.stream_response([], prompt):
-                if isinstance(event, TextDelta):
-                    summary_parts.append(event.text)
-        except Exception as e:
-            # Fall back to raw content
-            context_parts = [f"{'User' if m.role == 'user' else 'Assistant'}: {m.content}" for m in messages]
-            return f"Error generating summary: {e}\n\nRaw content:\n" + "\n\n".join(context_parts)
-
-        return "".join(summary_parts) if summary_parts else ""
+        return await self._summarizer.generate_return_summary(messages, return_prompt)
 
     def _check_auto_return(self, response_content: str) -> bool:
-        """Check if auto-return condition is met. Returns True if should auto-return."""
-        if not self.session.is_child_session():
-            return False
-
-        condition = self.session.return_condition
-
-        if condition == "manual":
-            return False
-
-        if condition == "done":
-            # Look for completion indicators
-            done_indicators = [
-                "task complete",
-                "task is complete",
-                "completed the task",
-                "finished",
-                "done",
-                "all set",
-            ]
-            lower_content = response_content.lower()
-            for indicator in done_indicators:
-                if indicator in lower_content:
-                    return True
-            return False
-
-        if condition.startswith("turns:"):
-            try:
-                max_turns = int(condition.split(":")[1])
-                # Count assistant messages in this child session
-                assistant_count = sum(1 for m in self.session.messages if m.role == "assistant")
-                # +1 for the current response not yet saved
-                return assistant_count + 1 >= max_turns
-            except (ValueError, IndexError):
-                return False
-
-        return False
+        """Check if auto-return condition is met. Delegates to Session."""
+        return self.session.check_auto_return(response_content)
 
     def on_with_widget_child_clicked(self, event: WithWidget.ChildClicked) -> None:
         """Handle clicking on WithWidget to navigate to child session."""

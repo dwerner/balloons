@@ -35,6 +35,31 @@ from .openai_runner import OpenAICompatibleRunner
 from .runner_factory import create_runner, resolve_env_var
 from .tools import TOOLS, get_tools_for_request
 from .tool_executor import execute_tool
+from .summarizer import Summarizer
+from .context_grouper import (
+    ContextGroups,
+    group_messages_by_context_mode,
+    build_context_messages,
+)
+from .streaming import (
+    StreamingContext,
+    StreamingCoordinator,
+    StreamingAction,
+    TextAction,
+    InitAction,
+    ResultAction,
+    ToolUseStartAction,
+    ToolInputDeltaAction,
+    ToolUseCompleteAction,
+    ToolResultAction,
+    DoneAction,
+    ErrorAction,
+    RateLimitAction,
+    CancelledAction,
+    InputRequiredAction,
+    HelperDoneAction,
+    NoAction,
+)
 
 __all__ = [
     # Commands
@@ -91,4 +116,28 @@ __all__ = [
     "TOOLS",
     "get_tools_for_request",
     "execute_tool",
+    # Summarizer
+    "Summarizer",
+    # Context grouper
+    "ContextGroups",
+    "group_messages_by_context_mode",
+    "build_context_messages",
+    # Streaming
+    "StreamingContext",
+    "StreamingCoordinator",
+    "StreamingAction",
+    "TextAction",
+    "InitAction",
+    "ResultAction",
+    "ToolUseStartAction",
+    "ToolInputDeltaAction",
+    "ToolUseCompleteAction",
+    "ToolResultAction",
+    "DoneAction",
+    "ErrorAction",
+    "RateLimitAction",
+    "CancelledAction",
+    "InputRequiredAction",
+    "HelperDoneAction",
+    "NoAction",
 ]
