@@ -2828,14 +2828,12 @@ Summary:"""
         )
 
         # Build turn_modes dict for visual indication
-        loaded_data = context_tree._loaded_sessions.get(session.id)
-        if loaded_data:
+        session_data = context_tree._state.get_session(session.id)
+        if session_data and session_data.is_loaded and session_data.turns:
             turn_modes = {}
-            for turn in loaded_data["turns"]:
-                turn_id = turn["idx"] + 1  # 1-indexed for chat_log
-                mode = context_tree._state.get_context_mode(
-                    session.id, turn["idx"]
-                )
+            for turn in session_data.turns:
+                turn_id = turn.idx + 1  # 1-indexed for chat_log
+                mode = context_tree._state.get_context_mode(session.id, turn.idx)
                 turn_modes[turn_id] = mode.name
             chat_log.set_turn_context_modes(turn_modes)
 
