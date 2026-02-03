@@ -223,3 +223,25 @@ class DebugLog:
 
 # Module-level singleton instance
 debug_log = DebugLog()
+
+
+def dump_failed_json(content: str, context: str = "json_error") -> Path | None:
+    """Write failed JSON content to a debug file.
+
+    Args:
+        content: The JSON content that failed to parse
+        context: A short identifier for the error context (e.g., "tool_input", "sse_line")
+
+    Returns:
+        Path to the created file, or None if writing failed
+    """
+    try:
+        debug_dir = Path.home() / ".cache" / "balloons" / "debug"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        filename = f"{context}_{timestamp}.json"
+        filepath = debug_dir / filename
+        filepath.write_text(content)
+        return filepath
+    except Exception:
+        return None

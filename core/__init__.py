@@ -26,7 +26,7 @@ from .context import ContextBuilder
 from .formatter import Formatter, format_edit_as_diff, guess_language
 from .runner import SessionRunner, RunnerStatus, StreamEvent, StreamResult, HelperRunner
 from .manager import SessionManager, SessionInfo
-from .debug_log import debug_log, DebugLog, LogLevel, LogEntry
+from .debug_log import debug_log, DebugLog, LogLevel, LogEntry, dump_failed_json
 from .base_runner import BaseRunner, RunnerEvent
 from .openai_runner import OpenAICompatibleRunner
 from .runner_factory import create_runner, resolve_env_var
@@ -64,6 +64,7 @@ from .fork import (
     DeriveResult,
     SwitchResult,
 )
+from .json_stream import StreamingJsonParser
 
 __all__ = [
     # Commands
@@ -107,6 +108,7 @@ __all__ = [
     "DebugLog",
     "LogLevel",
     "LogEntry",
+    "dump_failed_json",
     # Base runner
     "BaseRunner",
     "RunnerEvent",
@@ -147,4 +149,6 @@ __all__ = [
     "MergeResult",
     "DeriveResult",
     "SwitchResult",
+    # JSON streaming
+    "StreamingJsonParser",
 ]
