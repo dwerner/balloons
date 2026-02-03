@@ -189,8 +189,8 @@ class ToolUseWidget(Static):
         elif self.turn_id > 0:
             # Expanded or non-expandable: toggle context mode
             for ancestor in self.ancestors_with_self:
-                if isinstance(ancestor, ChatLog):
-                    ancestor.post_message(ChatLog.ContextModeToggleRequested(self.turn_id))
+                if isinstance(ancestor, ChatLogView):
+                    ancestor.post_message(ChatLogView.ContextModeToggleRequested(self.turn_id))
                     break
 
     @property
@@ -301,8 +301,8 @@ class ToolResultWidget(Static):
         elif self.turn_id > 0:
             # Expanded or non-expandable: toggle context mode
             for ancestor in self.ancestors_with_self:
-                if isinstance(ancestor, ChatLog):
-                    ancestor.post_message(ChatLog.ContextModeToggleRequested(self.turn_id))
+                if isinstance(ancestor, ChatLogView):
+                    ancestor.post_message(ChatLogView.ContextModeToggleRequested(self.turn_id))
                     break
 
     @property
@@ -508,8 +508,8 @@ class MessageWidget(Static):
             # Find the ChatLog parent and post the toggle message
             chat_log = self.ancestors_with_self
             for ancestor in chat_log:
-                if isinstance(ancestor, ChatLog):
-                    ancestor.post_message(ChatLog.ContextModeToggleRequested(self.turn_id))
+                if isinstance(ancestor, ChatLogView):
+                    ancestor.post_message(ChatLogView.ContextModeToggleRequested(self.turn_id))
                     break
 
     @property
@@ -619,7 +619,7 @@ class MoreBelowIndicator(Static):
 NewMessagesIndicator = MoreBelowIndicator
 
 
-class ChatLog(VerticalScroll):
+class ChatLogView(VerticalScroll):
     """Scrolling container for chat messages."""
 
     class FollowingChanged(Message):
@@ -643,7 +643,7 @@ class ChatLog(VerticalScroll):
     following: reactive[bool] = reactive(True)  # True when auto-scrolling to new content
 
     DEFAULT_CSS = """
-    ChatLog {
+    ChatLogView {
         height: 1fr;
         background: $background;
         padding: 1;

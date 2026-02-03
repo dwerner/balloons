@@ -32,7 +32,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLog, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult
+from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult
 from claude_runner import ClaudeRunner
 from session import Session
 from config import get_config, BackendConfig, save_last_view
@@ -121,7 +121,7 @@ class BalloonsApp(App):
         height: 1fr;
     }
 
-    ChatLog {
+    ChatLogView {
         height: 1fr;
     }
 
@@ -284,7 +284,7 @@ class BalloonsApp(App):
                 yield VerticalSplitter(id="splitter")
                 with Vertical(id="chat-container"):
                     yield Breadcrumb(id="breadcrumb")
-                    yield ChatLog(id="chat-log")
+                    yield ChatLogView(id="chat-log")
                     yield MoreBelowIndicator(id="more-below")
                 yield RequestPane(id="request-pane", classes="hidden")
             yield ToolBar(id="tool-bar")
@@ -313,7 +313,7 @@ class BalloonsApp(App):
         - This timer polls for events from all sessions
         - Events are dispatched to appropriate UI components
         """
-        chat_log = self.query_one("#chat-log", ChatLog)
+        chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
         status_bar = self.query_one("#status-bar", StatusBar)
 
@@ -373,7 +373,7 @@ class BalloonsApp(App):
         session_id: str,
         event: StreamEvent,
         ctx: StreamingContext,
-        chat_log: ChatLog,
+        chat_log: ChatLogView,
         context_tree: ContextTreeView,
         status_bar: StatusBar,
     ) -> None:
@@ -399,7 +399,7 @@ class BalloonsApp(App):
         self,
         action,
         ctx: StreamingContext,
-        chat_log: ChatLog,
+        chat_log: ChatLogView,
         context_tree: ContextTreeView,
         status_bar: StatusBar,
     ) -> None:
@@ -567,7 +567,7 @@ class BalloonsApp(App):
         helper_id: str,
         event: StreamEvent,
         ctx: StreamingContext,
-        chat_log: ChatLog,
+        chat_log: ChatLogView,
         status_bar: StatusBar,
     ) -> None:
         """Dispatch a helper event (context compression, merge summary).
@@ -599,7 +599,7 @@ class BalloonsApp(App):
         self,
         helper_id: str,
         ctx: StreamingContext,
-        chat_log: ChatLog,
+        chat_log: ChatLogView,
         status_bar: StatusBar,
         error: str = None,
         cancelled: bool = False,
@@ -640,7 +640,7 @@ class BalloonsApp(App):
     def _complete_fork_after_compression(
         self,
         ctx: StreamingContext,
-        chat_log: ChatLog,
+        chat_log: ChatLogView,
         status_bar: StatusBar,
     ) -> None:
         """Complete a fork after context compression finishes.
@@ -765,7 +765,7 @@ class BalloonsApp(App):
     def _complete_derive_after_compression(
         self,
         ctx: StreamingContext,
-        chat_log: ChatLog,
+        chat_log: ChatLogView,
         status_bar: StatusBar,
     ) -> None:
         """Complete a derive after context compression finishes.
@@ -831,7 +831,7 @@ class BalloonsApp(App):
         self,
         session_id: str,
         ctx: StreamingContext,
-        chat_log: ChatLog,
+        chat_log: ChatLogView,
         context_tree: ContextTreeView,
         status_bar: StatusBar,
         error: str = None,
@@ -1036,7 +1036,7 @@ class BalloonsApp(App):
                 session = self._manager.create_session()
             self._manager.set_active(session.id)
 
-        chat_log = self.query_one("#chat-log", ChatLog)
+        chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
         status_bar = self.query_one("#status-bar", StatusBar)
         input_box = self.query_one("#input-box", InputBox)
@@ -1139,7 +1139,7 @@ class BalloonsApp(App):
             prompt: User prompt to send
             is_active: True if this is the active/foreground session
         """
-        chat_log = self.query_one("#chat-log", ChatLog)
+        chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
         input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
@@ -1306,7 +1306,7 @@ class BalloonsApp(App):
 
     async def _handle_new_session(self, prompt: str = "", title: str = "") -> None:
         """Create a new session, optionally with an initial prompt and title."""
-        chat_log = self.query_one("#chat-log", ChatLog)
+        chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
         status_bar = self.query_one("#status-bar", StatusBar)
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
@@ -1393,7 +1393,7 @@ class BalloonsApp(App):
         self.session.save()
 
         # Update UI with new title
-        chat_log = self.query_one("#chat-log", ChatLog)
+        chat_log = self.query_one("#chat-log", ChatLogView)
         chat_log.set_session_title(title)
 
         request_pane = self.query_one("#request-pane", RequestPane)
@@ -1457,7 +1457,7 @@ class BalloonsApp(App):
             prompt: Prompt for generating link summary
         """
         import uuid
-        chat_log = self.query_one("#chat-log", ChatLog)
+        chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
         status_bar = self.query_one("#status-bar", StatusBar)
 
@@ -1584,7 +1584,7 @@ class BalloonsApp(App):
     def _handle_copy_turns(self) -> None:
         """Copy selected turns to a new session."""
         context_tree = self.query_one("#context-tree", ContextTreeView)
-        chat_log = self.query_one("#chat-log", ChatLog)
+        chat_log = self.query_one("#chat-log", ChatLogView)
 
         # Get selected messages
         selected_messages = context_tree.get_selected_messages()
@@ -1614,7 +1614,7 @@ class BalloonsApp(App):
         Uses the event-driven background streaming approach.
         """
         context_tree = self.query_one("#context-tree", ContextTreeView)
-        chat_log = self.query_one("#chat-log", ChatLog)
+        chat_log = self.query_one("#chat-log", ChatLogView)
         input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
         tool_bar = self.query_one("#tool-bar", ToolBar)
@@ -1668,7 +1668,7 @@ class BalloonsApp(App):
 
     async def _handle_shell_command(self, cmd: str) -> None:
         """Run a shell command and submit output to Claude."""
-        chat_log = self.query_one("#chat-log", ChatLog)
+        chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
         input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
@@ -1805,7 +1805,7 @@ class BalloonsApp(App):
             name: Optional name for easy reference (e.g., "auth-bug")
             background: If True, run in background and stay in parent
         """
-        chat_log = self.query_one("#chat-log", ChatLog)
+        chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
         input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
@@ -1860,7 +1860,7 @@ class BalloonsApp(App):
 
             helper_runner.start_background(result.compression_prompt)
 
-    def _complete_fork_ui(self, result: ForkResult, chat_log: ChatLog, context_tree: ContextTreeView, status_bar: StatusBar) -> None:
+    def _complete_fork_ui(self, result: ForkResult, chat_log: ChatLogView, context_tree: ContextTreeView, status_bar: StatusBar) -> None:
         """Complete fork UI updates after business logic is done.
 
         Called either directly (no compression) or after compression helper completes.
@@ -1933,7 +1933,7 @@ class BalloonsApp(App):
         - View switches to parent
         - Merge marker appears in parent with LLM summary
         """
-        chat_log = self.query_one("#chat-log", ChatLog)
+        chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
         status_bar = self.query_one("#status-bar", StatusBar)
 
@@ -1978,7 +1978,7 @@ class BalloonsApp(App):
         If COMPRESS messages exist, shows the compression streaming in the UI
         before creating the derived session. This avoids UI blocking.
         """
-        chat_log = self.query_one("#chat-log", ChatLog)
+        chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
         input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
@@ -2028,7 +2028,7 @@ class BalloonsApp(App):
 
             helper_runner.start_background(result.compression_prompt)
 
-    def _complete_derive_ui(self, result: DeriveResult, chat_log: ChatLog, context_tree: ContextTreeView) -> None:
+    def _complete_derive_ui(self, result: DeriveResult, chat_log: ChatLogView, context_tree: ContextTreeView) -> None:
         """Complete derive UI updates after business logic is done."""
         new_session = result.new_session
 
@@ -2077,7 +2077,7 @@ class BalloonsApp(App):
 
     async def _handle_return_command(self, return_prompt: str = "") -> None:
         """Return from child session to parent."""
-        chat_log = self.query_one("#chat-log", ChatLog)
+        chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
         status_bar = self.query_one("#status-bar", StatusBar)
         input_box = self.query_one("#input-box", InputBox)
@@ -2202,7 +2202,7 @@ class BalloonsApp(App):
             },
         )
 
-        chat_log = self.query_one("#chat-log", ChatLog)
+        chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
         request_pane = self.query_one("#request-pane", RequestPane)
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
@@ -2303,13 +2303,13 @@ class BalloonsApp(App):
 
     def on_context_tree_view_selection_changed(self, event: ContextTreeView.SelectionChanged) -> None:
         """Handle tree selection changes - apply visual context mode indicators."""
-        chat_log = self.query_one("#chat-log", ChatLog)
+        chat_log = self.query_one("#chat-log", ChatLogView)
         # Use visual indication instead of hiding
         chat_log.set_turn_context_modes(event.turn_modes)
         # Update context tokens when selection changes
         self._update_context_tokens()
 
-    def on_chat_log_context_mode_toggle_requested(self, event: ChatLog.ContextModeToggleRequested) -> None:
+    def on_chat_log_view_context_mode_toggle_requested(self, event: ChatLogView.ContextModeToggleRequested) -> None:
         """Handle click on chat widget to toggle its context mode."""
         if not self.session:
             return
@@ -2412,7 +2412,7 @@ class BalloonsApp(App):
 
             # Refresh chat log if this is the current session
             if self.session and self.session.id == session_id:
-                chat_log = self.query_one("#chat-log", ChatLog)
+                chat_log = self.query_one("#chat-log", ChatLogView)
                 chat_log.clear()
                 chat_log.load_history(session.messages, session=session)
 
@@ -2558,7 +2558,7 @@ class BalloonsApp(App):
         so we just need to scroll to and highlight the inspected turn.
         """
         request_pane = self.query_one("#request-pane", RequestPane)
-        chat_log = self.query_one("#chat-log", ChatLog)
+        chat_log = self.query_one("#chat-log", ChatLogView)
 
         # Handle different node types
         node_type = event.turn_data.get("type")
@@ -2635,7 +2635,7 @@ class BalloonsApp(App):
 
     def on_nested_tree_view_selection_changed(self, event: NestedTreeView.SelectionChanged) -> None:
         """Handle nested tree selection changes - apply visual context mode indicators."""
-        chat_log = self.query_one("#chat-log", ChatLog)
+        chat_log = self.query_one("#chat-log", ChatLogView)
         chat_log.set_turn_context_modes(event.turn_modes)
         # Update context tokens when selection changes
         self._update_context_tokens()
@@ -2671,7 +2671,7 @@ class BalloonsApp(App):
     def on_nested_tree_view_turn_inspected(self, event: NestedTreeView.TurnInspected) -> None:
         """Handle turn inspection from nested tree."""
         request_pane = self.query_one("#request-pane", RequestPane)
-        chat_log = self.query_one("#chat-log", ChatLog)
+        chat_log = self.query_one("#chat-log", ChatLogView)
 
         node_type = event.turn_data.get("type")
         turn_idx = event.turn_data.get("turn_idx", 0) if node_type == "turn" else None
@@ -2832,7 +2832,7 @@ class BalloonsApp(App):
         input_box = self.query_one("#input-box", InputBox)
         input_box.adjust_max_height(event.delta_y)
 
-    def on_chat_log_following_changed(self, event: ChatLog.FollowingChanged) -> None:
+    def on_chat_log_view_following_changed(self, event: ChatLogView.FollowingChanged) -> None:
         """Update status bar and more-below indicator when chat log following state changes."""
         status_bar = self.query_one("#status-bar", StatusBar)
         status_bar.following = event.following
@@ -2844,7 +2844,7 @@ class BalloonsApp(App):
             # Show indicator when not following (content below)
             indicator.show_more_below()
 
-    def on_chat_log_new_content_while_not_following(self, event: ChatLog.NewContentWhileNotFollowing) -> None:
+    def on_chat_log_view_new_content_while_not_following(self, event: ChatLogView.NewContentWhileNotFollowing) -> None:
         """Show new messages indicator when content arrives while not following."""
         indicator = self.query_one("#more-below", MoreBelowIndicator)
         indicator.show_new_messages()
@@ -2859,7 +2859,7 @@ class BalloonsApp(App):
 
     def action_scroll_to_bottom(self) -> None:
         """Scroll to bottom of chat and re-enable following."""
-        chat_log = self.query_one("#chat-log", ChatLog)
+        chat_log = self.query_one("#chat-log", ChatLogView)
         chat_log.following = True
         chat_log.scroll_end(animate=False)
         # Hide the more-below indicator

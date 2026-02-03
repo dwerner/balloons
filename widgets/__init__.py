@@ -1,4 +1,4 @@
-from .chat_log import ChatLog, MoreBelowIndicator, NewMessagesIndicator
+from .chat_log import ChatLogView, MoreBelowIndicator, NewMessagesIndicator
 from .input_box import InputBox
 from .status_bar import StatusBar
 from .context_tree import ContextTreeView
@@ -20,7 +20,7 @@ ContextTree = ContextTreeView
 NestedSessionTree = NestedTreeView
 
 __all__ = [
-    "ChatLog",
+    "ChatLogView",
     "MoreBelowIndicator",
     "NewMessagesIndicator",
     "InputBox",
