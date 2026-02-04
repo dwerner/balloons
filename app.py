@@ -68,6 +68,8 @@ from core import (
     HelpCommand,
     BackendCommand,
     PrefsCommand,
+    EditConfigCommand,
+    EditPromptCommand,
     LinkCommand,
     DebugToggleCommand,
     DebugClearCommand,
@@ -1304,6 +1306,10 @@ class BalloonsApp(App):
             self.push_screen(HelpModal())
         elif isinstance(cmd, PrefsCommand):
             self.action_show_preferences()
+        elif isinstance(cmd, EditConfigCommand):
+            self._handle_edit_config()
+        elif isinstance(cmd, EditPromptCommand):
+            self._handle_edit_prompt(cmd.prompt_name)
         elif isinstance(cmd, BackendCommand):
             await self._handle_backend_command(cmd.backend_name)
         elif isinstance(cmd, LinkCommand):
@@ -1786,6 +1792,78 @@ class BalloonsApp(App):
                 os.system(f"cd {cwd!r} && {cmd}")
             else:
                 os.system(cmd)
+
+    def _handle_edit_config(self) -> None:
+        """Open config file in external editor."""
+        from config import Config
+
+        config = Config.load()
+        config_path = config._config_path or (Path.home() / ".balloons" / "config.yaml")
+
+        # Create config directory and file if they don't exist
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        if not config_path.exists():
+            config_path.write_text("# Balloons configuration\n# See config/config.sample.yaml for examples\n\ndefault_backend: claude\n\nbackends:\n  claude:\n    # Uses ANTHROPIC_API_KEY from environment\n")
+
+        # Get editor from environment
+        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
+
+        with self.suspend():
+            os.system(f"{editor} {config_path!s}")
+
+    def _handle_edit_prompt(self, prompt_name: str) -> None:
+        """Open a prompt file in external editor.
+
+        If prompt_name is empty, show a picker with available prompts.
+        """
+        prompts_dir = Path(__file__).parent / "prompts"
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        if not prompts_dir.exists():
+            status_bar.set_error("Prompts directory not found")
+            return
+
+        # List available prompt files
+        prompt_files = list(prompts_dir.glob("*.md"))
+        if not prompt_files:
+            status_bar.set_error("No prompt files found")
+            return
+
+        if prompt_name:
+            # Direct edit - find matching file
+            matching = [f for f in prompt_files if f.stem == prompt_name or f.name == prompt_name]
+            if not matching:
+                # Try partial match
+                matching = [f for f in prompt_files if prompt_name in f.stem]
+
+            if not matching:
+                available = ", ".join(f.stem for f in prompt_files)
+                status_bar.set_error(f"Prompt not found: {prompt_name}. Available: {available}")
+                return
+            elif len(matching) > 1:
+                matches = ", ".join(f.stem for f in matching)
+                status_bar.set_error(f"Ambiguous: {matches}")
+                return
+
+            prompt_path = matching[0]
+        else:
+            # Show picker
+            from widgets.prompt_picker import PromptPickerModal
+            self.push_screen(PromptPickerModal(prompt_files), self._on_prompt_selected)
+            return
+
+        self._open_prompt_in_editor(prompt_path)
+
+    def _on_prompt_selected(self, prompt_path: Path | None) -> None:
+        """Callback when user selects a prompt from picker."""
+        if prompt_path:
+            self._open_prompt_in_editor(prompt_path)
+
+    def _open_prompt_in_editor(self, prompt_path: Path) -> None:
+        """Open a prompt file in the external editor."""
+        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
+        with self.suspend():
+            os.system(f"{editor} {prompt_path!s}")
 
     def action_cancel_stream(self) -> None:
         """Cancel streaming/shell and focus input box. Double-tap clears input."""

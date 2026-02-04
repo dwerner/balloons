@@ -25,6 +25,8 @@ COMMANDS = [
     (":reload", "Reload app"),
     (":backend", "Set backend"),
     (":prefs", "Preferences"),
+    (":edit-config", "Edit config"),
+    (":edit-prompt", "Edit prompt"),
     (":debug", "Toggle debug"),
     (":debug-pause", "Pause debug"),
     (":debug-clear", "Clear debug"),

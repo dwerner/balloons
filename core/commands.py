@@ -153,6 +153,18 @@ class PrefsCommand(Command):
 
 
 @dataclass
+class EditConfigCommand(Command):
+    """Open config file in external editor."""
+    pass
+
+
+@dataclass
+class EditPromptCommand(Command):
+    """Open a prompt file in external editor."""
+    prompt_name: str = ""  # Empty = show picker
+
+
+@dataclass
 class LinkCommand(Command):
     """Create bidirectional link to one or more sessions.
 
@@ -220,6 +232,8 @@ COMMAND_DOCS = [
     (":reload", "Hot reload the app"),
     (":backend [name]", "Show or set the backend for this session"),
     (":prefs", "Open preferences (Ctrl+P)"),
+    (":edit-config", "Edit config file in external editor"),
+    (":edit-prompt [name]", "Edit a prompt file (shows picker if no name)"),
     (":debug", "Toggle debug log pane visibility"),
     (":debug-pause", "Toggle debug logging on/off"),
     (":debug-clear", "Clear all debug log entries"),
@@ -360,6 +374,15 @@ class CommandParser:
         # Handle :prefs
         if text == ":prefs":
             return PrefsCommand()
+
+        # Handle :edit-config
+        if text == ":edit-config":
+            return EditConfigCommand()
+
+        # Handle :edit-prompt [name]
+        if text == ":edit-prompt" or text.startswith(":edit-prompt "):
+            prompt_name = text[13:].strip() if len(text) > 13 else ""
+            return EditPromptCommand(prompt_name=prompt_name)
 
         # Handle :link=<hash> <prompt>
         if text.startswith(":link"):
