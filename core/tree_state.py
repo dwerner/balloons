@@ -35,7 +35,10 @@ from dataclasses import dataclass, field
 from typing import Callable, Any, Protocol
 from enum import Enum
 
-from models import ContextMode
+from models import (
+    ContextMode, TextBlock, ToolUseBlock, ToolResultBlock,
+    InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock
+)
 
 
 class SessionProtocol(Protocol):
@@ -323,38 +326,47 @@ class TreeState:
     # --- Session Loading ---
 
     def load_session(self, session_id: str, session: SessionProtocol) -> None:
-        """Fully load a session with its turns."""
+        """Fully load a session with its turns.
+
+        Transforms legacy message format where a single Message contains multiple
+        content_blocks into the new model where each content block is its own turn.
+        """
         if session_id not in self._sessions:
             self.add_session(session, is_current=session_id == self._current_session_id)
 
         session_data = self._sessions[session_id]
         session_data.is_loaded = True
         session_data.session_ref = session
-        session_data.message_count = len(session.messages)
 
-        # Load turns
+        # Load turns, expanding multi-block messages into separate turns
         turns = []
-        for idx, msg in enumerate(session.messages):
-            turn_key = (session_id, idx)
+        turn_idx = 0
 
-            # Initialize context mode from message or default
-            if hasattr(msg, 'context_mode') and msg.context_mode:
-                self._context_modes[turn_key] = msg.context_mode
-            elif session_id == self._current_session_id:
-                self._context_modes[turn_key] = ContextMode.COMPRESS
-
+        for msg in session.messages:
             content_blocks = msg.content_blocks if hasattr(msg, 'content_blocks') else []
             exchange_id = msg.exchange_id if hasattr(msg, 'exchange_id') else None
+            msg_context_mode = msg.context_mode if hasattr(msg, 'context_mode') and msg.context_mode else None
 
-            turns.append(TurnData(
-                idx=idx,
-                role=msg.role,
-                content=msg.content,
-                content_blocks=content_blocks,
-                exchange_id=exchange_id,
-            ))
+            # Transform: expand multiple content_blocks into separate turns
+            expanded_turns = self._expand_message_to_turns(
+                msg.role, msg.content, content_blocks, exchange_id
+            )
+
+            for turn_data in expanded_turns:
+                turn_data.idx = turn_idx
+                turn_key = (session_id, turn_idx)
+
+                # Initialize context mode from message or default
+                if msg_context_mode:
+                    self._context_modes[turn_key] = msg_context_mode
+                elif session_id == self._current_session_id:
+                    self._context_modes[turn_key] = ContextMode.COMPRESS
+
+                turns.append(turn_data)
+                turn_idx += 1
 
         session_data.turns = turns
+        session_data.message_count = len(turns)
 
         # Load merge modes for merged children
         for child in session.children:
@@ -365,6 +377,97 @@ class TreeState:
                     self._merge_modes[merge_key] = ContextMode.COPY
 
         self._notify(TreeEvent.SESSION_LOADED, {"session_id": session_id})
+
+    def _expand_message_to_turns(
+        self,
+        role: str,
+        content: str,
+        content_blocks: list,
+        exchange_id: str | None,
+    ) -> list[TurnData]:
+        """Expand a message with multiple content_blocks into separate turns.
+
+        This handles the transformation from legacy format (single Message with
+        multiple content_blocks) to the new model (one turn per block).
+
+        For messages with 0-1 blocks, returns a single turn (no expansion needed).
+        For messages with multiple blocks, each block becomes its own turn.
+        """
+        # No blocks or single text block - no expansion needed
+        if not content_blocks:
+            return [TurnData(
+                idx=0,  # Will be set by caller
+                role=role,
+                content=content,
+                content_blocks=[],
+                exchange_id=exchange_id,
+            )]
+
+        if len(content_blocks) == 1:
+            block = content_blocks[0]
+            # Single block - create one turn with that block
+            return [TurnData(
+                idx=0,
+                role=role,
+                content=self._content_from_block(block, content),
+                content_blocks=[block],
+                exchange_id=exchange_id,
+            )]
+
+        # Multiple blocks - expand into separate turns
+        turns = []
+        for block in content_blocks:
+            block_role = self._role_from_block(block, role)
+            block_content = self._content_from_block(block, "")
+
+            turns.append(TurnData(
+                idx=0,  # Will be set by caller
+                role=block_role,
+                content=block_content,
+                content_blocks=[block],
+                exchange_id=exchange_id,
+            ))
+
+        return turns
+
+    def _role_from_block(self, block, default_role: str) -> str:
+        """Determine the role for a turn based on its content block type."""
+        if isinstance(block, TextBlock):
+            return default_role
+        elif isinstance(block, ToolUseBlock):
+            return "assistant"  # Claude is calling a tool
+        elif isinstance(block, ToolResultBlock):
+            return "tool"  # Tool result
+        elif isinstance(block, (InterruptionBlock, ErrorBlock)):
+            return "system"  # Markers
+        elif isinstance(block, LinkBlock):
+            return "system"  # Links are system-level
+        elif isinstance(block, ArchiveBlock):
+            return "system"  # Archives are system-level
+        return default_role
+
+    def _content_from_block(self, block, fallback: str) -> str:
+        """Extract display content from a content block."""
+        if isinstance(block, TextBlock):
+            return block.text or fallback
+        elif isinstance(block, ToolUseBlock):
+            return f"Tool: {block.name}"
+        elif isinstance(block, ToolResultBlock):
+            # Truncate long results for display
+            result = block.content or ""
+            if len(result) > 100:
+                result = result[:100] + "..."
+            prefix = "Error: " if block.is_error else "Result: "
+            return prefix + result
+        elif isinstance(block, InterruptionBlock):
+            return f"Interrupted: {block.reason}"
+        elif isinstance(block, ErrorBlock):
+            return f"Error: {block.reason}"
+        elif isinstance(block, LinkBlock):
+            return f"Link: {block.summary}"
+        elif isinstance(block, ArchiveBlock):
+            return f"Archive: {block.get_display_summary()}"
+        return fallback
 
     def is_session_loaded(self, session_id: str) -> bool:
         """Check if a session's full data has been loaded."""

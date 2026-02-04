@@ -9,7 +9,7 @@ from openai import AsyncOpenAI
 
 from models import (
     Message, TextDelta, ResultEvent, InitEvent,
-    TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ContextMode,
+    TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ArchiveBlock, ContextMode,
     ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultEvent,
 )
 from .base_runner import BaseRunner, RunnerEvent
@@ -77,6 +77,30 @@ class OpenAICompatibleRunner(BaseRunner):
             if msg.context_mode == ContextMode.DROP:
                 continue
 
+            # Handle system messages (links, archives, metadata)
+            if msg.role == "system":
+                if msg.content_blocks:
+                    content_parts = []
+                    for block in msg.content_blocks:
+                        if isinstance(block, ArchiveBlock):
+                            archive_info = f"[Archived {block.message_count} turns: {block.summary}]"
+                            archive_info += f"\n(Use read_archive tool with archive_id={block.archive_id} to retrieve full content)"
+                            content_parts.append(archive_info)
+                        elif isinstance(block, TextBlock) and block.text:
+                            content_parts.append(block.text)
+                    if content_parts:
+                        # Include system metadata as a user message for context
+                        openai_messages.append({
+                            "role": "user",
+                            "content": "\n\n".join(content_parts),
+                        })
+                elif msg.content:
+                    openai_messages.append({
+                        "role": "user",
+                        "content": msg.content,
+                    })
+                continue
+
             role = "user" if msg.role == "user" else "assistant"
 
             # Use summary if in SUMMARIZE mode and summary exists
@@ -97,22 +121,22 @@ class OpenAICompatibleRunner(BaseRunner):
                     elif isinstance(block, ToolUseBlock):
                         # Format tool use so the model knows what was done
                         input_str = json.dumps(block.input, indent=2)
-                        content_parts.append(f"[Tool Use: {block.name}]\n{input_str}")
+                        content_parts.append(f"[Tool: {block.name}]\n{input_str}")
                     elif isinstance(block, ToolResultBlock):
                         # Format tool result
-                        error_prefix = "[Error] " if block.is_error else ""
-                        content_parts.append(f"[Tool Result]{error_prefix}\n{block.content}")
+                        error_suffix = " (error)" if block.is_error else ""
+                        content_parts.append(f"[Result{error_suffix}]\n{block.content}")
                     elif isinstance(block, InterruptionBlock):
                         # Mark that the response was interrupted
-                        content_parts.append(f"[Response interrupted: {block.reason}]")
+                        content_parts.append(f"[Interrupted: {block.reason}]")
                     elif isinstance(block, ErrorBlock):
                         # Mark that the response was truncated due to error
-                        error_info = f"[Response truncated: {block.reason}]"
-                        if block.partial_tool_name:
-                            error_info += f"\n[Incomplete tool call: {block.partial_tool_name}]"
-                        if block.partial_tool_input:
-                            error_info += f"\n[Partial input: {block.partial_tool_input}]"
-                        content_parts.append(error_info)
+                        content_parts.append(f"[Error: {block.reason}]")
+                    elif isinstance(block, ArchiveBlock):
+                        # Format archive reference with summary
+                        archive_info = f"[Archived {block.message_count} turns: {block.summary}]"
+                        archive_info += f"\n(Use read_archive tool with archive_id={block.archive_id} to retrieve full content)"
+                        content_parts.append(archive_info)
 
                 if content_parts:
                     openai_messages.append({

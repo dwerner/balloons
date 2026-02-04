@@ -6,7 +6,7 @@ Extracted from app.py to enable unit testing without the UI.
 
 from typing import Protocol
 
-from models import Message, TextDelta
+from models import Message, TextDelta, ArchiveSummary
 from session import Session
 from core.context import ContextBuilder
 from core.debug_log import debug_log
@@ -217,3 +217,128 @@ Summary:"""
             )
 
         return "".join(summary_parts) if summary_parts else ""
+
+    async def generate_archive_summary(
+        self, messages: list[Message], user_hint: str = ""
+    ) -> ArchiveSummary:
+        """Generate a structured summary of messages for archiving.
+
+        Args:
+            messages: Messages to summarize for archiving
+            user_hint: Optional user hint for what to focus on
+
+        Returns:
+            ArchiveSummary with structured information about the archived content
+        """
+        if not messages:
+            return ArchiveSummary()
+
+        # Build conversation context
+        messages_text = []
+        for msg in messages:
+            role = "User" if msg.role == "user" else "Assistant"
+            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            # Truncate very long messages
+            if len(content) > 2000:
+                content = content[:2000] + "... [truncated]"
+            messages_text.append(f"{role}: {content}")
+
+        conversation = "\n\n".join(messages_text)
+
+        # Build the structured summary prompt
+        hint_section = f"\nUser hint: {user_hint}\n" if user_hint else ""
+
+        summary_prompt = f"""Analyze this conversation segment and provide a structured summary.
+{hint_section}
+Respond in EXACTLY this format (keep field names exactly as shown):
+
+FILES_MODIFIED:
+- file1.py (action)
+- file2.py (action)
+
+WORK_DONE:
+1-3 sentences describing what was accomplished.
+
+KEY_DECISIONS:
+- Decision 1
+- Decision 2
+
+If no files were modified, write "None" for FILES_MODIFIED.
+If no key decisions, write "None" for KEY_DECISIONS.
+
+Conversation:
+{conversation}
+
+Structured summary:"""
+
+        response_parts = []
+        try:
+            async for event in self._runner.stream_response(
+                [], summary_prompt, disable_tools=True
+            ):
+                if isinstance(event, TextDelta):
+                    response_parts.append(event.text)
+        except Exception as e:
+            debug_log.error(f"Archive summary generation failed: {e}", category="archive")
+            # Return a basic summary on error
+            return ArchiveSummary(
+                work_done=f"Archived {len(messages)} turns" + (f" ({user_hint})" if user_hint else "")
+            )
+
+        response = "".join(response_parts)
+        return self._parse_archive_summary(response, len(messages), user_hint)
+
+    def _parse_archive_summary(
+        self, response: str, message_count: int, user_hint: str
+    ) -> ArchiveSummary:
+        """Parse the LLM response into an ArchiveSummary."""
+        files_modified = []
+        work_done = ""
+        key_decisions = []
+
+        current_section = None
+        lines = response.strip().split("\n")
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # Detect section headers
+            if line.upper().startswith("FILES_MODIFIED"):
+                current_section = "files"
+                continue
+            elif line.upper().startswith("WORK_DONE"):
+                current_section = "work"
+                continue
+            elif line.upper().startswith("KEY_DECISIONS"):
+                current_section = "decisions"
+                continue
+
+            # Parse content based on current section
+            if current_section == "files":
+                if line.startswith("-"):
+                    file_entry = line[1:].strip()
+                    if file_entry.lower() != "none":
+                        files_modified.append(file_entry)
+            elif current_section == "work":
+                if line.lower() != "none":
+                    if work_done:
+                        work_done += " " + line
+                    else:
+                        work_done = line
+            elif current_section == "decisions":
+                if line.startswith("-"):
+                    decision = line[1:].strip()
+                    if decision.lower() != "none":
+                        key_decisions.append(decision)
+
+        # Fallback if parsing failed
+        if not work_done:
+            work_done = f"Archived {message_count} turns" + (f" ({user_hint})" if user_hint else "")
+
+        return ArchiveSummary(
+            files_modified=files_modified,
+            work_done=work_done,
+            key_decisions=key_decisions,
+        )

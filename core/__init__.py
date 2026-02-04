@@ -3,6 +3,8 @@
 from .commands import (
     Command,
     CommandParser,
+    ArchiveCommand,
+    RehydrateCommand,
     NewSessionCommand,
     CopyTurnsCommand,
     QueryWithCommand,
@@ -76,6 +78,8 @@ __all__ = [
     # Commands
     "Command",
     "CommandParser",
+    "ArchiveCommand",
+    "RehydrateCommand",
     "NewSessionCommand",
     "CopyTurnsCommand",
     "QueryWithCommand",

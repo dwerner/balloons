@@ -162,6 +162,32 @@ class LinkCommand(Command):
             self.target_session_prefixes = []
 
 
+@dataclass
+class ArchiveCommand(Command):
+    """Archive selected turns to a file, replacing with summary marker.
+
+    Can use explicit turn_indices from tree selection, or fall back to
+    context mode selection if turn_indices is empty.
+    LLM generates a structured summary of the archived content.
+    """
+    prompt: str = ""  # Optional hint for summary generation
+    turn_indices: list[int] = None  # Turn indices to archive (0-indexed)
+
+    def __post_init__(self):
+        if self.turn_indices is None:
+            self.turn_indices = []
+
+
+@dataclass
+class RehydrateCommand(Command):
+    """Restore archived turns back into the conversation.
+
+    Replaces the archive marker with the original messages.
+    """
+    archive_turn_index: int = -1  # Turn index of archive marker (-1 = auto-detect from selection)
+    archive_id: str = ""  # Archive ID (optional, used when triggered from marker click)
+
+
 # Command documentation for help display
 COMMAND_DOCS = [
     # Session management
@@ -177,6 +203,8 @@ COMMAND_DOCS = [
     # Context operations
     (":query-with <prompt>", "Query with selected context, response in new session"),
     (":copy-turns", "Copy selected turns to a new session"),
+    (":archive [hint]", "Archive selected turns to file with LLM summary"),
+    (":rehydrate", "Restore archived turns (click archive marker or select it)"),
     # Shell integration
     (":!<cmd>", "Run shell command and send output to Claude"),
     (":suspend <cmd>", "Suspend TUI and run interactive shell command"),
@@ -326,6 +354,15 @@ class CommandParser:
         # Handle :link=<hash> <prompt>
         if text.startswith(":link"):
             return self._parse_link(text)
+
+        # Handle :archive [hint]
+        if text == ":archive" or text.startswith(":archive "):
+            prompt = text[8:].strip() if len(text) > 8 else ""
+            return ArchiveCommand(prompt=prompt)
+
+        # Handle :rehydrate
+        if text == ":rehydrate":
+            return RehydrateCommand()
 
         # Unknown command
         cmd_name = text.split()[0]

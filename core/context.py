@@ -7,7 +7,7 @@ Extracted from app.py and claude_runner.py.
 import json
 from typing import Optional
 
-from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, ContextMode
+from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, ArchiveBlock, ContextMode
 from tokenizer import count_tokens
 
 
@@ -61,6 +61,12 @@ class ContextBuilder:
                         # Format tool result so Claude sees what the tool returned
                         error_prefix = "[Error] " if block.is_error else ""
                         block_parts.append(f"[Tool Result]{error_prefix}\n{block.content}")
+                    elif isinstance(block, ArchiveBlock):
+                        # Format archive as a summary reference
+                        block_parts.append(
+                            f"[Archived {block.message_count} turns: {block.summary}]\n"
+                            f"(Use read_archive tool with archive_id={block.archive_id} to retrieve full content)"
+                        )
 
                 if block_parts:
                     parts.append(f"{prefix}: " + "\n\n".join(block_parts))

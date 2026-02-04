@@ -17,7 +17,8 @@ from .with_result_widget import WithResultWidget
 from .fork_marker import ForkMarker
 from .merge_marker import MergeMarker
 from .link_marker import LinkMarker
-from models import TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock
+from .archive_marker import ArchiveMarker
+from models import TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock
 from core.formatter import format_edit_as_diff, guess_language
 from core.json_stream import StreamingJsonParser
 from session import Session
@@ -1048,19 +1049,35 @@ class ChatLogView(VerticalScroll):
 
     def highlight_tool(self, tool_use_id: str) -> None:
         """Highlight a tool use and its result by tool_use_id, scrolling to it."""
+        from core.debug_log import debug_log
+        debug_log.info(f"highlight_tool: looking for tool_use_id={tool_use_id}", category="chat_log")
+
         # First clear any existing highlights
         self.clear_highlights()
 
         # Find and highlight the matching widgets
         scrolled = False
+        found_use = False
+        found_result = False
         for child in self.children:
-            if isinstance(child, ToolUseWidget) and child.tool_use_id == tool_use_id:
-                child.add_class("highlighted")
-                if not scrolled:
-                    self.scroll_to_widget_and_check_follow(child)
-                    scrolled = True
-            elif isinstance(child, ToolResultWidget) and child.tool_use_id == tool_use_id:
-                child.add_class("highlighted")
+            if isinstance(child, ToolUseWidget):
+                debug_log.debug(f"  checking ToolUseWidget: tool_use_id={child.tool_use_id}", category="chat_log")
+                if child.tool_use_id == tool_use_id:
+                    child.add_class("highlighted")
+                    found_use = True
+                    if not scrolled:
+                        self.scroll_to_widget_and_check_follow(child)
+                        scrolled = True
+            elif isinstance(child, ToolResultWidget):
+                debug_log.debug(f"  checking ToolResultWidget: tool_use_id={child.tool_use_id}", category="chat_log")
+                if child.tool_use_id == tool_use_id:
+                    child.add_class("highlighted")
+                    found_result = True
+
+        if found_use or found_result:
+            debug_log.info(f"highlight_tool: found use={found_use} result={found_result}, scrolled={scrolled}", category="chat_log")
+        else:
+            debug_log.warning(f"highlight_tool: tool_use_id={tool_use_id} NOT FOUND in {len(list(self.children))} children", category="chat_log")
 
     def highlight_text_block(self, turn_id: int, block_idx: int) -> None:
         """Highlight a text block by turn_id and block_idx, scrolling to it."""
@@ -1241,6 +1258,14 @@ class ChatLogView(VerticalScroll):
                             is_orphaned=is_orphaned,
                         )
                         self.mount(widget)
+                    elif isinstance(block, ArchiveBlock):
+                        # Render ArchiveBlock as ArchiveMarker
+                        widget = ArchiveMarker(
+                            archive_block=block,
+                            turn_id=turn_id,
+                            turn_index=turn_idx,
+                        )
+                        self.mount(widget)
             else:
                 # Fallback: just use msg.content
                 widget = MessageWidget(msg.role, msg.content, turn_id=turn_id)
@@ -1308,7 +1333,7 @@ class ChatLogView(VerticalScroll):
         DEPRECATED: Use set_turn_context_modes instead for visual indication without hiding.
         """
         for child in self.children:
-            if isinstance(child, (MessageWidget, ToolUseWidget, ToolResultWidget, InterruptionMarkerWidget, WithWidget, WithResultWidget, ForkMarker, MergeMarker, LinkMarker)):
+            if isinstance(child, (MessageWidget, ToolUseWidget, ToolResultWidget, InterruptionMarkerWidget, WithWidget, WithResultWidget, ForkMarker, MergeMarker, LinkMarker, ArchiveMarker)):
                 if show_all or child.turn_id in turn_ids:
                     child.remove_class("hidden")
                 else:
@@ -1330,7 +1355,7 @@ class ChatLogView(VerticalScroll):
         context_classes = ("context-copy", "context-compress", "context-drop")
 
         for child in self.children:
-            if isinstance(child, (MessageWidget, ToolUseWidget, ToolResultWidget, InterruptionMarkerWidget, WithWidget, WithResultWidget, ForkMarker, MergeMarker, LinkMarker)):
+            if isinstance(child, (MessageWidget, ToolUseWidget, ToolResultWidget, InterruptionMarkerWidget, WithWidget, WithResultWidget, ForkMarker, MergeMarker, LinkMarker, ArchiveMarker)):
                 # Remove any existing context classes
                 for cls in context_classes:
                     child.remove_class(cls)
@@ -1447,5 +1472,39 @@ class ChatLogView(VerticalScroll):
         marker = self.find_link_marker(linked_session_id)
         if marker:
             self.scroll_to_widget_and_check_follow(marker)
+            return True
+        return False
+
+    def add_archive_marker(
+        self,
+        archive_block: ArchiveBlock,
+        turn_index: int,
+    ) -> ArchiveMarker:
+        """Add an archive marker to the log (shows archived turns)."""
+        turn_id = self._turn_counter
+        widget = ArchiveMarker(
+            archive_block=archive_block,
+            turn_id=turn_id,
+            turn_index=turn_index,
+        )
+        self.mount(widget)
+        self._smart_scroll()
+        return widget
+
+    def find_archive_marker(self, archive_id: str) -> ArchiveMarker | None:
+        """Find an ArchiveMarker by its archive ID."""
+        for child in self.children:
+            if isinstance(child, ArchiveMarker) and child.archive_block.archive_id == archive_id:
+                return child
+        return None
+
+    def remove_archive_marker(self, archive_id: str) -> bool:
+        """Remove an archive marker by its archive ID.
+
+        Returns True if the marker was found and removed, False otherwise.
+        """
+        marker = self.find_archive_marker(archive_id)
+        if marker:
+            marker.remove()
             return True
         return False

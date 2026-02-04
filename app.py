@@ -33,12 +33,14 @@ def debug_event(msg: str) -> None:
 
 from rich.console import RenderableType
 from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult
+from widgets.archive_marker import ArchiveMarker
 from claude_runner import ClaudeRunner
 from session import Session
 from config import get_config, BackendConfig, save_last_view
 from models import (
     TextDelta, ToolUseEvent, ToolResultEvent,
     TextBlock, ToolUseBlock, InterruptionBlock, ErrorBlock, Message, ContextMode,
+    ArchiveBlock,
 )
 from core import (
     CommandParser,
@@ -68,6 +70,8 @@ from core import (
     DebugToggleCommand,
     DebugClearCommand,
     DebugPauseCommand,
+    ArchiveCommand,
+    RehydrateCommand,
     debug_log,
     create_runner,
     # Streaming
@@ -1288,6 +1292,10 @@ class BalloonsApp(App):
             self._handle_debug_clear()
         elif isinstance(cmd, DebugPauseCommand):
             self._handle_debug_pause()
+        elif isinstance(cmd, ArchiveCommand):
+            await self._handle_archive_command(cmd.prompt)
+        elif isinstance(cmd, RehydrateCommand):
+            await self._handle_rehydrate_command()
 
     def _format_tool_use(
         self, event: ToolUseEvent
@@ -1595,6 +1603,141 @@ class BalloonsApp(App):
     async def _generate_link_summary(self, messages: list[Message], user_prompt: str) -> str:
         """Generate a summary of context for a link."""
         return await self._summarizer.generate_link_summary(messages, user_prompt)
+
+    async def _handle_archive_command(self, hint: str) -> None:
+        """Archive selected turns to a file with LLM-generated summary.
+
+        Uses tree selection if available, otherwise falls back to context mode selection.
+        """
+        from core.archiver import Archiver, ArchiveError
+
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        if not self.session:
+            status_bar.set_error("No active session")
+            return
+
+        # Get selected turn indices from tree (extract indices from messages with indices)
+        indexed_messages = context_tree.get_selected_messages_with_indices()
+        selected_indices = [idx for _msg, idx in indexed_messages]
+
+        if not selected_indices:
+            status_bar.set_error("No turns selected for archiving")
+            return
+
+        turn_start = min(selected_indices)
+        turn_end = max(selected_indices) + 1
+
+        # Get the messages to archive for summary generation
+        messages_to_archive = self.session.messages[turn_start:turn_end]
+
+        debug_log.info(
+            f"Archiving turns {turn_start}-{turn_end} ({len(messages_to_archive)} messages)",
+            category="archive",
+            details={"hint": hint},
+        )
+
+        # Generate structured summary using LLM
+        status_bar.set_status("Generating archive summary...", animate=True)
+        self.refresh()
+        await asyncio.sleep(0)
+
+        try:
+            summary = await self._summarizer.generate_archive_summary(messages_to_archive, hint)
+        except Exception as e:
+            debug_log.error(f"Summary generation failed: {e}", category="archive")
+            # Fall back to simple summary
+            summary = f"Archived turns {turn_start}-{turn_end - 1}"
+
+        # Perform the archive
+        archiver = Archiver()
+        try:
+            archive_block, new_messages = archiver.archive_turns(
+                self.session.id,
+                self.session.messages,
+                turn_start,
+                turn_end,
+                summary,
+            )
+
+            self.session.messages = new_messages
+            self.session.save()
+
+            # Reload the UI
+            chat_log.clear()
+            chat_log.load_history(self.session.messages, self.session)
+
+            context_tree.load_all_sessions(self.session)
+
+            status_bar.set_status(
+                f"Archived {archive_block.message_count} turns to {archive_block.file_path}",
+                animate=False,
+            )
+
+        except ArchiveError as e:
+            debug_log.error(f"Archive failed: {e}", category="archive")
+            status_bar.set_error(f"Archive failed: {e}")
+
+    async def _handle_rehydrate_command(self) -> None:
+        """Rehydrate selected archive marker back to original turns."""
+        from core.archiver import Archiver, ArchiveError
+
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        if not self.session:
+            status_bar.set_error("No active session")
+            return
+
+        # Get selected turn indices - should contain the archive marker
+        indexed_messages = context_tree.get_selected_messages_with_indices()
+        selected_indices = [idx for _msg, idx in indexed_messages]
+
+        if not selected_indices:
+            status_bar.set_error("No archive marker selected")
+            return
+
+        # Find archive block in selected turns
+        archive_turn_index = None
+        for idx in selected_indices:
+            if idx < len(self.session.messages):
+                msg = self.session.messages[idx]
+                for block in msg.content_blocks:
+                    if isinstance(block, ArchiveBlock):
+                        archive_turn_index = idx
+                        break
+            if archive_turn_index is not None:
+                break
+
+        if archive_turn_index is None:
+            status_bar.set_error("No archive marker in selection")
+            return
+
+        debug_log.info(
+            f"Rehydrating archive at turn {archive_turn_index}",
+            category="archive",
+        )
+
+        archiver = Archiver()
+        try:
+            new_messages = archiver.rehydrate(self.session.messages, archive_turn_index)
+            self.session.messages = new_messages
+            self.session.save()
+
+            # Reload the UI
+            chat_log.clear()
+            chat_log.load_history(self.session.messages, self.session)
+
+            context_tree.load_all_sessions(self.session)
+
+            status_bar.set_status("Restored archived turns", animate=False)
+
+        except ArchiveError as e:
+            debug_log.error(f"Rehydration failed: {e}", category="archive")
+            status_bar.set_error(f"Rehydration failed: {e}")
 
     def _handle_suspend(self, cmd: str) -> None:
         """Suspend TUI and run interactive command in session's working directory."""
@@ -2234,6 +2377,44 @@ class BalloonsApp(App):
         if child_session:
             self._switch_to_session(child_session)
 
+    def on_archive_marker_rehydrate_requested(self, event: ArchiveMarker.RehydrateRequested) -> None:
+        """Handle ctrl+shift+click on ArchiveMarker to rehydrate archived turns."""
+        from core.archiver import Archiver, ArchiveError
+
+        debug_log.info(
+            f"Rehydrating archive {event.archive_id} at turn {event.turn_index}",
+            category="archive",
+            details={"file_path": event.file_path},
+        )
+
+        archiver = Archiver()
+        try:
+            # Rehydrate the archive
+            new_messages = archiver.rehydrate(self.session.messages, event.turn_index)
+            self.session.messages = new_messages
+            self.session.save()
+
+            debug_log.info(
+                f"Rehydrated archive from {event.file_path}",
+                category="archive",
+                details={"message_count": len(new_messages)},
+            )
+
+            # Reload the chat log to show restored turns
+            chat_log = self.query_one("#chat-log", ChatLogView)
+            chat_log.clear()
+            chat_log.load_history(self.session.messages, self.session)
+
+            # Update context tree
+            context_tree = self.query_one("#context-tree", ContextTreeView)
+            context_tree.load_all_sessions(self.session)
+
+            self.notify(f"Restored archived turns from {event.file_path}")
+
+        except ArchiveError as e:
+            debug_log.error(f"Rehydration failed: {e}", category="archive")
+            self.notify(f"Failed to rehydrate: {e}", severity="error")
+
     def _switch_to_session(self, session: Session, target_turn_index: int | None = None) -> None:
         """Switch to a different session.
 
@@ -2532,12 +2713,6 @@ class BalloonsApp(App):
             name = session.id[:8]
         message = f"{name} ({msg_count} messages)"
 
-        # Check for active (non-orphaned) links
-        active_links = session.get_active_links()
-        if active_links:
-            link_count = len(active_links)
-            message += f"\n\nThis session has {link_count} active link(s) that will be orphaned."
-
         # Show confirmation dialog
         def on_confirm(confirmed: bool) -> None:
             if confirmed:
@@ -2593,6 +2768,63 @@ class BalloonsApp(App):
         """Handle clicking on a session - switch to it."""
         # Switch to this session (works even while other sessions stream)
         self._switch_to_session(event.session)
+
+    def on_context_tree_view_archive_requested(self, event: ContextTreeView.ArchiveRequested) -> None:
+        """Handle ctrl+shift+click on turns to archive them."""
+        from core.archiver import Archiver, ArchiveError
+
+        if not self.session:
+            self.notify("No active session", severity="error")
+            return
+
+        # Verify the request is for the current session
+        if event.session_id != self.session.id:
+            self.notify("Can only archive turns in the current session", severity="error")
+            return
+
+        turn_indices = event.turn_indices
+        if not turn_indices:
+            return
+
+        # Archive the selected turns
+        turn_start = min(turn_indices)
+        turn_end = max(turn_indices) + 1
+
+        debug_log.info(
+            f"Archiving turns {turn_start}-{turn_end} in session {event.session_id}",
+            category="archive",
+        )
+
+        archiver = Archiver()
+        try:
+            # Generate a simple summary for now
+            # TODO: Could use LLM to generate a better summary
+            summary = f"Archived turns {turn_start}-{turn_end - 1}"
+
+            archive_block, new_messages = archiver.archive_turns(
+                self.session.id,
+                self.session.messages,
+                turn_start,
+                turn_end,
+                summary,
+            )
+
+            self.session.messages = new_messages
+            self.session.save()
+
+            # Reload the UI
+            chat_log = self.query_one("#chat-log", ChatLogView)
+            chat_log.clear()
+            chat_log.load_history(self.session.messages, self.session)
+
+            context_tree = self.query_one("#context-tree", ContextTreeView)
+            context_tree.load_all_sessions(self.session)
+
+            self.notify(f"Archived {archive_block.message_count} turns to {archive_block.file_path}")
+
+        except ArchiveError as e:
+            debug_log.error(f"Archive failed: {e}", category="archive")
+            self.notify(f"Failed to archive: {e}", severity="error")
 
     def on_context_tree_view_session_link_requested(self, event: ContextTreeView.SessionLinkRequested) -> None:
         """Handle ctrl+click on a session - populate or append to link command."""
@@ -2664,9 +2896,22 @@ class BalloonsApp(App):
             if target_session:
                 debug_log.info(f"Loaded target session, calling _switch_to_session with turn_idx={turn_idx}", category="tree")
                 self._switch_to_session(target_session, target_turn_index=turn_idx)
-                # Show the turn data in request pane (session switch already handles scroll)
-                if node_type == "turn":
-                    request_pane.show_json(event.turn_data)
+                # Show the turn data in request pane and handle highlights after session switch
+                request_pane.show_json(event.turn_data)
+                # For tool_use and tool_result, we need to highlight after session switch
+                if node_type in ("tool_use", "tool_result"):
+                    tool_use_id = event.turn_data.get("tool_use_id", "")
+                    if tool_use_id:
+                        # Delay highlight to allow session switch to complete
+                        def do_highlight():
+                            chat_log.highlight_tool(tool_use_id)
+                        self.call_later(do_highlight)
+                elif node_type == "text":
+                    turn_id = event.turn_data.get("turn_idx", 0) + 1
+                    block_idx = event.turn_data.get("block_idx", -1)
+                    def do_highlight():
+                        chat_log.highlight_text_block(turn_id, block_idx)
+                    self.call_later(do_highlight)
                 return  # Session switch handles the rest
             else:
                 debug_log.warning(f"Failed to load session {turn_session_id}", category="tree")

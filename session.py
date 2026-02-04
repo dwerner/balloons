@@ -6,10 +6,36 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ContentBlock, ContextMode
+from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock, ArchiveSummary, ContentBlock, ContextMode
 
 
 SESSIONS_DIR = Path.home() / ".balloons" / "sessions"
+
+
+@dataclass
+class Turn:
+    """A single turn in the conversation - one content block with metadata."""
+    role: str  # "user", "assistant", "tool", or "system"
+    content_block: ContentBlock  # Single content block
+    tokens: int = 0
+    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+    context_mode: ContextMode = ContextMode.COMPRESS
+    summary: str = ""  # Cached summary for SUMMARIZE mode
+    exchange_id: Optional[str] = None  # Groups turns in an agentic loop
+
+    @property
+    def content(self) -> str:
+        """Get text content for display/backwards compat."""
+        if isinstance(self.content_block, TextBlock):
+            return self.content_block.text
+        elif isinstance(self.content_block, ToolResultBlock):
+            return self.content_block.content
+        return ""
+
+    @property
+    def content_blocks(self) -> list[ContentBlock]:
+        """Backwards compat: return content_block as a list."""
+        return [self.content_block]
 
 
 @dataclass
@@ -18,7 +44,17 @@ class Session:
     created: str = field(default_factory=lambda: datetime.now().isoformat())
     last_modified: str = field(default_factory=lambda: datetime.now().isoformat())
     model: str = ""
-    messages: list[Message] = field(default_factory=list)
+    turns: list[Turn] = field(default_factory=list)  # One content block per turn
+    _messages_deprecated: list[Message] = field(default_factory=list)  # Migration only, not used
+
+    @property
+    def messages(self) -> list[Turn]:
+        """Backwards compat: return turns as 'messages'.
+
+        Turn objects have a content_blocks property that wraps their single
+        content_block in a list, so most code expecting Message works.
+        """
+        return self.turns
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     total_cost: float = 0.0
@@ -49,6 +85,36 @@ class Session:
     def total_tokens(self) -> int:
         return self.total_input_tokens + self.total_output_tokens
 
+    def add_turn(
+        self,
+        role: str,
+        content_block: ContentBlock,
+        tokens: int = 0,
+        exchange_id: str | None = None,
+        timestamp: str | None = None,
+        context_mode: ContextMode = ContextMode.COMPRESS,
+    ) -> Turn:
+        """Add a single turn with one content block.
+
+        Args:
+            role: "user", "assistant", "tool", or "system"
+            content_block: Single content block (TextBlock, ToolUseBlock, etc.)
+            tokens: Token count for this turn
+            exchange_id: Groups turns in an agentic loop (user prompt + all responses)
+            timestamp: Optional timestamp (defaults to now)
+            context_mode: How to handle in context compilation
+        """
+        turn = Turn(
+            role=role,
+            content_block=content_block,
+            tokens=tokens,
+            exchange_id=exchange_id,
+            timestamp=timestamp or datetime.now().isoformat(),
+            context_mode=context_mode,
+        )
+        self.turns.append(turn)
+        return turn
+
     def add_message(
         self,
         role: str,
@@ -56,8 +122,11 @@ class Session:
         content_blocks: list[ContentBlock] | None = None,
         tokens: int = 0,
         exchange_id: str | None = None,
-    ) -> Message:
-        """Add a message with optional rich content blocks.
+    ) -> Turn:
+        """DEPRECATED: Add a message with optional rich content blocks.
+
+        Use add_turn() instead for new code. This method exists for backwards
+        compatibility and will add turns internally.
 
         Args:
             role: "user", "assistant", or "tool"
@@ -65,13 +134,30 @@ class Session:
             content_blocks: Rich content blocks (TextBlock, ToolUseBlock, etc.)
             tokens: Token count for this message
             exchange_id: Groups turns in an agentic loop (user prompt + all responses)
+
+        Returns:
+            The last Turn added (for backwards compat, callers may expect a message-like object)
         """
         if content_blocks is None:
             # Default to a single text block
             content_blocks = [TextBlock(text=content)] if content else []
-        msg = Message(role=role, content=content, content_blocks=content_blocks, tokens=tokens, exchange_id=exchange_id)
-        self.messages.append(msg)
-        return msg
+
+        # Add each content block as a separate turn
+        timestamp = datetime.now().isoformat()
+        last_turn = None
+        for i, block in enumerate(content_blocks):
+            # Only first block gets tokens (avoid double counting)
+            block_tokens = tokens if i == 0 else 0
+            last_turn = self.add_turn(
+                role=role,
+                content_block=block,
+                tokens=block_tokens,
+                exchange_id=exchange_id,
+                timestamp=timestamp,
+            )
+
+        # Return last turn (messages field is no longer populated)
+        return last_turn
 
     def update_usage(self, input_tokens: int, output_tokens: int, cost: float, context_window: int = 0):
         self.total_input_tokens += input_tokens
@@ -168,8 +254,8 @@ class Session:
         if condition.startswith("turns:"):
             try:
                 max_turns = int(condition.split(":")[1])
-                # Count assistant messages in this child session
-                assistant_count = sum(1 for m in self.messages if m.role == "assistant")
+                # Count assistant turns in this child session
+                assistant_count = sum(1 for t in self.turns if t.role == "assistant")
                 # +1 for the current response not yet saved
                 return assistant_count + 1 >= max_turns
             except (ValueError, IndexError):
@@ -197,8 +283,8 @@ class Session:
 
         Returns True if deleted, False if index invalid.
         """
-        if 0 <= turn_index < len(self.messages):
-            del self.messages[turn_index]
+        if 0 <= turn_index < len(self.turns):
+            del self.turns[turn_index]
             return True
         return False
 
@@ -221,61 +307,120 @@ class Session:
         """Get all child forks (active and merged)."""
         return self.children
 
-    def add_link_turn(self, link_id: str, linked_session_id: str, summary: str) -> Message:
-        """Add a link as a turn in the conversation.
-
-        This is the new preferred way to add links - as actual turns that preserve
-        ordering with other messages.
-        """
+    def add_link_turn(self, link_id: str, linked_session_id: str, summary: str) -> Turn:
+        """Add a link as a turn in the conversation."""
         link_block = LinkBlock(
             link_id=link_id,
             linked_session_id=linked_session_id,
             summary=summary,
             is_orphaned=False,
         )
-        # Use role "system" for metadata turns like links
-        msg = Message(
-            role="system",
-            content=f"Link: {summary}",
-            content_blocks=[link_block],
-        )
-        self.messages.append(msg)
-        return msg
+        return self.add_turn(role="system", content_block=link_block)
 
     def get_all_link_ids(self) -> list[str]:
-        """Get all link IDs from turn-based LinkBlocks."""
+        """Get all link IDs from LinkBlock turns."""
         link_ids = []
-        for msg in self.messages:
-            for block in msg.content_blocks:
-                if isinstance(block, LinkBlock):
-                    link_ids.append(block.link_id)
+        for turn in self.turns:
+            if isinstance(turn.content_block, LinkBlock):
+                link_ids.append(turn.content_block.link_id)
         return link_ids
 
     def get_all_active_links(self) -> list[dict]:
-        """Get all non-orphaned links from turn-based LinkBlocks."""
+        """Get all non-orphaned links from LinkBlock turns."""
         active = []
-        for msg in self.messages:
-            for block in msg.content_blocks:
-                if isinstance(block, LinkBlock) and not block.is_orphaned:
-                    active.append({
-                        "link_id": block.link_id,
-                        "linked_session_id": block.linked_session_id,
-                        "summary": block.summary,
-                        "is_orphaned": block.is_orphaned,
-                    })
+        for turn in self.turns:
+            block = turn.content_block
+            if isinstance(block, LinkBlock) and not block.is_orphaned:
+                active.append({
+                    "link_id": block.link_id,
+                    "linked_session_id": block.linked_session_id,
+                    "summary": block.summary,
+                    "is_orphaned": block.is_orphaned,
+                })
         return active
 
     def mark_link_orphaned(self, link_id: str) -> None:
         """Mark a link as orphaned (linked session was deleted)."""
-        for msg in self.messages:
-            for block in msg.content_blocks:
-                if isinstance(block, LinkBlock) and block.link_id == link_id:
-                    block.is_orphaned = True
-                    return
+        for turn in self.turns:
+            if isinstance(turn.content_block, LinkBlock) and turn.content_block.link_id == link_id:
+                turn.content_block.is_orphaned = True
+                return
 
     def has_active_links(self) -> bool:
         """Check if this session has any non-orphaned links."""
         return len(self.get_all_active_links()) > 0
+
+    # =========================================================================
+    # Archive Methods
+    # =========================================================================
+
+    def get_all_archives(self) -> list[tuple[int, ArchiveBlock]]:
+        """Get all archive blocks with their turn indices.
+
+        Returns:
+            List of (turn_index, ArchiveBlock) tuples
+        """
+        archives = []
+        for i, turn in enumerate(self.turns):
+            if isinstance(turn.content_block, ArchiveBlock):
+                archives.append((i, turn.content_block))
+        return archives
+
+    def archive_turns(self, turn_start: int, turn_end: int, summary: str) -> ArchiveBlock:
+        """Archive a range of turns to a file, replacing them with an ArchiveBlock.
+
+        Args:
+            turn_start: Start index (inclusive)
+            turn_end: End index (exclusive)
+            summary: LLM-generated summary of the archived content
+
+        Returns:
+            The ArchiveBlock that was inserted
+
+        Raises:
+            ArchiveError: If indices are invalid or archive fails
+        """
+        from core.archiver import Archiver
+        archiver = Archiver()
+        archive_block, new_turns = archiver.archive_turns(
+            session_id=self.id,
+            turns=self.turns,
+            turn_start=turn_start,
+            turn_end=turn_end,
+            summary=summary,
+        )
+        self.turns = new_turns
+        return archive_block
+
+    def rehydrate_archive(self, archive_turn_index: int) -> int:
+        """Rehydrate an archived turn, restoring the original turns.
+
+        Args:
+            archive_turn_index: Index of the turn containing the ArchiveBlock
+
+        Returns:
+            Number of turns restored
+
+        Raises:
+            ArchiveError: If the turn doesn't contain an archive block or rehydration fails
+        """
+        from core.archiver import Archiver
+        archiver = Archiver()
+
+        # Get the archive block to know how many turns will be restored
+        archive_turn = self.turns[archive_turn_index]
+        if not isinstance(archive_turn.content_block, ArchiveBlock):
+            from core.archiver import ArchiveError
+            raise ArchiveError(f"Turn {archive_turn_index} does not contain an archive block")
+
+        archive_block = archive_turn.content_block
+        new_turns = archiver.rehydrate(self.turns, archive_turn_index)
+        self.turns = new_turns
+        return archive_block.message_count
+
+    def has_archives(self) -> bool:
+        """Check if this session has any archived turns."""
+        return len(self.get_all_archives()) > 0
 
     @property
     def working_directory(self) -> Optional[str]:
@@ -316,10 +461,42 @@ class Session:
                 "summary": block.summary,
                 "is_orphaned": block.is_orphaned,
             }
+        elif isinstance(block, ArchiveBlock):
+            data = {
+                "type": "archive",
+                "archive_id": block.archive_id,
+                "file_path": block.file_path,
+                "summary": block.summary,
+                "turn_start": block.turn_start,
+                "turn_end": block.turn_end,
+                "message_count": block.message_count,
+                "token_estimate": block.token_estimate,
+            }
+            if block.structured_summary:
+                data["structured_summary"] = {
+                    "files_modified": block.structured_summary.files_modified,
+                    "work_done": block.structured_summary.work_done,
+                    "key_decisions": block.structured_summary.key_decisions,
+                }
+            return data
         return {"type": "unknown"}
 
+    def _serialize_turn(self, turn: Turn) -> dict:
+        """Serialize a turn to a dict."""
+        data = {
+            "role": turn.role,
+            "content_block": self._serialize_content_block(turn.content_block),
+            "tokens": turn.tokens,
+            "timestamp": turn.timestamp,
+            "context_mode": turn.context_mode.value,
+            "summary": turn.summary,
+        }
+        if turn.exchange_id:
+            data["exchange_id"] = turn.exchange_id
+        return data
+
     def _serialize_message(self, msg: Message) -> dict:
-        """Serialize a message with content blocks."""
+        """Serialize a message with content blocks. DEPRECATED - for migration only."""
         data = {
             "role": msg.role,
             "content": msg.content,
@@ -344,7 +521,8 @@ class Session:
             "created": self.created,
             "last_modified": self.last_modified,
             "model": self.model,
-            "messages": [self._serialize_message(m) for m in self.messages],
+            "turns": [self._serialize_turn(t) for t in self.turns],
+            "messages": [],  # Truncated - data now in turns
             "total_input_tokens": self.total_input_tokens,
             "total_output_tokens": self.total_output_tokens,
             "total_cost": self.total_cost,
@@ -413,8 +591,48 @@ class Session:
                 summary=data.get("summary", ""),
                 is_orphaned=data.get("is_orphaned", False),
             )
+        elif block_type == "archive":
+            structured_summary = None
+            if "structured_summary" in data:
+                ss = data["structured_summary"]
+                structured_summary = ArchiveSummary(
+                    files_modified=ss.get("files_modified", []),
+                    work_done=ss.get("work_done", ""),
+                    key_decisions=ss.get("key_decisions", []),
+                )
+            return ArchiveBlock(
+                archive_id=data.get("archive_id", ""),
+                file_path=data.get("file_path", ""),
+                summary=data.get("summary", ""),
+                structured_summary=structured_summary,
+                turn_start=data.get("turn_start", 0),
+                turn_end=data.get("turn_end", 0),
+                message_count=data.get("message_count", 0),
+                token_estimate=data.get("token_estimate", 0),
+            )
         # Fallback to text
         return TextBlock(text=str(data))
+
+    @classmethod
+    def _deserialize_turn(cls, data: dict) -> Turn:
+        """Deserialize a turn from a dict."""
+        content_block = cls._deserialize_content_block(data.get("content_block", {"type": "text", "text": ""}))
+
+        mode_str = data.get("context_mode", "compress")
+        try:
+            context_mode = ContextMode(mode_str)
+        except ValueError:
+            context_mode = ContextMode.COMPRESS
+
+        return Turn(
+            role=data["role"],
+            content_block=content_block,
+            tokens=data.get("tokens", 0),
+            timestamp=data.get("timestamp", ""),
+            context_mode=context_mode,
+            summary=data.get("summary", ""),
+            exchange_id=data.get("exchange_id"),
+        )
 
     @classmethod
     def load(cls, session_id: str) -> Optional["Session"]:
@@ -448,40 +666,56 @@ class Session:
             merge_message=data.get("merge_message", ""),
             backend_name=data.get("backend_name", ""),
         )
-        for m in data.get("messages", []):
-            # Parse content_blocks if present, otherwise create from content
-            raw_blocks = m.get("content_blocks", [])
-            if raw_blocks:
-                content_blocks = [cls._deserialize_content_block(b) for b in raw_blocks]
-            else:
-                # Backwards compat: create text block from content
-                content_blocks = [TextBlock(text=m.get("content", ""))] if m.get("content") else []
 
-            # Parse context_mode
-            mode_str = m.get("context_mode", "copy")
-            try:
-                context_mode = ContextMode(mode_str)
-            except ValueError:
-                context_mode = ContextMode.COPY
+        # Load turns (new format)
+        for t in data.get("turns", []):
+            session.turns.append(cls._deserialize_turn(t))
 
-            session.messages.append(Message(
-                role=m["role"],
-                content=m.get("content", ""),
-                content_blocks=content_blocks,
-                tokens=m.get("tokens", 0),
-                timestamp=m.get("timestamp", ""),
-                context_mode=context_mode,
-                summary=m.get("summary", ""),
-                exchange_id=m.get("exchange_id"),  # None for old sessions
-            ))
+        # Migration: if no turns but has messages, expand messages to turns
+        if not session.turns and data.get("messages"):
+            for m in data.get("messages", []):
+                # Parse content_blocks if present, otherwise create from content
+                raw_blocks = m.get("content_blocks", [])
+                if raw_blocks:
+                    content_blocks = [cls._deserialize_content_block(b) for b in raw_blocks]
+                else:
+                    # Backwards compat: create text block from content
+                    content_blocks = [TextBlock(text=m.get("content", ""))] if m.get("content") else []
+
+                # Parse context_mode
+                mode_str = m.get("context_mode", "copy")
+                try:
+                    context_mode = ContextMode(mode_str)
+                except ValueError:
+                    context_mode = ContextMode.COPY
+
+                # Expand each content block into a separate turn
+                timestamp = m.get("timestamp", "")
+                exchange_id = m.get("exchange_id")
+                tokens = m.get("tokens", 0)
+
+                for i, block in enumerate(content_blocks):
+                    # Only first block gets tokens (avoid double counting)
+                    block_tokens = tokens if i == 0 else 0
+                    session.turns.append(Turn(
+                        role=m["role"],
+                        content_block=block,
+                        tokens=block_tokens,
+                        timestamp=timestamp,
+                        context_mode=context_mode,
+                        summary=m.get("summary", "") if i == 0 else "",
+                        exchange_id=exchange_id,
+                    ))
+
+        # Don't populate messages - it's deprecated
         return session
 
     @classmethod
     def list_sessions(cls) -> list[dict]:
-        """Return list of session metadata dicts without loading full messages.
+        """Return list of session metadata dicts without loading full data.
 
         Returns list of dicts with keys: id, created, last_modified, model, title,
-        message_count, total_input_tokens, total_output_tokens, total_cost,
+        turn_count, total_input_tokens, total_output_tokens, total_cost,
         parent_id, children, fork_name, fork_status.
         """
         if not SESSIONS_DIR.exists():
@@ -492,13 +726,21 @@ class Session:
                 data = json.loads(path.read_text())
                 # For backwards compat, use created if last_modified missing
                 last_modified = data.get("last_modified", data.get("created", ""))
+                # Count turns (new format) or messages (old format for migration)
+                turn_count = len(data.get("turns", []))
+                if turn_count == 0:
+                    # Old format: count content blocks across messages
+                    for m in data.get("messages", []):
+                        blocks = m.get("content_blocks", [])
+                        turn_count += len(blocks) if blocks else 1
                 sessions.append({
                     "id": data["id"],
                     "created": data["created"],
                     "last_modified": last_modified,
                     "model": data.get("model", ""),
                     "title": data.get("title", ""),
-                    "message_count": len(data.get("messages", [])),
+                    "turn_count": turn_count,
+                    "message_count": turn_count,  # Backwards compat alias
                     "total_input_tokens": data.get("total_input_tokens", 0),
                     "total_output_tokens": data.get("total_output_tokens", 0),
                     "total_cost": data.get("total_cost", 0.0),

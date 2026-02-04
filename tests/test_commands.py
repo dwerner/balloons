@@ -13,6 +13,8 @@ from core.commands import (
     CdCommand,
     ReloadCommand,
     TitleCommand,
+    ArchiveCommand,
+    RehydrateCommand,
 )
 
 
@@ -135,3 +137,29 @@ class TestCommandParser:
         cmd = parser.parse("  :new  hello  ")
         assert isinstance(cmd, NewSessionCommand)
         assert cmd.prompt == "hello"
+
+
+class TestArchiveCommands:
+    """Tests for :archive and :rehydrate commands."""
+
+    @pytest.fixture
+    def parser(self):
+        return CommandParser()
+
+    def test_archive_no_hint(self, parser):
+        """':archive' creates ArchiveCommand with empty prompt."""
+        cmd = parser.parse(":archive")
+        assert isinstance(cmd, ArchiveCommand)
+        assert cmd.prompt == ""
+
+    def test_archive_with_hint(self, parser):
+        """':archive <hint>' includes the hint."""
+        cmd = parser.parse(":archive focus on the API changes")
+        assert isinstance(cmd, ArchiveCommand)
+        assert cmd.prompt == "focus on the API changes"
+
+    def test_rehydrate(self, parser):
+        """':rehydrate' creates RehydrateCommand."""
+        cmd = parser.parse(":rehydrate")
+        assert isinstance(cmd, RehydrateCommand)
+        assert cmd.archive_turn_index == -1

@@ -9,7 +9,7 @@ from typing import AsyncIterator, TYPE_CHECKING
 from models import (
     Message, TextDelta, ResultEvent, InitEvent, RawEvent,
     ToolUseStartEvent, ToolUseEvent, ToolResultEvent,
-    TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ContextMode,
+    TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock, ContextMode,
 )
 from core.debug_log import debug_log, dump_failed_json
 from core.base_runner import BaseRunner, RunnerEvent
@@ -185,6 +185,10 @@ class ClaudeRunner(BaseRunner):
                             if block.summary:
                                 link_info += f" - {block.summary}"
                             history_parts.append(link_info)
+                        elif isinstance(block, ArchiveBlock):
+                            archive_info = f"[Archived {block.message_count} turns: {block.summary}]"
+                            archive_info += f"\n(Use read_archive tool with archive_id=\"{block.archive_id}\" to retrieve full content)"
+                            history_parts.append(archive_info)
                         elif isinstance(block, TextBlock) and block.text:
                             history_parts.append(block.text)
                 elif msg.content:
@@ -224,6 +228,10 @@ class ClaudeRunner(BaseRunner):
                         if block.summary:
                             link_info += f" - {block.summary}"
                         block_texts.append(link_info)
+                    elif isinstance(block, ArchiveBlock):
+                        archive_info = f"[Archived {block.message_count} turns: {block.summary}]"
+                        archive_info += f"\n(Use read_archive tool with archive_id=\"{block.archive_id}\" to retrieve full content)"
+                        block_texts.append(archive_info)
 
                 if block_texts:
                     history_parts.append(f"<{role_name}>\n" + "\n\n".join(block_texts) + f"\n</{role_name}>")
@@ -622,6 +630,10 @@ class ClaudeRunner(BaseRunner):
                             if block.summary:
                                 link_info += f" - {block.summary}"
                             parts.append(link_info)
+                        elif isinstance(block, ArchiveBlock):
+                            archive_info = f"[Archived {block.message_count} turns: {block.summary}]"
+                            archive_info += f"\n(archive_id={block.archive_id})"
+                            parts.append(archive_info)
                         elif isinstance(block, TextBlock) and block.text:
                             parts.append(block.text)
                 elif msg.content:
@@ -653,6 +665,10 @@ class ClaudeRunner(BaseRunner):
                         if block.summary:
                             link_info += f" - {block.summary}"
                         block_texts.append(link_info)
+                    elif isinstance(block, ArchiveBlock):
+                        archive_info = f"[Archived {block.message_count} turns: {block.summary}]"
+                        archive_info += f"\n(archive_id={block.archive_id})"
+                        block_texts.append(archive_info)
 
                 if block_texts:
                     parts.append(f"{role_name}: " + "\n".join(block_texts))

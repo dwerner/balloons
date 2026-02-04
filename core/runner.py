@@ -17,7 +17,7 @@ from models import (
     TextBlock, ToolUseBlock, ToolResultBlock, ErrorBlock,
 )
 from .exceptions import RateLimitError, InputRequiredError
-from session import Session
+from session import Session, Turn
 from .debug_log import debug_log
 from .base_runner import BaseRunner
 
@@ -72,7 +72,7 @@ class StreamResult:
     error: Optional[str] = None
     # New per-turn structure
     exchange_id: str = ""  # UUID grouping all turns in this exchange
-    turns: list[Message] = field(default_factory=list)  # Individual turns (Messages)
+    turns: list = field(default_factory=list)  # Individual turns (Turn objects)
 
 
 class SessionRunner:
@@ -126,7 +126,7 @@ class SessionRunner:
 
         # New per-turn tracking
         self._exchange_id: str = ""  # UUID for current exchange
-        self._turns: list[Message] = []  # Completed turns in this exchange
+        self._turns: list[Turn] = []  # Completed turns in this exchange
         self._user_message_saved: bool = False  # Track if user message added to session
 
     @property
@@ -375,36 +375,37 @@ class SessionRunner:
             except asyncio.QueueEmpty:
                 break
 
-    def _create_turn(self, role: str, content: str, content_blocks: list) -> Message:
-        """Create a turn (Message) with the current exchange_id.
+    def _create_turn(self, role: str, content: str, content_blocks: list) -> Turn:
+        """Create a Turn with the current exchange_id.
 
         Args:
             role: "user", "assistant", or "tool"
-            content: Text summary for display
-            content_blocks: Rich content blocks
+            content: Text summary for display (not used directly, content_block provides text)
+            content_blocks: List with a single content block
 
         Returns:
-            Message with exchange_id set
+            Turn with exchange_id set
         """
-        return Message(
+        if not content_blocks:
+            raise ValueError("content_blocks must contain exactly one block")
+        return Turn(
             role=role,
-            content=content,
-            content_blocks=content_blocks,
+            content_block=content_blocks[0],  # Turn takes single content_block
             timestamp=datetime.now().isoformat(),
             exchange_id=self._exchange_id,
         )
 
-    def _save_turn_to_session(self, turn: Message, save_now: bool = False) -> None:
+    def _save_turn_to_session(self, turn: Turn, save_now: bool = False) -> None:
         """Add a turn to the session and optionally save to disk.
 
         This ensures turns are persisted incrementally during agentic loops,
         preventing data loss if the process crashes mid-exchange.
 
         Args:
-            turn: The Message to add to the session
+            turn: The Turn to add to the session
             save_now: If True, save session to disk immediately
         """
-        self.session.messages.append(turn)
+        self.session.turns.append(turn)
         if save_now:
             self.session.save()
             debug_log.debug(
@@ -589,9 +590,10 @@ class SessionRunner:
         error_block = self._check_stream_errors()
         if error_block:
             self._content_blocks.append(error_block)
-            # Create error turn
+            # Create error turn and save to session
             turn = self._create_turn("assistant", f"[Error: {error_block.reason}]", [error_block])
             self._turns.append(turn)
+            self._save_turn_to_session(turn, save_now=True)
 
         # Reconstruct full text content from all TextBlocks (legacy)
         text_parts = []

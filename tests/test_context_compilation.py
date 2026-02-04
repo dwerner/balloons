@@ -24,10 +24,10 @@ Claude format (single string, newline-separated):
 
     Assistant: <text>
 
-    [Tool Use: <name>]
+    [Tool: <name>]
     <json input>
 
-    [Tool Result]
+    [Result]
     <result content>
 
     User: <new prompt>
@@ -36,7 +36,7 @@ OpenAI format (list of message dicts):
     [
       {"role": "system", "content": "<system prompt>"},  # if configured
       {"role": "user", "content": "<content>"},
-      {"role": "assistant", "content": "<text>\\n\\n[Tool Use: <name>]\\n<json>"},
+      {"role": "assistant", "content": "<text>\\n\\n[Tool: <name>]\\n<json>"},
       {"role": "user", "content": "<new prompt>"}
     ]
 
@@ -75,7 +75,7 @@ import pytest
 
 from models import (
     Message, TextBlock, ToolUseBlock, ToolResultBlock,
-    InterruptionBlock, ErrorBlock, ContextMode,
+    InterruptionBlock, ErrorBlock, ArchiveBlock, ContextMode,
 )
 
 # Import OpenAI runner first (doesn't import claude_runner)
@@ -313,29 +313,29 @@ class TestClaudeContextFormat:
         assert lines[2] == "User: follow up"
 
     def test_tool_use_format(self, conversation_with_tool_use):
-        """Tool use is formatted as [Tool Use: name] with JSON input."""
+        """Tool use is formatted as [Tool: name] with JSON input."""
         result = ClaudeRunner.build_context(conversation_with_tool_use, "next")
 
         # Check tool use marker present
-        assert "[Tool Use: Read]" in result
+        assert "[Tool: Read]" in result
 
         # Check JSON input is included
         assert '"file_path"' in result
         assert '"/etc/config.yaml"' in result
 
     def test_tool_result_format(self, conversation_with_tool_use):
-        """Tool result is formatted as [Tool Result] with content."""
+        """Tool result is formatted as [Result] with content."""
         result = ClaudeRunner.build_context(conversation_with_tool_use, "next")
 
-        assert "[Tool Result]" in result
+        assert "[Result]" in result
         assert "key: value" in result
         assert "port: 8080" in result
 
     def test_tool_error_format(self, conversation_with_tool_error):
-        """Tool errors include [Error] prefix in result."""
+        """Tool errors include (error) suffix in result."""
         result = ClaudeRunner.build_context(conversation_with_tool_error, "next")
 
-        assert "[Tool Result][Error]" in result
+        assert "[Result (error)]" in result
         assert "File not found" in result
 
     def test_multiple_tools_ordering(self, conversation_with_multiple_tools):
@@ -343,9 +343,9 @@ class TestClaudeContextFormat:
         result = ClaudeRunner.build_context(conversation_with_multiple_tools, "done")
 
         # Find positions of each element
-        glob_pos = result.find("[Tool Use: Glob]")
+        glob_pos = result.find("[Tool: Glob]")
         glob_result_pos = result.find("test_foo.py")
-        read_pos = result.find("[Tool Use: Read]")
+        read_pos = result.find("[Tool: Read]")
         read_result_pos = result.find("def test_example")
 
         # Verify ordering
@@ -355,15 +355,13 @@ class TestClaudeContextFormat:
         """Interruption blocks are formatted with reason."""
         result = ClaudeRunner.build_context(conversation_with_interruption, "continue")
 
-        assert "[Response interrupted: user_cancelled]" in result
+        assert "[Interrupted: user_cancelled]" in result
 
     def test_error_block_format(self, conversation_with_error_block):
-        """Error blocks show truncation info and partial tool state."""
+        """Error blocks show truncation info."""
         result = ClaudeRunner.build_context(conversation_with_error_block, "retry")
 
-        assert "[Response truncated: truncated]" in result
-        assert "[Incomplete tool call: Edit]" in result
-        assert "[Partial input:" in result
+        assert "[Error: truncated]" in result
 
     def test_drop_mode_excludes_messages(self, conversation_with_context_modes):
         """DROP mode messages are not included in output."""
@@ -417,8 +415,8 @@ class TestClaudeContextFormat:
         result = ClaudeRunner.build_context(messages, "next")
 
         assert "First I'll check the file." in result
-        assert "[Tool Use: Read]" in result
-        assert "[Tool Result]" in result
+        assert "[Tool: Read]" in result
+        assert "[Result]" in result
         assert "code here" in result
         assert "The file contains code." in result
 
@@ -499,7 +497,7 @@ class TestOpenAIContextFormat:
         result = runner.build_messages(conversation_with_tool_use, "next")
 
         # Find the message with tool use
-        tool_msg = next(m for m in result if "[Tool Use: Read]" in m.get("content", ""))
+        tool_msg = next(m for m in result if "[Tool: Read]" in m.get("content", ""))
 
         assert tool_msg["role"] == "assistant"
         assert '"file_path"' in tool_msg["content"]
@@ -510,17 +508,17 @@ class TestOpenAIContextFormat:
         result = runner.build_messages(conversation_with_tool_use, "next")
 
         # Find the message with tool result
-        result_msg = next(m for m in result if "[Tool Result]" in m.get("content", ""))
+        result_msg = next(m for m in result if "[Result]" in m.get("content", ""))
 
         assert result_msg["role"] == "assistant"
         assert "key: value" in result_msg["content"]
 
     def test_tool_error_format(self, runner, conversation_with_tool_error):
-        """Tool errors include [Error] prefix."""
+        """Tool errors include (error) suffix."""
         result = runner.build_messages(conversation_with_tool_error, "next")
 
         all_content = " ".join(m.get("content", "") for m in result)
-        assert "[Tool Result][Error]" in all_content
+        assert "[Result (error)]" in all_content
         assert "File not found" in all_content
 
     def test_interruption_block_format(self, runner, conversation_with_interruption):
@@ -528,15 +526,14 @@ class TestOpenAIContextFormat:
         result = runner.build_messages(conversation_with_interruption, "continue")
 
         all_content = " ".join(m.get("content", "") for m in result)
-        assert "[Response interrupted: user_cancelled]" in all_content
+        assert "[Interrupted: user_cancelled]" in all_content
 
     def test_error_block_format(self, runner, conversation_with_error_block):
         """Error blocks show truncation info."""
         result = runner.build_messages(conversation_with_error_block, "retry")
 
         all_content = " ".join(m.get("content", "") for m in result)
-        assert "[Response truncated: truncated]" in all_content
-        assert "[Incomplete tool call: Edit]" in all_content
+        assert "[Error: truncated]" in all_content
 
     def test_drop_mode_excludes_messages(self, runner, conversation_with_context_modes):
         """DROP mode messages are not included."""
@@ -601,8 +598,8 @@ class TestCrossBackendConsistency:
 
         # Both should have both tool uses
         for tool_name in ["Glob", "Read"]:
-            assert f"[Tool Use: {tool_name}]" in claude_result
-            assert f"[Tool Use: {tool_name}]" in openai_content
+            assert f"[Tool: {tool_name}]" in claude_result
+            assert f"[Tool: {tool_name}]" in openai_content
 
     def test_both_respect_drop_mode(self, openai_runner, conversation_with_context_modes):
         """Both backends respect DROP context mode."""
@@ -625,14 +622,14 @@ class TestCrossBackendConsistency:
         assert "[Summary]" in openai_content
 
     def test_both_handle_tool_errors(self, openai_runner, conversation_with_tool_error):
-        """Both backends format tool errors with [Error] marker."""
+        """Both backends format tool errors with (error) marker in Result."""
         claude_result = ClaudeRunner.build_context(conversation_with_tool_error, "next")
         openai_result = openai_runner.build_messages(conversation_with_tool_error, "next")
         openai_content = " ".join(m.get("content", "") for m in openai_result)
 
-        # Both should have error marker
-        assert "[Error]" in claude_result
-        assert "[Error]" in openai_content
+        # Both should have error marker in result
+        assert "[Result (error)]" in claude_result
+        assert "[Result (error)]" in openai_content
 
 
 # =============================================================================
@@ -753,3 +750,139 @@ class TestEdgeCases:
 
         assert "line1\nline2\nline3" in claude_result
         assert "line1\nline2\nline3" in openai_result[0]["content"]
+
+
+# =============================================================================
+# Archive Block Tests
+# =============================================================================
+
+class TestArchiveBlockFormat:
+    """Tests for ArchiveBlock context formatting."""
+
+    @pytest.fixture
+    def openai_runner(self):
+        return OpenAICompatibleRunner(
+            base_url="http://test",
+            api_key="test",
+            model="test-model",
+        )
+
+    @pytest.fixture
+    def conversation_with_archive(self):
+        """Conversation with an archive block."""
+        return [
+            Message(role="user", content="First message"),
+            Message(
+                role="system",
+                content="[Archived 5 turns: Discussion about API design]",
+                content_blocks=[
+                    ArchiveBlock(
+                        archive_id="archive-123-abc",
+                        file_path="/path/to/archive.json",
+                        summary="Discussion about API design",
+                        turn_start=1,
+                        turn_end=6,
+                        message_count=5,
+                        token_estimate=1500,
+                    ),
+                ],
+            ),
+            Message(role="user", content="Continuing the conversation"),
+        ]
+
+    def test_archive_block_shows_summary(self, conversation_with_archive):
+        """Archive block shows summary in context."""
+        result = ClaudeRunner.build_context(conversation_with_archive, "new question")
+
+        assert "Archived 5 turns" in result
+        assert "Discussion about API design" in result
+
+    def test_archive_block_shows_archive_id(self, conversation_with_archive):
+        """Archive block shows archive_id for retrieval."""
+        result = ClaudeRunner.build_context(conversation_with_archive, "new question")
+
+        assert "archive-123-abc" in result
+
+    def test_archive_block_in_openai_format(self, openai_runner, conversation_with_archive):
+        """Archive block is formatted correctly in OpenAI messages."""
+        result = openai_runner.build_messages(conversation_with_archive, "new question")
+        all_content = " ".join(m.get("content", "") for m in result)
+
+        assert "Archived 5 turns" in all_content
+        assert "Discussion about API design" in all_content
+
+    def test_archive_in_assistant_message(self, openai_runner):
+        """Archive block in assistant message is formatted correctly."""
+        messages = [
+            Message(
+                role="assistant",
+                content="",
+                content_blocks=[
+                    TextBlock(text="Here's what happened earlier:"),
+                    ArchiveBlock(
+                        archive_id="archive-456",
+                        file_path="/path/to/archive.json",
+                        summary="Tool use and results for file operations",
+                        turn_start=0,
+                        turn_end=10,
+                        message_count=10,
+                        token_estimate=3000,
+                    ),
+                ],
+            ),
+        ]
+
+        claude_result = ClaudeRunner.build_context(messages, "continue")
+        openai_result = openai_runner.build_messages(messages, "continue")
+        openai_content = " ".join(m.get("content", "") for m in openai_result)
+
+        # Both should have archive info
+        assert "Archived 10 turns" in claude_result
+        assert "file operations" in claude_result
+        assert "archive-456" in claude_result
+
+        assert "Archived 10 turns" in openai_content
+        assert "file operations" in openai_content
+
+    def test_multiple_archives_in_context(self, openai_runner):
+        """Multiple archive blocks are all included."""
+        messages = [
+            Message(
+                role="system",
+                content="",
+                content_blocks=[
+                    ArchiveBlock(
+                        archive_id="archive-1",
+                        file_path="/path/1.json",
+                        summary="Initial setup discussion",
+                        turn_start=0,
+                        turn_end=5,
+                        message_count=5,
+                        token_estimate=1000,
+                    ),
+                ],
+            ),
+            Message(role="user", content="Middle message"),
+            Message(
+                role="system",
+                content="",
+                content_blocks=[
+                    ArchiveBlock(
+                        archive_id="archive-2",
+                        file_path="/path/2.json",
+                        summary="Implementation details",
+                        turn_start=6,
+                        turn_end=15,
+                        message_count=9,
+                        token_estimate=2000,
+                    ),
+                ],
+            ),
+        ]
+
+        claude_result = ClaudeRunner.build_context(messages, "final")
+
+        assert "Initial setup discussion" in claude_result
+        assert "Implementation details" in claude_result
+        assert "archive-1" in claude_result
+        assert "archive-2" in claude_result
