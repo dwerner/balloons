@@ -15,7 +15,9 @@ from tokenizer import count_tokens
 from session import Session
 from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ArchiveBlock
 from core.tree_state import TreeState, TreeEvent, SessionData, TurnData
+from core.context import ContextBuilder
 from core.json_stream import StreamingJsonParser
+from core.debug_log import debug_log
 
 if TYPE_CHECKING:
     from typing import Any
@@ -485,6 +487,9 @@ class ContextTreeView(Vertical):
         self._spinner_frame: int = 0
         self._spinner_timer: Timer | None = None
 
+        # Background loading flag - when True, observer skips expensive updates
+        self._background_loading: bool = False
+
         # Use provided TreeState or create internal one
         self._state = tree_state if tree_state is not None else TreeState()
         self._owns_state = tree_state is None  # Track if we created it
@@ -542,6 +547,7 @@ class ContextTreeView(Vertical):
         This is the observer callback - translates state changes to UI updates.
         All UI updates should flow through here in response to TreeState changes.
         """
+        debug_log.debug(f"TreeState event: {event.name}", category="tree", details=data)
         if event == TreeEvent.FULL_REBUILD:
             # TreeState was cleared or requests full rebuild
             self._rebuild_tree_with_sort()
@@ -549,7 +555,10 @@ class ContextTreeView(Vertical):
         elif event == TreeEvent.SESSION_ADDED:
             session_id = data.get("session_id")
             if session_id and session_id not in self._session_nodes:
-                self._add_session_node(session_id)
+                # During background loading, skip tree node creation entirely
+                # We'll do a single rebuild at the end
+                if not self._background_loading:
+                    self._add_session_node(session_id, update_root_label=True)
 
         elif event == TreeEvent.SESSION_REMOVED:
             session_id = data.get("session_id")
@@ -609,7 +618,12 @@ class ContextTreeView(Vertical):
             turn_idx = data.get("turn_idx")
             if session_id and turn_idx is not None:
                 self._update_turn_label(session_id, turn_idx)
-                self._update_root_label()
+                # Don't call _update_root_label here - wait for CONTEXT_TOKENS_CHANGED
+                # which fires after app recalculates from compiled context
+
+        elif event == TreeEvent.CONTEXT_TOKENS_CHANGED:
+            # App calculated new token counts - update root label
+            self._update_root_label()
 
         elif event == TreeEvent.SESSION_SELECTED:
             # Current session changed - update labels
@@ -619,7 +633,7 @@ class ContextTreeView(Vertical):
                 self._update_session_label(prev_session_id)
             if session_id:
                 self._update_session_label(session_id)
-            self._update_root_label()
+            # Don't call _update_root_label here - wait for CONTEXT_TOKENS_CHANGED
 
     # --- Spinner Animation ---
 
@@ -651,11 +665,15 @@ class ContextTreeView(Vertical):
         is_active = session_id == self._state.get_current_session_id()
         node.label = self._make_session_label(session_data, is_active)
 
-    def _add_session_node(self, session_id: str) -> None:
+    def _add_session_node(self, session_id: str, update_root_label: bool = True) -> None:
         """Add a single session node to the tree.
 
-        Called when a new session is added (e.g., background fork).
-        Adds the session at the top of the tree (most recent).
+        Called when a new session is added (e.g., background fork or background load).
+        Appends the session to the end of the tree.
+
+        Args:
+            session_id: The session ID to add
+            update_root_label: Whether to update the root label (set False for batch adds)
         """
         session_data = self._state.get_session(session_id)
         if not session_data:
@@ -667,9 +685,7 @@ class ContextTreeView(Vertical):
         # Build session label
         session_label = self._make_session_label_from_session_data(session_data, is_current)
 
-        # Add at the beginning (index 0) so new sessions appear at top
-        # Note: Tree.add() appends, but we want to prepend for "most recent" order
-        # We'll add normally and rely on the next rebuild to sort properly
+        # Append session node
         session_node = tree.root.add(
             session_label,
             data={"type": "session", "session_id": session_id}
@@ -680,7 +696,8 @@ class ContextTreeView(Vertical):
         if session_data.is_loaded and session_data.turns:
             self._add_turns_to_node(session_node, session_id, session_data.turns)
 
-        self._update_root_label()
+        if update_root_label:
+            self._update_root_label()
 
     def _add_streaming_turn_node(self, session_id: str, turn_idx: int, role: str, exchange_id: str | None = None) -> None:
         """Add a placeholder turn node when streaming starts.
@@ -789,6 +806,71 @@ class ContextTreeView(Vertical):
 
         # Build tree with current sort order
         self._rebuild_tree_with_sort()
+
+    def load_current_session_only(self, current_session: Session) -> None:
+        """Load only the current session into the tree immediately.
+
+        This allows the UI to be responsive while other sessions load
+        in the background via start_background_session_load().
+        """
+        # Clear TreeState
+        self._state.clear()
+
+        # Add and fully load the current session
+        self._state.add_session(current_session, is_current=True)
+        self._load_full_session(current_session.id, current_session)
+
+        # Build tree with just this session
+        self._rebuild_tree_with_sort()
+
+    async def start_background_session_load(self, current_session_id: str) -> None:
+        """Load other sessions in the background, yielding to the event loop.
+
+        This method reads session metadata from the index and adds them to
+        TreeState incrementally. Sessions are appended directly to the tree
+        (no rebuild) since the index is sorted by last_modified.
+
+        Args:
+            current_session_id: ID of current session to skip (already loaded)
+        """
+        import asyncio
+        import time
+
+        debug_log.info("Background session load: starting", category="tree")
+        start_time = time.time()
+
+        # Set flag to suppress tree node creation during bulk loading
+        self._background_loading = True
+
+        try:
+            count = 0
+            async for metadata in Session.list_sessions_async():
+                # Skip the current session (already loaded)
+                if metadata["id"] == current_session_id:
+                    continue
+
+                # Skip if already in state (shouldn't happen but be safe)
+                if self._state.get_session(metadata["id"]):
+                    continue
+
+                # Add to TreeState only (no tree node creation due to flag)
+                self._state.add_session_from_metadata(metadata, is_current=False)
+                count += 1
+
+                # Yield to event loop periodically to keep UI responsive
+                if count % 100 == 0:
+                    debug_log.debug(f"Background load: {count} sessions", category="tree")
+                    await asyncio.sleep(0)
+
+        finally:
+            self._background_loading = False
+
+        debug_log.info(f"Background session load: {count} sessions in {(time.time()-start_time)*1000:.0f}ms, starting rebuild", category="tree")
+
+        # Single tree rebuild with all sessions
+        self._rebuild_tree_with_sort()
+
+        debug_log.info(f"Background session load: complete in {(time.time()-start_time)*1000:.0f}ms", category="tree")
 
     def _make_session_label_from_session_data(self, session_data: SessionData, is_active: bool) -> str:
         """Create a label for a session node from SessionData."""
@@ -1253,60 +1335,45 @@ class ContextTreeView(Vertical):
         return f"{indicator} {icon}{tool_indicator}{error_indicator} {preview}"
 
     def _update_root_label(self) -> None:
-        """Update root label with selected context tokens for current session."""
+        """Update root label with selected context tokens for current session.
+
+        Token counts come from TreeState (calculated by app from compiled context).
+        This method also builds turn_modes dict for the chat log.
+        """
+        debug_log.debug("_update_root_label called", category="tree")
         tree = self.query_one("#turn-tree", SelectableTreeWidget)
 
-        selected_tokens = 0
-        current_session_tokens = 0
         current_session_turn_ids = []
         # Build turn_modes dict for current session (1-indexed turn_id -> mode name)
         turn_modes: dict[int, str] = {}
 
         current_session_id = self._state.get_current_session_id()
 
-        # Only count tokens for the current session's context
+        # Build turn_modes and turn_ids for current session
         if current_session_id:
             session_data = self._state.get_session(current_session_id)
             if session_data and session_data.is_loaded and session_data.turns:
                 for turn in session_data.turns:
-                    content = f"{'User' if turn.role == 'user' else 'Assistant'}: {turn.content}"
-                    tokens = count_tokens(content)
-                    current_session_tokens += tokens
                     mode = self._state.get_context_mode(current_session_id, turn.idx)
                     if mode != ContextMode.DROP:
-                        selected_tokens += tokens
                         current_session_turn_ids.append(turn.idx + 1)
-
                     # Build turn_modes for current session
                     turn_id = turn.idx + 1  # 1-indexed
                     turn_modes[turn_id] = mode.name
-
-                # Count merge summaries for current session
-                if session_data.session_ref:
-                    session = session_data.session_ref
-                    for child in session.children:
-                        if child.get("status") == "merged":
-                            fork_id = child.get("session_id", "")
-                            # Load fork to get merge message
-                            fork_session = Session.load(fork_id)
-                            if fork_session and fork_session.merge_message:
-                                merge_tokens = count_tokens(fork_session.merge_message)
-                                current_session_tokens += merge_tokens
-                                mode = self._state.get_merge_mode(current_session_id, fork_id)
-                                if mode != ContextMode.DROP:
-                                    selected_tokens += merge_tokens
 
         included_count = sum(
             1 for m in self._state.get_context_modes_for_session(current_session_id).values()
             if m != ContextMode.DROP
         ) if current_session_id else 0
-        # TODO: Add merge mode counting via TreeState when API is available
+
+        # Get token counts from TreeState (calculated by app from compiled context)
+        selected_tokens, total_tokens = self._state.get_context_tokens()
 
         # Root label shows context selection for current session
-        tree.root.label = f"[bold]Context:[/] {selected_tokens:,} / {current_session_tokens:,} [dim]tokens[/]"
+        tree.root.label = f"[bold]Context:[/] {selected_tokens:,} [dim]tokens[/]"
 
         self.post_message(self.SelectionChanged(
-            included_count, current_session_tokens, selected_tokens, current_session_turn_ids, turn_modes
+            included_count, total_tokens, selected_tokens, current_session_turn_ids, turn_modes
         ))
 
     def _update_turn_label(self, session_id: str, turn_idx: int) -> None:
@@ -2101,80 +2168,89 @@ class ContextTreeView(Vertical):
         Uses lazy loading: only loaded sessions show their turns.
         Unloaded sessions show as collapsed nodes.
         """
+        import time
+        start_time = time.time()
+        debug_log.info("_rebuild_tree_with_sort: starting", category="tree")
+
         tree = self.query_one("#turn-tree", SelectableTreeWidget)
-        tree.root.remove_children()
-        self._session_nodes.clear()
-        self._turn_nodes.clear()
-        self._tool_use_nodes.clear()
 
-        all_sessions = self._state.get_all_sessions()
-        if not all_sessions:
-            self._update_root_label()
-            return
+        # Batch all updates to prevent per-node refreshes
+        with self.app.batch_update():
+            tree.root.remove_children()
+            self._session_nodes.clear()
+            self._turn_nodes.clear()
+            self._tool_use_nodes.clear()
 
-        # Get session data sorted according to current order
-        sorted_session_ids = self._get_sorted_session_ids()
+            all_sessions = self._state.get_all_sessions()
+            debug_log.debug(f"_rebuild_tree_with_sort: {len(all_sessions)} sessions to process", category="tree")
+            if not all_sessions:
+                self._update_root_label()
+                return
 
-        # Determine which sessions to expand (and thus need to be loaded):
-        # - Always expand current session
-        # - Also expand parent session if current is a fork
-        current_session_id = self._state.get_current_session_id()
-        sessions_to_expand = {current_session_id}
-        if current_session_id:
-            current_data = self._state.get_session(current_session_id)
-            if current_data and current_data.parent_id:
-                sessions_to_expand.add(current_data.parent_id)
-                # Ensure parent is loaded too
-                if not self._is_session_loaded(current_data.parent_id):
-                    self._load_full_session(current_data.parent_id)
+            # Get session data sorted according to current order
+            sorted_session_ids = self._get_sorted_session_ids()
 
-        # Rebuild tree nodes for each session
-        for session_id in sorted_session_ids:
-            session_data = self._state.get_session(session_id)
-            if not session_data:
-                continue
-            is_current = session_data.is_current
+            # Determine which sessions to expand (and thus need to be loaded):
+            # - Always expand current session
+            # - Also expand parent session if current is a fork
+            current_session_id = self._state.get_current_session_id()
+            sessions_to_expand = {current_session_id}
+            if current_session_id:
+                current_data = self._state.get_session(current_session_id)
+                if current_data and current_data.parent_id:
+                    sessions_to_expand.add(current_data.parent_id)
+                    # Ensure parent is loaded too
+                    if not self._is_session_loaded(current_data.parent_id):
+                        self._load_full_session(current_data.parent_id)
 
-            # Build session label
-            session_label = self._make_session_label_from_session_data(session_data, is_current)
-            session_node = tree.root.add(
-                session_label,
-                data={"type": "session", "session_id": session_id}
-            )
-            self._session_nodes[session_id] = session_node
+            # Rebuild tree nodes for each session
+            for session_id in sorted_session_ids:
+                session_data = self._state.get_session(session_id)
+                if not session_data:
+                    continue
+                is_current = session_data.is_current
 
-            # Only add turn nodes if session is loaded
-            if session_data.is_loaded and session_data.turns:
-                # Expand loaded sessions that should be expanded
-                if session_id in sessions_to_expand:
-                    session_node.expand()
+                # Build session label
+                session_label = self._make_session_label_from_session_data(session_data, is_current)
+                session_node = tree.root.add(
+                    session_label,
+                    data={"type": "session", "session_id": session_id}
+                )
+                self._session_nodes[session_id] = session_node
 
-                # Rebuild turn nodes grouped by exchange_id
-                self._add_turns_to_node(session_node, session_id, session_data.turns)
+                # Only add turn nodes if session is loaded
+                if session_data.is_loaded and session_data.turns:
+                    # Expand loaded sessions that should be expanded
+                    if session_id in sessions_to_expand:
+                        session_node.expand()
 
-                # Rebuild fork and merge nodes from session_ref if available
-                if session_data.session_ref:
-                    session = session_data.session_ref
-                    fork_points = {}
-                    merge_points = {}
-                    for child in session.children:
-                        fork_point = child.get("fork_point", -1)
-                        merge_point = child.get("merge_point", -1)
-                        if fork_point >= 0:
-                            fork_points.setdefault(fork_point, []).append(child)
-                        if merge_point >= 0 and child.get("status") == "merged":
-                            merge_points.setdefault(merge_point, []).append(child)
+                    # Rebuild turn nodes grouped by exchange_id
+                    self._add_turns_to_node(session_node, session_id, session_data.turns)
 
-                    # Add forks at appropriate positions
-                    for fork_point, forks in fork_points.items():
-                        for fork in forks:
-                            self._add_fork_node(session_node, session_id, fork, tree)
+                    # Rebuild fork and merge nodes from session_ref if available
+                    if session_data.session_ref:
+                        session = session_data.session_ref
+                        fork_points = {}
+                        merge_points = {}
+                        for child in session.children:
+                            fork_point = child.get("fork_point", -1)
+                            merge_point = child.get("merge_point", -1)
+                            if fork_point >= 0:
+                                fork_points.setdefault(fork_point, []).append(child)
+                            if merge_point >= 0 and child.get("status") == "merged":
+                                merge_points.setdefault(merge_point, []).append(child)
 
-                    # Add merges at appropriate positions
-                    for merge_point, merges in merge_points.items():
-                        for merge in merges:
-                            self._add_merge_node(session_node, session_id, merge)
+                        # Add forks at appropriate positions
+                        for fork_point, forks in fork_points.items():
+                            for fork in forks:
+                                self._add_fork_node(session_node, session_id, fork, tree)
 
+                        # Add merges at appropriate positions
+                        for merge_point, merges in merge_points.items():
+                            for merge in merges:
+                                self._add_merge_node(session_node, session_id, merge)
+
+        debug_log.info(f"_rebuild_tree_with_sort: done in {(time.time()-start_time)*1000:.0f}ms", category="tree")
         self._update_root_label()
 
     def _get_sorted_session_ids(self) -> list[str]:

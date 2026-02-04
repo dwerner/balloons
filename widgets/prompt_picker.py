@@ -52,7 +52,10 @@ class PromptPickerModal(ModalScreen[Path | None]):
             yield Static("Select a prompt to edit")
             option_list = OptionList()
             for f in self._prompt_files:
-                option_list.add_option(Option(f.stem, id=str(f)))
+                # Show parent dir name to distinguish app vs user prompts
+                parent = f.parent.name
+                label = f"{f.stem} ({parent})"
+                option_list.add_option(Option(label, id=str(f)))
             yield option_list
 
     def on_mount(self) -> None:

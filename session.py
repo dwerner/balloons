@@ -1,15 +1,240 @@
+import asyncio
 import json
 import uuid
 import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, AsyncIterator
 
 from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock, ArchiveSummary, ContentBlock, ContextMode
 
 
 SESSIONS_DIR = Path.home() / ".balloons" / "sessions"
+INDEX_FILE = SESSIONS_DIR / "index.json"
+INDEX_VERSION = 1
+
+
+class SessionIndex:
+    """Manages the session index file for fast startup.
+
+    The index stores metadata for all sessions, avoiding the need to
+    read each session file individually on startup. The index is updated
+    whenever a session is saved.
+
+    Index structure:
+    {
+        "version": 1,
+        "sessions": {
+            "session_id": {
+                "id": "...",
+                "created": "...",
+                "last_modified": "...",
+                "model": "...",
+                "title": "...",
+                "turn_count": 0,
+                "total_input_tokens": 0,
+                "total_output_tokens": 0,
+                "total_cost": 0.0,
+                "parent_id": null,
+                "children": [],
+                "fork_name": "",
+                "fork_status": "active",
+                "backend_name": "",
+                "cached_context_tokens": 0
+            }
+        }
+    }
+    """
+
+    _instance: "SessionIndex | None" = None
+    _sessions: dict[str, dict]
+    _dirty: bool
+    _file_mtime: float  # Tracks file modification time for cache invalidation
+
+    def __new__(cls) -> "SessionIndex":
+        """Singleton pattern - only one index instance."""
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._sessions = {}
+            cls._instance._dirty = False
+            cls._instance._loaded = False
+            cls._instance._file_mtime = 0.0
+        return cls._instance
+
+    def _get_file_mtime(self) -> float:
+        """Get the index file's modification time, or 0 if it doesn't exist."""
+        try:
+            return INDEX_FILE.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    def _is_stale(self) -> bool:
+        """Check if our in-memory data is stale (file changed on disk)."""
+        if not self._loaded:
+            return False  # Not loaded yet, so not "stale"
+        current_mtime = self._get_file_mtime()
+        return current_mtime > self._file_mtime
+
+    def load(self) -> bool:
+        """Load the index from disk.
+
+        Returns True if index was loaded successfully, False if index
+        doesn't exist or is invalid (requiring a rebuild).
+        """
+        if not INDEX_FILE.exists():
+            return False
+
+        try:
+            self._file_mtime = self._get_file_mtime()
+            data = json.loads(INDEX_FILE.read_text())
+            if data.get("version") != INDEX_VERSION:
+                return False
+            self._sessions = data.get("sessions", {})
+            self._loaded = True
+            self._dirty = False
+            return True
+        except (json.JSONDecodeError, KeyError, OSError):
+            return False
+
+    def reload_if_stale(self) -> bool:
+        """Reload from disk if the file has been modified by another process.
+
+        Returns True if reloaded, False if not needed.
+        """
+        if not self._is_stale():
+            return False
+        self.load()
+        return True
+
+    def save(self) -> None:
+        """Save the index to disk if dirty."""
+        if not self._dirty:
+            return
+
+        SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+        data = {
+            "version": INDEX_VERSION,
+            "sessions": self._sessions,
+        }
+        INDEX_FILE.write_text(json.dumps(data, indent=2))
+        self._dirty = False
+        self._file_mtime = self._get_file_mtime()  # Update mtime after our write
+
+    def get(self, session_id: str) -> dict | None:
+        """Get metadata for a session."""
+        return self._sessions.get(session_id)
+
+    def update(self, session: "Session") -> None:
+        """Update index entry for a session."""
+        turn_count = len(session.turns)
+        self._sessions[session.id] = {
+            "id": session.id,
+            "created": session.created,
+            "last_modified": session.last_modified,
+            "model": session.model,
+            "title": session.title,
+            "turn_count": turn_count,
+            "message_count": turn_count,  # Backwards compat alias
+            "total_input_tokens": session.total_input_tokens,
+            "total_output_tokens": session.total_output_tokens,
+            "total_cost": session.total_cost,
+            "parent_id": session.parent_id,
+            "children": session.children,
+            "fork_name": session.fork_name,
+            "fork_status": session.fork_status,
+            "backend_name": session.backend_name,
+            "cached_context_tokens": session.cached_context_tokens,
+        }
+        self._dirty = True
+
+    def remove(self, session_id: str) -> None:
+        """Remove a session from the index."""
+        if session_id in self._sessions:
+            del self._sessions[session_id]
+            self._dirty = True
+
+    def get_all(self) -> list[dict]:
+        """Get all session metadata, sorted by last_modified descending."""
+        sessions = list(self._sessions.values())
+        sessions.sort(key=lambda x: x.get("last_modified", ""), reverse=True)
+        return sessions
+
+    def rebuild_from_files(self) -> None:
+        """Rebuild the index by scanning all session files.
+
+        This is a fallback when the index doesn't exist or is invalid.
+        """
+        self._sessions = {}
+        if not SESSIONS_DIR.exists():
+            return
+
+        for path in SESSIONS_DIR.glob("*.json"):
+            if path.name == "index.json":
+                continue
+            try:
+                data = json.loads(path.read_text())
+                session_id = data["id"]
+                last_modified = data.get("last_modified", data.get("created", ""))
+                turn_count = len(data.get("turns", []))
+                if turn_count == 0:
+                    for m in data.get("messages", []):
+                        blocks = m.get("content_blocks", [])
+                        turn_count += len(blocks) if blocks else 1
+
+                self._sessions[session_id] = {
+                    "id": session_id,
+                    "created": data["created"],
+                    "last_modified": last_modified,
+                    "model": data.get("model", ""),
+                    "title": data.get("title", ""),
+                    "turn_count": turn_count,
+                    "message_count": turn_count,
+                    "total_input_tokens": data.get("total_input_tokens", 0),
+                    "total_output_tokens": data.get("total_output_tokens", 0),
+                    "total_cost": data.get("total_cost", 0.0),
+                    "parent_id": data.get("parent_id"),
+                    "children": data.get("children", []),
+                    "fork_name": data.get("fork_name", ""),
+                    "fork_status": data.get("fork_status", "active"),
+                    "backend_name": data.get("backend_name", ""),
+                    "cached_context_tokens": data.get("cached_context_tokens", 0),
+                }
+            except (json.JSONDecodeError, KeyError, OSError):
+                continue
+
+        self._dirty = True
+        self._loaded = True
+
+    def is_loaded(self) -> bool:
+        """Check if index has been loaded or rebuilt."""
+        return self._loaded
+
+    def ensure_loaded(self) -> None:
+        """Ensure index is loaded and up-to-date.
+
+        This method:
+        1. Loads the index from disk if not already loaded
+        2. Creates empty index if file is missing/invalid
+        3. Reloads from disk if another process modified the file
+
+        Note: Dir scanning for orphan sessions is disabled for performance.
+        Sessions not in the index will only appear after being saved.
+        """
+        # If already loaded, check if file was modified by another process
+        if self._loaded:
+            if self._is_stale():
+                self.load()
+            return
+
+        # First load
+        if not self.load():
+            # Index missing/invalid - start with empty index
+            # Sessions will be added as they are saved
+            self._sessions = {}
+            self._loaded = True
+            self._dirty = True
+            self.save()
 
 
 @dataclass
@@ -69,6 +294,9 @@ class Session:
     merge_message: str = ""  # User's summary when merging back
     # Backend configuration
     backend_name: str = ""  # Name of backend to use (empty = default)
+    # Cached context token count (calculated from compiled context, not turn content)
+    # This is recalculated when turns change and saved to avoid expensive recomputation on load
+    cached_context_tokens: int = 0
     # Note: Links are stored as LinkBlock content blocks in messages (turn-based).
     # The legacy `links` field has been removed - old sessions with links data
     # will have those links ignored (they were never actively used).
@@ -288,6 +516,11 @@ class Session:
         path = SESSIONS_DIR / f"{self.id}.json"
         if path.exists():
             path.unlink()
+            # Remove from index
+            index = SessionIndex()
+            index.ensure_loaded()
+            index.remove(self.id)
+            index.save()
             return True
         return False
 
@@ -533,8 +766,15 @@ class Session:
             "merge_point_turn": self.merge_point_turn,
             "merge_message": self.merge_message,
             "backend_name": self.backend_name,
+            "cached_context_tokens": self.cached_context_tokens,
         }
         path.write_text(json.dumps(data, indent=2))
+
+        # Update session index
+        index = SessionIndex()
+        index.ensure_loaded()
+        index.update(self)
+        index.save()
 
     @classmethod
     def _load_working_directories(cls, data: dict) -> list[str]:
@@ -657,6 +897,7 @@ class Session:
             merge_point_turn=data.get("merge_point_turn", -1),
             merge_message=data.get("merge_message", ""),
             backend_name=data.get("backend_name", ""),
+            cached_context_tokens=data.get("cached_context_tokens", 0),
         )
 
         # Load turns (new format)
@@ -706,42 +947,51 @@ class Session:
     def list_sessions(cls) -> list[dict]:
         """Return list of session metadata dicts without loading full data.
 
+        Uses the session index for fast lookup. Rebuilds index from files
+        if it doesn't exist.
+
         Returns list of dicts with keys: id, created, last_modified, model, title,
         turn_count, total_input_tokens, total_output_tokens, total_cost,
         parent_id, children, fork_name, fork_status.
         """
-        if not SESSIONS_DIR.exists():
-            return []
-        sessions = []
-        for path in SESSIONS_DIR.glob("*.json"):
-            try:
-                data = json.loads(path.read_text())
-                # For backwards compat, use created if last_modified missing
-                last_modified = data.get("last_modified", data.get("created", ""))
-                # Count turns (new format) or messages (old format for migration)
-                turn_count = len(data.get("turns", []))
-                if turn_count == 0:
-                    # Old format: count content blocks across messages
-                    for m in data.get("messages", []):
-                        blocks = m.get("content_blocks", [])
-                        turn_count += len(blocks) if blocks else 1
-                sessions.append({
-                    "id": data["id"],
-                    "created": data["created"],
-                    "last_modified": last_modified,
-                    "model": data.get("model", ""),
-                    "title": data.get("title", ""),
-                    "turn_count": turn_count,
-                    "message_count": turn_count,  # Backwards compat alias
-                    "total_input_tokens": data.get("total_input_tokens", 0),
-                    "total_output_tokens": data.get("total_output_tokens", 0),
-                    "total_cost": data.get("total_cost", 0.0),
-                    "parent_id": data.get("parent_id"),
-                    "children": data.get("children", []),
-                    "fork_name": data.get("fork_name", ""),
-                    "fork_status": data.get("fork_status", "active"),
-                    "backend_name": data.get("backend_name", ""),
-                })
-            except (json.JSONDecodeError, KeyError):
-                continue
-        return sorted(sessions, key=lambda x: x["created"], reverse=True)
+        index = SessionIndex()
+        index.ensure_loaded()
+        return index.get_all()
+
+    @classmethod
+    async def list_sessions_async(cls) -> AsyncIterator[dict]:
+        """Async generator that yields session metadata dicts one at a time.
+
+        Uses the session index for instant loading. The index is loaded
+        synchronously on first call (fast - just one file read), then
+        sessions are yielded immediately from memory.
+
+        Sessions are yielded in order of last_modified (most recent first).
+
+        Yields dicts with keys: id, created, last_modified, model, title,
+        turn_count, total_input_tokens, total_output_tokens, total_cost,
+        parent_id, children, fork_name, fork_status.
+        """
+        index = SessionIndex()
+
+        # Load index in thread pool if not already loaded
+        if not index.is_loaded():
+            await asyncio.to_thread(index.ensure_loaded)
+
+        # Yield sessions from index (already sorted by last_modified desc)
+        for metadata in index.get_all():
+            yield metadata
+
+    @classmethod
+    def get_most_recent_session_id(cls) -> Optional[str]:
+        """Get the ID of the most recently modified session without loading all data.
+
+        Uses the session index for instant lookup.
+        Returns None if no sessions exist.
+        """
+        index = SessionIndex()
+        index.ensure_loaded()
+        sessions = index.get_all()
+        if sessions:
+            return sessions[0]["id"]  # Already sorted by last_modified desc
+        return None

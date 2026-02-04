@@ -12,8 +12,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .debug_log import debug_log
-from .tools import LINK_TOOL_NAMES
+from .tools import LINK_TOOL_NAMES, BALLOON_TOOL_NAMES
 from .link_tools import execute_link_tool
+from .fork import ForkProposal, ContextAssignment
 
 if TYPE_CHECKING:
     from session import Session
@@ -100,6 +101,8 @@ async def execute_tool(
             return await execute_list(args, working_dir)
         elif name == "balloon":
             return execute_balloon(args)
+        elif name == "propose_fork":
+            return execute_propose_fork(args)
         else:
             return f"Unknown tool: {name}", True
 
@@ -431,3 +434,80 @@ async def execute_list(args: dict, working_dir: str) -> tuple[str, bool]:
 
     except Exception as e:
         return f"Error: {e}", True
+
+
+def execute_propose_fork(args: dict) -> tuple[str, bool]:
+    """Handle a propose_fork tool call.
+
+    This validates the proposal arguments and returns a structured result.
+    The actual UI display and fork creation is handled by the app layer,
+    which intercepts this tool and shows the ForkProposalModal.
+
+    Args:
+        args: Tool arguments containing name, description, context_plan, etc.
+
+    Returns:
+        Tuple of (result_string, is_error)
+    """
+    name = args.get("name")
+    if not name:
+        return "Error: name is required", True
+
+    description = args.get("description")
+    if not description:
+        return "Error: description is required", True
+
+    context_plan = args.get("context_plan", [])
+    if not context_plan:
+        return "Error: context_plan is required (list of context assignments)", True
+
+    # Validate context_plan entries
+    valid_modes = {"copy", "compress", "drop"}
+    for i, assignment in enumerate(context_plan):
+        if not isinstance(assignment, dict):
+            return f"Error: context_plan[{i}] must be an object", True
+
+        if "exchange_range" not in assignment:
+            return f"Error: context_plan[{i}] missing exchange_range", True
+
+        mode = assignment.get("mode", "").lower()
+        if mode not in valid_modes:
+            return f"Error: context_plan[{i}] has invalid mode '{mode}' (must be copy/compress/drop)", True
+
+    # Build the proposal object for the UI layer to use
+    # The actual result is intercepted by the app - this is just acknowledgment
+    return "FORK_PROPOSAL_PENDING", False
+
+
+def parse_fork_proposal(args: dict) -> ForkProposal | None:
+    """Parse tool arguments into a ForkProposal object.
+
+    Called by the app layer when it intercepts a propose_fork tool call.
+
+    Args:
+        args: Tool arguments from the model
+
+    Returns:
+        ForkProposal object, or None if parsing fails
+    """
+    try:
+        name = args.get("name", "")
+        description = args.get("description", "")
+        initial_prompt = args.get("initial_prompt", "")
+
+        context_plan = []
+        for assignment in args.get("context_plan", []):
+            context_plan.append(ContextAssignment(
+                exchange_range=assignment.get("exchange_range", ""),
+                mode=assignment.get("mode", "drop").lower(),
+                reason=assignment.get("reason", ""),
+            ))
+
+        return ForkProposal(
+            name=name,
+            description=description,
+            context_plan=context_plan,
+            initial_prompt=initial_prompt,
+        )
+    except Exception:
+        return None

@@ -5,6 +5,7 @@ from .commands import (
     CommandParser,
     ArchiveCommand,
     RehydrateCommand,
+    ReindexCommand,
     NewSessionCommand,
     CopyTurnsCommand,
     QueryWithCommand,
@@ -40,8 +41,8 @@ from .exceptions import RateLimitError, InputRequiredError, BackendNotFoundError
 from .link_tools import LINK_TOOLS, get_link_tools_prompt, execute_link_tool
 from .openai_runner import OpenAICompatibleRunner
 from .runner_factory import create_runner, resolve_env_var
-from .tools import TOOLS, LINK_TOOLS as LINK_TOOLS_OPENAI, LINK_TOOL_NAMES, get_tools_for_request
-from .tool_executor import execute_tool
+from .tools import TOOLS, LINK_TOOLS as LINK_TOOLS_OPENAI, LINK_TOOL_NAMES, BALLOON_TOOLS, BALLOON_TOOL_NAMES, get_tools_for_request, get_balloon_tools_prompt
+from .tool_executor import execute_tool, parse_fork_proposal
 from .summarizer import Summarizer
 from .context_grouper import (
     ContextGroups,
@@ -74,6 +75,8 @@ from .fork import (
     MergeResult,
     DeriveResult,
     SwitchResult,
+    ForkProposal,
+    ContextAssignment,
 )
 from .json_stream import StreamingJsonParser
 
@@ -83,6 +86,7 @@ __all__ = [
     "CommandParser",
     "ArchiveCommand",
     "RehydrateCommand",
+    "ReindexCommand",
     "NewSessionCommand",
     "CopyTurnsCommand",
     "QueryWithCommand",
@@ -138,8 +142,12 @@ __all__ = [
     "TOOLS",
     "LINK_TOOLS_OPENAI",
     "LINK_TOOL_NAMES",
+    "BALLOON_TOOLS",
+    "BALLOON_TOOL_NAMES",
     "get_tools_for_request",
+    "get_balloon_tools_prompt",
     "execute_tool",
+    "parse_fork_proposal",
     # Summarizer
     "Summarizer",
     # Context grouper
@@ -170,6 +178,8 @@ __all__ = [
     "MergeResult",
     "DeriveResult",
     "SwitchResult",
+    "ForkProposal",
+    "ContextAssignment",
     # JSON streaming
     "StreamingJsonParser",
     # Exceptions

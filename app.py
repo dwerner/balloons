@@ -32,7 +32,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, RequestPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS
+from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, RequestPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult
 from widgets.input_box import CompletionPopup
 from widgets.archive_marker import ArchiveMarker
 from claude_runner import ClaudeRunner
@@ -76,6 +76,7 @@ from core import (
     DebugPauseCommand,
     ArchiveCommand,
     RehydrateCommand,
+    ReindexCommand,
     debug_log,
     create_runner,
     # Streaming
@@ -100,8 +101,9 @@ from core import (
 from core.summarizer import Summarizer
 from core.exceptions import BackendNotFoundError
 from core.context_grouper import group_messages_by_context_mode, build_context_messages
-from core.fork import ForkManager, ForkResult, MergeResult, DeriveResult, SwitchResult
-from core.tree_state import TreeState
+from core.fork import ForkManager, ForkResult, MergeResult, DeriveResult, SwitchResult, ForkProposal
+from core.tool_executor import parse_fork_proposal
+from core.tree_state import TreeState, TreeEvent
 from tokenizer import count_tokens
 
 
@@ -182,6 +184,11 @@ class BalloonsApp(App):
 
     def __init__(self, session: Session = None, backend_config: BackendConfig | None = None):
         super().__init__()
+        # Enable file logging if configured
+        config = get_config()
+        if config.debug_log_file:
+            debug_log.set_log_file(config.debug_log_file)
+            debug_log.info("Debug logging to file enabled", category="startup")
         self._initial_session = session  # Will be loaded into manager
         self.streaming = False  # True if active session is streaming
         self._tree_width = 50
@@ -212,6 +219,9 @@ class BalloonsApp(App):
         self._fork_manager = ForkManager(self._context_builder)
         # Tool preferences per backend (backend_name -> ToolPreferences)
         self._tool_preferences: dict[str, ToolPreferences] = {}
+        # Debounce timer for context token updates during typing
+        self._token_update_timer = None
+        self._pending_token_text = ""
 
     @property
     def session(self) -> Session | None:
@@ -259,12 +269,45 @@ class BalloonsApp(App):
             backend = self._backend_config
         return SessionRunner(session, runner=create_runner(backend))
 
+    def _update_base_context_tokens(self, use_cache: bool = False) -> None:
+        """Calculate and store base context tokens in TreeState.
+
+        This calculates tokens from the compiled context (selected messages)
+        and stores the result in TreeState. Both the tree and status bar
+        can observe this value. Called when turns change or context modes change.
+
+        Args:
+            use_cache: If True and session has cached tokens, use those instead
+                       of recalculating. Use this on session load/switch.
+        """
+        selected_tokens = 0
+        total_tokens = 0
+
+        if self.session:
+            # Check for cached value on load
+            if use_cache and self.session.cached_context_tokens > 0:
+                selected_tokens = self.session.cached_context_tokens
+            else:
+                try:
+                    context_tree = self.query_one("#context-tree", ContextTreeView)
+                    selected_messages = context_tree.get_selected_messages()
+                    if selected_messages:
+                        selected_tokens = self._context_builder.count_messages_tokens(selected_messages)
+                    # Update cached value on session for persistence
+                    self.session.cached_context_tokens = selected_tokens
+                except Exception:
+                    # Tree might not be mounted yet
+                    pass
+            # TODO: Calculate total_tokens from all session turns if needed
+
+        self._tree_state.set_context_tokens(selected_tokens, total_tokens)
+
     def _calculate_context_tokens(self, pending_prompt: str = "") -> int:
         """Calculate estimated context tokens for the next API call.
 
         Includes:
         - System overhead (Claude's built-in ~19.3k or custom system_prompt)
-        - Selected conversation context
+        - Selected conversation context (from TreeState)
         - Pending user input
 
         Args:
@@ -288,22 +331,13 @@ class BalloonsApp(App):
         # Add configured system prompt tokens
         system_tokens += backend.get_system_prompt_tokens()
 
-        # Conversation context from selected messages
-        conversation_tokens = 0
-        if self.session:
-            try:
-                context_tree = self.query_one("#context-tree", ContextTreeView)
-                selected_messages = context_tree.get_selected_messages()
-                if selected_messages:
-                    conversation_tokens = self._context_builder.count_messages_tokens(selected_messages)
-            except Exception:
-                # Tree might not be mounted yet
-                pass
+        # Conversation context from TreeState (base tokens calculated elsewhere)
+        selected_tokens, _ = self._tree_state.get_context_tokens()
 
         # Pending input tokens
         input_tokens = count_tokens(pending_prompt) if pending_prompt else 0
 
-        return system_tokens + conversation_tokens + input_tokens
+        return system_tokens + selected_tokens + input_tokens
 
     def _update_context_tokens(self, pending_prompt: str = "") -> None:
         """Update the status bar with current context token count."""
@@ -343,9 +377,18 @@ class BalloonsApp(App):
 
     def on_mount(self) -> None:
         """Initialize the app after mounting."""
+        # Subscribe to TreeState for context mode changes
+        self._tree_state.add_observer(self._on_tree_state_event)
         # Start the background session polling timer
         self._poll_timer = self.set_interval(0.1, self._poll_background_sessions)
         self._initialize_session()
+
+    def _on_tree_state_event(self, event: TreeEvent, data: dict) -> None:
+        """Handle state changes from TreeState that affect token counts."""
+        if event == TreeEvent.CONTEXT_MODE_CHANGED:
+            # Context mode changed - recalculate base tokens
+            self._update_base_context_tokens()
+            self._update_context_tokens()
 
     def _update_streaming_count(self) -> None:
         """Update the status bar with total streaming sessions count."""
@@ -498,6 +541,7 @@ class BalloonsApp(App):
                 if session:
                     status_bar.update_stats(cost=session.total_cost)
                 # Update context tokens now that new messages are added
+                self._update_base_context_tokens()
                 self._update_context_tokens()
 
         elif isinstance(action, ToolUseStartAction):
@@ -539,6 +583,19 @@ class BalloonsApp(App):
                 action.tool_input,
                 action.tool_index,
             )
+
+            # Intercept propose_fork tool - show modal before execution
+            if action.tool_name == "propose_fork" and is_active:
+                proposal = parse_fork_proposal(action.tool_input)
+                if proposal:
+                    self._handle_fork_proposal(
+                        proposal,
+                        action.tool_use_id,
+                        session_id,
+                        ctx,
+                    )
+                    # Don't show normal tool UI for propose_fork
+                    return
 
             if is_active:
                 # Finish streaming tool widget with formatted content
@@ -1035,32 +1092,11 @@ class BalloonsApp(App):
             if session:
                 return session, config.last_view_turn_index
 
-        # Fall back to most recently modified
-        all_sessions = Session.list_sessions()
-        if not all_sessions:
+        # Fall back to most recently modified (fast path using file mtime)
+        session_id = Session.get_most_recent_session_id()
+        if not session_id:
             return None, None
 
-        sort_order = config.session_sort_order
-
-        # Sort sessions according to preference
-        # list_sessions returns list of dicts with keys: id, created, last_modified, etc.
-        if sort_order == "modified_desc":
-            all_sessions.sort(key=lambda x: x["last_modified"], reverse=True)
-        elif sort_order == "modified_asc":
-            all_sessions.sort(key=lambda x: x["last_modified"])
-        elif sort_order == "date_desc":
-            all_sessions.sort(key=lambda x: x["created"], reverse=True)
-        elif sort_order == "date_asc":
-            all_sessions.sort(key=lambda x: x["created"])
-        elif sort_order in ("title_asc", "title_desc"):
-            # For title sort, still default to most recently modified
-            all_sessions.sort(key=lambda x: x["last_modified"], reverse=True)
-        else:
-            # Default: most recently modified
-            all_sessions.sort(key=lambda x: x["last_modified"], reverse=True)
-
-        # Load the first session (top of sorted list)
-        session_id = all_sessions[0]["id"]
         session = self._manager.load_session(session_id)
         return session, None  # No saved turn index for fallback
 
@@ -1088,8 +1124,18 @@ class BalloonsApp(App):
         input_box = self.query_one("#input-box", InputBox)
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
 
-        # Load all sessions into tree (current session's turns auto-selected)
-        context_tree.load_all_sessions(self.session)
+        # Pre-seed TreeState with cached token count from session
+        # This ensures the tree displays correct count immediately
+        if self.session.cached_context_tokens > 0:
+            self._tree_state.set_context_tokens(self.session.cached_context_tokens, 0)
+
+        # Load only the current session immediately (fast startup)
+        context_tree.load_current_session_only(self.session)
+
+        # Background loading disabled - use :reindex to load all sessions
+        # The background loading was blocking the UI for ~40s+ with 255 sessions
+        # import asyncio
+        # asyncio.create_task(context_tree.start_background_session_load(self.session.id))
 
         # Load current session's messages into chat view
         if self.session.turns:
@@ -1129,22 +1175,36 @@ class BalloonsApp(App):
         # Focus the input box
         input_box.focus()
 
-        # Scroll to restored turn if we have one
+        # Scroll to restored turn, or default to the bottom/last message
         if restore_turn_index is not None and restore_turn_index < len(self.session.turns):
             # Turn IDs in chat_log are 1-indexed
             turn_id = restore_turn_index + 1
             # Use call_after_refresh to ensure widgets are laid out before scrolling
             # Use default argument to capture turn_id value (avoid late binding)
             self.call_after_refresh(lambda tid=turn_id: chat_log.scroll_to_turn(tid))
+        elif self.session.turns:
+            # No saved position - scroll to the last turn
+            turn_id = len(self.session.turns)
+            self.call_after_refresh(lambda tid=turn_id: chat_log.scroll_to_turn(tid))
 
-        # Initial context token update
+        # Initial context token update (use cache on startup)
+        self._update_base_context_tokens(use_cache=True)
         self._update_context_tokens()
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         """Handle text changes in the input box - update context token count live."""
         # Only handle events from our input box
         if event.text_area.id == "input-box":
-            self._update_context_tokens(event.text_area.text)
+            # Debounce token updates to avoid lag during fast typing
+            self._pending_token_text = event.text_area.text
+            if self._token_update_timer is not None:
+                self._token_update_timer.stop()
+            self._token_update_timer = self.set_timer(0.15, self._do_debounced_token_update)
+
+    def _do_debounced_token_update(self) -> None:
+        """Actually update token count after debounce delay."""
+        self._token_update_timer = None
+        self._update_context_tokens(self._pending_token_text)
 
     def on_input_box_completion_changed(self, event: InputBox.CompletionChanged) -> None:
         """Handle completion popup visibility changes."""
@@ -1324,6 +1384,8 @@ class BalloonsApp(App):
             await self._handle_archive_command(cmd.prompt)
         elif isinstance(cmd, RehydrateCommand):
             await self._handle_rehydrate_command()
+        elif isinstance(cmd, ReindexCommand):
+            self._handle_reindex_command()
 
     def _format_tool_use(
         self, event: ToolUseEvent
@@ -1399,6 +1461,7 @@ class BalloonsApp(App):
         status_bar.set_status("New session created", animate=False)
 
         # Update context tokens for new empty session
+        self._update_base_context_tokens()
         self._update_context_tokens()
 
         # If a prompt was provided, send it
@@ -1805,8 +1868,7 @@ class BalloonsApp(App):
         if not config_path.exists():
             config_path.write_text("# Balloons configuration\n# See config/config.sample.yaml for examples\n\ndefault_backend: claude\n\nbackends:\n  claude:\n    # Uses ANTHROPIC_API_KEY from environment\n")
 
-        # Get editor from environment
-        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
+        editor = config.get_editor()
 
         with self.suspend():
             os.system(f"{editor} {config_path!s}")
@@ -1815,16 +1877,23 @@ class BalloonsApp(App):
         """Open a prompt file in external editor.
 
         If prompt_name is empty, show a picker with available prompts.
+        Shows app prompts and user prompts from ~/.balloons/prompts/.
         """
-        prompts_dir = Path(__file__).parent / "prompts"
         status_bar = self.query_one("#status-bar", StatusBar)
 
-        if not prompts_dir.exists():
-            status_bar.set_error("Prompts directory not found")
-            return
+        # Collect all prompt files
+        prompt_files: list[Path] = []
 
-        # List available prompt files
-        prompt_files = list(prompts_dir.glob("*.md"))
+        # Internal app prompts
+        app_prompts_dir = Path(__file__).parent / "prompts"
+        if app_prompts_dir.exists():
+            prompt_files.extend(app_prompts_dir.glob("*.md"))
+
+        # User prompts directory
+        user_prompts_dir = Path.home() / ".balloons" / "prompts"
+        if user_prompts_dir.exists():
+            prompt_files.extend(user_prompts_dir.glob("*.md"))
+
         if not prompt_files:
             status_bar.set_error("No prompt files found")
             return
@@ -1861,7 +1930,9 @@ class BalloonsApp(App):
 
     def _open_prompt_in_editor(self, prompt_path: Path) -> None:
         """Open a prompt file in the external editor."""
-        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
+        from config import Config
+        config = Config.load()
+        editor = config.get_editor()
         with self.suspend():
             os.system(f"{editor} {prompt_path!s}")
 
@@ -2091,6 +2162,101 @@ class BalloonsApp(App):
     async def _generate_merge_summary(self, fork_session: Session, user_prompt: str = "") -> str:
         """Generate a summary of what was accomplished in a fork."""
         return await self._summarizer.generate_merge_summary(fork_session, user_prompt)
+
+    # ===== FORK PROPOSAL HANDLING =====
+
+    def _handle_fork_proposal(
+        self,
+        proposal: ForkProposal,
+        tool_use_id: str,
+        session_id: str,
+        ctx: StreamingContext,
+    ) -> None:
+        """Handle a propose_fork tool call by showing the modal.
+
+        When the LLM calls propose_fork, we show a modal for the user to
+        accept, modify, or reject the proposal.
+        """
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        # Generate exchange summaries for the modal
+        exchange_summaries = self._get_exchange_summaries(session_id)
+
+        def on_result(result: ForkProposalResult | None) -> None:
+            if result is None or not result.accepted:
+                # User rejected
+                status_bar.set_status("Fork proposal rejected")
+                return
+
+            # User accepted - apply context modes and create fork
+            asyncio.create_task(self._execute_fork_proposal(
+                result.proposal,
+                session_id,
+                ctx,
+            ))
+
+        self.push_screen(
+            ForkProposalModal(proposal, exchange_summaries),
+            on_result,
+        )
+
+    def _get_exchange_summaries(self, session_id: str) -> list[str]:
+        """Get short summaries of each exchange for display in the proposal modal."""
+        summaries = []
+        groups = self._tree_state.get_turns_grouped_by_exchange(session_id)
+
+        for group in groups:
+            if not group:
+                continue
+            # Get first meaningful content from the group
+            first_turn = group[0]
+            content = first_turn.content or ""
+            # Truncate for display
+            if len(content) > 80:
+                content = content[:77] + "..."
+            # Remove newlines for single-line display
+            content = content.replace("\n", " ").strip()
+            role = first_turn.role
+            summaries.append(f"[{role}] {content}")
+
+        return summaries
+
+    async def _execute_fork_proposal(
+        self,
+        proposal: ForkProposal,
+        session_id: str,
+        ctx: StreamingContext,
+    ) -> None:
+        """Execute an accepted fork proposal by setting context modes and creating the fork."""
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        # Get exchange groups to map exchange indices to turn indices
+        groups = self._tree_state.get_turns_grouped_by_exchange(session_id)
+        total_exchanges = len(groups)
+
+        # Resolve the proposal's context plan to exchange indices
+        exchange_modes = proposal.resolve_exchange_indices(total_exchanges)
+
+        # Apply context modes to all turns in each exchange
+        # (TreeState fires CONTEXT_MODE_CHANGED events which update the tree)
+        for exchange_idx, mode in exchange_modes.items():
+            if exchange_idx < len(groups):
+                for turn in groups[exchange_idx]:
+                    self._tree_state.set_context_mode(session_id, turn.idx, mode)
+
+        self._update_context_tokens()
+
+        # Show confirmation
+        status_bar.set_status(f"Creating fork: {proposal.name}")
+
+        # Create the fork with the proposal's settings
+        # Use initial_prompt if provided, otherwise a default
+        prompt = proposal.initial_prompt or f"Continue with: {proposal.description}"
+        await self._handle_fork_command(
+            prompt=prompt,
+            name=proposal.name,
+            background=False,
+        )
 
     # ===== FORK/MERGE COMMANDS =====
 
@@ -2577,6 +2743,12 @@ class BalloonsApp(App):
             self._manager._sessions[session.id] = session
             self._manager._runners[session.id] = self._create_session_runner(session)
         self._manager.set_active(session.id)
+
+        # Pre-seed TreeState with cached token count before switching
+        # This ensures the tree displays correct count immediately
+        if session.cached_context_tokens > 0:
+            self._tree_state.set_context_tokens(session.cached_context_tokens, 0)
+
         context_tree.set_active_session(session.id)
 
         # Update breadcrumb to show current position in hierarchy
@@ -2666,7 +2838,8 @@ class BalloonsApp(App):
                 turn_modes[turn_id] = mode.name
             chat_log.set_turn_context_modes(turn_modes)
 
-        # Update context tokens for the new session
+        # Update context tokens for the new session (use cache on switch)
+        self._update_base_context_tokens(use_cache=True)
         self._update_context_tokens()
 
         # Save the new view position
@@ -2687,8 +2860,7 @@ class BalloonsApp(App):
         chat_log = self.query_one("#chat-log", ChatLogView)
         # Use visual indication instead of hiding
         chat_log.set_turn_context_modes(event.turn_modes)
-        # Update context tokens when selection changes
-        self._update_context_tokens()
+        # Token count already updated via TreeState observer
 
     def on_chat_log_view_context_mode_toggle_requested(self, event: ChatLogView.ContextModeToggleRequested) -> None:
         """Handle click on chat widget to toggle its context mode."""
@@ -2717,11 +2889,8 @@ class BalloonsApp(App):
             self.session.turns[turn_idx].context_mode = new_mode
             self.session.save()
 
-        # Update tree label and trigger SelectionChanged to update chat visuals
+        # Update tree label - root label and token count updated via TreeState observer
         context_tree._update_turn_label(self.session.id, turn_idx)
-        context_tree._update_root_label()
-        # Update context tokens when mode changes
-        self._update_context_tokens()
 
     def on_context_tree_view_context_mode_changed(self, event: ContextTreeView.ContextModeChanged) -> None:
         """Handle context mode change from tree - persist to session."""
@@ -3088,19 +3257,18 @@ class BalloonsApp(App):
         """Handle nested tree selection changes - apply visual context mode indicators."""
         chat_log = self.query_one("#chat-log", ChatLogView)
         chat_log.set_turn_context_modes(event.turn_modes)
-        # Update context tokens when selection changes
-        self._update_context_tokens()
+        # Token count already updated via TreeState observer
 
     def on_nested_tree_view_context_mode_changed(self, event: NestedTreeView.ContextModeChanged) -> None:
         """Handle context mode change from nested tree - persist to session."""
-        # Also update ContextTreeView's local state to keep them in sync
+        # Update TreeState - this triggers observer chain for token recalculation
         context_tree = self.query_one("#context-tree", ContextTreeView)
         if event.new_mode == ContextMode.DROP:
             context_tree._state.remove_context_mode(event.session_id, event.turn_idx)
         else:
             context_tree._state.set_context_mode(event.session_id, event.turn_idx, event.new_mode)
+        # Turn label updated here; root label and tokens updated via TreeState observer
         context_tree._update_turn_label(event.session_id, event.turn_idx)
-        context_tree._update_root_label()
 
         # Persist to session
         if self.session and self.session.id == event.session_id:
@@ -3111,9 +3279,6 @@ class BalloonsApp(App):
         if session and event.turn_idx < len(session.turns):
             session.turns[event.turn_idx].context_mode = event.new_mode
             session.save()
-
-        # Update context tokens when mode changes
-        self._update_context_tokens()
 
     def on_nested_tree_view_session_activated(self, event: NestedTreeView.SessionActivated) -> None:
         """Handle clicking on a session in nested tree - switch to it."""
@@ -3279,6 +3444,25 @@ class BalloonsApp(App):
         debug_log.enabled = not debug_log.enabled
         state = "enabled" if debug_log.enabled else "paused"
         self.notify(f"Debug logging {state}")
+
+    def _handle_reindex_command(self) -> None:
+        """Rebuild the session index from disk."""
+        from session import SessionIndex
+        status_bar = self.query_one("#status-bar", StatusBar)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+
+        status_bar.set_status("Rebuilding session index...", animate=True)
+
+        # Force rebuild
+        index = SessionIndex()
+        index.rebuild_from_files()
+        index.save()
+
+        session_count = len(index._sessions)
+        status_bar.set_status(f"Index rebuilt: {session_count} sessions", animate=False)
+
+        # Reload tree with new index data
+        context_tree.load_all_sessions(self.session)
 
     def action_show_help(self) -> None:
         """Show the help modal."""

@@ -164,6 +164,70 @@ TOOLS = [
     },
 ]
 
+# Balloons-specific tools - for UI interaction and workflow
+BALLOON_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_fork",
+            "description": """Propose creating a fork with curated context. Use this when you've analyzed a task and want to suggest an implementation path with optimized starting context. This allows you to specify which exchanges should be fully included (copy), summarized (compress), or excluded (drop) in the new fork.
+
+When you call this tool, the user will see a visual representation of your proposal showing:
+- The fork name and what it will accomplish
+- Which exchanges you've selected to keep, summarize, or drop
+- Your reasoning for each context decision
+
+The user can then accept the proposal (creating the fork), modify your suggestions, or reject it.
+
+Use this instead of asking "Would you like me to implement this?" when you have a clear implementation plan and want to start with focused context.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Short name for the fork (e.g., 'implement-cache-layer', 'fix-auth-bug')"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "What this fork will accomplish - the implementation goal"
+                    },
+                    "context_plan": {
+                        "type": "array",
+                        "description": "List of context mode assignments for exchanges",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "exchange_range": {
+                                    "type": "string",
+                                    "description": "Exchange range: '0-2' (indices 0,1,2), '5' (single), 'last' (most recent), 'last-2' (last 3), '-3' (last 3), 'all'"
+                                },
+                                "mode": {
+                                    "type": "string",
+                                    "enum": ["copy", "compress", "drop"],
+                                    "description": "copy=include verbatim, compress=LLM summarizes, drop=exclude"
+                                },
+                                "reason": {
+                                    "type": "string",
+                                    "description": "Why this mode for these exchanges (shown to user)"
+                                }
+                            },
+                            "required": ["exchange_range", "mode"]
+                        }
+                    },
+                    "initial_prompt": {
+                        "type": "string",
+                        "description": "Optional starting prompt for the fork (what to do first)"
+                    }
+                },
+                "required": ["name", "description", "context_plan"]
+            }
+        }
+    },
+]
+
+# Names of balloon tools for easy checking
+BALLOON_TOOL_NAMES = {"propose_fork"}
+
 # Link navigation tools - for traversing linked sessions
 LINK_TOOLS = [
     {
@@ -228,15 +292,18 @@ LINK_TOOL_NAMES = {"list_links", "follow_link", "search_linked_session"}
 
 def get_tools_for_request(
     allowed_tools: list[str] | None = None,
-    disable_tools: bool = False
+    disable_tools: bool = False,
+    include_balloon_tools: bool = True,
 ) -> list[dict] | None:
     """Get the list of tools to include in an API request.
 
-    Includes both standard file/shell tools and link navigation tools.
+    Includes standard file/shell tools, link navigation tools, and optionally
+    Balloons-specific workflow tools.
 
     Args:
         allowed_tools: List of tool names to allow, or None for all
         disable_tools: If True, return None (no tools)
+        include_balloon_tools: If True, include propose_fork and other balloon tools
 
     Returns:
         List of tool definitions, or None if tools disabled
@@ -244,8 +311,10 @@ def get_tools_for_request(
     if disable_tools:
         return None
 
-    # Combine standard tools and link tools
+    # Combine all tool categories
     all_tools = TOOLS + LINK_TOOLS
+    if include_balloon_tools:
+        all_tools = all_tools + BALLOON_TOOLS
 
     if allowed_tools is None:
         return all_tools
@@ -255,3 +324,58 @@ def get_tools_for_request(
         tool for tool in all_tools
         if tool["function"]["name"] in allowed_tools
     ]
+
+
+def get_balloon_tools_prompt() -> str:
+    """Generate the system prompt section describing Balloons workflow tools.
+
+    Returns:
+        Prompt text describing the propose_fork tool and usage.
+    """
+    return """## Balloons Workflow Tools
+
+You have access to special workflow tools for managing conversation context.
+
+### propose_fork Tool
+
+When you've analyzed a task and want to suggest an implementation approach, you can
+propose creating a "fork" - a new conversation branch with curated context.
+
+**When to use:**
+- You've discussed and planned an implementation approach
+- You want to start coding with focused, minimal context
+- You see an opportunity to drop irrelevant early exploration
+
+**Tool format:**
+```json
+{
+  "name": "propose_fork",
+  "args": {
+    "name": "short-fork-name",
+    "description": "What this fork will accomplish",
+    "context_plan": [
+      {"exchange_range": "0", "mode": "copy", "reason": "Contains the requirements"},
+      {"exchange_range": "1-3", "mode": "compress", "reason": "Background exploration - summarize"},
+      {"exchange_range": "last", "mode": "copy", "reason": "Contains the implementation plan"}
+    ],
+    "initial_prompt": "Let's start by creating the data model..."
+  }
+}
+```
+
+**Context modes:**
+- `copy`: Include exchange verbatim (for critical details)
+- `compress`: LLM summarizes before forking (for background)
+- `drop`: Exclude from fork (irrelevant tangents)
+
+**Exchange ranges:**
+- `"0"`, `"5"`: Single exchange by index
+- `"0-3"`: Range of exchanges (inclusive)
+- `"last"`: Most recent exchange
+- `"last-2"`: Last 3 exchanges
+- `"-3"`: Last 3 exchanges (negative indexing)
+- `"all"`: All exchanges
+
+When you call this tool, the user sees your proposal visually and can accept, modify,
+or reject it. If accepted, the fork is created with your suggested context.
+"""

@@ -9,6 +9,8 @@ from core.fork import (
     MergeResult,
     DeriveResult,
     SwitchResult,
+    ForkProposal,
+    ContextAssignment,
 )
 from models import Message, TextBlock, ContextMode
 
@@ -274,3 +276,156 @@ class TestForkManager:
 
         assert not result.success
         assert "no fork found" in result.error.lower()
+
+
+class TestForkProposal:
+    """Tests for ForkProposal context resolution."""
+
+    def test_resolve_single_index(self):
+        """Single index should resolve to one exchange."""
+        proposal = ForkProposal(
+            name="test",
+            description="test",
+            context_plan=[
+                ContextAssignment(exchange_range="2", mode="copy"),
+            ],
+        )
+
+        result = proposal.resolve_exchange_indices(5)
+
+        assert result == {2: ContextMode.COPY}
+
+    def test_resolve_range(self):
+        """Range should resolve to multiple exchanges."""
+        proposal = ForkProposal(
+            name="test",
+            description="test",
+            context_plan=[
+                ContextAssignment(exchange_range="0-2", mode="copy"),
+            ],
+        )
+
+        result = proposal.resolve_exchange_indices(5)
+
+        assert result == {
+            0: ContextMode.COPY,
+            1: ContextMode.COPY,
+            2: ContextMode.COPY,
+        }
+
+    def test_resolve_last(self):
+        """'last' should resolve to final exchange."""
+        proposal = ForkProposal(
+            name="test",
+            description="test",
+            context_plan=[
+                ContextAssignment(exchange_range="last", mode="copy"),
+            ],
+        )
+
+        result = proposal.resolve_exchange_indices(5)
+
+        assert result == {4: ContextMode.COPY}
+
+    def test_resolve_last_n(self):
+        """'last-N' should resolve to last N+1 exchanges."""
+        proposal = ForkProposal(
+            name="test",
+            description="test",
+            context_plan=[
+                ContextAssignment(exchange_range="last-2", mode="compress"),
+            ],
+        )
+
+        result = proposal.resolve_exchange_indices(5)
+
+        assert result == {
+            2: ContextMode.COMPRESS,
+            3: ContextMode.COMPRESS,
+            4: ContextMode.COMPRESS,
+        }
+
+    def test_resolve_negative(self):
+        """Negative index should resolve to last N exchanges."""
+        proposal = ForkProposal(
+            name="test",
+            description="test",
+            context_plan=[
+                ContextAssignment(exchange_range="-2", mode="drop"),
+            ],
+        )
+
+        result = proposal.resolve_exchange_indices(5)
+
+        assert result == {
+            3: ContextMode.DROP,
+            4: ContextMode.DROP,
+        }
+
+    def test_resolve_all(self):
+        """'all' should resolve to all exchanges."""
+        proposal = ForkProposal(
+            name="test",
+            description="test",
+            context_plan=[
+                ContextAssignment(exchange_range="all", mode="compress"),
+            ],
+        )
+
+        result = proposal.resolve_exchange_indices(3)
+
+        assert result == {
+            0: ContextMode.COMPRESS,
+            1: ContextMode.COMPRESS,
+            2: ContextMode.COMPRESS,
+        }
+
+    def test_resolve_multiple_assignments(self):
+        """Multiple assignments should all be applied, later overriding earlier."""
+        proposal = ForkProposal(
+            name="test",
+            description="test",
+            context_plan=[
+                ContextAssignment(exchange_range="all", mode="drop"),
+                ContextAssignment(exchange_range="0", mode="copy"),
+                ContextAssignment(exchange_range="last", mode="copy"),
+            ],
+        )
+
+        result = proposal.resolve_exchange_indices(5)
+
+        assert result == {
+            0: ContextMode.COPY,
+            1: ContextMode.DROP,
+            2: ContextMode.DROP,
+            3: ContextMode.DROP,
+            4: ContextMode.COPY,
+        }
+
+    def test_resolve_out_of_range(self):
+        """Out of range indices should be ignored."""
+        proposal = ForkProposal(
+            name="test",
+            description="test",
+            context_plan=[
+                ContextAssignment(exchange_range="10", mode="copy"),
+            ],
+        )
+
+        result = proposal.resolve_exchange_indices(5)
+
+        assert result == {}
+
+    def test_resolve_empty_session(self):
+        """Empty session should return empty dict."""
+        proposal = ForkProposal(
+            name="test",
+            description="test",
+            context_plan=[
+                ContextAssignment(exchange_range="all", mode="copy"),
+            ],
+        )
+
+        result = proposal.resolve_exchange_indices(0)
+
+        assert result == {}

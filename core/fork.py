@@ -13,7 +13,7 @@ Terminology:
 from dataclasses import dataclass, field
 from typing import Optional, Any
 
-from models import Message, TextBlock
+from models import Message, TextBlock, ContextMode
 from session import Session
 from .context_grouper import group_messages_by_context_mode, ContextGroups
 
@@ -21,6 +21,109 @@ from .context_grouper import group_messages_by_context_mode, ContextGroups
 # =============================================================================
 # Result Dataclasses - UI-agnostic operation results
 # =============================================================================
+
+@dataclass
+class ContextAssignment:
+    """A context mode assignment for a range of exchanges.
+
+    Used by LLM to propose which exchanges should be COPY/COMPRESS/DROP.
+    """
+    exchange_range: str  # e.g., "0-2", "5", "last", "all"
+    mode: str  # "copy", "compress", "drop"
+    reason: str = ""  # Why this mode for these exchanges
+
+
+@dataclass
+class ForkProposal:
+    """A proposed fork with curated context, suggested by the LLM.
+
+    When an LLM wants to suggest starting an implementation task with
+    optimized context, it can call the propose_fork tool to create this
+    proposal. The user sees a visual representation and can accept,
+    modify, or reject it.
+    """
+    name: str  # Short fork name (e.g., "implement-cache-layer")
+    description: str  # What this fork will accomplish
+    context_plan: list[ContextAssignment] = field(default_factory=list)
+    initial_prompt: str = ""  # Optional starting prompt
+
+    def resolve_exchange_indices(self, total_exchanges: int) -> dict[int, ContextMode]:
+        """Convert exchange_range strings to actual indices with modes.
+
+        Args:
+            total_exchanges: Total number of exchanges in the session
+
+        Returns:
+            Dict mapping exchange index -> ContextMode
+        """
+        result: dict[int, ContextMode] = {}
+
+        for assignment in self.context_plan:
+            mode = ContextMode(assignment.mode)
+            indices = self._parse_range(assignment.exchange_range, total_exchanges)
+            for idx in indices:
+                result[idx] = mode
+
+        return result
+
+    def _parse_range(self, range_str: str, total: int) -> list[int]:
+        """Parse an exchange range string into indices.
+
+        Supports:
+        - "0-2": indices 0, 1, 2
+        - "5": just index 5
+        - "last": last exchange
+        - "last-2": last 3 exchanges
+        - "all": all exchanges
+        - "-3": last 3 (negative indexing)
+        """
+        range_str = range_str.strip().lower()
+
+        if range_str == "all":
+            return list(range(total))
+
+        if range_str == "last":
+            return [total - 1] if total > 0 else []
+
+        # Handle "last-N" format (e.g., "last-2" means last 3 exchanges)
+        if range_str.startswith("last-"):
+            try:
+                n = int(range_str[5:])
+                start = max(0, total - n - 1)
+                return list(range(start, total))
+            except ValueError:
+                return []
+
+        # Handle negative index (e.g., "-3" means last 3)
+        if range_str.startswith("-") and range_str[1:].isdigit():
+            try:
+                n = int(range_str[1:])
+                start = max(0, total - n)
+                return list(range(start, total))
+            except ValueError:
+                return []
+
+        # Handle range "X-Y"
+        if "-" in range_str and not range_str.startswith("-"):
+            parts = range_str.split("-")
+            if len(parts) == 2:
+                try:
+                    start = int(parts[0])
+                    end = int(parts[1])
+                    return list(range(max(0, start), min(total, end + 1)))
+                except ValueError:
+                    return []
+
+        # Single index
+        try:
+            idx = int(range_str)
+            if 0 <= idx < total:
+                return [idx]
+        except ValueError:
+            pass
+
+        return []
+
 
 @dataclass
 class ForkResult:

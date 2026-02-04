@@ -205,6 +205,16 @@ class RehydrateCommand(Command):
     archive_id: str = ""  # Archive ID (optional, used when triggered from marker click)
 
 
+@dataclass
+class ReindexCommand(Command):
+    """Rebuild the session index from disk.
+
+    Scans all session files and rebuilds the index with their metadata.
+    Use this if sessions are missing from the tree or index is corrupted.
+    """
+    pass
+
+
 # Command documentation for help display
 COMMAND_DOCS = [
     # Session management
@@ -237,6 +247,7 @@ COMMAND_DOCS = [
     (":debug", "Toggle debug log pane visibility"),
     (":debug-pause", "Toggle debug logging on/off"),
     (":debug-clear", "Clear all debug log entries"),
+    (":reindex", "Rebuild session index from disk"),
     (":help", "Show this help"),
 ]
 
@@ -396,6 +407,10 @@ class CommandParser:
         # Handle :rehydrate
         if text == ":rehydrate":
             return RehydrateCommand()
+
+        # Handle :reindex
+        if text == ":reindex":
+            return ReindexCommand()
 
         # Unknown command
         cmd_name = text.split()[0]

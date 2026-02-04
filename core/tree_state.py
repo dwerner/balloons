@@ -90,6 +90,7 @@ class SessionData:
     fork_name: str
     fork_status: str
     backend_name: str = ""  # Name of backend to use (empty = default)
+    cached_context_tokens: int = 0  # Cached token count from compiled context
 
     # Runtime state
     is_current: bool = False
@@ -119,6 +120,7 @@ class TreeEvent(Enum):
     TOOL_RESULT_ADDED = "tool_result_added"
 
     CONTEXT_MODE_CHANGED = "context_mode_changed"
+    CONTEXT_TOKENS_CHANGED = "context_tokens_changed"
 
     STREAMING_STARTED = "streaming_started"
     STREAMING_STOPPED = "streaming_stopped"
@@ -161,6 +163,10 @@ class TreeState:
         # Session color assignments for visual distinction
         self._session_colors: dict[str, str] = {}
 
+        # Context token counts (set by app, consumed by views)
+        self._selected_context_tokens: int = 0
+        self._total_session_tokens: int = 0
+
         # Observer callbacks
         self._observers: list[ObserverCallback] = []
 
@@ -191,6 +197,7 @@ class TreeState:
 
     def add_session(self, session: SessionProtocol, is_current: bool = False) -> None:
         """Add or update a session in the state."""
+        cached_tokens = session.cached_context_tokens if hasattr(session, 'cached_context_tokens') else 0
         session_data = SessionData(
             id=session.id,
             created=session.created,
@@ -206,6 +213,7 @@ class TreeState:
             fork_name=session.fork_name,
             fork_status=session.fork_status,
             backend_name=session.backend_name,
+            cached_context_tokens=cached_tokens,
             is_current=is_current,
             session_ref=session,
         )
@@ -243,6 +251,7 @@ class TreeState:
             fork_name=metadata.get("fork_name", ""),
             fork_status=metadata.get("fork_status", "active"),
             backend_name=metadata.get("backend_name", ""),
+            cached_context_tokens=metadata.get("cached_context_tokens", 0),
             is_current=is_current,
         )
 
@@ -737,6 +746,32 @@ class TreeState:
         ]
         for key in keys_to_remove:
             del self._context_modes[key]
+
+    # --- Context Token Counts ---
+
+    def set_context_tokens(self, selected_tokens: int, total_tokens: int) -> None:
+        """Set the context token counts (called by app after calculating from compiled context).
+
+        Args:
+            selected_tokens: Tokens from selected (non-DROP) turns
+            total_tokens: Total tokens from all turns in current session
+        """
+        if (self._selected_context_tokens != selected_tokens or
+                self._total_session_tokens != total_tokens):
+            self._selected_context_tokens = selected_tokens
+            self._total_session_tokens = total_tokens
+            self._notify(TreeEvent.CONTEXT_TOKENS_CHANGED, {
+                "selected_tokens": selected_tokens,
+                "total_tokens": total_tokens,
+            })
+
+    def get_context_tokens(self) -> tuple[int, int]:
+        """Get the context token counts.
+
+        Returns:
+            Tuple of (selected_tokens, total_tokens)
+        """
+        return (self._selected_context_tokens, self._total_session_tokens)
 
     # --- Streaming State ---
 
