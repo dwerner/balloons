@@ -140,7 +140,7 @@ def _execute_list_links(session: Session) -> tuple[str, bool]:
         linked_session = Session.load(linked_session_id)
         if linked_session:
             name = linked_session.title or linked_session.fork_name or linked_session_id[:8]
-            message_count = len(linked_session.messages)
+            message_count = len(linked_session.turns)
         else:
             name = f"[deleted: {linked_session_id[:8]}]"
             message_count = 0
@@ -182,19 +182,19 @@ def _execute_follow_link(args: dict[str, Any], current_session: Session) -> tupl
         "name": linked_session.title or linked_session.fork_name or linked_session.id[:8],
         "created": linked_session.created,
         "last_modified": linked_session.last_modified,
-        "total_messages": len(linked_session.messages),
+        "total_turns": len(linked_session.turns),
         "link_summary": link.get("summary", ""),
     }
 
-    # Include recent messages
-    messages = linked_session.messages[-include_messages:] if include_messages > 0 else []
-    result["recent_messages"] = [
+    # Include recent turns
+    turns = linked_session.turns[-include_messages:] if include_messages > 0 else []
+    result["recent_turns"] = [
         {
-            "role": msg.role,
-            "content": msg.content[:1000] + "..." if len(msg.content) > 1000 else msg.content,
-            "timestamp": msg.timestamp,
+            "role": turn.role,
+            "content": turn.content[:1000] + "..." if len(turn.content) > 1000 else turn.content,
+            "timestamp": turn.timestamp,
         }
-        for msg in messages
+        for turn in turns
     ]
 
     return json.dumps(result, indent=2), False
@@ -223,14 +223,14 @@ def _execute_search_linked(args: dict[str, Any], current_session: Session) -> tu
     if not linked_session:
         return f"Error: Linked session not found or deleted: {linked_session_id}", True
 
-    # Search through messages
+    # Search through turns
     query_lower = query.lower()
     matches = []
 
-    for i, msg in enumerate(linked_session.messages):
-        if query_lower in msg.content.lower():
+    for i, turn in enumerate(linked_session.turns):
+        if query_lower in turn.content.lower():
             # Found a match - include context
-            match_preview = msg.content
+            match_preview = turn.content
             if len(match_preview) > 500:
                 # Try to center on the match
                 idx = match_preview.lower().find(query_lower)
@@ -239,9 +239,9 @@ def _execute_search_linked(args: dict[str, Any], current_session: Session) -> tu
                 match_preview = "..." + match_preview[start:end] + "..."
 
             matches.append({
-                "message_index": i,
-                "role": msg.role,
-                "timestamp": msg.timestamp,
+                "turn_index": i,
+                "role": turn.role,
+                "timestamp": turn.timestamp,
                 "content_preview": match_preview,
             })
 

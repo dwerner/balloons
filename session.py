@@ -47,14 +47,6 @@ class Session:
     turns: list[Turn] = field(default_factory=list)  # One content block per turn
     _messages_deprecated: list[Message] = field(default_factory=list)  # Migration only, not used
 
-    @property
-    def messages(self) -> list[Turn]:
-        """Backwards compat: return turns as 'messages'.
-
-        Turn objects have a content_blocks property that wraps their single
-        content_block in a list, so most code expecting Message works.
-        """
-        return self.turns
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     total_cost: float = 0.0

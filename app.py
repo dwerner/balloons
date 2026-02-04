@@ -749,7 +749,7 @@ class BalloonsApp(App):
 
         if background:
             # Background mode - stay in parent
-            turn_idx = len(child_session.messages)
+            turn_idx = len(child_session.turns)
             exchange_id = str(uuid.uuid4())  # Group user + assistant turns
             new_ctx = StreamingContext(
                 session_id=child_session.id,
@@ -787,7 +787,7 @@ class BalloonsApp(App):
             child_runner = self._manager._runners[child_session.id]
             child_runner.start_background(
                 prompt=prompt,
-                messages=child_session.messages,
+                messages=child_session.turns,
                 allowed_tools=allowed_tools,
             )
             status_bar.set_status(f"Fork '{name or child_session.id[:8]}' started in background", animate=False)
@@ -798,7 +798,7 @@ class BalloonsApp(App):
             breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
             self._manager.set_active(child_session.id)
             chat_log.clear()
-            chat_log.load_history(child_session.messages, session=child_session)
+            chat_log.load_history(child_session.turns, session=child_session)
             context_tree.load_all_sessions(child_session)
             breadcrumb.set_session(child_session)
 
@@ -863,7 +863,7 @@ class BalloonsApp(App):
         self._manager.set_active(new_session.id)
 
         chat_log.clear()
-        chat_log.load_history(new_session.messages, session=new_session)
+        chat_log.load_history(new_session.turns, session=new_session)
         context_tree.load_all_sessions(new_session)
         breadcrumb.set_session(new_session)
 
@@ -946,7 +946,7 @@ class BalloonsApp(App):
                 exchange_id = ctx.exchange_id or (result.exchange_id if result else None)
                 turns = result.turns if result else []
 
-                # Update exchange_id on turns (they're already in session.messages)
+                # Update exchange_id on turns (they're already in session.turns)
                 # This ensures consistent grouping for the UI
                 for turn in turns:
                     turn.exchange_id = exchange_id
@@ -1077,8 +1077,8 @@ class BalloonsApp(App):
         context_tree.load_all_sessions(self.session)
 
         # Load current session's messages into chat view
-        if self.session.messages:
-            chat_log.load_history(self.session.messages, session=self.session)
+        if self.session.turns:
+            chat_log.load_history(self.session.turns, session=self.session)
 
         # Set session title in chat header
         if self.session.title:
@@ -1115,7 +1115,7 @@ class BalloonsApp(App):
         input_box.focus()
 
         # Scroll to restored turn if we have one
-        if restore_turn_index is not None and restore_turn_index < len(self.session.messages):
+        if restore_turn_index is not None and restore_turn_index < len(self.session.turns):
             # Turn IDs in chat_log are 1-indexed
             turn_id = restore_turn_index + 1
             # Use call_after_refresh to ensure widgets are laid out before scrolling
@@ -1192,7 +1192,7 @@ class BalloonsApp(App):
         })
 
         # Track the turn index for tree updates
-        turn_idx = len(self.session.messages)  # Next turn will be at this index
+        turn_idx = len(self.session.turns)  # Next turn will be at this index
 
         # Generate exchange_id to group user prompt + all assistant responses
         exchange_id = str(uuid.uuid4())
@@ -1428,7 +1428,7 @@ class BalloonsApp(App):
         """Reload the app by re-executing the process."""
         self.session.save()
         # Save current view position so we return here after reload
-        turn_index = len(self.session.messages) - 1 if self.session.messages else None
+        turn_index = len(self.session.turns) - 1 if self.session.turns else None
         save_last_view(self.session.id, turn_index)
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
@@ -1588,7 +1588,7 @@ class BalloonsApp(App):
                 summary=summary,
                 linked_session_id=target_session.id,
                 linked_session_name=target_name,
-                link_point=len(self.session.messages) - 1,  # Current turn index
+                link_point=len(self.session.turns) - 1,  # Current turn index
             )
             linked_names.append(target_name)
 
@@ -1630,11 +1630,11 @@ class BalloonsApp(App):
         turn_start = min(selected_indices)
         turn_end = max(selected_indices) + 1
 
-        # Get the messages to archive for summary generation
-        messages_to_archive = self.session.messages[turn_start:turn_end]
+        # Get the turns to archive for summary generation
+        turns_to_archive = self.session.turns[turn_start:turn_end]
 
         debug_log.info(
-            f"Archiving turns {turn_start}-{turn_end} ({len(messages_to_archive)} messages)",
+            f"Archiving turns {turn_start}-{turn_end} ({len(turns_to_archive)} turns)",
             category="archive",
             details={"hint": hint},
         )
@@ -1645,7 +1645,7 @@ class BalloonsApp(App):
         await asyncio.sleep(0)
 
         try:
-            summary = await self._summarizer.generate_archive_summary(messages_to_archive, hint)
+            summary = await self._summarizer.generate_archive_summary(turns_to_archive, hint)
         except Exception as e:
             debug_log.error(f"Summary generation failed: {e}", category="archive")
             # Fall back to simple summary
@@ -1654,20 +1654,20 @@ class BalloonsApp(App):
         # Perform the archive
         archiver = Archiver()
         try:
-            archive_block, new_messages = archiver.archive_turns(
+            archive_block, new_turns = archiver.archive_turns(
                 self.session.id,
-                self.session.messages,
+                self.session.turns,
                 turn_start,
                 turn_end,
                 summary,
             )
 
-            self.session.messages = new_messages
+            self.session.turns = new_turns
             self.session.save()
 
             # Reload the UI
             chat_log.clear()
-            chat_log.load_history(self.session.messages, self.session)
+            chat_log.load_history(self.session.turns, self.session)
 
             context_tree.load_all_sessions(self.session)
 
@@ -1703,9 +1703,9 @@ class BalloonsApp(App):
         # Find archive block in selected turns
         archive_turn_index = None
         for idx in selected_indices:
-            if idx < len(self.session.messages):
-                msg = self.session.messages[idx]
-                for block in msg.content_blocks:
+            if idx < len(self.session.turns):
+                turn = self.session.turns[idx]
+                for block in turn.content_blocks:
                     if isinstance(block, ArchiveBlock):
                         archive_turn_index = idx
                         break
@@ -1723,13 +1723,13 @@ class BalloonsApp(App):
 
         archiver = Archiver()
         try:
-            new_messages = archiver.rehydrate(self.session.messages, archive_turn_index)
-            self.session.messages = new_messages
+            new_turns = archiver.rehydrate(self.session.turns, archive_turn_index)
+            self.session.turns = new_turns
             self.session.save()
 
             # Reload the UI
             chat_log.clear()
-            chat_log.load_history(self.session.messages, self.session)
+            chat_log.load_history(self.session.turns, self.session)
 
             context_tree.load_all_sessions(self.session)
 
@@ -1793,7 +1793,7 @@ class BalloonsApp(App):
         self._manager._runners[new_session.id] = self._create_session_runner(new_session)
         self._manager.set_active(new_session.id)
         context_tree.load_all_sessions(new_session)
-        chat_log.load_history(new_session.messages, session=new_session)
+        chat_log.load_history(new_session.turns, session=new_session)
         breadcrumb.set_session(new_session)
 
     async def _handle_query_with(self, prompt: str) -> None:
@@ -2071,7 +2071,7 @@ class BalloonsApp(App):
 
         if result.background:
             # Background mode - stay in parent
-            turn_idx = len(child_session.messages)
+            turn_idx = len(child_session.turns)
             exchange_id = str(uuid.uuid4())  # Group user + assistant turns
             ctx = StreamingContext(
                 session_id=child_session.id,
@@ -2106,7 +2106,7 @@ class BalloonsApp(App):
             child_runner = self._manager._runners[child_session.id]
             child_runner.start_background(
                 prompt=result.prompt,
-                messages=child_session.messages,
+                messages=child_session.turns,
                 allowed_tools=result.allowed_tools,
             )
             status_bar.set_status(f"Fork '{result.name or child_session.id[:8]}' started in background", animate=False)
@@ -2117,7 +2117,7 @@ class BalloonsApp(App):
             breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
             self._manager.set_active(child_session.id)
             chat_log.clear()
-            chat_log.load_history(child_session.messages, session=child_session)
+            chat_log.load_history(child_session.turns, session=child_session)
             context_tree.load_all_sessions(child_session)
             breadcrumb.set_session(child_session)
 
@@ -2162,7 +2162,7 @@ class BalloonsApp(App):
         self._manager._runners[result.parent_session.id] = self._create_session_runner(result.parent_session)
         self._manager.set_active(result.parent_session.id)
         chat_log.clear()
-        chat_log.load_history(result.parent_session.messages, session=result.parent_session)
+        chat_log.load_history(result.parent_session.turns, session=result.parent_session)
         context_tree.load_all_sessions(result.parent_session)
         breadcrumb.set_session(result.parent_session)
 
@@ -2239,7 +2239,7 @@ class BalloonsApp(App):
         self._manager.set_active(new_session.id)
 
         chat_log.clear()
-        chat_log.load_history(new_session.messages, session=new_session)
+        chat_log.load_history(new_session.turns, session=new_session)
         context_tree.load_all_sessions(new_session)
         breadcrumb.set_session(new_session)
 
@@ -2320,7 +2320,7 @@ class BalloonsApp(App):
         self._manager._runners[parent.id] = self._create_session_runner(parent)
         self._manager.set_active(parent.id)
         chat_log.clear()
-        chat_log.load_history(parent.messages, session=parent)
+        chat_log.load_history(parent.turns, session=parent)
         context_tree.load_all_sessions(parent)
         breadcrumb.set_session(parent)
 
@@ -2390,20 +2390,20 @@ class BalloonsApp(App):
         archiver = Archiver()
         try:
             # Rehydrate the archive
-            new_messages = archiver.rehydrate(self.session.messages, event.turn_index)
-            self.session.messages = new_messages
+            new_turns = archiver.rehydrate(self.session.turns, event.turn_index)
+            self.session.turns = new_turns
             self.session.save()
 
             debug_log.info(
                 f"Rehydrated archive from {event.file_path}",
                 category="archive",
-                details={"message_count": len(new_messages)},
+                details={"turn_count": len(new_turns)},
             )
 
             # Reload the chat log to show restored turns
             chat_log = self.query_one("#chat-log", ChatLogView)
             chat_log.clear()
-            chat_log.load_history(self.session.messages, self.session)
+            chat_log.load_history(self.session.turns, self.session)
 
             # Update context tree
             context_tree = self.query_one("#context-tree", ContextTreeView)
@@ -2436,7 +2436,7 @@ class BalloonsApp(App):
                 "from_session": old_session_id,
                 "to_session": session.id,
                 "title": session.title or "(untitled)",
-                "messages": len(session.messages),
+                "turns": len(session.turns),
             },
         )
 
@@ -2468,9 +2468,9 @@ class BalloonsApp(App):
         # Update breadcrumb to show current position in hierarchy
         breadcrumb.set_session(session)
 
-        # Load session messages and filter by selection
+        # Load session turns and filter by selection
         chat_log.clear()
-        chat_log.load_history(session.messages, session=session)
+        chat_log.load_history(session.turns, session=session)
 
         # Check if NEW session is currently streaming
         new_ctx = self._streaming_contexts.get(session.id)
@@ -2558,12 +2558,12 @@ class BalloonsApp(App):
         # Save the new view position
         # Default to last turn if no target specified
         turn_index = target_turn_index
-        if turn_index is None and session.messages:
-            turn_index = len(session.messages) - 1
+        if turn_index is None and session.turns:
+            turn_index = len(session.turns) - 1
         save_last_view(session.id, turn_index)
 
         # Scroll to target turn if specified
-        if target_turn_index is not None and target_turn_index < len(session.messages):
+        if target_turn_index is not None and target_turn_index < len(session.turns):
             turn_id = target_turn_index + 1  # 1-indexed for chat_log
             # Use default argument to capture turn_id value (avoid late binding)
             self.call_after_refresh(lambda tid=turn_id: chat_log.scroll_to_turn(tid))
@@ -2598,9 +2598,9 @@ class BalloonsApp(App):
             new_mode = ContextMode.COPY
             context_tree._state.set_context_mode(self.session.id, turn_idx, new_mode)
 
-        # Persist to session message and save
-        if turn_idx < len(self.session.messages):
-            self.session.messages[turn_idx].context_mode = new_mode
+        # Persist to session turn and save
+        if turn_idx < len(self.session.turns):
+            self.session.turns[turn_idx].context_mode = new_mode
             self.session.save()
 
         # Update tree label and trigger SelectionChanged to update chat visuals
@@ -2617,8 +2617,8 @@ class BalloonsApp(App):
         else:
             session = Session.load(event.session_id)
 
-        if session and event.turn_idx < len(session.messages):
-            session.messages[event.turn_idx].context_mode = event.new_mode
+        if session and event.turn_idx < len(session.turns):
+            session.turns[event.turn_idx].context_mode = event.new_mode
             session.save()
 
     def on_context_tree_view_turn_delete_requested(self, event: ContextTreeView.TurnDeleteRequested) -> None:
@@ -2641,10 +2641,10 @@ class BalloonsApp(App):
             return
 
         # Get turn preview for dialog
-        if event.turn_index < len(session.messages):
-            msg = session.messages[event.turn_index]
-            role = "User" if msg.role == "user" else "Assistant"
-            preview = msg.content[:50] + "..." if len(msg.content) > 50 else msg.content
+        if event.turn_index < len(session.turns):
+            turn = session.turns[event.turn_index]
+            role = "User" if turn.role == "user" else "Assistant"
+            preview = turn.content[:50] + "..." if len(turn.content) > 50 else turn.content
             preview = preview.replace("\n", " ")
             message = f"{role}: {preview}"
         else:
@@ -2681,7 +2681,7 @@ class BalloonsApp(App):
             if self.session and self.session.id == session_id:
                 chat_log = self.query_one("#chat-log", ChatLogView)
                 chat_log.clear()
-                chat_log.load_history(session.messages, session=session)
+                chat_log.load_history(session.turns, session=session)
 
             status_bar.set_status(f"Deleted turn {turn_index + 1}", animate=False)
         else:
@@ -2706,12 +2706,12 @@ class BalloonsApp(App):
         is_active = self.session and self.session.id == event.session_id
 
         # Build confirmation message
-        msg_count = len(session.messages)
+        turn_count = len(session.turns)
         if session.title:
             name = session.title[:30] + "..." if len(session.title) > 30 else session.title
         else:
             name = session.id[:8]
-        message = f"{name} ({msg_count} messages)"
+        message = f"{name} ({turn_count} turns)"
 
         # Show confirmation dialog
         def on_confirm(confirmed: bool) -> None:
@@ -2801,21 +2801,21 @@ class BalloonsApp(App):
             # TODO: Could use LLM to generate a better summary
             summary = f"Archived turns {turn_start}-{turn_end - 1}"
 
-            archive_block, new_messages = archiver.archive_turns(
+            archive_block, new_turns = archiver.archive_turns(
                 self.session.id,
-                self.session.messages,
+                self.session.turns,
                 turn_start,
                 turn_end,
                 summary,
             )
 
-            self.session.messages = new_messages
+            self.session.turns = new_turns
             self.session.save()
 
             # Reload the UI
             chat_log = self.query_one("#chat-log", ChatLogView)
             chat_log.clear()
-            chat_log.load_history(self.session.messages, self.session)
+            chat_log.load_history(self.session.turns, self.session)
 
             context_tree = self.query_one("#context-tree", ContextTreeView)
             context_tree.load_all_sessions(self.session)
@@ -2988,8 +2988,8 @@ class BalloonsApp(App):
         else:
             session = Session.load(event.session_id)
 
-        if session and event.turn_idx < len(session.messages):
-            session.messages[event.turn_idx].context_mode = event.new_mode
+        if session and event.turn_idx < len(session.turns):
+            session.turns[event.turn_idx].context_mode = event.new_mode
             session.save()
 
         # Update context tokens when mode changes

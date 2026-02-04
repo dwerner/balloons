@@ -20,7 +20,7 @@ class TestForkManager:
         """Create a mock session with default attributes."""
         session = MagicMock()
         session.id = kwargs.get("id", "test-session-123")
-        session.messages = kwargs.get("messages", [])
+        session.turns = kwargs.get("turns", [])
         session.is_read_only = MagicMock(return_value=kwargs.get("read_only", False))
         session.is_fork = MagicMock(return_value=kwargs.get("is_fork", False))
         session.is_merged = MagicMock(return_value=kwargs.get("is_merged", False))

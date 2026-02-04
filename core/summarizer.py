@@ -140,16 +140,16 @@ Provide a brief, informative summary:"""
             A concise summary of the fork's work
         """
         # Build conversation context from the fork
-        messages_text = []
-        for msg in fork_session.messages:
-            role = "User" if msg.role == "user" else "Assistant"
-            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+        turns_text = []
+        for turn in fork_session.turns:
+            role = "User" if turn.role == "user" else "Assistant"
+            content = turn.content if isinstance(turn.content, str) else str(turn.content)
             # Truncate very long messages
             if len(content) > 2000:
                 content = content[:2000] + "... [truncated]"
-            messages_text.append(f"{role}: {content}")
+            turns_text.append(f"{role}: {content}")
 
-        conversation = "\n\n".join(messages_text)
+        conversation = "\n\n".join(turns_text)
 
         # Build the summary prompt
         if user_prompt:
@@ -241,9 +241,9 @@ Summary:"""
             # Truncate very long messages
             if len(content) > 2000:
                 content = content[:2000] + "... [truncated]"
-            messages_text.append(f"{role}: {content}")
+            turns_text.append(f"{role}: {content}")
 
-        conversation = "\n\n".join(messages_text)
+        conversation = "\n\n".join(turns_text)
 
         # Build the structured summary prompt
         hint_section = f"\nUser hint: {user_hint}\n" if user_hint else ""

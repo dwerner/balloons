@@ -158,7 +158,7 @@ class ForkManager:
             return ForkResult(success=False, error="Cannot fork from a merged session")
 
         # Track fork point
-        fork_point = len(current_session.messages)
+        fork_point = len(current_session.turns)
 
         # Group messages by context mode
         groups = group_messages_by_context_mode(indexed_messages)
@@ -357,7 +357,7 @@ class ForkManager:
         Returns:
             MergeResult ready for UI updates
         """
-        merge_point = len(parent_session.messages)
+        merge_point = len(parent_session.turns)
 
         # Mark fork as merged
         fork_session.mark_merged(merge_message, merge_point)

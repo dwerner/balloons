@@ -32,7 +32,7 @@ class StreamingContext:
     event handling and UI updates.
     """
     session_id: str
-    user_turn_idx: int  # Index of user turn in session.messages (-1 for query_with)
+    user_turn_idx: int  # Index of user turn in session.turns (-1 for query_with)
     assistant_turn_idx: int  # Index of assistant turn
     prompt: str  # Original prompt for saving
     content: str = ""  # Accumulated text content

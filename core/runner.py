@@ -168,7 +168,7 @@ class SessionRunner:
         """
         self._reset_state()
         self._status = RunnerStatus.STREAMING
-        self._turn_index = len(self.session.messages)  # Next turn index
+        self._turn_index = len(self.session.turns)  # Next turn index
 
         # Emit turn_started event
         yield self._make_event("turn_started", {
@@ -243,7 +243,7 @@ class SessionRunner:
 
         self._reset_state()
         self._status = RunnerStatus.STREAMING
-        self._turn_index = len(self.session.messages)  # Next turn index
+        self._turn_index = len(self.session.turns)  # Next turn index
 
         self._background_task = asyncio.create_task(
             self._background_stream(prompt, messages, allowed_tools)
@@ -409,7 +409,7 @@ class SessionRunner:
         if save_now:
             self.session.save()
             debug_log.debug(
-                f"Session saved incrementally ({len(self.session.messages)} messages)",
+                f"Session saved incrementally ({len(self.session.turns)} turns)",
                 session_id=self.session.id,
                 category="stream",
             )

@@ -80,7 +80,7 @@ class TestExecuteLinkTool:
         linked_session = Mock(spec=Session)
         linked_session.title = "Linked Session"
         linked_session.fork_name = None
-        linked_session.messages = [Mock(), Mock()]
+        linked_session.turns = [Mock(), Mock()]
 
         with patch.object(Session, 'load', return_value=linked_session):
             result, is_error = execute_link_tool("list_links", {}, session)

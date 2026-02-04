@@ -47,7 +47,7 @@ class MockSession:
     last_modified: str = "2024-01-01T00:00:00"
     model: str = "test-model"
     title: str = "Test Session"
-    messages: list = field(default_factory=list)
+    turns: list = field(default_factory=list)
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     total_cost: float = 0.0
@@ -224,7 +224,7 @@ class TestTreeStateSessionLoading:
         state = TreeState()
         session = MockSession(
             id="s1",
-            messages=[
+            turns=[
                 MockMessage(role="user", content="Hello"),
                 MockMessage(role="assistant", content="Hi there"),
             ]
@@ -243,7 +243,7 @@ class TestTreeStateSessionLoading:
         state = TreeState()
         session = MockSession(
             id="s1",
-            messages=[
+            turns=[
                 MockMessage(role="user", content="Hello", context_mode=ContextMode.COPY),
             ]
         )
@@ -265,7 +265,7 @@ class TestTreeStateTurnOperations:
 
     def test_start_turn(self):
         state = TreeState()
-        session = MockSession(id="s1", messages=[])
+        session = MockSession(id="s1", turns=[])
         state.load_session("s1", session)
 
         events = []
@@ -284,7 +284,7 @@ class TestTreeStateTurnOperations:
 
     def test_update_turn_content(self):
         state = TreeState()
-        session = MockSession(id="s1", messages=[])
+        session = MockSession(id="s1", turns=[])
         state.load_session("s1", session)
         state.start_turn("s1", 0, "assistant")
 
@@ -295,7 +295,7 @@ class TestTreeStateTurnOperations:
 
     def test_finish_turn(self):
         state = TreeState()
-        session = MockSession(id="s1", messages=[])
+        session = MockSession(id="s1", turns=[])
         state.load_session("s1", session)
         state.start_turn("s1", 0, "assistant")
 
@@ -411,7 +411,7 @@ class TestTreeStateToolUse:
 
     def test_add_tool_use(self):
         state = TreeState()
-        session = MockSession(id="s1", messages=[])
+        session = MockSession(id="s1", turns=[])
         state.load_session("s1", session)
         state.start_turn("s1", 0, "assistant")
 
@@ -466,7 +466,7 @@ class TestTreeStateExchangeGrouping:
 
     def test_empty_session_returns_empty_list(self):
         state = TreeState()
-        session = MockSession(id="s1", messages=[])
+        session = MockSession(id="s1", turns=[])
         state.load_session("s1", session)
 
         groups = state.get_turns_grouped_by_exchange("s1")
@@ -484,7 +484,7 @@ class TestTreeStateExchangeGrouping:
         state = TreeState()
         session = MockSession(
             id="s1",
-            messages=[
+            turns=[
                 MockMessage(role="user", content="Hello"),
                 MockMessage(role="assistant", content="Hi"),
                 MockMessage(role="user", content="Bye"),
@@ -506,7 +506,7 @@ class TestTreeStateExchangeGrouping:
         state = TreeState()
         session = MockSession(
             id="s1",
-            messages=[
+            turns=[
                 MockMessage(role="user", content="Do something", exchange_id="ex1"),
                 MockMessage(role="assistant", content="Thinking...", exchange_id="ex1"),
                 MockMessage(role="assistant", content="Done!", exchange_id="ex1"),
@@ -527,7 +527,7 @@ class TestTreeStateExchangeGrouping:
         state = TreeState()
         session = MockSession(
             id="s1",
-            messages=[
+            turns=[
                 MockMessage(role="user", content="Q1", exchange_id="ex1"),
                 MockMessage(role="assistant", content="A1", exchange_id="ex1"),
                 MockMessage(role="user", content="Q2", exchange_id="ex2"),
@@ -553,7 +553,7 @@ class TestTreeStateExchangeGrouping:
         state = TreeState()
         session = MockSession(
             id="s1",
-            messages=[
+            turns=[
                 MockMessage(role="user", content="Q1", exchange_id="ex1"),
                 MockMessage(role="assistant", content="A1", exchange_id="ex1"),
                 MockMessage(role="system", content="System note"),  # No exchange_id
@@ -581,7 +581,7 @@ class TestTreeStateExchangeGrouping:
         state = TreeState()
         session = MockSession(
             id="s1",
-            messages=[
+            turns=[
                 MockMessage(role="user", content="First", exchange_id="ex1"),
                 MockMessage(role="assistant", content="Second", exchange_id="ex1"),
                 MockMessage(role="assistant", content="Third", exchange_id="ex1"),
@@ -600,7 +600,7 @@ class TestTreeStateExchangeGrouping:
         state = TreeState()
         session = MockSession(
             id="s1",
-            messages=[
+            turns=[
                 MockMessage(role="user", content="Q", exchange_id="ex123"),
                 MockMessage(role="assistant", content="A", exchange_id="ex123"),
             ]

@@ -554,40 +554,46 @@ class NestedTreeView(Vertical):
     ) -> None:
         """Add turn nodes to a session node, grouped by exchange_id.
 
-        Turns with the same exchange_id are nested under an exchange group node.
-        Single-turn groups (or turns without exchange_id) are added directly.
+        Turns with the same exchange_id are grouped under an exchange node.
+        Turns without an exchange_id (or alone in their exchange) are added directly.
         """
+        session_data = self._state.get_session(session_id)
+        if not session_data or not session_data.turns:
+            return
+
         groups = self._state.get_turns_grouped_by_exchange(session_id)
 
         for group in groups:
             if len(group) == 1:
-                # Single turn - add directly to session
-                turn = group[0]
-                self._add_single_turn_node(session_node, session_id, turn)
+                # Single turn - add directly to session node
+                self._add_single_turn_node(session_node, session_id, group[0])
             else:
-                # Multi-turn exchange - create a group node
+                # Multiple turns - create exchange group node
                 exchange_id = group[0].exchange_id
-                first_turn = group[0]
-
-                # Create exchange label from first turn's role/content
-                user_content = first_turn.content if first_turn.role == "user" else ""
-                preview = user_content[:25] + "..." if len(user_content) > 25 else user_content
-                preview = preview.replace("\n", " ")
-                exchange_label = f"[dim]⟨{len(group)}⟩[/] {preview or 'Exchange'}"
-
+                exchange_label = self._make_exchange_label(group)
                 exchange_node = session_node.add(
                     exchange_label,
                     data={
                         "type": "exchange",
                         "session_id": session_id,
                         "exchange_id": exchange_id,
-                        "first_turn_idx": first_turn.idx,
+                        "turn_indices": [t.idx for t in group],
                     }
                 )
-
-                # Add turns as children of the exchange node
+                # Add turns under the exchange node
                 for turn in group:
                     self._add_single_turn_node(exchange_node, session_id, turn)
+
+    def _has_displayable_children(self, content_blocks: list) -> bool:
+        """Check if content_blocks contains any items that will be displayed as children."""
+        if not content_blocks:
+            return False
+        for block in content_blocks:
+            if isinstance(block, TextBlock) and block.text.strip():
+                return True
+            elif isinstance(block, (ToolUseBlock, ToolResultBlock)):
+                return True
+        return False
 
     def _add_single_turn_node(
         self,
@@ -598,14 +604,17 @@ class NestedTreeView(Vertical):
         """Add a single turn node to a parent (session or exchange group)."""
         mode = self._state.get_context_mode(session_id, turn.idx)
         label = self._make_turn_label(turn.role, turn.content, mode, turn.content_blocks)
+        has_children = self._has_displayable_children(turn.content_blocks)
         turn_node = parent_node.add(
             label,
-            data={"type": "turn", "session_id": session_id, "turn_idx": turn.idx}
+            data={"type": "turn", "session_id": session_id, "turn_idx": turn.idx},
+            allow_expand=has_children,
         )
         self._turn_nodes[(session_id, turn.idx)] = turn_node
 
         # Add tool use blocks as children
-        self._add_content_block_nodes(turn_node, session_id, turn.idx, turn.content_blocks)
+        if has_children:
+            self._add_content_block_nodes(turn_node, session_id, turn.idx, turn.content_blocks)
 
     def _add_content_block_nodes(
         self,
@@ -867,6 +876,28 @@ class NestedTreeView(Vertical):
             return f"{prefix}{streaming}[bold cyan]{label}[/]"
         else:
             return f"{prefix}{streaming}{label}"
+
+    def _make_exchange_label(self, group: list[TurnData]) -> str:
+        """Create a label for an exchange group node.
+
+        Shows the first turn's content preview and a count of turns in the exchange.
+        """
+        turn_count = len(group)
+        first_turn = group[0]
+
+        # Get a preview from the first turn's content
+        preview = first_turn.content[:25] + "..." if len(first_turn.content) > 25 else first_turn.content
+        preview = preview.replace("\n", " ")
+
+        # Count tool uses across all turns in the exchange
+        tool_count = 0
+        for turn in group:
+            if turn.content_blocks:
+                tool_count += sum(1 for b in turn.content_blocks if isinstance(b, ToolUseBlock))
+
+        tool_indicator = f" [cyan]🔧{tool_count}[/]" if tool_count > 0 else ""
+
+        return f"[dim]⟨{turn_count}⟩[/]{tool_indicator} {preview}"
 
     def _make_turn_label(
         self,

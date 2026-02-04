@@ -244,7 +244,7 @@ class SessionManager:
                     title=title or f"Session {session_id[:8]}",
                     created=created,
                     model=model,
-                    message_count=len(session.messages),
+                    message_count=len(session.turns),
                     is_child=session.parent_id is not None,
                     is_returned=session.returned,
                     status=status,

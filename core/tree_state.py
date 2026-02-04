@@ -197,7 +197,7 @@ class TreeState:
             last_modified=session.last_modified,
             model=session.model,
             title=session.title,
-            message_count=len(session.messages),
+            message_count=len(session.turns),
             total_input_tokens=session.total_input_tokens,
             total_output_tokens=session.total_output_tokens,
             total_cost=session.total_cost,
@@ -342,7 +342,7 @@ class TreeState:
         turns = []
         turn_idx = 0
 
-        for msg in session.messages:
+        for msg in session.turns:
             content_blocks = msg.content_blocks if hasattr(msg, 'content_blocks') else []
             exchange_id = msg.exchange_id if hasattr(msg, 'exchange_id') else None
             msg_context_mode = msg.context_mode if hasattr(msg, 'context_mode') and msg.context_mode else None
