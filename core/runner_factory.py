@@ -66,8 +66,8 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
             system_prompt=system_prompt,
         )
 
-    elif backend_type == "claude":
-        # Claude CLI backend (default)
+    elif backend_type in ("claude", "claude-structured"):
+        # Claude CLI backend - always enables structured tools for link navigation
         from claude_runner import ClaudeRunner
 
         # Build environment for Claude CLI
@@ -80,7 +80,10 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
         # Load system prompt if configured
         system_prompt = backend.load_system_prompt()
 
-        return ClaudeRunner(backend_env=env if env else None, system_prompt=system_prompt)
+        return ClaudeRunner(
+            backend_env=env if env else None,
+            system_prompt=system_prompt,
+        )
 
     else:
-        raise ValueError(f"Unknown backend type: {backend_type}. Valid types: 'claude', 'openai'")
+        raise ValueError(f"Unknown backend type: {backend_type}. Valid types: 'claude', 'claude-structured', 'openai'")

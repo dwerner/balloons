@@ -65,6 +65,9 @@ from core import (
     HelpCommand,
     BackendCommand,
     LinkCommand,
+    DebugToggleCommand,
+    DebugClearCommand,
+    DebugPauseCommand,
     debug_log,
     create_runner,
     # Streaming
@@ -729,6 +732,11 @@ class BalloonsApp(App):
             )
             self._streaming_contexts[child_session.id] = new_ctx
 
+            # Add child session to TreeState so it appears in the tree
+            # This must happen before set_session_streaming so the node exists
+            self._tree_state.add_session(child_session, is_current=False)
+            self._tree_state.load_session(child_session.id, child_session)
+
             # Update tree streaming indicator and status bar count
             context_tree.set_session_streaming(child_session.id, True)
             self._update_streaming_count()
@@ -1249,6 +1257,12 @@ class BalloonsApp(App):
             await self._handle_backend_command(cmd.backend_name)
         elif isinstance(cmd, LinkCommand):
             await self._handle_link_command(cmd.target_session_prefixes, cmd.prompt)
+        elif isinstance(cmd, DebugToggleCommand):
+            self.action_toggle_debug()
+        elif isinstance(cmd, DebugClearCommand):
+            self._handle_debug_clear()
+        elif isinstance(cmd, DebugPauseCommand):
+            self._handle_debug_pause()
 
     def _format_tool_use(
         self, event: ToolUseEvent
@@ -1893,6 +1907,11 @@ class BalloonsApp(App):
                 exchange_id=exchange_id,
             )
             self._streaming_contexts[child_session.id] = ctx
+
+            # Add child session to TreeState so it appears in the tree
+            # This must happen before set_session_streaming so the node exists
+            self._tree_state.add_session(child_session, is_current=False)
+            self._tree_state.load_session(child_session.id, child_session)
 
             context_tree.set_session_streaming(child_session.id, True)
             self._update_streaming_count()
@@ -2810,6 +2829,17 @@ class BalloonsApp(App):
         """Toggle the debug pane visibility."""
         pane = self.query_one("#debug-pane", DebugPane)
         pane.toggle()
+
+    def _handle_debug_clear(self) -> None:
+        """Clear all debug log entries."""
+        pane = self.query_one("#debug-pane", DebugPane)
+        pane.clear_entries()
+
+    def _handle_debug_pause(self) -> None:
+        """Toggle debug logging on/off."""
+        debug_log.enabled = not debug_log.enabled
+        state = "enabled" if debug_log.enabled else "paused"
+        self.notify(f"Debug logging {state}")
 
     def action_show_help(self) -> None:
         """Show the help modal."""

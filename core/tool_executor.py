@@ -9,8 +9,14 @@ import glob as glob_module
 import os
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .debug_log import debug_log
+from .tools import LINK_TOOL_NAMES
+from .link_tools import execute_link_tool
+
+if TYPE_CHECKING:
+    from session import Session
 
 
 # Maximum output size before truncation
@@ -50,15 +56,17 @@ async def execute_tool(
     name: str,
     args: dict,
     working_dir: str,
-    run_id: str = ""
+    run_id: str = "",
+    session: "Session | None" = None,
 ) -> tuple[str, bool]:
     """Execute a tool and return the result.
 
     Args:
-        name: Tool name (Read, Write, Bash, etc.)
+        name: Tool name (Read, Write, Bash, list_links, etc.)
         args: Tool arguments from the model
         working_dir: Working directory for file operations
         run_id: Run ID for debug logging
+        session: Session for link tools (required for list_links, follow_link, search_linked_session)
 
     Returns:
         Tuple of (result_string, is_error)
@@ -71,6 +79,13 @@ async def execute_tool(
     )
 
     try:
+        # Link navigation tools
+        if name in LINK_TOOL_NAMES:
+            if session is None:
+                return "Error: Link tools require a session context", True
+            return execute_link_tool(name, args, session)
+
+        # Standard file/shell tools
         if name == "Read":
             return await execute_read(args, working_dir)
         elif name == "Write":
@@ -83,6 +98,8 @@ async def execute_tool(
             return await execute_grep(args, working_dir)
         elif name == "List":
             return await execute_list(args, working_dir)
+        elif name == "balloon":
+            return execute_balloon(args)
         else:
             return f"Unknown tool: {name}", True
 
@@ -350,6 +367,33 @@ async def _grep_fallback(
 
     except Exception as e:
         return f"Error: {e}", True
+
+
+def execute_balloon(args: dict) -> tuple[str, bool]:
+    """Handle a balloon tool call.
+
+    The balloon tool is used by the model to send messages through the UI.
+    The actual display is handled by the UI layer - this just validates
+    the arguments and returns an acknowledgment.
+
+    Args:
+        args: Tool arguments containing 'message' and optional 'type'
+
+    Returns:
+        Tuple of (result_string, is_error)
+    """
+    message = args.get("message")
+    if not message:
+        return "Error: message is required", True
+
+    msg_type = args.get("type", "info")
+    valid_types = {"info", "warning", "error", "success", "question"}
+    if msg_type not in valid_types:
+        msg_type = "info"
+
+    # The actual display happens in the UI layer via the tool events
+    # We just acknowledge that the balloon was received
+    return f"Balloon displayed: [{msg_type}] {message}", False
 
 
 async def execute_list(args: dict, working_dir: str) -> tuple[str, bool]:

@@ -4,7 +4,7 @@ Defines tools in OpenAI function calling format for use with OpenRouter,
 llamacpp, and other OpenAI-compatible APIs.
 """
 
-# Tool definitions in OpenAI function format
+# Standard file/shell tools in OpenAI function format
 TOOLS = [
     {
         "type": "function",
@@ -140,7 +140,90 @@ TOOLS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "balloon",
+            "description": "Send a message or notification to the user through the Balloons UI. Use this to provide status updates, ask questions, or display information that should be highlighted in the chat interface.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "The message to display to the user"
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": ["info", "warning", "error", "success", "question"],
+                        "description": "The type of message (affects styling). Defaults to 'info'."
+                    }
+                },
+                "required": ["message"]
+            }
+        }
+    },
 ]
+
+# Link navigation tools - for traversing linked sessions
+LINK_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "list_links",
+            "description": "List all links from the current session. Returns link IDs, summaries, and linked session names. Use this to discover what other conversations are linked to this one.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "follow_link",
+            "description": "Load context from a linked session. Returns the session metadata and recent conversation history. Use after list_links to explore a specific linked conversation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "link_id": {
+                        "type": "string",
+                        "description": "The link ID to follow (from list_links)"
+                    },
+                    "include_messages": {
+                        "type": "integer",
+                        "description": "Number of recent messages to include (default 10)"
+                    }
+                },
+                "required": ["link_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_linked_session",
+            "description": "Search for content within a linked session's conversation history. Use to find specific information in a linked conversation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "link_id": {
+                        "type": "string",
+                        "description": "The link ID of the session to search"
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Search query (case-insensitive substring match)"
+                    }
+                },
+                "required": ["link_id", "query"]
+            }
+        }
+    },
+]
+
+# Names of link tools for easy checking
+LINK_TOOL_NAMES = {"list_links", "follow_link", "search_linked_session"}
 
 
 def get_tools_for_request(
@@ -148,6 +231,8 @@ def get_tools_for_request(
     disable_tools: bool = False
 ) -> list[dict] | None:
     """Get the list of tools to include in an API request.
+
+    Includes both standard file/shell tools and link navigation tools.
 
     Args:
         allowed_tools: List of tool names to allow, or None for all
@@ -159,11 +244,14 @@ def get_tools_for_request(
     if disable_tools:
         return None
 
+    # Combine standard tools and link tools
+    all_tools = TOOLS + LINK_TOOLS
+
     if allowed_tools is None:
-        return TOOLS
+        return all_tools
 
     # Filter to only allowed tools
     return [
-        tool for tool in TOOLS
+        tool for tool in all_tools
         if tool["function"]["name"] in allowed_tools
     ]

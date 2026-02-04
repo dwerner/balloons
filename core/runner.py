@@ -16,7 +16,7 @@ from models import (
     ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultEvent,
     TextBlock, ToolUseBlock, ToolResultBlock, ErrorBlock,
 )
-from claude_runner import ClaudeRunner, RateLimitError, InputRequiredError
+from .exceptions import RateLimitError, InputRequiredError
 from session import Session
 from .debug_log import debug_log
 from .base_runner import BaseRunner
@@ -102,7 +102,15 @@ class SessionRunner:
     ):
         self.session = session
         # Use provided runner, or create ClaudeRunner for backwards compatibility
-        self._runner = runner or ClaudeRunner(backend_env=backend_env)
+        if runner is None:
+            from claude_runner import ClaudeRunner
+            runner = ClaudeRunner(backend_env=backend_env)
+        self._runner = runner
+
+        # Pass session to runners that support link navigation tools
+        # ClaudeRunner and OpenAICompatibleRunner both have set_session()
+        if hasattr(self._runner, 'set_session'):
+            self._runner.set_session(session)
         self._status = RunnerStatus.IDLE
         self._event_queue: asyncio.Queue[StreamEvent] = asyncio.Queue()
         self._background_task: Optional[asyncio.Task] = None
@@ -632,7 +640,10 @@ class HelperRunner:
     ):
         self.helper_id = helper_id  # Unique ID for this helper task
         # Use provided runner, or create ClaudeRunner for backwards compatibility
-        self._runner = runner or ClaudeRunner(backend_env=backend_env)
+        if runner is None:
+            from claude_runner import ClaudeRunner
+            runner = ClaudeRunner(backend_env=backend_env)
+        self._runner = runner
         self._status = RunnerStatus.IDLE
         self._event_queue: asyncio.Queue[StreamEvent] = asyncio.Queue()
         self._background_task: Optional[asyncio.Task] = None

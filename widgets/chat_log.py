@@ -1137,7 +1137,6 @@ class ChatLogView(VerticalScroll):
         # Build fork and merge points maps: turn_index -> list of child infos
         fork_points: dict[int, list[dict]] = {}
         merge_points: dict[int, list[dict]] = {}
-        link_points: dict[int, list[dict]] = {}
         if session:
             for child in session.children:
                 # Fork markers: all children have fork points
@@ -1149,11 +1148,6 @@ class ChatLogView(VerticalScroll):
                     merge_point = child.get("merge_point", -1)
                     if merge_point >= 0:
                         merge_points.setdefault(merge_point, []).append(child)
-            # Link markers
-            for link in session.links:
-                link_point = link.get("link_point", -1)
-                if link_point >= 0:
-                    link_points.setdefault(link_point, []).append(link)
 
         def mount_forks(fork_point_idx: int, turn_id: int) -> None:
             """Mount fork markers for a given fork point."""
@@ -1179,27 +1173,6 @@ class ChatLogView(VerticalScroll):
                         fork_name=child_info.get("name") or child_session.get_fork_display_name(),
                         turn_id=turn_id,
                     ))
-
-        def mount_links(link_point_idx: int, turn_id: int) -> None:
-            """Mount link markers for a given link point."""
-            for link_info in link_points.get(link_point_idx, []):
-                linked_session_id = link_info.get("linked_session_id", "")
-                linked_session = Session.load(linked_session_id)
-                is_orphaned = link_info.get("is_orphaned", False)
-                # Check if linked session exists
-                if linked_session:
-                    linked_name = linked_session.title or linked_session.fork_name or linked_session_id[:8]
-                else:
-                    linked_name = linked_session_id[:8] if linked_session_id else "[unknown]"
-                    is_orphaned = True  # Session doesn't exist anymore
-                self.mount(LinkMarker(
-                    summary=link_info.get("summary", ""),
-                    linked_session_id=linked_session_id,
-                    linked_session_name=linked_name,
-                    link_point=link_info.get("link_point", 0),
-                    turn_id=turn_id,
-                    is_orphaned=is_orphaned,
-                ))
 
         for turn_idx, msg in enumerate(messages):
             self._turn_counter += 1
@@ -1277,13 +1250,10 @@ class ChatLogView(VerticalScroll):
             mount_forks(turn_idx, turn_id)
             # Add any merge markers after this turn
             mount_merges(turn_idx, turn_id)
-            # Add any link markers after this turn
-            mount_links(turn_idx, turn_id)
 
         # Add any markers at the end (point == len(messages))
         mount_forks(len(messages), self._turn_counter)
         mount_merges(len(messages), self._turn_counter)
-        mount_links(len(messages), self._turn_counter)
 
         self.scroll_end(animate=False)
 

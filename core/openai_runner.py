@@ -3,7 +3,7 @@
 import asyncio
 import json
 import uuid
-from typing import AsyncIterator
+from typing import AsyncIterator, TYPE_CHECKING
 
 from openai import AsyncOpenAI
 
@@ -16,6 +16,9 @@ from .base_runner import BaseRunner, RunnerEvent
 from .debug_log import debug_log, dump_failed_json
 from .tools import get_tools_for_request
 from .tool_executor import execute_tool
+
+if TYPE_CHECKING:
+    from session import Session
 
 
 class OpenAICompatibleRunner(BaseRunner):
@@ -40,6 +43,15 @@ class OpenAICompatibleRunner(BaseRunner):
         self._running = False
         self._cancelled = False
         self._run_id = ""
+        self._session: "Session | None" = None
+
+    def set_session(self, session: "Session") -> None:
+        """Set the session for link tool execution.
+
+        Args:
+            session: The session to use for link navigation tools
+        """
+        self._session = session
 
     def build_messages(self, messages: list[Message], new_prompt: str) -> list[dict]:
         """Convert internal Message format to OpenAI chat format.
@@ -228,6 +240,7 @@ class OpenAICompatibleRunner(BaseRunner):
                         tc["arguments"],
                         working_dir or ".",
                         self._run_id,
+                        session=self._session,
                     )
 
                     # Yield tool result event

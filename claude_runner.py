@@ -1,25 +1,30 @@
 import asyncio
 import json
+import os
+import re
 import signal
-from typing import AsyncIterator, Union
+import uuid
+from typing import AsyncIterator, TYPE_CHECKING
 
 from models import (
     Message, TextDelta, ResultEvent, InitEvent, RawEvent,
-    ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultEvent,
-    TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ContextMode,
+    ToolUseStartEvent, ToolUseEvent, ToolResultEvent,
+    TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ContextMode,
 )
 from core.debug_log import debug_log, dump_failed_json
 from core.base_runner import BaseRunner, RunnerEvent
+from core.exceptions import RateLimitError
+from core.tool_executor import execute_tool
+from core.tools import LINK_TOOL_NAMES
 
+# Regex to match <balloons-tool>...</balloons-tool> blocks
+BALLOONS_TOOL_RE = re.compile(
+    r'<balloons-tool>\s*({.*?})\s*</balloons-tool>',
+    re.DOTALL
+)
 
-class RateLimitError(Exception):
-    """Raised when Claude CLI reports hitting the rate limit."""
-    pass
-
-
-class InputRequiredError(Exception):
-    """Raised when Claude CLI is waiting for user input (question asked)."""
-    pass
+if TYPE_CHECKING:
+    from session import Session
 
 
 async def readline_unlimited(stream: asyncio.StreamReader) -> bytes:
@@ -43,7 +48,18 @@ async def readline_unlimited(stream: asyncio.StreamReader) -> bytes:
 
 
 class ClaudeRunner(BaseRunner):
-    def __init__(self, backend_env: dict[str, str] | None = None, system_prompt: str | None = None):
+    """Runner that uses Claude CLI with bidirectional JSON streaming.
+
+    Uses --input-format stream-json and --output-format stream-json for
+    proper message passing. Executes tools ourselves and sends results
+    back via the bidirectional stream.
+    """
+
+    def __init__(
+        self,
+        backend_env: dict[str, str] | None = None,
+        system_prompt: str | None = None,
+    ):
         self.process: asyncio.subprocess.Process | None = None
         self._terminated = False
         self._current_tool_use: dict | None = None  # Track tool use being built
@@ -51,73 +67,189 @@ class ClaudeRunner(BaseRunner):
         self._backend_env = backend_env or {}  # Environment overrides for LLM backend
         self.system_prompt = system_prompt  # Additional system context to prepend
         self._json_errors: list[tuple[str, str | None]] = []  # Track (error_detail, dump_path) tuples
+        self._current_session: "Session | None" = None  # Session for tool execution
+        self._text_buffer: str = ""  # Buffer for detecting balloons-tool blocks
 
-    @staticmethod
-    def build_context(messages: list[Message], new_prompt: str) -> str:
-        """Build the full context string from message history + new prompt.
+    def _parse_balloons_tool(self, text: str) -> tuple[str | None, str | None, dict | None]:
+        """Parse a <balloons-tool> block from text.
 
-        Reconstructs tool calls and results so Claude has proper context.
-        Respects ContextMode for each message (copy, summarize, drop).
+        Args:
+            text: Text that may contain a balloons-tool block
+
+        Returns:
+            Tuple of (tool_name, tool_id, args) if found, (None, None, None) otherwise
         """
-        parts = []
+        match = BALLOONS_TOOL_RE.search(text)
+        if not match:
+            return None, None, None
+
+        try:
+            tool_call = json.loads(match.group(1))
+            tool_name = tool_call.get("name")
+            tool_args = tool_call.get("args", {})
+            tool_id = f"balloons-{uuid.uuid4().hex[:12]}"
+            return tool_name, tool_id, tool_args
+        except json.JSONDecodeError as e:
+            debug_log.warning(
+                f"Failed to parse balloons-tool JSON: {e}",
+                category="tool",
+                run_id=self._run_id,
+            )
+            return None, None, None
+
+    async def _handle_balloons_tool(
+        self, text: str, working_dir: str
+    ) -> AsyncIterator[RunnerEvent]:
+        """Check for and handle <balloons-tool> blocks in text.
+
+        If a balloons-tool block is found, executes the tool and sends the result
+        back to Claude as a continuation message.
+
+        Args:
+            text: Text that may contain a balloons-tool block
+            working_dir: Working directory for tool execution
+
+        Yields:
+            Tool use/result events if a tool was called
+        """
+        tool_name, tool_id, tool_args = self._parse_balloons_tool(text)
+        if not tool_name:
+            return
+
+        debug_log.info(
+            f"Detected balloons-tool: {tool_name}",
+            category="tool",
+            details={"args": tool_args},
+            run_id=self._run_id,
+        )
+
+        # Yield tool use events so UI can display them
+        yield ToolUseStartEvent(tool_use_id=tool_id, tool_name=tool_name)
+        yield ToolUseEvent(
+            tool_use_id=tool_id,
+            tool_name=tool_name,
+            tool_input=tool_args,
+        )
+
+        # Execute the tool
+        result, is_error = await execute_tool(
+            tool_name,
+            tool_args,
+            working_dir,
+            self._run_id,
+            session=self._current_session,
+        )
+
+        # Yield result event
+        yield ToolResultEvent(tool_use_id=tool_id, result=result)
+
+        # Send result back to Claude as a continuation
+        result_block = f"<balloons-tool-result>\n{result}\n</balloons-tool-result>"
+        continuation_msg = {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": result_block}],
+            }
+        }
+        await self._send_message(continuation_msg)
+
+    def build_message_content(self, messages: list[Message], new_prompt: str) -> list[dict]:
+        """Build content blocks for the user message.
+
+        Converts message history into a content array that Claude can understand.
+        Each message becomes a text block with role prefix, tool uses become
+        proper tool_use references, and tool results become tool_result blocks.
+
+        Args:
+            messages: Message history
+            new_prompt: New user prompt to append
+
+        Returns:
+            List of content blocks for the user message
+        """
+        content = []
+
+        # Build conversation history as text blocks
+        history_parts = []
         for msg in messages:
-            # Respect context mode
             if msg.context_mode == ContextMode.DROP:
                 continue
 
-            prefix = "User" if msg.role == "user" else "Assistant"
-
-            # Use summary if in SUMMARIZE mode and summary exists
-            if msg.context_mode == ContextMode.SUMMARIZE and msg.summary:
-                parts.append(f"{prefix}: [Summary] {msg.summary}")
+            # Handle system messages
+            if msg.role == "system":
+                if msg.content_blocks:
+                    for block in msg.content_blocks:
+                        if isinstance(block, LinkBlock):
+                            link_info = f"[Link: {block.linked_session_id[:8]}]"
+                            if block.summary:
+                                link_info += f" - {block.summary}"
+                            history_parts.append(link_info)
+                        elif isinstance(block, TextBlock) and block.text:
+                            history_parts.append(block.text)
+                elif msg.content:
+                    history_parts.append(msg.content)
                 continue
 
-            # Build content from blocks if available
+            # Use summary if in SUMMARIZE mode
+            if msg.context_mode == ContextMode.SUMMARIZE and msg.summary:
+                role_name = "User" if msg.role == "user" else "Assistant"
+                history_parts.append(f"<{role_name.lower()}>\n[Summary] {msg.summary}\n</{role_name.lower()}>")
+                continue
+
+            # Build content from blocks
             if msg.content_blocks:
-                block_parts = []
+                role_name = "user" if msg.role == "user" else "assistant"
+                block_texts = []
+
                 for block in msg.content_blocks:
-                    if isinstance(block, TextBlock):
-                        if block.text:
-                            block_parts.append(block.text)
+                    if isinstance(block, TextBlock) and block.text:
+                        block_texts.append(block.text)
                     elif isinstance(block, ToolUseBlock):
-                        # Format tool use so Claude knows what it did
-                        import json
-                        input_str = json.dumps(block.input, indent=2)
-                        block_parts.append(f"[Tool Use: {block.name}]\n{input_str}")
+                        tool_info = f"<tool_use name=\"{block.name}\" id=\"{block.id}\">\n{json.dumps(block.input, indent=2)}\n</tool_use>"
+                        block_texts.append(tool_info)
                     elif isinstance(block, ToolResultBlock):
-                        # Format tool result so Claude sees what the tool returned
-                        error_prefix = "[Error] " if block.is_error else ""
-                        block_parts.append(f"[Tool Result]{error_prefix}\n{block.content}")
+                        error_attr = ' error="true"' if block.is_error else ''
+                        result_info = f"<tool_result id=\"{block.tool_use_id}\"{error_attr}>\n{block.content}\n</tool_result>"
+                        block_texts.append(result_info)
                     elif isinstance(block, InterruptionBlock):
-                        # Mark that the response was interrupted
-                        block_parts.append(f"[Response interrupted: {block.reason}]")
+                        block_texts.append(f"[Response interrupted: {block.reason}]")
                     elif isinstance(block, ErrorBlock):
-                        # Mark that the response was truncated due to error
                         error_info = f"[Response truncated: {block.reason}]"
                         if block.partial_tool_name:
-                            error_info += f"\n[Incomplete tool call: {block.partial_tool_name}]"
-                        if block.partial_tool_input:
-                            error_info += f"\n[Partial input: {block.partial_tool_input}]"
-                        block_parts.append(error_info)
+                            error_info += f" (incomplete tool: {block.partial_tool_name})"
+                        block_texts.append(error_info)
+                    elif isinstance(block, LinkBlock):
+                        link_info = f"[Link: {block.linked_session_id[:8]}]"
+                        if block.summary:
+                            link_info += f" - {block.summary}"
+                        block_texts.append(link_info)
 
-                if block_parts:
-                    parts.append(f"{prefix}: " + "\n\n".join(block_parts))
-            else:
-                # Fallback to plain content
-                parts.append(f"{prefix}: {msg.content}")
+                if block_texts:
+                    history_parts.append(f"<{role_name}>\n" + "\n\n".join(block_texts) + f"\n</{role_name}>")
+            elif msg.content:
+                role_name = "user" if msg.role == "user" else "assistant"
+                history_parts.append(f"<{role_name}>\n{msg.content}\n</{role_name}>")
 
-        parts.append(f"User: {new_prompt}")
-        return "\n\n".join(parts)
+        # Add history as a single text block if we have any
+        if history_parts:
+            history_text = "<conversation_history>\n" + "\n\n".join(history_parts) + "\n</conversation_history>"
+            content.append({"type": "text", "text": history_text})
+
+        # Add the new prompt
+        content.append({"type": "text", "text": new_prompt})
+
+        return content
 
     async def stream_response(
         self, messages: list[Message], prompt: str, allowed_tools: list[str] | None = None,
         working_dir: str | None = None, disable_tools: bool = False
     ) -> AsyncIterator[RunnerEvent]:
-        """
-        Stream a response from Claude.
+        """Stream a response from Claude using bidirectional JSON streaming.
 
-        Sends full conversation history + new prompt each time.
-        Yields both parsed events and RawEvent for all JSON lines.
+        Uses --input-format stream-json for proper message passing. When Claude
+        calls a tool, we execute it ourselves and send the result back via the
+        bidirectional stream, continuing until Claude stops calling tools.
 
         Args:
             messages: Message history for context
@@ -125,28 +257,27 @@ class ClaudeRunner(BaseRunner):
             allowed_tools: List of tool names to allow, or None for all
             working_dir: Working directory for the Claude process
             disable_tools: If True, disable all tools (for simple text responses)
+
+        Yields:
+            RunnerEvent objects (TextDelta, ToolUseEvent, ToolResultEvent, etc.)
         """
         self._terminated = False
-        self._json_errors = []  # Reset for new stream
+        self._json_errors = []
+        self._current_tool_use = None
+        self._text_buffer = ""  # Reset text buffer for balloons-tool detection
 
-        # Build full context from history
-        if messages:
-            full_prompt = self.build_context(messages, prompt)
-        else:
-            full_prompt = prompt
-
-        # Prepend additional system context if configured
-        if self.system_prompt:
-            full_prompt = f"[Additional Context]\n{self.system_prompt}\n\n{full_prompt}"
-
+        # Build command with bidirectional JSON streaming
         cmd = [
             "claude",
             "-p",
+            "--input-format", "stream-json",
             "--output-format", "stream-json",
-            "--include-partial-messages",
-            "--no-session-persistence",  # Don't save sessions in Claude - we manage our own
-            "--disallowedTools", "Task,TodoWrite,NotebookEdit,AskUserQuestion,EnterPlanMode,ExitPlanMode",  # Prevent task spawning, todo lists, notebook, questions, plan mode - we manage our own sessions
+            "--no-session-persistence",
+            "--disallowedTools", "Task,TodoWrite,NotebookEdit,AskUserQuestion,EnterPlanMode,ExitPlanMode",
         ]
+
+        if self.system_prompt:
+            cmd.extend(["--system-prompt", self.system_prompt])
 
         if disable_tools:
             cmd.extend(["--tools", ""])
@@ -156,7 +287,6 @@ class ClaudeRunner(BaseRunner):
         # Build environment with backend overrides
         env = None
         if self._backend_env:
-            import os
             env = os.environ.copy()
             env.update(self._backend_env)
 
@@ -169,29 +299,78 @@ class ClaudeRunner(BaseRunner):
             env=env,
         )
 
-        # Track run_id for debug logging
         self._run_id = str(self.process.pid)
 
-        # Log process start
         debug_log.info(
             f"Claude started (pid {self.process.pid})",
             category="process",
-            details={"cwd": working_dir or "default", "prompt_len": len(full_prompt)},
+            details={"cwd": working_dir or "default", "mode": "stream-json"},
             run_id=self._run_id,
         )
 
-        # Send prompt via stdin
-        self.process.stdin.write(full_prompt.encode("utf-8"))
-        await self.process.stdin.drain()
-        self.process.stdin.close()
+        try:
+            # Build and send initial message with conversation history
+            content = self.build_message_content(messages, prompt)
+            initial_msg = {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": content,
+                }
+            }
+            await self._send_message(initial_msg)
 
-        # Read and parse NDJSON lines using readline() for immediate reads
+            # Process responses, handling tool calls
+            async for event in self._process_stream(working_dir or "."):
+                yield event
+
+        finally:
+            await self._cleanup()
+
+    async def _send_message(self, msg: dict) -> None:
+        """Send a JSON message to the Claude process."""
+        if not self.process or not self.process.stdin:
+            return
+
+        line = json.dumps(msg) + "\n"
+        self.process.stdin.write(line.encode("utf-8"))
+        await self.process.stdin.drain()
+
+        debug_log.debug(
+            f"Sent {msg.get('type')} message",
+            category="claude",
+            run_id=self._run_id,
+        )
+
+    async def _send_tool_result(self, tool_use_id: str, result: str, is_error: bool = False) -> None:
+        """Send a tool result back to Claude."""
+        msg = {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": result,
+                    "is_error": is_error,
+                }]
+            }
+        }
+        await self._send_message(msg)
+
+    async def _process_stream(self, working_dir: str) -> AsyncIterator[RunnerEvent]:
+        """Process the JSON stream from Claude, handling tool calls.
+
+        Yields events and automatically executes tools, sending results back.
+        """
+        pending_tool_calls: list[dict] = []  # Collect tool calls from current response
+
         while True:
             if self._terminated:
                 break
 
             line = await readline_unlimited(self.process.stdout)
-            if not line:  # EOF
+            if not line:
                 break
 
             line = line.decode("utf-8").strip()
@@ -202,71 +381,172 @@ class ClaudeRunner(BaseRunner):
                 data = json.loads(line)
             except json.JSONDecodeError as e:
                 dump_path = dump_failed_json(line, "sse_line")
-                error_detail = f"{e}: {line[:100] if len(line) > 100 else line}"
-                self._json_errors.append((error_detail, str(dump_path) if dump_path else None))
+                self._json_errors.append((str(e), str(dump_path) if dump_path else None))
                 debug_log.warning(
-                    f"JSON decode error: {e}" + (f" (dumped to {dump_path})" if dump_path else ""),
+                    f"JSON decode error: {e}",
                     category="json",
-                    details={"line": line[:100] if len(line) > 100 else line, "dump_file": str(dump_path) if dump_path else None},
                     run_id=self._run_id,
                 )
                 continue
 
-            # Log raw event type for debugging
-            event_type = data.get("type", "unknown")
-            event_subtype = ""
-            event_details = {}
-
-            if event_type == "stream_event":
-                event_obj = data.get("event", {})
-                event_subtype = event_obj.get("type", "")
-
-                # Capture delta content for debugging
-                if event_subtype == "content_block_delta":
-                    delta = event_obj.get("delta", {})
-                    delta_type = delta.get("type", "")
-                    if delta_type == "text_delta":
-                        text = delta.get("text", "")
-                        event_details["text"] = text[:100] if len(text) > 100 else text
-                    elif delta_type == "input_json_delta":
-                        partial = delta.get("partial_json", "")
-                        event_details["json"] = partial[:50] if len(partial) > 50 else partial
-
-            elif event_type == "system":
-                event_subtype = data.get("subtype", "")
-
-            debug_log.debug(
-                f"{event_type}" + (f"/{event_subtype}" if event_subtype else ""),
-                category="claude",
-                run_id=self._run_id,
-                details=event_details if event_details else None,
-            )
-
-            # Always yield raw event for inspection
+            # Always yield raw event
             yield RawEvent(data=data)
 
-            # Also yield parsed event if recognized
-            try:
-                event = self._parse_event(data)
-                if event:
-                    yield event
-                    # Give event loop a chance to process UI updates
-                    await asyncio.sleep(0)
-            except InputRequiredError:
-                # Claude is asking a question - terminate the process
-                debug_log.info(
-                    "Terminating: Claude is asking a question",
-                    category="process",
-                    run_id=self._run_id,
+            msg_type = data.get("type")
+
+            # Handle init event
+            if msg_type == "system" and data.get("subtype") == "init":
+                yield InitEvent(
+                    model=data.get("model", ""),
+                    session_id=data.get("session_id", ""),
+                    context_window=200000,
                 )
-                self.terminate()
-                raise
+                continue
 
-        # Check for rate limit error before waiting
-        stderr_output = await self.process.stderr.read()
-        await self.process.wait()
+            # Handle assistant message (contains text and/or tool_use)
+            if msg_type == "assistant":
+                message = data.get("message", {})
+                for block in message.get("content", []):
+                    block_type = block.get("type")
 
-        # Log process exit
+                    if block_type == "text":
+                        text = block.get("text", "")
+                        if text:
+                            yield TextDelta(text=text)
+
+                            # Check for balloons-tool blocks in text
+                            self._text_buffer += text
+                            if "<balloons-tool>" in self._text_buffer and "</balloons-tool>" in self._text_buffer:
+                                async for event in self._handle_balloons_tool(self._text_buffer, working_dir):
+                                    yield event
+                                self._text_buffer = ""
+
+                    elif block_type == "tool_use":
+                        tool_use_id = block.get("id", "")
+                        tool_name = block.get("name", "")
+                        tool_input = block.get("input", {})
+
+                        # Yield tool use events
+                        yield ToolUseStartEvent(
+                            tool_use_id=tool_use_id,
+                            tool_name=tool_name,
+                        )
+                        yield ToolUseEvent(
+                            tool_use_id=tool_use_id,
+                            tool_name=tool_name,
+                            tool_input=tool_input,
+                        )
+
+                        # Queue for execution
+                        pending_tool_calls.append({
+                            "id": tool_use_id,
+                            "name": tool_name,
+                            "input": tool_input,
+                        })
+                continue
+
+            # Handle user message (tool results from CLI)
+            if msg_type == "user":
+                # CLI executed tools and is sending results back
+                # Parse and yield the results, remove from pending_tool_calls
+                message = data.get("message", {})
+                for block in message.get("content", []):
+                    if block.get("type") == "tool_result":
+                        tool_use_id = block.get("tool_use_id", "")
+                        result_content = block.get("content", "")
+
+                        # Yield the tool result event
+                        yield ToolResultEvent(
+                            tool_use_id=tool_use_id,
+                            result=result_content,
+                        )
+
+                        # Remove from pending_tool_calls (CLI already handled it)
+                        pending_tool_calls = [
+                            tc for tc in pending_tool_calls
+                            if tc["id"] != tool_use_id
+                        ]
+
+                        debug_log.debug(
+                            f"CLI tool result received: {tool_use_id[:8]}...",
+                            category="claude",
+                            run_id=self._run_id,
+                        )
+                continue
+
+            # Handle result event (turn complete)
+            if msg_type == "result":
+                usage = data.get("usage", {})
+
+                # Only execute custom tools (link tools) that CLI doesn't know about
+                # Standard tools (Read, Bash, etc.) are handled by CLI
+                custom_tool_calls = [
+                    tc for tc in pending_tool_calls
+                    if tc["name"] in LINK_TOOL_NAMES
+                ]
+
+                if custom_tool_calls:
+                    for tc in custom_tool_calls:
+                        result, is_error = await execute_tool(
+                            tc["name"],
+                            tc["input"],
+                            working_dir,
+                            self._run_id,
+                            session=self._current_session,
+                        )
+
+                        yield ToolResultEvent(
+                            tool_use_id=tc["id"],
+                            result=result,
+                        )
+
+                        # Send result back to Claude
+                        await self._send_tool_result(tc["id"], result, is_error)
+
+                    pending_tool_calls.clear()
+                    # Continue processing - Claude will respond to the tool results
+                    continue
+
+                # No custom tool calls pending - we're done
+                pending_tool_calls.clear()
+                yield ResultEvent(
+                    input_tokens=usage.get("input_tokens", 0),
+                    output_tokens=usage.get("output_tokens", 0),
+                    total_cost_usd=data.get("total_cost_usd", 0.0),
+                    context_window=200000,
+                )
+                break
+
+    async def _cleanup(self) -> None:
+        """Clean up the Claude process."""
+        if not self.process:
+            return
+
+        # Close stdin to signal we're done
+        if self.process.stdin and not self.process.stdin.is_closing():
+            self.process.stdin.close()
+            try:
+                await self.process.stdin.wait_closed()
+            except Exception:
+                pass
+
+        # Read any remaining stderr
+        stderr_output = b""
+        try:
+            stderr_output = await asyncio.wait_for(
+                self.process.stderr.read(),
+                timeout=2.0
+            )
+        except asyncio.TimeoutError:
+            pass
+
+        # Wait for process to exit
+        try:
+            await asyncio.wait_for(self.process.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            self.process.kill()
+            await self.process.wait()
+
         exit_code = self.process.returncode
         stderr_text = stderr_output.decode("utf-8", errors="replace") if stderr_output else ""
 
@@ -274,11 +554,10 @@ class ClaudeRunner(BaseRunner):
             debug_log.error(
                 f"Claude exited (code {exit_code})",
                 category="process",
-                details={"stderr": stderr_text[:500] if len(stderr_text) > 500 else stderr_text},
+                details={"stderr": stderr_text[:500]},
                 run_id=self._run_id,
             )
-            # Check for rate limit
-            if "hit your limit" in stderr_text.lower() or "resets" in stderr_text.lower():
+            if "hit your limit" in stderr_text.lower():
                 raise RateLimitError(stderr_text.strip())
         else:
             debug_log.info(f"Claude exited (code 0)", category="process", run_id=self._run_id)
@@ -286,110 +565,7 @@ class ClaudeRunner(BaseRunner):
         self._run_id = ""
         self.process = None
 
-    def _parse_event(self, data: dict) -> Union[TextDelta, ResultEvent, InitEvent, ToolUseEvent, ToolResultEvent, None]:
-        """Parse a JSON event from Claude's stream output."""
-        msg_type = data.get("type")
-
-        if msg_type == "system" and data.get("subtype") == "init":
-            return InitEvent(
-                model=data.get("model", ""),
-                session_id=data.get("session_id", ""),
-                context_window=data.get("contextWindow", {}).get("maxTokens", 200000),
-            )
-
-        if msg_type == "stream_event":
-            event = data.get("event", {})
-            event_type = event.get("type")
-
-            if event_type == "content_block_delta":
-                delta = event.get("delta", {})
-                if delta.get("type") == "text_delta":
-                    return TextDelta(text=delta.get("text", ""))
-                # Stream tool input JSON delta
-                if delta.get("type") == "input_json_delta":
-                    if self._current_tool_use:
-                        partial = delta.get("partial_json", "")
-                        self._current_tool_use["input_json"] += partial
-                        return ToolInputDeltaEvent(
-                            tool_use_id=self._current_tool_use["id"],
-                            partial_json=partial,
-                        )
-
-            if event_type == "content_block_start":
-                content_block = event.get("content_block", {})
-                if content_block.get("type") == "tool_use":
-                    # Start tracking a new tool use (capture Claude's tool_use_id)
-                    tool_use_id = content_block.get("id", "")
-                    tool_name = content_block.get("name", "")
-                    self._current_tool_use = {
-                        "id": tool_use_id,
-                        "name": tool_name,
-                        "input_json": "",
-                    }
-                    # Emit start event immediately
-                    return ToolUseStartEvent(
-                        tool_use_id=tool_use_id,
-                        tool_name=tool_name,
-                    )
-
-            if event_type == "content_block_stop":
-                # Tool use complete - emit event
-                if self._current_tool_use:
-                    try:
-                        tool_input = json.loads(self._current_tool_use["input_json"]) if self._current_tool_use["input_json"] else {}
-                    except json.JSONDecodeError as e:
-                        raw_input = self._current_tool_use["input_json"]
-                        dump_path = dump_failed_json(raw_input, "tool_input")
-                        debug_log.warning(
-                            f"Tool input JSON decode error: {e}" + (f" (dumped to {dump_path})" if dump_path else ""),
-                            category="json",
-                            details={"tool_name": self._current_tool_use["name"], "dump_file": str(dump_path) if dump_path else None},
-                            run_id=self._run_id,
-                        )
-                        tool_input = {"raw": raw_input, "_dump_file": str(dump_path) if dump_path else None}
-
-                    event = ToolUseEvent(
-                        tool_use_id=self._current_tool_use["id"],
-                        tool_name=self._current_tool_use["name"],
-                        tool_input=tool_input,
-                    )
-                    self._current_tool_use = None
-                    return event
-
-        # Tool result from user message (Claude CLI returns tool results as user messages)
-        # A "user" event without tool_result content means Claude is asking a question
-        if msg_type == "user" and data.get("message"):
-            message = data.get("message", {})
-            has_tool_result = False
-            for content in message.get("content", []):
-                if content.get("type") == "tool_result":
-                    has_tool_result = True
-                    return ToolResultEvent(
-                        tool_use_id=content.get("tool_use_id", ""),
-                        result=content.get("content", ""),
-                    )
-            # If we got a user message but no tool_result, Claude is asking a question
-            if not has_tool_result:
-                debug_log.warning(
-                    "Received user event without tool_result - Claude may be asking a question",
-                    category="claude",
-                    run_id=self._run_id,
-                    details={"content_types": [c.get("type") for c in message.get("content", [])]},
-                )
-                raise InputRequiredError("Claude is asking a question (user event without tool_result)")
-
-        if msg_type == "result":
-            usage = data.get("usage", {})
-            return ResultEvent(
-                input_tokens=usage.get("input_tokens", 0),
-                output_tokens=usage.get("output_tokens", 0),
-                total_cost_usd=data.get("total_cost_usd", 0.0),
-                context_window=200000,  # Could extract from earlier init event
-            )
-
-        return None
-
-    def terminate(self):
+    def terminate(self) -> None:
         """Terminate the running Claude process."""
         self._terminated = True
         if self.process and self.process.returncode is None:
@@ -406,6 +582,84 @@ class ClaudeRunner(BaseRunner):
         """Get any errors that occurred during streaming.
 
         Returns:
-            Tuple of (json_errors list of (error_detail, dump_path) tuples, partial_tool_use dict or None)
+            Tuple of (json_errors, partial_tool_use)
         """
         return self._json_errors, self._current_tool_use
+
+    def set_session(self, session: "Session") -> None:
+        """Set the current session for tool execution.
+
+        Args:
+            session: The current Session object
+        """
+        self._current_session = session
+
+    @staticmethod
+    def build_context(messages: list[Message], new_prompt: str) -> str:
+        """Build a human-readable context string for display purposes.
+
+        This is used by the UI to show what context will be sent. The actual
+        API uses build_message_content() which returns structured content blocks.
+
+        Args:
+            messages: Message history
+            new_prompt: New user prompt
+
+        Returns:
+            Human-readable string representation of the context
+        """
+        parts = []
+
+        for msg in messages:
+            if msg.context_mode == ContextMode.DROP:
+                continue
+
+            if msg.role == "system":
+                if msg.content_blocks:
+                    for block in msg.content_blocks:
+                        if isinstance(block, LinkBlock):
+                            link_info = f"[Link: {block.linked_session_id[:8]}]"
+                            if block.summary:
+                                link_info += f" - {block.summary}"
+                            parts.append(link_info)
+                        elif isinstance(block, TextBlock) and block.text:
+                            parts.append(block.text)
+                elif msg.content:
+                    parts.append(msg.content)
+                continue
+
+            role_name = "User" if msg.role == "user" else "Assistant"
+
+            if msg.context_mode == ContextMode.SUMMARIZE and msg.summary:
+                parts.append(f"{role_name}: [Summary] {msg.summary}")
+                continue
+
+            if msg.content_blocks:
+                block_texts = []
+                for block in msg.content_blocks:
+                    if isinstance(block, TextBlock) and block.text:
+                        block_texts.append(block.text)
+                    elif isinstance(block, ToolUseBlock):
+                        block_texts.append(f"[Tool: {block.name}]\n{json.dumps(block.input, indent=2)}")
+                    elif isinstance(block, ToolResultBlock):
+                        error_mark = " (error)" if block.is_error else ""
+                        block_texts.append(f"[Result{error_mark}]\n{block.content}")
+                    elif isinstance(block, InterruptionBlock):
+                        block_texts.append(f"[Interrupted: {block.reason}]")
+                    elif isinstance(block, ErrorBlock):
+                        block_texts.append(f"[Error: {block.reason}]")
+                    elif isinstance(block, LinkBlock):
+                        link_info = f"[Link: {block.linked_session_id[:8]}]"
+                        if block.summary:
+                            link_info += f" - {block.summary}"
+                        block_texts.append(link_info)
+
+                if block_texts:
+                    parts.append(f"{role_name}: " + "\n".join(block_texts))
+            elif msg.content:
+                parts.append(f"{role_name}: {msg.content}")
+
+        if new_prompt:
+            parts.append(f"User: {new_prompt}")
+
+        return "\n\n".join(parts)

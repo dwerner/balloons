@@ -41,17 +41,9 @@ class Session:
     merge_message: str = ""  # User's summary when merging back
     # Backend configuration
     backend_name: str = ""  # Name of backend to use (empty = default)
-    # Bidirectional links to other sessions
-    # Bidirectional links to other sessions
-    links: list[dict] = field(default_factory=list)
-    # Each link: {
-    #   "link_id": str,           # UUID for this link pair (same in both sessions)
-    #   "linked_session_id": str, # The other session's ID
-    #   "link_point": int,        # Turn index where link appears in THIS session
-    #   "summary": str,           # LLM-generated summary
-    #   "created": str,           # ISO timestamp
-    #   "is_orphaned": bool,      # True if linked session was deleted
-    # }
+    # Note: Links are stored as LinkBlock content blocks in messages (turn-based).
+    # The legacy `links` field has been removed - old sessions with links data
+    # will have those links ignored (they were never actively used).
 
     @property
     def total_tokens(self) -> int:
@@ -229,17 +221,6 @@ class Session:
         """Get all child forks (active and merged)."""
         return self.children
 
-    def add_link(self, link_id: str, linked_session_id: str, link_point: int, summary: str) -> None:
-        """Add a bidirectional link to another session (legacy - stored in links list)."""
-        self.links.append({
-            "link_id": link_id,
-            "linked_session_id": linked_session_id,
-            "link_point": link_point,
-            "summary": summary,
-            "created": datetime.now().isoformat(),
-            "is_orphaned": False,
-        })
-
     def add_link_turn(self, link_id: str, linked_session_id: str, summary: str) -> Message:
         """Add a link as a turn in the conversation.
 
@@ -261,35 +242,18 @@ class Session:
         self.messages.append(msg)
         return msg
 
-    def get_links(self) -> list[dict]:
-        """Get all links from this session (legacy links list only)."""
-        return self.links
-
     def get_all_link_ids(self) -> list[str]:
-        """Get all link IDs from both legacy links and turn-based LinkBlocks."""
+        """Get all link IDs from turn-based LinkBlocks."""
         link_ids = []
-        # Legacy links
-        for link in self.links:
-            link_ids.append(link.get("link_id", ""))
-        # Turn-based LinkBlocks
         for msg in self.messages:
             for block in msg.content_blocks:
                 if isinstance(block, LinkBlock):
                     link_ids.append(block.link_id)
         return link_ids
 
-    def get_active_links(self) -> list[dict]:
-        """Get non-orphaned links from this session (legacy links list only)."""
-        return [link for link in self.links if not link.get("is_orphaned", False)]
-
     def get_all_active_links(self) -> list[dict]:
-        """Get all non-orphaned links from both legacy links and turn-based LinkBlocks."""
+        """Get all non-orphaned links from turn-based LinkBlocks."""
         active = []
-        # Legacy links
-        for link in self.links:
-            if not link.get("is_orphaned", False):
-                active.append(link)
-        # Turn-based LinkBlocks
         for msg in self.messages:
             for block in msg.content_blocks:
                 if isinstance(block, LinkBlock) and not block.is_orphaned:
@@ -302,18 +266,7 @@ class Session:
         return active
 
     def mark_link_orphaned(self, link_id: str) -> None:
-        """Mark a link as orphaned (linked session was deleted).
-
-        Handles both legacy links (in session.links list) and new link turns
-        (LinkBlock in message content_blocks).
-        """
-        # Mark in legacy links list
-        for link in self.links:
-            if link["link_id"] == link_id:
-                link["is_orphaned"] = True
-                break
-
-        # Mark in message content blocks (new turn-based links)
+        """Mark a link as orphaned (linked session was deleted)."""
         for msg in self.messages:
             for block in msg.content_blocks:
                 if isinstance(block, LinkBlock) and block.link_id == link_id:
@@ -321,7 +274,7 @@ class Session:
                     return
 
     def has_active_links(self) -> bool:
-        """Check if this session has any non-orphaned links (legacy or turn-based)."""
+        """Check if this session has any non-orphaned links."""
         return len(self.get_all_active_links()) > 0
 
     @property
@@ -410,7 +363,6 @@ class Session:
             "merge_point_turn": self.merge_point_turn,
             "merge_message": self.merge_message,
             "backend_name": self.backend_name,
-            "links": self.links,
         }
         path.write_text(json.dumps(data, indent=2))
 
@@ -495,7 +447,6 @@ class Session:
             merge_point_turn=data.get("merge_point_turn", -1),
             merge_message=data.get("merge_message", ""),
             backend_name=data.get("backend_name", ""),
-            links=data.get("links", []),
         )
         for m in data.get("messages", []):
             # Parse content_blocks if present, otherwise create from content
