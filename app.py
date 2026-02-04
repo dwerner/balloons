@@ -90,6 +90,7 @@ from core import (
     NoAction,
 )
 from core.summarizer import Summarizer
+from core.exceptions import BackendNotFoundError
 from core.context_grouper import group_messages_by_context_mode, build_context_messages
 from core.fork import ForkManager, ForkResult, MergeResult, DeriveResult, SwitchResult
 from core.tree_state import TreeState
@@ -204,15 +205,39 @@ class BalloonsApp(App):
         return self._manager.active_runner
 
     def _get_backend_for_session(self, session: Session) -> BackendConfig:
-        """Get the backend config for a session, respecting session override."""
+        """Get the backend config for a session, respecting session override.
+
+        Raises:
+            BackendNotFoundError: If the session specifies a backend that doesn't exist.
+        """
         config = get_config()
-        if session.backend_name and session.backend_name in config.backends:
-            return config.get_backend(session.backend_name)
+        if session.backend_name:
+            if session.backend_name in config.backends:
+                return config.get_backend(session.backend_name)
+            else:
+                raise BackendNotFoundError(
+                    session.backend_name, list(config.backends.keys())
+                )
         return self._backend_config
 
     def _create_session_runner(self, session: Session) -> SessionRunner:
-        """Create a runner for a session, respecting session's backend preference."""
-        backend = self._get_backend_for_session(session)
+        """Create a runner for a session, respecting session's backend preference.
+
+        If the session specifies a backend that no longer exists, falls back to the
+        default backend and clears the invalid backend_name from the session.
+        """
+        try:
+            backend = self._get_backend_for_session(session)
+        except BackendNotFoundError as e:
+            debug_log.info(
+                f"Session backend '{e.backend_name}' not found, using default for runner",
+                category="session",
+                session_id=session.id,
+            )
+            # Clear invalid backend and use default
+            session.backend_name = ""
+            session.save()
+            backend = self._backend_config
         return SessionRunner(session, runner=create_runner(backend))
 
     def _calculate_context_tokens(self, pending_prompt: str = "") -> int:
@@ -748,6 +773,12 @@ class BalloonsApp(App):
             )
             context_tree.start_turn(child_session.id, turn_idx + 1, "assistant", exchange_id=exchange_id)
 
+            # Add user message to child session before streaming starts
+            # This ensures it's persisted even if we crash mid-exchange
+            user_blocks = [TextBlock(text=prompt)]
+            child_session.add_message("user", prompt, content_blocks=user_blocks, exchange_id=exchange_id)
+            child_session.save()
+
             # Start background streaming
             child_runner = self._manager._runners[child_session.id]
             child_runner.start_background(
@@ -903,37 +934,25 @@ class BalloonsApp(App):
                 raw_events,
             )
 
-            # Save messages to session
+            # Save final session state
+            # Note: User message and turns are already added incrementally during streaming
+            # (user message added in _start_streaming, turns added by runner on each tool result)
+            # We just need to ensure exchange_id is set and do a final save
             if session:
-                # Use exchange_id from context (set when streaming started)
-                # This ensures tree state and saved messages use the same exchange_id
                 exchange_id = ctx.exchange_id or (result.exchange_id if result else None)
                 turns = result.turns if result else []
 
-                if ctx.query_with:
-                    # query_with: only save assistant response, no user message
-                    if turns:
-                        # New model: save individual turns (update exchange_id to match context)
-                        for turn in turns:
-                            turn.exchange_id = exchange_id
-                            session.messages.append(turn)
-                    else:
-                        # Legacy: single assistant message
-                        session.add_message("assistant", content, content_blocks=assistant_blocks, exchange_id=exchange_id)
-                else:
-                    # Normal case: save user message + assistant turns
-                    user_blocks = [TextBlock(text=ctx.prompt)]
-                    session.add_message("user", ctx.prompt, content_blocks=user_blocks, exchange_id=exchange_id)
+                # Update exchange_id on turns (they're already in session.messages)
+                # This ensures consistent grouping for the UI
+                for turn in turns:
+                    turn.exchange_id = exchange_id
 
-                    if turns:
-                        # New model: save individual assistant turns (update exchange_id to match context)
-                        for turn in turns:
-                            turn.exchange_id = exchange_id
-                            session.messages.append(turn)
-                    else:
-                        # Legacy: single assistant message
-                        session.add_message("assistant", content, content_blocks=assistant_blocks, exchange_id=exchange_id)
+                # Legacy fallback: if no turns were created, add a single assistant message
+                # This handles backends that don't produce turn events
+                if not turns and content:
+                    session.add_message("assistant", content, content_blocks=assistant_blocks, exchange_id=exchange_id)
 
+                # Final save to ensure all state is persisted
                 session.save()
 
             if ctx.is_active:
@@ -1179,6 +1198,12 @@ class BalloonsApp(App):
         context_tree.finish_turn(
             self.session.id, turn_idx, prompt, [TextBlock(text=prompt)], []
         )
+
+        # Add user message to session immediately (before tool loops start)
+        # This ensures the user prompt is persisted even if we crash mid-exchange
+        user_blocks = [TextBlock(text=prompt)]
+        self.session.add_message("user", prompt, content_blocks=user_blocks, exchange_id=exchange_id)
+        self.session.save()
 
         # Start the assistant turn in tree (with same exchange_id)
         assistant_turn_idx = turn_idx + 1
@@ -1433,10 +1458,17 @@ class BalloonsApp(App):
             # Show current backend
             current = self.session.backend_name or config.default_backend
             available = list(config.backends.keys())
-            status_bar.set_status(
-                f"Backend: {current} (available: {', '.join(available)})",
-                animate=False
-            )
+            # Check if session's backend still exists
+            if self.session.backend_name and self.session.backend_name not in config.backends:
+                status_bar.set_status(
+                    f"Backend: {current} (MISSING - will use default). Available: {', '.join(available)}",
+                    animate=False
+                )
+            else:
+                status_bar.set_status(
+                    f"Backend: {current} (available: {', '.join(available)})",
+                    animate=False
+                )
             return
 
         # Validate backend exists
@@ -1922,6 +1954,12 @@ class BalloonsApp(App):
             )
             context_tree.start_turn(child_session.id, turn_idx + 1, "assistant", exchange_id=exchange_id)
 
+            # Add user message to child session before streaming starts
+            # This ensures it's persisted even if we crash mid-exchange
+            user_blocks = [TextBlock(text=result.prompt)]
+            child_session.add_message("user", result.prompt, content_blocks=user_blocks, exchange_id=exchange_id)
+            child_session.save()
+
             child_runner = self._manager._runners[child_session.id]
             child_runner.start_background(
                 prompt=result.prompt,
@@ -2284,6 +2322,35 @@ class BalloonsApp(App):
 
         # Update working directory in status bar
         status_bar.update_working_directory(session.working_directory or "")
+
+        # Update status bar with session's model/backend and ensure runner uses correct backend
+        try:
+            session_backend = self._get_backend_for_session(session)
+        except BackendNotFoundError as e:
+            # Backend no longer exists - warn user and fall back to default
+            status_bar.set_error(
+                f"Backend '{e.backend_name}' not found, using default"
+            )
+            debug_log.info(
+                f"Session backend '{e.backend_name}' not found, falling back to default",
+                category="session",
+                session_id=session.id,
+            )
+            # Clear the invalid backend from the session
+            session.backend_name = ""
+            session.save()
+            session_backend = self._backend_config
+
+        status_bar.update_stats(
+            backend=session_backend.name if session_backend.name != "claude" else "",
+            model=session.model or session_backend.model or "",
+        )
+
+        # Ensure the session's runner uses the correct backend
+        # The SessionManager always creates runners with the default backend, so we need
+        # to recreate the runner if the session specifies a different backend
+        if session.backend_name and session.backend_name != self._backend_config.name:
+            self._manager._runners[session.id] = self._create_session_runner(session)
 
         # Update header and request pane with session info
         chat_log.set_session_title(session.title)

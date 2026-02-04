@@ -56,6 +56,7 @@ class MockSession:
     fork_name: str = ""
     fork_status: str = "active"
     merge_message: str = ""
+    backend_name: str = ""
 
 
 class TestTreeStateObservers:

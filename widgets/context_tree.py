@@ -46,6 +46,62 @@ SESSION_COLORS = [
 ]
 
 
+def get_model_icon(model: str, backend_name: str) -> str:
+    """Get a visual icon for a model/backend combination.
+
+    Icons help users quickly identify which model a session uses.
+    Uses unicode symbols that render well in terminals.
+
+    Args:
+        model: Model identifier (e.g., "claude-opus-4-5-20251101", "gpt-4")
+        backend_name: Backend name (e.g., "claude", "openrouter", "ollama")
+
+    Returns:
+        A short icon string with Rich markup for coloring.
+    """
+    model_lower = model.lower() if model else ""
+    backend_lower = backend_name.lower() if backend_name else ""
+
+    # Claude models - use different icons for different tiers
+    if "opus" in model_lower or "opus" in backend_lower:
+        return "[bold magenta]◆[/]"  # Diamond for Opus (premium)
+    elif "sonnet" in model_lower:
+        return "[cyan]◇[/]"  # Hollow diamond for Sonnet (balanced)
+    elif "haiku" in model_lower:
+        return "[green]○[/]"  # Circle for Haiku (fast/cheap)
+    elif "claude" in model_lower or backend_lower == "claude":
+        return "[blue]●[/]"  # Filled circle for generic Claude
+
+    # OpenAI models
+    if "gpt-4" in model_lower or "gpt4" in model_lower:
+        return "[yellow]★[/]"  # Star for GPT-4
+    elif "gpt-3" in model_lower or "gpt3" in model_lower:
+        return "[yellow]☆[/]"  # Hollow star for GPT-3.5
+    elif "o1" in model_lower or "o3" in model_lower:
+        return "[red]✦[/]"  # Four-pointed star for reasoning models
+
+    # Local/open models
+    if "llama" in model_lower:
+        return "[orange1]▲[/]"  # Triangle for Llama
+    elif "qwen" in model_lower:
+        return "[bright_blue]◈[/]"  # Diamond with dot for Qwen
+    elif "mistral" in model_lower:
+        return "[bright_cyan]◎[/]"  # Bullseye for Mistral
+    elif "deepseek" in model_lower:
+        return "[bright_green]◉[/]"  # Fisheye for DeepSeek
+    elif "gemma" in model_lower:
+        return "[bright_magenta]❖[/]"  # Diamond for Gemma
+
+    # Backend-based fallbacks
+    if backend_lower in ("ollama", "llamacpp"):
+        return "[dim]▪[/]"  # Small square for local models
+    elif backend_lower == "openrouter":
+        return "[dim]◦[/]"  # Small circle for OpenRouter
+
+    # Default - no icon if we can't identify the model
+    return ""
+
+
 class SelectableTreeWidget(Tree):
     """Tree widget with space-bar toggle for multiselect.
 
@@ -390,6 +446,8 @@ class ContextTreeView(Vertical):
         self._session_nodes: dict[str, Any] = {}
         # (session_id, turn_idx) -> tree node
         self._turn_nodes: dict[tuple[str, int], Any] = {}
+        # (session_id, exchange_id) -> tree node (for exchange group nodes)
+        self._exchange_nodes: dict[tuple[str, str], Any] = {}
         # (session_id, turn_idx, tool_use_id) -> tree node (for streaming tool use tracking)
         self._tool_use_nodes: dict[tuple[str, int, str], Any] = {}
         # (session_id, turn_idx) -> accumulated streaming text
@@ -443,7 +501,12 @@ class ContextTreeView(Vertical):
         Once we migrate to app calling TreeState directly, these handlers
         will be enabled.
         """
-        if event == TreeEvent.STREAMING_STARTED:
+        if event == TreeEvent.SESSION_ADDED:
+            session_id = data.get("session_id")
+            if session_id and session_id not in self._session_nodes:
+                self._add_session_node(session_id)
+
+        elif event == TreeEvent.STREAMING_STARTED:
             session_id = data.get("session_id")
             if session_id:
                 self._update_session_label(session_id)
@@ -518,6 +581,37 @@ class ContextTreeView(Vertical):
             return
         is_active = session_id == self._state.get_current_session_id()
         node.label = self._make_session_label(session_data, is_active)
+
+    def _add_session_node(self, session_id: str) -> None:
+        """Add a single session node to the tree.
+
+        Called when a new session is added (e.g., background fork).
+        Adds the session at the top of the tree (most recent).
+        """
+        session_data = self._state.get_session(session_id)
+        if not session_data:
+            return
+
+        tree = self.query_one("#turn-tree", SelectableTreeWidget)
+        is_current = session_id == self._state.get_current_session_id()
+
+        # Build session label
+        session_label = self._make_session_label_from_session_data(session_data, is_current)
+
+        # Add at the beginning (index 0) so new sessions appear at top
+        # Note: Tree.add() appends, but we want to prepend for "most recent" order
+        # We'll add normally and rely on the next rebuild to sort properly
+        session_node = tree.root.add(
+            session_label,
+            data={"type": "session", "session_id": session_id}
+        )
+        self._session_nodes[session_id] = session_node
+
+        # If session is loaded and has turns, add them
+        if session_data.is_loaded and session_data.turns:
+            self._add_turns_to_node(session_node, session_id, session_data.turns)
+
+        self._update_root_label()
 
     def _add_streaming_turn_node(self, session_id: str, turn_idx: int, role: str) -> None:
         """Add a placeholder turn node when streaming starts.
@@ -600,6 +694,7 @@ class ContextTreeView(Vertical):
         tree.root.remove_children()
         self._session_nodes.clear()
         self._turn_nodes.clear()
+        self._exchange_nodes.clear()
 
         # Clear TreeState (which now owns session data, context modes, and merge modes)
         self._state.clear()
@@ -667,6 +762,10 @@ class ContextTreeView(Vertical):
         else:
             streaming_indicator = ""
 
+        # Model icon for visual differentiation
+        model_icon = get_model_icon(session_data.model, session_data.backend_name)
+        model_indicator = f"{model_icon} " if model_icon else ""
+
         # Build label: fork name or title (if present), session ID prefix, msg count, tokens, datetime
         fork_name = session_data.fork_name
         title = session_data.title
@@ -684,9 +783,9 @@ class ContextTreeView(Vertical):
         token_str = f"{session_tokens:,}tok" if session_tokens > 0 else ""
 
         if name_part:
-            label = f"{id_prefix}{name_part} [dim]({msg_count}msg {token_str})[/] {status}"
+            label = f"{model_indicator}{id_prefix}{name_part} [dim]({msg_count}msg {token_str})[/] {status}"
         else:
-            label = f"{id_prefix}{date_str} [dim]({msg_count}msg {token_str})[/] {status}"
+            label = f"{model_indicator}{id_prefix}{date_str} [dim]({msg_count}msg {token_str})[/] {status}"
 
         # Highlight active session
         if is_active:
@@ -718,6 +817,7 @@ class ContextTreeView(Vertical):
                 children=session.children,
                 fork_name=session.fork_name,
                 fork_status=session.fork_status,
+                backend_name=session.backend_name,
             )
             return self._make_session_label_from_session_data(temp_data, is_active)
 
@@ -863,12 +963,10 @@ class ContextTreeView(Vertical):
                 # Multi-turn exchange - create a group node
                 exchange_id = group[0].exchange_id
                 first_turn = group[0]
+                turn_indices = [turn.idx for turn in group]
 
-                # Create exchange label from first turn's role/content
-                user_content = first_turn.content if first_turn.role == "user" else ""
-                preview = user_content[:25] + "..." if len(user_content) > 25 else user_content
-                preview = preview.replace("\n", " ")
-                exchange_label = f"[dim]⟨{len(group)}⟩[/] {preview or 'Exchange'}"
+                # Create exchange label from first turn's role/content with mode indicator
+                exchange_label = self._make_exchange_label(session_id, first_turn, len(group), turn_indices)
 
                 exchange_node = session_node.add(
                     exchange_label,
@@ -877,8 +975,10 @@ class ContextTreeView(Vertical):
                         "session_id": session_id,
                         "exchange_id": exchange_id,
                         "first_turn_idx": first_turn.idx,
+                        "turn_indices": turn_indices,
                     }
                 )
+                self._exchange_nodes[(session_id, exchange_id)] = exchange_node
 
                 # Add turns as children of the exchange node
                 for turn in group:
@@ -1032,6 +1132,67 @@ class ContextTreeView(Vertical):
         # Add tool indicator
         tool_indicator = f" [cyan]🔧{tool_count}[/]" if tool_count > 0 else ""
         return f"{indicator} {icon}{tool_indicator} {preview}"
+
+    def _get_exchange_aggregate_mode(self, session_id: str, turn_indices: list[int]) -> ContextMode | None:
+        """Get aggregate mode for exchange group if all turns share the same mode.
+
+        Returns:
+            The shared ContextMode if all turns have the same mode, None if mixed.
+        """
+        if not turn_indices:
+            return None
+
+        modes = [self._state.get_context_mode(session_id, idx) for idx in turn_indices]
+        first_mode = modes[0]
+
+        # Normalize SUMMARIZE to COMPRESS for comparison
+        def normalize(m):
+            return ContextMode.COMPRESS if m == ContextMode.SUMMARIZE else m
+
+        if all(normalize(m) == normalize(first_mode) for m in modes):
+            return first_mode
+        return None
+
+    def _make_exchange_label(self, session_id: str, first_turn, group_size: int, turn_indices: list[int]) -> str:
+        """Create label for an exchange group node with aggregate mode indicator."""
+        # Check if all turns in the exchange have the same mode
+        aggregate_mode = self._get_exchange_aggregate_mode(session_id, turn_indices)
+
+        if aggregate_mode == ContextMode.COPY:
+            indicator = "[green]☑[/]"
+        elif aggregate_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
+            indicator = "[yellow]Σ[/]"
+        elif aggregate_mode == ContextMode.DROP:
+            indicator = "☐"
+        else:
+            # Mixed modes - show a distinct indicator
+            indicator = "[dim]◐[/]"
+
+        user_content = first_turn.content if first_turn.role == "user" else ""
+        preview = user_content[:25] + "..." if len(user_content) > 25 else user_content
+        preview = preview.replace("\n", " ")
+        return f"{indicator} [dim]⟨{group_size}⟩[/] {preview or 'Exchange'}"
+
+    def _update_exchange_label(self, session_id: str, exchange_id: str) -> None:
+        """Update exchange node label to reflect current aggregate mode."""
+        exchange_node = self._exchange_nodes.get((session_id, exchange_id))
+        if not exchange_node:
+            return
+
+        node_data = exchange_node.data
+        if not node_data:
+            return
+
+        turn_indices = node_data.get("turn_indices", [])
+        first_turn_idx = node_data.get("first_turn_idx")
+
+        # Get the first turn data from TreeState
+        first_turn = self._state.get_turn(session_id, first_turn_idx)
+        if not first_turn:
+            return
+
+        new_label = self._make_exchange_label(session_id, first_turn, len(turn_indices), turn_indices)
+        exchange_node.set_label(new_label)
 
     def _update_root_label(self) -> None:
         """Update root label with selected context tokens for current session."""
@@ -1791,6 +1952,12 @@ class ContextTreeView(Vertical):
             new_mode = self._state.toggle_context_mode(session_id, turn_idx)
 
             self._update_turn_label(session_id, turn_idx)
+
+            # Update parent exchange label if this turn is in an exchange
+            turn_data = self._state.get_turn(session_id, turn_idx)
+            if turn_data and turn_data.exchange_id:
+                self._update_exchange_label(session_id, turn_data.exchange_id)
+
             self._update_root_label()
             # Notify app to persist the change
             self.post_message(self.ContextModeChanged(session_id, turn_idx, new_mode))
@@ -1807,9 +1974,46 @@ class ContextTreeView(Vertical):
             new_mode = self._state.toggle_context_mode(session_id, turn_idx)
 
             self._update_turn_label(session_id, turn_idx)
+
+            # Update parent exchange label if this turn is in an exchange
+            turn_data = self._state.get_turn(session_id, turn_idx)
+            if turn_data and turn_data.exchange_id:
+                self._update_exchange_label(session_id, turn_data.exchange_id)
+
             self._update_root_label()
             # Notify app to persist the change
             self.post_message(self.ContextModeChanged(session_id, turn_idx, new_mode))
+
+        elif node_type == "exchange":
+            session_id = event.node_data.get("session_id")
+            exchange_id = event.node_data.get("exchange_id")
+            turn_indices = event.node_data.get("turn_indices", [])
+
+            if not turn_indices:
+                return
+
+            # Determine next mode based on aggregate mode of the group
+            aggregate_mode = self._get_exchange_aggregate_mode(session_id, turn_indices)
+
+            if aggregate_mode == ContextMode.COPY:
+                new_mode = ContextMode.COMPRESS
+            elif aggregate_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
+                new_mode = ContextMode.DROP
+            elif aggregate_mode == ContextMode.DROP:
+                new_mode = ContextMode.COPY
+            else:
+                # Mixed modes - cycle to COPY to make them uniform
+                new_mode = ContextMode.COPY
+
+            # Set all turns in the exchange to the new mode
+            for turn_idx in turn_indices:
+                self._state.set_context_mode(session_id, turn_idx, new_mode)
+                self._update_turn_label(session_id, turn_idx)
+                # Notify app to persist each change
+                self.post_message(self.ContextModeChanged(session_id, turn_idx, new_mode))
+
+            self._update_exchange_label(session_id, exchange_id)
+            self._update_root_label()
 
         elif node_type == "merge":
             fork_id = event.node_data.get("session_id")
@@ -1842,6 +2046,10 @@ class ContextTreeView(Vertical):
             # Update TreeState
             self._state.set_context_mode(current_session_id, turn.idx, ContextMode.COPY)
             self._update_turn_label(current_session_id, turn.idx)
+        # Update all exchange labels for this session
+        for (session_id, exchange_id), node in self._exchange_nodes.items():
+            if session_id == current_session_id:
+                self._update_exchange_label(session_id, exchange_id)
         self._update_root_label()
 
     def on_selectable_tree_widget_select_none_requested(self, event: SelectableTreeWidget.SelectNoneRequested) -> None:
@@ -1856,6 +2064,10 @@ class ContextTreeView(Vertical):
             # Update TreeState
             self._state.set_context_mode(current_session_id, turn.idx, ContextMode.DROP)
             self._update_turn_label(current_session_id, turn.idx)
+        # Update all exchange labels for this session
+        for (session_id, exchange_id), node in self._exchange_nodes.items():
+            if session_id == current_session_id:
+                self._update_exchange_label(session_id, exchange_id)
         self._update_root_label()
 
     def on_selectable_tree_widget_search_requested(self, event: SelectableTreeWidget.SearchRequested) -> None:
@@ -1909,6 +2121,7 @@ class ContextTreeView(Vertical):
         tree.root.remove_children()
         self._session_nodes.clear()
         self._turn_nodes.clear()
+        self._exchange_nodes.clear()
 
         # Get session data sorted according to current order
         sorted_session_ids = self._get_sorted_session_ids()
@@ -2047,6 +2260,7 @@ class ContextTreeView(Vertical):
         tree.root.remove_children()
         self._session_nodes.clear()
         self._turn_nodes.clear()
+        self._exchange_nodes.clear()
 
         # Determine which sessions to expand:
         # - Always expand current session
@@ -2344,6 +2558,7 @@ class ContextTreeView(Vertical):
         tree.root.remove_children()
         self._session_nodes.clear()
         self._turn_nodes.clear()
+        self._exchange_nodes.clear()
         self._tool_use_nodes.clear()
         self._streaming_text.clear()
         self._state.clear()

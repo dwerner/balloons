@@ -506,6 +506,7 @@ class Session:
                     "children": data.get("children", []),
                     "fork_name": data.get("fork_name", ""),
                     "fork_status": data.get("fork_status", "active"),
+                    "backend_name": data.get("backend_name", ""),
                 })
             except (json.JSONDecodeError, KeyError):
                 continue
