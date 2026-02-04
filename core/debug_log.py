@@ -55,7 +55,18 @@ class DebugLog:
             cls._instance._entries = []
             cls._instance._listeners = []
             cls._instance._log_file: Path | None = None
+            cls._instance._enabled = True
         return cls._instance
+
+    @property
+    def enabled(self) -> bool:
+        """Whether logging is enabled."""
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        """Enable or disable logging."""
+        self._enabled = value
 
     def set_log_file(self, path: str | Path | None) -> None:
         """Enable file persistence for debug logs.
@@ -90,6 +101,8 @@ class DebugLog:
 
     def _add_entry(self, entry: LogEntry) -> None:
         """Add entry and notify listeners."""
+        if not self._enabled:
+            return
         self._entries.append(entry)
         # Write to file if configured
         self._write_to_file(entry)

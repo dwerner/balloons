@@ -20,6 +20,9 @@ from .commands import (
     HelpCommand,
     BackendCommand,
     LinkCommand,
+    DebugToggleCommand,
+    DebugClearCommand,
+    DebugPauseCommand,
     COMMAND_DOCS,
 )
 from .context import ContextBuilder
@@ -28,9 +31,11 @@ from .runner import SessionRunner, RunnerStatus, StreamEvent, StreamResult, Help
 from .manager import SessionManager, SessionInfo
 from .debug_log import debug_log, DebugLog, LogLevel, LogEntry, dump_failed_json
 from .base_runner import BaseRunner, RunnerEvent
+from .exceptions import RateLimitError, InputRequiredError
+from .link_tools import LINK_TOOLS, get_link_tools_prompt, execute_link_tool
 from .openai_runner import OpenAICompatibleRunner
 from .runner_factory import create_runner, resolve_env_var
-from .tools import TOOLS, get_tools_for_request
+from .tools import TOOLS, LINK_TOOLS as LINK_TOOLS_OPENAI, LINK_TOOL_NAMES, get_tools_for_request
 from .tool_executor import execute_tool
 from .summarizer import Summarizer
 from .context_grouper import (
@@ -88,6 +93,9 @@ __all__ = [
     "HelpCommand",
     "BackendCommand",
     "LinkCommand",
+    "DebugToggleCommand",
+    "DebugClearCommand",
+    "DebugPauseCommand",
     "COMMAND_DOCS",
     # Context
     "ContextBuilder",
@@ -118,6 +126,8 @@ __all__ = [
     "resolve_env_var",
     # Tools
     "TOOLS",
+    "LINK_TOOLS_OPENAI",
+    "LINK_TOOL_NAMES",
     "get_tools_for_request",
     "execute_tool",
     # Summarizer
@@ -152,4 +162,11 @@ __all__ = [
     "SwitchResult",
     # JSON streaming
     "StreamingJsonParser",
+    # Exceptions
+    "RateLimitError",
+    "InputRequiredError",
+    # Link tools
+    "LINK_TOOLS",
+    "get_link_tools_prompt",
+    "execute_link_tool",
 ]

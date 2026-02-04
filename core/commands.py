@@ -123,6 +123,24 @@ class HelpCommand(Command):
 
 
 @dataclass
+class DebugToggleCommand(Command):
+    """Toggle the debug log pane visibility."""
+    pass
+
+
+@dataclass
+class DebugClearCommand(Command):
+    """Clear all debug log entries."""
+    pass
+
+
+@dataclass
+class DebugPauseCommand(Command):
+    """Toggle whether new entries are added to the debug log."""
+    pass
+
+
+@dataclass
 class BackendCommand(Command):
     """Set or show the backend for this session."""
     backend_name: str = ""  # Empty = show current, non-empty = set
@@ -168,6 +186,9 @@ COMMAND_DOCS = [
     # Misc
     (":reload", "Hot reload the app"),
     (":backend [name]", "Show or set the backend for this session"),
+    (":debug", "Toggle debug log pane visibility"),
+    (":debug-pause", "Toggle debug logging on/off"),
+    (":debug-clear", "Clear all debug log entries"),
     (":help", "Show this help"),
 ]
 
@@ -284,6 +305,18 @@ class CommandParser:
         # Handle :help
         if text == ":help":
             return HelpCommand()
+
+        # Handle :debug
+        if text == ":debug":
+            return DebugToggleCommand()
+
+        # Handle :debug-pause
+        if text == ":debug-pause":
+            return DebugPauseCommand()
+
+        # Handle :debug-clear
+        if text == ":debug-clear":
+            return DebugClearCommand()
 
         # Handle :backend [name]
         if text == ":backend" or text.startswith(":backend "):
