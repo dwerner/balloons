@@ -54,6 +54,7 @@ class SessionProtocol(Protocol):
     fork_name: str
     fork_status: str
     merge_message: str
+    backend_name: str
 
 
 @dataclass
@@ -85,6 +86,7 @@ class SessionData:
     children: list[dict]
     fork_name: str
     fork_status: str
+    backend_name: str = ""  # Name of backend to use (empty = default)
 
     # Runtime state
     is_current: bool = False
@@ -200,6 +202,7 @@ class TreeState:
             children=session.children,
             fork_name=session.fork_name,
             fork_status=session.fork_status,
+            backend_name=session.backend_name,
             is_current=is_current,
             session_ref=session,
         )
@@ -236,6 +239,7 @@ class TreeState:
             children=metadata.get("children", []),
             fork_name=metadata.get("fork_name", ""),
             fork_status=metadata.get("fork_status", "active"),
+            backend_name=metadata.get("backend_name", ""),
             is_current=is_current,
         )
 

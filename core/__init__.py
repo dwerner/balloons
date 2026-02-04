@@ -31,7 +31,7 @@ from .runner import SessionRunner, RunnerStatus, StreamEvent, StreamResult, Help
 from .manager import SessionManager, SessionInfo
 from .debug_log import debug_log, DebugLog, LogLevel, LogEntry, dump_failed_json
 from .base_runner import BaseRunner, RunnerEvent
-from .exceptions import RateLimitError, InputRequiredError
+from .exceptions import RateLimitError, InputRequiredError, BackendNotFoundError
 from .link_tools import LINK_TOOLS, get_link_tools_prompt, execute_link_tool
 from .openai_runner import OpenAICompatibleRunner
 from .runner_factory import create_runner, resolve_env_var
@@ -165,6 +165,7 @@ __all__ = [
     # Exceptions
     "RateLimitError",
     "InputRequiredError",
+    "BackendNotFoundError",
     # Link tools
     "LINK_TOOLS",
     "get_link_tools_prompt",

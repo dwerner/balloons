@@ -127,6 +127,7 @@ class SessionRunner:
         # New per-turn tracking
         self._exchange_id: str = ""  # UUID for current exchange
         self._turns: list[Message] = []  # Completed turns in this exchange
+        self._user_message_saved: bool = False  # Track if user message added to session
 
     @property
     def status(self) -> RunnerStatus:
@@ -153,6 +154,9 @@ class SessionRunner:
         """Stream a response, yielding events as they arrive.
 
         This is the foreground streaming mode - blocks until complete.
+
+        Note: Caller should add the user message to the session before calling this.
+        The runner will add assistant/tool turns incrementally as they occur.
 
         Args:
             prompt: The user prompt
@@ -226,6 +230,9 @@ class SessionRunner:
         Events can be retrieved via drain_events().
         When done, is_done will be True and get_result() returns the result.
 
+        Note: Caller should add the user message to the session before calling this.
+        The runner will add assistant/tool turns incrementally as they occur.
+
         Args:
             prompt: The user prompt
             messages: Context messages
@@ -237,6 +244,7 @@ class SessionRunner:
         self._reset_state()
         self._status = RunnerStatus.STREAMING
         self._turn_index = len(self.session.messages)  # Next turn index
+
         self._background_task = asyncio.create_task(
             self._background_stream(prompt, messages, allowed_tools)
         )
@@ -359,6 +367,7 @@ class SessionRunner:
         # New per-turn tracking
         self._exchange_id = str(uuid.uuid4())
         self._turns = []
+        self._user_message_saved = False
         # Clear event queue
         while not self._event_queue.empty():
             try:
@@ -385,11 +394,31 @@ class SessionRunner:
             exchange_id=self._exchange_id,
         )
 
-    def _flush_text_as_turn(self, emit_event: bool = False) -> Optional[StreamEvent]:
+    def _save_turn_to_session(self, turn: Message, save_now: bool = False) -> None:
+        """Add a turn to the session and optionally save to disk.
+
+        This ensures turns are persisted incrementally during agentic loops,
+        preventing data loss if the process crashes mid-exchange.
+
+        Args:
+            turn: The Message to add to the session
+            save_now: If True, save session to disk immediately
+        """
+        self.session.messages.append(turn)
+        if save_now:
+            self.session.save()
+            debug_log.debug(
+                f"Session saved incrementally ({len(self.session.messages)} messages)",
+                session_id=self.session.id,
+                category="stream",
+            )
+
+    def _flush_text_as_turn(self, emit_event: bool = False, save_now: bool = False) -> Optional[StreamEvent]:
         """Flush accumulated text buffer as a text turn if non-empty.
 
         Args:
             emit_event: If True, return a text_flush event for UI notification
+            save_now: If True, save session to disk after adding the turn
 
         Returns:
             StreamEvent if emit_event=True and there was text to flush, else None
@@ -398,9 +427,10 @@ class SessionRunner:
             flushed_text = self._text_buffer
             text_block = TextBlock(text=flushed_text)
             self._content_blocks.append(text_block)  # Legacy
-            # Create turn
+            # Create turn and save to session
             turn = self._create_turn("assistant", flushed_text, [text_block])
             self._turns.append(turn)
+            self._save_turn_to_session(turn, save_now=save_now)
             self._text_buffer = ""
 
             if emit_event:
@@ -468,13 +498,14 @@ class SessionRunner:
                 )
                 self._content_blocks.append(tool_block)  # Legacy
 
-                # Create tool_use turn
+                # Create tool_use turn and save to session (don't save to disk yet - wait for result)
                 turn = self._create_turn(
                     "assistant",
                     f"[Tool: {event.tool_name}]",
                     [tool_block]
                 )
                 self._turns.append(turn)
+                self._save_turn_to_session(turn, save_now=False)
 
                 # Find the tool_index that was assigned at start
                 tool_idx = sum(
@@ -498,13 +529,15 @@ class SessionRunner:
                 )
                 self._content_blocks.append(result_block)  # Legacy
 
-                # Create tool_result turn (role="tool")
+                # Create tool_result turn and save to session immediately
+                # This is the key checkpoint - tool has executed, we must persist
                 turn = self._create_turn(
                     "tool",
                     f"[Result: {len(event.result)} chars]",
                     [result_block]
                 )
                 self._turns.append(turn)
+                self._save_turn_to_session(turn, save_now=True)
 
                 # Find the tool_index for this result (matches the tool_use_id)
                 tool_idx = None
