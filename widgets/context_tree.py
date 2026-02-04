@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from tokenizer import count_tokens
 from session import Session
-from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock
+from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ArchiveBlock
 from core.tree_state import TreeState, TreeEvent, SessionData, TurnData
 from core.json_stream import StreamingJsonParser
 
@@ -197,6 +197,10 @@ class SelectableTreeWidget(Tree):
             self.turn_indices = turn_indices
             super().__init__()
 
+    class ColonPressed(Message):
+        """Fired when user types : to jump to text entry with colon."""
+        pass
+
     def on_click(self, event: Click) -> None:
         """Handle modifier+click on nodes.
 
@@ -297,6 +301,11 @@ class SelectableTreeWidget(Tree):
                     event.prevent_default()
                     event.stop()
                     return
+        elif event.key == "colon":
+            self.post_message(self.ColonPressed())
+            event.prevent_default()
+            event.stop()
+            return
         elif event.key == "right":
             # Expand current node
             node = self.cursor_node
@@ -456,6 +465,10 @@ class ContextTreeView(Vertical):
             self.session_id = session_id
             self.turn_indices = turn_indices
             super().__init__()
+
+    class ColonPressed(Message):
+        """Fired when user types : to jump to text entry."""
+        pass
 
     # Spinner animation for streaming sessions
     _spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -1197,6 +1210,22 @@ class ContextTreeView(Vertical):
         return f"[dim]⟨{turn_count}⟩[/]{tool_indicator} {preview}"
 
     def _make_turn_label(self, role: str, content: str, mode: ContextMode, content_blocks: list = None, session_id: str = None) -> str:
+        # Check for archive block first
+        if content_blocks:
+            for block in content_blocks:
+                if isinstance(block, ArchiveBlock):
+                    # Archive marker - use 📦 and show work summary
+                    if mode == ContextMode.COPY:
+                        indicator = "[green]☑[/]"
+                    elif mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
+                        indicator = "[yellow]Σ[/]"
+                    else:
+                        indicator = "☐"
+                    summary = block.structured_summary.work_done if block.structured_summary else block.summary
+                    preview = summary[:40] + "..." if len(summary) > 40 else summary
+                    preview = preview.replace("\n", " ")
+                    return f"{indicator} 📦 {preview}"
+
         # Mode indicator: copy=green check, compress=yellow Σ, drop=empty box
         if mode == ContextMode.COPY:
             indicator = "[green]☑[/]"
@@ -2043,6 +2072,10 @@ class ContextTreeView(Vertical):
         """Handle ctrl+shift+click archive request - bubble up to app."""
         self.post_message(self.ArchiveRequested(event.session_id, event.turn_indices))
 
+    def on_selectable_tree_widget_colon_pressed(self, event: SelectableTreeWidget.ColonPressed) -> None:
+        """Handle : key - bubble up to app to jump to text entry."""
+        self.post_message(self.ColonPressed())
+
     def on_input_changed(self, event: Input.Changed) -> None:
         """Filter tree nodes as user types."""
         if event.input.id == "search-input":
@@ -2298,6 +2331,34 @@ class ContextTreeView(Vertical):
                     return True
 
         return False
+
+    def get_cursor_turns(self) -> tuple[str, list[int]] | None:
+        """Get the session_id and turn indices for the currently selected tree node.
+
+        If cursor is on a turn node, returns that single turn.
+        If cursor is on an exchange group node, returns all turns in that exchange.
+
+        Returns (session_id, [turn_indices]) or None if no valid selection.
+        """
+        tree = self.query_one("#turn-tree", SelectableTreeWidget)
+        node = tree.cursor_node
+        if not node or not node.data:
+            return None
+
+        node_type = node.data.get("type")
+        session_id = node.data.get("session_id")
+
+        if node_type == "turn":
+            turn_idx = node.data.get("turn_idx")
+            if session_id is not None and turn_idx is not None:
+                return (session_id, [turn_idx])
+
+        elif node_type == "exchange":
+            turn_indices = node.data.get("turn_indices", [])
+            if session_id is not None and turn_indices:
+                return (session_id, turn_indices)
+
+        return None
 
     def get_selected_messages(self) -> list:
         """Get included messages in order for context building.

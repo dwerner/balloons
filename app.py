@@ -32,7 +32,8 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, RequestPane, ToolBar, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult
+from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, RequestPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS
+from widgets.input_box import CompletionPopup
 from widgets.archive_marker import ArchiveMarker
 from claude_runner import ClaudeRunner
 from session import Session
@@ -66,6 +67,7 @@ from core import (
     TitleCommand,
     HelpCommand,
     BackendCommand,
+    PrefsCommand,
     LinkCommand,
     DebugToggleCommand,
     DebugClearCommand,
@@ -150,6 +152,14 @@ class BalloonsApp(App):
     #input-area {
         height: auto;
     }
+
+    #completion-popup {
+        display: none;
+        margin-bottom: 0;
+        margin-left: 1;
+        width: auto;
+        max-width: 40;
+    }
     """
 
     BINDINGS = [
@@ -161,6 +171,7 @@ class BalloonsApp(App):
         Binding("ctrl+n", "switch_tree_view", "Switch Tree", show=True),
         Binding("ctrl+r", "toggle_requests", "Toggle Requests", show=True),
         Binding("ctrl+g", "toggle_debug", "Debug", show=True),
+        Binding("ctrl+p", "show_preferences", "Preferences", show=True),
         Binding("ctrl+left", "resize_tree(-5)", "Shrink Tree", show=False),
         Binding("ctrl+right", "resize_tree(5)", "Grow Tree", show=False),
         Binding("ctrl+end", "scroll_to_bottom", "Follow", show=False),
@@ -197,6 +208,8 @@ class BalloonsApp(App):
         self._streaming_coordinator = StreamingCoordinator()
         # Fork manager for fork/merge/derive operations
         self._fork_manager = ForkManager(self._context_builder)
+        # Tool preferences per backend (backend_name -> ToolPreferences)
+        self._tool_preferences: dict[str, ToolPreferences] = {}
 
     @property
     def session(self) -> Session | None:
@@ -319,11 +332,11 @@ class BalloonsApp(App):
                     yield ChatLogView(id="chat-log")
                     yield MoreBelowIndicator(id="more-below")
                 yield RequestPane(id="request-pane", classes="hidden")
-            yield ToolBar(id="tool-bar")
             yield DebugPane(id="debug-pane")
             yield StatusBar(id="status-bar")
             with Vertical(id="input-area"):
                 yield HorizontalSplitter(id="input-splitter")
+                yield CompletionPopup(id="completion-popup")
                 yield InputBox(id="input-box")
 
     def on_mount(self) -> None:
@@ -1131,6 +1144,14 @@ class BalloonsApp(App):
         if event.text_area.id == "input-box":
             self._update_context_tokens(event.text_area.text)
 
+    def on_input_box_completion_changed(self, event: InputBox.CompletionChanged) -> None:
+        """Handle completion popup visibility changes."""
+        popup = self.query_one("#completion-popup", CompletionPopup)
+        if event.visible and event.candidates:
+            popup.show_candidates(event.candidates, event.selected)
+        else:
+            popup.hide()
+
     async def on_input_box_submitted(self, event: InputBox.Submitted) -> None:
         """Handle user input submission."""
         if self.streaming:
@@ -1179,8 +1200,7 @@ class BalloonsApp(App):
         selected_messages = context_tree.get_selected_messages()
 
         # Get enabled tools
-        tool_bar = self.query_one("#tool-bar", ToolBar)
-        allowed_tools = tool_bar.get_enabled_tools()
+        allowed_tools = self._get_enabled_tools()
 
         # Log the request
         request_pane = self.query_one("#request-pane", RequestPane)
@@ -1282,10 +1302,12 @@ class BalloonsApp(App):
             self._handle_title_command(cmd.title)
         elif isinstance(cmd, HelpCommand):
             self.push_screen(HelpModal())
+        elif isinstance(cmd, PrefsCommand):
+            self.action_show_preferences()
         elif isinstance(cmd, BackendCommand):
             await self._handle_backend_command(cmd.backend_name)
         elif isinstance(cmd, LinkCommand):
-            await self._handle_link_command(cmd.target_session_prefixes, cmd.prompt)
+            await self._handle_link_command(cmd.target_session_prefixes)
         elif isinstance(cmd, DebugToggleCommand):
             self.action_toggle_debug()
         elif isinstance(cmd, DebugClearCommand):
@@ -1503,12 +1525,15 @@ class BalloonsApp(App):
         status_bar.update_stats(backend=backend_name, model=backend_config.model or "")
         status_bar.set_status(f"Backend set to: {backend_name}", animate=False)
 
-    async def _handle_link_command(self, target_prefixes: list[str], prompt: str) -> None:
+    async def _handle_link_command(self, target_prefixes: list[str]) -> None:
         """Create bidirectional links to one or more sessions.
+
+        Each link uses summaries of the linked sessions as descriptions:
+        - Current session's link marker shows summary of target session
+        - Target session's link marker shows summary of current session
 
         Args:
             target_prefixes: List of 8-char hash prefixes of target sessions
-            prompt: Prompt for generating link summary
         """
         import uuid
         chat_log = self.query_one("#chat-log", ChatLogView)
@@ -1546,49 +1571,59 @@ class BalloonsApp(App):
 
             resolved_targets.append((target_prefix, target_session))
 
-        # Get selected context for summary generation
-        indexed_messages = context_tree.get_selected_messages_with_indices()
-        if not indexed_messages:
-            status_bar.set_error("No context selected for link summary")
-            return
-
-        # Generate summary using LLM (one summary shared across all links)
-        status_bar.set_status("Generating link summary...", animate=True)
+        # Generate and save summaries for all sessions involved
+        status_bar.set_status("Generating session summaries...", animate=True)
         self.refresh()
         await asyncio.sleep(0)
 
-        # Build messages for summary
-        messages = [msg for msg, _ in indexed_messages]
-        summary = await self._generate_link_summary(messages, prompt)
+        # Generate and save summary for current session if needed
+        if not self.session.summary:
+            self.session.summary = await self._summarizer.generate_session_summary(
+                self.session
+            )
 
         # Create links to each target
         linked_names = []
         for target_prefix, target_session in resolved_targets:
+            # Generate and save summary for target session if needed
+            if not target_session.summary:
+                target_session.summary = await self._summarizer.generate_session_summary(
+                    target_session
+                )
+
             # Create unique link ID (same for both sides of this pair)
             link_id = str(uuid.uuid4())
 
-            # Add link as a turn in current session (preserves ordering)
-            self.session.add_link_turn(
+            # Add link as a turn in current session with target's summary
+            link_turn = self.session.add_link_turn(
                 link_id=link_id,
                 linked_session_id=target_session.id,
-                summary=summary,
+                summary=target_session.summary,
             )
 
-            # Add link as a turn in target session (preserves ordering)
+            # Add link as a turn in target session with current session's summary
             target_session.add_link_turn(
                 link_id=link_id,
                 linked_session_id=self.session.id,
-                summary=summary,
+                summary=self.session.summary,
             )
             target_session.save()
 
             # Add link marker to current chat log
             target_name = target_session.title or target_session.fork_name or target_session.id[:8]
             chat_log.add_link_marker(
-                summary=summary,
+                summary=target_session.summary,
                 linked_session_id=target_session.id,
                 linked_session_name=target_name,
                 link_point=len(self.session.turns) - 1,  # Current turn index
+            )
+
+            # Add link turn to the context tree
+            context_tree.add_turn_to_current(
+                role=link_turn.role,
+                content=link_turn.content,
+                raw_events=[],
+                content_blocks=[link_turn.content_block] if link_turn.content_block else None,
             )
             linked_names.append(target_name)
 
@@ -1600,14 +1635,12 @@ class BalloonsApp(App):
         else:
             status_bar.set_status(f"Linked to {len(linked_names)} sessions", animate=False)
 
-    async def _generate_link_summary(self, messages: list[Message], user_prompt: str) -> str:
-        """Generate a summary of context for a link."""
-        return await self._summarizer.generate_link_summary(messages, user_prompt)
-
     async def _handle_archive_command(self, hint: str) -> None:
         """Archive selected turns to a file with LLM-generated summary.
 
-        Uses tree selection if available, otherwise falls back to context mode selection.
+        Archives the turn(s) at the cursor position:
+        - Single turn: archives just that turn
+        - Exchange group: archives all turns in the exchange
         """
         from core.archiver import Archiver, ArchiveError
 
@@ -1619,16 +1652,22 @@ class BalloonsApp(App):
             status_bar.set_error("No active session")
             return
 
-        # Get selected turn indices from tree (extract indices from messages with indices)
-        indexed_messages = context_tree.get_selected_messages_with_indices()
-        selected_indices = [idx for _msg, idx in indexed_messages]
-
-        if not selected_indices:
-            status_bar.set_error("No turns selected for archiving")
+        # Get the cursor selection from the tree (turn or exchange group)
+        cursor_selection = context_tree.get_cursor_turns()
+        if not cursor_selection:
+            status_bar.set_error("Select a turn or exchange to archive")
             return
 
-        turn_start = min(selected_indices)
-        turn_end = max(selected_indices) + 1
+        cursor_session_id, turn_indices = cursor_selection
+
+        # Must be in the current session
+        if cursor_session_id != self.session.id:
+            status_bar.set_error("Selected turn must be in the current session")
+            return
+
+        # Archive the selected range (contiguous turns)
+        turn_start = min(turn_indices)
+        turn_end = max(turn_indices) + 1
 
         # Get the turns to archive for summary generation
         turns_to_archive = self.session.turns[turn_start:turn_end]
@@ -1806,12 +1845,11 @@ class BalloonsApp(App):
         chat_log = self.query_one("#chat-log", ChatLogView)
         input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
-        tool_bar = self.query_one("#tool-bar", ToolBar)
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
 
         # Get selected messages for context (before creating new session)
         selected_messages = context_tree.get_selected_messages()
-        allowed_tools = tool_bar.get_enabled_tools()
+        allowed_tools = self._get_enabled_tools()
 
         # Create new session for the response through manager
         new_session = self._manager.create_session()
@@ -1998,11 +2036,10 @@ class BalloonsApp(App):
         context_tree = self.query_one("#context-tree", ContextTreeView)
         input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
-        tool_bar = self.query_one("#tool-bar", ToolBar)
 
         # Get selected messages and tools from UI
         indexed_messages = context_tree.get_selected_messages_with_indices()
-        allowed_tools = tool_bar.get_enabled_tools()
+        allowed_tools = self._get_enabled_tools()
 
         # Prepare fork via ForkManager (handles validation and session creation)
         result = self._fork_manager.prepare_fork(
@@ -2182,11 +2219,10 @@ class BalloonsApp(App):
         context_tree = self.query_one("#context-tree", ContextTreeView)
         input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
-        tool_bar = self.query_one("#tool-bar", ToolBar)
 
         # Get selected messages and tools from UI
         indexed_messages = context_tree.get_selected_messages_with_indices()
-        allowed_tools = tool_bar.get_enabled_tools()
+        allowed_tools = self._get_enabled_tools()
 
         # Prepare derive via ForkManager
         result = self._fork_manager.prepare_derive(
@@ -2841,12 +2877,11 @@ class BalloonsApp(App):
         current_text = input_box.text
 
         # Check if there's already a :link= command in the input
-        link_match = re.match(r'^:link=([a-f0-9,]+)(\s.*)?$', current_text)
+        link_match = re.match(r'^:link=([a-f0-9,]+)', current_text)
 
         if link_match:
             # Existing link command - append to the hash list
             existing_hashes = link_match.group(1)
-            rest = link_match.group(2) or " "
 
             # Check if this hash is already in the list
             hash_list = [h.strip() for h in existing_hashes.split(",")]
@@ -2857,16 +2892,23 @@ class BalloonsApp(App):
 
             # Append the new hash
             new_hashes = f"{existing_hashes},{new_hash}"
-            new_text = f":link={new_hashes}{rest}"
+            new_text = f":link={new_hashes}"
             input_box.clear()
             input_box.insert(new_text)
         else:
             # No existing link command - create new one
-            link_cmd = f":link={new_hash} "
+            link_cmd = f":link={new_hash}"
             input_box.clear()
             input_box.insert(link_cmd)
 
         input_box.focus()
+
+    def on_context_tree_view_colon_pressed(self, event: ContextTreeView.ColonPressed) -> None:
+        """Handle : key from tree - jump to input box, insert colon only if empty."""
+        input_box = self.query_one("#input-box", InputBox)
+        input_box.focus()
+        if not input_box.text:
+            input_box.insert(":")
 
     def on_context_tree_view_turn_inspected(self, event: ContextTreeView.TurnInspected) -> None:
         """Handle turn inspection - show in request pane and highlight tool uses.
@@ -3058,6 +3100,13 @@ class BalloonsApp(App):
             # Load the session into TreeState
             self._tree_state.load_session(event.session_id, session)
 
+    def on_nested_tree_view_colon_pressed(self, event: NestedTreeView.ColonPressed) -> None:
+        """Handle : key from tree - jump to input box, insert colon only if empty."""
+        input_box = self.query_one("#input-box", InputBox)
+        input_box.focus()
+        if not input_box.text:
+            input_box.insert(":")
+
     def on_breadcrumb_segment_clicked(self, event: Breadcrumb.SegmentClicked) -> None:
         """Handle clicking a breadcrumb segment to navigate up."""
         target_session = Session.load(event.session_id)
@@ -3157,6 +3206,38 @@ class BalloonsApp(App):
         """Show the help modal."""
         self.push_screen(HelpModal())
 
+    def action_show_preferences(self) -> None:
+        """Show the preferences modal."""
+        current_backend = self._backend_config.name
+        if self.session and self.session.backend_name:
+            current_backend = self.session.backend_name
+        self.push_screen(PreferencesModal(
+            current_backend=current_backend,
+            tool_preferences=self._tool_preferences,
+        ))
+
+    def on_preferences_modal_tools_changed(self, event: PreferencesModal.ToolsChanged) -> None:
+        """Handle tool preference changes from the modal."""
+        self._tool_preferences[event.backend_name] = ToolPreferences(
+            enabled_tools=set(event.enabled_tools)
+        )
+
+    def on_preferences_modal_backend_changed(self, event: PreferencesModal.BackendChanged) -> None:
+        """Handle backend change from the modal."""
+        # Update the default backend
+        config = get_config()
+        if event.backend_name in config.backends:
+            self._backend_config = config.get_backend(event.backend_name)
+
+    def _get_enabled_tools(self) -> list[str]:
+        """Get enabled tools for the current backend."""
+        backend_name = self._backend_config.name
+        if self.session and self.session.backend_name:
+            backend_name = self.session.backend_name
+        if backend_name in self._tool_preferences:
+            return list(self._tool_preferences[backend_name].enabled_tools)
+        return list(DEFAULT_TOOLS)
+
     def action_resize_tree(self, delta: int) -> None:
         """Resize the active tree by delta columns."""
         self._tree_width = max(20, min(100, self._tree_width + delta))
@@ -3190,6 +3271,13 @@ class BalloonsApp(App):
         """Show new messages indicator when content arrives while not following."""
         indicator = self.query_one("#more-below", MoreBelowIndicator)
         indicator.show_new_messages()
+
+    def on_chat_log_view_colon_pressed(self, event: ChatLogView.ColonPressed) -> None:
+        """Handle : key from chat - jump to input box, insert colon only if empty."""
+        input_box = self.query_one("#input-box", InputBox)
+        input_box.focus()
+        if not input_box.text:
+            input_box.insert(":")
 
     def on_status_bar_follow_clicked(self, event: StatusBar.FollowClicked) -> None:
         """Handle click on Follow indicator - scroll to bottom."""

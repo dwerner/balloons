@@ -7,6 +7,7 @@ from .splitter import VerticalSplitter, HorizontalSplitter
 from .context_preview import ContextPreview, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult
 from .request_pane import RequestPane
 from .tool_bar import ToolBar
+from .preferences_modal import PreferencesModal, ToolPreferences, DEFAULT_TOOLS
 from .with_widget import WithWidget
 from .with_result_widget import WithResultWidget
 from .debug_pane import DebugPane
@@ -39,6 +40,9 @@ __all__ = [
     "NewSessionResult",
     "RequestPane",
     "ToolBar",
+    "PreferencesModal",
+    "ToolPreferences",
+    "DEFAULT_TOOLS",
     "WithWidget",
     "WithResultWidget",
     "DebugPane",

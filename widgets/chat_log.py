@@ -5,7 +5,7 @@ from textual.widgets import Static
 from textual.containers import VerticalScroll
 from textual.reactive import reactive
 from textual.message import Message
-from textual.events import Click
+from textual.events import Click, Key
 from rich.markdown import Markdown
 from rich.console import RenderableType, Group
 from rich.text import Text
@@ -641,6 +641,10 @@ class ChatLogView(VerticalScroll):
         """Posted when new content arrives while user is not following."""
         pass
 
+    class ColonPressed(Message):
+        """Posted when user types : to jump to text entry."""
+        pass
+
     following: reactive[bool] = reactive(True)  # True when auto-scrolling to new content
 
     DEFAULT_CSS = """
@@ -656,6 +660,15 @@ class ChatLogView(VerticalScroll):
         self._current_assistant_message: MessageWidget | None = None
         self._turn_counter = 0
         self._header: SessionHeader | None = None
+
+    async def _on_key(self, event: Key) -> None:
+        """Handle key events - colon jumps to text entry."""
+        if event.key == "colon":
+            self.post_message(self.ColonPressed())
+            event.prevent_default()
+            event.stop()
+            return
+        await super()._on_key(event)
 
     def watch_following(self, following: bool) -> None:
         """Post a message when following state changes."""

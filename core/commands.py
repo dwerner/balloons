@@ -147,6 +147,12 @@ class BackendCommand(Command):
 
 
 @dataclass
+class PrefsCommand(Command):
+    """Open preferences modal."""
+    pass
+
+
+@dataclass
 class LinkCommand(Command):
     """Create bidirectional link to one or more sessions.
 
@@ -155,7 +161,6 @@ class LinkCommand(Command):
     Multiple targets can be specified as comma-separated hashes.
     """
     target_session_prefixes: list[str] = None  # List of 8-char hash prefixes
-    prompt: str = ""  # Prompt for generating link summary
 
     def __post_init__(self):
         if self.target_session_prefixes is None:
@@ -199,7 +204,7 @@ COMMAND_DOCS = [
     (":fork ... --bg", "Fork in background (continue working in parent)"),
     (":merge [prompt]", "Merge fork back to parent with LLM summary"),
     (":derive <prompt>", "New independent session with selected context (no merge)"),
-    (":link=<hash>[,hash,...] <prompt>", "Create bidirectional links to other sessions"),
+    (":link=<hash>[,hash,...]", "Create bidirectional links to other sessions"),
     # Context operations
     (":query-with <prompt>", "Query with selected context, response in new session"),
     (":copy-turns", "Copy selected turns to a new session"),
@@ -214,6 +219,7 @@ COMMAND_DOCS = [
     # Misc
     (":reload", "Hot reload the app"),
     (":backend [name]", "Show or set the backend for this session"),
+    (":prefs", "Open preferences (Ctrl+P)"),
     (":debug", "Toggle debug log pane visibility"),
     (":debug-pause", "Toggle debug logging on/off"),
     (":debug-clear", "Clear all debug log entries"),
@@ -351,6 +357,10 @@ class CommandParser:
             backend_name = text[8:].strip() if len(text) > 8 else ""
             return BackendCommand(backend_name=backend_name)
 
+        # Handle :prefs
+        if text == ":prefs":
+            return PrefsCommand()
+
         # Handle :link=<hash> <prompt>
         if text.startswith(":link"):
             return self._parse_link(text)
@@ -420,29 +430,21 @@ class CommandParser:
         return NewSessionCommand(prompt=prompt, title=title)
 
     def _parse_link(self, text: str) -> LinkCommand:
-        """Parse :link=<hash>[,hash,...] <prompt> command."""
+        """Parse :link=<hash>[,hash,...] command."""
         remaining = text[5:]  # Remove ":link"
 
         if not remaining.startswith("="):
-            raise ValueError(":link requires =<session-hash> (e.g., :link=abc12345 <prompt>)")
+            raise ValueError(":link requires =<session-hash> (e.g., :link=abc12345)")
 
-        # Extract hashes until space
-        eq_part = remaining[1:]  # Remove "="
-        if " " in eq_part:
-            hashes_str, prompt = eq_part.split(" ", 1)
-            prompt = prompt.strip()
-        else:
-            hashes_str = eq_part
-            prompt = ""
+        # Extract hashes (everything after "=")
+        hashes_str = remaining[1:].strip()
 
         if not hashes_str:
             raise ValueError(":link requires at least one session hash prefix")
-        if not prompt:
-            raise ValueError(":link requires a prompt")
 
         # Parse comma-separated hashes
         target_prefixes = [h.strip() for h in hashes_str.split(",") if h.strip()]
         if not target_prefixes:
             raise ValueError(":link requires at least one session hash prefix")
 
-        return LinkCommand(target_session_prefixes=target_prefixes, prompt=prompt)
+        return LinkCommand(target_session_prefixes=target_prefixes)

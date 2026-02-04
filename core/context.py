@@ -65,7 +65,7 @@ class ContextBuilder:
                         # Format archive as a summary reference
                         block_parts.append(
                             f"[Archived {block.message_count} turns: {block.summary}]\n"
-                            f"(Use read_archive tool with archive_id={block.archive_id} to retrieve full content)"
+                            f"(Archive JSON path: {block.file_path})"
                         )
 
                 if block_parts:

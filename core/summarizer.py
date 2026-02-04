@@ -4,12 +4,33 @@ Handles LLM-based summarization of conversations, contexts, and merges.
 Extracted from app.py to enable unit testing without the UI.
 """
 
+from pathlib import Path
 from typing import Protocol
 
 from models import Message, TextDelta, ArchiveSummary
 from session import Session
 from core.context import ContextBuilder
 from core.debug_log import debug_log
+
+# Load link summary prompt from file
+_PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
+_LINK_SUMMARY_PROMPT_PATH = _PROMPTS_DIR / "link-summary.md"
+
+def _load_link_summary_prompt() -> str:
+    """Load the link summary prompt from file."""
+    try:
+        return _LINK_SUMMARY_PROMPT_PATH.read_text()
+    except Exception:
+        # Fallback if file not found
+        return """Summarize this conversation in one sentence (max 100 chars).
+Be specific about what was built, fixed, or discussed.
+
+Conversation:
+{conversation}
+
+Summary:"""
+
+_LINK_SUMMARY_PROMPT = _load_link_summary_prompt()
 
 
 class StreamingRunner(Protocol):
@@ -33,7 +54,7 @@ class Summarizer:
 
     Usage:
         summarizer = Summarizer(helper_runner)
-        summary = await summarizer.generate_link_summary(messages, "focus on X")
+        summary = await summarizer.generate_session_summary(session, "focus on X")
     """
 
     def __init__(self, runner: StreamingRunner):
@@ -44,57 +65,6 @@ class Summarizer:
         """
         self._runner = runner
         self._context_builder = ContextBuilder()
-
-    async def generate_link_summary(
-        self, messages: list[Message], user_prompt: str = ""
-    ) -> str:
-        """Generate a summary of context for a link between sessions.
-
-        Args:
-            messages: The messages to summarize
-            user_prompt: Optional user guidance for the summary
-
-        Returns:
-            Generated summary string, or fallback on error
-        """
-        # Build conversation context
-        messages_text = []
-        for msg in messages:
-            role = "User" if msg.role == "user" else "Assistant"
-            content = msg.content if isinstance(msg.content, str) else str(msg.content)
-            # Truncate very long messages
-            if len(content) > 2000:
-                content = content[:2000] + "..."
-            messages_text.append(f"{role}: {content}")
-
-        context_str = "\n\n".join(messages_text)
-
-        summary_prompt = f"""Summarize the following conversation context in 1-3 concise sentences.
-The summary will be used as a link reference between sessions.
-
-{f"User guidance: {user_prompt}" if user_prompt else ""}
-
-Conversation:
-{context_str}
-
-Provide a brief, informative summary:"""
-
-        summary_parts = []
-        try:
-            async for event in self._runner.stream_response(
-                [], summary_prompt, disable_tools=True
-            ):
-                if isinstance(event, TextDelta):
-                    summary_parts.append(event.text)
-        except Exception as e:
-            debug_log.error(f"Link summary generation failed: {e}", category="link")
-            return user_prompt or "Linked context"
-
-        result = "".join(summary_parts)
-        if result:
-            return result.strip()
-        else:
-            return user_prompt or "Linked context"
 
     async def generate_context_summary(self, messages: list[Message]) -> str:
         """Generate a summary of messages for context compression.
@@ -126,6 +96,52 @@ Provide a brief, informative summary:"""
             )
 
         return "".join(summary_parts) if summary_parts else ""
+
+    async def generate_session_summary(self, session: Session) -> str:
+        """Generate a summary of a session's conversation for linking.
+
+        Uses the link-summary.md prompt to generate a short, specific summary.
+
+        Note: This always generates a new summary. Callers should check
+        session.summary first if they want to reuse existing summaries.
+
+        Args:
+            session: The session to summarize
+
+        Returns:
+            A concise summary of the session's content (max ~100 chars)
+        """
+        # Build conversation context from the session
+        turns_text = []
+        for turn in session.turns:
+            role = "User" if turn.role == "user" else "Assistant"
+            content = turn.content if isinstance(turn.content, str) else str(turn.content)
+            # Truncate very long messages
+            if len(content) > 2000:
+                content = content[:2000] + "... [truncated]"
+            turns_text.append(f"{role}: {content}")
+
+        if not turns_text:
+            return session.title or "Empty session"
+
+        conversation = "\n\n".join(turns_text)
+
+        # Use the prompt template from file
+        summary_prompt = _LINK_SUMMARY_PROMPT.format(conversation=conversation)
+
+        summary_parts = []
+        try:
+            async for event in self._runner.stream_response(
+                [], summary_prompt, disable_tools=True
+            ):
+                if isinstance(event, TextDelta):
+                    summary_parts.append(event.text)
+        except Exception as e:
+            debug_log.error(f"Session summary generation failed: {e}", category="link")
+            return session.title or "Session"
+
+        result = "".join(summary_parts).strip()
+        return result if result else (session.title or "Session")
 
     async def generate_merge_summary(
         self, fork_session: Session, user_prompt: str = ""
@@ -234,7 +250,7 @@ Summary:"""
             return ArchiveSummary()
 
         # Build conversation context
-        messages_text = []
+        turns_text = []
         for msg in messages:
             role = "User" if msg.role == "user" else "Assistant"
             content = msg.content if isinstance(msg.content, str) else str(msg.content)

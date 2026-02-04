@@ -187,7 +187,7 @@ class ClaudeRunner(BaseRunner):
                             history_parts.append(link_info)
                         elif isinstance(block, ArchiveBlock):
                             archive_info = f"[Archived {block.message_count} turns: {block.summary}]"
-                            archive_info += f"\n(Use read_archive tool with archive_id=\"{block.archive_id}\" to retrieve full content)"
+                            archive_info += f"\n(Archive JSON path: {block.file_path})"
                             history_parts.append(archive_info)
                         elif isinstance(block, TextBlock) and block.text:
                             history_parts.append(block.text)
@@ -230,7 +230,7 @@ class ClaudeRunner(BaseRunner):
                         block_texts.append(link_info)
                     elif isinstance(block, ArchiveBlock):
                         archive_info = f"[Archived {block.message_count} turns: {block.summary}]"
-                        archive_info += f"\n(Use read_archive tool with archive_id=\"{block.archive_id}\" to retrieve full content)"
+                        archive_info += f"\n(Archive JSON path: {block.file_path})"
                         block_texts.append(archive_info)
 
                 if block_texts:
@@ -298,12 +298,21 @@ class ClaudeRunner(BaseRunner):
             env = os.environ.copy()
             env.update(self._backend_env)
 
+        # Use working_dir if it exists, otherwise fall back to current directory
+        effective_cwd = working_dir
+        if working_dir and not os.path.isdir(working_dir):
+            debug_log.warning(
+                f"Working directory does not exist: {working_dir}, falling back to cwd",
+                category="process",
+            )
+            effective_cwd = None
+
         self.process = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=working_dir,
+            cwd=effective_cwd,
             env=env,
         )
 
@@ -632,7 +641,7 @@ class ClaudeRunner(BaseRunner):
                             parts.append(link_info)
                         elif isinstance(block, ArchiveBlock):
                             archive_info = f"[Archived {block.message_count} turns: {block.summary}]"
-                            archive_info += f"\n(archive_id={block.archive_id})"
+                            archive_info += f"\n(Archive JSON path: {block.file_path})"
                             parts.append(archive_info)
                         elif isinstance(block, TextBlock) and block.text:
                             parts.append(block.text)
@@ -667,7 +676,7 @@ class ClaudeRunner(BaseRunner):
                         block_texts.append(link_info)
                     elif isinstance(block, ArchiveBlock):
                         archive_info = f"[Archived {block.message_count} turns: {block.summary}]"
-                        archive_info += f"\n(archive_id={block.archive_id})"
+                        archive_info += f"\n(Archive JSON path: {block.file_path})"
                         block_texts.append(archive_info)
 
                 if block_texts:

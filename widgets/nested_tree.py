@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 from datetime import datetime
 
 from session import Session
-from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock
+from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock, ErrorBlock, ArchiveBlock
 from core.tree_state import TreeState, TreeEvent, SessionData, TurnData
 from tokenizer import count_tokens
 
@@ -118,6 +118,10 @@ class NestedTreeWidget(Tree):
             self.session_id = session_id
             super().__init__()
 
+    class ColonPressed(Message):
+        """Fired when user types : to jump to text entry with colon."""
+        pass
+
     # --- Click handling ---
 
     def on_click(self, event: Click) -> None:
@@ -199,6 +203,11 @@ class NestedTreeWidget(Tree):
                     event.prevent_default()
                     event.stop()
                     return
+        elif event.key == "colon":
+            self.post_message(self.ColonPressed())
+            event.prevent_default()
+            event.stop()
+            return
         elif event.key == "right":
             node = self.cursor_node
             if node and node._allow_expand and not node.is_expanded:
@@ -311,6 +320,10 @@ class NestedTreeView(Vertical):
         def __init__(self, session_id: str) -> None:
             self.session_id = session_id
             super().__init__()
+
+    class ColonPressed(Message):
+        """Fired when user types : to jump to text entry."""
+        pass
 
     # Spinner animation for streaming sessions
     _spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -881,6 +894,7 @@ class NestedTreeView(Vertical):
         """Create a label for an exchange group node.
 
         Shows the first turn's content preview and a count of turns in the exchange.
+        Shows an error indicator if any turn in the exchange has an ErrorBlock.
         """
         turn_count = len(group)
         first_turn = group[0]
@@ -889,15 +903,19 @@ class NestedTreeView(Vertical):
         preview = first_turn.content[:25] + "..." if len(first_turn.content) > 25 else first_turn.content
         preview = preview.replace("\n", " ")
 
-        # Count tool uses across all turns in the exchange
+        # Count tool uses and check for errors across all turns in the exchange
         tool_count = 0
+        has_error = False
         for turn in group:
             if turn.content_blocks:
                 tool_count += sum(1 for b in turn.content_blocks if isinstance(b, ToolUseBlock))
+                if not has_error:
+                    has_error = any(isinstance(b, ErrorBlock) for b in turn.content_blocks)
 
         tool_indicator = f" [cyan]🔧{tool_count}[/]" if tool_count > 0 else ""
+        error_indicator = " [yellow]⚠[/]" if has_error else ""
 
-        return f"[dim]⟨{turn_count}⟩[/]{tool_indicator} {preview}"
+        return f"[dim]⟨{turn_count}⟩[/]{tool_indicator}{error_indicator} {preview}"
 
     def _make_turn_label(
         self,
@@ -907,6 +925,22 @@ class NestedTreeView(Vertical):
         content_blocks: list = None
     ) -> str:
         """Create a label for a turn node."""
+        # Check for archive block first
+        if content_blocks:
+            for block in content_blocks:
+                if isinstance(block, ArchiveBlock):
+                    # Archive marker - use 📦 and show work summary
+                    if mode == ContextMode.COPY:
+                        indicator = "[green]☑[/]"
+                    elif mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
+                        indicator = "[yellow]Σ[/]"
+                    else:
+                        indicator = "☐"
+                    summary = block.structured_summary.work_done if block.structured_summary else block.summary
+                    preview = summary[:40] + "..." if len(summary) > 40 else summary
+                    preview = preview.replace("\n", " ")
+                    return f"{indicator} 📦 {preview}"
+
         if mode == ContextMode.COPY:
             indicator = "[green]☑[/]"
         elif mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
@@ -916,16 +950,19 @@ class NestedTreeView(Vertical):
 
         icon = "👤" if role == "user" else "🤖"
 
-        # Tool count
+        # Count tool uses and check for errors
         tool_count = 0
+        has_error = False
         if content_blocks:
             tool_count = sum(1 for b in content_blocks if isinstance(b, ToolUseBlock))
+            has_error = any(isinstance(b, ErrorBlock) for b in content_blocks)
 
         preview = content[:30] + "..." if len(content) > 30 else content
         preview = preview.replace("\n", " ")
 
         tool_indicator = f" [cyan]🔧{tool_count}[/]" if tool_count > 0 else ""
-        return f"{indicator} {icon}{tool_indicator} {preview}"
+        error_indicator = " [yellow]⚠[/]" if has_error else ""
+        return f"{indicator} {icon}{tool_indicator}{error_indicator} {preview}"
 
     # --- Event Handlers (from NestedTreeWidget) ---
 
@@ -972,6 +1009,22 @@ class NestedTreeView(Vertical):
                     "turn_idx": turn_idx,
                 }, session_id))
 
+        elif node_type == "exchange":
+            session_id = event.node_data.get("session_id")
+            turn_indices = event.node_data.get("turn_indices", [])
+            if turn_indices:
+                # Get first turn in exchange to scroll to
+                first_turn_idx = turn_indices[0]
+                turn_data = self._state.get_turn(session_id, first_turn_idx)
+                if turn_data:
+                    self.post_message(self.TurnInspected({
+                        "type": "turn",
+                        "role": turn_data.role,
+                        "content": turn_data.content,
+                        "content_blocks": turn_data.content_blocks,
+                        "turn_idx": first_turn_idx,
+                    }, session_id))
+
     def on_nested_tree_select_all_requested(self, event: NestedTreeWidget.SelectAllRequested) -> None:
         """Set all turns in current session to COPY."""
         current_id = self._state.get_current_session_id()
@@ -1009,6 +1062,10 @@ class NestedTreeView(Vertical):
     def on_nested_tree_link_requested(self, event: NestedTreeWidget.LinkRequested) -> None:
         """Bubble up link request."""
         self.post_message(self.SessionLinkRequested(event.session_id))
+
+    def on_nested_tree_colon_pressed(self, event: NestedTreeWidget.ColonPressed) -> None:
+        """Bubble up colon pressed to jump to text entry."""
+        self.post_message(self.ColonPressed())
 
     def on_tree_node_expanded(self, event) -> None:
         """Handle node expansion - request session load if not loaded."""
