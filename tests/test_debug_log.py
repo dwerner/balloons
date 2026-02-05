@@ -1,7 +1,9 @@
 """Tests for the debug logging module."""
 
+import asyncio
+import json
 import pytest
-from core.debug_log import DebugLog, LogLevel, LogEntry, debug_log
+from core.debug_log import DebugLog, LogLevel, LogEntry, debug_log, dump_failed_json
 
 
 class TestLogEntry:
@@ -183,3 +185,98 @@ class TestDebugLog:
         assert entry.timestamp[2] == ":"
         assert entry.timestamp[5] == ":"
         assert entry.timestamp[8] == "."
+
+
+class TestAsyncFileLogging:
+    """Tests for async fire-and-forget file logging."""
+
+    def setup_method(self):
+        """Clear the debug log before each test."""
+        debug_log.clear()
+        debug_log._listeners = []
+        debug_log._log_file = None
+
+    @pytest.mark.asyncio
+    async def test_write_to_file_async(self, tmp_path):
+        """Test that log entries are written to file asynchronously."""
+        log_file = tmp_path / "test.log"
+        debug_log.set_log_file(log_file)
+
+        debug_log.info("Test async write", category="test")
+
+        # Allow the fire-and-forget task to complete
+        await asyncio.sleep(0.1)
+
+        assert log_file.exists()
+        content = log_file.read_text()
+        assert "Test async write" in content
+        assert "test" in content  # category
+
+        # Cleanup
+        debug_log._log_file = None
+
+    @pytest.mark.asyncio
+    async def test_write_multiple_entries_async(self, tmp_path):
+        """Test that multiple entries are written asynchronously."""
+        log_file = tmp_path / "test.log"
+        debug_log.set_log_file(log_file)
+
+        debug_log.info("Entry 1")
+        debug_log.warning("Entry 2")
+        debug_log.error("Entry 3")
+
+        # Allow tasks to complete
+        await asyncio.sleep(0.1)
+
+        content = log_file.read_text()
+        lines = content.strip().split("\n")
+        assert len(lines) == 3
+
+        # Verify JSON format
+        for line in lines:
+            parsed = json.loads(line)
+            assert "timestamp" in parsed
+            assert "level" in parsed
+            assert "message" in parsed
+
+        # Cleanup
+        debug_log._log_file = None
+
+    @pytest.mark.asyncio
+    async def test_dump_failed_json_async(self, tmp_path, monkeypatch):
+        """Test that dump_failed_json writes asynchronously."""
+        from pathlib import Path
+
+        # Monkeypatch Path.home to return tmp_path
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        content = '{"invalid": json content}'
+        result = dump_failed_json(content, context="test_error")
+
+        # Allow task to complete
+        await asyncio.sleep(0.1)
+
+        assert result is not None
+        assert "test_error" in str(result)
+        # File should exist after async write completes
+        assert result.exists()
+        assert result.read_text() == content
+
+    def test_no_event_loop_graceful_fallback(self, tmp_path):
+        """Test that logging works even without event loop (in-memory only)."""
+        log_file = tmp_path / "test.log"
+        debug_log.set_log_file(log_file)
+
+        # This runs without an event loop, so file write should be skipped
+        # but in-memory logging should still work
+        debug_log.info("Test no loop")
+
+        entries = debug_log.get_entries()
+        assert len(entries) == 1
+        assert entries[0].message == "Test no loop"
+
+        # File should not exist (no event loop to run async write)
+        assert not log_file.exists()
+
+        # Cleanup
+        debug_log._log_file = None

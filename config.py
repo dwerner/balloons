@@ -5,6 +5,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
 
+import aiofiles
 import yaml
 
 from tokenizer import count_tokens
@@ -48,6 +49,19 @@ class BackendConfig:
         path = Path(self.system_prompt).expanduser()
         if path.exists():
             self._system_prompt_content = path.read_text()
+            self._system_prompt_tokens = count_tokens(self._system_prompt_content)
+        return self._system_prompt_content
+
+    async def load_system_prompt_async(self) -> Optional[str]:
+        """Async version of load_system_prompt()."""
+        if self._system_prompt_content is not None:
+            return self._system_prompt_content
+        if not self.system_prompt:
+            return None
+        path = Path(self.system_prompt).expanduser()
+        if path.exists():
+            async with aiofiles.open(path, encoding="utf-8") as f:
+                self._system_prompt_content = await f.read()
             self._system_prompt_tokens = count_tokens(self._system_prompt_content)
         return self._system_prompt_content
 
@@ -108,11 +122,26 @@ class Config:
         )
 
     @classmethod
-    def _load_from_file(cls, path: Path) -> "Config":
-        """Load configuration from a YAML file."""
-        with open(path) as f:
-            data = yaml.safe_load(f) or {}
+    async def load_async(cls) -> "Config":
+        """Async version of load()."""
+        config_paths = [
+            os.environ.get("BALLOONS_CONFIG"),
+            Path.home() / ".balloons" / "config.yaml",
+        ]
 
+        for path in config_paths:
+            if path and Path(path).exists():
+                return await cls._load_from_file_async(Path(path))
+
+        # Default: just claude backend
+        return cls(
+            default_backend="claude",
+            backends={"claude": BackendConfig(name="claude")}
+        )
+
+    @classmethod
+    def _build_config_from_data(cls, data: dict, path: Path) -> "Config":
+        """Build Config from parsed YAML data."""
         backends = {}
         for name, backend_data in data.get("backends", {}).items():
             if backend_data is None:
@@ -143,6 +172,21 @@ class Config:
             _config_path=path,
         )
 
+    @classmethod
+    def _load_from_file(cls, path: Path) -> "Config":
+        """Load configuration from a YAML file."""
+        with open(path) as f:
+            data = yaml.safe_load(f) or {}
+        return cls._build_config_from_data(data, path)
+
+    @classmethod
+    async def _load_from_file_async(cls, path: Path) -> "Config":
+        """Async version of _load_from_file()."""
+        async with aiofiles.open(path, encoding="utf-8") as f:
+            content = await f.read()
+        data = yaml.safe_load(content) or {}
+        return cls._build_config_from_data(data, path)
+
     def get_backend(self, name: Optional[str] = None) -> BackendConfig:
         """Get a backend configuration by name, or the default."""
         backend_name = name or self.default_backend
@@ -162,18 +206,31 @@ class Config:
 
         return env
 
+    def _get_save_path(self) -> Path:
+        """Get the path to save config to."""
+        if self._config_path:
+            return self._config_path
+        return Path.home() / ".balloons" / "config.yaml"
+
+    def _build_save_data(self, existing_data: dict) -> dict:
+        """Build data dict for saving, merging with existing data."""
+        data = existing_data.copy()
+        if self.last_view_session_id:
+            data["last_view"] = {
+                "session_id": self.last_view_session_id,
+                "turn_index": self.last_view_turn_index,
+            }
+        elif "last_view" in data:
+            del data["last_view"]
+        return data
+
     def save(self) -> None:
         """Save configuration to file.
 
         Saves user-modifiable settings (last_view, etc).
         Creates config file if it doesn't exist.
         """
-        # Determine path to save to
-        if self._config_path:
-            path = self._config_path
-        else:
-            # Default to ~/.balloons/config.yaml
-            path = Path.home() / ".balloons" / "config.yaml"
+        path = self._get_save_path()
 
         # Load existing data if file exists, to preserve other settings
         if path.exists():
@@ -183,17 +240,28 @@ class Config:
             data = {}
             path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Save last view position
-        if self.last_view_session_id:
-            data["last_view"] = {
-                "session_id": self.last_view_session_id,
-                "turn_index": self.last_view_turn_index,
-            }
-        elif "last_view" in data:
-            del data["last_view"]
+        data = self._build_save_data(data)
 
         with open(path, "w") as f:
             yaml.safe_dump(data, f, default_flow_style=False)
+
+    async def save_async(self) -> None:
+        """Async version of save()."""
+        path = self._get_save_path()
+
+        # Load existing data if file exists, to preserve other settings
+        if path.exists():
+            async with aiofiles.open(path, encoding="utf-8") as f:
+                content = await f.read()
+            data = yaml.safe_load(content) or {}
+        else:
+            data = {}
+            path.parent.mkdir(parents=True, exist_ok=True)
+
+        data = self._build_save_data(data)
+
+        async with aiofiles.open(path, "w", encoding="utf-8") as f:
+            await f.write(yaml.safe_dump(data, default_flow_style=False))
 
 
 # Global config instance
@@ -205,6 +273,14 @@ def get_config() -> Config:
     global _config
     if _config is None:
         _config = Config.load()
+    return _config
+
+
+async def get_config_async() -> Config:
+    """Async version of get_config()."""
+    global _config
+    if _config is None:
+        _config = await Config.load_async()
     return _config
 
 
@@ -222,3 +298,11 @@ def save_last_view(session_id: str, turn_index: Optional[int] = None) -> None:
     config.last_view_session_id = session_id
     config.last_view_turn_index = turn_index
     config.save()
+
+
+async def save_last_view_async(session_id: str, turn_index: Optional[int] = None) -> None:
+    """Async version of save_last_view()."""
+    config = await get_config_async()
+    config.last_view_session_id = session_id
+    config.last_view_turn_index = turn_index
+    await config.save_async()

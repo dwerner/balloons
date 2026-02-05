@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, AsyncIterator
 
+import aiofiles
+
 from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock, ArchiveSummary, ContentBlock, ContextMode
 
 
@@ -97,6 +99,25 @@ class SessionIndex:
         except (json.JSONDecodeError, KeyError, OSError):
             return False
 
+    async def load_async(self) -> bool:
+        """Async version of load()."""
+        if not INDEX_FILE.exists():
+            return False
+
+        try:
+            self._file_mtime = self._get_file_mtime()
+            async with aiofiles.open(INDEX_FILE, encoding="utf-8") as f:
+                content = await f.read()
+            data = json.loads(content)
+            if data.get("version") != INDEX_VERSION:
+                return False
+            self._sessions = data.get("sessions", {})
+            self._loaded = True
+            self._dirty = False
+            return True
+        except (json.JSONDecodeError, KeyError, OSError):
+            return False
+
     def reload_if_stale(self) -> bool:
         """Reload from disk if the file has been modified by another process.
 
@@ -118,6 +139,21 @@ class SessionIndex:
             "sessions": self._sessions,
         }
         INDEX_FILE.write_text(json.dumps(data, indent=2))
+        self._dirty = False
+        self._file_mtime = self._get_file_mtime()  # Update mtime after our write
+
+    async def save_async(self) -> None:
+        """Async version of save()."""
+        if not self._dirty:
+            return
+
+        SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+        data = {
+            "version": INDEX_VERSION,
+            "sessions": self._sessions,
+        }
+        async with aiofiles.open(INDEX_FILE, "w", encoding="utf-8") as f:
+            await f.write(json.dumps(data, indent=2))
         self._dirty = False
         self._file_mtime = self._get_file_mtime()  # Update mtime after our write
 
@@ -206,6 +242,51 @@ class SessionIndex:
         self._dirty = True
         self._loaded = True
 
+    async def rebuild_from_files_async(self) -> None:
+        """Async version of rebuild_from_files()."""
+        self._sessions = {}
+        if not SESSIONS_DIR.exists():
+            return
+
+        for path in SESSIONS_DIR.glob("*.json"):
+            if path.name == "index.json":
+                continue
+            try:
+                async with aiofiles.open(path, encoding="utf-8") as f:
+                    content = await f.read()
+                data = json.loads(content)
+                session_id = data["id"]
+                last_modified = data.get("last_modified", data.get("created", ""))
+                turn_count = len(data.get("turns", []))
+                if turn_count == 0:
+                    for m in data.get("messages", []):
+                        blocks = m.get("content_blocks", [])
+                        turn_count += len(blocks) if blocks else 1
+
+                self._sessions[session_id] = {
+                    "id": session_id,
+                    "created": data["created"],
+                    "last_modified": last_modified,
+                    "model": data.get("model", ""),
+                    "title": data.get("title", ""),
+                    "turn_count": turn_count,
+                    "message_count": turn_count,
+                    "total_input_tokens": data.get("total_input_tokens", 0),
+                    "total_output_tokens": data.get("total_output_tokens", 0),
+                    "total_cost": data.get("total_cost", 0.0),
+                    "parent_id": data.get("parent_id"),
+                    "children": data.get("children", []),
+                    "fork_name": data.get("fork_name", ""),
+                    "fork_status": data.get("fork_status", "active"),
+                    "backend_name": data.get("backend_name", ""),
+                    "cached_context_tokens": data.get("cached_context_tokens", 0),
+                }
+            except (json.JSONDecodeError, KeyError, OSError):
+                continue
+
+        self._dirty = True
+        self._loaded = True
+
     def is_loaded(self) -> bool:
         """Check if index has been loaded or rebuilt."""
         return self._loaded
@@ -235,6 +316,23 @@ class SessionIndex:
             self._loaded = True
             self._dirty = True
             self.save()
+
+    async def ensure_loaded_async(self) -> None:
+        """Async version of ensure_loaded()."""
+        # If already loaded, check if file was modified by another process
+        if self._loaded:
+            if self._is_stale():
+                await self.load_async()
+            return
+
+        # First load
+        if not await self.load_async():
+            # Index missing/invalid - start with empty index
+            # Sessions will be added as they are saved
+            self._sessions = {}
+            self._loaded = True
+            self._dirty = True
+            await self.save_async()
 
 
 @dataclass
@@ -736,12 +834,10 @@ class Session:
             data["exchange_id"] = msg.exchange_id
         return data
 
-    def save(self):
-        SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-        path = SESSIONS_DIR / f"{self.id}.json"
-        # Update last_modified timestamp on every save
+    def _build_save_data(self) -> dict:
+        """Build the data dict for saving."""
         self.last_modified = datetime.now().isoformat()
-        data = {
+        return {
             "id": self.id,
             "created": self.created,
             "last_modified": self.last_modified,
@@ -768,6 +864,11 @@ class Session:
             "backend_name": self.backend_name,
             "cached_context_tokens": self.cached_context_tokens,
         }
+
+    def save(self):
+        SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+        path = SESSIONS_DIR / f"{self.id}.json"
+        data = self._build_save_data()
         path.write_text(json.dumps(data, indent=2))
 
         # Update session index
@@ -775,6 +876,20 @@ class Session:
         index.ensure_loaded()
         index.update(self)
         index.save()
+
+    async def save_async(self):
+        """Async version of save()."""
+        SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+        path = SESSIONS_DIR / f"{self.id}.json"
+        data = self._build_save_data()
+        async with aiofiles.open(path, "w", encoding="utf-8") as f:
+            await f.write(json.dumps(data, indent=2))
+
+        # Update session index
+        index = SessionIndex()
+        await index.ensure_loaded_async()
+        index.update(self)
+        await index.save_async()
 
     @classmethod
     def _load_working_directories(cls, data: dict) -> list[str]:
@@ -867,11 +982,8 @@ class Session:
         )
 
     @classmethod
-    def load(cls, session_id: str) -> Optional["Session"]:
-        path = SESSIONS_DIR / f"{session_id}.json"
-        if not path.exists():
-            return None
-        data = json.loads(path.read_text())
+    def _build_session_from_data(cls, data: dict) -> "Session":
+        """Build a Session object from loaded data dict."""
         # For backwards compat, use created if last_modified missing
         last_modified = data.get("last_modified", data.get("created", ""))
         session = cls(
@@ -940,8 +1052,26 @@ class Session:
                         exchange_id=exchange_id,
                     ))
 
-        # Don't populate messages - it's deprecated
         return session
+
+    @classmethod
+    def load(cls, session_id: str) -> Optional["Session"]:
+        path = SESSIONS_DIR / f"{session_id}.json"
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text())
+        return cls._build_session_from_data(data)
+
+    @classmethod
+    async def load_async(cls, session_id: str) -> Optional["Session"]:
+        """Async version of load()."""
+        path = SESSIONS_DIR / f"{session_id}.json"
+        if not path.exists():
+            return None
+        async with aiofiles.open(path, encoding="utf-8") as f:
+            content = await f.read()
+        data = json.loads(content)
+        return cls._build_session_from_data(data)
 
     @classmethod
     def list_sessions(cls) -> list[dict]:
@@ -963,8 +1093,8 @@ class Session:
         """Async generator that yields session metadata dicts one at a time.
 
         Uses the session index for instant loading. The index is loaded
-        synchronously on first call (fast - just one file read), then
-        sessions are yielded immediately from memory.
+        asynchronously on first call, then sessions are yielded immediately
+        from memory.
 
         Sessions are yielded in order of last_modified (most recent first).
 
@@ -974,9 +1104,9 @@ class Session:
         """
         index = SessionIndex()
 
-        # Load index in thread pool if not already loaded
+        # Load index asynchronously if not already loaded
         if not index.is_loaded():
-            await asyncio.to_thread(index.ensure_loaded)
+            await index.ensure_loaded_async()
 
         # Yield sessions from index (already sorted by last_modified desc)
         for metadata in index.get_all():

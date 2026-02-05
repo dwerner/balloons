@@ -7,6 +7,8 @@ Extracted from app.py to enable unit testing without the UI.
 from pathlib import Path
 from typing import Protocol
 
+import aiofiles
+
 from models import Message, TextDelta, ArchiveSummary
 from session import Session
 from core.context import ContextBuilder
@@ -16,19 +18,31 @@ from core.debug_log import debug_log
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 _LINK_SUMMARY_PROMPT_PATH = _PROMPTS_DIR / "link-summary.md"
 
-def _load_link_summary_prompt() -> str:
-    """Load the link summary prompt from file."""
-    try:
-        return _LINK_SUMMARY_PROMPT_PATH.read_text()
-    except Exception:
-        # Fallback if file not found
-        return """Summarize this conversation in one sentence (max 100 chars).
+_DEFAULT_LINK_SUMMARY_PROMPT = """Summarize this conversation in one sentence (max 100 chars).
 Be specific about what was built, fixed, or discussed.
 
 Conversation:
 {conversation}
 
 Summary:"""
+
+
+def _load_link_summary_prompt() -> str:
+    """Load the link summary prompt from file."""
+    try:
+        return _LINK_SUMMARY_PROMPT_PATH.read_text()
+    except Exception:
+        return _DEFAULT_LINK_SUMMARY_PROMPT
+
+
+async def _load_link_summary_prompt_async() -> str:
+    """Async version of _load_link_summary_prompt()."""
+    try:
+        async with aiofiles.open(_LINK_SUMMARY_PROMPT_PATH, encoding="utf-8") as f:
+            return await f.read()
+    except Exception:
+        return _DEFAULT_LINK_SUMMARY_PROMPT
+
 
 _LINK_SUMMARY_PROMPT = _load_link_summary_prompt()
 

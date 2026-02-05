@@ -1,11 +1,12 @@
 """Tests for session persistence and progressive saving."""
 
+import asyncio
 import json
 import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from session import Session, Turn, SESSIONS_DIR
+from session import Session, Turn, SessionIndex, SESSIONS_DIR, INDEX_FILE
 from models import Message, TextBlock, ToolUseBlock, ToolResultBlock
 
 
@@ -391,3 +392,116 @@ class TestSessionLoadBackwardsCompat:
         assert isinstance(loaded.turns[0].content_block, TextBlock)
         assert loaded.turns[0].content_block.text == "Hello"
         assert loaded.turns[0].content == "Hello"  # Via property
+
+
+class TestAsyncSessionIO:
+    """Tests for async session I/O methods."""
+
+    @pytest.fixture
+    def temp_sessions_dir(self, tmp_path):
+        """Use a temporary directory for sessions."""
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+        index_file = sessions_dir / "index.json"
+        with patch("session.SESSIONS_DIR", sessions_dir), \
+             patch("session.INDEX_FILE", index_file):
+            # Reset the singleton for each test
+            SessionIndex._instance = None
+            yield sessions_dir
+            SessionIndex._instance = None
+
+    @pytest.mark.asyncio
+    async def test_save_async(self, temp_sessions_dir):
+        """Test async session save."""
+        session = Session()
+        session.add_message("user", "Hello async")
+        session.add_message("assistant", "Hi there")
+        await session.save_async()
+
+        # Verify file was written
+        path = temp_sessions_dir / f"{session.id}.json"
+        assert path.exists()
+        data = json.loads(path.read_text())
+        assert len(data["turns"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_load_async(self, temp_sessions_dir):
+        """Test async session load."""
+        # Create session with sync save
+        session = Session()
+        session.add_message("user", "Test message")
+        session.save()
+
+        # Load with async
+        loaded = await Session.load_async(session.id)
+        assert loaded is not None
+        assert len(loaded.turns) == 1
+        assert loaded.turns[0].content == "Test message"
+
+    @pytest.mark.asyncio
+    async def test_load_async_nonexistent(self, temp_sessions_dir):
+        """Test async load of nonexistent session returns None."""
+        loaded = await Session.load_async("nonexistent-id")
+        assert loaded is None
+
+    @pytest.mark.asyncio
+    async def test_save_async_load_async_roundtrip(self, temp_sessions_dir):
+        """Test async save and load roundtrip."""
+        session = Session()
+        session.add_message("user", "Question")
+        session.add_message("assistant", "Answer")
+        session.update_usage(input_tokens=100, output_tokens=50, cost=0.001)
+        await session.save_async()
+
+        loaded = await Session.load_async(session.id)
+        assert loaded is not None
+        assert len(loaded.turns) == 2
+        assert loaded.total_input_tokens == 100
+        assert loaded.total_output_tokens == 50
+
+    @pytest.mark.asyncio
+    async def test_list_sessions_async(self, temp_sessions_dir):
+        """Test async session listing."""
+        # Create a few sessions
+        for i in range(3):
+            session = Session()
+            session.add_message("user", f"Session {i}")
+            await session.save_async()
+
+        # List sessions
+        sessions = []
+        async for metadata in Session.list_sessions_async():
+            sessions.append(metadata)
+
+        assert len(sessions) == 3
+
+    @pytest.mark.asyncio
+    async def test_index_async_operations(self, temp_sessions_dir):
+        """Test async index load/save operations."""
+        index = SessionIndex()
+        await index.ensure_loaded_async()
+
+        # Create a session
+        session = Session()
+        session.add_message("user", "Test")
+        await session.save_async()
+
+        # Verify index was updated
+        metadata = index.get(session.id)
+        assert metadata is not None
+        assert metadata["turn_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_concurrent_saves(self, temp_sessions_dir):
+        """Test multiple concurrent async saves."""
+        sessions = [Session() for _ in range(5)]
+        for i, session in enumerate(sessions):
+            session.add_message("user", f"Message {i}")
+
+        # Save all concurrently
+        await asyncio.gather(*[s.save_async() for s in sessions])
+
+        # Verify all were saved
+        for session in sessions:
+            path = temp_sessions_dir / f"{session.id}.json"
+            assert path.exists()

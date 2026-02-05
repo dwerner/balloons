@@ -11,6 +11,8 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import aiofiles
+
 from .debug_log import debug_log
 from .tools import LINK_TOOL_NAMES, BALLOON_TOOL_NAMES
 from .link_tools import execute_link_tool
@@ -130,7 +132,8 @@ async def execute_read(args: dict, working_dir: str) -> tuple[str, bool]:
         return f"Error: {path} is a directory, not a file", True
 
     try:
-        content = path.read_text(encoding="utf-8", errors="replace")
+        async with aiofiles.open(path, encoding="utf-8", errors="replace") as f:
+            content = await f.read()
     except Exception as e:
         return f"Error reading file: {e}", True
 
@@ -182,7 +185,8 @@ async def execute_write(args: dict, working_dir: str) -> tuple[str, bool]:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        path.write_text(content, encoding="utf-8")
+        async with aiofiles.open(path, "w", encoding="utf-8") as f:
+            await f.write(content)
         return f"Successfully wrote {len(content)} bytes to {path}", False
     except Exception as e:
         return f"Error writing file: {e}", True

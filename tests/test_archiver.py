@@ -951,3 +951,126 @@ class TestArchiveMarkerWidget:
         assert "Archive:" in rendered_str
         assert "/home/user/.balloons/archives/session-123/archive-456.json" in rendered_str
         assert "Ctrl+Shift+Click" in rendered_str
+
+
+# =============================================================================
+# Async Archive Tests
+# =============================================================================
+
+
+class TestAsyncArchiver:
+    """Tests for async archiver methods."""
+
+    @pytest.fixture
+    def temp_archives_dir(self, tmp_path):
+        """Use a temporary directory for archives."""
+        archives_dir = tmp_path / "archives"
+        archives_dir.mkdir()
+        return archives_dir
+
+    @pytest.fixture
+    def archiver(self, temp_archives_dir):
+        """Create an archiver with temp directory."""
+        return Archiver(archives_dir=temp_archives_dir)
+
+    @pytest.fixture
+    def simple_conversation(self):
+        """Create a simple conversation for testing."""
+        return [
+            Turn(role="user", content_block=TextBlock(text="Hello"), tokens=10),
+            Turn(role="assistant", content_block=TextBlock(text="Hi there!"), tokens=15),
+            Turn(role="user", content_block=TextBlock(text="How are you?"), tokens=12),
+            Turn(role="assistant", content_block=TextBlock(text="I'm doing well!"), tokens=20),
+            Turn(role="user", content_block=TextBlock(text="Great!"), tokens=8),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_archive_async_creates_file(self, archiver, simple_conversation, temp_archives_dir):
+        """Async archive creates file."""
+        archive_block, _ = await archiver.archive_turns_async(
+            session_id="test-session",
+            turns=simple_conversation,
+            turn_start=1,
+            turn_end=3,
+            summary="Async test archive",
+        )
+
+        assert Path(archive_block.file_path).exists()
+
+    @pytest.mark.asyncio
+    async def test_archive_async_returns_correct_turns(self, archiver, simple_conversation):
+        """Async archive returns correct new turn list."""
+        archive_block, new_turns = await archiver.archive_turns_async(
+            session_id="test-session",
+            turns=simple_conversation,
+            turn_start=1,
+            turn_end=4,
+            summary="Archived middle turns",
+        )
+
+        # Should have: turn 0, archive marker, turn 4
+        assert len(new_turns) == 3
+        assert new_turns[0].content_block.text == "Hello"
+        assert isinstance(new_turns[1].content_block, ArchiveBlock)
+        assert new_turns[2].content_block.text == "Great!"
+
+    @pytest.mark.asyncio
+    async def test_load_archive_async(self, archiver, simple_conversation):
+        """Async load returns archived turns."""
+        archive_block, _ = await archiver.archive_turns_async(
+            session_id="test-session",
+            turns=simple_conversation,
+            turn_start=0,
+            turn_end=3,
+            summary="First three turns",
+        )
+
+        loaded = await archiver.load_archive_async(archive_block)
+        assert len(loaded) == 3
+        assert loaded[0].content_block.text == "Hello"
+        assert loaded[1].content_block.text == "Hi there!"
+        assert loaded[2].content_block.text == "How are you?"
+
+    @pytest.mark.asyncio
+    async def test_rehydrate_async(self, archiver, simple_conversation):
+        """Async rehydrate restores turns."""
+        _, archived = await archiver.archive_turns_async(
+            session_id="test-session",
+            turns=simple_conversation,
+            turn_start=1,
+            turn_end=4,
+            summary="Middle turns",
+        )
+
+        # archived has [turn 0, archive, turn 4]
+        rehydrated = await archiver.rehydrate_async(archived, 1)
+
+        # Should be back to original 5 turns
+        assert len(rehydrated) == 5
+        assert rehydrated[0].content_block.text == "Hello"
+        assert rehydrated[1].content_block.text == "Hi there!"
+        assert rehydrated[4].content_block.text == "Great!"
+
+    @pytest.mark.asyncio
+    async def test_async_roundtrip(self, archiver, simple_conversation):
+        """Async archive and rehydrate roundtrip preserves data."""
+        original_texts = [t.content_block.text for t in simple_conversation]
+
+        archive_block, archived = await archiver.archive_turns_async(
+            session_id="test-session",
+            turns=simple_conversation,
+            turn_start=0,
+            turn_end=5,
+            summary="All turns",
+        )
+
+        # Should have just the archive marker
+        assert len(archived) == 1
+
+        # Rehydrate
+        rehydrated = await archiver.rehydrate_async(archived, 0)
+
+        # Should match original
+        assert len(rehydrated) == 5
+        for i, turn in enumerate(rehydrated):
+            assert turn.content_block.text == original_texts[i]

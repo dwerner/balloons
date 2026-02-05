@@ -4,12 +4,15 @@ Provides a singleton debug log that collects entries from across the app.
 Listeners can subscribe for real-time updates (used by DebugPane).
 """
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Callable
+
+import aiofiles
 
 
 class LogLevel(Enum):
@@ -81,7 +84,18 @@ class DebugLog:
             self._log_file.parent.mkdir(parents=True, exist_ok=True)
 
     def _write_to_file(self, entry: LogEntry) -> None:
-        """Write entry to log file if configured."""
+        """Write entry to log file if configured (fire-and-forget async)."""
+        if self._log_file is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._write_to_file_async(entry))
+        except RuntimeError:
+            # No event loop running - skip file write (in-memory log still works)
+            pass
+
+    async def _write_to_file_async(self, entry: LogEntry) -> None:
+        """Async file write for log entry."""
         if self._log_file is None:
             return
         try:
@@ -94,8 +108,8 @@ class DebugLog:
                 "run_id": entry.run_id,
                 "details": entry.details,
             })
-            with open(self._log_file, "a") as f:
-                f.write(log_line + "\n")
+            async with aiofiles.open(self._log_file, "a") as f:
+                await f.write(log_line + "\n")
         except Exception:
             pass  # Don't let file errors crash logging
 
@@ -239,14 +253,14 @@ debug_log = DebugLog()
 
 
 def dump_failed_json(content: str, context: str = "json_error") -> Path | None:
-    """Write failed JSON content to a debug file.
+    """Write failed JSON content to a debug file (fire-and-forget async).
 
     Args:
         content: The JSON content that failed to parse
         context: A short identifier for the error context (e.g., "tool_input", "sse_line")
 
     Returns:
-        Path to the created file, or None if writing failed
+        Path to the created file, or None if no event loop running
     """
     try:
         debug_dir = Path.home() / ".cache" / "balloons" / "debug"
@@ -254,7 +268,23 @@ def dump_failed_json(content: str, context: str = "json_error") -> Path | None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         filename = f"{context}_{timestamp}.json"
         filepath = debug_dir / filename
-        filepath.write_text(content)
-        return filepath
+
+        # Fire-and-forget async write
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_dump_failed_json_async(filepath, content))
+            return filepath
+        except RuntimeError:
+            # No event loop running - skip file write
+            return None
     except Exception:
         return None
+
+
+async def _dump_failed_json_async(filepath: Path, content: str) -> None:
+    """Async file write for dump_failed_json."""
+    try:
+        async with aiofiles.open(filepath, "w") as f:
+            await f.write(content)
+    except Exception:
+        pass  # Don't let file errors crash
