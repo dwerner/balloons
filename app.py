@@ -103,7 +103,7 @@ from core.summarizer import Summarizer
 from core.exceptions import BackendNotFoundError
 from core.context_grouper import group_messages_by_context_mode, build_context_messages
 from core.fork import ForkManager, ForkResult, MergeResult, DeriveResult, SwitchResult, ForkProposal
-from core.command_executor import CommandExecutor, ArchiveResult, RehydrateResult, LinkResult, BackendResult
+from core.command_executor import CommandExecutor, ArchiveResult, RehydrateResult, LinkResult, BackendResult, ShellResult
 from core.tool_executor import parse_fork_proposal
 from core.tree_state import TreeState, TreeEvent
 from tokenizer import count_tokens
@@ -590,7 +590,8 @@ class BalloonsApp(App):
             )
 
             # Intercept propose_fork tool - show modal before execution
-            if action.tool_name == "propose_fork" and is_active:
+            # Only handle balloons-tool calls (id starts with "balloons-"), not native CLI tools
+            if action.tool_name == "propose_fork" and is_active and action.tool_use_id.startswith("balloons-"):
                 proposal = parse_fork_proposal(action.tool_input)
                 if proposal:
                     self._handle_fork_proposal(
@@ -2012,8 +2013,6 @@ class BalloonsApp(App):
 
     async def _handle_shell_command(self, cmd: str) -> None:
         """Run a shell command and submit output to Claude."""
-        chat_log = self.query_one("#chat-log", ChatLogView)
-        context_tree = self.query_one("#context-tree", ContextTreeView)
         input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
 
@@ -2021,45 +2020,26 @@ class BalloonsApp(App):
         input_box.set_disabled(True)
         status_bar.set_status(f"Running: {cmd[:30]}...")
 
-        # Run command and capture output
-        import os
-        env = os.environ.copy()
-        env.update({
-            "FORCE_COLOR": "1",
-            "CLICOLOR_FORCE": "1",
-            "TERM": "xterm-256color",
-        })
         # Use session's working directory if set
         cwd = self.session.working_directory if self.session.working_directory else None
-        try:
-            self._shell_process = await asyncio.create_subprocess_shell(
-                cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                env=env,
-                cwd=cwd,
-            )
-            stdout, _ = await self._shell_process.communicate()
-            output = stdout.decode("utf-8", errors="replace").rstrip()
-            self._shell_process = None
-        except asyncio.CancelledError:
-            if self._shell_process:
-                self._shell_process.kill()
-                self._shell_process = None
-            input_box.set_disabled(False)
-            status_bar.set_status("")
-            return
-        except Exception as e:
-            self._shell_process = None
-            output = f"Error: {e}"
+
+        # Execute via CommandExecutor
+        result = await self._command_executor.execute_shell(cmd, cwd)
 
         status_bar.set_status("")
 
-        # Format with explanatory header
-        prompt = f"# User executed shell command:\n```bash\n$ {cmd}\n```\n# Output:\n```\n{output}\n```"
+        if result.was_cancelled:
+            input_box.set_disabled(False)
+            return
 
-        # Use event-driven streaming (same as normal input)
-        self._start_streaming(prompt)
+        if not result.success:
+            # Still send error output to Claude
+            prompt = f"# User executed shell command:\n```bash\n$ {cmd}\n```\n# Error:\n```\n{result.error}\n```"
+            self._start_streaming(prompt)
+            return
+
+        # Use the formatted prompt from the result
+        self._start_streaming(result.prompt)
 
     async def _generate_context_summary(self, messages: list) -> str:
         """Generate a summary of messages marked for summarization."""

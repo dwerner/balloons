@@ -4,9 +4,9 @@ from dataclasses import dataclass
 from typing import Optional
 
 from textual.screen import ModalScreen
-from textual.widgets import Static, Button, Label
+from textual.widgets import Static, Button, TextArea, Tree
+from textual.widgets.tree import TreeNode
 from textual.containers import Vertical, Horizontal, ScrollableContainer
-from textual.message import Message
 
 from models import ContextMode
 from core.fork import ForkProposal, ContextAssignment
@@ -38,50 +38,41 @@ class ForkProposalModal(ModalScreen[Optional[ForkProposalResult]]):
     }
 
     #proposal-dialog {
-        width: 90;
-        height: 80%;
+        width: 85;
+        height: auto;
+        max-height: 80%;
         background: $surface;
         border: thick $accent;
         padding: 1 2;
     }
 
     #proposal-title {
-        text-align: center;
         text-style: bold;
         color: $accent;
-        padding-bottom: 1;
+        margin-bottom: 0;
+    }
+
+    #fork-description {
+        color: $text-muted;
+        margin-bottom: 1;
     }
 
     #proposal-content {
-        height: 1fr;
-        padding: 1 0;
+        height: auto;
+        max-height: 40;
+        padding: 0;
     }
 
     .section-title {
         text-style: bold;
-        margin-top: 1;
-        margin-bottom: 0;
+        margin: 0;
         color: $primary;
-    }
-
-    .section-content {
-        padding-left: 2;
-        margin-bottom: 1;
-    }
-
-    #fork-name {
-        color: $success;
-        text-style: bold;
-    }
-
-    #fork-description {
-        color: $text;
-        margin-bottom: 1;
     }
 
     .context-item {
         height: auto;
-        margin: 0;
+        min-height: 2;
+        margin: 0 0 1 0;
         padding: 0 0 0 1;
         border-left: thick $primary-darken-2;
     }
@@ -102,20 +93,16 @@ class ForkProposalModal(ModalScreen[Optional[ForkProposalResult]]):
         text-style: bold;
     }
 
-    .context-mode {
-        margin-left: 1;
-    }
-
-    .context-mode.copy {
+    .context-range.copy {
         color: $success;
     }
 
-    .context-mode.compress {
+    .context-range.compress {
         color: $warning;
     }
 
-    .context-mode.drop {
-        color: $error-darken-2;
+    .context-range.drop {
+        color: $text-muted;
     }
 
     .context-reason {
@@ -123,12 +110,19 @@ class ForkProposalModal(ModalScreen[Optional[ForkProposalResult]]):
         padding-left: 2;
     }
 
+    #context-tree {
+        height: auto;
+        max-height: 12;
+        min-height: 2;
+        padding: 0;
+        margin: 0;
+    }
+
     #initial-prompt {
         background: $surface-darken-1;
-        padding: 1;
-        margin-top: 1;
-        max-height: 10;
-        overflow-y: auto;
+        height: 6;
+        min-height: 3;
+        border: solid $primary-darken-2;
     }
 
     #proposal-buttons {
@@ -174,58 +168,144 @@ class ForkProposalModal(ModalScreen[Optional[ForkProposalResult]]):
 
     def compose(self):
         with Vertical(id="proposal-dialog"):
-            yield Static("Fork Proposal", id="proposal-title")
+            # Compact header: name on same line
+            yield Static(f"Fork: {self._proposal.name}", id="proposal-title")
+            yield Static(self._proposal.description, id="fork-description")
 
             with ScrollableContainer(id="proposal-content"):
-                # Fork name and description
-                yield Static("Name", classes="section-title")
-                with Vertical(classes="section-content"):
-                    yield Static(self._proposal.name, id="fork-name")
+                # Context plan as collapsible tree - single line per item with reason inline
+                yield Static(f"Context ({len(self._proposal.context_plan) if self._proposal.context_plan else 0})", classes="section-title")
+                tree: Tree[str] = Tree("", id="context-tree")
+                tree.show_root = False
+                if self._proposal.context_plan:
+                    for assignment in self._proposal.context_plan:
+                        mode_icons = {"copy": "+", "compress": "~", "drop": "-"}
+                        icon = mode_icons.get(assignment.mode.lower(), "?")
+                        # Single line: icon, range, mode, reason all together
+                        reason_part = f" - {assignment.reason}" if assignment.reason else ""
+                        label = f"[{icon}] {assignment.exchange_range} {assignment.mode.upper()}{reason_part}"
+                        tree.root.add_leaf(label)
+                yield tree
 
-                yield Static("Goal", classes="section-title")
-                with Vertical(classes="section-content"):
-                    yield Static(self._proposal.description, id="fork-description")
-
-                # Context plan
-                yield Static("Context Plan", classes="section-title")
-                with Vertical(classes="section-content"):
-                    if self._proposal.context_plan:
-                        for assignment in self._proposal.context_plan:
-                            yield self._make_context_item(assignment)
-                    else:
-                        yield Static("No context assignments specified", classes="context-reason")
-
-                # Initial prompt if provided
-                if self._proposal.initial_prompt:
-                    yield Static("Starting Prompt", classes="section-title")
-                    with Vertical(classes="section-content"):
-                        yield Static(self._proposal.initial_prompt, id="initial-prompt")
+                # Initial prompt - editable
+                yield Static("Prompt", classes="section-title")
+                yield TextArea(self._proposal.initial_prompt or "", id="initial-prompt")
 
             with Horizontal(id="proposal-buttons"):
                 yield Button("Accept", id="accept-btn", variant="success")
                 yield Button("Reject", id="reject-btn", variant="error")
 
-    def _make_context_item(self, assignment: ContextAssignment) -> Vertical:
-        """Create a widget showing a context assignment."""
+    def _make_context_item(
+        self,
+        assignment: ContextAssignment,
+        total_exchanges: int,
+    ) -> Vertical:
+        """Create a widget showing a context assignment.
+
+        Args:
+            assignment: The context assignment to render
+            total_exchanges: Total number of exchanges (for resolving ranges)
+        """
         mode_class = assignment.mode.lower()
-        mode_icons = {"copy": "[+]", "compress": "[~]", "drop": "[-]"}
-        mode_icon = mode_icons.get(mode_class, "[?]")
+        mode_icons = {"copy": "●", "compress": "◐", "drop": "○"}
+        mode_icon = mode_icons.get(mode_class, "?")
 
-        # Get exchange summary if available
-        exchange_info = f"Exchanges {assignment.exchange_range}"
+        # Resolve the exchange range to show what it covers
+        exchange_label = self._format_exchange_range(
+            assignment.exchange_range,
+            total_exchanges,
+        )
 
-        # Build children list
-        range_label = Static(f"{mode_icon} {exchange_info}", classes="context-range")
-        mode_label = Static(assignment.mode.upper(), classes=f"context-mode {mode_class}")
-        row = Horizontal(range_label, mode_label)
+        # Build the header row
+        header = f"{mode_icon} {exchange_label}  [{assignment.mode.upper()}]"
+        header_label = Static(header, classes=f"context-range {mode_class}")
 
-        children = [row]
+        children = [header_label]
+
+        # Add exchange previews for simple ranges
+        previews = self._get_exchange_previews(assignment.exchange_range, total_exchanges)
+        for preview in previews:
+            children.append(Static(f"  {preview}", classes="context-reason"))
+
+        # Add reason if provided
         if assignment.reason:
-            reason_label = Static(assignment.reason, classes="context-reason")
-            children.append(reason_label)
+            children.append(Static(f"  → {assignment.reason}", classes="context-reason"))
 
-        # Create container with children
         return Vertical(*children, classes=f"context-item {mode_class}")
+
+    def _format_exchange_range(self, range_str: str, total: int) -> str:
+        """Format an exchange range for display."""
+        range_str = range_str.strip().lower()
+
+        if range_str == "all":
+            return f"All exchanges (0-{total - 1})" if total > 0 else "All exchanges"
+        if range_str == "last":
+            return f"Exchange {total - 1}" if total > 0 else "Last exchange"
+        if range_str.startswith("last-"):
+            try:
+                n = int(range_str[5:])
+                start = max(0, total - n - 1)
+                return f"Exchanges {start}-{total - 1}"
+            except ValueError:
+                return f"Exchanges {range_str}"
+        if "-" in range_str and not range_str.startswith("-"):
+            return f"Exchanges {range_str}"
+        if range_str.isdigit():
+            return f"Exchange {range_str}"
+
+        return f"Exchanges {range_str}"
+
+    def _get_exchange_previews(self, range_str: str, total: int) -> list[str]:
+        """Get preview text for exchanges in a range."""
+        if not self._exchange_summaries:
+            return []
+
+        indices = self._resolve_range(range_str, total)
+        previews = []
+        for idx in indices[:3]:  # Show at most 3 previews
+            if 0 <= idx < len(self._exchange_summaries):
+                previews.append(self._exchange_summaries[idx])
+
+        if len(indices) > 3:
+            previews.append(f"... and {len(indices) - 3} more")
+
+        return previews
+
+    def _resolve_range(self, range_str: str, total: int) -> list[int]:
+        """Resolve an exchange range string to indices."""
+        range_str = range_str.strip().lower()
+
+        if range_str == "all":
+            return list(range(total))
+        if range_str == "last":
+            return [total - 1] if total > 0 else []
+        if range_str.startswith("last-"):
+            try:
+                n = int(range_str[5:])
+                start = max(0, total - n - 1)
+                return list(range(start, total))
+            except ValueError:
+                return []
+        if range_str.startswith("-") and range_str[1:].isdigit():
+            try:
+                n = int(range_str[1:])
+                start = max(0, total - n)
+                return list(range(start, total))
+            except ValueError:
+                return []
+        if "-" in range_str and not range_str.startswith("-"):
+            parts = range_str.split("-")
+            if len(parts) == 2:
+                try:
+                    start, end = int(parts[0]), int(parts[1])
+                    return list(range(start, min(end + 1, total)))
+                except ValueError:
+                    return []
+        if range_str.isdigit():
+            idx = int(range_str)
+            return [idx] if idx < total else []
+
+        return []
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "accept-btn":
@@ -234,10 +314,22 @@ class ForkProposalModal(ModalScreen[Optional[ForkProposalResult]]):
             self.action_reject()
 
     def action_accept(self) -> None:
-        """Accept the fork proposal."""
+        """Accept the fork proposal with potentially edited initial prompt."""
+        # Get the edited initial prompt from the TextArea
+        prompt_area = self.query_one("#initial-prompt", TextArea)
+        edited_prompt = prompt_area.text
+
+        # Create a new proposal with the edited prompt
+        edited_proposal = ForkProposal(
+            name=self._proposal.name,
+            description=self._proposal.description,
+            context_plan=self._proposal.context_plan,
+            initial_prompt=edited_prompt,
+        )
+
         result = ForkProposalResult(
             accepted=True,
-            proposal=self._proposal,
+            proposal=edited_proposal,
         )
         self.dismiss(result)
 

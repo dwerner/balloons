@@ -495,6 +495,11 @@ def parse_fork_proposal(args: dict) -> ForkProposal | None:
         ForkProposal object, or None if parsing fails
     """
     try:
+        debug_log.info(
+            f"parse_fork_proposal received args",
+            category="fork",
+            details={"args_keys": list(args.keys()), "context_plan_len": len(args.get("context_plan", []))},
+        )
         name = args.get("name", "")
         description = args.get("description", "")
         initial_prompt = args.get("initial_prompt", "")

@@ -77,6 +77,22 @@ class LinkResult:
 
 
 @dataclass
+class ShellResult:
+    """Result of a shell command execution."""
+    success: bool
+    error: Optional[str] = None
+
+    # Command info
+    command: str = ""
+    output: str = ""
+    exit_code: int = 0
+    was_cancelled: bool = False
+
+    # Formatted prompt for Claude
+    prompt: str = ""
+
+
+@dataclass
 class BackendInfo:
     """Information about current and available backends."""
     current: str
@@ -440,4 +456,76 @@ class CommandExecutor:
             success=True,
             new_backend=backend_name,
             model=backend_config.model or "",
+        )
+
+    # =========================================================================
+    # Shell Operations
+    # =========================================================================
+
+    async def execute_shell(
+        self,
+        command: str,
+        working_directory: str | None = None,
+    ) -> ShellResult:
+        """Execute a shell command and capture output.
+
+        Runs the command asynchronously with color output enabled.
+        Returns the output formatted as a prompt for Claude.
+
+        Args:
+            command: Shell command to execute
+            working_directory: Directory to run command in (None = current)
+
+        Returns:
+            ShellResult with command output and formatted prompt
+        """
+        import asyncio
+        import os
+
+        if not command:
+            return ShellResult(success=False, error="No command specified")
+
+        # Set up environment with color support
+        env = os.environ.copy()
+        env.update({
+            "FORCE_COLOR": "1",
+            "CLICOLOR_FORCE": "1",
+            "TERM": "xterm-256color",
+        })
+
+        try:
+            process = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=env,
+                cwd=working_directory,
+            )
+            stdout, _ = await process.communicate()
+            output = stdout.decode("utf-8", errors="replace").rstrip()
+            exit_code = process.returncode or 0
+
+        except asyncio.CancelledError:
+            return ShellResult(
+                success=False,
+                error="Command cancelled",
+                command=command,
+                was_cancelled=True,
+            )
+        except Exception as e:
+            return ShellResult(
+                success=False,
+                error=str(e),
+                command=command,
+            )
+
+        # Format output as prompt for Claude
+        prompt = f"# User executed shell command:\n```bash\n$ {command}\n```\n# Output:\n```\n{output}\n```"
+
+        return ShellResult(
+            success=True,
+            command=command,
+            output=output,
+            exit_code=exit_code,
+            prompt=prompt,
         )

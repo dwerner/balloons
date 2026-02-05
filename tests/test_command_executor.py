@@ -14,6 +14,7 @@ from core.command_executor import (
     LinkTarget,
     BackendResult,
     BackendInfo,
+    ShellResult,
 )
 from session import Session, Turn
 from models import ArchiveBlock, ArchiveSummary, TextBlock, ContextMode
@@ -342,3 +343,112 @@ class TestCommandExecutorBackend:
         assert not result.success
         assert "Unknown backend" in result.error
         assert "claude" in result.error  # Lists available backends
+
+
+class TestShellResult:
+    """Tests for ShellResult dataclass."""
+
+    def test_success_result(self):
+        """Test creating a successful shell result."""
+        result = ShellResult(
+            success=True,
+            command="ls -la",
+            output="file1.txt\nfile2.txt",
+            exit_code=0,
+            prompt="# User executed...",
+        )
+
+        assert result.success
+        assert result.error is None
+        assert result.command == "ls -la"
+        assert result.output == "file1.txt\nfile2.txt"
+        assert result.exit_code == 0
+        assert not result.was_cancelled
+
+    def test_error_result(self):
+        """Test creating an error shell result."""
+        result = ShellResult(
+            success=False,
+            error="Command not found",
+            command="nonexistent",
+        )
+
+        assert not result.success
+        assert result.error == "Command not found"
+        assert result.command == "nonexistent"
+
+    def test_cancelled_result(self):
+        """Test creating a cancelled shell result."""
+        result = ShellResult(
+            success=False,
+            error="Command cancelled",
+            command="long-running",
+            was_cancelled=True,
+        )
+
+        assert not result.success
+        assert result.was_cancelled
+
+
+@pytest.mark.asyncio
+class TestCommandExecutorShell:
+    """Tests for CommandExecutor shell operations."""
+
+    async def test_execute_shell_no_command(self, executor):
+        """Test shell fails without a command."""
+        result = await executor.execute_shell("")
+
+        assert not result.success
+        assert "No command specified" in result.error
+
+    async def test_execute_shell_simple_command(self, executor):
+        """Test executing a simple shell command."""
+        result = await executor.execute_shell("echo hello")
+
+        assert result.success
+        assert result.command == "echo hello"
+        assert "hello" in result.output
+        assert result.exit_code == 0
+        assert "echo hello" in result.prompt
+        assert "hello" in result.prompt
+
+    async def test_execute_shell_with_working_dir(self, executor, temp_dir):
+        """Test executing command in specific directory."""
+        result = await executor.execute_shell("pwd", working_directory=str(temp_dir))
+
+        assert result.success
+        assert str(temp_dir) in result.output
+
+    async def test_execute_shell_captures_stderr(self, executor):
+        """Test that stderr is captured in output."""
+        result = await executor.execute_shell("ls /nonexistent_dir_12345 2>&1 || true")
+
+        assert result.success
+        # Error message should be in output (stderr redirected to stdout)
+
+    async def test_execute_shell_nonzero_exit(self, executor):
+        """Test command with non-zero exit code still succeeds."""
+        result = await executor.execute_shell("exit 42")
+
+        assert result.success  # Command ran, even if it returned non-zero
+        assert result.exit_code == 42
+
+    async def test_execute_shell_invalid_command(self, executor):
+        """Test executing an invalid command."""
+        # Command that will fail to execute
+        result = await executor.execute_shell("/nonexistent_binary_xyz")
+
+        # Should still succeed (command ran), but with error in output
+        assert result.success
+        assert result.exit_code != 0
+
+    async def test_execute_shell_prompt_format(self, executor):
+        """Test the prompt format includes command and output."""
+        result = await executor.execute_shell("echo test_output")
+
+        assert result.success
+        assert "# User executed shell command:" in result.prompt
+        assert "```bash" in result.prompt
+        assert "$ echo test_output" in result.prompt
+        assert "# Output:" in result.prompt
+        assert "test_output" in result.prompt

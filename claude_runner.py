@@ -18,8 +18,9 @@ from core.tool_executor import execute_tool
 from core.link_tools import LINK_TOOL_NAMES
 
 # Regex to match <balloons-tool>...</balloons-tool> blocks
+# Use greedy match for JSON content since {.*?} cuts off at first } which breaks nested objects
 BALLOONS_TOOL_RE = re.compile(
-    r'<balloons-tool>\s*({.*?})\s*</balloons-tool>',
+    r'<balloons-tool>\s*(\{.*\})\s*</balloons-tool>',
     re.DOTALL
 )
 
@@ -86,15 +87,30 @@ class ClaudeRunner(BaseRunner):
             return None, None, None
 
         try:
-            tool_call = json.loads(match.group(1))
+            captured = match.group(1)
+            debug_log.info(
+                f"Parsing balloons-tool JSON",
+                category="tool",
+                details={"captured_len": len(captured), "captured_preview": captured[:200]},
+                run_id=self._run_id,
+            )
+            tool_call = json.loads(captured)
             tool_name = tool_call.get("name")
             tool_args = tool_call.get("args", {})
+            if tool_name == "propose_fork":
+                debug_log.info(
+                    f"propose_fork parsed",
+                    category="tool",
+                    details={"context_plan_len": len(tool_args.get("context_plan", []))},
+                    run_id=self._run_id,
+                )
             tool_id = f"balloons-{uuid.uuid4().hex[:12]}"
             return tool_name, tool_id, tool_args
         except json.JSONDecodeError as e:
             debug_log.warning(
                 f"Failed to parse balloons-tool JSON: {e}",
                 category="tool",
+                details={"captured": match.group(1)[:500] if match else "no match"},
                 run_id=self._run_id,
             )
             return None, None, None
@@ -436,6 +452,12 @@ class ClaudeRunner(BaseRunner):
                             # Check for balloons-tool blocks in text
                             self._text_buffer += text
                             if "<balloons-tool>" in self._text_buffer and "</balloons-tool>" in self._text_buffer:
+                                debug_log.info(
+                                    f"Found complete balloons-tool block",
+                                    category="tool",
+                                    details={"buffer_len": len(self._text_buffer), "buffer_preview": self._text_buffer[:500]},
+                                    run_id=self._run_id,
+                                )
                                 async for event in self._handle_balloons_tool(self._text_buffer, working_dir):
                                     yield event
                                 self._text_buffer = ""
