@@ -45,6 +45,8 @@ from models import (
     InterruptionBlock,
     ErrorBlock,
     LinkBlock,
+    ForkBlock,
+    MergeBlock,
     ContentBlock,
     ContextMode,
 )
@@ -96,6 +98,23 @@ class Archiver:
                 "linked_session_id": block.linked_session_id,
                 "summary": block.summary,
                 "is_orphaned": block.is_orphaned,
+            }
+        elif isinstance(block, ForkBlock):
+            return {
+                "type": "fork",
+                "fork_id": block.fork_id,
+                "child_session_id": block.child_session_id,
+                "fork_name": block.fork_name,
+                "prompt": block.prompt,
+                "status": block.status,
+            }
+        elif isinstance(block, MergeBlock):
+            return {
+                "type": "merge",
+                "merge_id": block.merge_id,
+                "child_session_id": block.child_session_id,
+                "fork_name": block.fork_name,
+                "message": block.message,
             }
         elif isinstance(block, ArchiveBlock):
             data = {
@@ -150,6 +169,21 @@ class Archiver:
                 linked_session_id=data.get("linked_session_id", ""),
                 summary=data.get("summary", ""),
                 is_orphaned=data.get("is_orphaned", False),
+            )
+        elif block_type == "fork":
+            return ForkBlock(
+                fork_id=data.get("fork_id", ""),
+                child_session_id=data.get("child_session_id", ""),
+                fork_name=data.get("fork_name", ""),
+                prompt=data.get("prompt", ""),
+                status=data.get("status", "active"),
+            )
+        elif block_type == "merge":
+            return MergeBlock(
+                merge_id=data.get("merge_id", ""),
+                child_session_id=data.get("child_session_id", ""),
+                fork_name=data.get("fork_name", ""),
+                message=data.get("message", ""),
             )
         elif block_type == "archive":
             structured_summary = None

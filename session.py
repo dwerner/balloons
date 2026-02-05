@@ -9,7 +9,7 @@ from typing import Optional, AsyncIterator
 
 import aiofiles
 
-from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock, ArchiveSummary, ContentBlock, ContextMode
+from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, ArchiveBlock, ArchiveSummary, ContentBlock, ContextMode
 
 
 SESSIONS_DIR = Path.home() / ".balloons" / "sessions"
@@ -640,6 +640,87 @@ class Session:
         )
         return self.add_turn(role="system", content_block=link_block)
 
+    # =========================================================================
+    # Fork/Merge Turn Methods
+    # =========================================================================
+
+    def add_fork_turn(
+        self,
+        fork_id: str,
+        child_session_id: str,
+        fork_name: str,
+        prompt: str,
+        status: str = "active",
+    ) -> Turn:
+        """Add a fork marker as a turn in the conversation.
+
+        This records where a fork was created, allowing nested fork history
+        to propagate through merges.
+        """
+        fork_block = ForkBlock(
+            fork_id=fork_id,
+            child_session_id=child_session_id,
+            fork_name=fork_name,
+            prompt=prompt,
+            status=status,
+        )
+        return self.add_turn(role="system", content_block=fork_block)
+
+    def add_merge_turn(
+        self,
+        merge_id: str,
+        child_session_id: str,
+        fork_name: str,
+        message: str,
+    ) -> Turn:
+        """Add a merge marker as a turn in the conversation.
+
+        This records where a fork was merged back, including the merge summary.
+        Nested merge blocks propagate through subsequent merges.
+        """
+        merge_block = MergeBlock(
+            merge_id=merge_id,
+            child_session_id=child_session_id,
+            fork_name=fork_name,
+            message=message,
+        )
+        return self.add_turn(role="system", content_block=merge_block)
+
+    def get_all_fork_blocks(self) -> list[tuple[int, ForkBlock]]:
+        """Get all fork blocks with their turn indices.
+
+        Returns:
+            List of (turn_index, ForkBlock) tuples
+        """
+        forks = []
+        for i, turn in enumerate(self.turns):
+            if isinstance(turn.content_block, ForkBlock):
+                forks.append((i, turn.content_block))
+        return forks
+
+    def get_all_merge_blocks(self) -> list[tuple[int, MergeBlock]]:
+        """Get all merge blocks with their turn indices.
+
+        Returns:
+            List of (turn_index, MergeBlock) tuples
+        """
+        merges = []
+        for i, turn in enumerate(self.turns):
+            if isinstance(turn.content_block, MergeBlock):
+                merges.append((i, turn.content_block))
+        return merges
+
+    def update_fork_status(self, child_session_id: str, status: str) -> bool:
+        """Update the status of a fork block.
+
+        Returns True if found and updated, False if not found.
+        """
+        for turn in self.turns:
+            if isinstance(turn.content_block, ForkBlock) and turn.content_block.child_session_id == child_session_id:
+                turn.content_block.status = status
+                return True
+        return False
+
     def get_all_link_ids(self) -> list[str]:
         """Get all link IDs from LinkBlock turns."""
         link_ids = []
@@ -783,6 +864,23 @@ class Session:
                 "linked_session_id": block.linked_session_id,
                 "summary": block.summary,
                 "is_orphaned": block.is_orphaned,
+            }
+        elif isinstance(block, ForkBlock):
+            return {
+                "type": "fork",
+                "fork_id": block.fork_id,
+                "child_session_id": block.child_session_id,
+                "fork_name": block.fork_name,
+                "prompt": block.prompt,
+                "status": block.status,
+            }
+        elif isinstance(block, MergeBlock):
+            return {
+                "type": "merge",
+                "merge_id": block.merge_id,
+                "child_session_id": block.child_session_id,
+                "fork_name": block.fork_name,
+                "message": block.message,
             }
         elif isinstance(block, ArchiveBlock):
             data = {
@@ -937,6 +1035,21 @@ class Session:
                 linked_session_id=data.get("linked_session_id", ""),
                 summary=data.get("summary", ""),
                 is_orphaned=data.get("is_orphaned", False),
+            )
+        elif block_type == "fork":
+            return ForkBlock(
+                fork_id=data.get("fork_id", ""),
+                child_session_id=data.get("child_session_id", ""),
+                fork_name=data.get("fork_name", ""),
+                prompt=data.get("prompt", ""),
+                status=data.get("status", "active"),
+            )
+        elif block_type == "merge":
+            return MergeBlock(
+                merge_id=data.get("merge_id", ""),
+                child_session_id=data.get("child_session_id", ""),
+                fork_name=data.get("fork_name", ""),
+                message=data.get("message", ""),
             )
         elif block_type == "archive":
             structured_summary = None

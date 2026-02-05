@@ -71,6 +71,35 @@ class LinkBlock:
 
 
 @dataclass
+class ForkBlock:
+    """Marker indicating where a fork was created.
+
+    Stored as a turn in the parent session's history. When nested forks exist,
+    these blocks persist through merges, preserving the full fork history.
+    """
+    type: str = "fork"
+    fork_id: str = ""  # UUID for this fork (same as child session ID typically)
+    child_session_id: str = ""  # The forked session's ID
+    fork_name: str = ""  # User-friendly name for the fork
+    prompt: str = ""  # The prompt that started the fork
+    status: str = "active"  # "active", "merged", "abandoned"
+
+
+@dataclass
+class MergeBlock:
+    """Marker indicating where a fork was merged back.
+
+    Stored as a turn in the parent session's history. Contains the merge summary,
+    allowing nested merge info to propagate when sessions are re-merged.
+    """
+    type: str = "merge"
+    merge_id: str = ""  # UUID for this merge event
+    child_session_id: str = ""  # The fork session that was merged
+    fork_name: str = ""  # Name of the fork
+    message: str = ""  # Summary of what was accomplished in the fork
+
+
+@dataclass
 class ArchiveSummary:
     """Structured summary of archived content.
 
@@ -117,7 +146,7 @@ class ArchiveBlock:
 
 
 # Union type for all content block types
-ContentBlock = Union[TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock]
+ContentBlock = Union[TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, ArchiveBlock]
 
 
 @dataclass

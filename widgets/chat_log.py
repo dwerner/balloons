@@ -18,7 +18,7 @@ from .fork_marker import ForkMarker
 from .merge_marker import MergeMarker
 from .link_marker import LinkMarker
 from .archive_marker import ArchiveMarker
-from models import TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock
+from models import TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, ArchiveBlock
 from core.formatter import format_edit_as_diff, guess_language
 from core.json_stream import StreamingJsonParser
 from session import Session
@@ -1277,6 +1277,25 @@ class ChatLogView(VerticalScroll):
                             archive_block=block,
                             turn_id=turn_id,
                             turn_index=turn_idx,
+                        )
+                        self.mount(widget)
+                    elif isinstance(block, ForkBlock):
+                        # Render ForkBlock as ForkMarker
+                        widget = ForkMarker(
+                            prompt=block.prompt,
+                            child_session_id=block.child_session_id,
+                            fork_name=block.fork_name,
+                            status=block.status,
+                            turn_id=turn_id,
+                        )
+                        self.mount(widget)
+                    elif isinstance(block, MergeBlock):
+                        # Render MergeBlock as MergeMarker
+                        widget = MergeMarker(
+                            message=block.message,
+                            child_session_id=block.child_session_id,
+                            fork_name=block.fork_name,
+                            turn_id=turn_id,
                         )
                         self.mount(widget)
             else:
