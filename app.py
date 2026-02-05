@@ -32,7 +32,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, RequestPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MessageStash, StashPopup
+from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, RequestPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, MessageStash, StashPopup
 from widgets.input_box import CompletionPopup
 from widgets.archive_marker import ArchiveMarker
 from claude_runner import ClaudeRunner
@@ -105,9 +105,9 @@ from core import (
 from core.summarizer import Summarizer
 from core.exceptions import BackendNotFoundError
 from core.context_grouper import group_messages_by_context_mode, build_context_messages
-from core.fork import ForkManager, ForkResult, MergeResult, DeriveResult, SwitchResult, ForkProposal
+from core.fork import ForkManager, ForkResult, MergeResult, DeriveResult, SwitchResult, ForkProposal, MergeProposal
 from core.command_executor import CommandExecutor, ArchiveResult, RehydrateResult, LinkResult, BackendResult, ShellResult
-from core.tool_executor import parse_fork_proposal
+from core.tool_executor import parse_fork_proposal, parse_merge_proposal
 from core.tree_state import TreeState, TreeEvent
 from tokenizer import count_tokens
 
@@ -619,6 +619,19 @@ class BalloonsApp(App):
                         ctx,
                     )
                     # Don't show normal tool UI for propose_fork
+                    return
+
+            # Intercept propose_merge tool - show modal before execution
+            if action.tool_name == "propose_merge" and is_active and action.tool_use_id.startswith("balloons-"):
+                proposal = parse_merge_proposal(action.tool_input)
+                if proposal:
+                    self._handle_merge_proposal(
+                        proposal,
+                        action.tool_use_id,
+                        session_id,
+                        ctx,
+                    )
+                    # Don't show normal tool UI for propose_merge
                     return
 
             if is_active:
@@ -2231,6 +2244,81 @@ class BalloonsApp(App):
             name=proposal.name,
             background=False,
         )
+
+    # ===== MERGE PROPOSAL HANDLING =====
+
+    def _handle_merge_proposal(
+        self,
+        proposal: MergeProposal,
+        tool_use_id: str,
+        session_id: str,
+        ctx: StreamingContext,
+    ) -> None:
+        """Handle a propose_merge tool call by showing the modal.
+
+        When the LLM calls propose_merge, we show a modal for the user to
+        accept, edit the summary, or reject the merge.
+        """
+        status_bar = self.query_one("#status-bar", StatusBar)
+        chat_log = self.query_one("#chat-log", ChatLogView)
+
+        # Validate that we're in a fork
+        if not self.session.is_fork():
+            status_bar.set_error("Cannot merge: not in a fork")
+            return
+
+        if self.session.is_merged():
+            status_bar.set_error("Cannot merge: fork already merged")
+            return
+
+        fork_name = self.session.get_fork_display_name()
+
+        def on_result(result: MergeProposalResult | None) -> None:
+            if result is None or not result.accepted:
+                # User rejected - inform Claude via chat
+                status_bar.set_status("Merge proposal rejected")
+                chat_log.add_user_message("[Merge proposal rejected by user]")
+                return
+
+            # User accepted - execute the merge with the (potentially edited) summary
+            summary = result.edited_summary or result.proposal.summary
+            asyncio.create_task(self._execute_merge_proposal(summary))
+
+        self.push_screen(
+            MergeProposalModal(proposal, fork_name=fork_name),
+            on_result,
+        )
+
+    async def _execute_merge_proposal(self, summary: str) -> None:
+        """Execute an accepted merge proposal with the given summary."""
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        # Validate merge via ForkManager
+        prep_result = self._fork_manager.prepare_merge(self.session)
+        if not prep_result.success:
+            status_bar.set_error(prep_result.error)
+            return
+
+        # Complete the merge with the provided summary (no need to generate)
+        result = self._fork_manager.complete_merge(
+            fork_session=prep_result.fork_session,
+            parent_session=prep_result.parent_session,
+            merge_message=summary,
+        )
+
+        # Switch to parent
+        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
+        self._manager._sessions[result.parent_session.id] = result.parent_session
+        self._manager._runners[result.parent_session.id] = self._create_session_runner(result.parent_session)
+        self._manager.set_active(result.parent_session.id)
+        chat_log.clear()
+        chat_log.load_history(result.parent_session.turns, session=result.parent_session)
+        context_tree.load_all_sessions(result.parent_session)
+        breadcrumb.set_session(result.parent_session)
+
+        status_bar.set_status(f"Merged from '{result.fork_name}'", animate=False)
 
     # ===== FORK/MERGE COMMANDS =====
 

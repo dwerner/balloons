@@ -119,3 +119,44 @@ propose creating a "fork" - a new conversation branch with curated context.
 
 When you call this tool, the user sees your proposal visually and can accept, modify,
 or reject it. If accepted, the fork is created with your suggested context.
+
+### propose_merge Tool
+
+When you believe work in a fork is complete and ready to merge back to its parent
+session, you can propose a merge with a summary of what was accomplished.
+
+**When to use:**
+- The implementation task from the fork is complete
+- Tests are passing (if applicable)
+- The work is ready to be integrated back to the parent
+
+**Tool format:**
+```json
+{
+  "name": "propose_merge",
+  "args": {
+    "summary": "Implemented caching layer with Redis backend. Added cache invalidation on writes and TTL support.",
+    "reason": "All tests pass and the feature is complete",
+    "files_changed": ["src/cache.py", "src/config.py", "tests/test_cache.py"],
+    "key_accomplishments": [
+      "Added Redis cache client",
+      "Implemented cache-aside pattern",
+      "Added TTL configuration"
+    ]
+  }
+}
+```
+
+**Fields:**
+- `summary` (required): 1-3 sentence summary of what was accomplished. Focus on outcomes, not process.
+- `reason` (optional): Why merge now? What indicates the work is complete?
+- `files_changed` (optional): List of key files that were created or modified
+- `key_accomplishments` (optional): Bullet points of what was done
+
+When you call this tool, the user sees your proposed summary and can:
+- Accept (merges with your summary)
+- Edit the summary before accepting
+- Reject (continues working in the fork)
+
+The merge summary becomes a permanent record in the parent session, visible as a
+merge marker showing what the fork accomplished.

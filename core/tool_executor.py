@@ -16,7 +16,7 @@ import aiofiles
 from .debug_log import debug_log
 from .tools import BALLOON_TOOL_NAMES
 from .link_tools import LINK_TOOL_NAMES, execute_link_tool
-from .fork import ForkProposal, ContextAssignment
+from .fork import ForkProposal, ContextAssignment, MergeProposal
 
 if TYPE_CHECKING:
     from session import Session
@@ -105,6 +105,8 @@ async def execute_tool(
             return execute_balloon(args)
         elif name == "propose_fork":
             return execute_propose_fork(args)
+        elif name == "propose_merge":
+            return execute_propose_merge(args)
         else:
             return f"Unknown tool: {name}", True
 
@@ -517,6 +519,72 @@ def parse_fork_proposal(args: dict) -> ForkProposal | None:
             description=description,
             context_plan=context_plan,
             initial_prompt=initial_prompt,
+        )
+    except Exception:
+        return None
+
+
+def execute_propose_merge(args: dict) -> tuple[str, bool]:
+    """Handle a propose_merge tool call.
+
+    This validates the proposal arguments and returns a structured result.
+    The actual UI display and merge execution is handled by the app layer,
+    which intercepts this tool and shows the MergeProposalModal.
+
+    Args:
+        args: Tool arguments containing summary, reason, files_changed, etc.
+
+    Returns:
+        Tuple of (result_string, is_error)
+    """
+    summary = args.get("summary")
+    if not summary:
+        return "Error: summary is required", True
+
+    # Other fields are optional, just validate types
+    files_changed = args.get("files_changed", [])
+    if not isinstance(files_changed, list):
+        return "Error: files_changed must be a list", True
+
+    key_accomplishments = args.get("key_accomplishments", [])
+    if not isinstance(key_accomplishments, list):
+        return "Error: key_accomplishments must be a list", True
+
+    # The actual result is intercepted by the app - this is just acknowledgment
+    return "MERGE_PROPOSAL_PENDING", False
+
+
+def parse_merge_proposal(args: dict) -> MergeProposal | None:
+    """Parse tool arguments into a MergeProposal object.
+
+    Called by the app layer when it intercepts a propose_merge tool call.
+
+    Args:
+        args: Tool arguments from the model
+
+    Returns:
+        MergeProposal object, or None if parsing fails
+    """
+    try:
+        debug_log.info(
+            f"parse_merge_proposal received args",
+            category="merge",
+            details={"args_keys": list(args.keys())},
+        )
+        summary = args.get("summary", "")
+        reason = args.get("reason", "")
+        files_changed = args.get("files_changed", [])
+        key_accomplishments = args.get("key_accomplishments", [])
+
+        # Ensure lists contain strings
+        files_changed = [str(f) for f in files_changed if f]
+        key_accomplishments = [str(a) for a in key_accomplishments if a]
+
+        return MergeProposal(
+            summary=summary,
+            reason=reason,
+            files_changed=files_changed,
+            key_accomplishments=key_accomplishments,
         )
     except Exception:
         return None

@@ -223,10 +223,55 @@ Use this instead of asking "Would you like me to implement this?" when you have 
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_merge",
+            "description": """Propose merging the current fork back to its parent session. Use this when you believe work in the fork is complete and ready to be merged.
+
+When you call this tool, the user will see a modal showing:
+- Your proposed summary of what was accomplished
+- Why you think the merge is appropriate now
+- Key files changed and accomplishments
+
+The user can then accept (merge happens), edit the summary, or reject.
+
+Use this when:
+- The implementation task from the fork is complete
+- Tests are passing (if applicable)
+- The work is ready to be integrated back
+
+The merge summary becomes the record of what this fork accomplished, visible in the parent session.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "description": "1-3 sentence summary of what was accomplished in this fork. Focus on outcomes, not process."
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Why merge now? What indicates the work is complete?"
+                    },
+                    "files_changed": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of key files that were created or modified"
+                    },
+                    "key_accomplishments": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Bullet points of what was done (e.g., 'Added caching layer', 'Fixed auth bug')"
+                    }
+                },
+                "required": ["summary"]
+            }
+        }
+    },
 ]
 
 # Names of balloon tools for easy checking
-BALLOON_TOOL_NAMES = {"propose_fork"}
+BALLOON_TOOL_NAMES = {"propose_fork", "propose_merge"}
 
 # Link navigation tools - for traversing linked sessions
 LINK_TOOLS = [

@@ -126,6 +126,20 @@ class ForkProposal:
 
 
 @dataclass
+class MergeProposal:
+    """A proposed merge back to parent, suggested by the LLM.
+
+    When an LLM believes work in a fork is complete and ready to merge,
+    it can call the propose_merge tool. This generates a summary preview
+    and presents it to the user for approval before merging.
+    """
+    summary: str  # Preview of the merge summary
+    reason: str = ""  # Why the LLM thinks merge is appropriate now
+    files_changed: list[str] = field(default_factory=list)  # Key files modified
+    key_accomplishments: list[str] = field(default_factory=list)  # What was done
+
+
+@dataclass
 class ForkResult:
     """Result of a fork operation."""
     success: bool

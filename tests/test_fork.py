@@ -10,7 +10,12 @@ from core.fork import (
     DeriveResult,
     SwitchResult,
     ForkProposal,
+    MergeProposal,
     ContextAssignment,
+)
+from core.tool_executor import (
+    execute_propose_merge,
+    parse_merge_proposal,
 )
 from models import Message, TextBlock, ContextMode
 
@@ -429,3 +434,134 @@ class TestForkProposal:
         result = proposal.resolve_exchange_indices(0)
 
         assert result == {}
+
+
+class TestMergeProposal:
+    """Tests for MergeProposal dataclass."""
+
+    def test_create_minimal(self):
+        """Minimal merge proposal with only summary."""
+        proposal = MergeProposal(summary="Fixed the bug")
+        assert proposal.summary == "Fixed the bug"
+        assert proposal.reason == ""
+        assert proposal.files_changed == []
+        assert proposal.key_accomplishments == []
+
+    def test_create_full(self):
+        """Full merge proposal with all fields."""
+        proposal = MergeProposal(
+            summary="Implemented caching layer",
+            reason="All tests pass",
+            files_changed=["cache.py", "config.py"],
+            key_accomplishments=["Added Redis client", "TTL support"],
+        )
+        assert proposal.summary == "Implemented caching layer"
+        assert proposal.reason == "All tests pass"
+        assert proposal.files_changed == ["cache.py", "config.py"]
+        assert proposal.key_accomplishments == ["Added Redis client", "TTL support"]
+
+
+class TestProposeMergeTool:
+    """Tests for the propose_merge tool executor."""
+
+    def test_execute_missing_summary(self):
+        """Should error if summary is missing."""
+        result, is_error = execute_propose_merge({})
+        assert is_error
+        assert "summary is required" in result
+
+    def test_execute_empty_summary(self):
+        """Should error if summary is empty."""
+        result, is_error = execute_propose_merge({"summary": ""})
+        assert is_error
+        assert "summary is required" in result
+
+    def test_execute_invalid_files_changed_type(self):
+        """Should error if files_changed is not a list."""
+        result, is_error = execute_propose_merge({
+            "summary": "Test",
+            "files_changed": "not-a-list",
+        })
+        assert is_error
+        assert "files_changed must be a list" in result
+
+    def test_execute_invalid_accomplishments_type(self):
+        """Should error if key_accomplishments is not a list."""
+        result, is_error = execute_propose_merge({
+            "summary": "Test",
+            "key_accomplishments": "not-a-list",
+        })
+        assert is_error
+        assert "key_accomplishments must be a list" in result
+
+    def test_execute_valid_minimal(self):
+        """Valid minimal proposal should return pending."""
+        result, is_error = execute_propose_merge({"summary": "Test summary"})
+        assert not is_error
+        assert result == "MERGE_PROPOSAL_PENDING"
+
+    def test_execute_valid_full(self):
+        """Valid full proposal should return pending."""
+        result, is_error = execute_propose_merge({
+            "summary": "Test summary",
+            "reason": "Work is done",
+            "files_changed": ["file1.py", "file2.py"],
+            "key_accomplishments": ["Done thing 1", "Done thing 2"],
+        })
+        assert not is_error
+        assert result == "MERGE_PROPOSAL_PENDING"
+
+
+class TestParseMergeProposal:
+    """Tests for parse_merge_proposal function."""
+
+    def test_parse_minimal(self):
+        """Parse minimal proposal."""
+        proposal = parse_merge_proposal({"summary": "Test"})
+        assert proposal is not None
+        assert proposal.summary == "Test"
+        assert proposal.reason == ""
+        assert proposal.files_changed == []
+        assert proposal.key_accomplishments == []
+
+    def test_parse_full(self):
+        """Parse full proposal."""
+        proposal = parse_merge_proposal({
+            "summary": "Implemented feature X",
+            "reason": "Tests pass",
+            "files_changed": ["a.py", "b.py"],
+            "key_accomplishments": ["Added X", "Fixed Y"],
+        })
+        assert proposal is not None
+        assert proposal.summary == "Implemented feature X"
+        assert proposal.reason == "Tests pass"
+        assert proposal.files_changed == ["a.py", "b.py"]
+        assert proposal.key_accomplishments == ["Added X", "Fixed Y"]
+
+    def test_parse_filters_empty_values(self):
+        """Empty strings in lists should be filtered."""
+        proposal = parse_merge_proposal({
+            "summary": "Test",
+            "files_changed": ["a.py", "", "b.py", None],
+            "key_accomplishments": ["Done", "", None, "Also done"],
+        })
+        assert proposal is not None
+        assert proposal.files_changed == ["a.py", "b.py"]
+        assert proposal.key_accomplishments == ["Done", "Also done"]
+
+    def test_parse_converts_to_strings(self):
+        """Non-string values should be converted to strings."""
+        proposal = parse_merge_proposal({
+            "summary": "Test",
+            "files_changed": [123, True],
+            "key_accomplishments": [456],
+        })
+        assert proposal is not None
+        assert proposal.files_changed == ["123", "True"]
+        assert proposal.key_accomplishments == ["456"]
+
+    def test_parse_empty_args(self):
+        """Empty args should return proposal with empty summary."""
+        proposal = parse_merge_proposal({})
+        assert proposal is not None
+        assert proposal.summary == ""

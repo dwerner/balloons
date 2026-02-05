@@ -121,17 +121,37 @@ class NestedTreeWidget(Tree):
         """Fired when user types : to jump to text entry with colon."""
         pass
 
+    class ExchangeJumpRequested(Message):
+        """Fired when user presses [ or ] on an exchange to jump to first/last turn."""
+        def __init__(self, node_data: dict, jump_to: str) -> None:
+            self.node_data = node_data
+            self.jump_to = jump_to  # "first" or "last"
+            super().__init__()
+
     # --- Click handling ---
 
     def on_click(self, event: Click) -> None:
-        """Handle ctrl+click on session to create link command.
+        """Handle clicks on tree nodes.
+
+        - Click on exchange navigation controls (⏮/⏭): jump to first/last turn
+        - Ctrl+Click on session: create link command
 
         Uses on_click (message handler) rather than _on_click (override)
         to avoid interfering with the Tree's default click handling.
-        Only stops propagation for ctrl+click on valid sessions.
         """
+        meta = event.style.meta
+
+        # Check for exchange navigation control clicks
+        if "exchange_jump" in meta:
+            if "line" in meta:
+                node = self.get_node_at_line(meta["line"])
+                if node and node.data and node.data.get("type") == "exchange":
+                    self.post_message(self.ExchangeJumpRequested(node.data, meta["exchange_jump"]))
+                    event.stop()
+                    return
+
+        # Ctrl+Click on session: create link
         if event.ctrl:
-            meta = event.style.meta
             if "line" in meta:
                 node = self.get_node_at_line(meta["line"])
                 if node and node.data:
@@ -207,6 +227,22 @@ class NestedTreeWidget(Tree):
             event.prevent_default()
             event.stop()
             return
+        elif event.key == "left_square_bracket":
+            # Jump to first turn in exchange
+            node = self.cursor_node
+            if node and node.data and node.data.get("type") == "exchange":
+                self.post_message(self.ExchangeJumpRequested(node.data, "first"))
+                event.prevent_default()
+                event.stop()
+                return
+        elif event.key == "right_square_bracket":
+            # Jump to last turn in exchange
+            node = self.cursor_node
+            if node and node.data and node.data.get("type") == "exchange":
+                self.post_message(self.ExchangeJumpRequested(node.data, "last"))
+                event.prevent_default()
+                event.stop()
+                return
         elif event.key == "right":
             node = self.cursor_node
             if node and node._allow_expand and not node.is_expanded:
@@ -706,11 +742,22 @@ class NestedTreeView(Vertical):
         if not session_data or not session_data.turns:
             return
 
-        # Clear existing turn nodes for this session only
+        # Clear ALL turn-related children from session node (turns AND exchange groups)
+        # to prevent double-nesting when streaming adds flat nodes and then
+        # SESSION_LOADED triggers grouped rebuild
         keys_to_remove = [k for k in self._turn_nodes if k[0] == session_id]
         for key in keys_to_remove:
-            node = self._turn_nodes.pop(key)
-            node.remove()
+            del self._turn_nodes[key]
+
+        # Remove all children that are turns or exchanges (keep fork sessions)
+        children_to_remove = []
+        for child in session_node.children:
+            if child.data:
+                node_type = child.data.get("type")
+                if node_type in ("turn", "exchange"):
+                    children_to_remove.append(child)
+        for child in children_to_remove:
+            child.remove()
 
         # Add turn nodes using the grouping logic
         self._add_turns_to_node(session_node, session_id, session_data.turns)
@@ -895,11 +942,12 @@ class NestedTreeView(Vertical):
         else:
             return f"{prefix}{streaming}{label}"
 
-    def _make_exchange_label(self, group: list[TurnData]) -> str:
+    def _make_exchange_label(self, group: list[TurnData]) -> Text:
         """Create a label for an exchange group node.
 
         Shows the first turn's content preview and a count of turns in the exchange.
         Shows an error indicator if any turn in the exchange has an ErrorBlock.
+        Includes clickable ⏮ and ⏭ controls to jump to first/last turn.
         """
         turn_count = len(group)
         first_turn = group[0]
@@ -917,10 +965,28 @@ class NestedTreeView(Vertical):
                 if not has_error:
                     has_error = any(isinstance(b, ErrorBlock) for b in turn.content_blocks)
 
-        tool_indicator = f" [cyan]🔧{tool_count}[/]" if tool_count > 0 else ""
-        error_indicator = " [yellow]⚠[/]" if has_error else ""
+        # Build the label as a Text object with clickable navigation controls
+        label = Text()
+        label.append(f"⟨{turn_count}⟩", style="dim")
 
-        return f"[dim]⟨{turn_count}⟩[/]{tool_indicator}{error_indicator} {preview}"
+        if tool_count > 0:
+            label.append(f" 🔧{tool_count}", style="cyan")
+
+        if has_error:
+            label.append(" ⚠", style="yellow")
+
+        # Add clickable navigation controls for exchanges with multiple turns
+        if turn_count > 1:
+            label.append(" ")
+            # First turn button - clickable with meta
+            label.append("⏮", style=Style(color="blue", meta={"exchange_jump": "first"}))
+            label.append(" ")
+            # Last turn button - clickable with meta
+            label.append("⏭", style=Style(color="blue", meta={"exchange_jump": "last"}))
+
+        label.append(f" {preview}")
+
+        return label
 
     def _make_turn_label(
         self,
@@ -1074,6 +1140,38 @@ class NestedTreeView(Vertical):
         """Bubble up colon pressed to jump to text entry."""
         self.post_message(self.ColonPressed())
 
+    def on_nested_tree_exchange_jump_requested(self, event: NestedTreeWidget.ExchangeJumpRequested) -> None:
+        """Handle [ and ] keys to jump to first/last turn in exchange."""
+        session_id = event.node_data.get("session_id")
+        turn_indices = event.node_data.get("turn_indices", [])
+        if not session_id or not turn_indices:
+            return
+
+        # Select the first or last turn index
+        if event.jump_to == "first":
+            target_idx = turn_indices[0]
+        else:  # "last"
+            target_idx = turn_indices[-1]
+
+        # Find and scroll to the turn node
+        turn_node = self._turn_nodes.get((session_id, target_idx))
+        if turn_node:
+            tree = self.query_one("#nested-tree-widget", NestedTreeWidget)
+            tree.select_node(turn_node)
+            tree.scroll_to_node(turn_node)
+
+            # Also fire TurnInspected so chat log scrolls to the turn
+            turn_data = self._state.get_turn(session_id, target_idx)
+            if turn_data:
+                self.post_message(self.TurnInspected({
+                    "type": "turn",
+                    "role": turn_data.role,
+                    "content": turn_data.content,
+                    "content_blocks": turn_data.content_blocks,
+                    "turn_idx": target_idx,
+                    "scroll_to_top": event.jump_to == "first",
+                }, session_id))
+
     def on_tree_node_expanded(self, event) -> None:
         """Handle node expansion - request session load if not loaded."""
         node_data = event.node.data
@@ -1116,7 +1214,7 @@ class NestedTreeView(Vertical):
         turn_node = self._turn_nodes.get((session_id, turn_idx))
         if turn_node:
             tree.select_node(turn_node)
-            turn_node.scroll_visible()
+            tree.scroll_to_node(turn_node)
             return True
 
         return False

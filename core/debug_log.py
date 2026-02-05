@@ -29,6 +29,7 @@ class LogEntry:
     level: LogLevel
     message: str
     timestamp: str
+    seq: int = 0  # Monotonic sequence number for strict ordering
     session_id: str = ""
     category: str = ""  # "process", "stderr", "json", "event", "stream"
     details: dict = field(default_factory=dict)
@@ -59,6 +60,7 @@ class DebugLog:
             cls._instance._listeners = []
             cls._instance._log_file: Path | None = None
             cls._instance._enabled = True
+            cls._instance._seq_counter = 0  # Monotonic sequence counter
         return cls._instance
 
     @property
@@ -100,6 +102,7 @@ class DebugLog:
             return
         try:
             log_line = json.dumps({
+                "seq": entry.seq,
                 "timestamp": entry.timestamp,
                 "level": entry.level.value,
                 "message": entry.message,
@@ -139,11 +142,13 @@ class DebugLog:
         details: dict | None = None,
         run_id: str = "",
     ) -> LogEntry:
-        """Create a log entry with current timestamp."""
+        """Create a log entry with current timestamp and sequence number."""
+        self._seq_counter += 1
         return LogEntry(
             level=level,
             message=message,
             timestamp=datetime.now().strftime("%H:%M:%S.%f")[:-3],
+            seq=self._seq_counter,
             session_id=session_id,
             category=category,
             details=details or {},

@@ -92,6 +92,7 @@ from .command_executor import (
     BackendInfo,
 )
 from .json_stream import StreamingJsonParser
+from .stream_buffer import StreamBuffer, Timer, TimerFactory
 
 __all__ = [
     # Commands
@@ -212,4 +213,8 @@ __all__ = [
     "BackendNotFoundError",
     # Link tools
     "execute_link_tool",
+    # Stream buffer
+    "StreamBuffer",
+    "Timer",
+    "TimerFactory",
 ]

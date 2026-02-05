@@ -17,6 +17,7 @@ from .merge_marker import MergeMarker
 from .link_marker import LinkMarker
 from .breadcrumb import Breadcrumb
 from .fork_proposal_modal import ForkProposalModal, ForkProposalResult
+from .merge_proposal_modal import MergeProposalModal, MergeProposalResult
 
 # Backwards compatibility aliases
 ContextTree = ContextTreeView
@@ -57,4 +58,6 @@ __all__ = [
     "Breadcrumb",
     "ForkProposalModal",
     "ForkProposalResult",
+    "MergeProposalModal",
+    "MergeProposalResult",
 ]
