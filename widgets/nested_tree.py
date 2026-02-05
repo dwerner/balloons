@@ -23,7 +23,6 @@ from datetime import datetime
 from session import Session
 from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock, ErrorBlock, ArchiveBlock
 from core.tree_state import TreeState, TreeEvent, SessionData, TurnData
-from tokenizer import count_tokens
 
 if TYPE_CHECKING:
     pass
@@ -409,6 +408,13 @@ class NestedTreeView(Vertical):
             session_id = data.get("session_id")
             if session_id:
                 self._populate_session_turns(session_id)
+
+        elif event == TreeEvent.SESSION_UPDATED:
+            # Session data changed (e.g., cached_context_tokens updated after archive)
+            # Re-render the session label to show new values
+            session_id = data.get("session_id")
+            if session_id:
+                self._update_session_label(session_id)
 
         elif event == TreeEvent.STREAMING_STARTED:
             session_id = data.get("session_id")
@@ -798,7 +804,11 @@ class NestedTreeView(Vertical):
         session_node.label = self._make_session_label(session_data, is_current)
 
     def _update_root_label(self) -> None:
-        """Update root label with token counts."""
+        """Update root label with token counts.
+
+        Token counts come from TreeState (calculated by app from compiled context).
+        This ensures consistency with context_tree.py and status bar.
+        """
         tree = self.query_one("#nested-tree-widget", NestedTreeWidget)
 
         current_id = self._state.get_current_session_id()
@@ -811,22 +821,17 @@ class NestedTreeView(Vertical):
             tree.root.label = "[bold]Sessions[/]"
             return
 
-        # Calculate tokens
-        total_tokens = 0
-        selected_tokens = 0
+        # Build turn_modes for SelectionChanged message
         turn_modes: dict[int, str] = {}
-
         for turn in session_data.turns:
-            content = f"{'User' if turn.role == 'user' else 'Assistant'}: {turn.content}"
-            tokens = count_tokens(content)
-            total_tokens += tokens
-
             mode = self._state.get_context_mode(current_id, turn.idx)
             turn_modes[turn.idx + 1] = mode.name
-            if mode != ContextMode.DROP:
-                selected_tokens += tokens
 
-        tree.root.label = f"[bold]Context:[/] {selected_tokens:,} / {total_tokens:,} [dim]tokens[/]"
+        # Get token counts from TreeState (calculated by app from compiled context)
+        # This ensures consistency with context_tree.py and status bar
+        selected_tokens, total_tokens = self._state.get_context_tokens()
+
+        tree.root.label = f"[bold]Context:[/] {selected_tokens:,} [dim]tokens[/]"
 
         # Post selection changed message
         selected_count = sum(
@@ -1014,6 +1019,7 @@ class NestedTreeView(Vertical):
             turn_indices = event.node_data.get("turn_indices", [])
             if turn_indices:
                 # Get first turn in exchange to scroll to
+                # Use scroll_to_top=True so the first turn is at the top of viewport
                 first_turn_idx = turn_indices[0]
                 turn_data = self._state.get_turn(session_id, first_turn_idx)
                 if turn_data:
@@ -1023,6 +1029,7 @@ class NestedTreeView(Vertical):
                         "content": turn_data.content,
                         "content_blocks": turn_data.content_blocks,
                         "turn_idx": first_turn_idx,
+                        "scroll_to_top": True,  # Exchange clicks should scroll first turn to top
                     }, session_id))
 
     def on_nested_tree_select_all_requested(self, event: NestedTreeWidget.SelectAllRequested) -> None:

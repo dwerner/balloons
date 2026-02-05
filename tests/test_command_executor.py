@@ -28,16 +28,25 @@ def temp_dir():
 
 
 @pytest.fixture
+def temp_sessions_dir(tmp_path):
+    """Use a temporary directory for sessions to avoid polluting real sessions."""
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    with patch("session.SESSIONS_DIR", sessions_dir), \
+         patch("session.INDEX_FILE", sessions_dir / "index.json"):
+        yield sessions_dir
+
+
+@pytest.fixture
 def executor():
     """Create a CommandExecutor instance."""
     return CommandExecutor()
 
 
 @pytest.fixture
-def sample_session(temp_dir):
+def sample_session(temp_dir, temp_sessions_dir):
     """Create a sample session with some turns."""
     session = Session()
-    session._storage_dir = temp_dir  # Override storage for testing
 
     # Add some turns (Turn takes content_block, not content)
     session.turns = [

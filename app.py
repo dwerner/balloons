@@ -32,7 +32,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, RequestPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult
+from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, RequestPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MessageStash, StashPopup
 from widgets.input_box import CompletionPopup
 from widgets.archive_marker import ArchiveMarker
 from claude_runner import ClaudeRunner
@@ -78,6 +78,9 @@ from core import (
     RehydrateCommand,
     ReindexCommand,
     FollowCommand,
+    StashCommand,
+    PopCommand,
+    ClearAllSessionsCommand,
     debug_log,
     create_runner,
     # Streaming
@@ -166,6 +169,14 @@ class BalloonsApp(App):
         width: auto;
         max-width: 40;
     }
+
+    #stash-popup {
+        display: none;
+        margin-bottom: 0;
+        margin-left: 1;
+        width: auto;
+        max-width: 60;
+    }
     """
 
     BINDINGS = [
@@ -178,6 +189,7 @@ class BalloonsApp(App):
         Binding("ctrl+r", "toggle_requests", "Toggle Requests", show=True),
         Binding("ctrl+g", "toggle_debug", "Debug", show=True),
         Binding("ctrl+p", "show_preferences", "Preferences", show=True),
+        Binding("ctrl+s", "stash_toggle", "Stash", show=False),
         Binding("ctrl+left", "resize_tree(-5)", "Shrink Tree", show=False),
         Binding("ctrl+right", "resize_tree(5)", "Grow Tree", show=False),
         Binding("ctrl+end", "scroll_to_bottom", "Follow", show=False),
@@ -226,6 +238,8 @@ class BalloonsApp(App):
         # Debounce timer for context token updates during typing
         self._token_update_timer = None
         self._pending_token_text = ""
+        # Message stash for deferred drafts
+        self._message_stash = MessageStash()
 
     @property
     def session(self) -> Session | None:
@@ -304,6 +318,9 @@ class BalloonsApp(App):
                     pass
             # TODO: Calculate total_tokens from all session turns if needed
 
+            # Update TreeState's SessionData so tree label shows new value
+            self._tree_state.update_session_tokens(self.session.id, selected_tokens)
+
         self._tree_state.set_context_tokens(selected_tokens, total_tokens)
 
     def _calculate_context_tokens(self, pending_prompt: str = "") -> int:
@@ -376,6 +393,7 @@ class BalloonsApp(App):
             with Vertical(id="input-area"):
                 yield HorizontalSplitter(id="input-splitter")
                 yield CompletionPopup(id="completion-popup")
+                yield StashPopup(id="stash-popup")
                 yield InputBox(id="input-box")
 
     def on_mount(self) -> None:
@@ -1390,6 +1408,12 @@ class BalloonsApp(App):
             self._handle_reindex_command()
         elif isinstance(cmd, FollowCommand):
             self._handle_follow_toggle()
+        elif isinstance(cmd, StashCommand):
+            self._handle_stash_command(cmd.name)
+        elif isinstance(cmd, PopCommand):
+            self._handle_pop_command()
+        elif isinstance(cmd, ClearAllSessionsCommand):
+            self._handle_clear_all_sessions_command()
 
     def _format_tool_use(
         self, event: ToolUseEvent
@@ -3168,7 +3192,10 @@ class BalloonsApp(App):
         elif node_type == "turn":
             # Whole turn inspection - scroll to it, highlight it, and show in request pane
             turn_id = turn_idx + 1
-            chat_log.highlight_turn(turn_id)
+            scroll_to_top = event.turn_data.get("scroll_to_top", False)
+            # Use call_after_refresh to ensure layout is computed before scrolling
+            # This fixes the "second click needed" bug where scroll fails on first click
+            self.call_after_refresh(lambda tid=turn_id, stt=scroll_to_top: chat_log.highlight_turn(tid, scroll_to_top=stt))
             request_pane.show_json(event.turn_data)
             # Save last view position
             save_last_view(self.session.id, turn_idx)
@@ -3261,7 +3288,10 @@ class BalloonsApp(App):
 
         if node_type == "turn":
             turn_id = turn_idx + 1
-            chat_log.scroll_to_turn(turn_id)
+            scroll_to_top = event.turn_data.get("scroll_to_top", False)
+            # Use call_after_refresh to ensure layout is computed before scrolling
+            # This fixes the "second click needed" bug where scroll fails on first click
+            self.call_after_refresh(lambda tid=turn_id, stt=scroll_to_top: chat_log.scroll_to_turn(tid, scroll_to_top=stt))
             chat_log.clear_highlights()
             request_pane.show_json(event.turn_data)
             # Save last view position
@@ -3416,6 +3446,92 @@ class BalloonsApp(App):
         # Reload tree with new index data
         context_tree.load_all_sessions(self.session)
 
+    def _handle_clear_all_sessions_command(self) -> None:
+        """Delete all sessions after confirmation."""
+        from session import SessionIndex, SESSIONS_DIR
+
+        # Count sessions first
+        index = SessionIndex()
+        index.ensure_loaded()
+        session_count = len(index._sessions)
+
+        if session_count == 0:
+            status_bar = self.query_one("#status-bar", StatusBar)
+            status_bar.set_status("No sessions to delete", animate=False)
+            return
+
+        # Show confirmation dialog
+        def on_confirm(confirmed: bool) -> None:
+            if confirmed:
+                self._execute_clear_all_sessions()
+
+        self.push_screen(
+            ConfirmDialog(
+                "Delete ALL Sessions?",
+                f"This will permanently delete {session_count} sessions.\nThis action cannot be undone!"
+            ),
+            on_confirm,
+        )
+
+    def _execute_clear_all_sessions(self) -> None:
+        """Execute deletion of all sessions after confirmation."""
+        from session import SessionIndex, SESSIONS_DIR
+        import shutil
+
+        status_bar = self.query_one("#status-bar", StatusBar)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
+
+        # Count before deletion
+        index = SessionIndex()
+        index.ensure_loaded()
+        deleted_count = len(index._sessions)
+
+        # Delete all session files
+        if SESSIONS_DIR.exists():
+            for path in SESSIONS_DIR.glob("*.json"):
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+
+        # Clear the index
+        index._sessions = {}
+        index._dirty = True
+        index.save()
+
+        # Clear manager state
+        self._manager._sessions.clear()
+        self._manager._runners.clear()
+
+        # Clear streaming contexts
+        self._streaming_contexts.clear()
+
+        # Create a fresh session
+        new_session = self._manager.create_session()
+        self._manager.set_active(new_session.id)
+
+        # Reset TreeState
+        self._tree_state.clear()
+        self._tree_state.add_session(new_session, is_current=True)
+
+        # Update UI
+        chat_log.clear()
+        context_tree.load_all_sessions(new_session)
+        breadcrumb.set_session(new_session)
+
+        # Update tokens
+        self._update_base_context_tokens()
+        self._update_context_tokens()
+
+        status_bar.set_status(f"Deleted {deleted_count} sessions", animate=False)
+        debug_log.info(
+            f"Cleared all sessions",
+            category="session",
+            details={"deleted_count": deleted_count},
+        )
+
     def action_show_help(self) -> None:
         """Show the help modal."""
         self.push_screen(HelpModal())
@@ -3525,6 +3641,126 @@ class BalloonsApp(App):
             status_bar.set_status("Follow enabled")
         else:
             status_bar.set_status("Follow disabled - scroll freely")
+
+    def _handle_stash_command(self, name: str = "") -> None:
+        """Handle :stash command - stash current input."""
+        input_box = self.query_one("#input-box", InputBox)
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        content = input_box.text.strip()
+        if not content:
+            status_bar.set_error("Nothing to stash")
+            return
+
+        self._message_stash.add(content, name if name else None)
+        input_box.clear()
+        count = len(self._message_stash)
+        status_bar.set_status(f"Stashed ({count} total)")
+
+    def _handle_pop_command(self) -> None:
+        """Handle :pop command - show stash picker."""
+        self._show_stash_popup()
+
+    def _show_stash_popup(self) -> None:
+        """Show the stash popup for selection."""
+        stash_popup = self.query_one("#stash-popup", StashPopup)
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        messages = self._message_stash.all()
+        if not messages:
+            status_bar.set_error("Stash is empty")
+            return
+
+        stash_popup.show_messages(messages)
+
+    def _hide_stash_popup(self) -> None:
+        """Hide the stash popup."""
+        stash_popup = self.query_one("#stash-popup", StashPopup)
+        stash_popup.hide()
+
+    def on_stash_popup_message_selected(self, event: StashPopup.MessageSelected) -> None:
+        """Handle selection of a stashed message."""
+        input_box = self.query_one("#input-box", InputBox)
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        # Pop the message from stash (removes it)
+        self._message_stash.pop(event.index)
+
+        # Load content into input box
+        input_box.clear()
+        input_box.insert(event.message.content)
+        input_box.focus()
+
+        self._hide_stash_popup()
+        status_bar.set_status("Loaded from stash")
+
+    def on_stash_popup_message_deleted(self, event: StashPopup.MessageDeleted) -> None:
+        """Handle deletion of a stashed message."""
+        status_bar = self.query_one("#status-bar", StatusBar)
+        stash_popup = self.query_one("#stash-popup", StashPopup)
+
+        self._message_stash.remove(event.index)
+
+        # Refresh the popup
+        messages = self._message_stash.all()
+        if messages:
+            stash_popup.show_messages(messages)
+        else:
+            self._hide_stash_popup()
+            status_bar.set_status("Stash empty")
+
+    def on_stash_popup_closed(self, event: StashPopup.Closed) -> None:
+        """Handle stash popup being closed without selection."""
+        self._hide_stash_popup()
+        input_box = self.query_one("#input-box", InputBox)
+        input_box.focus()
+
+    def action_stash_toggle(self) -> None:
+        """Toggle stash: if input has text, stash it; if empty, show popup (Ctrl+S)."""
+        input_box = self.query_one("#input-box", InputBox)
+        stash_popup = self.query_one("#stash-popup", StashPopup)
+
+        # If popup is visible, close it
+        if stash_popup.display:
+            self._hide_stash_popup()
+            input_box.focus()
+            return
+
+        # If input has text, stash it
+        if input_box.text.strip():
+            self._handle_stash_command()
+        else:
+            # Input is empty, show popup to retrieve
+            self._show_stash_popup()
+
+    def on_key(self, event) -> None:
+        """Handle key events for stash popup navigation."""
+        stash_popup = self.query_one("#stash-popup", StashPopup)
+        if not stash_popup.display:
+            return  # Let event bubble normally
+
+        if event.key == "up":
+            event.prevent_default()
+            event.stop()
+            stash_popup.cycle(-1)
+        elif event.key == "down":
+            event.prevent_default()
+            event.stop()
+            stash_popup.cycle(1)
+        elif event.key == "enter":
+            event.prevent_default()
+            event.stop()
+            stash_popup.select_current()
+        elif event.key in ("delete", "backspace"):
+            event.prevent_default()
+            event.stop()
+            stash_popup.delete_current()
+        elif event.key == "escape":
+            event.prevent_default()
+            event.stop()
+            self._hide_stash_popup()
+            input_box = self.query_one("#input-box", InputBox)
+            input_box.focus()
 
     def action_quit(self) -> None:
         """Quit the application."""

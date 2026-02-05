@@ -18,6 +18,8 @@ COMMANDS = [
     (":copy-turns", "Copy turns"),
     (":archive", "Archive turns"),
     (":rehydrate", "Restore archive"),
+    (":stash", "Stash current input"),
+    (":pop", "Pop from stash"),
     (":!", "Shell command"),
     (":suspend", "Suspend for shell"),
     (":pwd", "Show directory"),
@@ -148,6 +150,18 @@ class InputBox(TextArea):
             self.visible = visible
             super().__init__()
 
+    class StashRequested(Message):
+        """Message sent when user wants to stash current input (Ctrl+S)."""
+
+        def __init__(self, content: str, name: str | None = None) -> None:
+            self.content = content
+            self.name = name
+            super().__init__()
+
+    class PopRequested(Message):
+        """Message sent when user wants to pop from stash (Ctrl+D)."""
+        pass
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._disabled = False
@@ -175,7 +189,7 @@ class InputBox(TextArea):
         self.max_height = new_height
 
     # Keys that should bubble up to the app (not handled by TextArea)
-    APP_KEYS = {"ctrl+t", "ctrl+o", "ctrl+q", "ctrl+r", "ctrl+g", "ctrl+c"}
+    APP_KEYS = {"ctrl+t", "ctrl+o", "ctrl+q", "ctrl+r", "ctrl+g", "ctrl+c", "ctrl+s"}
 
     async def _on_key(self, event: Key) -> None:
         """Intercept key events before TextArea processes them."""

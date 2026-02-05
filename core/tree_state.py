@@ -792,6 +792,20 @@ class TreeState:
         """
         return (self._selected_context_tokens, self._total_session_tokens)
 
+    def update_session_tokens(self, session_id: str, cached_tokens: int) -> None:
+        """Update a session's cached_context_tokens value.
+
+        Called by app after recalculating context tokens (e.g., after archive).
+        This updates the SessionData so tree labels reflect the new token count.
+
+        Args:
+            session_id: The session to update
+            cached_tokens: The new cached token count
+        """
+        if session_id in self._sessions:
+            self._sessions[session_id].cached_context_tokens = cached_tokens
+            self._notify(TreeEvent.SESSION_UPDATED, {"session_id": session_id})
+
     # --- Streaming State ---
 
     def start_streaming(self, session_id: str) -> None:

@@ -10,7 +10,17 @@ from models import Message, TextDelta, InitEvent, ResultEvent, ToolUseStartEvent
 
 
 @pytest.fixture
-def session():
+def temp_sessions_dir(tmp_path):
+    """Use a temporary directory for sessions to avoid polluting real sessions."""
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    with patch("session.SESSIONS_DIR", sessions_dir), \
+         patch("session.INDEX_FILE", sessions_dir / "index.json"):
+        yield sessions_dir
+
+
+@pytest.fixture
+def session(temp_sessions_dir):
     """Create a test session."""
     s = Session()
     s.set_working_directory("/test")

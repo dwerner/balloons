@@ -44,8 +44,10 @@ class ToolUseWidget(Static):
     }
 
     ToolUseWidget.highlighted {
-        background: #2a2a2a;
-        border: wide $warning;
+        /* Use outline on top/right/bottom only - outline-left conflicts with border-left */
+        outline-top: wide $warning;
+        outline-right: wide $warning;
+        outline-bottom: wide $warning;
     }
 
     ToolUseWidget.expandable {
@@ -225,8 +227,10 @@ class ToolResultWidget(Static):
     }
 
     ToolResultWidget.highlighted {
-        background: #2a2a2a;
-        border: wide $warning;
+        /* Use outline on top/right/bottom only - outline-left conflicts with border-left */
+        outline-top: wide $warning;
+        outline-right: wide $warning;
+        outline-bottom: wide $warning;
     }
 
     ToolResultWidget.expandable {
@@ -402,10 +406,11 @@ class MessageWidget(Static):
     }
 
     MessageWidget.user {
-        background: #1a1a2a;
-        color: $text-muted;
+        background: #1a1a3a;
+        color: #e0d8b0;  /* Subtle light yellow for user messages */
         border-left: thick $primary;
         margin-left: 2;
+        padding: 1 2;
     }
 
     MessageWidget.assistant {
@@ -436,8 +441,10 @@ class MessageWidget(Static):
     }
 
     MessageWidget.highlighted {
-        background: #2a3a2a;
-        border: wide $warning;
+        /* Use outline on top/right/bottom only - outline-left conflicts with border-left */
+        outline-top: wide $warning;
+        outline-right: wide $warning;
+        outline-bottom: wide $warning;
     }
 
     /* Context mode visual indicators - use background color to avoid layout shifts */
@@ -486,10 +493,16 @@ class MessageWidget(Static):
         else:
             return Text("")
 
-    def append_text(self, text: str) -> None:
-        """Append text to the message content."""
+    def append_text(self, text: str, refresh: bool = True) -> None:
+        """Append text to the message content.
+
+        Args:
+            text: Text to append
+            refresh: Whether to refresh immediately (set False for batched updates)
+        """
         self._content += text
-        self.refresh()
+        if refresh:
+            self.refresh()
 
     def finish_streaming(self) -> None:
         """Mark streaming as complete and re-render with markdown."""
@@ -590,6 +603,8 @@ class MoreBelowIndicator(Static):
 
     def show_more_below(self) -> None:
         """Show the indicator for content below viewport."""
+        # TEMPORARILY DISABLED for debugging scroll issues
+        return
         if self._new_message_count == 0:
             self.update("↓ More below ↓")
             self.remove_class("new-messages")
@@ -597,6 +612,8 @@ class MoreBelowIndicator(Static):
 
     def show_new_messages(self) -> None:
         """Show with new message styling."""
+        # TEMPORARILY DISABLED for debugging scroll issues
+        return
         self._new_message_count += 1
         self.add_class("new-messages")
         if self._new_message_count == 1:
@@ -655,11 +672,18 @@ class ChatLogView(VerticalScroll):
     }
     """
 
+    # Maximum update rate for streaming text (in seconds)
+    # Lower = more responsive but higher CPU, higher = smoother under load
+    STREAM_UPDATE_INTERVAL = 0.05  # 50ms = 20 updates/sec max
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._current_assistant_message: MessageWidget | None = None
         self._turn_counter = 0
         self._header: SessionHeader | None = None
+        # Batched streaming text buffer
+        self._pending_text: str = ""
+        self._stream_update_timer = None
 
     async def _on_key(self, event: Key) -> None:
         """Handle key events - colon jumps to text entry."""
@@ -672,6 +696,8 @@ class ChatLogView(VerticalScroll):
 
     def watch_following(self, following: bool) -> None:
         """Post a message when following state changes."""
+        from core.debug_log import debug_log
+        debug_log.info(f"watch_following: following changed to {following}", category="chat_log")
         if self.is_mounted:
             self.post_message(self.FollowingChanged(following))
             # Clear new messages flag when we start following again
@@ -680,7 +706,9 @@ class ChatLogView(VerticalScroll):
 
     def _notify_new_content(self) -> None:
         """Called when new content is added - posts message if not following."""
+        from core.debug_log import debug_log
         if not self.following:
+            debug_log.info(f"_notify_new_content: NOT following, posting NewContentWhileNotFollowing", category="chat_log")
             self.post_message(self.NewContentWhileNotFollowing())
 
     def compose(self):
@@ -689,6 +717,7 @@ class ChatLogView(VerticalScroll):
 
     def _check_at_bottom(self) -> None:
         """Check if we're at the bottom and update following state."""
+        from core.debug_log import debug_log
         if not self.is_mounted:
             return
         # If max_scroll_y is 0 or very small, content fits in viewport - always following
@@ -699,6 +728,11 @@ class ChatLogView(VerticalScroll):
             at_bottom = (max_y - self.scroll_y) < 50
         # Only update if changed to avoid message spam
         if self.following != at_bottom:
+            debug_log.info(
+                f"_check_at_bottom: following changing from {self.following} to {at_bottom}, "
+                f"max_scroll_y={max_y}, scroll_y={self.scroll_y}, gap={max_y - self.scroll_y}",
+                category="chat_log"
+            )
             self.following = at_bottom
 
     def on_mouse_scroll_down(self, event) -> None:
@@ -711,27 +745,48 @@ class ChatLogView(VerticalScroll):
 
     def _smart_scroll(self) -> None:
         """Scroll to end only if user hasn't scrolled up."""
+        from core.debug_log import debug_log
         if self.following:
+            debug_log.debug(f"_smart_scroll: following=True, scheduling scroll_end", category="chat_log")
             # Defer scroll until after layout refresh so scroll_end knows the true max_scroll_y
             self.call_after_refresh(self._scroll_end_and_verify)
+        else:
+            debug_log.debug(f"_smart_scroll: following=False, NOT scrolling", category="chat_log")
 
     def _scroll_end_and_verify(self) -> None:
         """Scroll to end and re-check if we're actually at the bottom."""
+        from core.debug_log import debug_log
+        debug_log.debug(
+            f"_scroll_end_and_verify: before scroll_end, scroll_y={self.scroll_y}, max_scroll_y={self.max_scroll_y}",
+            category="chat_log"
+        )
         self.scroll_end(animate=False)
+        debug_log.debug(
+            f"_scroll_end_and_verify: after scroll_end, scroll_y={self.scroll_y}, max_scroll_y={self.max_scroll_y}",
+            category="chat_log"
+        )
         # Re-check after scroll in case content grew during the frame
         self.call_later(self._check_at_bottom)
 
-    def scroll_to_turn(self, turn_id: int) -> bool:
+    def scroll_to_turn(self, turn_id: int, scroll_to_top: bool = False) -> bool:
         """Scroll to a turn by ID and disable follow mode if not at the bottom.
+
+        Args:
+            turn_id: The 1-indexed turn ID to scroll to
+            scroll_to_top: If True, always scroll so turn is at top of viewport.
+                          If False (default), use smart scroll that minimizes movement.
 
         Returns True if the turn was found and scrolled to, False otherwise.
         """
         from core.debug_log import debug_log
-        debug_log.info(f"scroll_to_turn: looking for turn_id={turn_id}", category="chat_log")
+        debug_log.info(f"scroll_to_turn: looking for turn_id={turn_id}, scroll_to_top={scroll_to_top}", category="chat_log")
         for child in self.children:
             if hasattr(child, 'turn_id') and child.turn_id == turn_id:
                 debug_log.info(f"scroll_to_turn: found turn_id={turn_id}, scrolling", category="chat_log")
-                self.scroll_to_widget_and_check_follow(child)
+                if scroll_to_top:
+                    self.scroll_to_widget_at_top(child)
+                else:
+                    self.scroll_to_widget_and_check_follow(child)
                 return True
         debug_log.warning(f"scroll_to_turn: turn_id={turn_id} NOT FOUND", category="chat_log")
         return False
@@ -745,16 +800,25 @@ class ChatLogView(VerticalScroll):
 
         Accounts for the floating "more below" indicator (2 lines) at the bottom.
         """
+        from core.debug_log import debug_log
         # Reserve space for floating "more below" indicator
         INDICATOR_HEIGHT = 2
 
-        # Get widget's region relative to this container's virtual content
-        widget_region = widget.region
+        # Use virtual_region which is relative to the container's content, not the viewport
+        # widget.region is relative to screen and changes with scroll position
+        widget_region = widget.virtual_region
         viewport_height = self.size.height
         effective_viewport = viewport_height - INDICATOR_HEIGHT
         widget_height = widget_region.height
         widget_top = widget_region.y
         widget_bottom = widget_top + widget_height
+
+        debug_log.info(
+            f"scroll_to_widget_and_check_follow: widget={widget}, virtual_region={widget_region}, "
+            f"viewport_height={viewport_height}, effective_viewport={effective_viewport}, "
+            f"current_scroll_y={self.scroll_y}",
+            category="chat_log"
+        )
 
         if widget_height <= effective_viewport:
             # Widget fits in viewport - ensure entire widget is visible above indicator
@@ -764,19 +828,49 @@ class ChatLogView(VerticalScroll):
 
             if widget_top >= visible_top and widget_bottom <= visible_bottom:
                 # Already fully visible - no scroll needed
+                debug_log.info(f"  -> already visible, no scroll", category="chat_log")
                 pass
             elif widget_top < visible_top:
                 # Widget is above viewport - scroll up to show it
+                debug_log.info(f"  -> widget above viewport, scrolling to y={widget_top}", category="chat_log")
                 self.scroll_to(y=widget_top, animate=False)
             else:
                 # Widget is below viewport - scroll down so bottom of widget
                 # is at bottom of effective viewport (above indicator)
-                self.scroll_to(y=widget_bottom - effective_viewport, animate=False)
+                target_y = widget_bottom - effective_viewport
+                debug_log.info(f"  -> widget below viewport, scrolling to y={target_y}", category="chat_log")
+                self.scroll_to(y=target_y, animate=False)
         else:
             # Widget doesn't fit - scroll so top of widget is at top of viewport
+            debug_log.info(f"  -> widget too tall, scrolling to y={widget_top}", category="chat_log")
             self.scroll_to(y=widget_top, animate=False)
 
         # After scrolling, check if we're at the bottom
+        self.call_later(self._check_at_bottom)
+
+    def scroll_to_widget_at_top(self, widget) -> None:
+        """Scroll so the widget is at the top of the viewport.
+
+        Unlike scroll_to_widget_and_check_follow, this always scrolls to put
+        the widget at the top, even if it's already partially visible.
+        Useful for exchange nodes where we want the first turn at the top.
+        """
+        from core.debug_log import debug_log
+        # Use virtual_region which is relative to the container's content, not the viewport
+        # widget.region is relative to screen and changes with scroll position
+        widget_top = widget.virtual_region.y
+        # Account for container's content offset (padding/border at top)
+        # The virtual_region.y includes the content offset, so we subtract it to get
+        # the widget to appear at the top of the visible content area
+        content_offset_y = self.content_offset.y if hasattr(self, 'content_offset') else 0
+        adjusted_y = max(0, widget_top - content_offset_y)
+        debug_log.info(
+            f"scroll_to_widget_at_top: widget={widget}, virtual_region={widget.virtual_region}, "
+            f"content_offset_y={content_offset_y}, current_scroll_y={self.scroll_y}, "
+            f"scrolling to y={adjusted_y} (widget_top={widget_top} - offset={content_offset_y})",
+            category="chat_log"
+        )
+        self.scroll_to(y=adjusted_y, animate=False)
         self.call_later(self._check_at_bottom)
 
     def set_session_title(self, title: str) -> None:
@@ -810,6 +904,9 @@ class ChatLogView(VerticalScroll):
 
         If there's no current streaming message (e.g., after a tool use finalized it),
         create a new one to receive text that comes after tools.
+
+        Text is buffered and flushed at a rate-limited interval to reduce UI
+        refresh overhead during fast streaming (especially under high CPU load).
         """
         if not self._current_assistant_message:
             # Create a new streaming message for text after tool use
@@ -818,9 +915,32 @@ class ChatLogView(VerticalScroll):
             self._current_assistant_message = widget
             self.mount(widget)
 
-        self._current_assistant_message.append_text(text)
-        self._smart_scroll()
-        self._notify_new_content()
+        # Buffer the text instead of immediately refreshing
+        self._pending_text += text
+
+        # Start a timer to flush if not already running
+        if self._stream_update_timer is None:
+            self._stream_update_timer = self.set_timer(
+                self.STREAM_UPDATE_INTERVAL,
+                self._flush_pending_text
+            )
+
+    def _flush_pending_text(self) -> None:
+        """Flush buffered streaming text to the widget in a single batch update."""
+        self._stream_update_timer = None
+
+        if not self._pending_text:
+            return
+
+        text_to_append = self._pending_text
+        self._pending_text = ""
+
+        if self._current_assistant_message:
+            # Use batch_update to coalesce all refreshes into one
+            with self.app.batch_update():
+                self._current_assistant_message.append_text(text_to_append, refresh=True)
+                self._smart_scroll()
+                self._notify_new_content()
 
     def resume_streaming(
         self,
@@ -1005,6 +1125,14 @@ class ChatLogView(VerticalScroll):
         in between), we collect content from all assistant messages in the current turn.
         Finishes ALL streaming messages in the turn, not just _current_assistant_message.
         """
+        # Flush any pending buffered text first
+        if self._stream_update_timer is not None:
+            self._stream_update_timer.stop()
+            self._stream_update_timer = None
+        if self._pending_text and self._current_assistant_message:
+            self._current_assistant_message.append_text(self._pending_text, refresh=False)
+            self._pending_text = ""
+
         turn_id = self._turn_counter
         content_parts = []
 
@@ -1055,6 +1183,12 @@ class ChatLogView(VerticalScroll):
 
     def clear(self) -> None:
         """Clear all messages and reset counter."""
+        # Cancel any pending stream update
+        if self._stream_update_timer is not None:
+            self._stream_update_timer.stop()
+            self._stream_update_timer = None
+        self._pending_text = ""
+
         for child in list(self.children):
             child.remove()
         self._turn_counter = 0
@@ -1114,10 +1248,16 @@ class ChatLogView(VerticalScroll):
         if not found:
             debug_log.warning(f"  -> NOT FOUND!", category="chat_log")
 
-    def highlight_turn(self, turn_id: int) -> None:
-        """Highlight a turn by turn_id, scrolling to it."""
+    def highlight_turn(self, turn_id: int, scroll_to_top: bool = False) -> None:
+        """Highlight a turn by turn_id, scrolling to it.
+
+        Args:
+            turn_id: The 1-indexed turn ID to highlight
+            scroll_to_top: If True, always scroll so turn is at top of viewport.
+                          If False (default), use smart scroll that minimizes movement.
+        """
         from core.debug_log import debug_log
-        debug_log.info(f"highlight_turn: looking for turn_id={turn_id}", category="chat_log")
+        debug_log.info(f"highlight_turn: looking for turn_id={turn_id}, scroll_to_top={scroll_to_top}", category="chat_log")
 
         self.clear_highlights()
 
@@ -1125,7 +1265,10 @@ class ChatLogView(VerticalScroll):
         for child in self.children:
             if hasattr(child, 'turn_id') and child.turn_id == turn_id:
                 child.add_class("highlighted")
-                self.scroll_to_widget_and_check_follow(child)
+                if scroll_to_top:
+                    self.scroll_to_widget_at_top(child)
+                else:
+                    self.scroll_to_widget_and_check_follow(child)
                 debug_log.info(f"highlight_turn: found and highlighted turn_id={turn_id}", category="chat_log")
                 return
         debug_log.warning(f"highlight_turn: turn_id={turn_id} NOT FOUND", category="chat_log")

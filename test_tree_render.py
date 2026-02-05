@@ -9,7 +9,10 @@ Renders the tree once and exits, printing any errors encountered.
 
 import argparse
 import sys
+import tempfile
 from io import StringIO
+from pathlib import Path
+from unittest.mock import patch
 
 from widgets import ContextTreeView
 from core.tree_state import TreeState
@@ -157,9 +160,18 @@ def main():
             print(f"Error: Session '{args.session}' not found.", file=sys.stderr)
             sys.exit(1)
         print(f"Using session: {args.session}")
+        temp_dir = None  # Using real session, no temp dir needed
     else:
+        # Create temp dir for ephemeral test session to avoid polluting real sessions
+        temp_dir = tempfile.mkdtemp(prefix="balloons_test_")
+        temp_sessions = Path(temp_dir) / "sessions"
+        temp_sessions.mkdir()
+        # Patch session storage to use temp dir
+        import session as session_module
+        session_module.SESSIONS_DIR = temp_sessions
+        session_module.INDEX_FILE = temp_sessions / "index.json"
         session = Session()
-        print("Using new empty session")
+        print(f"Using new empty session (temp dir: {temp_dir})")
 
     success = True
 
@@ -173,6 +185,12 @@ def main():
 
     if args.textual:
         success = test_with_textual(session) and success
+
+    # Clean up temp dir if used
+    if temp_dir:
+        import shutil
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        print(f"Cleaned up temp dir: {temp_dir}")
 
     sys.exit(0 if success else 1)
 

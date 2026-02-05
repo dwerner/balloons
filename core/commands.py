@@ -225,6 +225,36 @@ class FollowCommand(Command):
     pass
 
 
+@dataclass
+class StashCommand(Command):
+    """Stash current input for later.
+
+    Saves the current input text to a persistent stash.
+    Use :pop to retrieve stashed messages.
+    """
+    content: str = ""  # Content to stash (from input)
+    name: str = ""  # Optional name for the stash entry
+
+
+@dataclass
+class PopCommand(Command):
+    """Pop a message from the stash.
+
+    Opens a picker to select and retrieve a stashed message.
+    """
+    pass
+
+
+@dataclass
+class ClearAllSessionsCommand(Command):
+    """Delete all sessions from disk.
+
+    This is a destructive operation that removes all session files
+    and clears the index. Requires confirmation.
+    """
+    pass
+
+
 # Command documentation for help display
 COMMAND_DOCS = [
     # Session management
@@ -242,6 +272,9 @@ COMMAND_DOCS = [
     (":copy-turns", "Copy selected turns to a new session"),
     (":archive [hint]", "Archive selected turns to file with LLM summary"),
     (":rehydrate", "Restore archived turns (click archive marker or select it)"),
+    # Message stash
+    (":stash [name]", "Stash current input (Ctrl+S if text)"),
+    (":pop", "Pop from stash (Ctrl+S if empty)"),
     # Shell integration
     (":!<cmd>", "Run shell command and send output to Claude"),
     (":suspend <cmd>", "Suspend TUI and run interactive shell command"),
@@ -259,6 +292,7 @@ COMMAND_DOCS = [
     (":debug-clear", "Clear all debug log entries"),
     (":reindex", "Rebuild session index from disk"),
     (":follow", "Toggle auto-scroll to follow new content"),
+    (":clear-all-sessions", "Delete ALL sessions (requires confirmation)"),
     (":help", "Show this help"),
 ]
 
@@ -426,6 +460,21 @@ class CommandParser:
         # Handle :follow
         if text == ":follow":
             return FollowCommand()
+
+        # Handle :stash [name]
+        # Note: :stash alone (no content) is handled specially by the app
+        # since we need to capture the input box content
+        if text == ":stash" or text.startswith(":stash "):
+            name = text[7:].strip() if len(text) > 7 else ""
+            return StashCommand(name=name)
+
+        # Handle :pop
+        if text == ":pop":
+            return PopCommand()
+
+        # Handle :clear-all-sessions
+        if text == ":clear-all-sessions":
+            return ClearAllSessionsCommand()
 
         # Unknown command
         cmd_name = text.split()[0]

@@ -558,6 +558,13 @@ class ContextTreeView(Vertical):
                 if session_node:
                     self._populate_session_node(session_id, session_node)
 
+        elif event == TreeEvent.SESSION_UPDATED:
+            # Session data changed (e.g., cached_context_tokens updated after archive)
+            # Re-render the session label to show new values
+            session_id = data.get("session_id")
+            if session_id:
+                self._update_session_label(session_id)
+
         elif event == TreeEvent.STREAMING_STARTED:
             session_id = data.get("session_id")
             if session_id:
@@ -1990,6 +1997,25 @@ class ContextTreeView(Vertical):
                 "message": merge_message,
                 "context_mode": mode.name,
             }, session_id=parent_session_id))
+        elif node_type == "exchange":
+            # Exchange nodes group multiple turns - scroll to first turn in exchange
+            # Use scroll_to_top=True so the first turn is at the top of viewport
+            session_id = node_data.get("session_id")
+            turn_indices = node_data.get("turn_indices", [])
+            if turn_indices:
+                first_turn_idx = turn_indices[0]
+                turn = self._state.get_turn(session_id, first_turn_idx)
+                if turn:
+                    mode = self._state.get_context_mode(session_id, first_turn_idx)
+                    self.post_message(self.TurnInspected({
+                        "type": "turn",
+                        "role": turn.role,
+                        "content": turn.content,
+                        "events": turn.events,
+                        "turn_idx": first_turn_idx,
+                        "context_mode": mode.name,
+                        "scroll_to_top": True,  # Exchange clicks should scroll first turn to top
+                    }, session_id=session_id))
 
     def on_selectable_tree_widget_activate_requested(self, event: SelectableTreeWidget.ActivateRequested) -> None:
         """Handle Enter key - activate session (load into chat view)."""

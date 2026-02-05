@@ -1,5 +1,6 @@
 from .chat_log import ChatLogView, MoreBelowIndicator, NewMessagesIndicator
 from .input_box import InputBox
+from .stash_popup import StashPopup, MessageStash, StashedMessage
 from .status_bar import StatusBar
 from .context_tree import ContextTreeView
 from .nested_tree import NestedTreeView
@@ -26,6 +27,9 @@ __all__ = [
     "MoreBelowIndicator",
     "NewMessagesIndicator",
     "InputBox",
+    "StashPopup",
+    "MessageStash",
+    "StashedMessage",
     "StatusBar",
     "ContextTreeView",
     "NestedTreeView",

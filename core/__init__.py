@@ -30,6 +30,9 @@ from .commands import (
     DebugClearCommand,
     DebugPauseCommand,
     FollowCommand,
+    StashCommand,
+    PopCommand,
+    ClearAllSessionsCommand,
     COMMAND_DOCS,
 )
 from .context import ContextBuilder
@@ -121,6 +124,9 @@ __all__ = [
     "DebugClearCommand",
     "DebugPauseCommand",
     "FollowCommand",
+    "StashCommand",
+    "PopCommand",
+    "ClearAllSessionsCommand",
     "COMMAND_DOCS",
     # Context
     "ContextBuilder",
