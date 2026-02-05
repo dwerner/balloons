@@ -1906,16 +1906,17 @@ class BalloonsApp(App):
 
         # Update session state
         self.session.turns = result.new_turns
-
-        # Recalculate token count after rehydration (turns restored)
-        self._update_base_context_tokens()
-        self._update_context_tokens()
         self.session.save()
 
-        # Reload the UI
+        # Reload the UI first so TreeState has updated turns
         chat_log.clear()
         chat_log.load_history(self.session.turns, self.session)
         context_tree.load_all_sessions(self.session)
+
+        # Recalculate token count after rehydration (turns restored)
+        # Must be after tree reload so TreeState has the new turns
+        self._update_base_context_tokens()
+        self._update_context_tokens()
 
         status_bar.set_status(f"Restored {result.restored_count} archived turns", animate=False)
 
@@ -2800,10 +2801,6 @@ class BalloonsApp(App):
             # Rehydrate the archive
             new_turns = archiver.rehydrate(self.session.turns, event.turn_index)
             self.session.turns = new_turns
-
-            # Recalculate token count after rehydration (turns restored)
-            self._update_base_context_tokens()
-            self._update_context_tokens()
             self.session.save()
 
             debug_log.info(
@@ -2812,7 +2809,7 @@ class BalloonsApp(App):
                 details={"turn_count": len(new_turns)},
             )
 
-            # Reload the chat log to show restored turns
+            # Reload the UI first so TreeState has updated turns
             chat_log = self.query_one("#chat-log", ChatLogView)
             chat_log.clear()
             chat_log.load_history(self.session.turns, self.session)
@@ -2820,6 +2817,11 @@ class BalloonsApp(App):
             # Update context tree
             context_tree = self.query_one("#context-tree", ContextTreeView)
             context_tree.load_all_sessions(self.session)
+
+            # Recalculate token count after rehydration (turns restored)
+            # Must be after tree reload so TreeState has the new turns
+            self._update_base_context_tokens()
+            self._update_context_tokens()
 
             self.notify(f"Restored archived turns from {event.file_path}")
 
