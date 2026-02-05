@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from textual.widgets import Tree, Input, Select
-from textual.containers import Vertical, Horizontal
+from textual.widgets import Tree, Input
+from textual.containers import Vertical
 from textual.message import Message
 from textual.events import Key, Click
 from textual.binding import Binding
@@ -15,6 +15,20 @@ from tokenizer import count_tokens
 from session import Session
 from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ArchiveBlock
 from core.tree_state import TreeState, TreeEvent, SessionData, TurnData
+
+# Claude CLI system overhead: ~19.3k tokens for built-in tools and system prompt
+CLAUDE_SYSTEM_OVERHEAD = 19300
+
+import math
+
+def _format_kt(tokens: int) -> str:
+    """Format tokens as kt, rounding up to nearest 0.1kt, dropping leading zero."""
+    if tokens <= 0:
+        return ""
+    kt = math.ceil(tokens / 100) / 10  # Round up to nearest 0.1
+    if kt < 1:
+        return f".{int(kt * 10)}kt"  # e.g., ".2kt" for 200 tokens
+    return f"{kt:.1f}kt"
 from core.context import ContextBuilder
 from core.json_stream import StreamingJsonParser
 from core.debug_log import debug_log
@@ -23,19 +37,6 @@ if TYPE_CHECKING:
     from typing import Any
 
 
-# Sorting options for sessions
-SORT_OPTIONS = [
-    ("modified_desc", "Recently used"),
-    ("modified_asc", "Least recently used"),
-    ("date_desc", "Newest created"),
-    ("date_asc", "Oldest created"),
-    ("title_asc", "Title A-Z"),
-    ("title_desc", "Title Z-A"),
-    ("messages_desc", "Most messages"),
-    ("messages_asc", "Fewest messages"),
-    ("tokens_desc", "Most tokens"),
-    ("cost_desc", "Highest cost"),
-]
 
 # Colors for session grouping (cycling through these for visual distinction)
 SESSION_COLORS = [
@@ -382,17 +383,6 @@ class ContextTreeView(Vertical):
         display: block;
     }
 
-    ContextTreeView > #sort-container {
-        dock: top;
-        height: auto;
-        padding: 0 1;
-        background: $surface;
-    }
-
-    ContextTreeView > #sort-container > #sort-select {
-        width: 100%;
-        min-width: 20;
-    }
     """
 
     class SelectionChanged(Message):
@@ -436,12 +426,6 @@ class ContextTreeView(Vertical):
             self.new_mode = new_mode
             super().__init__()
 
-    class SortOrderChanged(Message):
-        """Fired when user changes sort order, so app can persist it."""
-        def __init__(self, sort_order: str) -> None:
-            self.sort_order = sort_order
-            super().__init__()
-
     class TurnDeleteRequested(Message):
         """Fired when user requests to delete a turn."""
         def __init__(self, session_id: str, turn_index: int) -> None:
@@ -477,7 +461,6 @@ class ContextTreeView(Vertical):
 
     def __init__(
         self,
-        initial_sort_order: str = "modified_desc",
         tree_state: TreeState | None = None,
         **kwargs
     ):
@@ -506,17 +489,9 @@ class ContextTreeView(Vertical):
 
         # Local UI state (not shared)
         self._search_query: str = ""
-        self._sort_order: str = initial_sort_order
 
     def compose(self):
         yield Input(placeholder="Search sessions...", id="search-input")
-        with Horizontal(id="sort-container"):
-            yield Select(
-                [(label, key) for key, label in SORT_OPTIONS],
-                value=self._sort_order,
-                id="sort-select",
-                allow_blank=False,
-            )
         tree = SelectableTreeWidget("[dim]loading...[/]", id="turn-tree")
         tree.root.data = {"type": "root"}
         yield tree
@@ -550,7 +525,7 @@ class ContextTreeView(Vertical):
         debug_log.debug(f"TreeState event: {event.name}", category="tree", details=data)
         if event == TreeEvent.FULL_REBUILD:
             # TreeState was cleared or requests full rebuild
-            self._rebuild_tree_with_sort()
+            self._rebuild_tree()
 
         elif event == TreeEvent.SESSION_ADDED:
             session_id = data.get("session_id")
@@ -745,7 +720,7 @@ class ContextTreeView(Vertical):
             # Update label with final content
             mode = self._state.get_context_mode(session_id, turn_idx)
             turn_node.label = self._make_turn_label(
-                turn_data.role, content, mode, content_blocks, session_id=session_id
+                turn_data.role, content, mode, content_blocks, session_id=session_id, tokens=turn_data.tokens
             )
 
         # Update session label (streaming indicator, token counts) even if turn node wasn't visible
@@ -805,7 +780,7 @@ class ContextTreeView(Vertical):
         self._load_full_session(current_session.id, current_session)
 
         # Build tree with current sort order
-        self._rebuild_tree_with_sort()
+        self._rebuild_tree()
 
     def load_current_session_only(self, current_session: Session) -> None:
         """Load only the current session into the tree immediately.
@@ -821,7 +796,7 @@ class ContextTreeView(Vertical):
         self._load_full_session(current_session.id, current_session)
 
         # Build tree with just this session
-        self._rebuild_tree_with_sort()
+        self._rebuild_tree()
 
     async def start_background_session_load(self, current_session_id: str) -> None:
         """Load other sessions in the background, yielding to the event loop.
@@ -868,7 +843,7 @@ class ContextTreeView(Vertical):
         debug_log.info(f"Background session load: {count} sessions in {(time.time()-start_time)*1000:.0f}ms, starting rebuild", category="tree")
 
         # Single tree rebuild with all sessions
-        self._rebuild_tree_with_sort()
+        self._rebuild_tree()
 
         debug_log.info(f"Background session load: complete in {(time.time()-start_time)*1000:.0f}ms", category="tree")
 
@@ -883,12 +858,11 @@ class ContextTreeView(Vertical):
         msg_count = session_data.message_count
         session_id = session_data.id
 
-        # Calculate token count - use stored total if available, else calculate from loaded data
-        if session_data.is_loaded:
-            session_tokens = self._calculate_session_tokens(session_id)
-        else:
-            # Use stored token count from session data
-            session_tokens = session_data.total_input_tokens + session_data.total_output_tokens
+        # Use cached context tokens (actual context size calculated by tiktoken)
+        # Add backend-specific overhead (Claude has ~19.3k system overhead)
+        session_tokens = session_data.cached_context_tokens
+        if session_data.backend_name == "claude" or (not session_data.backend_name and "claude" in (session_data.model or "").lower()):
+            session_tokens += CLAUDE_SYSTEM_OVERHEAD
 
         # Show fork status indicator
         is_fork = session_data.parent_id is not None
@@ -930,7 +904,7 @@ class ContextTreeView(Vertical):
         id_prefix = f"[dim]{session_id[:8]}[/] "
 
         # Format token count
-        token_str = f"{session_tokens:,}tok" if session_tokens > 0 else ""
+        token_str = _format_kt(session_tokens)
 
         if name_part:
             label = f"{model_indicator}{id_prefix}{name_part} [dim]({msg_count}msg {token_str})[/] {status}"
@@ -970,18 +944,6 @@ class ContextTreeView(Vertical):
                 backend_name=session.backend_name,
             )
             return self._make_session_label_from_session_data(temp_data, is_active)
-
-    def _calculate_session_tokens(self, session_id: str) -> int:
-        """Calculate total tokens for a specific session."""
-        session_data = self._state.get_session(session_id)
-        if not session_data or not session_data.turns:
-            return 0
-
-        total = 0
-        for turn in session_data.turns:
-            content = f"{'User' if turn.role == 'user' else 'Assistant'}: {turn.content}"
-            total += count_tokens(content)
-        return total
 
     def _load_full_session(self, session_id: str, session: Session = None) -> bool:
         """Fully load a session's messages and turns.
@@ -1148,7 +1110,7 @@ class ContextTreeView(Vertical):
     ) -> None:
         """Add a single turn node to a parent (session or exchange group)."""
         mode = self._state.get_context_mode(session_id, turn.idx)
-        label = self._make_turn_label(turn.role, turn.content, mode, turn.content_blocks, session_id=session_id)
+        label = self._make_turn_label(turn.role, turn.content, mode, turn.content_blocks, session_id=session_id, tokens=turn.tokens)
         has_children = self._has_displayable_children(turn.content_blocks)
         turn_node = parent_node.add(
             label,
@@ -1272,7 +1234,7 @@ class ContextTreeView(Vertical):
     def _make_exchange_label(self, group: list) -> str:
         """Create a label for an exchange group node.
 
-        Shows the first turn's content preview and a count of turns in the exchange.
+        Shows the first turn's content preview, turn count, tool count, and token estimate.
         """
         turn_count = len(group)
         first_turn = group[0]
@@ -1281,17 +1243,13 @@ class ContextTreeView(Vertical):
         preview = first_turn.content[:25] + "..." if len(first_turn.content) > 25 else first_turn.content
         preview = preview.replace("\n", " ")
 
-        # Count tool uses across all turns in the exchange
-        tool_count = 0
-        for turn in group:
-            if turn.content_blocks:
-                tool_count += sum(1 for b in turn.content_blocks if isinstance(b, ToolUseBlock))
+        # Sum tokens from pre-calculated turn data
+        total_tokens = sum(turn.tokens for turn in group)
+        token_str = _format_kt(total_tokens)
 
-        tool_indicator = f" [cyan]🔧{tool_count}[/]" if tool_count > 0 else ""
+        return f"[dim]{turn_count}[/] [cyan]({token_str})[/] {preview}"
 
-        return f"[dim]⟨{turn_count}⟩[/]{tool_indicator} {preview}"
-
-    def _make_turn_label(self, role: str, content: str, mode: ContextMode, content_blocks: list = None, session_id: str = None) -> str:
+    def _make_turn_label(self, role: str, content: str, mode: ContextMode, content_blocks: list = None, session_id: str = None, tokens: int = 0) -> str:
         # Check for archive block first
         if content_blocks:
             for block in content_blocks:
@@ -1328,11 +1286,15 @@ class ContextTreeView(Vertical):
         preview = content[:30] + "..." if len(content) > 30 else content
         preview = preview.replace("\n", " ")
 
+        # Format token count
+        kt_str = _format_kt(tokens)
+        token_str = f"[cyan]({kt_str})[/]" if kt_str else ""
+
         # Add tool indicator
         tool_indicator = f" [cyan]🔧{tool_count}[/]" if tool_count > 0 else ""
         # Add error indicator
         error_indicator = " [yellow]⚠[/]" if has_error else ""
-        return f"{indicator} {icon}{tool_indicator}{error_indicator} {preview}"
+        return f"{indicator} {icon}{tool_indicator}{error_indicator}{token_str} {preview}"
 
     def _update_root_label(self) -> None:
         """Update root label with selected context tokens for current session.
@@ -1386,7 +1348,7 @@ class ContextTreeView(Vertical):
         turn_node = self._turn_nodes.get((session_id, turn_idx))
         if turn_node:
             turn_node.label = self._make_turn_label(
-                turn_data.role, turn_data.content, mode, turn_data.content_blocks, session_id=session_id
+                turn_data.role, turn_data.content, mode, turn_data.content_blocks, session_id=session_id, tokens=turn_data.tokens
             )
 
     def _update_merge_label(self, parent_session_id: str, fork_id: str, node_data: dict) -> None:
@@ -1452,7 +1414,8 @@ class ContextTreeView(Vertical):
         # Set context mode in TreeState
         self._state.set_context_mode(current_session_id, idx, ContextMode.COMPRESS)
 
-        label = self._make_turn_label(role, content, ContextMode.COMPRESS, content_blocks, session_id=current_session_id)
+        tokens = count_tokens(content) if content else 0
+        label = self._make_turn_label(role, content, ContextMode.COMPRESS, content_blocks, session_id=current_session_id, tokens=tokens)
         if session_node:
             turn_node = session_node.add(
                 label,
@@ -1860,6 +1823,10 @@ class ContextTreeView(Vertical):
         if not session_data or not session_data.is_loaded or not session_data.turns:
             return
 
+        # Skip if session node already has children (already populated by rebuild)
+        if session_node.children:
+            return
+
         tree = self.query_one("#turn-tree", SelectableTreeWidget)
 
         # Add turn nodes grouped by exchange_id
@@ -2154,15 +2121,7 @@ class ContextTreeView(Vertical):
         if event.input.id == "search-input":
             self._hide_search()
 
-    def on_select_changed(self, event: Select.Changed) -> None:
-        """Handle sort order change."""
-        if event.select.id == "sort-select":
-            self._sort_order = str(event.value)
-            self._rebuild_tree_with_sort()
-            # Notify app to persist the sort order
-            self.post_message(self.SortOrderChanged(self._sort_order))
-
-    def _rebuild_tree_with_sort(self) -> None:
+    def _rebuild_tree(self) -> None:
         """Rebuild the tree with sessions in the current sort order.
 
         Uses lazy loading: only loaded sessions show their turns.
@@ -2170,7 +2129,7 @@ class ContextTreeView(Vertical):
         """
         import time
         start_time = time.time()
-        debug_log.info("_rebuild_tree_with_sort: starting", category="tree")
+        debug_log.info("_rebuild_tree: starting", category="tree")
 
         tree = self.query_one("#turn-tree", SelectableTreeWidget)
 
@@ -2182,13 +2141,13 @@ class ContextTreeView(Vertical):
             self._tool_use_nodes.clear()
 
             all_sessions = self._state.get_all_sessions()
-            debug_log.debug(f"_rebuild_tree_with_sort: {len(all_sessions)} sessions to process", category="tree")
+            debug_log.debug(f"_rebuild_tree: {len(all_sessions)} sessions to process", category="tree")
             if not all_sessions:
                 self._update_root_label()
                 return
 
             # Get session data sorted according to current order
-            sorted_session_ids = self._get_sorted_session_ids()
+            sorted_session_ids = self._get_session_ids()
 
             # Determine which sessions to expand (and thus need to be loaded):
             # - Always expand current session
@@ -2250,47 +2209,12 @@ class ContextTreeView(Vertical):
                             for merge in merges:
                                 self._add_merge_node(session_node, session_id, merge)
 
-        debug_log.info(f"_rebuild_tree_with_sort: done in {(time.time()-start_time)*1000:.0f}ms", category="tree")
+        debug_log.info(f"_rebuild_tree: done in {(time.time()-start_time)*1000:.0f}ms", category="tree")
         self._update_root_label()
 
-    def _get_sorted_session_ids(self) -> list[str]:
-        """Return session IDs sorted according to current sort order."""
-        session_items = []
-        for session_id, session_data in self._state.get_all_sessions().items():
-            title = session_data.title or ""
-            session_items.append({
-                "id": session_id,
-                "created": session_data.created,
-                "last_modified": session_data.last_modified,
-                "title": title.lower() if title else "",
-                "messages": session_data.message_count,
-                "tokens": session_data.total_input_tokens + session_data.total_output_tokens,
-                "cost": session_data.total_cost,
-            })
-
-        # Sort based on current order
-        if self._sort_order == "modified_desc":
-            session_items.sort(key=lambda x: x["last_modified"], reverse=True)
-        elif self._sort_order == "modified_asc":
-            session_items.sort(key=lambda x: x["last_modified"])
-        elif self._sort_order == "date_desc":
-            session_items.sort(key=lambda x: x["created"], reverse=True)
-        elif self._sort_order == "date_asc":
-            session_items.sort(key=lambda x: x["created"])
-        elif self._sort_order == "title_asc":
-            session_items.sort(key=lambda x: (x["title"] == "", x["title"]))
-        elif self._sort_order == "title_desc":
-            session_items.sort(key=lambda x: (x["title"] == "", x["title"]), reverse=True)
-        elif self._sort_order == "messages_desc":
-            session_items.sort(key=lambda x: x["messages"], reverse=True)
-        elif self._sort_order == "messages_asc":
-            session_items.sort(key=lambda x: x["messages"])
-        elif self._sort_order == "tokens_desc":
-            session_items.sort(key=lambda x: x["tokens"], reverse=True)
-        elif self._sort_order == "cost_desc":
-            session_items.sort(key=lambda x: x["cost"], reverse=True)
-
-        return [item["id"] for item in session_items]
+    def _get_session_ids(self) -> list[str]:
+        """Return session IDs in index order (most recently used first)."""
+        return list(self._state.get_all_sessions().keys())
 
     def _on_key(self, event: Key) -> None:
         """Handle Escape to clear search."""
@@ -2337,7 +2261,7 @@ class ContextTreeView(Vertical):
                 sessions_to_expand.add(current_data.parent_id)
 
         # Use sorted session order
-        sorted_session_ids = self._get_sorted_session_ids()
+        sorted_session_ids = self._get_session_ids()
 
         for session_id in sorted_session_ids:
             session_data = self._state.get_session(session_id)
@@ -2370,7 +2294,7 @@ class ContextTreeView(Vertical):
                 turns_to_show = matching_turns if self._search_query else session_data.turns
                 for turn in turns_to_show:
                     mode = self._state.get_context_mode(session_id, turn.idx)
-                    label = self._make_turn_label(turn.role, turn.content, mode, turn.content_blocks, session_id=session_id)
+                    label = self._make_turn_label(turn.role, turn.content, mode, turn.content_blocks, session_id=session_id, tokens=turn.tokens)
                     turn_node = session_node.add(
                         label,
                         data={"type": "turn", "session_id": session_id, "turn_idx": turn.idx}

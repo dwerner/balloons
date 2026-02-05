@@ -64,6 +64,7 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
             api_key=api_key,
             model=backend.model,
             system_prompt=system_prompt,
+            context_window=backend.context_window,
         )
 
     elif backend_type in ("claude", "claude-structured"):
@@ -83,6 +84,7 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
         return ClaudeRunner(
             backend_env=env if env else None,
             system_prompt=system_prompt,
+            context_window=backend.context_window,
         )
 
     else:

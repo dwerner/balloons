@@ -30,6 +30,7 @@ COMMANDS = [
     (":debug", "Toggle debug"),
     (":debug-pause", "Pause debug"),
     (":debug-clear", "Clear debug"),
+    (":follow", "Toggle follow"),
     (":help", "Show help"),
 ]
 

@@ -60,6 +60,15 @@ class SessionProtocol(Protocol):
     backend_name: str
 
 
+def _safe_count_tokens(content: str) -> int:
+    """Count tokens safely, returning 0 if tokenizer unavailable."""
+    try:
+        from tokenizer import count_tokens
+        return count_tokens(content) if content else 0
+    except ImportError:
+        return 0
+
+
 @dataclass
 class TurnData:
     """Data for a single turn in a session."""
@@ -71,6 +80,7 @@ class TurnData:
     streaming: bool = False
     tool_use_ids: list[str] = field(default_factory=list)
     exchange_id: str | None = None  # Groups turns in an agentic loop
+    tokens: int = 0  # Estimated token count for this turn
 
 
 @dataclass
@@ -410,17 +420,20 @@ class TreeState:
                 content=content,
                 content_blocks=[],
                 exchange_id=exchange_id,
+                tokens=_safe_count_tokens(content),
             )]
 
         if len(content_blocks) == 1:
             block = content_blocks[0]
             # Single block - create one turn with that block
+            block_content = self._content_from_block(block, content)
             return [TurnData(
                 idx=0,
                 role=role,
-                content=self._content_from_block(block, content),
+                content=block_content,
                 content_blocks=[block],
                 exchange_id=exchange_id,
+                tokens=_safe_count_tokens(block_content),
             )]
 
         # Multiple blocks - expand into separate turns
@@ -435,6 +448,7 @@ class TreeState:
                 content=block_content,
                 content_blocks=[block],
                 exchange_id=exchange_id,
+                tokens=_safe_count_tokens(block_content),
             ))
 
         return turns
@@ -545,6 +559,11 @@ class TreeState:
                 turn.content_blocks = content_blocks
                 turn.events = events or []
                 turn.streaming = False
+                turn.tokens = _safe_count_tokens(content)
+
+                # Update session's cached token count (sum all turn tokens)
+                session_data.cached_context_tokens = sum(t.tokens for t in session_data.turns)
+
                 self._notify(TreeEvent.TURN_FINISHED, {
                     "session_id": session_id,
                     "turn_idx": turn_idx,

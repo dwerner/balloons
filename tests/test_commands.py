@@ -15,6 +15,7 @@ from core.commands import (
     TitleCommand,
     ArchiveCommand,
     RehydrateCommand,
+    FollowCommand,
 )
 
 
@@ -163,3 +164,16 @@ class TestArchiveCommands:
         cmd = parser.parse(":rehydrate")
         assert isinstance(cmd, RehydrateCommand)
         assert cmd.archive_turn_index == -1
+
+
+class TestFollowCommand:
+    """Tests for :follow command."""
+
+    @pytest.fixture
+    def parser(self):
+        return CommandParser()
+
+    def test_follow(self, parser):
+        """':follow' creates FollowCommand."""
+        cmd = parser.parse(":follow")
+        assert isinstance(cmd, FollowCommand)

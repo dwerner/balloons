@@ -28,7 +28,7 @@ class OpenAICompatibleRunner(BaseRunner):
     for models that implement OpenAI's function calling API.
     """
 
-    def __init__(self, base_url: str, api_key: str, model: str, system_prompt: str | None = None):
+    def __init__(self, base_url: str, api_key: str, model: str, system_prompt: str | None = None, context_window: int = 128000):
         """Initialize the runner.
 
         Args:
@@ -36,10 +36,12 @@ class OpenAICompatibleRunner(BaseRunner):
             api_key: API key for authentication
             model: Model identifier to use
             system_prompt: Optional system prompt content to prepend to conversations
+            context_window: Max context tokens for this backend
         """
         self.client = AsyncOpenAI(base_url=base_url, api_key=api_key)
         self.model = model
         self.system_prompt = system_prompt
+        self.context_window = context_window
         self._running = False
         self._cancelled = False
         self._run_id = ""
@@ -203,7 +205,7 @@ class OpenAICompatibleRunner(BaseRunner):
         yield InitEvent(
             model=self.model,
             session_id="",  # No session concept for OpenAI
-            context_window=128000,  # Default assumption, varies by model
+            context_window=self.context_window,
         )
 
         total_input_tokens = 0
@@ -295,7 +297,7 @@ class OpenAICompatibleRunner(BaseRunner):
                 input_tokens=total_input_tokens,
                 output_tokens=total_output_tokens,
                 total_cost_usd=0.0,  # Unknown for non-Claude backends
-                context_window=128000,
+                context_window=self.context_window,
             )
 
         except Exception as e:

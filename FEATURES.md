@@ -270,7 +270,6 @@ backends:
     api_key: "optional-key"
     model: "llama-70b"
 
-session_sort_order: modified_desc
 debug_log_file: /tmp/balloons_debug.log  # optional
 ```
 

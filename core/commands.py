@@ -215,6 +215,16 @@ class ReindexCommand(Command):
     pass
 
 
+@dataclass
+class FollowCommand(Command):
+    """Toggle auto-scroll to follow new content.
+
+    When enabled, chat scrolls to show new content as it arrives.
+    When disabled, you can scroll freely without jumping.
+    """
+    pass
+
+
 # Command documentation for help display
 COMMAND_DOCS = [
     # Session management
@@ -248,6 +258,7 @@ COMMAND_DOCS = [
     (":debug-pause", "Toggle debug logging on/off"),
     (":debug-clear", "Clear all debug log entries"),
     (":reindex", "Rebuild session index from disk"),
+    (":follow", "Toggle auto-scroll to follow new content"),
     (":help", "Show this help"),
 ]
 
@@ -411,6 +422,10 @@ class CommandParser:
         # Handle :reindex
         if text == ":reindex":
             return ReindexCommand()
+
+        # Handle :follow
+        if text == ":follow":
+            return FollowCommand()
 
         # Unknown command
         cmd_name = text.split()[0]

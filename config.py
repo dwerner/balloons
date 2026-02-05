@@ -29,6 +29,7 @@ class BackendConfig:
     api_key: Optional[str] = None
     model: Optional[str] = None
     system_prompt: Optional[str] = None  # Path to system prompt file
+    context_window: int = 150000  # Max context tokens for this backend
 
     # Cached at runtime (not persisted)
     _system_prompt_content: Optional[str] = field(default=None, repr=False, compare=False)
@@ -69,7 +70,6 @@ class Config:
     default_backend: str = "claude"
     backends: dict[str, BackendConfig] = field(default_factory=dict)
     debug_log_file: Optional[str] = None  # Path to persist debug logs
-    session_sort_order: str = "modified_desc"  # Default sort order for sessions
     editor: Optional[str] = None  # Editor command (falls back to $VISUAL, $EDITOR, vi)
     last_view_session_id: Optional[str] = None  # Last viewed session ID
     last_view_turn_index: Optional[int] = None  # Last viewed turn index (0-based)
@@ -124,6 +124,7 @@ class Config:
                 api_key=backend_data.get("api_key"),
                 model=backend_data.get("model"),
                 system_prompt=backend_data.get("system_prompt"),
+                context_window=backend_data.get("context_window", 150000),
             )
 
         # Ensure claude backend always exists
@@ -136,7 +137,6 @@ class Config:
             default_backend=data.get("default_backend", "claude"),
             backends=backends,
             debug_log_file=data.get("debug_log_file"),
-            session_sort_order=data.get("session_sort_order", "modified_desc"),
             editor=data.get("editor"),
             last_view_session_id=last_view.get("session_id") if last_view else None,
             last_view_turn_index=last_view.get("turn_index") if last_view else None,
@@ -165,7 +165,7 @@ class Config:
     def save(self) -> None:
         """Save configuration to file.
 
-        Only saves user-modifiable settings (session_sort_order, etc).
+        Saves user-modifiable settings (last_view, etc).
         Creates config file if it doesn't exist.
         """
         # Determine path to save to
@@ -182,9 +182,6 @@ class Config:
         else:
             data = {}
             path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Update user-modifiable settings
-        data["session_sort_order"] = self.session_sort_order
 
         # Save last view position
         if self.last_view_session_id:

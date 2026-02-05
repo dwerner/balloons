@@ -77,6 +77,7 @@ from core import (
     ArchiveCommand,
     RehydrateCommand,
     ReindexCommand,
+    FollowCommand,
     debug_log,
     create_runner,
     # Streaming
@@ -354,7 +355,6 @@ class BalloonsApp(App):
         with Vertical():
             with Horizontal(id="main-split"):
                 yield ContextTreeView(
-                    initial_sort_order=config.session_sort_order,
                     tree_state=self._tree_state,
                     id="context-tree"
                 )
@@ -385,10 +385,12 @@ class BalloonsApp(App):
 
     def _on_tree_state_event(self, event: TreeEvent, data: dict) -> None:
         """Handle state changes from TreeState that affect token counts."""
-        if event == TreeEvent.CONTEXT_MODE_CHANGED:
-            # Context mode changed - recalculate base tokens
-            self._update_base_context_tokens()
-            self._update_context_tokens()
+        if event == TreeEvent.TURN_FINISHED:
+            # Turn completed - recalculate tokens for the session
+            session_id = data.get("session_id")
+            if session_id == self._tree_state.get_current_session_id():
+                self._update_base_context_tokens()
+                self._update_context_tokens()
 
     def _update_streaming_count(self) -> None:
         """Update the status bar with total streaming sessions count."""
@@ -1129,13 +1131,9 @@ class BalloonsApp(App):
         if self.session.cached_context_tokens > 0:
             self._tree_state.set_context_tokens(self.session.cached_context_tokens, 0)
 
-        # Load only the current session immediately (fast startup)
-        context_tree.load_current_session_only(self.session)
-
-        # Background loading disabled - use :reindex to load all sessions
-        # The background loading was blocking the UI for ~40s+ with 255 sessions
-        # import asyncio
-        # asyncio.create_task(context_tree.start_background_session_load(self.session.id))
+        # Load all sessions from index (fast - single file read)
+        # Sessions are lazy-loaded: only metadata initially, full data on expand/activate
+        context_tree.load_all_sessions(self.session)
 
         # Load current session's messages into chat view
         if self.session.turns:
@@ -1187,8 +1185,8 @@ class BalloonsApp(App):
             turn_id = len(self.session.turns)
             self.call_after_refresh(lambda tid=turn_id: chat_log.scroll_to_turn(tid))
 
-        # Initial context token update (use cache on startup)
-        self._update_base_context_tokens(use_cache=True)
+        # Initial context token update (recalculate from actual selected context)
+        self._update_base_context_tokens(use_cache=False)
         self._update_context_tokens()
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
@@ -1386,6 +1384,8 @@ class BalloonsApp(App):
             await self._handle_rehydrate_command()
         elif isinstance(cmd, ReindexCommand):
             self._handle_reindex_command()
+        elif isinstance(cmd, FollowCommand):
+            self._handle_follow_toggle()
 
     def _format_tool_use(
         self, event: ToolUseEvent
@@ -1771,6 +1771,10 @@ class BalloonsApp(App):
             )
 
             self.session.turns = new_turns
+
+            # Recalculate token count after archiving (turns removed)
+            self._update_base_context_tokens()
+            self._update_context_tokens()
             self.session.save()
 
             # Reload the UI
@@ -1833,6 +1837,10 @@ class BalloonsApp(App):
         try:
             new_turns = archiver.rehydrate(self.session.turns, archive_turn_index)
             self.session.turns = new_turns
+
+            # Recalculate token count after rehydration (turns restored)
+            self._update_base_context_tokens()
+            self._update_context_tokens()
             self.session.save()
 
             # Reload the UI
@@ -2672,6 +2680,10 @@ class BalloonsApp(App):
             # Rehydrate the archive
             new_turns = archiver.rehydrate(self.session.turns, event.turn_index)
             self.session.turns = new_turns
+
+            # Recalculate token count after rehydration (turns restored)
+            self._update_base_context_tokens()
+            self._update_context_tokens()
             self.session.save()
 
             debug_log.info(
@@ -2970,12 +2982,6 @@ class BalloonsApp(App):
         else:
             status_bar.set_error("Could not delete turn")
 
-    def on_context_tree_view_sort_order_changed(self, event: ContextTreeView.SortOrderChanged) -> None:
-        """Handle sort order change - persist to config."""
-        config = get_config()
-        config.session_sort_order = event.sort_order
-        config.save()
-
     def on_context_tree_view_session_delete_requested(self, event: ContextTreeView.SessionDeleteRequested) -> None:
         """Handle session delete request - show confirmation dialog."""
         status_bar = self.query_one("#status-bar", StatusBar)
@@ -3093,6 +3099,10 @@ class BalloonsApp(App):
             )
 
             self.session.turns = new_turns
+
+            # Recalculate token count after archiving (turns removed)
+            self._update_base_context_tokens()
+            self._update_context_tokens()
             self.session.save()
 
             # Reload the UI
@@ -3557,6 +3567,22 @@ class BalloonsApp(App):
         # Hide the more-below indicator
         indicator = self.query_one("#more-below", MoreBelowIndicator)
         indicator.hide()
+
+    def _handle_follow_toggle(self) -> None:
+        """Toggle auto-scroll following mode."""
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        status_bar = self.query_one("#status-bar", StatusBar)
+        indicator = self.query_one("#more-below", MoreBelowIndicator)
+
+        chat_log.following = not chat_log.following
+
+        if chat_log.following:
+            # When enabling follow, scroll to bottom
+            chat_log.scroll_end(animate=False)
+            indicator.hide()
+            status_bar.set_status("Follow enabled")
+        else:
+            status_bar.set_status("Follow disabled - scroll freely")
 
     def action_quit(self) -> None:
         """Quit the application."""

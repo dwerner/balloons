@@ -59,6 +59,7 @@ class ClaudeRunner(BaseRunner):
         self,
         backend_env: dict[str, str] | None = None,
         system_prompt: str | None = None,
+        context_window: int = 150000,
     ):
         self.process: asyncio.subprocess.Process | None = None
         self._terminated = False
@@ -66,6 +67,7 @@ class ClaudeRunner(BaseRunner):
         self._run_id: str = ""  # Current process PID for debug logging
         self._backend_env = backend_env or {}  # Environment overrides for LLM backend
         self.system_prompt = system_prompt  # Additional system context to prepend
+        self.context_window = context_window  # Max context tokens
         self._json_errors: list[tuple[str, str | None]] = []  # Track (error_detail, dump_path) tuples
         self._current_session: "Session | None" = None  # Session for tool execution
         self._text_buffer: str = ""  # Buffer for detecting balloons-tool blocks
@@ -416,7 +418,7 @@ class ClaudeRunner(BaseRunner):
                 yield InitEvent(
                     model=data.get("model", ""),
                     session_id=data.get("session_id", ""),
-                    context_window=200000,
+                    context_window=self.context_window,
                 )
                 continue
 
@@ -530,7 +532,7 @@ class ClaudeRunner(BaseRunner):
                     input_tokens=usage.get("input_tokens", 0),
                     output_tokens=usage.get("output_tokens", 0),
                     total_cost_usd=data.get("total_cost_usd", 0.0),
-                    context_window=200000,
+                    context_window=self.context_window,
                 )
                 break
 
