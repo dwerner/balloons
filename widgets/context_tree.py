@@ -9,11 +9,12 @@ from textual.timer import Timer
 from datetime import datetime
 from rich.text import Text
 from rich.style import Style
+from rich.markup import escape as escape_markup
 from typing import TYPE_CHECKING
 
 from tokenizer import count_tokens
 from session import Session
-from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ArchiveBlock
+from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ArchiveBlock, LinkBlock, ForkBlock, MergeBlock
 from core.tree_state import TreeState, TreeEvent, SessionData, TurnData
 
 # Claude CLI system overhead: ~19.3k tokens for built-in tools and system prompt
@@ -643,6 +644,14 @@ class ContextTreeView(Vertical):
                 # Don't call _update_root_label here - wait for CONTEXT_TOKENS_CHANGED
                 # which fires after app recalculates from compiled context
 
+        elif event == TreeEvent.TURN_VIEWED:
+            # Turn was marked as viewed - update label to remove unviewed indicator
+            session_id = data.get("session_id")
+            turn_idx = data.get("turn_idx")
+            if session_id and turn_idx is not None:
+                self._update_turn_label(session_id, turn_idx)
+                self._update_session_label(session_id)
+
         elif event == TreeEvent.CONTEXT_TOKENS_CHANGED:
             # App calculated new token counts - update root label
             self._update_root_label()
@@ -764,7 +773,7 @@ class ContextTreeView(Vertical):
             # Update label with final content
             mode = self._state.get_context_mode(session_id, turn_idx)
             turn_node.label = self._make_turn_label(
-                turn_data.role, content, mode, content_blocks, session_id=session_id, tokens=turn_data.tokens
+                turn_data.role, content, mode, content_blocks, session_id=session_id, tokens=turn_data.tokens, viewed=turn_data.viewed
             )
 
         # Update session label (streaming indicator, token counts) even if turn node wasn't visible
@@ -930,6 +939,13 @@ class ContextTreeView(Vertical):
         else:
             streaming_indicator = ""
 
+        # Unviewed turns indicator
+        unviewed_count = self._state.get_unviewed_count(session_id)
+        if unviewed_count > 0:
+            unviewed_indicator = f" [bold blue]●{unviewed_count}[/]"
+        else:
+            unviewed_indicator = ""
+
         # Model icon for visual differentiation
         model_icon = get_model_icon(session_data.model, session_data.backend_name)
         model_indicator = f"{model_icon} " if model_icon else ""
@@ -938,9 +954,10 @@ class ContextTreeView(Vertical):
         fork_name = session_data.fork_name
         title = session_data.title
         if fork_name:
-            name_part = fork_name
+            name_part = escape_markup(fork_name)
         elif title:
-            name_part = title[:25] + "..." if len(title) > 25 else title
+            truncated = title[:25] + "..." if len(title) > 25 else title
+            name_part = escape_markup(truncated)
         else:
             name_part = None
 
@@ -951,9 +968,9 @@ class ContextTreeView(Vertical):
         token_str = _format_kt(session_tokens)
 
         if name_part:
-            label = f"{model_indicator}{id_prefix}{name_part} [dim]({msg_count}msg {token_str})[/] {status}"
+            label = f"{model_indicator}{id_prefix}{name_part} [dim]({msg_count}msg {token_str})[/]{unviewed_indicator} {status}"
         else:
-            label = f"{model_indicator}{id_prefix}{date_str} [dim]({msg_count}msg {token_str})[/] {status}"
+            label = f"{model_indicator}{id_prefix}{date_str} [dim]({msg_count}msg {token_str})[/]{unviewed_indicator} {status}"
 
         # Highlight active session
         if is_active:
@@ -1026,15 +1043,24 @@ class ContextTreeView(Vertical):
         if session_data and session_data.session_ref:
             self.post_message(self.SessionActivated(session_data.session_ref))
 
-    def _add_fork_node(self, parent_node, parent_session_id: str, fork: dict, tree: SelectableTreeWidget) -> None:
+    def _add_fork_node(self, parent_node, parent_session_id: str, fork: dict, tree: SelectableTreeWidget, fork_point: int = -1) -> None:
         """Add a fork link node inline in the parent session.
 
         This is just a reference/link to the forked session - the actual session
         content is shown in the session's own node in the main tree.
+
+        Args:
+            parent_node: The tree node to add the fork under
+            parent_session_id: ID of the parent session
+            fork: Dict with fork info (session_id, name, status, fork_point)
+            tree: The tree widget
+            fork_point: Turn index where fork was created (0-indexed). If -1, uses fork["fork_point"].
         """
         fork_id = fork.get("session_id", "")
         fork_name = fork.get("name", "") or fork_id[:8]
         status = fork.get("status", "active")
+        # Use passed fork_point or fall back to dict value
+        turn_idx = fork_point if fork_point >= 0 else fork.get("fork_point", -1)
 
         # Status indicator
         if status == "active":
@@ -1044,7 +1070,7 @@ class ContextTreeView(Vertical):
         else:
             status_text = f"[dim][{status}][/]"
 
-        label = f"[bold]🔀 {fork_name}[/] {status_text}"
+        label = f"[bold]🔀 {escape_markup(fork_name)}[/] {status_text}"
         parent_node.add(
             label,
             data={
@@ -1053,14 +1079,24 @@ class ContextTreeView(Vertical):
                 "parent_session_id": parent_session_id,
                 "fork_name": fork_name,
                 "status": status,
+                "turn_idx": turn_idx,  # Turn index for scrolling in chat
             },
             allow_expand=False,  # No children - just a link
         )
 
-    def _add_merge_node(self, parent_node, parent_session_id: str, merge: dict) -> None:
-        """Add a merge result node inline in the parent session."""
+    def _add_merge_node(self, parent_node, parent_session_id: str, merge: dict, merge_point: int = -1) -> None:
+        """Add a merge result node inline in the parent session.
+
+        Args:
+            parent_node: The tree node to add the merge under
+            parent_session_id: ID of the parent session
+            merge: Dict with merge info (session_id, name, merge_point)
+            merge_point: Turn index where merge happened (0-indexed). If -1, uses merge["merge_point"].
+        """
         fork_id = merge.get("session_id", "")
         fork_name = merge.get("name", "") or fork_id[:8]
+        # Use passed merge_point or fall back to dict value
+        turn_idx = merge_point if merge_point >= 0 else merge.get("merge_point", -1)
 
         # Load fork to get merge message
         fork_session = Session.load(fork_id)
@@ -1078,6 +1114,7 @@ class ContextTreeView(Vertical):
                 "parent_session_id": parent_session_id,
                 "fork_name": fork_name,
                 "message": merge_message,
+                "turn_idx": turn_idx,  # Turn index for scrolling in chat
             }
         )
 
@@ -1095,7 +1132,7 @@ class ContextTreeView(Vertical):
         msg_preview = merge_message[:40] + "..." if len(merge_message) > 40 else merge_message
         msg_preview = msg_preview.replace("\n", " ")
 
-        return f"{mode_indicator}[green]⬅️ Merged: {fork_name}[/] {msg_preview}"
+        return f"{mode_indicator}[green]⬅️ Merged: {escape_markup(fork_name)}[/] {escape_markup(msg_preview)}"
 
     def _add_turns_to_node(
         self,
@@ -1137,7 +1174,7 @@ class ContextTreeView(Vertical):
         Use _add_turn_to_tree for the high-level method that handles exchange grouping.
         """
         mode = self._state.get_context_mode(session_id, turn.idx)
-        label = self._make_turn_label(turn.role, turn.content, mode, turn.content_blocks, session_id=session_id, tokens=turn.tokens)
+        label = self._make_turn_label(turn.role, turn.content, mode, turn.content_blocks, session_id=session_id, tokens=turn.tokens, viewed=turn.viewed)
 
         # User turns are always leaves - they're just text, no need for children
         # Assistant turns may have tool uses, text blocks, etc.
@@ -1253,7 +1290,7 @@ class ContextTreeView(Vertical):
                     text_preview = block.text[:50].replace("\n", " ")
                     if len(block.text) > 50:
                         text_preview += "..."
-                    label = f"[dim]💬[/] {text_preview}"
+                    label = f"[dim]💬[/] {escape_markup(text_preview)}"
                     turn_node.add(
                         label,
                         data={
@@ -1269,7 +1306,7 @@ class ContextTreeView(Vertical):
                 input_preview = json.dumps(block.input)[:50]
                 if len(json.dumps(block.input)) > 50:
                     input_preview += "..."
-                label = f"[cyan]🔧 {block.name}[/] {input_preview}"
+                label = f"[cyan]🔧 {block.name}[/] {escape_markup(input_preview)}"
                 tool_node = turn_node.add(
                     label,
                     data={
@@ -1288,7 +1325,7 @@ class ContextTreeView(Vertical):
                 if len(str(block.content)) > 50:
                     content_preview += "..."
                 error_indicator = "[red]❌[/] " if block.is_error else ""
-                label = f"{error_indicator}[blue]📋 Result[/] {content_preview}"
+                label = f"{error_indicator}[blue]📋 Result[/] {escape_markup(content_preview)}"
                 # Find parent tool use node, or fall back to turn node
                 parent_node = tool_use_nodes.get(block.tool_use_id, turn_node)
                 parent_node.add(
@@ -1344,6 +1381,69 @@ class ContextTreeView(Vertical):
                         "dump_file": block.dump_file,
                     }
                 )
+            elif isinstance(block, LinkBlock):
+                # Link to another session
+                summary_preview = block.summary[:40] + "..." if len(block.summary) > 40 else block.summary
+                summary_preview = summary_preview.replace("\n", " ")
+                escaped_preview = escape_markup(summary_preview)
+                if block.is_orphaned:
+                    label = f"[dim strikethrough]🔗 Link: [deleted] {escaped_preview}[/]"
+                else:
+                    label = f"[magenta]🔗 Link[/] {escaped_preview}"
+                turn_node.add(
+                    label,
+                    data={
+                        "type": "link",
+                        "session_id": session_id,
+                        "turn_idx": turn_idx,
+                        "block_idx": block_idx,
+                        "linked_session_id": block.linked_session_id,
+                        "link_id": block.link_id,
+                        "summary": block.summary,
+                        "is_orphaned": block.is_orphaned,
+                    }
+                )
+            elif isinstance(block, ForkBlock):
+                # Fork marker stored in content_blocks
+                status = block.status
+                if status == "active":
+                    status_text = "[yellow][active][/]"
+                elif status == "merged":
+                    status_text = "[green][merged ✓][/]"
+                else:
+                    status_text = f"[dim][{escape_markup(status)}][/]"
+                label = f"[bold]🔀 {escape_markup(block.fork_name)}[/] {status_text}"
+                turn_node.add(
+                    label,
+                    data={
+                        "type": "fork_block",  # Distinguish from session-level fork nodes
+                        "session_id": session_id,
+                        "turn_idx": turn_idx,
+                        "block_idx": block_idx,
+                        "child_session_id": block.child_session_id,
+                        "fork_name": block.fork_name,
+                        "prompt": block.prompt,
+                        "status": block.status,
+                    },
+                    allow_expand=False,
+                )
+            elif isinstance(block, MergeBlock):
+                # Merge marker stored in content_blocks
+                message_preview = block.message[:40] + "..." if len(block.message) > 40 else block.message
+                message_preview = message_preview.replace("\n", " ")
+                label = f"[green]⬅️ Merged: {escape_markup(block.fork_name)}[/] {escape_markup(message_preview)}"
+                turn_node.add(
+                    label,
+                    data={
+                        "type": "merge_block",  # Distinguish from session-level merge nodes
+                        "session_id": session_id,
+                        "turn_idx": turn_idx,
+                        "block_idx": block_idx,
+                        "child_session_id": block.child_session_id,
+                        "fork_name": block.fork_name,
+                        "message": block.message,
+                    }
+                )
 
     def _make_exchange_label(self, group: list) -> Text:
         """Create a label for an exchange group node.
@@ -1375,7 +1475,10 @@ class ContextTreeView(Vertical):
 
         return label
 
-    def _make_turn_label(self, role: str, content: str, mode: ContextMode, content_blocks: list = None, session_id: str = None, tokens: int = 0) -> str:
+    def _make_turn_label(self, role: str, content: str, mode: ContextMode, content_blocks: list = None, session_id: str = None, tokens: int = 0, viewed: bool = True) -> str:
+        # Unviewed indicator (blue dot for unviewed assistant turns)
+        unviewed_indicator = "[bold blue]● [/]" if not viewed else ""
+
         # Check for archive block first
         if content_blocks:
             for block in content_blocks:
@@ -1390,7 +1493,7 @@ class ContextTreeView(Vertical):
                     summary = block.structured_summary.work_done if block.structured_summary else block.summary
                     preview = summary[:40] + "..." if len(summary) > 40 else summary
                     preview = preview.replace("\n", " ")
-                    return f"{indicator} 📦 {preview}"
+                    return f"{unviewed_indicator}{indicator} 📦 {escape_markup(preview)}"
 
         # Mode indicator: copy=green check, compress=yellow Σ, drop=empty box
         if mode == ContextMode.COPY:
@@ -1420,7 +1523,7 @@ class ContextTreeView(Vertical):
         tool_indicator = f" [cyan]🔧{tool_count}[/]" if tool_count > 0 else ""
         # Add error indicator
         error_indicator = " [yellow]⚠[/]" if has_error else ""
-        return f"{indicator} {icon}{tool_indicator}{error_indicator}{token_str} {preview}"
+        return f"{unviewed_indicator}{indicator} {icon}{tool_indicator}{error_indicator}{token_str} {escape_markup(preview)}"
 
     def _update_root_label(self) -> None:
         """Update root label with selected context tokens for current session.
@@ -1474,7 +1577,7 @@ class ContextTreeView(Vertical):
         turn_node = self._turn_nodes.get((session_id, turn_idx))
         if turn_node:
             turn_node.label = self._make_turn_label(
-                turn_data.role, turn_data.content, mode, turn_data.content_blocks, session_id=session_id, tokens=turn_data.tokens
+                turn_data.role, turn_data.content, mode, turn_data.content_blocks, session_id=session_id, tokens=turn_data.tokens, viewed=turn_data.viewed
             )
 
     def _update_merge_label(self, parent_session_id: str, fork_id: str, node_data: dict) -> None:
@@ -1541,7 +1644,9 @@ class ContextTreeView(Vertical):
         self._state.set_context_mode(current_session_id, idx, ContextMode.COMPRESS)
 
         tokens = count_tokens(content) if content else 0
-        label = self._make_turn_label(role, content, ContextMode.COMPRESS, content_blocks, session_id=current_session_id, tokens=tokens)
+        # Streaming assistant turns start as unviewed, user turns are always viewed
+        viewed = role != "assistant"
+        label = self._make_turn_label(role, content, ContextMode.COMPRESS, content_blocks, session_id=current_session_id, tokens=tokens, viewed=viewed)
         if session_node:
             # User turns are always leaves - no child nodes
             has_children = role != "user" and self._has_displayable_children(content_blocks)
@@ -1669,7 +1774,7 @@ class ContextTreeView(Vertical):
         input_preview = json.dumps(tool_input)[:50]
         if len(json.dumps(tool_input)) > 50:
             input_preview += "..."
-        label = f"[cyan]🔧 {tool_name}[/] {input_preview}"
+        label = f"[cyan]🔧 {tool_name}[/] {escape_markup(input_preview)}"
 
         tool_key = (session_id, turn_idx, tool_use_id)
 
@@ -1746,7 +1851,7 @@ class ContextTreeView(Vertical):
             if len(accumulated) > 50:
                 preview += "..."
 
-        node.label = f"[cyan]🔧 {tool_name}[/] [dim]{preview}[/]"
+        node.label = f"[cyan]🔧 {tool_name}[/] [dim]{escape_markup(preview)}[/]"
 
     def _format_tool_preview(self, tool_name: str, parsed: dict) -> str:
         """Format a tool input preview based on the tool type."""
@@ -1817,9 +1922,9 @@ class ContextTreeView(Vertical):
         # Show tool count if any
         tool_count = sum(1 for k in self._tool_use_nodes if k[0] == session_id and k[1] == turn_idx)
         if tool_count > 0:
-            turn_node.label = f"{indicator} {icon} [cyan]🔧{tool_count}[/] [dim]{preview}[/]"
+            turn_node.label = f"{indicator} {icon} [cyan]🔧{tool_count}[/] [dim]{escape_markup(preview)}[/]"
         else:
-            turn_node.label = f"{indicator} {icon} [dim]{preview}[/]"
+            turn_node.label = f"{indicator} {icon} [dim]{escape_markup(preview)}[/]"
 
     def flush_streaming_text(
         self,
@@ -1840,7 +1945,7 @@ class ContextTreeView(Vertical):
         text_preview = text[:50].replace("\n", " ")
         if len(text) > 50:
             text_preview += "..."
-        label = f"[dim]💬[/] {text_preview}"
+        label = f"[dim]💬[/] {escape_markup(text_preview)}"
 
         # Track how many text nodes we've added for this turn
         text_key = (session_id, turn_idx)
@@ -1886,7 +1991,7 @@ class ContextTreeView(Vertical):
         if len(str(result)) > 50:
             content_preview += "..."
         error_indicator = "[red]❌[/] " if is_error else ""
-        label = f"{error_indicator}[blue]📋 Result[/] {content_preview}"
+        label = f"{error_indicator}[blue]📋 Result[/] {escape_markup(content_preview)}"
 
         # Find parent tool use node, or fall back to turn node
         tool_key = (session_id, turn_idx, tool_use_id)
@@ -1991,11 +2096,11 @@ class ContextTreeView(Vertical):
 
             for fork_point, forks in fork_points.items():
                 for fork in forks:
-                    self._add_fork_node(session_node, session_id, fork, tree)
+                    self._add_fork_node(session_node, session_id, fork, tree, fork_point=fork_point)
 
             for merge_point, merges in merge_points.items():
                 for merge in merges:
-                    self._add_merge_node(session_node, session_id, merge)
+                    self._add_merge_node(session_node, session_id, merge, merge_point=merge_point)
 
     def on_tree_node_selected(self, event) -> None:
         """Handle node selection - show info in preview pane.
@@ -2105,26 +2210,31 @@ class ContextTreeView(Vertical):
                 "context_mode": mode.name,
             }, session_id=session_id))
         elif node_type == "fork":
-            # Show fork info in preview pane - don't activate
-            session_id = node_data.get("session_id")
-            session_data = self._state.get_session(session_id)
+            # Show fork info in preview pane and scroll to fork point
+            fork_session_id = node_data.get("session_id")
+            parent_session_id = node_data.get("parent_session_id")
+            fork_turn_idx = node_data.get("turn_idx", -1)
+            session_data = self._state.get_session(fork_session_id)
             if session_data:
                 self.post_message(self.TurnInspected({
-                    "type": "session_preview",
-                    "session_id": session_id,
+                    "type": "fork",
+                    "session_id": fork_session_id,
+                    "parent_session_id": parent_session_id,
                     "title": session_data.title or node_data.get("fork_name", ""),
                     "created": session_data.created,
                     "message_count": session_data.message_count,
                     "model": session_data.model,
                     "is_fork": True,
                     "status": node_data.get("status", "active"),
-                }))
+                    "turn_idx": fork_turn_idx,  # Turn index for scrolling in parent
+                }, session_id=parent_session_id))
         elif node_type == "merge":
-            # Show merge details in inspection pane
+            # Show merge details in inspection pane and scroll to merge point
             fork_id = node_data.get("session_id")
             parent_session_id = node_data.get("parent_session_id")
             fork_name = node_data.get("fork_name", "")
             merge_message = node_data.get("message", "")
+            merge_turn_idx = node_data.get("turn_idx", -1)
             mode = self._state.get_merge_mode(parent_session_id, fork_id)
             self.post_message(self.TurnInspected({
                 "type": "merge",
@@ -2133,7 +2243,46 @@ class ContextTreeView(Vertical):
                 "fork_name": fork_name,
                 "message": merge_message,
                 "context_mode": mode.name,
+                "turn_idx": merge_turn_idx,  # Turn index for scrolling in parent
             }, session_id=parent_session_id))
+        elif node_type == "link":
+            # Show link details in inspection pane and scroll to it
+            session_id = node_data.get("session_id")
+            turn_idx = node_data.get("turn_idx")
+            self.post_message(self.TurnInspected({
+                "type": "link",
+                "session_id": session_id,
+                "turn_idx": turn_idx,
+                "linked_session_id": node_data.get("linked_session_id"),
+                "link_id": node_data.get("link_id"),
+                "summary": node_data.get("summary", ""),
+                "is_orphaned": node_data.get("is_orphaned", False),
+            }, session_id=session_id))
+        elif node_type == "fork_block":
+            # Fork marker stored in content_blocks - scroll to it and show info
+            session_id = node_data.get("session_id")
+            turn_idx = node_data.get("turn_idx")
+            self.post_message(self.TurnInspected({
+                "type": "fork_block",
+                "session_id": session_id,
+                "turn_idx": turn_idx,
+                "child_session_id": node_data.get("child_session_id"),
+                "fork_name": node_data.get("fork_name"),
+                "prompt": node_data.get("prompt"),
+                "status": node_data.get("status"),
+            }, session_id=session_id))
+        elif node_type == "merge_block":
+            # Merge marker stored in content_blocks - scroll to it and show info
+            session_id = node_data.get("session_id")
+            turn_idx = node_data.get("turn_idx")
+            self.post_message(self.TurnInspected({
+                "type": "merge_block",
+                "session_id": session_id,
+                "turn_idx": turn_idx,
+                "child_session_id": node_data.get("child_session_id"),
+                "fork_name": node_data.get("fork_name"),
+                "message": node_data.get("message"),
+            }, session_id=session_id))
         elif node_type == "exchange":
             # Exchange nodes group multiple turns - scroll to first turn in exchange
             # Use scroll_to_top=True so the first turn is at the top of viewport
@@ -2171,6 +2320,21 @@ class ContextTreeView(Vertical):
             # Activate merged fork session
             session_id = node_data.get("session_id")
             self._activate_session(session_id)
+        elif node_type == "fork_block":
+            # Activate fork session from content_block
+            child_session_id = node_data.get("child_session_id")
+            if child_session_id:
+                self._activate_session(child_session_id)
+        elif node_type == "merge_block":
+            # Activate merged fork session from content_block
+            child_session_id = node_data.get("child_session_id")
+            if child_session_id:
+                self._activate_session(child_session_id)
+        elif node_type == "link":
+            # Activate linked session
+            linked_session_id = node_data.get("linked_session_id")
+            if linked_session_id and not node_data.get("is_orphaned"):
+                self._activate_session(linked_session_id)
         elif node_type == "turn":
             # Toggle context mode on Enter for turns (same as space)
             session_id = node_data.get("session_id")
@@ -2400,12 +2564,12 @@ class ContextTreeView(Vertical):
                         # Add forks at appropriate positions
                         for fork_point, forks in fork_points.items():
                             for fork in forks:
-                                self._add_fork_node(session_node, session_id, fork, tree)
+                                self._add_fork_node(session_node, session_id, fork, tree, fork_point=fork_point)
 
                         # Add merges at appropriate positions
                         for merge_point, merges in merge_points.items():
                             for merge in merges:
-                                self._add_merge_node(session_node, session_id, merge)
+                                self._add_merge_node(session_node, session_id, merge, merge_point=merge_point)
 
         debug_log.info(f"_rebuild_tree: done in {(time.time()-start_time)*1000:.0f}ms", category="tree")
         self._update_root_label()
@@ -2493,7 +2657,7 @@ class ContextTreeView(Vertical):
                 turns_to_show = matching_turns if self._search_query else session_data.turns
                 for turn in turns_to_show:
                     mode = self._state.get_context_mode(session_id, turn.idx)
-                    label = self._make_turn_label(turn.role, turn.content, mode, turn.content_blocks, session_id=session_id, tokens=turn.tokens)
+                    label = self._make_turn_label(turn.role, turn.content, mode, turn.content_blocks, session_id=session_id, tokens=turn.tokens, viewed=turn.viewed)
                     # User turns are always leaves - no child nodes
                     has_children = turn.role != "user" and self._has_displayable_children(turn.content_blocks)
                     turn_node = session_node.add(
@@ -2562,6 +2726,41 @@ class ContextTreeView(Vertical):
                 return (session_id, turn_indices)
 
         return None
+
+    def scroll_to_turn(self, session_id: str, turn_idx: int) -> bool:
+        """Scroll to and select a specific turn in the tree.
+
+        Args:
+            session_id: The session containing the turn
+            turn_idx: The 0-based turn index
+
+        Returns:
+            True if the turn was found and scrolled to, False otherwise
+        """
+        tree = self.query_one("#turn-tree", SelectableTreeWidget)
+
+        # Ensure the session node exists and is expanded
+        session_node = self._session_nodes.get(session_id)
+        if session_node:
+            session_node.expand()
+
+        # Try to find the turn node
+        turn_node = self._turn_nodes.get((session_id, turn_idx))
+        if turn_node:
+            tree.select_node(turn_node)
+            tree.scroll_to_node(turn_node)
+            return True
+
+        # Turn might be in an exchange group - search for it
+        for key, exchange_node in self._exchange_nodes.items():
+            if key[0] == session_id and exchange_node.data:
+                turn_indices = exchange_node.data.get("turn_indices", [])
+                if turn_idx in turn_indices:
+                    tree.select_node(exchange_node)
+                    tree.scroll_to_node(exchange_node)
+                    return True
+
+        return False
 
     def get_selected_messages(self) -> list:
         """Get included messages in order for context building.

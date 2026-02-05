@@ -11,7 +11,7 @@ from session import Session
 
 
 # Tool names for checking if a tool is a link tool
-LINK_TOOL_NAMES = {"list_links", "follow_link", "search_linked_session"}
+LINK_TOOL_NAMES = {"list_links", "follow_link", "search_linked_session", "session_info"}
 
 
 def execute_link_tool(
@@ -35,6 +35,8 @@ def execute_link_tool(
         return _execute_follow_link(args, current_session)
     elif name == "search_linked_session":
         return _execute_search_linked(args, current_session)
+    elif name == "session_info":
+        return _execute_session_info(current_session)
     else:
         return f"Unknown link tool: {name}", True
 
@@ -179,3 +181,86 @@ def _execute_search_linked(args: dict[str, Any], current_session: Session) -> tu
     }
 
     return json.dumps(result, indent=2), False
+
+
+def _execute_session_info(session: Session) -> tuple[str, bool]:
+    """Get information about the current session.
+
+    Returns context usage, token counts, fork status, and other metadata
+    to help the LLM make informed decisions about forking or merging.
+    """
+    # Calculate context usage
+    context_tokens = session.cached_context_tokens
+    context_window = session.context_window
+    context_usage_pct = (context_tokens / context_window * 100) if context_window > 0 else 0
+
+    # Count exchanges (user prompts, roughly)
+    exchange_count = sum(1 for t in session.turns if t.role == "user")
+
+    # Count different turn types
+    user_turns = sum(1 for t in session.turns if t.role == "user")
+    assistant_turns = sum(1 for t in session.turns if t.role == "assistant")
+    tool_turns = sum(1 for t in session.turns if t.role == "tool")
+
+    # Fork/merge status
+    is_fork = session.is_fork()
+    is_merged = session.is_merged()
+
+    # Get parent info if this is a fork
+    parent_info = None
+    if is_fork and session.parent_id:
+        parent_session = Session.load(session.parent_id)
+        if parent_session:
+            parent_info = {
+                "id": parent_session.id[:8],
+                "name": parent_session.title or parent_session.fork_name or parent_session.id[:8],
+            }
+
+    # Get active children (forks)
+    active_forks = session.get_active_forks()
+
+    result = {
+        "session_id": session.id[:8],
+        "name": session.title or session.fork_name or session.id[:8],
+        "context": {
+            "tokens_used": context_tokens,
+            "context_window": context_window,
+            "usage_percent": round(context_usage_pct, 1),
+            "recommendation": _get_context_recommendation(context_usage_pct),
+        },
+        "conversation": {
+            "exchange_count": exchange_count,
+            "total_turns": len(session.turns),
+            "user_turns": user_turns,
+            "assistant_turns": assistant_turns,
+            "tool_turns": tool_turns,
+        },
+        "fork_status": {
+            "is_fork": is_fork,
+            "is_merged": is_merged,
+            "fork_name": session.fork_name if is_fork else None,
+            "parent": parent_info,
+            "active_child_forks": len(active_forks),
+        },
+        "tokens": {
+            "total_input": session.total_input_tokens,
+            "total_output": session.total_output_tokens,
+            "total_cost_usd": round(session.total_cost, 4),
+        },
+    }
+
+    return json.dumps(result, indent=2), False
+
+
+def _get_context_recommendation(usage_pct: float) -> str:
+    """Get a recommendation based on context usage percentage."""
+    if usage_pct < 25:
+        return "Low usage - plenty of room for continued conversation"
+    elif usage_pct < 50:
+        return "Moderate usage - consider forking for large new tasks"
+    elif usage_pct < 75:
+        return "High usage - forking recommended before starting new substantial work"
+    elif usage_pct < 90:
+        return "Very high usage - strongly recommend forking with compressed context"
+    else:
+        return "Critical usage - fork immediately to avoid context overflow"

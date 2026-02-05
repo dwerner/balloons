@@ -93,6 +93,16 @@ from .command_executor import (
 )
 from .json_stream import StreamingJsonParser
 from .stream_buffer import StreamBuffer, Timer, TimerFactory
+from .task_state import (
+    TaskState,
+    Task,
+    TaskStatus,
+    TaskType,
+    TaskEvent,
+    SessionTaskInfo,
+    AsyncObserver,
+    get_task_state,
+)
 
 __all__ = [
     # Commands
@@ -176,6 +186,7 @@ __all__ = [
     "StreamingCoordinator",
     "StreamingAction",
     "TextAction",
+    "TextFlushAction",
     "InitAction",
     "ResultAction",
     "ToolUseStartAction",
@@ -217,4 +228,13 @@ __all__ = [
     "StreamBuffer",
     "Timer",
     "TimerFactory",
+    # Task state
+    "TaskState",
+    "Task",
+    "TaskStatus",
+    "TaskType",
+    "TaskEvent",
+    "SessionTaskInfo",
+    "AsyncObserver",
+    "get_task_state",
 ]

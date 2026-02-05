@@ -329,6 +329,18 @@ LINK_TOOLS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "session_info",
+            "description": "Get information about the current session including context usage, token counts, and fork status. Use this to understand the state of the conversation and make informed decisions about forking or merging.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
 ]
 
 def get_tools_for_request(

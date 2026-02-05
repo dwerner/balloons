@@ -610,3 +610,132 @@ class TestTreeStateExchangeGrouping:
         groups = state.get_turns_grouped_by_exchange("s1")
 
         assert all(t.exchange_id == "ex123" for t in groups[0])
+
+
+class TestTreeStateViewedTracking:
+    """Test tracking of viewed/unviewed turns."""
+
+    def test_start_turn_user_is_viewed(self):
+        """User turns start as viewed."""
+        state = TreeState()
+        session = MockSession(id="s1", turns=[])
+        state.add_session(session)
+        state.load_session("s1", session)
+
+        state.start_turn("s1", 0, "user")
+
+        turn = state.get_turn("s1", 0)
+        assert turn.viewed is True
+
+    def test_start_turn_assistant_is_unviewed(self):
+        """Assistant turns start as unviewed."""
+        state = TreeState()
+        session = MockSession(id="s1", turns=[])
+        state.add_session(session)
+        state.load_session("s1", session)
+
+        state.start_turn("s1", 0, "assistant")
+
+        turn = state.get_turn("s1", 0)
+        assert turn.viewed is False
+
+    def test_mark_turn_viewed(self):
+        """Can mark an unviewed turn as viewed."""
+        state = TreeState()
+        session = MockSession(id="s1", turns=[])
+        state.add_session(session)
+        state.load_session("s1", session)
+        state.start_turn("s1", 0, "assistant")
+
+        result = state.mark_turn_viewed("s1", 0)
+
+        assert result is True
+        turn = state.get_turn("s1", 0)
+        assert turn.viewed is True
+
+    def test_mark_turn_viewed_already_viewed_returns_false(self):
+        """Marking an already-viewed turn returns False."""
+        state = TreeState()
+        session = MockSession(id="s1", turns=[])
+        state.add_session(session)
+        state.load_session("s1", session)
+        state.start_turn("s1", 0, "user")  # User turns start viewed
+
+        result = state.mark_turn_viewed("s1", 0)
+
+        assert result is False
+
+    def test_mark_turn_viewed_fires_event(self):
+        """Marking a turn as viewed fires TURN_VIEWED event."""
+        state = TreeState()
+        session = MockSession(id="s1", turns=[])
+        state.add_session(session)
+        state.load_session("s1", session)
+        state.start_turn("s1", 0, "assistant")
+
+        events = []
+        state.add_observer(lambda e, d: events.append((e, d)))
+
+        state.mark_turn_viewed("s1", 0)
+
+        turn_viewed_events = [e for e, d in events if e == TreeEvent.TURN_VIEWED]
+        assert len(turn_viewed_events) == 1
+
+    def test_get_unviewed_turns(self):
+        """get_unviewed_turns returns indices of unviewed turns."""
+        state = TreeState()
+        session = MockSession(id="s1", turns=[])
+        state.add_session(session)
+        state.load_session("s1", session)
+        state.start_turn("s1", 0, "user")
+        state.start_turn("s1", 1, "assistant")  # unviewed
+        state.start_turn("s1", 2, "assistant")  # unviewed
+
+        unviewed = state.get_unviewed_turns("s1")
+
+        assert unviewed == [1, 2]
+
+    def test_has_unviewed_turns(self):
+        """has_unviewed_turns returns True when there are unviewed turns."""
+        state = TreeState()
+        session = MockSession(id="s1", turns=[])
+        state.add_session(session)
+        state.load_session("s1", session)
+        state.start_turn("s1", 0, "user")
+
+        assert state.has_unviewed_turns("s1") is False
+
+        state.start_turn("s1", 1, "assistant")
+
+        assert state.has_unviewed_turns("s1") is True
+
+    def test_get_unviewed_count(self):
+        """get_unviewed_count returns count of unviewed turns."""
+        state = TreeState()
+        session = MockSession(id="s1", turns=[])
+        state.add_session(session)
+        state.load_session("s1", session)
+        state.start_turn("s1", 0, "user")
+        state.start_turn("s1", 1, "assistant")
+        state.start_turn("s1", 2, "assistant")
+
+        assert state.get_unviewed_count("s1") == 2
+
+        state.mark_turn_viewed("s1", 1)
+
+        assert state.get_unviewed_count("s1") == 1
+
+    def test_mark_turns_viewed_batch(self):
+        """mark_turns_viewed can mark multiple turns at once."""
+        state = TreeState()
+        session = MockSession(id="s1", turns=[])
+        state.add_session(session)
+        state.load_session("s1", session)
+        state.start_turn("s1", 0, "assistant")
+        state.start_turn("s1", 1, "assistant")
+        state.start_turn("s1", 2, "user")  # Already viewed
+
+        count = state.mark_turns_viewed("s1", [0, 1, 2])
+
+        assert count == 2  # Only 2 were actually marked (user was already viewed)
+        assert state.get_unviewed_count("s1") == 0

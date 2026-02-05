@@ -20,6 +20,7 @@ class TestLinkToolNames:
         assert "list_links" in LINK_TOOL_NAMES
         assert "follow_link" in LINK_TOOL_NAMES
         assert "search_linked_session" in LINK_TOOL_NAMES
+        assert "session_info" in LINK_TOOL_NAMES
 
 
 class TestExecuteLinkTool:
@@ -104,6 +105,79 @@ class TestExecuteLinkTool:
         )
         assert is_error
         assert "query is required" in result
+
+    def test_session_info_basic(self):
+        """Test session_info returns expected structure."""
+        session = Mock(spec=Session)
+        session.id = "test-session-12345678"
+        session.title = "Test Session"
+        session.fork_name = ""
+        session.cached_context_tokens = 40000  # 20% usage - clearly in "Low usage" range
+        session.context_window = 200000
+        session.turns = [Mock(role="user"), Mock(role="assistant"), Mock(role="tool")]
+        session.is_fork.return_value = False
+        session.is_merged.return_value = False
+        session.parent_id = None
+        session.get_active_forks.return_value = []
+        session.total_input_tokens = 10000
+        session.total_output_tokens = 5000
+        session.total_cost = 0.25
+
+        result, is_error = execute_link_tool("session_info", {}, session)
+
+        assert not is_error
+        data = json.loads(result)
+
+        # Check structure
+        assert data["session_id"] == "test-ses"  # First 8 chars
+        assert data["name"] == "Test Session"
+        assert data["context"]["tokens_used"] == 40000
+        assert data["context"]["context_window"] == 200000
+        assert data["context"]["usage_percent"] == 20.0
+        assert "Low usage" in data["context"]["recommendation"]
+        assert data["conversation"]["total_turns"] == 3
+        assert data["conversation"]["user_turns"] == 1
+        assert data["conversation"]["assistant_turns"] == 1
+        assert data["conversation"]["tool_turns"] == 1
+        assert data["fork_status"]["is_fork"] is False
+        assert data["tokens"]["total_input"] == 10000
+        assert data["tokens"]["total_output"] == 5000
+
+    def test_session_info_high_context_usage(self):
+        """Test session_info recommends forking at high usage."""
+        session = Mock(spec=Session)
+        session.id = "test-session-12345678"
+        session.title = ""
+        session.fork_name = "my-fork"
+        session.cached_context_tokens = 160000
+        session.context_window = 200000
+        session.turns = []
+        session.is_fork.return_value = True
+        session.is_merged.return_value = False
+        session.parent_id = "parent-1234"
+        session.get_active_forks.return_value = []
+        session.total_input_tokens = 0
+        session.total_output_tokens = 0
+        session.total_cost = 0.0
+
+        # Mock parent session
+        parent_session = Mock(spec=Session)
+        parent_session.id = "parent-1234"
+        parent_session.title = "Parent Session"
+        parent_session.fork_name = ""
+
+        with patch.object(Session, 'load', return_value=parent_session):
+            result, is_error = execute_link_tool("session_info", {}, session)
+
+        assert not is_error
+        data = json.loads(result)
+
+        # Name should come from fork_name when title is empty
+        assert data["name"] == "my-fork"
+        assert data["context"]["usage_percent"] == 80.0
+        assert "strongly recommend" in data["context"]["recommendation"].lower()
+        assert data["fork_status"]["is_fork"] is True
+        assert data["fork_status"]["parent"]["name"] == "Parent Session"
 
 
 class TestClaudeRunnerSession:

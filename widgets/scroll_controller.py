@@ -273,9 +273,12 @@ class ScrollController:
         self.following = True
 
     def _log_info(self, message: str) -> None:
-        """Log info message if debug_log is available."""
+        """Log info message if debug_log is available.
+
+        Note: Using debug level to reduce noise - change back to info if debugging scroll issues.
+        """
         if self._debug_log:
-            self._debug_log.info(message, category="scroll_controller")
+            self._debug_log.debug(message, category="scroll_controller")
 
     def _log_debug(self, message: str) -> None:
         """Log debug message if debug_log is available."""

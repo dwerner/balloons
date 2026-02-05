@@ -399,6 +399,7 @@ class ClaudeRunner(BaseRunner):
         Yields events and automatically executes tools, sending results back.
         """
         pending_tool_calls: list[dict] = []  # Collect tool calls from current response
+        awaiting_balloons_tool_response = False  # True after we send a balloons-tool result
 
         while True:
             if self._terminated:
@@ -461,6 +462,8 @@ class ClaudeRunner(BaseRunner):
                                 async for event in self._handle_balloons_tool(self._text_buffer, working_dir):
                                     yield event
                                 self._text_buffer = ""
+                                # Mark that we're waiting for Claude to respond to the tool result
+                                awaiting_balloons_tool_response = True
 
                     elif block_type == "tool_use":
                         tool_use_id = block.get("id", "")
@@ -546,6 +549,16 @@ class ClaudeRunner(BaseRunner):
 
                     pending_tool_calls.clear()
                     # Continue processing - Claude will respond to the tool results
+                    continue
+
+                # Check if we're waiting for Claude to respond to a balloons-tool result
+                if awaiting_balloons_tool_response:
+                    debug_log.debug(
+                        "Awaiting balloons-tool response, continuing stream",
+                        category="tool",
+                        run_id=self._run_id,
+                    )
+                    awaiting_balloons_tool_response = False
                     continue
 
                 # No custom tool calls pending - we're done

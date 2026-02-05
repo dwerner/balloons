@@ -17,6 +17,7 @@ from textual.events import Key, Click
 from textual.timer import Timer
 from rich.text import Text
 from rich.style import Style
+from rich.markup import escape as escape_markup
 from typing import TYPE_CHECKING, Any
 from datetime import datetime
 
@@ -488,6 +489,14 @@ class NestedTreeView(Vertical):
                 self._update_turn_label(session_id, turn_idx)
                 self._update_root_label()
 
+        elif event == TreeEvent.TURN_VIEWED:
+            # Turn was marked as viewed - update label to remove unviewed indicator
+            session_id = data.get("session_id")
+            turn_idx = data.get("turn_idx")
+            if session_id and turn_idx is not None:
+                self._update_turn_label(session_id, turn_idx)
+                self._update_session_label(session_id)
+
         elif event == TreeEvent.TOOL_USE_STARTED:
             # Could add tool use nodes during streaming
             pass
@@ -658,7 +667,7 @@ class NestedTreeView(Vertical):
     ) -> None:
         """Add a single turn node to a parent (session or exchange group)."""
         mode = self._state.get_context_mode(session_id, turn.idx)
-        label = self._make_turn_label(turn.role, turn.content, mode, turn.content_blocks)
+        label = self._make_turn_label(turn.role, turn.content, mode, turn.content_blocks, turn.viewed)
         has_children = self._has_displayable_children(turn.content_blocks)
         turn_node = parent_node.add(
             label,
@@ -689,7 +698,7 @@ class NestedTreeView(Vertical):
                     if len(block.text) > 50:
                         text_preview += "..."
                     turn_node.add(
-                        f"[dim]💬[/] {text_preview}",
+                        f"[dim]💬[/] {escape_markup(text_preview)}",
                         data={
                             "type": "text",
                             "session_id": session_id,
@@ -702,7 +711,7 @@ class NestedTreeView(Vertical):
                 if len(json.dumps(block.input)) > 50:
                     input_preview += "..."
                 tool_node = turn_node.add(
-                    f"[cyan]🔧 {block.name}[/] {input_preview}",
+                    f"[cyan]🔧 {block.name}[/] {escape_markup(input_preview)}",
                     data={
                         "type": "tool_use",
                         "session_id": session_id,
@@ -719,7 +728,7 @@ class NestedTreeView(Vertical):
                 error_indicator = "[red]❌[/] " if block.is_error else ""
                 parent = tool_use_nodes.get(block.tool_use_id, turn_node)
                 parent.add(
-                    f"{error_indicator}[blue]📋 Result[/] {content_preview}",
+                    f"{error_indicator}[blue]📋 Result[/] {escape_markup(content_preview)}",
                     data={
                         "type": "tool_result",
                         "session_id": session_id,
@@ -777,14 +786,16 @@ class NestedTreeView(Vertical):
         if not session_node:
             return
 
+        turn_data = self._state.get_turn(session_id, turn_idx)
         if streaming:
             content = "[dim]streaming...[/]"
+            viewed = True  # Streaming turns are considered viewed (user is watching)
         else:
-            turn_data = self._state.get_turn(session_id, turn_idx)
             content = turn_data.content if turn_data else ""
+            viewed = turn_data.viewed if turn_data else True
 
         mode = self._state.get_context_mode(session_id, turn_idx)
-        label = self._make_turn_label(role, content, mode)
+        label = self._make_turn_label(role, content, mode, viewed=viewed)
 
         turn_node = session_node.add(
             label,
@@ -814,7 +825,7 @@ class NestedTreeView(Vertical):
             return
 
         mode = self._state.get_context_mode(session_id, turn_idx)
-        turn_node.label = self._make_turn_label(turn_data.role, content, mode, content_blocks)
+        turn_node.label = self._make_turn_label(turn_data.role, content, mode, content_blocks, turn_data.viewed)
 
         # Clear and rebuild content block children
         turn_node.remove_children()
@@ -834,7 +845,7 @@ class NestedTreeView(Vertical):
 
         mode = self._state.get_context_mode(session_id, turn_idx)
         turn_node.label = self._make_turn_label(
-            turn_data.role, turn_data.content, mode, turn_data.content_blocks
+            turn_data.role, turn_data.content, mode, turn_data.content_blocks, turn_data.viewed
         )
 
     def _update_session_label(self, session_id: str) -> None:
@@ -922,20 +933,28 @@ class NestedTreeView(Vertical):
         else:
             streaming = ""
 
+        # Unviewed turns indicator
+        unviewed_count = self._state.get_unviewed_count(session_data.id)
+        if unviewed_count > 0:
+            unviewed = f" [bold blue]●{unviewed_count}[/]"
+        else:
+            unviewed = ""
+
         # Name
         if session_data.fork_name:
-            name = session_data.fork_name
+            name = escape_markup(session_data.fork_name)
         elif session_data.title:
-            name = session_data.title[:25] + "..." if len(session_data.title) > 25 else session_data.title
+            title = session_data.title[:25] + "..." if len(session_data.title) > 25 else session_data.title
+            name = escape_markup(title)
         else:
             name = None
 
         id_prefix = f"[dim]{session_data.id[:8]}[/] "
 
         if name:
-            label = f"{id_prefix}{name} [dim]({msg_count}msg)[/]"
+            label = f"{id_prefix}{name} [dim]({msg_count}msg)[/]{unviewed}"
         else:
-            label = f"{id_prefix}{date_str} [dim]({msg_count}msg)[/]"
+            label = f"{id_prefix}{date_str} [dim]({msg_count}msg)[/]{unviewed}"
 
         if is_active:
             return f"{prefix}{streaming}[bold cyan]{label}[/]"
@@ -993,9 +1012,13 @@ class NestedTreeView(Vertical):
         role: str,
         content: str,
         mode: ContextMode,
-        content_blocks: list = None
+        content_blocks: list = None,
+        viewed: bool = True
     ) -> str:
         """Create a label for a turn node."""
+        # Unviewed indicator (blue dot for unviewed assistant turns)
+        unviewed_indicator = "[bold blue]● [/]" if not viewed else ""
+
         # Check for archive block first
         if content_blocks:
             for block in content_blocks:
@@ -1010,7 +1033,7 @@ class NestedTreeView(Vertical):
                     summary = block.structured_summary.work_done if block.structured_summary else block.summary
                     preview = summary[:40] + "..." if len(summary) > 40 else summary
                     preview = preview.replace("\n", " ")
-                    return f"{indicator} 📦 {preview}"
+                    return f"{unviewed_indicator}{indicator} 📦 {escape_markup(preview)}"
 
         if mode == ContextMode.COPY:
             indicator = "[green]☑[/]"
@@ -1033,7 +1056,7 @@ class NestedTreeView(Vertical):
 
         tool_indicator = f" [cyan]🔧{tool_count}[/]" if tool_count > 0 else ""
         error_indicator = " [yellow]⚠[/]" if has_error else ""
-        return f"{indicator} {icon}{tool_indicator}{error_indicator} {preview}"
+        return f"{unviewed_indicator}{indicator} {icon}{tool_indicator}{error_indicator} {escape_markup(preview)}"
 
     # --- Event Handlers (from NestedTreeWidget) ---
 

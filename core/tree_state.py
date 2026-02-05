@@ -78,6 +78,7 @@ class TurnData:
     content_blocks: list = field(default_factory=list)
     events: list = field(default_factory=list)
     streaming: bool = False
+    viewed: bool = True  # Whether user has seen this turn (False for new assistant turns)
     tool_use_ids: list[str] = field(default_factory=list)
     exchange_id: str | None = None  # Groups turns in an agentic loop
     tokens: int = 0  # Estimated token count for this turn
@@ -124,6 +125,7 @@ class TreeEvent(Enum):
     TURN_STARTED = "turn_started"
     TURN_UPDATED = "turn_updated"
     TURN_FINISHED = "turn_finished"
+    TURN_VIEWED = "turn_viewed"
 
     TOOL_USE_STARTED = "tool_use_started"
     TOOL_USE_UPDATED = "tool_use_updated"
@@ -508,11 +510,15 @@ class TreeState:
         turn_key = (session_id, turn_idx)
         self._context_modes[turn_key] = ContextMode.COMPRESS
 
+        # Assistant turns start as unviewed until user sees them
+        is_viewed = role != "assistant"
+
         turn = TurnData(
             idx=turn_idx,
             role=role,
             content="",
             streaming=True,
+            viewed=is_viewed,
             exchange_id=exchange_id,
         )
         session_data.turns.append(turn)
@@ -676,8 +682,18 @@ class TreeState:
     # --- Context Mode Operations ---
 
     def get_context_mode(self, session_id: str, turn_idx: int) -> ContextMode:
-        """Get the context mode for a turn."""
-        return self._context_modes.get((session_id, turn_idx), ContextMode.DROP)
+        """Get the context mode for a turn.
+
+        For the current session, defaults to COPY (include in context).
+        For other sessions, defaults to DROP (not in context).
+        """
+        key = (session_id, turn_idx)
+        if key in self._context_modes:
+            return self._context_modes[key]
+        # Default: current session turns are COPY, others are DROP
+        if session_id == self._current_session_id:
+            return ContextMode.COPY
+        return ContextMode.DROP
 
     def set_context_mode(self, session_id: str, turn_idx: int, mode: ContextMode) -> None:
         """Set the context mode for a turn."""
@@ -829,6 +845,60 @@ class TreeState:
     def get_streaming_sessions(self) -> set[str]:
         """Get all session IDs that are currently streaming."""
         return self._streaming_sessions.copy()
+
+    # --- Viewed State ---
+
+    def mark_turn_viewed(self, session_id: str, turn_idx: int) -> bool:
+        """Mark a turn as viewed by the user.
+
+        Returns True if the turn was marked as viewed (was previously unviewed),
+        False if already viewed or turn not found.
+        """
+        turn = self.get_turn(session_id, turn_idx)
+        if not turn or turn.viewed:
+            return False
+
+        turn.viewed = True
+        self._notify(TreeEvent.TURN_VIEWED, {
+            "session_id": session_id,
+            "turn_idx": turn_idx,
+        })
+        return True
+
+    def mark_turns_viewed(self, session_id: str, turn_indices: list[int]) -> int:
+        """Mark multiple turns as viewed.
+
+        Returns the number of turns that were actually marked as viewed.
+        """
+        count = 0
+        for turn_idx in turn_indices:
+            if self.mark_turn_viewed(session_id, turn_idx):
+                count += 1
+        return count
+
+    def get_unviewed_turns(self, session_id: str) -> list[int]:
+        """Get list of turn indices that haven't been viewed."""
+        session_data = self._sessions.get(session_id)
+        if not session_data or session_data.turns is None:
+            return []
+
+        return [turn.idx for turn in session_data.turns if not turn.viewed]
+
+    def has_unviewed_turns(self, session_id: str) -> bool:
+        """Check if session has any unviewed turns."""
+        session_data = self._sessions.get(session_id)
+        if not session_data or session_data.turns is None:
+            return False
+
+        return any(not turn.viewed for turn in session_data.turns)
+
+    def get_unviewed_count(self, session_id: str) -> int:
+        """Get count of unviewed turns in a session."""
+        session_data = self._sessions.get(session_id)
+        if not session_data or session_data.turns is None:
+            return 0
+
+        return sum(1 for turn in session_data.turns if not turn.viewed)
 
     # --- Bulk Operations ---
 

@@ -100,7 +100,7 @@ class StatusBar(Static):
 
         return (
             f"[{backend_display}{model_display}] "
-            f"{self.context_tokens:,} / {self.context_window:,} ctx ({percent:.1f}%) | "
+            f"ctx: {self.context_tokens:,} / {self.context_window:,} ({percent:.1f}%) | "
             f"${self.cost:.4f}"
             f"{wd_display}"
             f"{follow_indicator}"

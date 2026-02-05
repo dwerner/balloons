@@ -345,7 +345,8 @@ class StreamingCoordinator:
             return InputRequiredAction(session_id=session_id, message=event.data)
 
         else:
-            debug_log.warning(
+            # Note: "raw" events are common and benign - use debug level to reduce noise
+            debug_log.debug(
                 f"Unknown event type: {event.event_type}",
                 category="stream",
                 session_id=session_id,

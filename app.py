@@ -32,7 +32,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, RequestPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, MessageStash, StashPopup
+from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, TaskPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, MessageStash, StashPopup
 from widgets.input_box import CompletionPopup
 from widgets.archive_marker import ArchiveMarker
 from claude_runner import ClaudeRunner
@@ -109,6 +109,7 @@ from core.fork import ForkManager, ForkResult, MergeResult, DeriveResult, Switch
 from core.command_executor import CommandExecutor, ArchiveResult, RehydrateResult, LinkResult, BackendResult, ShellResult
 from core.tool_executor import parse_fork_proposal, parse_merge_proposal
 from core.tree_state import TreeState, TreeEvent
+from core.task_state import get_task_state, TaskStatus
 from tokenizer import count_tokens
 
 
@@ -181,12 +182,12 @@ class BalloonsApp(App):
 
     BINDINGS = [
         Binding("escape", "cancel_stream", "Cancel", show=True),
-        Binding("ctrl+c", "quit", "Quit", show=True),
-        Binding("ctrl+q", "quit", "Quit", show=False),
+        # Note: ctrl+c is reserved for copy (text selection) - use ctrl+q to quit
+        Binding("ctrl+q", "quit", "Quit", show=True),
         Binding("ctrl+space", "new_session", "New Session", show=True),
         Binding("ctrl+t", "toggle_tree", "Toggle Tree", show=True),
         Binding("ctrl+n", "switch_tree_view", "Switch Tree", show=True),
-        Binding("ctrl+r", "toggle_requests", "Toggle Requests", show=True),
+        Binding("ctrl+r", "toggle_tasks", "Toggle Tasks", show=True),
         Binding("ctrl+g", "toggle_debug", "Debug", show=True),
         Binding("ctrl+p", "show_preferences", "Preferences", show=True),
         Binding("ctrl+s", "stash_toggle", "Stash", show=False),
@@ -387,7 +388,7 @@ class BalloonsApp(App):
                     yield Breadcrumb(id="breadcrumb")
                     yield ChatLogView(id="chat-log")
                     yield MoreBelowIndicator(id="more-below")
-                yield RequestPane(id="request-pane", classes="hidden")
+                yield TaskPane(id="task-pane", classes="hidden")
             yield DebugPane(id="debug-pane")
             yield StatusBar(id="status-bar")
             with Vertical(id="input-area"):
@@ -405,13 +406,42 @@ class BalloonsApp(App):
         self._initialize_session()
 
     def _on_tree_state_event(self, event: TreeEvent, data: dict) -> None:
-        """Handle state changes from TreeState that affect token counts."""
+        """Handle state changes from TreeState that affect token counts and UI."""
         if event == TreeEvent.TURN_FINISHED:
             # Turn completed - recalculate tokens for the session
             session_id = data.get("session_id")
             if session_id == self._tree_state.get_current_session_id():
                 self._update_base_context_tokens()
                 self._update_context_tokens()
+                # Update scrollbar markers for unviewed turns
+                self._update_unviewed_markers()
+
+        elif event == TreeEvent.TURN_VIEWED:
+            # Turn was viewed - update scrollbar markers
+            session_id = data.get("session_id")
+            if session_id == self._tree_state.get_current_session_id():
+                self._update_unviewed_markers()
+
+        elif event == TreeEvent.SESSION_LOADED:
+            # Session loaded - update scrollbar markers
+            session_id = data.get("session_id")
+            if session_id == self._tree_state.get_current_session_id():
+                self._update_unviewed_markers()
+
+    def _update_unviewed_markers(self) -> None:
+        """Update the chat log scrollbar markers for unviewed turns."""
+        try:
+            chat_log = self.query_one("#chat-log", ChatLogView)
+            current_id = self._tree_state.get_current_session_id()
+            if current_id:
+                # Get unviewed turn indices (0-indexed) and convert to turn IDs (1-indexed)
+                unviewed_indices = self._tree_state.get_unviewed_turns(current_id)
+                unviewed_turn_ids = [idx + 1 for idx in unviewed_indices]
+                chat_log.set_unviewed_markers(unviewed_turn_ids)
+            else:
+                chat_log.set_unviewed_markers([])
+        except Exception:
+            pass  # Chat log may not be mounted yet
 
     def _update_streaming_count(self) -> None:
         """Update the status bar with total streaming sessions count."""
@@ -534,6 +564,13 @@ class BalloonsApp(App):
                 action.text,
             )
 
+            # Track accumulated content for token estimation
+            ctx.content += action.text
+
+            # Update task state with approximate token count (rough estimate: 4 chars per token)
+            approx_tokens = len(ctx.content) // 4
+            get_task_state().update_task(ctx.exchange_id, tokens_streamed=approx_tokens)
+
             if is_active:
                 chat_log.append_to_current(action.text)
             else:
@@ -551,6 +588,12 @@ class BalloonsApp(App):
             )
 
         elif isinstance(action, InitAction):
+            # Update task with model info
+            get_task_state().update_task(
+                ctx.exchange_id,
+                model=action.model,
+                context_window=action.context_window,
+            )
             if is_active:
                 status_bar.update_stats(
                     model=action.model,
@@ -558,12 +601,19 @@ class BalloonsApp(App):
                 )
 
         elif isinstance(action, ResultAction):
+            # Update task with actual token counts
+            get_task_state().update_task(
+                ctx.exchange_id,
+                input_tokens=action.input_tokens,
+                output_tokens=action.output_tokens,
+            )
             if is_active:
                 # Get session from manager for cost tracking
                 session = self._manager._sessions.get(session_id)
                 if session:
                     status_bar.update_stats(cost=session.total_cost)
-                # Update context tokens now that new messages are added
+                # Update context tokens to show cumulative context for NEXT request
+                # (includes the response that was just added)
                 self._update_base_context_tokens()
                 self._update_context_tokens()
 
@@ -576,6 +626,15 @@ class BalloonsApp(App):
                 action.tool_name,
                 {},  # Empty input for now
                 action.tool_index,
+            )
+
+            # Track tool count for task state
+            ctx.tool_count = getattr(ctx, 'tool_count', 0) + 1
+            get_task_state().update_task(
+                ctx.exchange_id,
+                status=TaskStatus.EXECUTING,
+                tool_name=action.tool_name,
+                tool_count=ctx.tool_count,
             )
 
             if is_active:
@@ -661,6 +720,13 @@ class BalloonsApp(App):
                 action.tool_use_id,
                 action.result,
                 action.tool_index,
+            )
+
+            # Tool done, back to streaming
+            get_task_state().update_task(
+                ctx.exchange_id,
+                status=TaskStatus.STREAMING,
+                tool_name=None,
             )
 
             if is_active:
@@ -1108,6 +1174,15 @@ class BalloonsApp(App):
         finally:
             # Always clean up streaming context
             if session_id in self._streaming_contexts:
+                # Update task state
+                task_state = get_task_state()
+                if cancelled:
+                    task_state.cancel_task(ctx.exchange_id)
+                elif error:
+                    task_state.fail_task(ctx.exchange_id, error)
+                else:
+                    task_state.complete_task(ctx.exchange_id)
+
                 del self._streaming_contexts[session_id]
                 # Update tree streaming indicator and status bar count
                 context_tree.set_session_streaming(session_id, False)
@@ -1180,15 +1255,6 @@ class BalloonsApp(App):
 
         # Update breadcrumb to show current position in hierarchy
         breadcrumb.set_session(self.session)
-
-        # Show session info in request pane
-        request_pane = self.query_one("#request-pane", RequestPane)
-        request_pane.show_session_info(
-            self.session.title,
-            self.session.summary,
-            self.session.created,
-            self.session.model,
-        )
 
         # Update status bar with session info
         backend_name = self.session.backend_name or get_config().default_backend
@@ -1297,15 +1363,6 @@ class BalloonsApp(App):
         # Get enabled tools
         allowed_tools = self._get_enabled_tools()
 
-        # Log the request
-        request_pane = self.query_one("#request-pane", RequestPane)
-        request_pane.add_request("claude_request", {
-            "prompt": prompt,
-            "messages": [{"role": m.role, "content": m.content[:100] + "..." if len(m.content) > 100 else m.content} for m in selected_messages],
-            "message_count": len(selected_messages),
-            "allowed_tools": allowed_tools,
-        })
-
         # Track the turn index for tree updates
         turn_idx = len(self.session.turns)  # Next turn will be at this index
 
@@ -1344,6 +1401,20 @@ class BalloonsApp(App):
         self._tree_state.start_streaming(self.session.id)
         self._update_streaming_count()
 
+        # Register task for task pane with context info
+        backend_name = self.session.backend_name or self._backend_config.name
+        context_tokens = self._calculate_context_tokens(prompt)
+        context_window = self._backend_config.context_window
+        task = get_task_state().register_session_task(
+            session_id=self.session.id,
+            exchange_id=exchange_id,
+            prompt=prompt,
+            backend_name=backend_name,
+        )
+        # Set initial context info
+        task.input_tokens = context_tokens
+        task.context_window = context_window
+
         if is_active:
             # Add user message to display
             chat_log.add_user_message(prompt)
@@ -1351,6 +1422,8 @@ class BalloonsApp(App):
             # Disable input during streaming
             input_box.set_disabled(True)
             status_bar.set_streaming(True)
+            # Update status bar to show context tokens being sent for this request
+            status_bar.update_stats(context_tokens=context_tokens)
             self.streaming = True
 
             # Start assistant message
@@ -1575,14 +1648,6 @@ class BalloonsApp(App):
         chat_log = self.query_one("#chat-log", ChatLogView)
         chat_log.set_session_title(title)
 
-        request_pane = self.query_one("#request-pane", RequestPane)
-        request_pane.show_session_info(
-            title,
-            self.session.summary,
-            self.session.created,
-            self.session.model,
-        )
-
         # Reload context tree to show title
         context_tree = self.query_one("#context-tree", ContextTreeView)
         context_tree.load_all_sessions(self.session)
@@ -1772,16 +1837,17 @@ class BalloonsApp(App):
 
         # Update session state
         self.session.turns = result.new_turns
-
-        # Recalculate token count after archiving (turns removed)
-        self._update_base_context_tokens()
-        self._update_context_tokens()
         self.session.save()
 
-        # Reload the UI
+        # Reload the UI first so TreeState has updated turns
         chat_log.clear()
         chat_log.load_history(self.session.turns, self.session)
         context_tree.load_all_sessions(self.session)
+
+        # Recalculate token count after archiving (turns removed)
+        # Must be after tree reload so TreeState has the new turns
+        self._update_base_context_tokens()
+        self._update_context_tokens()
 
         status_bar.set_status(
             f"Archived {result.archived_count} turns to {result.file_path}",
@@ -2788,7 +2854,6 @@ class BalloonsApp(App):
 
         chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
-        request_pane = self.query_one("#request-pane", RequestPane)
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
         input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
@@ -2823,6 +2888,9 @@ class BalloonsApp(App):
         # Load session turns and filter by selection
         chat_log.clear()
         chat_log.load_history(session.turns, session=session)
+
+        # Update scrollbar markers for unviewed turns
+        self._update_unviewed_markers()
 
         # Check if NEW session is currently streaming
         new_ctx = self._streaming_contexts.get(session.id)
@@ -2885,14 +2953,8 @@ class BalloonsApp(App):
         if session.backend_name and session.backend_name != self._backend_config.name:
             self._manager._runners[session.id] = self._create_session_runner(session)
 
-        # Update header and request pane with session info
+        # Update header with session title
         chat_log.set_session_title(session.title)
-        request_pane.show_session_info(
-            session.title,
-            session.summary,
-            session.created,
-            session.model,
-        )
 
         # Build turn_modes dict for visual indication
         session_data = context_tree._state.get_session(session.id)
@@ -2957,6 +3019,16 @@ class BalloonsApp(App):
 
         # Update tree label - root label and token count updated via TreeState observer
         context_tree._update_turn_label(self.session.id, turn_idx)
+
+    def on_chat_log_view_turn_clicked(self, event: ChatLogView.TurnClicked) -> None:
+        """Handle click on chat widget to highlight the turn in the tree."""
+        if not self.session:
+            return
+
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+        # Convert 1-indexed turn_id to 0-indexed turn_idx
+        turn_idx = event.turn_id - 1
+        context_tree.scroll_to_turn(self.session.id, turn_idx)
 
     def on_context_tree_view_context_mode_changed(self, event: ContextTreeView.ContextModeChanged) -> None:
         """Handle context mode change from tree - persist to session."""
@@ -3153,19 +3225,20 @@ class BalloonsApp(App):
             )
 
             self.session.turns = new_turns
-
-            # Recalculate token count after archiving (turns removed)
-            self._update_base_context_tokens()
-            self._update_context_tokens()
             self.session.save()
 
-            # Reload the UI
+            # Reload the UI first so TreeState has updated turns
             chat_log = self.query_one("#chat-log", ChatLogView)
             chat_log.clear()
             chat_log.load_history(self.session.turns, self.session)
 
             context_tree = self.query_one("#context-tree", ContextTreeView)
             context_tree.load_all_sessions(self.session)
+
+            # Recalculate token count after archiving (turns removed)
+            # Must be after tree reload so TreeState has the new turns
+            self._update_base_context_tokens()
+            self._update_context_tokens()
 
             self.notify(f"Archived {archive_block.message_count} turns to {archive_block.file_path}")
 
@@ -3222,18 +3295,18 @@ class BalloonsApp(App):
             input_box.insert(":")
 
     def on_context_tree_view_turn_inspected(self, event: ContextTreeView.TurnInspected) -> None:
-        """Handle turn inspection - show in request pane and highlight tool uses.
+        """Handle turn inspection - highlight and scroll to turns and tool uses.
 
         If the turn belongs to a different session, switch to that session first.
         All turns are now always visible (with visual context mode indication),
         so we just need to scroll to and highlight the inspected turn.
         """
-        request_pane = self.query_one("#request-pane", RequestPane)
         chat_log = self.query_one("#chat-log", ChatLogView)
 
         # Handle different node types
         node_type = event.turn_data.get("type")
-        turn_idx = event.turn_data.get("turn_idx", 0) if node_type == "turn" else None
+        # Extract turn_idx for node types that have it
+        turn_idx = event.turn_data.get("turn_idx") if node_type in ("turn", "fork", "merge") else None
 
         # Check if we need to switch sessions
         turn_session_id = event.session_id
@@ -3249,8 +3322,6 @@ class BalloonsApp(App):
             if target_session:
                 debug_log.info(f"Loaded target session, calling _switch_to_session with turn_idx={turn_idx}", category="tree")
                 self._switch_to_session(target_session, target_turn_index=turn_idx)
-                # Show the turn data in request pane and handle highlights after session switch
-                request_pane.show_json(event.turn_data)
                 # For tool_use and tool_result, we need to highlight after session switch
                 if node_type in ("tool_use", "tool_result"):
                     tool_use_id = event.turn_data.get("tool_use_id", "")
@@ -3270,12 +3341,6 @@ class BalloonsApp(App):
                 debug_log.warning(f"Failed to load session {turn_session_id}", category="tree")
 
         if node_type == "summary":
-            request_pane.show_session_info(
-                event.turn_data.get("title", ""),
-                event.turn_data.get("summary", ""),
-                "",  # No created date for this view
-                "",  # No model for this view
-            )
             chat_log.clear_highlights()
         elif node_type == "turn":
             # Whole turn inspection - scroll to it, highlight it, and show in request pane
@@ -3284,7 +3349,6 @@ class BalloonsApp(App):
             # Use call_after_refresh to ensure layout is computed before scrolling
             # This fixes the "second click needed" bug where scroll fails on first click
             self.call_after_refresh(lambda tid=turn_id, stt=scroll_to_top: chat_log.highlight_turn(tid, scroll_to_top=stt))
-            request_pane.show_json(event.turn_data)
             # Save last view position
             save_last_view(self.session.id, turn_idx)
         elif node_type == "text":
@@ -3293,29 +3357,55 @@ class BalloonsApp(App):
             turn_id = event.turn_data.get("turn_idx", 0) + 1
             block_idx = event.turn_data.get("block_idx", -1)
             chat_log.highlight_text_block(turn_id, block_idx)
-            request_pane.show_json(event.turn_data)
         elif node_type == "tool_use":
             # Highlight the tool use in the chat log
             tool_use_id = event.turn_data.get("tool_use_id", "")
             if tool_use_id:
                 chat_log.highlight_tool(tool_use_id)
-            request_pane.show_json(event.turn_data)
         elif node_type == "tool_result":
             # Highlight the tool result and its parent tool use
             tool_use_id = event.turn_data.get("tool_use_id", "")
             if tool_use_id:
                 chat_log.highlight_tool(tool_use_id)
-            request_pane.show_json(event.turn_data)
+        elif node_type == "fork":
+            # Scroll to fork marker in chat and show in request pane
+            # The turn_idx is the fork_point (0-indexed turn where fork was created)
+            fork_turn_idx = event.turn_data.get("turn_idx", -1)
+            if fork_turn_idx >= 0:
+                # Fork markers appear after the turn at fork_point, so turn_id = fork_turn_idx + 1
+                turn_id = fork_turn_idx + 1
+                self.call_after_refresh(lambda tid=turn_id: chat_log.scroll_to_turn(tid))
+            chat_log.clear_highlights()
         elif node_type == "merge":
             # Scroll to merge marker in chat and show in request pane
-            child_session_id = event.turn_data.get("session_id", "")
-            if child_session_id:
-                chat_log.scroll_to_merge_marker(child_session_id)
+            # Try turn_idx first (more reliable), fall back to scroll_to_merge_marker
+            merge_turn_idx = event.turn_data.get("turn_idx", -1)
+            if merge_turn_idx >= 0:
+                # Merge markers appear after the turn at merge_point, so turn_id = merge_turn_idx + 1
+                turn_id = merge_turn_idx + 1
+                self.call_after_refresh(lambda tid=turn_id: chat_log.scroll_to_turn(tid))
+            else:
+                # Fall back to finding marker by child session ID
+                child_session_id = event.turn_data.get("session_id", "")
+                if child_session_id:
+                    chat_log.scroll_to_merge_marker(child_session_id)
             chat_log.clear_highlights()
-            request_pane.show_json(event.turn_data)
+        elif node_type == "link":
+            # Scroll to link marker in chat and show in request pane
+            turn_idx = event.turn_data.get("turn_idx")
+            if turn_idx is not None:
+                turn_id = turn_idx + 1
+                self.call_after_refresh(lambda tid=turn_id: chat_log.scroll_to_turn(tid))
+            chat_log.clear_highlights()
+        elif node_type in ("fork_block", "merge_block"):
+            # Fork/merge blocks stored in content_blocks - scroll to the turn containing them
+            turn_idx = event.turn_data.get("turn_idx")
+            if turn_idx is not None:
+                turn_id = turn_idx + 1
+                self.call_after_refresh(lambda tid=turn_id: chat_log.scroll_to_turn(tid))
+            chat_log.clear_highlights()
         else:
             chat_log.clear_highlights()
-            request_pane.show_json(event.turn_data)
 
     # --- NestedTreeView Event Handlers ---
     # These mirror the ContextTreeView handlers since both trees emit the same message types
@@ -3353,7 +3443,6 @@ class BalloonsApp(App):
 
     def on_nested_tree_view_turn_inspected(self, event: NestedTreeView.TurnInspected) -> None:
         """Handle turn inspection from nested tree."""
-        request_pane = self.query_one("#request-pane", RequestPane)
         chat_log = self.query_one("#chat-log", ChatLogView)
 
         node_type = event.turn_data.get("type")
@@ -3365,13 +3454,7 @@ class BalloonsApp(App):
             target_session = Session.load(turn_session_id)
             if target_session:
                 self._switch_to_session(target_session, target_turn_index=turn_idx)
-                # Return early - _switch_to_session handles scrolling
-                if node_type == "turn":
-                    chat_log.clear_highlights()
-                    request_pane.show_json(event.turn_data)
-                else:
-                    chat_log.clear_highlights()
-                    request_pane.show_json(event.turn_data)
+                chat_log.clear_highlights()
                 return
 
         if node_type == "turn":
@@ -3381,12 +3464,10 @@ class BalloonsApp(App):
             # This fixes the "second click needed" bug where scroll fails on first click
             self.call_after_refresh(lambda tid=turn_id, stt=scroll_to_top: chat_log.scroll_to_turn(tid, scroll_to_top=stt))
             chat_log.clear_highlights()
-            request_pane.show_json(event.turn_data)
             # Save last view position
             save_last_view(self.session.id, turn_idx)
         else:
             chat_log.clear_highlights()
-            request_pane.show_json(event.turn_data)
 
     def on_nested_tree_view_turn_delete_requested(self, event: NestedTreeView.TurnDeleteRequested) -> None:
         """Handle turn delete request from nested tree."""
@@ -3494,9 +3575,9 @@ class BalloonsApp(App):
                 self._nested_tree_active = True
             self.query_one("#splitter", VerticalSplitter).display = True
 
-    def action_toggle_requests(self) -> None:
-        """Toggle the request pane visibility."""
-        pane = self.query_one("#request-pane", RequestPane)
+    def action_toggle_tasks(self) -> None:
+        """Toggle the task pane visibility."""
+        pane = self.query_one("#task-pane", TaskPane)
         pane.display = not pane.display
 
     def action_toggle_debug(self) -> None:
@@ -3696,6 +3777,13 @@ class BalloonsApp(App):
         input_box.focus()
         if not input_box.text:
             input_box.insert(":")
+
+    def on_chat_log_view_turn_viewed(self, event: ChatLogView.TurnViewed) -> None:
+        """Handle turn being viewed by user - mark it in TreeState."""
+        if self.session:
+            # Convert 1-indexed turn_id to 0-indexed turn_idx
+            turn_idx = event.turn_id - 1
+            self._tree_state.mark_turn_viewed(self.session.id, turn_idx)
 
     def on_status_bar_follow_clicked(self, event: StatusBar.FollowClicked) -> None:
         """Handle click on Follow indicator - scroll to bottom."""

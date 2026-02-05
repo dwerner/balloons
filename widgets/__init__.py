@@ -6,7 +6,7 @@ from .context_tree import ContextTreeView
 from .nested_tree import NestedTreeView
 from .splitter import VerticalSplitter, HorizontalSplitter
 from .context_preview import ContextPreview, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult
-from .request_pane import RequestPane
+from .task_pane import TaskPane
 from .tool_bar import ToolBar
 from .preferences_modal import PreferencesModal, ToolPreferences, DEFAULT_TOOLS
 from .with_widget import WithWidget
@@ -44,7 +44,7 @@ __all__ = [
     "HelpModal",
     "NewSessionModal",
     "NewSessionResult",
-    "RequestPane",
+    "TaskPane",
     "ToolBar",
     "PreferencesModal",
     "ToolPreferences",

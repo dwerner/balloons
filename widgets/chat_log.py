@@ -1,14 +1,20 @@
 import json
+from math import ceil
 from pathlib import Path
+from typing import ClassVar
 
 from textual.widgets import Static
 from textual.containers import VerticalScroll
 from textual.reactive import reactive
 from textual.message import Message
 from textual.events import Click, Key
+from textual.scrollbar import ScrollBarRender, ScrollBar
 from rich.markdown import Markdown
+from rich.color import Color
 from rich.console import RenderableType, Group
+from rich.segment import Segment, Segments
 from rich.text import Text
+from rich.style import Style
 from rich.syntax import Syntax
 from rich.panel import Panel
 
@@ -35,6 +41,87 @@ from session import Session
 # Re-export for backwards compatibility (used by app.py imports)
 _format_edit_as_diff = format_edit_as_diff
 _guess_language = guess_language
+
+
+class MarkedScrollBarRender(ScrollBarRender):
+    """ScrollBar renderer that can display markers at specific positions.
+
+    Markers are shown as colored segments in the scrollbar gutter,
+    useful for indicating unviewed turns, search results, errors, etc.
+    """
+
+    # Marker positions as fractions (0.0 to 1.0) of total content
+    markers: ClassVar[list[float]] = []
+    # Color for the markers (bright blue for unviewed)
+    marker_color: ClassVar[Color] = Color.parse("#5588ff")
+
+    @classmethod
+    def render_bar(
+        cls,
+        size: int = 25,
+        virtual_size: float = 50,
+        window_size: float = 20,
+        position: float = 0,
+        thickness: int = 1,
+        vertical: bool = True,
+        back_color: Color = Color.parse("#555555"),
+        bar_color: Color = Color.parse("bright_magenta"),
+    ) -> Segments:
+        """Render the scrollbar with optional markers."""
+        # First, get the standard scrollbar rendering
+        segments_obj = super().render_bar(
+            size=size,
+            virtual_size=virtual_size,
+            window_size=window_size,
+            position=position,
+            thickness=thickness,
+            vertical=vertical,
+            back_color=back_color,
+            bar_color=bar_color,
+        )
+
+        # If no markers or not vertical, return as-is
+        if not cls.markers or not vertical:
+            return segments_obj
+
+        # Convert Segments to a mutable list
+        # Segments stores segments in the 'segments' attribute
+        segments = list(segments_obj.segments)
+
+        # Filter out newline segments for marker placement
+        # In vertical mode, segments alternate: [content, newline, content, newline, ...]
+        content_indices = []
+        for i, seg in enumerate(segments):
+            if seg.text and seg.text != "\n":
+                content_indices.append(i)
+
+        if not content_indices:
+            return segments_obj
+
+        # Add markers at the appropriate positions
+        width_thickness = thickness
+        # Use a full block character for visibility
+        marker_char = "█" * width_thickness
+
+        for marker_pos in cls.markers:
+            # Convert marker position (0.0-1.0) to segment index
+            segment_idx = int(marker_pos * len(content_indices))
+            segment_idx = max(0, min(segment_idx, len(content_indices) - 1))
+
+            actual_idx = content_indices[segment_idx]
+
+            # Replace the segment with a marker
+            # Keep the original meta for click handling
+            original_seg = segments[actual_idx]
+            original_meta = original_seg.style.meta if original_seg.style else {}
+            marker_style = Style(
+                color=cls.marker_color,
+                bgcolor=cls.marker_color,
+                meta=original_meta,
+            )
+            segments[actual_idx] = Segment(marker_char, marker_style)
+
+        return Segments(segments, new_lines=False)
 
 
 class ToolUseWidget(Static):
@@ -194,15 +281,15 @@ class ToolUseWidget(Static):
             self.refresh()
 
     def on_click(self) -> None:
-        """Handle click - expand if collapsed and expandable, otherwise toggle context mode."""
+        """Handle click - expand if collapsed and expandable, otherwise highlight tree node."""
         if self._full_content is not None and not self._expanded:
             # Collapsed expandable widget: expand it
             self.toggle_expand()
         elif self.turn_id > 0:
-            # Expanded or non-expandable: toggle context mode
+            # Expanded or non-expandable: highlight in tree
             for ancestor in self.ancestors_with_self:
                 if isinstance(ancestor, ChatLogView):
-                    ancestor.post_message(ChatLogView.ContextModeToggleRequested(self.turn_id))
+                    ancestor.post_message(ChatLogView.TurnClicked(self.turn_id))
                     break
 
     @property
@@ -308,15 +395,15 @@ class ToolResultWidget(Static):
             self.refresh()
 
     def on_click(self) -> None:
-        """Handle click - expand if collapsed and expandable, otherwise toggle context mode."""
+        """Handle click - expand if collapsed and expandable, otherwise highlight tree node."""
         if self._full_content is not None and not self._expanded:
             # Collapsed expandable widget: expand it
             self.toggle_expand()
         elif self.turn_id > 0:
-            # Expanded or non-expandable: toggle context mode
+            # Expanded or non-expandable: highlight in tree
             for ancestor in self.ancestors_with_self:
                 if isinstance(ancestor, ChatLogView):
-                    ancestor.post_message(ChatLogView.ContextModeToggleRequested(self.turn_id))
+                    ancestor.post_message(ChatLogView.TurnClicked(self.turn_id))
                     break
 
     @property
@@ -527,13 +614,12 @@ class MessageWidget(Static):
         self.refresh()
 
     def on_click(self) -> None:
-        """Toggle context mode when clicked."""
+        """Highlight the corresponding tree node when clicked."""
         if self.turn_id > 0:
-            # Find the ChatLog parent and post the toggle message
-            chat_log = self.ancestors_with_self
-            for ancestor in chat_log:
+            # Find the ChatLog parent and post the click message
+            for ancestor in self.ancestors_with_self:
                 if isinstance(ancestor, ChatLogView):
-                    ancestor.post_message(ChatLogView.ContextModeToggleRequested(self.turn_id))
+                    ancestor.post_message(ChatLogView.TurnClicked(self.turn_id))
                     break
 
     @property
@@ -664,6 +750,13 @@ class ChatLogView(VerticalScroll):
             super().__init__()
             self.turn_id = turn_id
 
+    class TurnClicked(Message):
+        """Posted when user clicks a turn widget to highlight it in the tree."""
+
+        def __init__(self, turn_id: int) -> None:
+            super().__init__()
+            self.turn_id = turn_id
+
     class NewContentWhileNotFollowing(Message):
         """Posted when new content arrives while user is not following."""
         pass
@@ -671,6 +764,12 @@ class ChatLogView(VerticalScroll):
     class ColonPressed(Message):
         """Posted when user types : to jump to text entry."""
         pass
+
+    class TurnViewed(Message):
+        """Posted when a turn is scrolled into view and should be marked as viewed."""
+        def __init__(self, turn_id: int) -> None:
+            super().__init__()
+            self.turn_id = turn_id
 
     following: reactive[bool] = reactive(True)  # True when auto-scrolling to new content
 
@@ -687,6 +786,8 @@ class ChatLogView(VerticalScroll):
         self._current_assistant_message: MessageWidget | None = None
         self._turn_counter = 0
         self._header: SessionHeader | None = None
+        # Unviewed turn IDs for scrollbar markers
+        self._unviewed_turn_ids: set[int] = set()
         # Stream buffer - manages rate-limited text buffering
         self._stream_buffer = StreamBuffer(
             flush_callback=self._on_stream_buffer_flush,
@@ -750,6 +851,48 @@ class ChatLogView(VerticalScroll):
         self._header = SessionHeader("", id="session-header")
         yield self._header
 
+    def on_mount(self) -> None:
+        """Set up the custom scrollbar renderer when mounted."""
+        # Use the marked scrollbar renderer for the vertical scrollbar
+        self.vertical_scrollbar.renderer = MarkedScrollBarRender
+
+    def set_unviewed_markers(self, unviewed_turn_ids: list[int]) -> None:
+        """Update the scrollbar markers to show unviewed turn positions.
+
+        Args:
+            unviewed_turn_ids: List of 1-indexed turn IDs that are unviewed
+        """
+        self._unviewed_turn_ids = set(unviewed_turn_ids)
+        self._update_scrollbar_markers()
+
+    def _update_scrollbar_markers(self) -> None:
+        """Recalculate and apply scrollbar markers based on unviewed turns."""
+        if not self._unviewed_turn_ids:
+            MarkedScrollBarRender.markers = []
+            self.vertical_scrollbar.refresh()
+            return
+
+        # Calculate marker positions as fractions of total content height
+        markers = []
+        total_height = self.virtual_size.height
+        if total_height <= 0:
+            MarkedScrollBarRender.markers = []
+            return
+
+        # Find widgets for each unviewed turn and calculate their position
+        for child in self.children:
+            if hasattr(child, 'turn_id') and child.turn_id in self._unviewed_turn_ids:
+                # Get the widget's position in the virtual content
+                region = child.virtual_region
+                # Calculate position as fraction (center of the widget)
+                center_y = region.y + region.height / 2
+                fraction = center_y / total_height
+                fraction = max(0.0, min(1.0, fraction))
+                markers.append(fraction)
+
+        MarkedScrollBarRender.markers = sorted(markers)
+        self.vertical_scrollbar.refresh()
+
     def _check_at_bottom(self) -> None:
         """Check if we're at the bottom and update following state."""
         self._scroll_controller.check_at_bottom()
@@ -785,6 +928,8 @@ class ChatLogView(VerticalScroll):
                     self.scroll_to_widget_at_top(child)
                 else:
                     self.scroll_to_widget_and_check_follow(child)
+                # Mark turn as viewed since user explicitly scrolled to it
+                self.post_message(self.TurnViewed(turn_id))
                 return True
         debug_log.warning(f"scroll_to_turn: turn_id={turn_id} NOT FOUND", category="chat_log")
         return False
@@ -1079,6 +1224,10 @@ class ChatLogView(VerticalScroll):
         # so we need to scroll after the layout recalculates
         self._smart_scroll()
 
+        # If user is following (watching the stream), mark the turn as viewed
+        if self.following:
+            self.post_message(self.TurnViewed(turn_id))
+
         return "\n\n".join(content_parts)
 
     def add_interruption_marker(self, reason: str = "user_cancelled") -> InterruptionMarkerWidget:
@@ -1118,6 +1267,9 @@ class ChatLogView(VerticalScroll):
             child.remove()
         self._turn_counter = 0
         self._current_assistant_message = None
+        # Clear scrollbar markers
+        self._unviewed_turn_ids.clear()
+        MarkedScrollBarRender.markers = []
 
     def highlight_tool(self, tool_use_id: str) -> None:
         """Highlight a tool use and its result by tool_use_id, scrolling to it."""

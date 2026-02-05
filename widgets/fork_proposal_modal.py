@@ -7,6 +7,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Static, Button, TextArea, Tree
 from textual.widgets.tree import TreeNode
 from textual.containers import Vertical, Horizontal, ScrollableContainer
+from rich.markup import escape as escape_markup
 
 from models import ContextMode
 from core.fork import ForkProposal, ContextAssignment
@@ -182,8 +183,8 @@ class ForkProposalModal(ModalScreen[Optional[ForkProposalResult]]):
                         mode_icons = {"copy": "+", "compress": "~", "drop": "-"}
                         icon = mode_icons.get(assignment.mode.lower(), "?")
                         # Single line: icon, range, mode, reason all together
-                        reason_part = f" - {assignment.reason}" if assignment.reason else ""
-                        label = f"[{icon}] {assignment.exchange_range} {assignment.mode.upper()}{reason_part}"
+                        reason_part = f" - {escape_markup(assignment.reason)}" if assignment.reason else ""
+                        label = f"[{icon}] {escape_markup(assignment.exchange_range)} {assignment.mode.upper()}{reason_part}"
                         tree.root.add_leaf(label)
                 yield tree
 
@@ -225,11 +226,11 @@ class ForkProposalModal(ModalScreen[Optional[ForkProposalResult]]):
         # Add exchange previews for simple ranges
         previews = self._get_exchange_previews(assignment.exchange_range, total_exchanges)
         for preview in previews:
-            children.append(Static(f"  {preview}", classes="context-reason"))
+            children.append(Static(f"  {escape_markup(preview)}", classes="context-reason"))
 
         # Add reason if provided
         if assignment.reason:
-            children.append(Static(f"  → {assignment.reason}", classes="context-reason"))
+            children.append(Static(f"  → {escape_markup(assignment.reason)}", classes="context-reason"))
 
         return Vertical(*children, classes=f"context-item {mode_class}")
 
