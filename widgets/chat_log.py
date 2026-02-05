@@ -21,6 +21,12 @@ from .archive_marker import ArchiveMarker
 from models import TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, ArchiveBlock
 from core.formatter import format_edit_as_diff, guess_language
 from core.json_stream import StreamingJsonParser
+from core.history_loader import (
+    HistoryLoader,
+    RenderMessage, RenderToolUse, RenderToolResult,
+    RenderInterruption, RenderError, RenderLink, RenderArchive,
+    RenderFork, RenderMerge
+)
 from session import Session
 
 # Re-export for backwards compatibility (used by app.py imports)
@@ -34,7 +40,7 @@ class ToolUseWidget(Static):
     DEFAULT_CSS = """
     ToolUseWidget {
         padding: 0 1;
-        margin: 0 0 0 2;
+        margin: 0 0 1 2;
         background: #2a2a1a;
         border-left: thick $warning;
     }
@@ -215,7 +221,7 @@ class ToolResultWidget(Static):
     DEFAULT_CSS = """
     ToolResultWidget {
         padding: 0 1;
-        margin: 0 0 1 4;
+        margin: 0 0 1 2;
         background: #2a2a20;
         border-left: thick #d4d422;
         max-height: 15;
@@ -1306,156 +1312,110 @@ class ChatLogView(VerticalScroll):
 
         If session is provided, also reconstructs fork, merge, and link markers from
         the session's children and links lists.
+
+        Uses HistoryLoader to transform messages into render instructions, then
+        interprets those instructions to create and mount widgets.
         """
-        # Build fork and merge points maps: turn_index -> list of child infos
-        fork_points: dict[int, list[dict]] = {}
-        merge_points: dict[int, list[dict]] = {}
-        if session:
-            for child in session.children:
-                # Fork markers: all children have fork points
-                fork_point = child.get("fork_point", -1)
-                if fork_point >= 0:
-                    fork_points.setdefault(fork_point, []).append(child)
-                # Merge markers: only merged children
-                if child.get("status") == "merged":
-                    merge_point = child.get("merge_point", -1)
-                    if merge_point >= 0:
-                        merge_points.setdefault(merge_point, []).append(child)
+        loader = HistoryLoader()
+        result = loader.load(messages, session=session, start_turn_id=self._turn_counter)
 
-        def mount_forks(fork_point_idx: int, turn_id: int) -> None:
-            """Mount fork markers for a given fork point."""
-            for child_info in fork_points.get(fork_point_idx, []):
-                child_session = Session.load(child_info["session_id"])
-                if child_session:
-                    self.mount(ForkMarker(
-                        prompt=child_info.get("prompt", ""),
-                        child_session_id=child_session.id,
-                        fork_name=child_info.get("name") or child_session.get_fork_display_name(),
-                        status=child_info.get("status", "active"),
-                        turn_id=turn_id,
-                    ))
-
-        def mount_merges(merge_point_idx: int, turn_id: int) -> None:
-            """Mount merge markers for a given merge point."""
-            for child_info in merge_points.get(merge_point_idx, []):
-                child_session = Session.load(child_info["session_id"])
-                if child_session:
-                    self.mount(MergeMarker(
-                        message=child_session.merge_message,
-                        child_session_id=child_session.id,
-                        fork_name=child_info.get("name") or child_session.get_fork_display_name(),
-                        turn_id=turn_id,
-                    ))
-
-        for turn_idx, msg in enumerate(messages):
-            self._turn_counter += 1
-            turn_id = self._turn_counter
-
-            # Render content blocks properly if available
-            if msg.content_blocks:
-                for block_idx, block in enumerate(msg.content_blocks):
-                    if isinstance(block, TextBlock):
-                        if block.text.strip():
-                            widget = MessageWidget(
-                                msg.role, block.text, turn_id=turn_id, block_idx=block_idx
-                            )
-                            self.mount(widget)
-                    elif isinstance(block, ToolUseBlock):
-                        formatted = self._format_tool_use(block)
-                        if isinstance(formatted, tuple):
-                            content, full_content = formatted
-                        else:
-                            content, full_content = formatted, None
-                        widget = ToolUseWidget(
-                            block.name, content, turn_id=turn_id,
-                            tool_use_id=block.id, full_content=full_content
-                        )
-                        self.mount(widget)
-                    elif isinstance(block, ToolResultBlock):
-                        formatted = self._format_tool_result(block)
-                        if isinstance(formatted, tuple):
-                            content, full_content = formatted
-                        else:
-                            content, full_content = formatted, None
-                        widget = ToolResultWidget(
-                            content, turn_id=turn_id,
-                            tool_use_id=block.tool_use_id, full_content=full_content
-                        )
-                        self.mount(widget)
-                    elif isinstance(block, InterruptionBlock):
-                        widget = InterruptionMarkerWidget(
-                            reason=block.reason, turn_id=turn_id
-                        )
-                        self.mount(widget)
-                    elif isinstance(block, ErrorBlock):
-                        widget = ErrorMarkerWidget(
-                            reason=block.reason,
-                            partial_tool_name=block.partial_tool_name,
-                            details=block.details,
-                            dump_file=block.dump_file,
-                            turn_id=turn_id,
-                        )
-                        self.mount(widget)
-                    elif isinstance(block, LinkBlock):
-                        # Render LinkBlock as LinkMarker
-                        linked_session = Session.load(block.linked_session_id)
-                        is_orphaned = block.is_orphaned
-                        if linked_session:
-                            linked_name = linked_session.title or linked_session.fork_name or block.linked_session_id[:8]
-                        else:
-                            linked_name = block.linked_session_id[:8] if block.linked_session_id else "[unknown]"
-                            is_orphaned = True
-                        widget = LinkMarker(
-                            summary=block.summary,
-                            linked_session_id=block.linked_session_id,
-                            linked_session_name=linked_name,
-                            link_point=turn_idx,  # The turn index where this link exists
-                            turn_id=turn_id,
-                            is_orphaned=is_orphaned,
-                        )
-                        self.mount(widget)
-                    elif isinstance(block, ArchiveBlock):
-                        # Render ArchiveBlock as ArchiveMarker
-                        widget = ArchiveMarker(
-                            archive_block=block,
-                            turn_id=turn_id,
-                            turn_index=turn_idx,
-                        )
-                        self.mount(widget)
-                    elif isinstance(block, ForkBlock):
-                        # Render ForkBlock as ForkMarker
-                        widget = ForkMarker(
-                            prompt=block.prompt,
-                            child_session_id=block.child_session_id,
-                            fork_name=block.fork_name,
-                            status=block.status,
-                            turn_id=turn_id,
-                        )
-                        self.mount(widget)
-                    elif isinstance(block, MergeBlock):
-                        # Render MergeBlock as MergeMarker
-                        widget = MergeMarker(
-                            message=block.message,
-                            child_session_id=block.child_session_id,
-                            fork_name=block.fork_name,
-                            turn_id=turn_id,
-                        )
-                        self.mount(widget)
-            else:
-                # Fallback: just use msg.content
-                widget = MessageWidget(msg.role, msg.content, turn_id=turn_id)
+        for instr in result.instructions:
+            widget = self._instruction_to_widget(instr)
+            if widget:
                 self.mount(widget)
 
-            # Add any fork markers after this turn (forks start after the turn)
-            mount_forks(turn_idx, turn_id)
-            # Add any merge markers after this turn
-            mount_merges(turn_idx, turn_id)
-
-        # Add any markers at the end (point == len(messages))
-        mount_forks(len(messages), self._turn_counter)
-        mount_merges(len(messages), self._turn_counter)
-
+        self._turn_counter = result.final_turn_id
         self.scroll_end(animate=False)
+
+    def _instruction_to_widget(self, instr):
+        """Convert a render instruction to a widget.
+
+        This method bridges the data layer (instructions) with the UI layer (widgets).
+        """
+        if isinstance(instr, RenderMessage):
+            return MessageWidget(
+                instr.role, instr.text, turn_id=instr.turn_id, block_idx=instr.block_idx
+            )
+
+        elif isinstance(instr, RenderToolUse):
+            # Format using Formatter for display
+            block = ToolUseBlock(id=instr.tool_use_id, name=instr.tool_name, input=instr.tool_input)
+            formatted = self._format_tool_use(block)
+            if isinstance(formatted, tuple):
+                content, full_content = formatted
+            else:
+                content, full_content = formatted, None
+            return ToolUseWidget(
+                instr.tool_name, content, turn_id=instr.turn_id,
+                tool_use_id=instr.tool_use_id, full_content=full_content
+            )
+
+        elif isinstance(instr, RenderToolResult):
+            # Format using Formatter for display
+            block = ToolResultBlock(
+                tool_use_id=instr.tool_use_id,
+                content=instr.content,
+                is_error=instr.is_error
+            )
+            formatted = self._format_tool_result(block)
+            if isinstance(formatted, tuple):
+                content, full_content = formatted
+            else:
+                content, full_content = formatted, None
+            return ToolResultWidget(
+                content, turn_id=instr.turn_id,
+                tool_use_id=instr.tool_use_id, full_content=full_content
+            )
+
+        elif isinstance(instr, RenderInterruption):
+            return InterruptionMarkerWidget(
+                reason=instr.reason, turn_id=instr.turn_id
+            )
+
+        elif isinstance(instr, RenderError):
+            return ErrorMarkerWidget(
+                reason=instr.reason,
+                partial_tool_name=instr.partial_tool_name,
+                details=instr.details,
+                dump_file=instr.dump_file,
+                turn_id=instr.turn_id,
+            )
+
+        elif isinstance(instr, RenderLink):
+            return LinkMarker(
+                summary=instr.summary,
+                linked_session_id=instr.linked_session_id,
+                linked_session_name=instr.linked_session_name,
+                link_point=instr.link_point,
+                turn_id=instr.turn_id,
+                is_orphaned=instr.is_orphaned,
+            )
+
+        elif isinstance(instr, RenderArchive):
+            return ArchiveMarker(
+                archive_block=instr.archive_block,
+                turn_id=instr.turn_id,
+                turn_index=instr.turn_index,
+            )
+
+        elif isinstance(instr, RenderFork):
+            return ForkMarker(
+                prompt=instr.prompt,
+                child_session_id=instr.child_session_id,
+                fork_name=instr.fork_name,
+                status=instr.status,
+                turn_id=instr.turn_id,
+            )
+
+        elif isinstance(instr, RenderMerge):
+            return MergeMarker(
+                message=instr.message,
+                child_session_id=instr.child_session_id,
+                fork_name=instr.fork_name,
+                turn_id=instr.turn_id,
+            )
+
+        return None
 
     def add_with_widget(
         self,
