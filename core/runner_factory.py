@@ -2,9 +2,23 @@
 
 import os
 import re
+from pathlib import Path
 
 from config import BackendConfig
 from .base_runner import BaseRunner
+
+# Load balloons tools prompt from file
+_PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
+_BALLOONS_TOOLS_PROMPT_PATH = _PROMPTS_DIR / "balloons-tools.md"
+
+
+def _load_balloons_tools_prompt() -> str:
+    """Load the balloons tools prompt from file."""
+    try:
+        return _BALLOONS_TOOLS_PROMPT_PATH.read_text()
+    except Exception:
+        # Fallback if file not found
+        return ""
 
 
 def resolve_env_var(value: str) -> str:
@@ -78,8 +92,16 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
         if backend.api_key:
             env["ANTHROPIC_API_KEY"] = resolve_env_var(backend.api_key)
 
-        # Load system prompt if configured
-        system_prompt = backend.load_system_prompt()
+        # Build system prompt: user's custom prompt + Balloons tool prompts
+        parts = []
+        user_prompt = backend.load_system_prompt()
+        if user_prompt:
+            parts.append(user_prompt)
+        # Add Balloons-specific tool prompts (link navigation and propose_fork)
+        balloons_prompt = _load_balloons_tools_prompt()
+        if balloons_prompt:
+            parts.append(balloons_prompt)
+        system_prompt = "\n\n".join(parts) if parts else None
 
         return ClaudeRunner(
             backend_env=env if env else None,

@@ -38,9 +38,8 @@ class ForkProposalModal(ModalScreen[Optional[ForkProposalResult]]):
     }
 
     #proposal-dialog {
-        width: 80;
-        height: auto;
-        max-height: 85%;
+        width: 90;
+        height: 80%;
         background: $surface;
         border: thick $accent;
         padding: 1 2;
@@ -54,8 +53,7 @@ class ForkProposalModal(ModalScreen[Optional[ForkProposalResult]]):
     }
 
     #proposal-content {
-        height: auto;
-        max-height: 70%;
+        height: 1fr;
         padding: 1 0;
     }
 
@@ -129,6 +127,8 @@ class ForkProposalModal(ModalScreen[Optional[ForkProposalResult]]):
         background: $surface-darken-1;
         padding: 1;
         margin-top: 1;
+        max-height: 10;
+        overflow-y: auto;
     }
 
     #proposal-buttons {
@@ -214,20 +214,18 @@ class ForkProposalModal(ModalScreen[Optional[ForkProposalResult]]):
         # Get exchange summary if available
         exchange_info = f"Exchanges {assignment.exchange_range}"
 
-        container = Vertical(classes=f"context-item {mode_class}")
-
-        # Build the display
+        # Build children list
         range_label = Static(f"{mode_icon} {exchange_info}", classes="context-range")
         mode_label = Static(assignment.mode.upper(), classes=f"context-mode {mode_class}")
-
         row = Horizontal(range_label, mode_label)
-        container._nodes.append(row)
 
+        children = [row]
         if assignment.reason:
             reason_label = Static(assignment.reason, classes="context-reason")
-            container._nodes.append(reason_label)
+            children.append(reason_label)
 
-        return container
+        # Create container with children
+        return Vertical(*children, classes=f"context-item {mode_class}")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "accept-btn":

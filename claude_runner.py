@@ -15,7 +15,7 @@ from core.debug_log import debug_log, dump_failed_json
 from core.base_runner import BaseRunner, RunnerEvent
 from core.exceptions import RateLimitError
 from core.tool_executor import execute_tool
-from core.tools import LINK_TOOL_NAMES
+from core.link_tools import LINK_TOOL_NAMES
 
 # Regex to match <balloons-tool>...</balloons-tool> blocks
 BALLOONS_TOOL_RE = re.compile(

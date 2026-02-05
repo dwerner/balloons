@@ -5,8 +5,7 @@ import pytest
 from unittest.mock import Mock, patch
 
 from core.link_tools import (
-    LINK_TOOLS,
-    get_link_tools_prompt,
+    LINK_TOOL_NAMES,
     execute_link_tool,
 )
 from claude_runner import ClaudeRunner
@@ -14,40 +13,13 @@ from session import Session
 from models import Message, TextBlock, LinkBlock
 
 
-class TestLinkToolDefinitions:
-    """Test that link tool definitions are correct."""
-
-    def test_all_tools_have_required_fields(self):
-        for tool in LINK_TOOLS:
-            assert "name" in tool
-            assert "description" in tool
-            assert "parameters" in tool
+class TestLinkToolNames:
+    """Test that link tool names are defined correctly."""
 
     def test_tool_names(self):
-        names = [t["name"] for t in LINK_TOOLS]
-        assert "list_links" in names
-        assert "follow_link" in names
-        assert "search_linked_session" in names
-
-
-class TestLinkToolsPrompt:
-    """Test the generated prompt for link tools."""
-
-    def test_prompt_includes_tool_names(self):
-        prompt = get_link_tools_prompt()
-        assert "list_links" in prompt
-        assert "follow_link" in prompt
-        assert "search_linked_session" in prompt
-
-    def test_prompt_includes_example_format(self):
-        prompt = get_link_tools_prompt()
-        # The prompt format may have changed, just check it's non-empty
-        assert len(prompt) > 0
-
-    def test_prompt_includes_descriptions(self):
-        prompt = get_link_tools_prompt()
-        # Check tool descriptions are included
-        assert "link" in prompt.lower()
+        assert "list_links" in LINK_TOOL_NAMES
+        assert "follow_link" in LINK_TOOL_NAMES
+        assert "search_linked_session" in LINK_TOOL_NAMES
 
 
 class TestExecuteLinkTool:

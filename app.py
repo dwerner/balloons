@@ -103,6 +103,7 @@ from core.summarizer import Summarizer
 from core.exceptions import BackendNotFoundError
 from core.context_grouper import group_messages_by_context_mode, build_context_messages
 from core.fork import ForkManager, ForkResult, MergeResult, DeriveResult, SwitchResult, ForkProposal
+from core.command_executor import CommandExecutor, ArchiveResult, RehydrateResult, LinkResult, BackendResult
 from core.tool_executor import parse_fork_proposal
 from core.tree_state import TreeState, TreeEvent
 from tokenizer import count_tokens
@@ -218,6 +219,8 @@ class BalloonsApp(App):
         self._streaming_coordinator = StreamingCoordinator()
         # Fork manager for fork/merge/derive operations
         self._fork_manager = ForkManager(self._context_builder)
+        # Command executor for archive/link/backend commands
+        self._command_executor = CommandExecutor()
         # Tool preferences per backend (backend_name -> ToolPreferences)
         self._tool_preferences: dict[str, ToolPreferences] = {}
         # Debounce timer for context token updates during typing
@@ -1554,45 +1557,39 @@ class BalloonsApp(App):
         config = get_config()
 
         if not backend_name:
-            # Show current backend
-            current = self.session.backend_name or config.default_backend
-            available = list(config.backends.keys())
-            # Check if session's backend still exists
-            if self.session.backend_name and self.session.backend_name not in config.backends:
+            # Show current backend info
+            result = self._command_executor.get_backend_info(self.session, config)
+            info = result.info
+            if info.is_missing:
                 status_bar.set_status(
-                    f"Backend: {current} (MISSING - will use default). Available: {', '.join(available)}",
+                    f"Backend: {info.current} (MISSING - will use default). Available: {', '.join(info.available)}",
                     animate=False
                 )
             else:
                 status_bar.set_status(
-                    f"Backend: {current} (available: {', '.join(available)})",
+                    f"Backend: {info.current} (available: {', '.join(info.available)})",
                     animate=False
                 )
             return
 
-        # Validate backend exists
-        if backend_name not in config.backends:
-            available = list(config.backends.keys())
-            status_bar.set_status(
-                f"Unknown backend: {backend_name}. Available: {', '.join(available)}",
-                animate=False
-            )
+        # Set backend for this session
+        result = self._command_executor.set_backend(self.session, backend_name, config)
+
+        if not result.success:
+            status_bar.set_status(result.error, animate=False)
             return
 
-        # Set backend for this session
-        self.session.backend_name = backend_name
+        # Save session and recreate runner
         self.session.save()
 
-        # Recreate the runner for this session with new backend
-        backend_config = config.get_backend(backend_name)
+        backend_config = config.get_backend(result.new_backend)
         self._manager._runners[self.session.id] = SessionRunner(
             self.session, runner=create_runner(backend_config)
         )
 
         # Update status bar with new backend and model
-        # Use the backend's configured model, or clear it if not set
-        status_bar.update_stats(backend=backend_name, model=backend_config.model or "")
-        status_bar.set_status(f"Backend set to: {backend_name}", animate=False)
+        status_bar.update_stats(backend=result.new_backend, model=result.model)
+        status_bar.set_status(f"Backend set to: {result.new_backend}", animate=False)
 
     async def _handle_link_command(self, target_prefixes: list[str]) -> None:
         """Create bidirectional links to one or more sessions.
@@ -1604,90 +1601,59 @@ class BalloonsApp(App):
         Args:
             target_prefixes: List of 8-char hash prefixes of target sessions
         """
-        import uuid
         chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
         status_bar = self.query_one("#status-bar", StatusBar)
 
-        # Resolve all target sessions first
-        all_sessions = Session.list_sessions()
-        resolved_targets: list[tuple[str, Session]] = []  # (prefix, session)
+        # Phase 1: Resolve targets and identify what needs summaries
+        resolve_result = self._command_executor.resolve_link_targets(
+            current_session=self.session,
+            target_prefixes=target_prefixes,
+        )
 
-        for target_prefix in target_prefixes:
-            matches = [s for s in all_sessions if s["id"].startswith(target_prefix)]
+        if not resolve_result.success:
+            status_bar.set_error(resolve_result.error)
+            return
 
-            if not matches:
-                status_bar.set_error(f"No session found matching '{target_prefix}'")
-                return
+        # Phase 2: Generate any needed summaries
+        if resolve_result.needs_summary:
+            status_bar.set_status("Generating session summaries...", animate=True)
+            self.refresh()
+            await asyncio.sleep(0)
 
-            if len(matches) > 1:
-                match_ids = [s["id"][:8] for s in matches[:5]]
-                status_bar.set_error(f"Multiple sessions match '{target_prefix}': {', '.join(match_ids)}...")
-                return
+            for session in resolve_result.needs_summary:
+                session.summary = await self._summarizer.generate_session_summary(session)
 
-            target_session_id = matches[0]["id"]
+            # Update target summaries in resolved list
+            for target in resolve_result.linked_targets:
+                if not target.summary:
+                    target.summary = target.session.summary
 
-            # Check not linking to self
-            if target_session_id == self.session.id:
-                status_bar.set_error("Cannot link session to itself")
-                return
+        # Phase 3: Complete the link operation
+        link_result = self._command_executor.complete_link(
+            current_session=self.session,
+            targets=resolve_result.linked_targets,
+            current_summary=self.session.summary,
+        )
 
-            # Load target session
-            target_session = Session.load(target_session_id)
-            if not target_session:
-                status_bar.set_error(f"Failed to load session {target_prefix}")
-                return
+        # Save all modified sessions
+        for session in link_result.sessions_to_save:
+            session.save()
 
-            resolved_targets.append((target_prefix, target_session))
-
-        # Generate and save summaries for all sessions involved
-        status_bar.set_status("Generating session summaries...", animate=True)
-        self.refresh()
-        await asyncio.sleep(0)
-
-        # Generate and save summary for current session if needed
-        if not self.session.summary:
-            self.session.summary = await self._summarizer.generate_session_summary(
-                self.session
-            )
-
-        # Create links to each target
+        # Update UI for each link
         linked_names = []
-        for target_prefix, target_session in resolved_targets:
-            # Generate and save summary for target session if needed
-            if not target_session.summary:
-                target_session.summary = await self._summarizer.generate_session_summary(
-                    target_session
-                )
+        for target, link_turn in zip(link_result.linked_targets, link_result.link_turns):
+            target_name = target.session.title or target.session.fork_name or target.session.id[:8]
 
-            # Create unique link ID (same for both sides of this pair)
-            link_id = str(uuid.uuid4())
-
-            # Add link as a turn in current session with target's summary
-            link_turn = self.session.add_link_turn(
-                link_id=link_id,
-                linked_session_id=target_session.id,
-                summary=target_session.summary,
-            )
-
-            # Add link as a turn in target session with current session's summary
-            target_session.add_link_turn(
-                link_id=link_id,
-                linked_session_id=self.session.id,
-                summary=self.session.summary,
-            )
-            target_session.save()
-
-            # Add link marker to current chat log
-            target_name = target_session.title or target_session.fork_name or target_session.id[:8]
+            # Add link marker to chat log
             chat_log.add_link_marker(
-                summary=target_session.summary,
-                linked_session_id=target_session.id,
+                summary=target.summary,
+                linked_session_id=target.session.id,
                 linked_session_name=target_name,
-                link_point=len(self.session.turns) - 1,  # Current turn index
+                link_point=len(self.session.turns) - 1,
             )
 
-            # Add link turn to the context tree
+            # Add link turn to context tree
             context_tree.add_turn_to_current(
                 role=link_turn.role,
                 content=link_turn.content,
@@ -1695,9 +1661,6 @@ class BalloonsApp(App):
                 content_blocks=[link_turn.content_block] if link_turn.content_block else None,
             )
             linked_names.append(target_name)
-
-        # Save current session once (after all links added)
-        self.session.save()
 
         if len(linked_names) == 1:
             status_bar.set_status(f"Linked to '{linked_names[0]}'", animate=False)
@@ -1711,8 +1674,6 @@ class BalloonsApp(App):
         - Single turn: archives just that turn
         - Exchange group: archives all turns in the exchange
         """
-        from core.archiver import Archiver, ArchiveError
-
         context_tree = self.query_one("#context-tree", ContextTreeView)
         chat_log = self.query_one("#chat-log", ChatLogView)
         status_bar = self.query_one("#status-bar", StatusBar)
@@ -1759,43 +1720,38 @@ class BalloonsApp(App):
             # Fall back to simple summary
             summary = f"Archived turns {turn_start}-{turn_end - 1}"
 
-        # Perform the archive
-        archiver = Archiver()
-        try:
-            archive_block, new_turns = archiver.archive_turns(
-                self.session.id,
-                self.session.turns,
-                turn_start,
-                turn_end,
-                summary,
-            )
+        # Use command executor for business logic
+        result = self._command_executor.prepare_archive(
+            session=self.session,
+            turn_indices=turn_indices,
+            summary=summary,
+        )
 
-            self.session.turns = new_turns
+        if not result.success:
+            debug_log.error(f"Archive failed: {result.error}", category="archive")
+            status_bar.set_error(f"Archive failed: {result.error}")
+            return
 
-            # Recalculate token count after archiving (turns removed)
-            self._update_base_context_tokens()
-            self._update_context_tokens()
-            self.session.save()
+        # Update session state
+        self.session.turns = result.new_turns
 
-            # Reload the UI
-            chat_log.clear()
-            chat_log.load_history(self.session.turns, self.session)
+        # Recalculate token count after archiving (turns removed)
+        self._update_base_context_tokens()
+        self._update_context_tokens()
+        self.session.save()
 
-            context_tree.load_all_sessions(self.session)
+        # Reload the UI
+        chat_log.clear()
+        chat_log.load_history(self.session.turns, self.session)
+        context_tree.load_all_sessions(self.session)
 
-            status_bar.set_status(
-                f"Archived {archive_block.message_count} turns to {archive_block.file_path}",
-                animate=False,
-            )
-
-        except ArchiveError as e:
-            debug_log.error(f"Archive failed: {e}", category="archive")
-            status_bar.set_error(f"Archive failed: {e}")
+        status_bar.set_status(
+            f"Archived {result.archived_count} turns to {result.file_path}",
+            animate=False,
+        )
 
     async def _handle_rehydrate_command(self) -> None:
         """Rehydrate selected archive marker back to original turns."""
-        from core.archiver import Archiver, ArchiveError
-
         context_tree = self.query_one("#context-tree", ContextTreeView)
         chat_log = self.query_one("#chat-log", ChatLogView)
         status_bar = self.query_one("#status-bar", StatusBar)
@@ -1833,27 +1789,31 @@ class BalloonsApp(App):
             category="archive",
         )
 
-        archiver = Archiver()
-        try:
-            new_turns = archiver.rehydrate(self.session.turns, archive_turn_index)
-            self.session.turns = new_turns
+        # Use command executor for business logic
+        result = self._command_executor.prepare_rehydrate(
+            session=self.session,
+            turn_index=archive_turn_index,
+        )
 
-            # Recalculate token count after rehydration (turns restored)
-            self._update_base_context_tokens()
-            self._update_context_tokens()
-            self.session.save()
+        if not result.success:
+            debug_log.error(f"Rehydration failed: {result.error}", category="archive")
+            status_bar.set_error(f"Rehydration failed: {result.error}")
+            return
 
-            # Reload the UI
-            chat_log.clear()
-            chat_log.load_history(self.session.turns, self.session)
+        # Update session state
+        self.session.turns = result.new_turns
 
-            context_tree.load_all_sessions(self.session)
+        # Recalculate token count after rehydration (turns restored)
+        self._update_base_context_tokens()
+        self._update_context_tokens()
+        self.session.save()
 
-            status_bar.set_status("Restored archived turns", animate=False)
+        # Reload the UI
+        chat_log.clear()
+        chat_log.load_history(self.session.turns, self.session)
+        context_tree.load_all_sessions(self.session)
 
-        except ArchiveError as e:
-            debug_log.error(f"Rehydration failed: {e}", category="archive")
-            status_bar.set_error(f"Rehydration failed: {e}")
+        status_bar.set_status(f"Restored {result.restored_count} archived turns", animate=False)
 
     def _handle_suspend(self, cmd: str) -> None:
         """Suspend TUI and run interactive command in session's working directory."""
@@ -2192,8 +2152,10 @@ class BalloonsApp(App):
 
         def on_result(result: ForkProposalResult | None) -> None:
             if result is None or not result.accepted:
-                # User rejected
+                # User rejected - send rejection back to Claude via chat
                 status_bar.set_status("Fork proposal rejected")
+                chat_log = self.query_one("#chat-log", ChatLogView)
+                chat_log.add_user_message("[Fork proposal rejected by user]")
                 return
 
             # User accepted - apply context modes and create fork

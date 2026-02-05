@@ -39,10 +39,10 @@ from .manager import SessionManager, SessionInfo
 from .debug_log import debug_log, DebugLog, LogLevel, LogEntry, dump_failed_json
 from .base_runner import BaseRunner, RunnerEvent
 from .exceptions import RateLimitError, InputRequiredError, BackendNotFoundError
-from .link_tools import LINK_TOOLS, get_link_tools_prompt, execute_link_tool
+from .link_tools import LINK_TOOL_NAMES, execute_link_tool
 from .openai_runner import OpenAICompatibleRunner
 from .runner_factory import create_runner, resolve_env_var
-from .tools import TOOLS, LINK_TOOLS as LINK_TOOLS_OPENAI, LINK_TOOL_NAMES, BALLOON_TOOLS, BALLOON_TOOL_NAMES, get_tools_for_request, get_balloon_tools_prompt
+from .tools import TOOLS, LINK_TOOLS as LINK_TOOLS_OPENAI, BALLOON_TOOLS, BALLOON_TOOL_NAMES, get_tools_for_request
 from .tool_executor import execute_tool, parse_fork_proposal
 from .summarizer import Summarizer
 from .context_grouper import (
@@ -78,6 +78,15 @@ from .fork import (
     SwitchResult,
     ForkProposal,
     ContextAssignment,
+)
+from .command_executor import (
+    CommandExecutor,
+    ArchiveResult,
+    RehydrateResult,
+    LinkResult,
+    LinkTarget,
+    BackendResult,
+    BackendInfo,
 )
 from .json_stream import StreamingJsonParser
 
@@ -147,7 +156,6 @@ __all__ = [
     "BALLOON_TOOLS",
     "BALLOON_TOOL_NAMES",
     "get_tools_for_request",
-    "get_balloon_tools_prompt",
     "execute_tool",
     "parse_fork_proposal",
     # Summarizer
@@ -182,6 +190,14 @@ __all__ = [
     "SwitchResult",
     "ForkProposal",
     "ContextAssignment",
+    # Command executor
+    "CommandExecutor",
+    "ArchiveResult",
+    "RehydrateResult",
+    "LinkResult",
+    "LinkTarget",
+    "BackendResult",
+    "BackendInfo",
     # JSON streaming
     "StreamingJsonParser",
     # Exceptions
@@ -189,7 +205,5 @@ __all__ = [
     "InputRequiredError",
     "BackendNotFoundError",
     # Link tools
-    "LINK_TOOLS",
-    "get_link_tools_prompt",
     "execute_link_tool",
 ]

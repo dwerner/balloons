@@ -286,10 +286,6 @@ LINK_TOOLS = [
     },
 ]
 
-# Names of link tools for easy checking
-LINK_TOOL_NAMES = {"list_links", "follow_link", "search_linked_session"}
-
-
 def get_tools_for_request(
     allowed_tools: list[str] | None = None,
     disable_tools: bool = False,
@@ -326,56 +322,3 @@ def get_tools_for_request(
     ]
 
 
-def get_balloon_tools_prompt() -> str:
-    """Generate the system prompt section describing Balloons workflow tools.
-
-    Returns:
-        Prompt text describing the propose_fork tool and usage.
-    """
-    return """## Balloons Workflow Tools
-
-You have access to special workflow tools for managing conversation context.
-
-### propose_fork Tool
-
-When you've analyzed a task and want to suggest an implementation approach, you can
-propose creating a "fork" - a new conversation branch with curated context.
-
-**When to use:**
-- You've discussed and planned an implementation approach
-- You want to start coding with focused, minimal context
-- You see an opportunity to drop irrelevant early exploration
-
-**Tool format:**
-```json
-{
-  "name": "propose_fork",
-  "args": {
-    "name": "short-fork-name",
-    "description": "What this fork will accomplish",
-    "context_plan": [
-      {"exchange_range": "0", "mode": "copy", "reason": "Contains the requirements"},
-      {"exchange_range": "1-3", "mode": "compress", "reason": "Background exploration - summarize"},
-      {"exchange_range": "last", "mode": "copy", "reason": "Contains the implementation plan"}
-    ],
-    "initial_prompt": "Let's start by creating the data model..."
-  }
-}
-```
-
-**Context modes:**
-- `copy`: Include exchange verbatim (for critical details)
-- `compress`: LLM summarizes before forking (for background)
-- `drop`: Exclude from fork (irrelevant tangents)
-
-**Exchange ranges:**
-- `"0"`, `"5"`: Single exchange by index
-- `"0-3"`: Range of exchanges (inclusive)
-- `"last"`: Most recent exchange
-- `"last-2"`: Last 3 exchanges
-- `"-3"`: Last 3 exchanges (negative indexing)
-- `"all"`: All exchanges
-
-When you call this tool, the user sees your proposal visually and can accept, modify,
-or reject it. If accepted, the fork is created with your suggested context.
-"""
