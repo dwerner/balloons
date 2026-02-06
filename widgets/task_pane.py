@@ -3,6 +3,7 @@
 from textual.widgets import Static, Tree
 from textual.containers import Vertical, VerticalScroll
 from textual.reactive import reactive
+from textual.timer import Timer
 from rich.text import Text
 from datetime import datetime
 
@@ -90,10 +91,17 @@ class TaskPane(Vertical):
     # Reactive to trigger updates
     task_count = reactive(0)
 
+    # Spinner animation for active tasks
+    _spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._selected_task_id: str | None = None
         self._task_state = get_task_state()
+
+        # Spinner animation state
+        self._spinner_frame: int = 0
+        self._spinner_timer: Timer | None = None
 
     def compose(self):
         tree = Tree("[bold]Tasks[/]", id="task-tree")
@@ -107,10 +115,14 @@ class TaskPane(Vertical):
         self._task_state.add_observer(self._on_task_event)
         # Initial render
         self._refresh_task_tree()
+        # Start spinner if any tasks are already active
+        if self._task_state.get_active_count() > 0:
+            self._start_spinner()
 
     def on_unmount(self) -> None:
         """Stop observing task state changes."""
         self._task_state.remove_observer(self._on_task_event)
+        self._stop_spinner()
 
     async def _on_task_event(self, event: TaskEvent, task: Task) -> None:
         """Handle task state changes (async observer)."""
@@ -119,8 +131,15 @@ class TaskPane(Vertical):
             return
 
         # Update the reactive to trigger a refresh
-        self.task_count = self._task_state.get_active_count()
+        active_count = self._task_state.get_active_count()
+        self.task_count = active_count
         self._refresh_task_tree()
+
+        # Start/stop spinner based on active task count
+        if active_count > 0:
+            self._start_spinner()
+        else:
+            self._stop_spinner()
 
         # If viewing this task, refresh detail
         if self._selected_task_id == task.task_id:
@@ -208,11 +227,15 @@ class TaskPane(Vertical):
         }.get(status, "dim")
 
     def _get_status_icon(self, status: TaskStatus) -> str:
-        """Get icon for a status."""
+        """Get icon for a status.
+
+        Active statuses (PENDING, STREAMING, EXECUTING) get animated spinner.
+        Completed statuses get static icons.
+        """
+        if status in (TaskStatus.STREAMING, TaskStatus.EXECUTING, TaskStatus.PENDING):
+            # Use animated spinner for active tasks
+            return self._spinner_chars[self._spinner_frame]
         return {
-            TaskStatus.PENDING: "○",
-            TaskStatus.STREAMING: "●",
-            TaskStatus.EXECUTING: "◐",
             TaskStatus.COMPLETED: "✓",
             TaskStatus.ERROR: "✗",
             TaskStatus.CANCELLED: "⊘",
@@ -228,6 +251,31 @@ class TaskPane(Vertical):
             TaskType.ARCHIVE_SUMMARY: "Archive",
             TaskType.TITLE: "Title",
         }.get(task_type, str(task_type.value))
+
+    # --- Spinner Animation ---
+
+    def _start_spinner(self) -> None:
+        """Start the spinner animation for active tasks."""
+        if self._spinner_timer is None:
+            self._spinner_timer = self.set_interval(0.1, self._advance_spinner)
+
+    def _stop_spinner(self) -> None:
+        """Stop the spinner animation."""
+        if self._spinner_timer is not None:
+            self._spinner_timer.stop()
+            self._spinner_timer = None
+            self._spinner_frame = 0
+
+    def _advance_spinner(self) -> None:
+        """Advance the spinner to the next frame and update active task labels."""
+        self._spinner_frame = (self._spinner_frame + 1) % len(self._spinner_chars)
+        # Refresh tree to show updated spinner
+        self._refresh_task_tree()
+        # Also refresh detail pane if showing an active task
+        if self._selected_task_id:
+            task = self._task_state.get_task(self._selected_task_id)
+            if task and task.is_active:
+                self._show_task_detail(task)
 
     def _show_task_detail(self, task: Task) -> None:
         """Show detailed properties for selected task."""

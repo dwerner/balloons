@@ -428,6 +428,13 @@ class BalloonsApp(App):
             if session_id == self._tree_state.get_current_session_id():
                 self._update_unviewed_markers()
 
+        elif event == TreeEvent.CONTEXT_MODE_CHANGED:
+            # Context mode changed on a turn - recalculate tokens if it's the current session
+            session_id = data.get("session_id")
+            if session_id == self._tree_state.get_current_session_id():
+                self._update_base_context_tokens()
+                self._update_context_tokens()
+
     def _update_unviewed_markers(self) -> None:
         """Update the chat log scrollbar markers for unviewed turns."""
         try:

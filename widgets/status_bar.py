@@ -132,7 +132,7 @@ class StatusBar(Static):
         if streaming:
             self._start_spinner()
         else:
-            self._stop_spinner()
+            self._maybe_stop_spinner()
 
     def set_streaming_count(self, count: int):
         """Set total number of streaming sessions (foreground + background)."""
@@ -140,8 +140,8 @@ class StatusBar(Static):
         # Start spinner if any sessions streaming
         if count > 0:
             self._start_spinner()
-        elif not self.streaming and not self.status:
-            self._stop_spinner()
+        else:
+            self._maybe_stop_spinner()
 
     def set_status(self, status: str, animate: bool = True):
         self.status = status
@@ -150,12 +150,12 @@ class StatusBar(Static):
         if status and animate:
             self._start_spinner()
         else:
-            self._stop_spinner()
+            self._maybe_stop_spinner()
 
     def set_error(self, error: str):
         self.error = error
         self.status = ""  # Clear status when setting error
-        self._stop_spinner()  # No animation for errors
+        self._maybe_stop_spinner()  # Only stop if nothing else needs animation
 
     def _start_spinner(self) -> None:
         """Start the spinner animation."""
@@ -163,11 +163,27 @@ class StatusBar(Static):
             self._spinner_timer = self.set_interval(0.1, self._advance_spinner)
 
     def _stop_spinner(self) -> None:
-        """Stop the spinner animation."""
+        """Stop the spinner animation unconditionally."""
         if self._spinner_timer is not None:
             self._spinner_timer.stop()
             self._spinner_timer = None
             self._spinner_frame = 0
+
+    def _maybe_stop_spinner(self) -> None:
+        """Stop the spinner only if nothing needs animation.
+
+        The spinner should keep running if any of:
+        - Foreground session is streaming
+        - Background sessions are streaming (streaming_count > 0)
+        - An animated status message is shown
+        """
+        needs_animation = (
+            self.streaming or
+            self.streaming_count > 0 or
+            (self.status and self._status_animated)
+        )
+        if not needs_animation:
+            self._stop_spinner()
 
     def _advance_spinner(self) -> None:
         """Advance the spinner to the next frame."""
