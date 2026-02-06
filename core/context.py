@@ -144,3 +144,44 @@ Provide a clear, actionable summary that can be used as context for continuing t
             return 0
         context = self.build_context(messages, "")
         return self.count_tokens(context)
+
+    def count_turn_tokens(self, role: str, content_blocks: list) -> int:
+        """Count tokens for a single turn from its content blocks.
+
+        This is the single source of truth for turn token counting.
+        Uses the same formatting as build_context() so counts are accurate.
+
+        Args:
+            role: "user" or "assistant"
+            content_blocks: List of content blocks (TextBlock, ToolUseBlock, etc.)
+
+        Returns:
+            Token count for this turn
+        """
+        if not content_blocks:
+            return 0
+
+        prefix = "User" if role == "user" else "Assistant"
+        block_parts = []
+
+        for block in content_blocks:
+            if isinstance(block, TextBlock):
+                if block.text:
+                    block_parts.append(block.text)
+            elif isinstance(block, ToolUseBlock):
+                input_str = json.dumps(block.input, indent=2)
+                block_parts.append(f"[Tool Use: {block.name}]\n{input_str}")
+            elif isinstance(block, ToolResultBlock):
+                error_prefix = "[Error] " if block.is_error else ""
+                block_parts.append(f"[Tool Result]{error_prefix}\n{block.content}")
+            elif isinstance(block, ArchiveBlock):
+                block_parts.append(
+                    f"[Archived {block.message_count} turns: {block.summary}]\n"
+                    f"(Archive JSON path: {block.file_path})"
+                )
+
+        if not block_parts:
+            return 0
+
+        full_content = f"{prefix}: " + "\n\n".join(block_parts)
+        return self.count_tokens(full_content)

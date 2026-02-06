@@ -39,6 +39,10 @@ from models import (
     ContextMode, TextBlock, ToolUseBlock, ToolResultBlock,
     InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock
 )
+from core.context import ContextBuilder
+
+# Module-level context builder for token counting
+_context_builder = ContextBuilder()
 
 
 class SessionProtocol(Protocol):
@@ -58,15 +62,6 @@ class SessionProtocol(Protocol):
     fork_status: str
     merge_message: str
     backend_name: str
-
-
-def _safe_count_tokens(content: str) -> int:
-    """Count tokens safely, returning 0 if tokenizer unavailable."""
-    try:
-        from tokenizer import count_tokens
-        return count_tokens(content) if content else 0
-    except ImportError:
-        return 0
 
 
 @dataclass
@@ -422,7 +417,7 @@ class TreeState:
                 content=content,
                 content_blocks=[],
                 exchange_id=exchange_id,
-                tokens=_safe_count_tokens(content),
+                tokens=_context_builder.count_turn_tokens(role, [TextBlock(text=content)] if content else []),
             )]
 
         if len(content_blocks) == 1:
@@ -435,7 +430,7 @@ class TreeState:
                 content=block_content,
                 content_blocks=[block],
                 exchange_id=exchange_id,
-                tokens=_safe_count_tokens(block_content),
+                tokens=_context_builder.count_turn_tokens(role, [block]),
             )]
 
         # Multiple blocks - expand into separate turns
@@ -450,7 +445,7 @@ class TreeState:
                 content=block_content,
                 content_blocks=[block],
                 exchange_id=exchange_id,
-                tokens=_safe_count_tokens(block_content),
+                tokens=_context_builder.count_turn_tokens(block_role, [block]),
             ))
 
         return turns
@@ -565,7 +560,7 @@ class TreeState:
                 turn.content_blocks = content_blocks
                 turn.events = events or []
                 turn.streaming = False
-                turn.tokens = _safe_count_tokens(content)
+                turn.tokens = _context_builder.count_turn_tokens(turn.role, content_blocks)
 
                 # Update session's cached token count (sum all turn tokens)
                 session_data.cached_context_tokens = sum(t.tokens for t in session_data.turns)

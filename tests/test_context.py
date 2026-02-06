@@ -197,3 +197,50 @@ class TestReturnSummaryPrompt:
         result = builder.build_return_summary_prompt(messages, "Custom instruction")
         assert "Custom instruction" in result
         assert "Context:" in result
+
+
+class TestCountTurnTokens:
+    """Tests for count_turn_tokens - single source of truth for turn token counting."""
+
+    def test_empty_blocks_returns_zero(self, builder):
+        """Empty content blocks returns 0 tokens."""
+        result = builder.count_turn_tokens("user", [])
+        assert result == 0
+
+    def test_text_block_counts_tokens(self, builder):
+        """TextBlock content is counted."""
+        result = builder.count_turn_tokens("user", [TextBlock(text="hello world")])
+        assert result > 0
+
+    def test_tool_use_block_counts_tokens(self, builder):
+        """ToolUseBlock with JSON input is counted."""
+        result = builder.count_turn_tokens("assistant", [
+            ToolUseBlock(id="123", name="Read", input={"file_path": "/very/long/path/to/file.py"})
+        ])
+        # Should include "[Tool Use: Read]\n" + JSON formatted input
+        assert result > 10  # Rough estimate, JSON adds tokens
+
+    def test_tool_result_block_counts_tokens(self, builder):
+        """ToolResultBlock content is counted."""
+        result = builder.count_turn_tokens("assistant", [
+            ToolResultBlock(tool_use_id="123", content="file contents " * 100)
+        ])
+        # Should include "[Tool Result]\n" + content
+        assert result > 50  # Lots of content
+
+    def test_multiple_blocks_sum_correctly(self, builder):
+        """Multiple blocks are all counted."""
+        blocks = [
+            TextBlock(text="Thinking about this"),
+            ToolUseBlock(id="123", name="Read", input={"file_path": "/test.py"}),
+            ToolResultBlock(tool_use_id="123", content="print('hello')"),
+        ]
+        result = builder.count_turn_tokens("assistant", blocks)
+        # Count individual blocks to verify they're all included
+        text_only = builder.count_turn_tokens("assistant", [blocks[0]])
+        tool_use_only = builder.count_turn_tokens("assistant", [blocks[1]])
+        tool_result_only = builder.count_turn_tokens("assistant", [blocks[2]])
+        # Combined should be roughly the sum (with some overhead from role prefix being counted once)
+        assert result > text_only
+        assert result > tool_use_only
+        assert result > tool_result_only
