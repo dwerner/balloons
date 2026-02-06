@@ -8,6 +8,7 @@ import asyncio
 import glob as glob_module
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -107,6 +108,8 @@ async def execute_tool(
             return execute_propose_fork(args)
         elif name == "propose_merge":
             return execute_propose_merge(args)
+        elif name == "create_slide":
+            return execute_create_slide(args, session)
         else:
             return f"Unknown tool: {name}", True
 
@@ -585,6 +588,86 @@ def parse_merge_proposal(args: dict) -> MergeProposal | None:
             reason=reason,
             files_changed=files_changed,
             key_accomplishments=key_accomplishments,
+        )
+    except Exception:
+        return None
+
+
+def execute_create_slide(args: dict, session: "Session | None" = None) -> tuple[str, bool]:
+    """Handle a create_slide tool call.
+
+    Creates a slide turn in the session.
+
+    Args:
+        args: Tool arguments containing title, content, and optional notes
+        session: The session to add the slide to
+
+    Returns:
+        Tuple of (result_string, is_error)
+    """
+    title = args.get("title", "")
+    content = args.get("content", "")
+    notes = args.get("notes", "")
+
+    if not title and not content:
+        return "Error: Either title or content is required", True
+
+    # Validate title length (soft limit)
+    if len(title) > 100:
+        return f"Error: Title too long ({len(title)} chars). Max recommended: 50 chars", True
+
+    # Validate content length (soft limit - ~10 lines)
+    content_lines = content.count("\n") + 1 if content else 0
+    if content_lines > 20:
+        return f"Error: Content too long ({content_lines} lines). Max recommended: 10 lines for 1080p", True
+
+    if not session:
+        return "Error: No session available to create slide", True
+
+    # Create the slide in the session
+    session.add_slide_turn(
+        title=title,
+        content=content,
+        notes=notes,
+    )
+    session.save()
+
+    debug_log.info(f"Slide created in session {session.id[:8]}: '{title}' - session now has {session.get_slide_count()} slides", category="slides")
+
+    return f"Slide created: {title or '(untitled)'}", False
+
+
+@dataclass
+class SlideData:
+    """Parsed slide data from tool arguments."""
+    title: str
+    content: str
+    notes: str
+
+
+def parse_create_slide(args: dict) -> SlideData | None:
+    """Parse tool arguments into SlideData.
+
+    Called by the app layer when it intercepts a create_slide tool call.
+
+    Args:
+        args: Tool arguments from the model
+
+    Returns:
+        SlideData object, or None if parsing fails
+    """
+    try:
+        title = args.get("title", "")
+        content = args.get("content", "")
+        notes = args.get("notes", "")
+
+        if not title and not content:
+            return None
+
+        return SlideData(
+            title=title,
+            content=content,
+            notes=notes,
         )
     except Exception:
         return None

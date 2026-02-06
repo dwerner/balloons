@@ -9,7 +9,7 @@ from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
-from textual.widgets import TextArea
+from textual.widgets import TextArea, Button
 
 # Debug logging for event ordering
 DEBUG_EVENTS = os.environ.get("BALLOONS_DEBUG_EVENTS", "").lower() in ("1", "true", "yes")
@@ -32,7 +32,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, TaskPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, MessageStash, StashPopup
+from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, TaskPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, MessageStash, StashPopup, SlidesPane, PresentationScreen
 from widgets.input_box import CompletionPopup
 from widgets.archive_marker import ArchiveMarker
 from claude_runner import ClaudeRunner
@@ -82,6 +82,10 @@ from core import (
     PopCommand,
     ClearAllSessionsCommand,
     SnapCommand,
+    NewSlideCommand,
+    PresentCommand,
+    SlidesCommand,
+    ChatCommand,
     debug_log,
     create_runner,
     register_app_tool_handler,
@@ -143,6 +147,47 @@ class BalloonsApp(App):
 
     #chat-container {
         height: 1fr;
+    }
+
+    #content-tabs {
+        dock: top;
+        height: auto;
+        width: 100%;
+        background: $surface;
+        border-bottom: solid $primary-darken-2;
+        padding: 0 1;
+    }
+
+    #content-tabs Button {
+        min-width: 12;
+        margin: 0 1 0 0;
+        border: none;
+        background: transparent;
+    }
+
+    #content-tabs Button:hover {
+        background: $primary-darken-3;
+    }
+
+    #content-tabs Button.active {
+        background: $primary-darken-2;
+        text-style: bold;
+    }
+
+    #content-area {
+        height: 1fr;
+    }
+
+    #slides-pane {
+        display: none;
+    }
+
+    #slides-pane.visible {
+        display: block;
+    }
+
+    #chat-log.hidden {
+        display: none;
     }
 
     ChatLogView {
@@ -395,7 +440,12 @@ class BalloonsApp(App):
                 yield VerticalSplitter(id="splitter")
                 with Vertical(id="chat-container"):
                     yield Breadcrumb(id="breadcrumb")
-                    yield ChatLogView(id="chat-log")
+                    with Horizontal(id="content-tabs"):
+                        yield Button("💬 Chat", id="tab-chat", classes="active")
+                        yield Button("📊 Slides", id="tab-slides")
+                    with Vertical(id="content-area"):
+                        yield ChatLogView(id="chat-log")
+                        yield SlidesPane(id="slides-pane")
                     yield MoreBelowIndicator(id="more-below")
                 yield TaskPane(id="task-pane", classes="hidden")
             yield DebugPane(id="debug-pane")
@@ -743,6 +793,11 @@ class BalloonsApp(App):
                     # Don't show normal tool UI for propose_merge
                     return
 
+            # Track tool names for post-result actions (like slides refresh)
+            if action.tool_use_id.startswith("balloons-"):
+                ctx.tool_names[action.tool_use_id] = action.tool_name
+                debug_log.info(f"Tracking balloons tool: {action.tool_name} ({action.tool_use_id})", category="slides")
+
             if is_active:
                 # Finish streaming tool widget with formatted content
                 tool_event = ToolUseEvent(
@@ -782,6 +837,15 @@ class BalloonsApp(App):
                 status=TaskStatus.STREAMING,
                 tool_name=None,
             )
+
+            # Refresh slides pane when create_slide tool completes
+            tool_name = ctx.tool_names.get(action.tool_use_id)
+            debug_log.debug(f"ToolResultAction: tool_use_id={action.tool_use_id}, tool_name={tool_name}, tool_names={ctx.tool_names}", category="slides")
+            if tool_name == "create_slide" and action.tool_use_id.startswith("balloons-"):
+                debug_log.info(f"create_slide tool completed, refreshing slides pane", category="slides")
+                if session_id == self._tree_state.get_current_session_id():
+                    # Use call_later to ensure refresh happens after session state settles
+                    self.call_later(self._refresh_slides_pane)
 
             if is_active:
                 # Display tool result widget
@@ -1566,6 +1630,14 @@ class BalloonsApp(App):
             self._handle_clear_all_sessions_command()
         elif isinstance(cmd, SnapCommand):
             await self._handle_snap_command(cmd.prompt)
+        elif isinstance(cmd, NewSlideCommand):
+            self._handle_new_slide_command(cmd.title)
+        elif isinstance(cmd, PresentCommand):
+            self._handle_present_command()
+        elif isinstance(cmd, SlidesCommand):
+            self._switch_to_slides_tab()
+        elif isinstance(cmd, ChatCommand):
+            self._switch_to_chat_tab()
 
     def _format_tool_use(
         self, event: ToolUseEvent
@@ -3158,6 +3230,9 @@ class BalloonsApp(App):
             # Use default argument to capture turn_id value (avoid late binding)
             self.call_after_refresh(lambda tid=turn_id: chat_log.scroll_to_turn(tid))
 
+        # Update slides pane with the new session
+        self._refresh_slides_pane()
+
     def on_context_tree_view_selection_changed(self, event: ContextTreeView.SelectionChanged) -> None:
         """Handle tree selection changes - apply visual context mode indicators."""
         chat_log = self.query_one("#chat-log", ChatLogView)
@@ -4010,6 +4085,123 @@ class BalloonsApp(App):
                 f"Screen capture failed: {e}",
                 category="command",
             )
+
+    # =========================================================================
+    # Slide/Presentation Commands
+    # =========================================================================
+
+    def _handle_new_slide_command(self, title: str = "") -> None:
+        """Create a new slide in the current session.
+
+        Args:
+            title: Optional slide title
+        """
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        if not self.session:
+            status_bar.set_error("No active session")
+            return
+
+        # Create the slide
+        self.session.add_slide_turn(
+            title=title or "New Slide",
+            content="",
+            notes="",
+        )
+        self.session.save()
+
+        # Refresh UI
+        self._refresh_slides_pane()
+        self._switch_to_slides_tab()
+
+        status_bar.set_message(f"Created slide: {title or 'New Slide'}")
+        debug_log.info(f"Created new slide: {title}", category="slides")
+
+    def _handle_present_command(self) -> None:
+        """Enter fullscreen presentation mode."""
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        if not self.session:
+            status_bar.set_error("No active session")
+            return
+
+        slides = self.session.get_all_slides()
+        if not slides:
+            status_bar.set_error("No slides to present")
+            return
+
+        debug_log.info(f"Entering presentation mode: {len(slides)} slides", category="slides")
+        self.push_screen(PresentationScreen(slides))
+
+    def _switch_to_slides_tab(self) -> None:
+        """Switch to the Slides tab view."""
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        slides_pane = self.query_one("#slides-pane", SlidesPane)
+        tab_chat = self.query_one("#tab-chat", Button)
+        tab_slides = self.query_one("#tab-slides", Button)
+
+        # Update button states
+        tab_chat.remove_class("active")
+        tab_slides.add_class("active")
+
+        # Update visibility
+        chat_log.add_class("hidden")
+        slides_pane.add_class("visible")
+
+        # Update slide count in tab
+        if self.session:
+            count = self.session.get_slide_count()
+            tab_slides.label = f"📊 Slides ({count})" if count > 0 else "📊 Slides"
+
+        debug_log.info("Switched to Slides tab", category="ui")
+
+    def _switch_to_chat_tab(self) -> None:
+        """Switch to the Chat tab view."""
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        slides_pane = self.query_one("#slides-pane", SlidesPane)
+        tab_chat = self.query_one("#tab-chat", Button)
+        tab_slides = self.query_one("#tab-slides", Button)
+
+        # Update button states
+        tab_chat.add_class("active")
+        tab_slides.remove_class("active")
+
+        # Update visibility
+        chat_log.remove_class("hidden")
+        slides_pane.remove_class("visible")
+
+        debug_log.info("Switched to Chat tab", category="ui")
+
+    def _refresh_slides_pane(self) -> None:
+        """Refresh the slides pane with current session data."""
+        try:
+            slides_pane = self.query_one("#slides-pane", SlidesPane)
+            slides_pane.set_session(self.session)
+
+            # Update tab label with count
+            tab_slides = self.query_one("#tab-slides", Button)
+            if self.session:
+                count = self.session.get_slide_count()
+                debug_log.info(f"Refreshing slides pane: {count} slides found", category="slides")
+                tab_slides.label = f"📊 Slides ({count})" if count > 0 else "📊 Slides"
+            else:
+                debug_log.info("Refreshing slides pane: no session", category="slides")
+                tab_slides.label = "📊 Slides"
+        except Exception as e:
+            debug_log.warning(f"Failed to refresh slides pane: {e}", category="slides")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses for tab switching."""
+        if event.button.id == "tab-chat":
+            self._switch_to_chat_tab()
+        elif event.button.id == "tab-slides":
+            self._switch_to_slides_tab()
+        elif event.button.id == "present-btn":
+            self._handle_present_command()
+
+    def on_slides_pane_present_requested(self, event: SlidesPane.PresentRequested) -> None:
+        """Handle present button from slides pane."""
+        self._handle_present_command()
 
     def action_show_help(self) -> None:
         """Show the help modal."""

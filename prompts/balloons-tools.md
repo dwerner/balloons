@@ -281,3 +281,39 @@ When you call this tool, the user sees your proposed summary and can:
 
 The merge summary becomes a permanent record in the parent session, visible as a
 merge marker showing what the fork accomplished.
+
+
+## Slide Creation Tool
+
+You can create presentation slides that appear in the Slides tab. Use this for:
+- Creating a presentation from conversation content
+- Building a slide deck step by step
+- Visualizing concepts or summaries
+
+### create_slide Tool
+
+```json
+{
+  "name": "create_slide",
+  "args": {
+    "title": "Slide Title",
+    "content": "## Heading\n\n- Bullet point 1\n- Bullet point 2\n- Bullet point 3",
+    "notes": "Optional speaker notes (not shown in presentation)"
+  }
+}
+```
+
+**Content constraints (optimized for 1080p display):**
+- Title: max ~50 characters
+- Content: max ~10 lines of body text
+- Bullets: 5-7 items max, each under 60 chars
+- Code blocks: max ~15 lines
+- One concept per slide
+
+**Example:**
+
+<balloons-tool>
+{"name": "create_slide", "args": {"title": "Context Management", "content": "## Key Features\n\n- Per-turn COPY/COMPRESS/DROP modes\n- Visual context tree with token counts\n- Session forking & merging\n- Bidirectional session linking", "notes": "Emphasize the git-like workflow"}}
+</balloons-tool>
+
+The slide will appear in the Slides tab. Users can view presentations with `:present`.

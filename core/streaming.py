@@ -43,6 +43,8 @@ class StreamingContext:
     tool_events: dict = None
     # Track tool_use_id -> turn_idx mapping for finish_turn calls
     tool_turn_indices: dict = None
+    # Track tool_use_id -> tool_name for tools that need post-result actions
+    tool_names: dict = None
     # Helper task tracking (for context compression, merge summaries)
     is_helper: bool = False  # True if this is a helper task, not a normal prompt
     helper_type: str = ""  # "compress", "merge", etc.
@@ -54,6 +56,8 @@ class StreamingContext:
             self.tool_events = {}
         if self.tool_turn_indices is None:
             self.tool_turn_indices = {}
+        if self.tool_names is None:
+            self.tool_names = {}
         if self.fork_data is None:
             self.fork_data = {}
 

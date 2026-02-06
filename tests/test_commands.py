@@ -17,6 +17,10 @@ from core.commands import (
     RehydrateCommand,
     FollowCommand,
     SnapCommand,
+    NewSlideCommand,
+    PresentCommand,
+    SlidesCommand,
+    ChatCommand,
 )
 
 
@@ -198,3 +202,27 @@ class TestSnapCommand:
         cmd = parser.parse(":snap what does this show?")
         assert isinstance(cmd, SnapCommand)
         assert cmd.prompt == "what does this show?"
+
+
+class TestSlideCommands:
+    def test_new_slide_no_title(self, parser):
+        cmd = parser.parse(":new-slide")
+        assert isinstance(cmd, NewSlideCommand)
+        assert cmd.title == ""
+
+    def test_new_slide_with_title(self, parser):
+        cmd = parser.parse(":new-slide Introduction")
+        assert isinstance(cmd, NewSlideCommand)
+        assert cmd.title == "Introduction"
+
+    def test_present(self, parser):
+        cmd = parser.parse(":present")
+        assert isinstance(cmd, PresentCommand)
+
+    def test_slides(self, parser):
+        cmd = parser.parse(":slides")
+        assert isinstance(cmd, SlidesCommand)
+
+    def test_chat(self, parser):
+        cmd = parser.parse(":chat")
+        assert isinstance(cmd, ChatCommand)

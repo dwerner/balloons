@@ -34,6 +34,10 @@ from .commands import (
     PopCommand,
     ClearAllSessionsCommand,
     SnapCommand,
+    NewSlideCommand,
+    PresentCommand,
+    SlidesCommand,
+    ChatCommand,
     COMMAND_DOCS,
 )
 from .context import ContextBuilder
@@ -47,7 +51,7 @@ from .link_tools import LINK_TOOL_NAMES, execute_link_tool, register_app_tool_ha
 from .openai_runner import OpenAICompatibleRunner
 from .runner_factory import create_runner, resolve_env_var
 from .tools import TOOLS, LINK_TOOLS as LINK_TOOLS_OPENAI, BALLOON_TOOLS, BALLOON_TOOL_NAMES, get_tools_for_request
-from .tool_executor import execute_tool, parse_fork_proposal
+from .tool_executor import execute_tool, parse_fork_proposal, parse_create_slide, SlideData
 from .summarizer import Summarizer
 from .context_grouper import (
     ContextGroups,
@@ -141,6 +145,10 @@ __all__ = [
     "PopCommand",
     "ClearAllSessionsCommand",
     "SnapCommand",
+    "NewSlideCommand",
+    "PresentCommand",
+    "SlidesCommand",
+    "ChatCommand",
     "COMMAND_DOCS",
     # Context
     "ContextBuilder",
@@ -178,6 +186,8 @@ __all__ = [
     "get_tools_for_request",
     "execute_tool",
     "parse_fork_proposal",
+    "parse_create_slide",
+    "SlideData",
     "register_app_tool_handler",
     "unregister_app_tool_handler",
     # Summarizer

@@ -9,7 +9,7 @@ from typing import Optional, AsyncIterator
 
 import aiofiles
 
-from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, ArchiveBlock, ArchiveSummary, ContentBlock, ContextMode
+from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, ArchiveBlock, ArchiveSummary, SlideBlock, ContentBlock, ContextMode
 
 
 SESSIONS_DIR = Path.home() / ".balloons" / "sessions"
@@ -846,6 +846,78 @@ class Session:
         """Check if this session has any archived turns."""
         return len(self.get_all_archives()) > 0
 
+    # =========================================================================
+    # Slide Methods
+    # =========================================================================
+
+    def add_slide_turn(
+        self,
+        title: str,
+        content: str,
+        notes: str = "",
+    ) -> Turn:
+        """Add a slide as a turn in the conversation.
+
+        Args:
+            title: Slide title (max ~50 chars for 1080p)
+            content: Markdown body (max ~10 lines for 1080p)
+            notes: Optional speaker notes (not shown in presentation)
+
+        Returns:
+            The Turn containing the SlideBlock
+        """
+        slide_block = SlideBlock(
+            title=title,
+            content=content,
+            notes=notes,
+        )
+        return self.add_turn(role="slide", content_block=slide_block)
+
+    def get_all_slides(self) -> list[tuple[int, SlideBlock]]:
+        """Get all slide blocks with their turn indices.
+
+        Returns:
+            List of (turn_index, SlideBlock) tuples in order of appearance
+        """
+        slides = []
+        for i, turn in enumerate(self.turns):
+            if isinstance(turn.content_block, SlideBlock):
+                slides.append((i, turn.content_block))
+        return slides
+
+    def get_slide_count(self) -> int:
+        """Get the number of slides in this session."""
+        return sum(1 for t in self.turns if isinstance(t.content_block, SlideBlock))
+
+    def has_slides(self) -> bool:
+        """Check if this session has any slides."""
+        return self.get_slide_count() > 0
+
+    def update_slide(self, turn_index: int, title: str = None, content: str = None, notes: str = None) -> bool:
+        """Update an existing slide's content.
+
+        Args:
+            turn_index: Index of the turn containing the slide
+            title: New title (None to keep existing)
+            content: New content (None to keep existing)
+            notes: New notes (None to keep existing)
+
+        Returns:
+            True if updated, False if turn doesn't exist or isn't a slide
+        """
+        if turn_index < 0 or turn_index >= len(self.turns):
+            return False
+        turn = self.turns[turn_index]
+        if not isinstance(turn.content_block, SlideBlock):
+            return False
+        if title is not None:
+            turn.content_block.title = title
+        if content is not None:
+            turn.content_block.content = content
+        if notes is not None:
+            turn.content_block.notes = notes
+        return True
+
     @property
     def working_directory(self) -> Optional[str]:
         """Get the current working directory (first in list), or None if not set."""
@@ -920,6 +992,13 @@ class Session:
                     "key_decisions": block.structured_summary.key_decisions,
                 }
             return data
+        elif isinstance(block, SlideBlock):
+            return {
+                "type": "slide",
+                "title": block.title,
+                "content": block.content,
+                "notes": block.notes,
+            }
         return {"type": "unknown"}
 
     def _serialize_turn(self, turn: Turn) -> dict:
@@ -1089,6 +1168,12 @@ class Session:
                 turn_end=data.get("turn_end", 0),
                 message_count=data.get("message_count", 0),
                 token_estimate=data.get("token_estimate", 0),
+            )
+        elif block_type == "slide":
+            return SlideBlock(
+                title=data.get("title", ""),
+                content=data.get("content", ""),
+                notes=data.get("notes", ""),
             )
         # Fallback to text
         return TextBlock(text=str(data))

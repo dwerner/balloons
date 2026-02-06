@@ -265,6 +265,45 @@ class SnapCommand(Command):
     prompt: str = ""  # Optional prompt to send along with the snapshot
 
 
+@dataclass
+class NewSlideCommand(Command):
+    """Create a new slide turn in the conversation.
+
+    Slides are a first-class turn type for presentations. They appear
+    in the Slides tab and can be presented fullscreen with :present.
+    """
+    title: str = ""  # Optional title (can be added later)
+    content: str = ""  # Optional initial content
+
+
+@dataclass
+class PresentCommand(Command):
+    """Enter fullscreen presentation mode.
+
+    Shows slides one at a time with ←/→ navigation.
+    Press Esc or q to exit.
+    """
+    pass
+
+
+@dataclass
+class SlidesCommand(Command):
+    """Switch to the Slides tab view.
+
+    Shows all presentation slides in the current session.
+    """
+    pass
+
+
+@dataclass
+class ChatCommand(Command):
+    """Switch to the Chat tab view.
+
+    Returns to the main chat conversation view.
+    """
+    pass
+
+
 # Command documentation for help display
 COMMAND_DOCS = [
     # Session management
@@ -304,6 +343,11 @@ COMMAND_DOCS = [
     (":follow", "Toggle auto-scroll to follow new content"),
     (":clear-all-sessions", "Delete ALL sessions (requires confirmation)"),
     (":snap [prompt]", "Capture screen as text and send to Claude"),
+    # Slides/Presentation
+    (":new-slide [Title]", "Create a new slide (view in Slides tab)"),
+    (":slides", "Switch to Slides tab view"),
+    (":chat", "Switch to Chat tab view"),
+    (":present", "Enter fullscreen presentation mode (Esc to exit)"),
     (":help", "Show this help"),
 ]
 
@@ -491,6 +535,23 @@ class CommandParser:
         if text == ":snap" or text.startswith(":snap "):
             prompt = text[5:].strip() if len(text) > 5 else ""
             return SnapCommand(prompt=prompt)
+
+        # Handle :new-slide [Title]
+        if text == ":new-slide" or text.startswith(":new-slide "):
+            title = text[10:].strip() if len(text) > 10 else ""
+            return NewSlideCommand(title=title)
+
+        # Handle :present
+        if text == ":present":
+            return PresentCommand()
+
+        # Handle :slides
+        if text == ":slides":
+            return SlidesCommand()
+
+        # Handle :chat
+        if text == ":chat":
+            return ChatCommand()
 
         # Unknown command
         cmd_name = text.split()[0]

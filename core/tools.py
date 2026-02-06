@@ -268,10 +268,47 @@ The merge summary becomes the record of what this fork accomplished, visible in 
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_slide",
+            "description": """Create a presentation slide. Slides appear in the Slides tab and can be viewed in presentation mode.
+
+Use this tool to:
+- Build a presentation from conversation content
+- Create step-by-step slide decks
+- Visualize summaries or key concepts
+
+Content constraints for 1080p display:
+- Title: max ~50 characters
+- Content: max ~10 lines of body text
+- Bullets: 5-7 items, each under 60 chars
+- Code blocks: max ~15 lines
+- One concept per slide""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Slide title (max ~50 characters for 1080p)"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Markdown body content (max ~10 lines for 1080p)"
+                    },
+                    "notes": {
+                        "type": "string",
+                        "description": "Optional speaker notes (not shown in presentation)"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
 ]
 
 # Names of balloon tools for easy checking
-BALLOON_TOOL_NAMES = {"propose_fork", "propose_merge"}
+BALLOON_TOOL_NAMES = {"propose_fork", "propose_merge", "create_slide"}
 
 # Link navigation tools - for traversing linked sessions
 LINK_TOOLS = [

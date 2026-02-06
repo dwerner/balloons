@@ -18,6 +18,8 @@ from .link_marker import LinkMarker
 from .breadcrumb import Breadcrumb
 from .fork_proposal_modal import ForkProposalModal, ForkProposalResult
 from .merge_proposal_modal import MergeProposalModal, MergeProposalResult
+from .slides_pane import SlidesPane, SlideCard
+from .presentation_screen import PresentationScreen
 
 # Backwards compatibility aliases
 ContextTree = ContextTreeView
@@ -60,4 +62,7 @@ __all__ = [
     "ForkProposalResult",
     "MergeProposalModal",
     "MergeProposalResult",
+    "SlidesPane",
+    "SlideCard",
+    "PresentationScreen",
 ]
