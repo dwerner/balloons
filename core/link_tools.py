@@ -109,7 +109,13 @@ def _execute_follow_link(args: dict[str, Any], current_session: Session) -> tupl
     if not link_id:
         return "Error: link_id is required", True
 
-    include_messages = args.get("include_messages", 10)
+    # Pagination parameters
+    limit = args.get("limit", 10)  # Number of turns to return
+    offset = args.get("offset", None)  # Turn index to start from (None = from end)
+
+    # Max content per turn - default 10000 chars, can be increased with full_content=true
+    full_content = args.get("full_content", False)
+    max_content_len = 100000 if full_content else 10000
 
     # Find the link (use get_all_active_links to include turn-based LinkBlocks)
     links = current_session.get_all_active_links()
@@ -124,25 +130,51 @@ def _execute_follow_link(args: dict[str, Any], current_session: Session) -> tupl
     if not linked_session:
         return f"Error: Linked session not found or deleted: {linked_session_id}", True
 
+    total_turns = len(linked_session.turns)
+
     # Build result
     result = {
         "session_id": linked_session.id,
         "name": linked_session.title or linked_session.fork_name or linked_session.id[:8],
         "created": linked_session.created,
         "last_modified": linked_session.last_modified,
-        "total_turns": len(linked_session.turns),
+        "total_turns": total_turns,
         "link_summary": link.get("summary", ""),
     }
 
-    # Include recent turns
-    turns = linked_session.turns[-include_messages:] if include_messages > 0 else []
-    result["recent_turns"] = [
+    # Get turns with pagination
+    if offset is not None:
+        # Explicit offset: get turns starting at offset
+        start_idx = max(0, offset)
+        end_idx = min(total_turns, start_idx + limit)
+        turns = linked_session.turns[start_idx:end_idx]
+        result["pagination"] = {
+            "offset": start_idx,
+            "limit": limit,
+            "returned": len(turns),
+            "has_more_before": start_idx > 0,
+            "has_more_after": end_idx < total_turns,
+        }
+    else:
+        # No offset: get last N turns (original behavior)
+        turns = linked_session.turns[-limit:] if limit > 0 else []
+        start_idx = max(0, total_turns - limit)
+        result["pagination"] = {
+            "offset": start_idx,
+            "limit": limit,
+            "returned": len(turns),
+            "has_more_before": start_idx > 0,
+            "has_more_after": False,
+        }
+
+    result["turns"] = [
         {
+            "index": start_idx + i,
             "role": turn.role,
-            "content": turn.content[:1000] + "..." if len(turn.content) > 1000 else turn.content,
+            "content": turn.content[:max_content_len] + "..." if len(turn.content) > max_content_len else turn.content,
             "timestamp": turn.timestamp,
         }
-        for turn in turns
+        for i, turn in enumerate(turns)
     ]
 
     return json.dumps(result, indent=2), False
@@ -157,6 +189,14 @@ def _execute_search_linked(args: dict[str, Any], current_session: Session) -> tu
         return "Error: link_id is required", True
     if not query:
         return "Error: query is required", True
+
+    # Pagination parameters
+    limit = args.get("limit", 20)  # Max results to return
+    offset = args.get("offset", 0)  # Skip first N matches
+
+    # Content options
+    full_content = args.get("full_content", False)  # Return full turn content
+    max_preview_len = 10000 if full_content else 2000  # Preview length
 
     # Find the link (use get_all_active_links to include turn-based LinkBlocks)
     links = current_session.get_all_active_links()
@@ -173,40 +213,54 @@ def _execute_search_linked(args: dict[str, Any], current_session: Session) -> tu
 
     # Search through turns
     query_lower = query.lower()
-    matches = []
+    all_matches = []
 
     for i, turn in enumerate(linked_session.turns):
         if query_lower in turn.content.lower():
-            # Found a match - include context
-            match_preview = turn.content
-            if len(match_preview) > 500:
-                # Try to center on the match
-                idx = match_preview.lower().find(query_lower)
-                start = max(0, idx - 200)
-                end = min(len(match_preview), idx + len(query) + 200)
-                match_preview = "..." + match_preview[start:end] + "..."
+            all_matches.append((i, turn))
 
-            matches.append({
-                "turn_index": i,
-                "role": turn.role,
-                "timestamp": turn.timestamp,
-                "content_preview": match_preview,
-            })
+    total_matches = len(all_matches)
 
-    if not matches:
+    if total_matches == 0:
         return f"No matches found for '{query}' in linked session.", False
 
-    # Limit results
-    if len(matches) > 20:
-        matches = matches[:20]
-        truncated = True
-    else:
-        truncated = False
+    # Apply pagination
+    paginated_matches = all_matches[offset:offset + limit]
+
+    matches = []
+    for i, turn in paginated_matches:
+        # Build content preview
+        if full_content:
+            content = turn.content[:max_preview_len]
+            if len(turn.content) > max_preview_len:
+                content += "..."
+        else:
+            # Try to center on the match
+            match_preview = turn.content
+            if len(match_preview) > max_preview_len:
+                idx = match_preview.lower().find(query_lower)
+                start = max(0, idx - max_preview_len // 2)
+                end = min(len(match_preview), idx + len(query) + max_preview_len // 2)
+                match_preview = ("..." if start > 0 else "") + match_preview[start:end] + ("..." if end < len(turn.content) else "")
+            content = match_preview
+
+        matches.append({
+            "turn_index": i,
+            "role": turn.role,
+            "timestamp": turn.timestamp,
+            "content_preview": content,
+        })
 
     result = {
         "query": query,
         "session_name": linked_session.title or linked_session.fork_name or linked_session.id[:8],
-        "total_matches": len(matches) if not truncated else f"20+ (showing first 20)",
+        "total_matches": total_matches,
+        "pagination": {
+            "offset": offset,
+            "limit": limit,
+            "returned": len(matches),
+            "has_more": offset + len(matches) < total_matches,
+        },
         "matches": matches,
     }
 

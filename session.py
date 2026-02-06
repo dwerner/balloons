@@ -606,6 +606,26 @@ class Session:
             return True
         return False
 
+    def delete_turns(self, turn_indices: list[int]) -> int:
+        """Delete multiple turns from the session history.
+
+        Deletes in reverse order to preserve indices during deletion.
+
+        Args:
+            turn_indices: List of turn indices to delete
+
+        Returns:
+            Number of turns actually deleted
+        """
+        # Sort in reverse order so deleting doesn't affect subsequent indices
+        sorted_indices = sorted(set(turn_indices), reverse=True)
+        deleted_count = 0
+        for idx in sorted_indices:
+            if 0 <= idx < len(self.turns):
+                del self.turns[idx]
+                deleted_count += 1
+        return deleted_count
+
     def delete(self) -> bool:
         """Delete this session's file from disk.
 

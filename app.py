@@ -951,7 +951,7 @@ class BalloonsApp(App):
 
         child_session.save()
 
-        # Register child in parent
+        # Register child in parent and add fork turn marker
         parent_session = fork_data["parent_session"]
         fork_point = fork_data["fork_point"]
         parent_session.add_child(
@@ -959,6 +959,13 @@ class BalloonsApp(App):
             prompt,
             name=name,
             fork_point=fork_point,
+        )
+        # Add fork turn marker to parent session (so fork shows in turn tree)
+        parent_session.add_fork_turn(
+            fork_id=str(uuid.uuid4()),
+            child_session_id=child_session.id,
+            fork_name=name or "fork",
+            prompt=prompt,
         )
         parent_session.save()
 
@@ -1820,7 +1827,7 @@ class BalloonsApp(App):
                 role=link_turn.role,
                 content=link_turn.content,
                 raw_events=[],
-                content_blocks=[link_turn.content_block] if link_turn.content_block else None,
+                content_block=link_turn.content_block,
             )
             linked_names.append(target_name)
 
@@ -1904,6 +1911,87 @@ class BalloonsApp(App):
         # Reload the UI first so TreeState has updated turns
         chat_log.clear()
         chat_log.load_history(self.session.turns, self.session)
+        context_tree.load_all_sessions(self.session)
+
+        # Recalculate token count after archiving (turns removed)
+        # Must be after tree reload so TreeState has the new turns
+        self._update_base_context_tokens()
+        self._update_context_tokens()
+
+        status_bar.set_status(
+            f"Archived {result.archived_count} turns to {result.file_path}",
+            animate=False,
+        )
+
+    async def _archive_turns_from_tree(self, session_id: str, turn_indices: list[int]) -> None:
+        """Archive turns requested from tree view (ctrl+shift+click or x key).
+
+        Uses LLM to generate a summary of the archived turns.
+        """
+        from core.archiver import ArchiveError
+
+        if not self.session:
+            self.notify("No active session", severity="error")
+            return
+
+        # Verify the request is for the current session
+        if session_id != self.session.id:
+            self.notify("Can only archive turns in the current session", severity="error")
+            return
+
+        if not turn_indices:
+            return
+
+        # Archive the selected turns
+        turn_start = min(turn_indices)
+        turn_end = max(turn_indices) + 1
+
+        # Get the turns to archive for summary generation
+        turns_to_archive = self.session.turns[turn_start:turn_end]
+
+        debug_log.info(
+            f"Archiving turns {turn_start}-{turn_end} ({len(turns_to_archive)} turns) in session {session_id}",
+            category="archive",
+        )
+
+        # Generate structured summary using LLM
+        status_bar = self.query_one("#status-bar", StatusBar)
+        status_bar.set_status("Generating archive summary...", animate=True)
+        self.refresh()
+        await asyncio.sleep(0)
+
+        # Ensure summarizer has current session for task tracking
+        self._summarizer.set_session_id(self.session.id)
+
+        try:
+            summary = await self._summarizer.generate_archive_summary(turns_to_archive, "")
+        except Exception as e:
+            debug_log.error(f"Summary generation failed: {e}", category="archive")
+            # Fall back to simple summary
+            summary = f"Archived turns {turn_start}-{turn_end - 1}"
+
+        # Use command executor for business logic
+        result = self._command_executor.prepare_archive(
+            session=self.session,
+            turn_indices=turn_indices,
+            summary=summary,
+        )
+
+        if not result.success:
+            debug_log.error(f"Archive failed: {result.error}", category="archive")
+            status_bar.set_error(f"Archive failed: {result.error}")
+            return
+
+        # Update session state
+        self.session.turns = result.new_turns
+        self.session.save()
+
+        # Reload the UI first so TreeState has updated turns
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        chat_log.clear()
+        chat_log.load_history(self.session.turns, self.session)
+
+        context_tree = self.query_one("#context-tree", ContextTreeView)
         context_tree.load_all_sessions(self.session)
 
         # Recalculate token count after archiving (turns removed)
@@ -3249,6 +3337,61 @@ class BalloonsApp(App):
         else:
             status_bar.set_error("Could not delete session")
 
+    def on_context_tree_view_exchange_delete_requested(self, event: ContextTreeView.ExchangeDeleteRequested) -> None:
+        """Handle exchange group delete request - show confirmation dialog."""
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        # Load the session
+        session = Session.load(event.session_id)
+        if not session:
+            status_bar.set_error("Session not found")
+            return
+
+        if session.is_read_only():
+            status_bar.set_error("Cannot delete from merged (read-only) session")
+            return
+
+        turn_count = len(event.turn_indices)
+        message = f"Delete {turn_count} turns in this exchange?"
+
+        # Show confirmation dialog
+        def on_confirm(confirmed: bool) -> None:
+            if confirmed:
+                self._execute_exchange_delete(event.session_id, event.turn_indices, session)
+
+        self.push_screen(
+            ConfirmDialog("Delete Exchange?", message),
+            on_confirm,
+        )
+
+    def _execute_exchange_delete(self, session_id: str, turn_indices: list[int], session: Session) -> None:
+        """Execute the exchange deletion after confirmation."""
+        status_bar = self.query_one("#status-bar", StatusBar)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+
+        deleted_count = session.delete_turns(turn_indices)
+        if deleted_count > 0:
+            debug_log.info(
+                f"Deleted {deleted_count} turns from session {session_id[:8]}",
+                session_id=session_id,
+                category="event",
+                details={"turn_indices": turn_indices, "deleted_count": deleted_count},
+            )
+            session.save()
+
+            # Reload the tree for this session (easier than updating multiple turns)
+            context_tree.load_all_sessions(session)
+
+            # Refresh chat log if this is the current session
+            if self.session and self.session.id == session_id:
+                chat_log = self.query_one("#chat-log", ChatLogView)
+                chat_log.clear()
+                chat_log.load_history(session.turns, session=session)
+
+            status_bar.set_status(f"Deleted {deleted_count} turns", animate=False)
+        else:
+            status_bar.set_error("Could not delete turns")
+
     def on_context_tree_view_session_activated(self, event: ContextTreeView.SessionActivated) -> None:
         """Handle clicking on a session - switch to it."""
         # Switch to this session (works even while other sessions stream)
@@ -3256,65 +3399,8 @@ class BalloonsApp(App):
 
     def on_context_tree_view_archive_requested(self, event: ContextTreeView.ArchiveRequested) -> None:
         """Handle ctrl+shift+click on turns to archive them."""
-        from core.archiver import Archiver, ArchiveError
-
-        if not self.session:
-            self.notify("No active session", severity="error")
-            return
-
-        # Verify the request is for the current session
-        if event.session_id != self.session.id:
-            self.notify("Can only archive turns in the current session", severity="error")
-            return
-
-        turn_indices = event.turn_indices
-        if not turn_indices:
-            return
-
-        # Archive the selected turns
-        turn_start = min(turn_indices)
-        turn_end = max(turn_indices) + 1
-
-        debug_log.info(
-            f"Archiving turns {turn_start}-{turn_end} in session {event.session_id}",
-            category="archive",
-        )
-
-        archiver = Archiver()
-        try:
-            # Generate a simple summary for now
-            # TODO: Could use LLM to generate a better summary
-            summary = f"Archived turns {turn_start}-{turn_end - 1}"
-
-            archive_block, new_turns = archiver.archive_turns(
-                self.session.id,
-                self.session.turns,
-                turn_start,
-                turn_end,
-                summary,
-            )
-
-            self.session.turns = new_turns
-            self.session.save()
-
-            # Reload the UI first so TreeState has updated turns
-            chat_log = self.query_one("#chat-log", ChatLogView)
-            chat_log.clear()
-            chat_log.load_history(self.session.turns, self.session)
-
-            context_tree = self.query_one("#context-tree", ContextTreeView)
-            context_tree.load_all_sessions(self.session)
-
-            # Recalculate token count after archiving (turns removed)
-            # Must be after tree reload so TreeState has the new turns
-            self._update_base_context_tokens()
-            self._update_context_tokens()
-
-            self.notify(f"Archived {archive_block.message_count} turns to {archive_block.file_path}")
-
-        except ArchiveError as e:
-            debug_log.error(f"Archive failed: {e}", category="archive")
-            self.notify(f"Failed to archive: {e}", severity="error")
+        # Delegate to async handler
+        asyncio.create_task(self._archive_turns_from_tree(event.session_id, event.turn_indices))
 
     def on_context_tree_view_session_link_requested(self, event: ContextTreeView.SessionLinkRequested) -> None:
         """Handle ctrl+click on a session - populate or append to link command."""
@@ -3363,6 +3449,19 @@ class BalloonsApp(App):
         input_box.focus()
         if not input_box.text:
             input_box.insert(":")
+
+    def on_context_tree_view_jump_to_exchange_end(self, event: ContextTreeView.JumpToExchangeEnd) -> None:
+        """Handle 'g' key on exchange group - scroll to last turn in the exchange."""
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        # Check if we need to switch sessions
+        if self.session and event.session_id != self.session.id:
+            target_session = Session.load(event.session_id)
+            if target_session:
+                self._switch_to_session(target_session, target_turn_index=event.last_turn_idx)
+                return
+        # Scroll to the last turn in the exchange
+        turn_id = event.last_turn_idx + 1
+        self.call_after_refresh(lambda tid=turn_id: chat_log.scroll_to_turn(tid))
 
     def on_context_tree_view_turn_inspected(self, event: ContextTreeView.TurnInspected) -> None:
         """Handle turn inspection - highlight and scroll to turns and tool uses.
@@ -3474,6 +3573,13 @@ class BalloonsApp(App):
                 turn_id = turn_idx + 1
                 self.call_after_refresh(lambda tid=turn_id: chat_log.scroll_to_turn(tid))
             chat_log.clear_highlights()
+        elif node_type == "exchange_group":
+            # Scroll to the first turn in the exchange group
+            turn_idx = event.turn_data.get("turn_idx")
+            if turn_idx is not None:
+                turn_id = turn_idx + 1
+                self.call_after_refresh(lambda tid=turn_id: chat_log.scroll_to_turn(tid))
+            chat_log.clear_highlights()
         else:
             chat_log.clear_highlights()
 
@@ -3516,7 +3622,7 @@ class BalloonsApp(App):
         chat_log = self.query_one("#chat-log", ChatLogView)
 
         node_type = event.turn_data.get("type")
-        turn_idx = event.turn_data.get("turn_idx", 0) if node_type == "turn" else None
+        turn_idx = event.turn_data.get("turn_idx") if node_type in ("turn", "exchange_group") else None
 
         # Check if we need to switch sessions
         turn_session_id = event.session_id
@@ -3536,6 +3642,13 @@ class BalloonsApp(App):
             chat_log.clear_highlights()
             # Save last view position
             save_last_view(self.session.id, turn_idx)
+        elif node_type == "exchange_group":
+            # Scroll to first turn in exchange group
+            turn_idx = event.turn_data.get("turn_idx")
+            if turn_idx is not None:
+                turn_id = turn_idx + 1
+                self.call_after_refresh(lambda tid=turn_id: chat_log.scroll_to_turn(tid))
+            chat_log.clear_highlights()
         else:
             chat_log.clear_highlights()
 
@@ -3550,6 +3663,12 @@ class BalloonsApp(App):
         # Reuse the ContextTreeView handler logic
         context_tree_event = ContextTreeView.SessionDeleteRequested(event.session_id)
         self.on_context_tree_session_delete_requested(context_tree_event)
+
+    def on_nested_tree_view_exchange_delete_requested(self, event: NestedTreeView.ExchangeDeleteRequested) -> None:
+        """Handle exchange delete request from nested tree."""
+        # Reuse the ContextTreeView handler logic
+        context_tree_event = ContextTreeView.ExchangeDeleteRequested(event.session_id, event.turn_indices)
+        self.on_context_tree_view_exchange_delete_requested(context_tree_event)
 
     def on_nested_tree_view_session_link_requested(self, event: NestedTreeView.SessionLinkRequested) -> None:
         """Handle ctrl+click link request from nested tree."""
@@ -3570,6 +3689,24 @@ class BalloonsApp(App):
         input_box.focus()
         if not input_box.text:
             input_box.insert(":")
+
+    def on_nested_tree_view_jump_to_exchange_end(self, event: NestedTreeView.JumpToExchangeEnd) -> None:
+        """Handle 'g' key on exchange group - scroll to last turn in the exchange."""
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        # Check if we need to switch sessions
+        if self.session and event.session_id != self.session.id:
+            target_session = Session.load(event.session_id)
+            if target_session:
+                self._switch_to_session(target_session, target_turn_index=event.last_turn_idx)
+                return
+        # Scroll to the last turn in the exchange
+        turn_id = event.last_turn_idx + 1
+        self.call_after_refresh(lambda tid=turn_id: chat_log.scroll_to_turn(tid))
+
+    def on_nested_tree_view_archive_requested(self, event: NestedTreeView.ArchiveRequested) -> None:
+        """Handle x key on turn or exchange group to archive them."""
+        # Delegate to async handler
+        asyncio.create_task(self._archive_turns_from_tree(event.session_id, event.turn_indices))
 
     def on_breadcrumb_segment_clicked(self, event: Breadcrumb.SegmentClicked) -> None:
         """Handle clicking a breadcrumb segment to navigate up."""

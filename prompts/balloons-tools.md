@@ -12,23 +12,33 @@ related conversations and allow you to discover context from other chats.
   },
   {
     "name": "follow_link",
-    "description": "Load context from a linked session. Returns the session metadata and recent conversation history.",
+    "description": "Load context from a linked session. Returns the session metadata and conversation turns with pagination support.",
     "parameters": {
       "link_id": {
         "type": "string",
         "description": "The link ID to follow (from list_links)",
         "required": true
       },
-      "include_messages": {
+      "limit": {
         "type": "integer",
-        "description": "Number of recent messages to include (default 10)",
+        "description": "Number of turns to return (default 10)",
+        "required": false
+      },
+      "offset": {
+        "type": "integer",
+        "description": "Turn index to start from. If omitted, returns the last N turns. Use offset=0 to start from the beginning.",
+        "required": false
+      },
+      "full_content": {
+        "type": "boolean",
+        "description": "If true, returns full turn content (up to 100k chars). Default false returns up to 10k chars per turn.",
         "required": false
       }
     }
   },
   {
     "name": "search_linked_session",
-    "description": "Search for content within a linked session's conversation history.",
+    "description": "Search for content within a linked session's conversation history. Returns matching turns with pagination.",
     "parameters": {
       "link_id": {
         "type": "string",
@@ -39,6 +49,21 @@ related conversations and allow you to discover context from other chats.
         "type": "string",
         "description": "Search query (case-insensitive substring match)",
         "required": true
+      },
+      "limit": {
+        "type": "integer",
+        "description": "Max results to return (default 20)",
+        "required": false
+      },
+      "offset": {
+        "type": "integer",
+        "description": "Skip first N matches for pagination (default 0)",
+        "required": false
+      },
+      "full_content": {
+        "type": "boolean",
+        "description": "If true, returns full turn content. Default returns a 2k char preview centered on the match.",
+        "required": false
       }
     }
   },
@@ -68,10 +93,22 @@ For example, to list available links:
 {"name": "list_links", "args": {}}
 </balloons-tool>
 
-Or to follow a specific link:
+Or to follow a specific link (last 5 turns):
 
 <balloons-tool>
-{"name": "follow_link", "args": {"link_id": "abc123", "include_messages": 5}}
+{"name": "follow_link", "args": {"link_id": "abc123", "limit": 5}}
+</balloons-tool>
+
+Or to paginate through a linked session (turns 10-19):
+
+<balloons-tool>
+{"name": "follow_link", "args": {"link_id": "abc123", "offset": 10, "limit": 10}}
+</balloons-tool>
+
+Or to get full content from a specific turn range:
+
+<balloons-tool>
+{"name": "follow_link", "args": {"link_id": "abc123", "offset": 42, "limit": 1, "full_content": true}}
 </balloons-tool>
 
 Or to check session status:

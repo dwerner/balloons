@@ -117,6 +117,13 @@ class SelectableTreeWidget(Tree):
             self.session_id = session_id
             super().__init__()
 
+    class ExchangeDeleteRequested(Message):
+        """Fired when user presses d/Delete to delete an exchange group."""
+        def __init__(self, session_id: str, turn_indices: list[int]) -> None:
+            self.session_id = session_id
+            self.turn_indices = turn_indices
+            super().__init__()
+
     class LinkRequested(Message):
         """Fired when user ctrl+clicks on a session to create a link."""
         def __init__(self, session_id: str) -> None:
@@ -133,6 +140,13 @@ class SelectableTreeWidget(Tree):
     class ColonPressed(Message):
         """Fired when user types : to jump to text entry with colon."""
         pass
+
+    class JumpToExchangeEnd(Message):
+        """Fired when user presses 'e' on an exchange group to jump to its last turn."""
+        def __init__(self, session_id: str, last_turn_idx: int) -> None:
+            self.session_id = session_id
+            self.last_turn_idx = last_turn_idx
+            super().__init__()
 
 
     def on_click(self, event: Click) -> None:
@@ -229,6 +243,16 @@ class SelectableTreeWidget(Tree):
                     event.prevent_default()
                     event.stop()
                     return
+                elif node_type == "exchange_group":
+                    turn_indices = node.data.get("turn_indices", [])
+                    if turn_indices:
+                        self.post_message(self.ExchangeDeleteRequested(
+                            session_id=node.data.get("session_id"),
+                            turn_indices=turn_indices,
+                        ))
+                        event.prevent_default()
+                        event.stop()
+                        return
                 elif node_type == "session":
                     self.post_message(self.SessionDeleteRequested(
                         session_id=node.data.get("session_id"),
@@ -236,11 +260,46 @@ class SelectableTreeWidget(Tree):
                     event.prevent_default()
                     event.stop()
                     return
+        elif event.key == "x":
+            # Archive selected node (exchange group or single turn)
+            node = self.cursor_node
+            if node and node.data:
+                node_type = node.data.get("type")
+                session_id = node.data.get("session_id")
+                if session_id:
+                    if node_type == "exchange_group":
+                        turn_indices = node.data.get("turn_indices", [])
+                        if turn_indices:
+                            self.post_message(self.ArchiveRequested(session_id, turn_indices))
+                            event.prevent_default()
+                            event.stop()
+                            return
+                    elif node_type == "turn":
+                        turn_idx = node.data.get("turn_idx")
+                        if turn_idx is not None:
+                            self.post_message(self.ArchiveRequested(session_id, [turn_idx]))
+                            event.prevent_default()
+                            event.stop()
+                            return
         elif event.key == "colon":
             self.post_message(self.ColonPressed())
             event.prevent_default()
             event.stop()
             return
+        elif event.key == "g":
+            # Jump to end of exchange group (on exchange_group nodes)
+            node = self.cursor_node
+            if node and node.data:
+                node_type = node.data.get("type")
+                if node_type == "exchange_group":
+                    session_id = node.data.get("session_id")
+                    turn_indices = node.data.get("turn_indices", [])
+                    if session_id and turn_indices:
+                        last_turn_idx = max(turn_indices)
+                        self.post_message(self.JumpToExchangeEnd(session_id, last_turn_idx))
+                        event.prevent_default()
+                        event.stop()
+                        return
         elif event.key == "right":
             # Expand current node
             node = self.cursor_node
@@ -371,6 +430,13 @@ class ContextTreeView(Vertical):
             self.session_id = session_id
             super().__init__()
 
+    class ExchangeDeleteRequested(Message):
+        """Fired when user requests to delete an exchange group."""
+        def __init__(self, session_id: str, turn_indices: list[int]) -> None:
+            self.session_id = session_id
+            self.turn_indices = turn_indices
+            super().__init__()
+
     class SessionLinkRequested(Message):
         """Fired when user ctrl+clicks a session to create a link command."""
         def __init__(self, session_id: str) -> None:
@@ -387,6 +453,13 @@ class ContextTreeView(Vertical):
     class ColonPressed(Message):
         """Fired when user types : to jump to text entry."""
         pass
+
+    class JumpToExchangeEnd(Message):
+        """Fired when user presses 'g' on an exchange group to jump to its last turn."""
+        def __init__(self, session_id: str, last_turn_idx: int) -> None:
+            self.session_id = session_id
+            self.last_turn_idx = last_turn_idx
+            super().__init__()
 
     # Spinner animation for streaming sessions
     _spinner_chars = SPINNER_CHARS
@@ -941,13 +1014,26 @@ class ContextTreeView(Vertical):
         session_id: str,
         turns: list,
     ) -> None:
-        """Add turn nodes to a session node."""
+        """Add turn nodes to a session node, grouping by exchange_id.
+
+        Turns with the same exchange_id are grouped under a collapsible
+        "exchange group" node showing total tokens. Single-turn groups
+        are rendered as leaf nodes directly.
+        """
         session_data = self._state.get_session(session_id)
         if not session_data or not session_data.turns:
             return
 
-        for turn in session_data.turns:
-            self._add_turn_to_tree(session_id, turn, is_streaming=False)
+        # Get turns grouped by exchange_id
+        groups = self._state.get_turns_grouped_by_exchange(session_id)
+
+        for group in groups:
+            if len(group) == 1:
+                # Single turn - add as leaf node
+                self._add_single_turn_node(session_node, session_id, group[0])
+            else:
+                # Multi-turn exchange - add as collapsible group
+                self._add_exchange_group_node(session_node, session_id, group)
 
     def _add_single_turn_node(
         self,
@@ -986,13 +1072,148 @@ class ContextTreeView(Vertical):
         )
         self._turn_nodes[(session_id, turn.idx)] = turn_node
 
+    def _add_exchange_group_node(
+        self,
+        parent_node,
+        session_id: str,
+        turns: list,
+    ) -> None:
+        """Add a collapsible exchange group node containing multiple turns.
+
+        Exchange groups show total token count and can be archived as a unit.
+        The first turn is typically a user message, followed by assistant
+        responses with tool use/results.
+        """
+        if not turns:
+            return
+
+        # Calculate total tokens for the group
+        total_tokens = sum(t.tokens for t in turns)
+        turn_indices = [t.idx for t in turns]
+        exchange_id = turns[0].exchange_id
+
+        # Determine group mode (any non-DROP = included)
+        modes = [self._state.get_context_mode(session_id, t.idx) for t in turns]
+        if all(m == ContextMode.DROP for m in modes):
+            group_mode = ContextMode.DROP
+        elif all(m == ContextMode.COPY for m in modes):
+            group_mode = ContextMode.COPY
+        else:
+            group_mode = ContextMode.COMPRESS  # Mixed modes
+
+        # Create group label with tokens first (green)
+        label = self._make_exchange_group_label(turns, total_tokens, group_mode)
+
+        # Add the group node
+        group_node = parent_node.add(
+            label,
+            data={
+                "type": "exchange_group",
+                "session_id": session_id,
+                "exchange_id": exchange_id,
+                "turn_indices": turn_indices,
+            },
+            allow_expand=True,
+        )
+
+        # Add child turn nodes
+        for turn in turns:
+            mode = self._state.get_context_mode(session_id, turn.idx)
+            child_label = self._make_turn_label(turn.role, turn.content, mode, turn.content_block, session_id=session_id, tokens=turn.tokens, viewed=turn.viewed)
+            turn_node = group_node.add(
+                child_label,
+                data={"type": "turn", "session_id": session_id, "turn_idx": turn.idx, "exchange_id": exchange_id},
+                allow_expand=False,
+            )
+            self._turn_nodes[(session_id, turn.idx)] = turn_node
+
+        # Store group node reference for updates
+        if not hasattr(self, '_exchange_group_nodes'):
+            self._exchange_group_nodes = {}
+        self._exchange_group_nodes[(session_id, exchange_id)] = group_node
+
+    def _make_exchange_group_label(
+        self,
+        turns: list,
+        total_tokens: int,
+        group_mode: ContextMode,
+    ) -> str:
+        """Create a label for an exchange group node.
+
+        Format: [green]1.2kt[/] ☑ 🤖 Agent exchange (5 turns)
+        """
+        # Token count in green (like tool turns)
+        kt_str = format_kt(total_tokens)
+        token_part = f"[green]{kt_str}[/] " if kt_str else ""
+
+        # Mode indicator
+        if group_mode == ContextMode.COPY:
+            indicator = "[green]☑[/]"
+        elif group_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
+            indicator = "[yellow]Σ[/]"
+        else:  # DROP
+            indicator = "☐"
+
+        # Count turn types
+        turn_count = len(turns)
+
+        # Get first user message preview if available
+        first_turn = turns[0]
+        if first_turn.role == "user" and first_turn.content:
+            preview = first_turn.content[:25] + "..." if len(first_turn.content) > 25 else first_turn.content
+            preview = preview.replace("\n", " ")
+            return f"{token_part}{indicator} 🤖 {escape_markup(preview)} [dim]({turn_count} turns)[/]"
+
+        return f"{token_part}{indicator} 🤖 Agent exchange [dim]({turn_count} turns)[/]"
+
+    def _update_exchange_group_label(self, session_id: str, exchange_id: str) -> None:
+        """Update an exchange group node's label after mode changes."""
+        if not hasattr(self, '_exchange_group_nodes'):
+            return
+
+        group_node = self._exchange_group_nodes.get((session_id, exchange_id))
+        if not group_node:
+            return
+
+        # Gather the turns in this group
+        turn_indices = group_node.data.get("turn_indices", [])
+        turns = []
+        for turn_idx in turn_indices:
+            turn_data = self._state.get_turn(session_id, turn_idx)
+            if turn_data:
+                turns.append(turn_data)
+
+        if not turns:
+            return
+
+        # Calculate totals
+        total_tokens = sum(t.tokens for t in turns)
+
+        # Determine group mode
+        modes = [self._state.get_context_mode(session_id, t.idx) for t in turns]
+        if all(m == ContextMode.DROP for m in modes):
+            group_mode = ContextMode.DROP
+        elif all(m == ContextMode.COPY for m in modes):
+            group_mode = ContextMode.COPY
+        else:
+            group_mode = ContextMode.COMPRESS
+
+        # Update label
+        group_node.label = self._make_exchange_group_label(turns, total_tokens, group_mode)
+
     def _add_turn_to_tree(
         self,
         session_id: str,
         turn,
         is_streaming: bool = False,
     ) -> None:
-        """Add a turn to the tree directly under its session node.
+        """Add a turn to the tree, respecting exchange grouping.
+
+        If the turn has an exchange_id:
+        - If an exchange group for that ID already exists, add to it
+        - Otherwise, create a new exchange group node
+
+        If no exchange_id, add as a flat turn node.
 
         Args:
             session_id: The session this turn belongs to
@@ -1003,14 +1224,116 @@ class ContextTreeView(Vertical):
         if not session_node:
             return
 
-        # Add turn directly to session node
-        self._add_single_turn_node(session_node, session_id, turn)
+        # Initialize exchange group tracking if needed
+        if not hasattr(self, '_exchange_group_nodes'):
+            self._exchange_group_nodes = {}
+
+        exchange_id = turn.exchange_id
+
+        if exchange_id:
+            # Check if we already have a group for this exchange
+            group_key = (session_id, exchange_id)
+            group_node = self._exchange_group_nodes.get(group_key)
+
+            if group_node:
+                # Add turn to existing group
+                self._add_turn_to_exchange_group(group_node, session_id, turn, is_streaming)
+            else:
+                # Create new exchange group with this turn
+                self._create_streaming_exchange_group(session_node, session_id, turn, is_streaming)
+        else:
+            # No exchange_id - add as flat turn node
+            self._add_single_turn_node(session_node, session_id, turn)
+
+            # Expand for streaming visibility
+            if is_streaming:
+                turn_node = self._turn_nodes.get((session_id, turn.idx))
+                if turn_node:
+                    turn_node.expand()
+
+    def _create_streaming_exchange_group(
+        self,
+        session_node,
+        session_id: str,
+        turn,
+        is_streaming: bool = False,
+    ) -> None:
+        """Create a new exchange group node for a streaming turn.
+
+        Called when we see the first turn with a new exchange_id.
+        """
+        exchange_id = turn.exchange_id
+        if not exchange_id:
+            return
+
+        # Create group label with initial turn
+        total_tokens = turn.tokens
+        mode = self._state.get_context_mode(session_id, turn.idx)
+        label = self._make_exchange_group_label([turn], total_tokens, mode)
+
+        # Add the group node
+        group_node = session_node.add(
+            label,
+            data={
+                "type": "exchange_group",
+                "session_id": session_id,
+                "exchange_id": exchange_id,
+                "turn_indices": [turn.idx],
+            },
+            allow_expand=True,
+        )
+
+        # Store group node reference
+        self._exchange_group_nodes[(session_id, exchange_id)] = group_node
+
+        # Add the turn as a child of the group
+        turn_mode = self._state.get_context_mode(session_id, turn.idx)
+        child_label = self._make_turn_label(
+            turn.role, turn.content, turn_mode, turn.content_block,
+            session_id=session_id, tokens=turn.tokens, viewed=turn.viewed
+        )
+        turn_node = group_node.add(
+            child_label,
+            data={"type": "turn", "session_id": session_id, "turn_idx": turn.idx, "exchange_id": exchange_id},
+            allow_expand=False,
+        )
+        self._turn_nodes[(session_id, turn.idx)] = turn_node
 
         # Expand for streaming visibility
         if is_streaming:
-            turn_node = self._turn_nodes.get((session_id, turn.idx))
-            if turn_node:
-                turn_node.expand()
+            group_node.expand()
+
+    def _add_turn_to_exchange_group(
+        self,
+        group_node,
+        session_id: str,
+        turn,
+        is_streaming: bool = False,
+    ) -> None:
+        """Add a turn to an existing exchange group node."""
+        exchange_id = turn.exchange_id
+
+        # Add turn index to the group's tracking list
+        turn_indices = group_node.data.get("turn_indices", [])
+        if turn.idx not in turn_indices:
+            turn_indices.append(turn.idx)
+            group_node.data["turn_indices"] = turn_indices
+
+        # Add the turn as a child of the group
+        turn_mode = self._state.get_context_mode(session_id, turn.idx)
+        child_label = self._make_turn_label(
+            turn.role, turn.content, turn_mode, turn.content_block,
+            session_id=session_id, tokens=turn.tokens, viewed=turn.viewed
+        )
+        turn_node = group_node.add(
+            child_label,
+            data={"type": "turn", "session_id": session_id, "turn_idx": turn.idx, "exchange_id": exchange_id},
+            allow_expand=False,
+        )
+        self._turn_nodes[(session_id, turn.idx)] = turn_node
+
+        # Update the group label with new totals
+        self._update_exchange_group_label(session_id, exchange_id)
 
     def _make_turn_label(self, role: str, content: str, mode: ContextMode, content_block=None, session_id: str = None, tokens: int = 0, viewed: bool = True) -> str:
         """Create a label for a turn node.
@@ -1523,11 +1846,17 @@ class ContextTreeView(Vertical):
         for key in keys_to_remove:
             del self._turn_nodes[key]
 
+        # Clear exchange group nodes for this session
+        if hasattr(self, '_exchange_group_nodes'):
+            group_keys_to_remove = [k for k in self._exchange_group_nodes if k[0] == session_id]
+            for key in group_keys_to_remove:
+                del self._exchange_group_nodes[key]
+
         children_to_remove = []
         for child in session_node.children:
             if child.data:
                 node_type = child.data.get("type")
-                if node_type == "turn":
+                if node_type in ("turn", "exchange_group"):
                     children_to_remove.append(child)
         for child in children_to_remove:
             child.remove()
@@ -1599,6 +1928,22 @@ class ContextTreeView(Vertical):
                     debug_log.warning(f"on_tree_node_selected: turn {turn_idx} not found in session_data", category="tree")
             else:
                 debug_log.warning(f"on_tree_node_selected: session {session_id} not loaded", category="tree")
+        elif node_type == "exchange_group":
+            # Scroll to the first turn in the exchange group
+            session_id = node_data.get("session_id")
+            turn_indices = node_data.get("turn_indices", [])
+            exchange_id = node_data.get("exchange_id")
+            if turn_indices:
+                first_turn_idx = min(turn_indices)
+                last_turn_idx = max(turn_indices)
+                self.post_message(self.TurnInspected({
+                    "type": "exchange_group",
+                    "session_id": session_id,
+                    "turn_idx": first_turn_idx,  # For scrolling to first turn
+                    "last_turn_idx": last_turn_idx,  # For "jump to end" feature
+                    "exchange_id": exchange_id,
+                    "turn_count": len(turn_indices),
+                }, session_id=session_id))
         elif node_type == "text":
             # Send text block data for inspection and highlighting
             session_id = node_data.get("session_id")
@@ -1778,6 +2123,32 @@ class ContextTreeView(Vertical):
             # Notify app to persist the change
             self.post_message(self.ContextModeChanged(session_id, turn_idx, new_mode))
 
+        elif node_type == "exchange_group":
+            # Toggle all turns in the exchange group together
+            session_id = event.node_data.get("session_id")
+            turn_indices = event.node_data.get("turn_indices", [])
+            if not turn_indices:
+                return
+
+            # Get current mode of first turn to determine next mode
+            first_mode = self._state.get_context_mode(session_id, turn_indices[0])
+            if first_mode == ContextMode.COPY:
+                new_mode = ContextMode.COMPRESS
+            elif first_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
+                new_mode = ContextMode.DROP
+            else:  # DROP
+                new_mode = ContextMode.COPY
+
+            # Set all turns in the group to the new mode
+            for turn_idx in turn_indices:
+                self._state.set_context_mode(session_id, turn_idx, new_mode)
+                self._update_turn_label(session_id, turn_idx)
+                self.post_message(self.ContextModeChanged(session_id, turn_idx, new_mode))
+
+            # Update the group node label
+            self._update_exchange_group_label(session_id, event.node_data.get("exchange_id"))
+            self._update_root_label()
+
     def on_selectable_tree_widget_select_all_requested(self, event: SelectableTreeWidget.SelectAllRequested) -> None:
         """Set all turns in CURRENT session to COPY mode."""
         current_session_id = self._state.get_current_session_id()
@@ -1820,6 +2191,10 @@ class ContextTreeView(Vertical):
         """Handle session delete request - bubble up to app."""
         self.post_message(self.SessionDeleteRequested(event.session_id))
 
+    def on_selectable_tree_widget_exchange_delete_requested(self, event: SelectableTreeWidget.ExchangeDeleteRequested) -> None:
+        """Handle exchange delete request - bubble up to app."""
+        self.post_message(self.ExchangeDeleteRequested(event.session_id, event.turn_indices))
+
     def on_selectable_tree_widget_link_requested(self, event: SelectableTreeWidget.LinkRequested) -> None:
         """Handle ctrl+click link request - bubble up to app."""
         self.post_message(self.SessionLinkRequested(event.session_id))
@@ -1831,6 +2206,10 @@ class ContextTreeView(Vertical):
     def on_selectable_tree_widget_colon_pressed(self, event: SelectableTreeWidget.ColonPressed) -> None:
         """Handle : key - bubble up to app to jump to text entry."""
         self.post_message(self.ColonPressed())
+
+    def on_selectable_tree_widget_jump_to_exchange_end(self, event: SelectableTreeWidget.JumpToExchangeEnd) -> None:
+        """Handle 'g' key on exchange group - bubble up to app to scroll to last turn."""
+        self.post_message(self.JumpToExchangeEnd(event.session_id, event.last_turn_idx))
 
     def on_input_changed(self, event: Input.Changed) -> None:
         """Filter tree nodes as user types."""

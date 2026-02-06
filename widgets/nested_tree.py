@@ -112,6 +112,13 @@ class NestedTreeWidget(Tree):
             self.session_id = session_id
             super().__init__()
 
+    class ExchangeDeleteRequested(Message):
+        """Fired when user presses d/Delete to delete an exchange group."""
+        def __init__(self, session_id: str, turn_indices: list[int]) -> None:
+            self.session_id = session_id
+            self.turn_indices = turn_indices
+            super().__init__()
+
     class LinkRequested(Message):
         """Fired when user ctrl+clicks on a session to create a link."""
         def __init__(self, session_id: str) -> None:
@@ -121,6 +128,20 @@ class NestedTreeWidget(Tree):
     class ColonPressed(Message):
         """Fired when user types : to jump to text entry with colon."""
         pass
+
+    class ArchiveRequested(Message):
+        """Fired when user requests to archive turns (e.g., from exchange group)."""
+        def __init__(self, session_id: str, turn_indices: list[int]) -> None:
+            self.session_id = session_id
+            self.turn_indices = turn_indices
+            super().__init__()
+
+    class JumpToExchangeEnd(Message):
+        """Fired when user presses 'g' on an exchange group to jump to its last turn."""
+        def __init__(self, session_id: str, last_turn_idx: int) -> None:
+            self.session_id = session_id
+            self.last_turn_idx = last_turn_idx
+            super().__init__()
 
     # --- Click handling ---
 
@@ -199,6 +220,16 @@ class NestedTreeWidget(Tree):
                     event.prevent_default()
                     event.stop()
                     return
+                elif node_type == "exchange_group":
+                    turn_indices = node.data.get("turn_indices", [])
+                    if turn_indices:
+                        self.post_message(self.ExchangeDeleteRequested(
+                            session_id=node.data.get("session_id"),
+                            turn_indices=turn_indices,
+                        ))
+                        event.prevent_default()
+                        event.stop()
+                        return
                 elif node_type == "session":
                     self.post_message(self.SessionDeleteRequested(
                         session_id=node.data.get("session_id"),
@@ -206,11 +237,46 @@ class NestedTreeWidget(Tree):
                     event.prevent_default()
                     event.stop()
                     return
+        elif event.key == "x":
+            # Archive selected node (exchange group or single turn)
+            node = self.cursor_node
+            if node and node.data:
+                node_type = node.data.get("type")
+                session_id = node.data.get("session_id")
+                if session_id:
+                    if node_type == "exchange_group":
+                        turn_indices = node.data.get("turn_indices", [])
+                        if turn_indices:
+                            self.post_message(self.ArchiveRequested(session_id, turn_indices))
+                            event.prevent_default()
+                            event.stop()
+                            return
+                    elif node_type == "turn":
+                        turn_idx = node.data.get("turn_idx")
+                        if turn_idx is not None:
+                            self.post_message(self.ArchiveRequested(session_id, [turn_idx]))
+                            event.prevent_default()
+                            event.stop()
+                            return
         elif event.key == "colon":
             self.post_message(self.ColonPressed())
             event.prevent_default()
             event.stop()
             return
+        elif event.key == "g":
+            # Jump to end of exchange group (on exchange_group nodes)
+            node = self.cursor_node
+            if node and node.data:
+                node_type = node.data.get("type")
+                if node_type == "exchange_group":
+                    session_id = node.data.get("session_id")
+                    turn_indices = node.data.get("turn_indices", [])
+                    if session_id and turn_indices:
+                        last_turn_idx = max(turn_indices)
+                        self.post_message(self.JumpToExchangeEnd(session_id, last_turn_idx))
+                        event.prevent_default()
+                        event.stop()
+                        return
         elif event.key == "right":
             node = self.cursor_node
             if node and node._allow_expand and not node.is_expanded:
@@ -312,6 +378,13 @@ class NestedTreeView(Vertical):
             self.session_id = session_id
             super().__init__()
 
+    class ExchangeDeleteRequested(Message):
+        """Fired when user requests to delete an exchange group."""
+        def __init__(self, session_id: str, turn_indices: list[int]) -> None:
+            self.session_id = session_id
+            self.turn_indices = turn_indices
+            super().__init__()
+
     class SessionLinkRequested(Message):
         """Fired when user ctrl+clicks a session to create a link command."""
         def __init__(self, session_id: str) -> None:
@@ -324,9 +397,23 @@ class NestedTreeView(Vertical):
             self.session_id = session_id
             super().__init__()
 
+    class ArchiveRequested(Message):
+        """Fired when user requests to archive turns (x key on turn or exchange group)."""
+        def __init__(self, session_id: str, turn_indices: list[int]) -> None:
+            self.session_id = session_id
+            self.turn_indices = turn_indices
+            super().__init__()
+
     class ColonPressed(Message):
         """Fired when user types : to jump to text entry."""
         pass
+
+    class JumpToExchangeEnd(Message):
+        """Fired when user presses 'g' on an exchange group to jump to its last turn."""
+        def __init__(self, session_id: str, last_turn_idx: int) -> None:
+            self.session_id = session_id
+            self.last_turn_idx = last_turn_idx
+            super().__init__()
 
     # Spinner animation for streaming sessions
     _spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -583,13 +670,26 @@ class NestedTreeView(Vertical):
         session_id: str,
         turns: list[TurnData]
     ) -> None:
-        """Add turn nodes to a session node."""
+        """Add turn nodes to a session node, grouping by exchange_id.
+
+        Turns with the same exchange_id are grouped under a collapsible
+        "exchange group" node showing total tokens. Single-turn groups
+        are rendered as leaf nodes directly.
+        """
         session_data = self._state.get_session(session_id)
         if not session_data or not session_data.turns:
             return
 
-        for turn in session_data.turns:
-            self._add_single_turn_node(session_node, session_id, turn)
+        # Get turns grouped by exchange_id
+        groups = self._state.get_turns_grouped_by_exchange(session_id)
+
+        for group in groups:
+            if len(group) == 1:
+                # Single turn - add as leaf node
+                self._add_single_turn_node(session_node, session_id, group[0])
+            else:
+                # Multi-turn exchange - add as collapsible group
+                self._add_exchange_group_node(session_node, session_id, group)
 
     def _add_single_turn_node(
         self,
@@ -602,13 +702,109 @@ class NestedTreeView(Vertical):
         Turns are leaf nodes - each turn has exactly one content_block.
         """
         mode = self._state.get_context_mode(session_id, turn.idx)
-        label = self._make_turn_label(turn.role, turn.content, mode, turn.content_block, turn.viewed)
+        label = self._make_turn_label(turn.role, turn.content, mode, turn.content_block, turn.viewed, turn.tokens)
         turn_node = parent_node.add(
             label,
             data={"type": "turn", "session_id": session_id, "turn_idx": turn.idx},
             allow_expand=False,  # Turns are leaf nodes
         )
         self._turn_nodes[(session_id, turn.idx)] = turn_node
+
+    def _add_exchange_group_node(
+        self,
+        parent_node,
+        session_id: str,
+        turns: list[TurnData]
+    ) -> None:
+        """Add a collapsible exchange group node containing multiple turns.
+
+        Exchange groups show total token count and can be archived as a unit.
+        The first turn is typically a user message, followed by assistant
+        responses with tool use/results.
+        """
+        if not turns:
+            return
+
+        # Calculate total tokens for the group
+        total_tokens = sum(t.tokens for t in turns)
+        turn_indices = [t.idx for t in turns]
+        exchange_id = turns[0].exchange_id
+
+        # Determine group mode (any non-DROP = included)
+        modes = [self._state.get_context_mode(session_id, t.idx) for t in turns]
+        if all(m == ContextMode.DROP for m in modes):
+            group_mode = ContextMode.DROP
+        elif all(m == ContextMode.COPY for m in modes):
+            group_mode = ContextMode.COPY
+        else:
+            group_mode = ContextMode.COMPRESS  # Mixed modes
+
+        # Create group label with tokens first (green)
+        label = self._make_exchange_group_label(turns, total_tokens, group_mode)
+
+        # Add the group node
+        group_node = parent_node.add(
+            label,
+            data={
+                "type": "exchange_group",
+                "session_id": session_id,
+                "exchange_id": exchange_id,
+                "turn_indices": turn_indices,
+            },
+            allow_expand=True,
+        )
+
+        # Add child turn nodes
+        for turn in turns:
+            mode = self._state.get_context_mode(session_id, turn.idx)
+            child_label = self._make_turn_label(turn.role, turn.content, mode, turn.content_block, turn.viewed, turn.tokens)
+            turn_node = group_node.add(
+                child_label,
+                data={"type": "turn", "session_id": session_id, "turn_idx": turn.idx},
+                allow_expand=False,
+            )
+            self._turn_nodes[(session_id, turn.idx)] = turn_node
+
+        # Store group node reference for updates
+        if not hasattr(self, '_exchange_group_nodes'):
+            self._exchange_group_nodes = {}
+        self._exchange_group_nodes[(session_id, exchange_id)] = group_node
+
+    def _make_exchange_group_label(
+        self,
+        turns: list[TurnData],
+        total_tokens: int,
+        group_mode: ContextMode,
+    ) -> str:
+        """Create a label for an exchange group node.
+
+        Format: [green]1.2kt[/] 🤖 Agent exchange (5 turns)
+        """
+        from widgets.session_rendering import format_kt
+
+        # Token count in green (like tool turns)
+        kt_str = format_kt(total_tokens)
+        token_part = f"[green]{kt_str}[/] " if kt_str else ""
+
+        # Mode indicator
+        if group_mode == ContextMode.COPY:
+            indicator = "[green]☑[/]"
+        elif group_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
+            indicator = "[yellow]Σ[/]"
+        else:  # DROP
+            indicator = "☐"
+
+        # Count turn types
+        turn_count = len(turns)
+
+        # Get first user message preview if available
+        first_turn = turns[0]
+        if first_turn.role == "user" and first_turn.content:
+            preview = first_turn.content[:25] + "..." if len(first_turn.content) > 25 else first_turn.content
+            preview = preview.replace("\n", " ")
+            return f"{token_part}{indicator} 🤖 {escape_markup(preview)} [dim]({turn_count} turns)[/]"
+
+        return f"{token_part}{indicator} 🤖 Agent exchange [dim]({turn_count} turns)[/]"
 
     def _populate_session_turns(self, session_id: str) -> None:
         """Populate a session's turns after it's loaded.
@@ -631,12 +827,18 @@ class NestedTreeView(Vertical):
         for key in keys_to_remove:
             del self._turn_nodes[key]
 
-        # Remove all children that are turns (keep fork sessions)
+        # Clear exchange group nodes for this session
+        if hasattr(self, '_exchange_group_nodes'):
+            group_keys_to_remove = [k for k in self._exchange_group_nodes if k[0] == session_id]
+            for key in group_keys_to_remove:
+                del self._exchange_group_nodes[key]
+
+        # Remove all children that are turns or exchange groups (keep fork sessions)
         children_to_remove = []
         for child in session_node.children:
             if child.data:
                 node_type = child.data.get("type")
-                if node_type == "turn":
+                if node_type in ("turn", "exchange_group"):
                     children_to_remove.append(child)
         for child in children_to_remove:
             child.remove()
@@ -654,32 +856,155 @@ class NestedTreeView(Vertical):
         role: str,
         streaming: bool = False
     ) -> None:
-        """Add a turn node (called during streaming)."""
+        """Add a turn node (called during streaming), respecting exchange grouping.
+
+        If the turn has an exchange_id:
+        - If an exchange group for that ID already exists, add to it
+        - Otherwise, create a new exchange group node
+
+        If no exchange_id, add as a flat turn node.
+        """
         session_node = self._session_nodes.get(session_id)
         if not session_node:
             return
 
         turn_data = self._state.get_turn(session_id, turn_idx)
-        if streaming:
-            content = "[dim]streaming...[/]"
-            viewed = True  # Streaming turns are considered viewed (user is watching)
+        if not turn_data:
+            return
+
+        # Initialize exchange group tracking if needed
+        if not hasattr(self, '_exchange_group_nodes'):
+            self._exchange_group_nodes = {}
+
+        exchange_id = turn_data.exchange_id
+
+        if exchange_id:
+            # Check if we already have a group for this exchange
+            group_key = (session_id, exchange_id)
+            group_node = self._exchange_group_nodes.get(group_key)
+
+            if group_node:
+                # Add turn to existing group
+                self._add_turn_to_exchange_group(group_node, session_id, turn_data, streaming)
+            else:
+                # Create new exchange group with this turn
+                self._create_streaming_exchange_group(session_node, session_id, turn_data, streaming)
         else:
-            content = turn_data.content if turn_data else ""
-            viewed = turn_data.viewed if turn_data else True
+            # No exchange_id - add as flat turn node
+            if streaming:
+                content = "[dim]streaming...[/]"
+                viewed = True
+            else:
+                content = turn_data.content
+                viewed = turn_data.viewed
 
-        mode = self._state.get_context_mode(session_id, turn_idx)
-        label = self._make_turn_label(role, content, mode, viewed=viewed)
+            mode = self._state.get_context_mode(session_id, turn_idx)
+            tokens = turn_data.tokens
+            label = self._make_turn_label(role, content, mode, viewed=viewed, tokens=tokens)
 
-        turn_node = session_node.add(
-            label,
-            data={"type": "turn", "session_id": session_id, "turn_idx": turn_idx}
-        )
-        turn_node.expand()
-        self._turn_nodes[(session_id, turn_idx)] = turn_node
+            turn_node = session_node.add(
+                label,
+                data={"type": "turn", "session_id": session_id, "turn_idx": turn_idx}
+            )
+            turn_node.expand()
+            self._turn_nodes[(session_id, turn_idx)] = turn_node
 
         # Update session label (message count)
         self._update_session_label(session_id)
         self._update_root_label()
+
+    def _create_streaming_exchange_group(
+        self,
+        session_node,
+        session_id: str,
+        turn,
+        streaming: bool = False,
+    ) -> None:
+        """Create a new exchange group node for a streaming turn."""
+        exchange_id = turn.exchange_id
+        if not exchange_id:
+            return
+
+        # Create group label with initial turn
+        total_tokens = turn.tokens
+        mode = self._state.get_context_mode(session_id, turn.idx)
+        label = self._make_exchange_group_label([turn], total_tokens, mode)
+
+        # Add the group node
+        group_node = session_node.add(
+            label,
+            data={
+                "type": "exchange_group",
+                "session_id": session_id,
+                "exchange_id": exchange_id,
+                "turn_indices": [turn.idx],
+            },
+            allow_expand=True,
+        )
+
+        # Store group node reference
+        self._exchange_group_nodes[(session_id, exchange_id)] = group_node
+
+        # Add the turn as a child of the group
+        if streaming:
+            content = "[dim]streaming...[/]"
+            viewed = True
+        else:
+            content = turn.content
+            viewed = turn.viewed
+
+        turn_mode = self._state.get_context_mode(session_id, turn.idx)
+        child_label = self._make_turn_label(
+            turn.role, content, turn_mode, turn.content_block, viewed, turn.tokens
+        )
+        turn_node = group_node.add(
+            child_label,
+            data={"type": "turn", "session_id": session_id, "turn_idx": turn.idx, "exchange_id": exchange_id},
+            allow_expand=False,
+        )
+        self._turn_nodes[(session_id, turn.idx)] = turn_node
+
+        # Expand for streaming visibility
+        if streaming:
+            group_node.expand()
+
+    def _add_turn_to_exchange_group(
+        self,
+        group_node,
+        session_id: str,
+        turn,
+        streaming: bool = False,
+    ) -> None:
+        """Add a turn to an existing exchange group node."""
+        exchange_id = turn.exchange_id
+
+        # Add turn index to the group's tracking list
+        turn_indices = group_node.data.get("turn_indices", [])
+        if turn.idx not in turn_indices:
+            turn_indices.append(turn.idx)
+            group_node.data["turn_indices"] = turn_indices
+
+        # Add the turn as a child of the group
+        if streaming:
+            content = "[dim]streaming...[/]"
+            viewed = True
+        else:
+            content = turn.content
+            viewed = turn.viewed
+
+        turn_mode = self._state.get_context_mode(session_id, turn.idx)
+        child_label = self._make_turn_label(
+            turn.role, content, turn_mode, turn.content_block, viewed, turn.tokens
+        )
+        turn_node = group_node.add(
+            child_label,
+            data={"type": "turn", "session_id": session_id, "turn_idx": turn.idx, "exchange_id": exchange_id},
+            allow_expand=False,
+        )
+        self._turn_nodes[(session_id, turn.idx)] = turn_node
+
+        # Update the group label with new totals
+        self._update_exchange_group_label(session_id, exchange_id)
 
     def _finalize_turn_node(
         self,
@@ -698,7 +1023,7 @@ class NestedTreeView(Vertical):
             return
 
         mode = self._state.get_context_mode(session_id, turn_idx)
-        turn_node.label = self._make_turn_label(turn_data.role, content, mode, content_block, turn_data.viewed)
+        turn_node.label = self._make_turn_label(turn_data.role, content, mode, content_block, turn_data.viewed, turn_data.tokens)
 
         self._update_root_label()
 
@@ -714,8 +1039,43 @@ class NestedTreeView(Vertical):
 
         mode = self._state.get_context_mode(session_id, turn_idx)
         turn_node.label = self._make_turn_label(
-            turn_data.role, turn_data.content, mode, turn_data.content_block, turn_data.viewed
+            turn_data.role, turn_data.content, mode, turn_data.content_block, turn_data.viewed, turn_data.tokens
         )
+
+    def _update_exchange_group_label(self, session_id: str, exchange_id: str) -> None:
+        """Update an exchange group node's label after mode changes."""
+        if not hasattr(self, '_exchange_group_nodes'):
+            return
+
+        group_node = self._exchange_group_nodes.get((session_id, exchange_id))
+        if not group_node:
+            return
+
+        # Gather the turns in this group
+        turn_indices = group_node.data.get("turn_indices", [])
+        turns = []
+        for turn_idx in turn_indices:
+            turn_data = self._state.get_turn(session_id, turn_idx)
+            if turn_data:
+                turns.append(turn_data)
+
+        if not turns:
+            return
+
+        # Calculate totals
+        total_tokens = sum(t.tokens for t in turns)
+
+        # Determine group mode
+        modes = [self._state.get_context_mode(session_id, t.idx) for t in turns]
+        if all(m == ContextMode.DROP for m in modes):
+            group_mode = ContextMode.DROP
+        elif all(m == ContextMode.COPY for m in modes):
+            group_mode = ContextMode.COPY
+        else:
+            group_mode = ContextMode.COMPRESS
+
+        # Update label
+        group_node.label = self._make_exchange_group_label(turns, total_tokens, group_mode)
 
     def _update_session_label(self, session_id: str) -> None:
         """Update a session node's label."""
@@ -836,12 +1196,15 @@ class NestedTreeView(Vertical):
         content: str,
         mode: ContextMode,
         content_block=None,
-        viewed: bool = True
+        viewed: bool = True,
+        tokens: int = 0,
     ) -> str:
         """Create a label for a turn node.
 
         Each turn has exactly one content_block that determines its type and rendering.
         """
+        from widgets.session_rendering import format_kt
+
         # Unviewed indicator (blue dot for unviewed assistant turns)
         unviewed_indicator = "[bold blue]● [/]" if not viewed else ""
 
@@ -853,43 +1216,47 @@ class NestedTreeView(Vertical):
         else:  # DROP
             indicator = "☐"
 
+        # Token count string (green, like other nodes)
+        kt_str = format_kt(tokens) if tokens > 0 else ""
+        token_part = f"[green]{kt_str}[/] " if kt_str else ""
+
         # Determine turn type and icon based on content_block
         if isinstance(content_block, ArchiveBlock):
             summary = content_block.structured_summary.work_done if content_block.structured_summary else content_block.summary
             preview = summary[:40] + "..." if len(summary) > 40 else summary
             preview = preview.replace("\n", " ")
-            return f"{unviewed_indicator}{indicator} 📦 {escape_markup(preview)}"
+            return f"{token_part}{unviewed_indicator}{indicator} 📦 {escape_markup(preview)}"
 
         if isinstance(content_block, ForkBlock):
             preview = f"{content_block.fork_name}"
             if content_block.status == "merged":
-                return f"{unviewed_indicator}{indicator} [green]🔀 Fork: {escape_markup(preview)} [merged][/]"
-            return f"{unviewed_indicator}{indicator} [bold]🔀 Fork: {escape_markup(preview)}[/]"
+                return f"{token_part}{unviewed_indicator}{indicator} [green]🔀 Fork: {escape_markup(preview)} [merged][/]"
+            return f"{token_part}{unviewed_indicator}{indicator} [bold]🔀 Fork: {escape_markup(preview)}[/]"
 
         if isinstance(content_block, MergeBlock):
             msg_preview = content_block.message[:40] + "..." if len(content_block.message) > 40 else content_block.message
             msg_preview = msg_preview.replace("\n", " ")
-            return f"{unviewed_indicator}{indicator} [green]⬅️ Merged: {escape_markup(content_block.fork_name)}[/] {escape_markup(msg_preview)}"
+            return f"{token_part}{unviewed_indicator}{indicator} [green]⬅️ Merged: {escape_markup(content_block.fork_name)}[/] {escape_markup(msg_preview)}"
 
         if isinstance(content_block, LinkBlock):
             preview = content_block.summary[:40] + "..." if len(content_block.summary) > 40 else content_block.summary
             preview = preview.replace("\n", " ")
-            return f"{unviewed_indicator}{indicator} [magenta]🔗 Link:[/] {escape_markup(preview)}"
+            return f"{token_part}{unviewed_indicator}{indicator} [magenta]🔗 Link:[/] {escape_markup(preview)}"
 
         if isinstance(content_block, ToolUseBlock):
-            return f"{unviewed_indicator}{indicator} 🤖 [cyan]🔧 {escape_markup(content_block.name)}[/]"
+            return f"{token_part}{unviewed_indicator}{indicator} 🤖 [cyan]🔧 {escape_markup(content_block.name)}[/]"
 
         if isinstance(content_block, ToolResultBlock):
             result_preview = content[:30] + "..." if len(content) > 30 else content
             result_preview = result_preview.replace("\n", " ")
             error_indicator = "[red]❌[/] " if content_block.is_error else ""
-            return f"{unviewed_indicator}{indicator} {error_indicator}📋 {escape_markup(result_preview)}"
+            return f"{token_part}{unviewed_indicator}{indicator} {error_indicator}📋 {escape_markup(result_preview)}"
 
         if isinstance(content_block, ErrorBlock):
-            return f"{unviewed_indicator}{indicator} [yellow]⚠ Error:[/] {escape_markup(content_block.reason)}"
+            return f"{token_part}{unviewed_indicator}{indicator} [yellow]⚠ Error:[/] {escape_markup(content_block.reason)}"
 
         if isinstance(content_block, InterruptionBlock):
-            return f"{unviewed_indicator}{indicator} [red]⚠ Interrupted:[/] {escape_markup(content_block.reason)}"
+            return f"{token_part}{unviewed_indicator}{indicator} [red]⚠ Interrupted:[/] {escape_markup(content_block.reason)}"
 
         # Default: text turn (user or assistant message)
         icon = "👤" if role == "user" else "🤖"
@@ -897,7 +1264,7 @@ class NestedTreeView(Vertical):
         preview = content[:30] + "..." if len(content) > 30 else content
         preview = preview.replace("\n", " ")
 
-        return f"{unviewed_indicator}{indicator} {icon} {escape_markup(preview)}"
+        return f"{token_part}{unviewed_indicator}{indicator} {icon} {escape_markup(preview)}"
 
     # --- Event Handlers (from NestedTreeWidget) ---
 
@@ -915,6 +1282,30 @@ class NestedTreeView(Vertical):
             # TreeState fires CONTEXT_MODE_CHANGED, which updates our UI
             # Also notify app to persist
             self.post_message(self.ContextModeChanged(session_id, turn_idx, new_mode))
+
+        elif node_type == "exchange_group":
+            # Toggle all turns in the exchange group together
+            session_id = event.node_data.get("session_id")
+            turn_indices = event.node_data.get("turn_indices", [])
+            if not turn_indices:
+                return
+
+            # Get current mode of first turn to determine next mode
+            first_mode = self._state.get_context_mode(session_id, turn_indices[0])
+            if first_mode == ContextMode.COPY:
+                new_mode = ContextMode.COMPRESS
+            elif first_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
+                new_mode = ContextMode.DROP
+            else:  # DROP
+                new_mode = ContextMode.COPY
+
+            # Set all turns in the group to the new mode
+            for turn_idx in turn_indices:
+                self._state.set_context_mode(session_id, turn_idx, new_mode)
+                self.post_message(self.ContextModeChanged(session_id, turn_idx, new_mode))
+
+            # Update the group node label
+            self._update_exchange_group_label(session_id, event.node_data.get("exchange_id"))
 
     def on_nested_tree_activate_requested(self, event: NestedTreeWidget.ActivateRequested) -> None:
         """Handle Enter key - activate session."""
@@ -978,6 +1369,10 @@ class NestedTreeView(Vertical):
         """Bubble up session delete request."""
         self.post_message(self.SessionDeleteRequested(event.session_id))
 
+    def on_nested_tree_exchange_delete_requested(self, event: NestedTreeWidget.ExchangeDeleteRequested) -> None:
+        """Bubble up exchange delete request."""
+        self.post_message(self.ExchangeDeleteRequested(event.session_id, event.turn_indices))
+
     def on_nested_tree_link_requested(self, event: NestedTreeWidget.LinkRequested) -> None:
         """Bubble up link request."""
         self.post_message(self.SessionLinkRequested(event.session_id))
@@ -985,6 +1380,14 @@ class NestedTreeView(Vertical):
     def on_nested_tree_colon_pressed(self, event: NestedTreeWidget.ColonPressed) -> None:
         """Bubble up colon pressed to jump to text entry."""
         self.post_message(self.ColonPressed())
+
+    def on_nested_tree_jump_to_exchange_end(self, event: NestedTreeWidget.JumpToExchangeEnd) -> None:
+        """Bubble up jump to exchange end request."""
+        self.post_message(self.JumpToExchangeEnd(event.session_id, event.last_turn_idx))
+
+    def on_nested_tree_archive_requested(self, event: NestedTreeWidget.ArchiveRequested) -> None:
+        """Bubble up archive request."""
+        self.post_message(self.ArchiveRequested(event.session_id, event.turn_indices))
 
     def on_tree_node_expanded(self, event) -> None:
         """Handle node expansion - request session load if not loaded."""
@@ -1053,6 +1456,22 @@ class NestedTreeView(Vertical):
                         "content_block": turn_data.content_block,
                         "turn_idx": turn_idx,
                     }, session_id))
+
+        elif node_type == "exchange_group":
+            # Clicking an exchange group - scroll to first turn
+            turn_indices = node_data.get("turn_indices", [])
+            exchange_id = node_data.get("exchange_id")
+            if session_id and turn_indices:
+                first_turn_idx = min(turn_indices)
+                last_turn_idx = max(turn_indices)
+                self.post_message(self.TurnInspected({
+                    "type": "exchange_group",
+                    "session_id": session_id,
+                    "turn_idx": first_turn_idx,
+                    "last_turn_idx": last_turn_idx,
+                    "exchange_id": exchange_id,
+                    "turn_count": len(turn_indices),
+                }, session_id))
 
     # --- Public API (for compatibility with app) ---
 

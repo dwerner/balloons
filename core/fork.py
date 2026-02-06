@@ -10,6 +10,7 @@ Terminology:
 - Derive: Create independent session with selected context (no merge)
 """
 
+import uuid
 from dataclasses import dataclass, field
 from typing import Optional, Any
 
@@ -301,6 +302,14 @@ class ForkManager:
                 name=name,
                 fork_point=fork_point,
             )
+
+            # Add fork turn marker to parent session
+            current_session.add_fork_turn(
+                fork_id=str(uuid.uuid4()),
+                child_session_id=child_session.id,
+                fork_name=name or "fork",
+                prompt=prompt,
+            )
             current_session.save()
 
             return ForkResult(
@@ -316,7 +325,6 @@ class ForkManager:
             )
         else:
             # Compression needed - return prompt and data for helper
-            import uuid
             helper_id = f"compress-{uuid.uuid4().hex[:8]}"
 
             group = groups.compress_groups[0]
@@ -406,6 +414,14 @@ class ForkManager:
             name=name,
             fork_point=fork_point,
         )
+
+        # Add fork turn marker to parent session
+        parent_session.add_fork_turn(
+            fork_id=str(uuid.uuid4()),
+            child_session_id=child_session.id,
+            fork_name=name or "fork",
+            prompt=prompt,
+        )
         parent_session.save()
 
         return ForkResult(
@@ -482,6 +498,17 @@ class ForkManager:
 
         # Update parent's child record
         parent_session.mark_child_merged(fork_session.id, merge_point)
+
+        # Update the ForkBlock status to merged (if it exists)
+        parent_session.update_fork_status(fork_session.id, "merged")
+
+        # Add merge turn marker to parent session
+        parent_session.add_merge_turn(
+            merge_id=str(uuid.uuid4()),
+            child_session_id=fork_session.id,
+            fork_name=fork_session.get_fork_display_name(),
+            message=merge_message,
+        )
         parent_session.save()
 
         return MergeResult(
@@ -532,7 +559,6 @@ class ForkManager:
             )
         else:
             # Compression needed
-            import uuid
             helper_id = f"derive-compress-{uuid.uuid4().hex[:8]}"
 
             group = groups.compress_groups[0]

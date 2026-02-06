@@ -229,6 +229,97 @@ class TestSessionSaveAtomicity:
         assert second_modified > first_modified
 
 
+class TestSessionDeleteTurns:
+    """Tests for delete_turn and delete_turns methods."""
+
+    def test_delete_turn_valid_index(self):
+        """delete_turn should remove turn at valid index."""
+        session = Session()
+        session.add_message("user", "Turn 0")
+        session.add_message("assistant", "Turn 1")
+        session.add_message("user", "Turn 2")
+
+        result = session.delete_turn(1)
+
+        assert result is True
+        assert len(session.turns) == 2
+        assert session.turns[0].content == "Turn 0"
+        assert session.turns[1].content == "Turn 2"
+
+    def test_delete_turn_invalid_index(self):
+        """delete_turn should return False for invalid index."""
+        session = Session()
+        session.add_message("user", "Only turn")
+
+        assert session.delete_turn(-1) is False
+        assert session.delete_turn(1) is False
+        assert session.delete_turn(100) is False
+        assert len(session.turns) == 1
+
+    def test_delete_turns_multiple(self):
+        """delete_turns should remove multiple turns in one call."""
+        session = Session()
+        for i in range(5):
+            session.add_message("user" if i % 2 == 0 else "assistant", f"Turn {i}")
+
+        # Delete turns 1, 2, 3 (indices don't matter if done in reverse order internally)
+        deleted = session.delete_turns([1, 2, 3])
+
+        assert deleted == 3
+        assert len(session.turns) == 2
+        assert session.turns[0].content == "Turn 0"
+        assert session.turns[1].content == "Turn 4"
+
+    def test_delete_turns_reverse_order(self):
+        """delete_turns should handle indices correctly regardless of order."""
+        session = Session()
+        for i in range(5):
+            session.add_message("user", f"Turn {i}")
+
+        # Pass indices in random order
+        deleted = session.delete_turns([3, 1, 4])
+
+        assert deleted == 3
+        assert len(session.turns) == 2
+        assert session.turns[0].content == "Turn 0"
+        assert session.turns[1].content == "Turn 2"
+
+    def test_delete_turns_with_invalid_indices(self):
+        """delete_turns should skip invalid indices."""
+        session = Session()
+        session.add_message("user", "Turn 0")
+        session.add_message("assistant", "Turn 1")
+
+        # Mix of valid and invalid indices
+        deleted = session.delete_turns([0, 100, -1])
+
+        assert deleted == 1
+        assert len(session.turns) == 1
+        assert session.turns[0].content == "Turn 1"
+
+    def test_delete_turns_empty_list(self):
+        """delete_turns with empty list should do nothing."""
+        session = Session()
+        session.add_message("user", "Turn 0")
+
+        deleted = session.delete_turns([])
+
+        assert deleted == 0
+        assert len(session.turns) == 1
+
+    def test_delete_turns_duplicates(self):
+        """delete_turns should handle duplicate indices."""
+        session = Session()
+        for i in range(3):
+            session.add_message("user", f"Turn {i}")
+
+        # Duplicate index 1
+        deleted = session.delete_turns([1, 1, 1])
+
+        assert deleted == 1  # Only deleted once
+        assert len(session.turns) == 2
+
+
 class TestSessionArchive:
     """Tests for session archive/rehydrate methods."""
 
