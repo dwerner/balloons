@@ -121,7 +121,8 @@ class MarkedScrollBarRender(ScrollBarRender):
             )
             segments[actual_idx] = Segment(marker_char, marker_style)
 
-        return Segments(segments, new_lines=False)
+        # Preserve new_lines=True for vertical scrollbars (matches parent behavior)
+        return Segments(segments, new_lines=True)
 
 
 class ToolUseWidget(Static):

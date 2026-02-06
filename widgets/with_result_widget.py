@@ -12,7 +12,7 @@ class WithResultWidget(Static):
     DEFAULT_CSS = """
     WithResultWidget {
         padding: 0 1;
-        margin: 0 0 1 0;
+        margin: 0 0 1 2;
         background: #1a2a1a;
         border-left: thick $success;
         max-height: 20;

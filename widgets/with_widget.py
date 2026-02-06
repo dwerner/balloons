@@ -10,7 +10,7 @@ class WithWidget(Static):
     DEFAULT_CSS = """
     WithWidget {
         padding: 0 1;
-        margin: 0 0 1 0;
+        margin: 0 0 1 2;
         background: #2a1a2a;
         border-left: thick $secondary;
     }
