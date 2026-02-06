@@ -41,6 +41,8 @@ class StreamingContext:
     exchange_id: str = ""  # Groups all turns in this exchange (user + assistant responses)
     # Track tool events for session resume (tool_use_id -> (name, input, result))
     tool_events: dict = None
+    # Track tool_use_id -> turn_idx mapping for finish_turn calls
+    tool_turn_indices: dict = None
     # Helper task tracking (for context compression, merge summaries)
     is_helper: bool = False  # True if this is a helper task, not a normal prompt
     helper_type: str = ""  # "compress", "merge", etc.
@@ -50,6 +52,8 @@ class StreamingContext:
     def __post_init__(self):
         if self.tool_events is None:
             self.tool_events = {}
+        if self.tool_turn_indices is None:
+            self.tool_turn_indices = {}
         if self.fork_data is None:
             self.fork_data = {}
 
@@ -74,6 +78,7 @@ class TextAction(StreamingAction):
 class TextFlushAction(StreamingAction):
     """Text segment complete (before tool use). Commit accumulated text as a visible node."""
     text: str
+    turn_idx: int  # The turn index to finish
 
 
 @dataclass
@@ -176,6 +181,25 @@ class NoAction(StreamingAction):
     pass
 
 
+@dataclass
+class TurnStartedAction(StreamingAction):
+    """A new turn has started during streaming.
+
+    Used to create new turn nodes in the context tree for tool_use and tool_result turns.
+    The initial assistant turn is started via the 'turn_started' event, but subsequent
+    turns (tool_use, tool_result) need their own TurnStartedAction.
+    """
+    turn_idx: int
+    role: str  # "assistant" for tool_use, "tool" for tool_result
+    exchange_id: str
+    turn_type: str  # "text", "tool_use", "tool_result"
+    # For tool_use turns
+    tool_use_id: str = ""
+    tool_name: str = ""
+    # For tool_result turns
+    result_preview: str = ""
+
+
 # =============================================================================
 # StreamingCoordinator - Dispatches events and returns actions
 # =============================================================================
@@ -215,8 +239,46 @@ class StreamingCoordinator:
         session_id = ctx.session_id
 
         if event.event_type == "turn_started":
-            # Just logging, no action needed
+            # Initial assistant turn - just logging, no action needed
+            # (the UI creates the node when streaming starts)
             return NoAction(session_id=session_id)
+
+        elif event.event_type == "text_turn_started":
+            # Text segment flushed before tool use - create a new turn node
+            data = event.data
+            return TurnStartedAction(
+                session_id=session_id,
+                turn_idx=data.get("turn_index", 0),
+                role=data.get("role", "assistant"),
+                exchange_id=data.get("exchange_id", ""),
+                turn_type="text",
+            )
+
+        elif event.event_type == "tool_use_turn_started":
+            # Tool use turn - create a new turn node
+            data = event.data
+            return TurnStartedAction(
+                session_id=session_id,
+                turn_idx=data.get("turn_index", 0),
+                role=data.get("role", "assistant"),
+                exchange_id=data.get("exchange_id", ""),
+                turn_type="tool_use",
+                tool_use_id=data.get("tool_use_id", ""),
+                tool_name=data.get("tool_name", ""),
+            )
+
+        elif event.event_type == "tool_result_turn_started":
+            # Tool result turn - create a new turn node
+            data = event.data
+            return TurnStartedAction(
+                session_id=session_id,
+                turn_idx=data.get("turn_index", 0),
+                role=data.get("role", "tool"),
+                exchange_id=data.get("exchange_id", ""),
+                turn_type="tool_result",
+                tool_use_id=data.get("tool_use_id", ""),
+                result_preview=data.get("result_preview", ""),
+            )
 
         elif event.event_type == "text":
             text = event.data
@@ -226,7 +288,8 @@ class StreamingCoordinator:
         elif event.event_type == "text_flush":
             # Text segment complete (before tool use) - commit as visible node
             text = event.data.get("text", "")
-            return TextFlushAction(session_id=session_id, text=text)
+            turn_idx = event.data.get("turn_index", 0)
+            return TextFlushAction(session_id=session_id, text=text, turn_idx=turn_idx)
 
         elif event.event_type == "init":
             return InitAction(

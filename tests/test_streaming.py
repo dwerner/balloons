@@ -20,6 +20,7 @@ from core.streaming import (
     InputRequiredAction,
     HelperDoneAction,
     NoAction,
+    TurnStartedAction,
 )
 from core.runner import StreamEvent
 
@@ -96,12 +97,13 @@ class TestStreamingCoordinator:
             prompt="Hello",
         )
 
-        event = StreamEvent(event_type="text_flush", data={"text": "Completed text segment"})
+        event = StreamEvent(event_type="text_flush", data={"text": "Completed text segment", "turn_index": 2})
         action = coordinator.dispatch_event(event, ctx)
 
         assert isinstance(action, TextFlushAction)
         assert action.session_id == "test-123"
         assert action.text == "Completed text segment"
+        assert action.turn_idx == 2
 
     def test_init_event(self):
         coordinator = StreamingCoordinator()
@@ -322,6 +324,85 @@ class TestStreamingCoordinator:
         action = coordinator.dispatch_event(event, ctx)
 
         assert isinstance(action, NoAction)
+
+    def test_text_turn_started_event(self):
+        """text_turn_started event should return TurnStartedAction."""
+        coordinator = StreamingCoordinator()
+        ctx = StreamingContext(
+            session_id="test-123",
+            user_turn_idx=0,
+            assistant_turn_idx=1,
+            prompt="Hello",
+        )
+
+        event = StreamEvent(event_type="text_turn_started", data={
+            "turn_index": 2,
+            "exchange_id": "exchange-abc",
+            "role": "assistant",
+            "turn_type": "text",
+            "text_preview": "Some text...",
+        })
+        action = coordinator.dispatch_event(event, ctx)
+
+        assert isinstance(action, TurnStartedAction)
+        assert action.turn_idx == 2
+        assert action.role == "assistant"
+        assert action.exchange_id == "exchange-abc"
+        assert action.turn_type == "text"
+
+    def test_tool_use_turn_started_event(self):
+        """tool_use_turn_started event should return TurnStartedAction with tool info."""
+        coordinator = StreamingCoordinator()
+        ctx = StreamingContext(
+            session_id="test-123",
+            user_turn_idx=0,
+            assistant_turn_idx=1,
+            prompt="Hello",
+        )
+
+        event = StreamEvent(event_type="tool_use_turn_started", data={
+            "turn_index": 3,
+            "exchange_id": "exchange-abc",
+            "role": "assistant",
+            "turn_type": "tool_use",
+            "tool_use_id": "tool-123",
+            "tool_name": "Read",
+        })
+        action = coordinator.dispatch_event(event, ctx)
+
+        assert isinstance(action, TurnStartedAction)
+        assert action.turn_idx == 3
+        assert action.role == "assistant"
+        assert action.turn_type == "tool_use"
+        assert action.tool_use_id == "tool-123"
+        assert action.tool_name == "Read"
+
+    def test_tool_result_turn_started_event(self):
+        """tool_result_turn_started event should return TurnStartedAction with result info."""
+        coordinator = StreamingCoordinator()
+        ctx = StreamingContext(
+            session_id="test-123",
+            user_turn_idx=0,
+            assistant_turn_idx=1,
+            prompt="Hello",
+        )
+
+        event = StreamEvent(event_type="tool_result_turn_started", data={
+            "turn_index": 4,
+            "exchange_id": "exchange-abc",
+            "role": "tool",
+            "turn_type": "tool_result",
+            "tool_use_id": "tool-123",
+            "result_preview": "File contents...",
+        })
+        action = coordinator.dispatch_event(event, ctx)
+
+        assert isinstance(action, TurnStartedAction)
+        assert action.turn_idx == 4
+        assert action.role == "tool"
+        assert action.turn_type == "tool_result"
+        assert action.tool_use_id == "tool-123"
+        assert action.result_preview == "File contents..."
 
     def test_unknown_event(self):
         coordinator = StreamingCoordinator()

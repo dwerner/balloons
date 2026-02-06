@@ -140,12 +140,7 @@ class ToolUseWidget(Static):
         display: none;
     }
 
-    ToolUseWidget.highlighted {
-        /* Use outline on top/right/bottom only - outline-left conflicts with border-left */
-        outline-top: wide $warning;
-        outline-right: wide $warning;
-        outline-bottom: wide $warning;
-    }
+    /* Focus/highlight styles removed for debugging zero-height issue */
 
     ToolUseWidget.expandable {
         border-left: thick $warning;
@@ -170,15 +165,6 @@ class ToolUseWidget(Static):
 
     ToolUseWidget.context-drop {
         opacity: 0.4;
-    }
-
-    /* Hover feedback - background change only, no border changes */
-    ToolUseWidget:hover {
-        background: #222222;
-    }
-
-    ToolUseWidget:focus {
-        background: #202020;
     }
     """
 
@@ -317,18 +303,14 @@ class ToolResultWidget(Static):
         border-left: thick #d4d422;
         max-height: 15;
         overflow-y: auto;
+        scrollbar-gutter: stable;
     }
 
     ToolResultWidget.hidden {
         display: none;
     }
 
-    ToolResultWidget.highlighted {
-        /* Use outline on top/right/bottom only - outline-left conflicts with border-left */
-        outline-top: wide $warning;
-        outline-right: wide $warning;
-        outline-bottom: wide $warning;
-    }
+    /* Focus/highlight styles removed for debugging zero-height issue */
 
     ToolResultWidget.expandable {
         border-left: thick #d4d422;
@@ -345,15 +327,6 @@ class ToolResultWidget(Static):
 
     ToolResultWidget.context-drop {
         opacity: 0.4;
-    }
-
-    /* Hover feedback - background change only, no border changes */
-    ToolResultWidget:hover {
-        background: #222222;
-    }
-
-    ToolResultWidget:focus {
-        background: #202020;
     }
 
     ToolResultWidget.expanded {
@@ -506,29 +479,19 @@ class MessageWidget(Static):
         background: #1a1a3a;
         color: #e0d8b0;  /* Subtle light yellow for user messages */
         border-left: thick $primary;
-        margin-left: 2;
-        padding: 1 2;
+        margin: 0 0 1 2;
+        padding: 1 2 0 2;
     }
 
     MessageWidget.assistant {
         background: #2a1a1a;
         color: $text;
         border-left: thick $error;
-        margin-left: 2;
-        padding: 1 2;
+        margin: 0 0 1 2;
+        padding: 1 2 0 2;
     }
 
-    MessageWidget:focus {
-        background: #252525;
-    }
-
-    MessageWidget.user:focus {
-        background: #1f1f2f;
-    }
-
-    MessageWidget.assistant:focus {
-        background: #2f1f1f;
-    }
+    /* Focus/highlight styles removed for debugging zero-height issue */
 
     MessageWidget.streaming {
         border-left: thick $accent;
@@ -536,13 +499,6 @@ class MessageWidget(Static):
 
     MessageWidget.hidden {
         display: none;
-    }
-
-    MessageWidget.highlighted {
-        /* Use outline on top/right/bottom only - outline-left conflicts with border-left */
-        outline-top: wide $warning;
-        outline-right: wide $warning;
-        outline-bottom: wide $warning;
     }
 
     /* Context mode visual indicators - use background color to avoid layout shifts */
@@ -779,6 +735,7 @@ class ChatLogView(VerticalScroll):
         height: 1fr;
         background: $background;
         padding: 1;
+        scrollbar-gutter: stable;
     }
     """
 
@@ -957,8 +914,16 @@ class ChatLogView(VerticalScroll):
         the widget at the top, even if it's already partially visible.
         Useful for exchange nodes where we want the first turn at the top.
         """
+        from core.debug_log import debug_log
         region = widget.virtual_region
         content_offset_y = self.content_offset.y if hasattr(self, 'content_offset') else 0
+        turn_id = getattr(widget, 'turn_id', '?')
+        debug_log.info(
+            f"scroll_to_widget_at_top: turn_id={turn_id}, "
+            f"region.y={region.y}, region.height={region.height}, "
+            f"widget.size={widget.size}, widget._content_width={getattr(widget, '_content', '?')[:30] if hasattr(widget, '_content') else '?'}",
+            category="chat_log"
+        )
         self._scroll_controller.scroll_to_widget(
             WidgetRegion(y=region.y, height=region.height),
             at_top=True,
@@ -1292,7 +1257,10 @@ class ChatLogView(VerticalScroll):
             scroll_to_top: If True, always scroll so turn is at top of viewport.
                           If False (default), use smart scroll that minimizes movement.
         """
+        from core.debug_log import debug_log
+        debug_log.info(f"highlight_turn: turn_id={turn_id}, scroll_to_top={scroll_to_top}", category="chat_log")
         scroll_target = self._widget_registry.highlight_turn(turn_id)
+        debug_log.info(f"highlight_turn: scroll_target={scroll_target}, type={type(scroll_target).__name__ if scroll_target else None}", category="chat_log")
         if scroll_target:
             if scroll_to_top:
                 self.scroll_to_widget_at_top(scroll_target)

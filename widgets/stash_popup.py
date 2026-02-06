@@ -12,6 +12,7 @@ import yaml
 
 from textual.widgets import Static
 from textual.message import Message
+from textual.events import Key
 from rich.text import Text
 
 
@@ -110,18 +111,21 @@ class MessageStash:
         return len(self._messages)
 
 
-class StashPopup(Static):
+class StashPopup(Static, can_focus=True):
     """Popup showing stashed messages for selection."""
 
     DEFAULT_CSS = """
     StashPopup {
         background: $surface;
-        border: solid $warning;
+        border: solid $secondary;
         padding: 0 1;
-        min-width: 20;
+        min-width: 30;
         height: auto;
-        max-height: 12;
+        max-height: 14;
         max-width: 60;
+    }
+    StashPopup:focus {
+        border: solid $accent;
     }
     """
 
@@ -143,7 +147,7 @@ class StashPopup(Static):
         pass
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        super().__init__("", **kwargs)  # Initialize with empty content
         self._messages: list[StashedMessage] = []
         self._selected_index: int = 0
 
@@ -151,8 +155,9 @@ class StashPopup(Static):
         """Show stash popup with given messages."""
         self._messages = messages
         self._selected_index = 0
-        self._render()
+        self._refresh_display()
         self.display = True
+        self.focus()
 
     def hide(self) -> None:
         """Hide the popup."""
@@ -164,7 +169,7 @@ class StashPopup(Static):
         if not self._messages:
             return
         self._selected_index = (self._selected_index + delta) % len(self._messages)
-        self._render()
+        self._refresh_display()
 
     def select_current(self) -> None:
         """Select the currently highlighted message."""
@@ -183,24 +188,60 @@ class StashPopup(Static):
     def selected_index(self) -> int:
         return self._selected_index
 
-    def _render(self) -> None:
-        """Render the message list."""
+    async def _on_key(self, event: Key) -> None:
+        """Handle key events when popup has focus."""
+        if event.key == "up":
+            event.prevent_default()
+            event.stop()
+            self.cycle(-1)
+        elif event.key == "down":
+            event.prevent_default()
+            event.stop()
+            self.cycle(1)
+        elif event.key == "enter":
+            event.prevent_default()
+            event.stop()
+            self.select_current()
+        elif event.key in ("delete", "backspace"):
+            event.prevent_default()
+            event.stop()
+            self.delete_current()
+        elif event.key == "escape":
+            event.prevent_default()
+            event.stop()
+            self.post_message(self.Closed())
+
+    def _refresh_display(self) -> None:
+        """Update the displayed message list."""
         if not self._messages:
             self.update(Text("(empty)", style="dim italic"))
             return
 
-        lines = []
+        result = Text()
+
+        # Header with title
+        result.append("📋 Stash", style="bold cyan")
+        result.append(f" ({len(self._messages)})\n", style="dim")
+
+        # Message list
         for i, msg in enumerate(self._messages):
             name = msg.display_name()
             if i == self._selected_index:
-                line = Text(f" {name} ", style="reverse")
+                result.append(" › ", style="bold cyan")
+                result.append(f"{name}\n", style="reverse")
             else:
-                line = Text(f" {name} ", style="bold yellow")
-            lines.append(line)
+                result.append("   ", style="dim")
+                result.append(f"{name}\n", style="")
 
-        result = Text()
-        for i, line in enumerate(lines):
-            if i > 0:
-                result.append("\n")
-            result.append_text(line)
+        # Help line with shortcuts
+        result.append("─" * 28 + "\n", style="dim")
+        result.append("↑↓", style="bold cyan")
+        result.append(" nav  ", style="dim")
+        result.append("Enter", style="bold cyan")
+        result.append(" pop  ", style="dim")
+        result.append("Del", style="bold cyan")
+        result.append(" rm  ", style="dim")
+        result.append("Esc", style="bold cyan")
+        result.append(" close", style="dim")
+
         self.update(result)

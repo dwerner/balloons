@@ -16,94 +16,23 @@ from tokenizer import count_tokens
 from session import Session
 from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ArchiveBlock, LinkBlock, ForkBlock, MergeBlock
 from core.tree_state import TreeState, TreeEvent, SessionData, TurnData
-
-# Claude CLI system overhead: ~19.3k tokens for built-in tools and system prompt
-CLAUDE_SYSTEM_OVERHEAD = 19300
-
-import math
-
-def _format_kt(tokens: int) -> str:
-    """Format tokens as kt, rounding up to nearest 0.1kt, dropping leading zero."""
-    if tokens <= 0:
-        return ""
-    kt = math.ceil(tokens / 100) / 10  # Round up to nearest 0.1
-    if kt < 1:
-        return f".{int(kt * 10)}kt"  # e.g., ".2kt" for 200 tokens
-    return f"{kt:.1f}kt"
 from core.context import ContextBuilder
 from core.json_stream import StreamingJsonParser
 from core.debug_log import debug_log
 
+# Import shared rendering utilities
+from widgets.session_rendering import (
+    SessionLabelRenderer,
+    TurnLabelRenderer,
+    format_kt,
+    get_model_icon,
+    CLAUDE_SYSTEM_OVERHEAD,
+    SESSION_COLORS,
+    SPINNER_CHARS,
+)
+
 if TYPE_CHECKING:
     from typing import Any
-
-
-
-# Colors for session grouping (cycling through these for visual distinction)
-SESSION_COLORS = [
-    "blue",
-    "magenta",
-    "cyan",
-    "green",
-    "yellow",
-    "red",
-]
-
-
-def get_model_icon(model: str, backend_name: str) -> str:
-    """Get a visual icon for a model/backend combination.
-
-    Icons help users quickly identify which model a session uses.
-    Uses unicode symbols that render well in terminals.
-
-    Args:
-        model: Model identifier (e.g., "claude-opus-4-5-20251101", "gpt-4")
-        backend_name: Backend name (e.g., "claude", "openrouter", "ollama")
-
-    Returns:
-        A short icon string with Rich markup for coloring.
-    """
-    model_lower = model.lower() if model else ""
-    backend_lower = backend_name.lower() if backend_name else ""
-
-    # Claude models - use different icons for different tiers
-    if "opus" in model_lower or "opus" in backend_lower:
-        return "[bold magenta]◆[/]"  # Diamond for Opus (premium)
-    elif "sonnet" in model_lower:
-        return "[cyan]◇[/]"  # Hollow diamond for Sonnet (balanced)
-    elif "haiku" in model_lower:
-        return "[green]○[/]"  # Circle for Haiku (fast/cheap)
-    elif "claude" in model_lower or backend_lower == "claude":
-        return "[blue]●[/]"  # Filled circle for generic Claude
-
-    # OpenAI models
-    if "gpt-4" in model_lower or "gpt4" in model_lower:
-        return "[yellow]★[/]"  # Star for GPT-4
-    elif "gpt-3" in model_lower or "gpt3" in model_lower:
-        return "[yellow]☆[/]"  # Hollow star for GPT-3.5
-    elif "o1" in model_lower or "o3" in model_lower:
-        return "[red]✦[/]"  # Four-pointed star for reasoning models
-
-    # Local/open models
-    if "llama" in model_lower:
-        return "[orange1]▲[/]"  # Triangle for Llama
-    elif "qwen" in model_lower:
-        return "[bright_blue]◈[/]"  # Diamond with dot for Qwen
-    elif "mistral" in model_lower:
-        return "[bright_cyan]◎[/]"  # Bullseye for Mistral
-    elif "deepseek" in model_lower:
-        return "[bright_green]◉[/]"  # Fisheye for DeepSeek
-    elif "gemma" in model_lower:
-        return "[bright_magenta]❖[/]"  # Diamond for Gemma
-
-    # Backend-based fallbacks
-    if backend_lower in ("ollama", "llamacpp"):
-        return "[dim]▪[/]"  # Small square for local models
-    elif backend_lower == "openrouter":
-        return "[dim]◦[/]"  # Small circle for OpenRouter
-
-    # Default - no icon if we can't identify the model
-    return ""
 
 
 class SelectableTreeWidget(Tree):
@@ -205,17 +134,10 @@ class SelectableTreeWidget(Tree):
         """Fired when user types : to jump to text entry with colon."""
         pass
 
-    class ExchangeJumpRequested(Message):
-        """Fired when user presses [ or ] on an exchange to jump to first/last turn."""
-        def __init__(self, node_data: dict, jump_to: str) -> None:
-            self.node_data = node_data
-            self.jump_to = jump_to  # "first" or "last"
-            super().__init__()
 
     def on_click(self, event: Click) -> None:
         """Handle clicks on tree nodes.
 
-        - Click on exchange navigation controls (⏮/⏭): jump to first/last turn
         - Ctrl+Shift+Click on turn: archive those turns
         - Ctrl+Click on session: create link command
 
@@ -223,15 +145,6 @@ class SelectableTreeWidget(Tree):
         to avoid interfering with the Tree's default click handling.
         """
         meta = event.style.meta
-
-        # Check for exchange navigation control clicks (no modifier needed)
-        if "exchange_jump" in meta:
-            if "line" in meta:
-                node = self.get_node_at_line(meta["line"])
-                if node and node.data and node.data.get("type") == "exchange":
-                    self.post_message(self.ExchangeJumpRequested(node.data, meta["exchange_jump"]))
-                    event.stop()
-                    return
 
         if "line" not in meta:
             return
@@ -328,22 +241,6 @@ class SelectableTreeWidget(Tree):
             event.prevent_default()
             event.stop()
             return
-        elif event.key == "left_square_bracket":
-            # Jump to first turn in exchange
-            node = self.cursor_node
-            if node and node.data and node.data.get("type") == "exchange":
-                self.post_message(self.ExchangeJumpRequested(node.data, "first"))
-                event.prevent_default()
-                event.stop()
-                return
-        elif event.key == "right_square_bracket":
-            # Jump to last turn in exchange
-            node = self.cursor_node
-            if node and node.data and node.data.get("type") == "exchange":
-                self.post_message(self.ExchangeJumpRequested(node.data, "last"))
-                event.prevent_default()
-                event.stop()
-                return
         elif event.key == "right":
             # Expand current node
             node = self.cursor_node
@@ -492,7 +389,7 @@ class ContextTreeView(Vertical):
         pass
 
     # Spinner animation for streaming sessions
-    _spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    _spinner_chars = SPINNER_CHARS
 
     def __init__(
         self,
@@ -512,15 +409,21 @@ class ContextTreeView(Vertical):
         self._state = tree_state if tree_state is not None else TreeState()
         self._owns_state = tree_state is None  # Track if we created it
 
+        # Shared renderers for consistent session/turn labels
+        self._session_renderer = SessionLabelRenderer(
+            spinner_chars=self._spinner_chars,
+            include_model_icon=True,
+            include_tokens=True,
+        )
+        self._turn_renderer = TurnLabelRenderer(include_tokens=True)
+
         # Node references (Textual-specific, not in TreeState)
         # session_id -> tree node
         self._session_nodes: dict[str, Any] = {}
         # (session_id, turn_idx) -> tree node
         self._turn_nodes: dict[tuple[str, int], Any] = {}
-        # (session_id, exchange_id) -> exchange group tree node
-        self._exchange_nodes: dict[tuple[str, str], Any] = {}
-        # (session_id, turn_idx, tool_use_id) -> tree node (for streaming tool use tracking)
-        self._tool_use_nodes: dict[tuple[str, int, str], Any] = {}
+        # (session_id, turn_idx, tool_use_id) -> tool info dict (for streaming tool tracking)
+        self._tool_use_nodes: dict[tuple[str, int, str], dict] = {}
         # (session_id, turn_idx) -> accumulated streaming text
         self._streaming_text: dict[tuple[str, int], str] = {}
 
@@ -581,10 +484,6 @@ class ContextTreeView(Vertical):
                 keys_to_remove = [k for k in self._turn_nodes if k[0] == session_id]
                 for key in keys_to_remove:
                     del self._turn_nodes[key]
-                # Clean up exchange nodes for this session
-                exchange_keys = [k for k in self._exchange_nodes if k[0] == session_id]
-                for key in exchange_keys:
-                    del self._exchange_nodes[key]
                 # Clean up tool use nodes
                 tool_keys = [k for k in self._tool_use_nodes if k[0] == session_id]
                 for key in tool_keys:
@@ -624,17 +523,16 @@ class ContextTreeView(Vertical):
             session_id = data.get("session_id")
             turn_idx = data.get("turn_idx")
             role = data.get("role")
-            exchange_id = data.get("exchange_id")
             if session_id and turn_idx is not None and role:
-                self._add_streaming_turn_node(session_id, turn_idx, role, exchange_id)
+                self._add_streaming_turn_node(session_id, turn_idx, role)
 
         elif event == TreeEvent.TURN_FINISHED:
             session_id = data.get("session_id")
             turn_idx = data.get("turn_idx")
             content = data.get("content", "")
-            content_blocks = data.get("content_blocks", [])
+            content_block = data.get("content_block")
             if session_id and turn_idx is not None:
-                self._finalize_turn_node(session_id, turn_idx, content, content_blocks)
+                self._finalize_turn_node(session_id, turn_idx, content, content_block)
 
         elif event == TreeEvent.CONTEXT_MODE_CHANGED:
             session_id = data.get("session_id")
@@ -730,11 +628,10 @@ class ContextTreeView(Vertical):
         if update_root_label:
             self._update_root_label()
 
-    def _add_streaming_turn_node(self, session_id: str, turn_idx: int, role: str, exchange_id: str | None = None) -> None:
+    def _add_streaming_turn_node(self, session_id: str, turn_idx: int, role: str) -> None:
         """Add a turn node when streaming starts.
 
         Called via observer when TreeState.start_turn() is called.
-        Uses the same code path as loading to handle exchange grouping consistently.
         """
         session_data = self._state.get_session(session_id)
         session_node = self._session_nodes.get(session_id)
@@ -755,7 +652,7 @@ class ContextTreeView(Vertical):
         # Always update token counts when a turn starts
         self._update_root_label()
 
-    def _finalize_turn_node(self, session_id: str, turn_idx: int, content: str, content_blocks: list) -> None:
+    def _finalize_turn_node(self, session_id: str, turn_idx: int, content: str, content_block) -> None:
         """Finalize a streaming turn node with final content.
 
         Called via observer when TreeState.finish_turn() is called.
@@ -765,15 +662,10 @@ class ContextTreeView(Vertical):
 
         # Update tree node if available
         if turn_data and turn_node:
-            # Clear existing children and rebuild (only for non-user turns)
-            turn_node.remove_children()
-            if turn_data.role != "user" and self._has_displayable_children(content_blocks):
-                self._add_content_block_nodes(turn_node, session_id, turn_idx, content_blocks)
-
-            # Update label with final content
+            # Turns are leaf nodes - just update the label with final content
             mode = self._state.get_context_mode(session_id, turn_idx)
             turn_node.label = self._make_turn_label(
-                turn_data.role, content, mode, content_blocks, session_id=session_id, tokens=turn_data.tokens, viewed=turn_data.viewed
+                turn_data.role, content, mode, content_block, session_id=session_id, tokens=turn_data.tokens, viewed=turn_data.viewed
             )
 
         # Update session label (streaming indicator, token counts) even if turn node wasn't visible
@@ -965,7 +857,7 @@ class ContextTreeView(Vertical):
         id_prefix = f"[dim]{session_id[:8]}[/] "
 
         # Format token count
-        token_str = _format_kt(session_tokens)
+        token_str = format_kt(session_tokens)
 
         if name_part:
             label = f"{model_indicator}{id_prefix}{name_part} [dim]({msg_count}msg {token_str})[/]{unviewed_indicator} {status}"
@@ -1043,107 +935,13 @@ class ContextTreeView(Vertical):
         if session_data and session_data.session_ref:
             self.post_message(self.SessionActivated(session_data.session_ref))
 
-    def _add_fork_node(self, parent_node, parent_session_id: str, fork: dict, tree: SelectableTreeWidget, fork_point: int = -1) -> None:
-        """Add a fork link node inline in the parent session.
-
-        This is just a reference/link to the forked session - the actual session
-        content is shown in the session's own node in the main tree.
-
-        Args:
-            parent_node: The tree node to add the fork under
-            parent_session_id: ID of the parent session
-            fork: Dict with fork info (session_id, name, status, fork_point)
-            tree: The tree widget
-            fork_point: Turn index where fork was created (0-indexed). If -1, uses fork["fork_point"].
-        """
-        fork_id = fork.get("session_id", "")
-        fork_name = fork.get("name", "") or fork_id[:8]
-        status = fork.get("status", "active")
-        # Use passed fork_point or fall back to dict value
-        turn_idx = fork_point if fork_point >= 0 else fork.get("fork_point", -1)
-
-        # Status indicator
-        if status == "active":
-            status_text = "[yellow][active][/]"
-        elif status == "merged":
-            status_text = "[green][merged ✓][/]"
-        else:
-            status_text = f"[dim][{status}][/]"
-
-        label = f"[bold]🔀 {escape_markup(fork_name)}[/] {status_text}"
-        parent_node.add(
-            label,
-            data={
-                "type": "fork",
-                "session_id": fork_id,
-                "parent_session_id": parent_session_id,
-                "fork_name": fork_name,
-                "status": status,
-                "turn_idx": turn_idx,  # Turn index for scrolling in chat
-            },
-            allow_expand=False,  # No children - just a link
-        )
-
-    def _add_merge_node(self, parent_node, parent_session_id: str, merge: dict, merge_point: int = -1) -> None:
-        """Add a merge result node inline in the parent session.
-
-        Args:
-            parent_node: The tree node to add the merge under
-            parent_session_id: ID of the parent session
-            merge: Dict with merge info (session_id, name, merge_point)
-            merge_point: Turn index where merge happened (0-indexed). If -1, uses merge["merge_point"].
-        """
-        fork_id = merge.get("session_id", "")
-        fork_name = merge.get("name", "") or fork_id[:8]
-        # Use passed merge_point or fall back to dict value
-        turn_idx = merge_point if merge_point >= 0 else merge.get("merge_point", -1)
-
-        # Load fork to get merge message
-        fork_session = Session.load(fork_id)
-        merge_message = fork_session.merge_message if fork_session else ""
-
-        # Get context mode for this merge from TreeState
-        mode = self._state.get_merge_mode(parent_session_id, fork_id)
-
-        label = self._make_merge_label(fork_name, merge_message, mode, session_id=parent_session_id)
-        parent_node.add(
-            label,
-            data={
-                "type": "merge",
-                "session_id": fork_id,
-                "parent_session_id": parent_session_id,
-                "fork_name": fork_name,
-                "message": merge_message,
-                "turn_idx": turn_idx,  # Turn index for scrolling in chat
-            }
-        )
-
-    def _make_merge_label(self, fork_name: str, merge_message: str, mode: ContextMode, session_id: str = None) -> str:
-        """Create a label for a merge node with context mode indicator."""
-        # Mode indicator (same style as turns)
-        if mode == ContextMode.COPY:
-            mode_indicator = "[green]●[/] "
-        elif mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
-            mode_indicator = "[yellow]◐[/] "
-        else:  # DROP
-            mode_indicator = "[dim]○[/] "
-
-        # Truncate message for display
-        msg_preview = merge_message[:40] + "..." if len(merge_message) > 40 else merge_message
-        msg_preview = msg_preview.replace("\n", " ")
-
-        return f"{mode_indicator}[green]⬅️ Merged: {escape_markup(fork_name)}[/] {escape_markup(msg_preview)}"
-
     def _add_turns_to_node(
         self,
         session_node,
         session_id: str,
         turns: list,
     ) -> None:
-        """Add turn nodes to a session node, grouped by exchange_id.
-
-        Uses the unified _add_turn_to_tree method which handles exchange grouping.
-        """
+        """Add turn nodes to a session node."""
         session_data = self._state.get_session(session_id)
         if not session_data or not session_data.turns:
             return
@@ -1151,44 +949,42 @@ class ContextTreeView(Vertical):
         for turn in session_data.turns:
             self._add_turn_to_tree(session_id, turn, is_streaming=False)
 
-    def _has_displayable_children(self, content_blocks: list) -> bool:
-        """Check if content_blocks contains any items that will be displayed as children."""
-        if not content_blocks:
-            return False
-        for block in content_blocks:
-            if isinstance(block, TextBlock) and block.text.strip():
-                return True
-            elif isinstance(block, (ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock)):
-                return True
-        return False
-
     def _add_single_turn_node(
         self,
         parent_node,
         session_id: str,
         turn,
     ) -> None:
-        """Add a single turn node to a parent (session or exchange group).
+        """Add a single turn node to a parent session node."""
+        # Check if node already exists
+        existing_node = self._turn_nodes.get((session_id, turn.idx))
+        if existing_node:
+            # Check if node needs to be re-parented
+            if existing_node.parent != parent_node:
+                # Remove from old parent and create new node under correct parent
+                existing_node.remove()
+                del self._turn_nodes[(session_id, turn.idx)]
+                # Fall through to create new node
+            else:
+                # Same parent - just update the label
+                mode = self._state.get_context_mode(session_id, turn.idx)
+                existing_node.label = self._make_turn_label(
+                    turn.role, turn.content, mode, turn.content_block,
+                    session_id=session_id, tokens=turn.tokens, viewed=turn.viewed
+                )
+                existing_node.data["exchange_id"] = turn.exchange_id
+                return
 
-        This is the low-level method that actually creates the tree node.
-        Use _add_turn_to_tree for the high-level method that handles exchange grouping.
-        """
         mode = self._state.get_context_mode(session_id, turn.idx)
-        label = self._make_turn_label(turn.role, turn.content, mode, turn.content_blocks, session_id=session_id, tokens=turn.tokens, viewed=turn.viewed)
+        label = self._make_turn_label(turn.role, turn.content, mode, turn.content_block, session_id=session_id, tokens=turn.tokens, viewed=turn.viewed)
 
-        # User turns are always leaves - they're just text, no need for children
-        # Assistant turns may have tool uses, text blocks, etc.
-        has_children = turn.role != "user" and self._has_displayable_children(turn.content_blocks)
+        # All turns are leaf nodes - content is shown in the label
         turn_node = parent_node.add(
             label,
             data={"type": "turn", "session_id": session_id, "turn_idx": turn.idx, "exchange_id": turn.exchange_id},
-            allow_expand=has_children,
+            allow_expand=False,
         )
         self._turn_nodes[(session_id, turn.idx)] = turn_node
-
-        # Add content blocks as children (only for non-user turns)
-        if has_children:
-            self._add_content_block_nodes(turn_node, session_id, turn.idx, turn.content_blocks)
 
     def _add_turn_to_tree(
         self,
@@ -1196,13 +992,7 @@ class ContextTreeView(Vertical):
         turn,
         is_streaming: bool = False,
     ) -> None:
-        """Add a turn to the tree, handling exchange grouping.
-
-        This is the unified code path for both streaming and loading.
-
-        - Single turn with exchange_id: added flat (exchange not created yet)
-        - Multiple turns with same exchange_id: grouped under exchange node
-        - Turn without exchange_id: added directly to session node
+        """Add a turn to the tree directly under its session node.
 
         Args:
             session_id: The session this turn belongs to
@@ -1213,60 +1003,8 @@ class ContextTreeView(Vertical):
         if not session_node:
             return
 
-        exchange_id = turn.exchange_id
-
-        if exchange_id:
-            # Turn belongs to an exchange - check how many turns are in it
-            session_data = self._state.get_session(session_id)
-            if session_data and session_data.turns:
-                exchange_turns = [t for t in session_data.turns if t.exchange_id == exchange_id]
-            else:
-                exchange_turns = [turn]
-
-            # Only create exchange group if there are multiple turns
-            # Single-turn "exchanges" (e.g., just a user message) are added flat
-            if len(exchange_turns) == 1:
-                # Single turn - add directly to session node (no exchange grouping)
-                self._add_single_turn_node(session_node, session_id, turn)
-            else:
-                # Multiple turns - use exchange grouping
-                exchange_key = (session_id, exchange_id)
-                exchange_node = self._exchange_nodes.get(exchange_key)
-
-                if not exchange_node:
-                    # Transition: first turn was added flat, now we have 2+ turns
-                    # Remove any flat turns that belong to this exchange
-                    for t in exchange_turns:
-                        if t.idx != turn.idx:  # Don't try to remove the current turn
-                            flat_node = self._turn_nodes.get((session_id, t.idx))
-                            if flat_node and flat_node.parent == session_node:
-                                flat_node.remove()
-                                del self._turn_nodes[(session_id, t.idx)]
-
-                    # Create new exchange node
-                    exchange_label = self._make_exchange_label(exchange_turns)
-                    exchange_node = session_node.add(
-                        exchange_label,
-                        data={
-                            "type": "exchange",
-                            "session_id": session_id,
-                            "exchange_id": exchange_id,
-                            "turn_indices": [t.idx for t in exchange_turns],
-                        }
-                    )
-                    self._exchange_nodes[exchange_key] = exchange_node
-
-                    # Add ALL turns in this exchange under the exchange node
-                    for t in exchange_turns:
-                        self._add_single_turn_node(exchange_node, session_id, t)
-                else:
-                    # Exchange node exists - just add the new turn and update label
-                    exchange_node.label = self._make_exchange_label(exchange_turns)
-                    exchange_node.data["turn_indices"] = [t.idx for t in exchange_turns]
-                    self._add_single_turn_node(exchange_node, session_id, turn)
-        else:
-            # No exchange_id - add directly to session node
-            self._add_single_turn_node(session_node, session_id, turn)
+        # Add turn directly to session node
+        self._add_single_turn_node(session_node, session_id, turn)
 
         # Expand for streaming visibility
         if is_streaming:
@@ -1274,226 +1012,20 @@ class ContextTreeView(Vertical):
             if turn_node:
                 turn_node.expand()
 
-    def _add_content_block_nodes(self, turn_node, session_id: str, turn_idx: int, content_blocks: list) -> None:
-        """Add child nodes for text blocks, tool uses and results within a turn."""
-        if not content_blocks:
-            return
+    def _make_turn_label(self, role: str, content: str, mode: ContextMode, content_block=None, session_id: str = None, tokens: int = 0, viewed: bool = True) -> str:
+        """Create a label for a turn node.
 
-        import json
-        # Track tool use nodes by their id so we can nest results under them
-        tool_use_nodes: dict[str, any] = {}
-
-        for block_idx, block in enumerate(content_blocks):
-            if isinstance(block, TextBlock):
-                # Only add text blocks with meaningful content
-                if block.text.strip():
-                    text_preview = block.text[:50].replace("\n", " ")
-                    if len(block.text) > 50:
-                        text_preview += "..."
-                    label = f"[dim]💬[/] {escape_markup(text_preview)}"
-                    turn_node.add(
-                        label,
-                        data={
-                            "type": "text",
-                            "session_id": session_id,
-                            "turn_idx": turn_idx,
-                            "block_idx": block_idx,
-                            "text": block.text,
-                        }
-                    )
-            elif isinstance(block, ToolUseBlock):
-                # Truncate input preview
-                input_preview = json.dumps(block.input)[:50]
-                if len(json.dumps(block.input)) > 50:
-                    input_preview += "..."
-                label = f"[cyan]🔧 {block.name}[/] {escape_markup(input_preview)}"
-                tool_node = turn_node.add(
-                    label,
-                    data={
-                        "type": "tool_use",
-                        "session_id": session_id,
-                        "turn_idx": turn_idx,
-                        "block_idx": block_idx,
-                        "tool_name": block.name,
-                        "tool_input": block.input,
-                        "tool_use_id": block.id,
-                    }
-                )
-                tool_use_nodes[block.id] = tool_node
-            elif isinstance(block, ToolResultBlock):
-                content_preview = str(block.content)[:50]
-                if len(str(block.content)) > 50:
-                    content_preview += "..."
-                error_indicator = "[red]❌[/] " if block.is_error else ""
-                label = f"{error_indicator}[blue]📋 Result[/] {escape_markup(content_preview)}"
-                # Find parent tool use node, or fall back to turn node
-                parent_node = tool_use_nodes.get(block.tool_use_id, turn_node)
-                parent_node.add(
-                    label,
-                    data={
-                        "type": "tool_result",
-                        "session_id": session_id,
-                        "turn_idx": turn_idx,
-                        "block_idx": block_idx,
-                        "content": block.content,
-                        "is_error": block.is_error,
-                        "tool_use_id": block.tool_use_id,
-                    }
-                )
-            elif isinstance(block, InterruptionBlock):
-                if block.reason == "user_cancelled":
-                    label = "[red]⚠ Interrupted by user[/]"
-                elif block.reason == "timeout":
-                    label = "[red]⚠ Timed out[/]"
-                else:
-                    label = f"[red]⚠ Interrupted: {block.reason}[/]"
-                turn_node.add(
-                    label,
-                    data={
-                        "type": "interruption",
-                        "session_id": session_id,
-                        "turn_idx": turn_idx,
-                        "block_idx": block_idx,
-                        "reason": block.reason,
-                    }
-                )
-            elif isinstance(block, ErrorBlock):
-                if block.reason == "truncated" and block.partial_tool_name:
-                    label = f"[yellow]⚠ Truncated during {block.partial_tool_name}[/]"
-                elif block.reason == "truncated":
-                    label = "[yellow]⚠ Truncated[/]"
-                elif block.reason == "json_decode_error":
-                    label = "[yellow]⚠ Parse error[/]"
-                else:
-                    label = f"[yellow]⚠ Error: {block.reason}[/]"
-                if block.dump_file:
-                    label += f" [dim](dump: {block.dump_file})[/]"
-                turn_node.add(
-                    label,
-                    data={
-                        "type": "error",
-                        "session_id": session_id,
-                        "turn_idx": turn_idx,
-                        "block_idx": block_idx,
-                        "reason": block.reason,
-                        "partial_tool_name": block.partial_tool_name,
-                        "details": block.details,
-                        "dump_file": block.dump_file,
-                    }
-                )
-            elif isinstance(block, LinkBlock):
-                # Link to another session
-                summary_preview = block.summary[:40] + "..." if len(block.summary) > 40 else block.summary
-                summary_preview = summary_preview.replace("\n", " ")
-                escaped_preview = escape_markup(summary_preview)
-                if block.is_orphaned:
-                    label = f"[dim strikethrough]🔗 Link: [deleted] {escaped_preview}[/]"
-                else:
-                    label = f"[magenta]🔗 Link[/] {escaped_preview}"
-                turn_node.add(
-                    label,
-                    data={
-                        "type": "link",
-                        "session_id": session_id,
-                        "turn_idx": turn_idx,
-                        "block_idx": block_idx,
-                        "linked_session_id": block.linked_session_id,
-                        "link_id": block.link_id,
-                        "summary": block.summary,
-                        "is_orphaned": block.is_orphaned,
-                    }
-                )
-            elif isinstance(block, ForkBlock):
-                # Fork marker stored in content_blocks
-                status = block.status
-                if status == "active":
-                    status_text = "[yellow][active][/]"
-                elif status == "merged":
-                    status_text = "[green][merged ✓][/]"
-                else:
-                    status_text = f"[dim][{escape_markup(status)}][/]"
-                label = f"[bold]🔀 {escape_markup(block.fork_name)}[/] {status_text}"
-                turn_node.add(
-                    label,
-                    data={
-                        "type": "fork_block",  # Distinguish from session-level fork nodes
-                        "session_id": session_id,
-                        "turn_idx": turn_idx,
-                        "block_idx": block_idx,
-                        "child_session_id": block.child_session_id,
-                        "fork_name": block.fork_name,
-                        "prompt": block.prompt,
-                        "status": block.status,
-                    },
-                    allow_expand=False,
-                )
-            elif isinstance(block, MergeBlock):
-                # Merge marker stored in content_blocks
-                message_preview = block.message[:40] + "..." if len(block.message) > 40 else block.message
-                message_preview = message_preview.replace("\n", " ")
-                label = f"[green]⬅️ Merged: {escape_markup(block.fork_name)}[/] {escape_markup(message_preview)}"
-                turn_node.add(
-                    label,
-                    data={
-                        "type": "merge_block",  # Distinguish from session-level merge nodes
-                        "session_id": session_id,
-                        "turn_idx": turn_idx,
-                        "block_idx": block_idx,
-                        "child_session_id": block.child_session_id,
-                        "fork_name": block.fork_name,
-                        "message": block.message,
-                    }
-                )
-
-    def _make_exchange_label(self, group: list) -> Text:
-        """Create a label for an exchange group node.
-
-        Shows turn count, token estimate, and navigation controls.
-        Does NOT include user message preview since user turns are shown as separate nodes.
+        Args:
+            role: The turn's role (user, assistant, system, tool)
+            content: Display text for the turn
+            mode: Context mode (COPY, COMPRESS, DROP)
+            content_block: Single content block (TextBlock, ForkBlock, etc.)
+            session_id: Session ID (for future use)
+            tokens: Token count for this turn
+            viewed: Whether this turn has been viewed
         """
-        turn_count = len(group)
-
-        # Sum tokens from pre-calculated turn data
-        total_tokens = sum(turn.tokens for turn in group)
-        token_str = _format_kt(total_tokens)
-
-        # Build the label as a Text object with clickable navigation controls
-        label = Text()
-        label.append("📋 ", style="dim")
-        label.append(f"{turn_count} turns", style="dim")
-        if token_str:
-            label.append(f" ({token_str})", style="cyan")
-
-        # Add clickable navigation controls for exchanges with multiple turns
-        if turn_count > 1:
-            label.append(" ")
-            # First turn button - clickable with meta
-            label.append("⏮", style=Style(color="blue", meta={"exchange_jump": "first"}))
-            label.append(" ")
-            # Last turn button - clickable with meta
-            label.append("⏭", style=Style(color="blue", meta={"exchange_jump": "last"}))
-
-        return label
-
-    def _make_turn_label(self, role: str, content: str, mode: ContextMode, content_blocks: list = None, session_id: str = None, tokens: int = 0, viewed: bool = True) -> str:
         # Unviewed indicator (blue dot for unviewed assistant turns)
         unviewed_indicator = "[bold blue]● [/]" if not viewed else ""
-
-        # Check for archive block first
-        if content_blocks:
-            for block in content_blocks:
-                if isinstance(block, ArchiveBlock):
-                    # Archive marker - use 📦 and show work summary
-                    if mode == ContextMode.COPY:
-                        indicator = "[green]☑[/]"
-                    elif mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
-                        indicator = "[yellow]Σ[/]"
-                    else:
-                        indicator = "☐"
-                    summary = block.structured_summary.work_done if block.structured_summary else block.summary
-                    preview = summary[:40] + "..." if len(summary) > 40 else summary
-                    preview = preview.replace("\n", " ")
-                    return f"{unviewed_indicator}{indicator} 📦 {escape_markup(preview)}"
 
         # Mode indicator: copy=green check, compress=yellow Σ, drop=empty box
         if mode == ContextMode.COPY:
@@ -1503,27 +1035,104 @@ class ContextTreeView(Vertical):
         else:  # DROP
             indicator = "☐"
 
+        # Determine turn type and icon based on content_block
+        if isinstance(content_block, ArchiveBlock):
+            # Archive marker - special rendering
+            summary = content_block.structured_summary.work_done if content_block.structured_summary else content_block.summary
+            preview = summary[:40] + "..." if len(summary) > 40 else summary
+            preview = preview.replace("\n", " ")
+            return f"{unviewed_indicator}{indicator} 📦 {escape_markup(preview)}"
+
+        if isinstance(content_block, ForkBlock):
+            # Fork turn - show fork icon and name
+            preview = f"{content_block.fork_name}"
+            if content_block.status == "merged":
+                return f"{unviewed_indicator}{indicator} [green]🔀 Fork: {escape_markup(preview)} [merged][/]"
+            return f"{unviewed_indicator}{indicator} [bold]🔀 Fork: {escape_markup(preview)}[/]"
+
+        if isinstance(content_block, MergeBlock):
+            # Merge turn - show merge icon and summary
+            msg_preview = content_block.message[:40] + "..." if len(content_block.message) > 40 else content_block.message
+            msg_preview = msg_preview.replace("\n", " ")
+            return f"{unviewed_indicator}{indicator} [green]⬅️ Merged: {escape_markup(content_block.fork_name)}[/] {escape_markup(msg_preview)}"
+
+        if isinstance(content_block, LinkBlock):
+            # Link turn - show link icon
+            preview = content_block.summary[:40] + "..." if len(content_block.summary) > 40 else content_block.summary
+            preview = preview.replace("\n", " ")
+            return f"{unviewed_indicator}{indicator} [magenta]🔗 Link:[/] {escape_markup(preview)}"
+
+        if isinstance(content_block, ToolUseBlock):
+            # Tool use turn - show tool name + key input parameter
+            kt_str = format_kt(tokens)
+            token_str = f"[green]({kt_str})[/] " if kt_str else ""
+            tool_name = content_block.name
+            # Extract meaningful preview from input based on tool type
+            tool_input = content_block.input or {}
+            preview = ""
+            if tool_name in ("Read", "Write", "Edit"):
+                # Show filename and parent dir for context
+                path = tool_input.get("file_path", "")
+                if path:
+                    parts = path.split("/")
+                    if len(parts) >= 2:
+                        preview = f" {parts[-2]}/{parts[-1]}"
+                    else:
+                        preview = f" {parts[-1]}"
+            elif tool_name == "Glob":
+                pattern = tool_input.get("pattern", "")
+                if pattern:
+                    preview = f" {pattern}"
+            elif tool_name == "Grep":
+                # Show pattern and path if available
+                pattern = tool_input.get("pattern", "")
+                path = tool_input.get("path", "")
+                if pattern:
+                    pat_preview = pattern[:15] + "..." if len(pattern) > 15 else pattern
+                    preview = f" /{pat_preview}/"
+                    if path:
+                        path_parts = path.split("/")
+                        path_preview = path_parts[-1] if path_parts else path
+                        preview += f" {path_preview}"
+            elif tool_name == "Bash":
+                cmd = tool_input.get("command", "")
+                if cmd:
+                    # Show command up to reasonable length
+                    cmd_preview = cmd[:30] + "..." if len(cmd) > 30 else cmd
+                    cmd_preview = cmd_preview.replace("\n", " ")
+                    preview = f" {cmd_preview}"
+            return f"{unviewed_indicator}{indicator} [green]🔧[/]{token_str}[green]{escape_markup(tool_name)}[/][dim]{escape_markup(preview)}[/]"
+
+        if isinstance(content_block, ToolResultBlock):
+            # Tool result turn - show truncated result content
+            result_content = content_block.content or ""
+            # Clean up for preview
+            result_preview = result_content.replace("\n", " ").strip()
+            result_preview = result_preview[:40] + "..." if len(result_preview) > 40 else result_preview
+            error_indicator = "[red]❌ [/]" if content_block.is_error else ""
+            kt_str = format_kt(tokens)
+            token_str = f"[green]({kt_str})[/] " if kt_str else ""
+            return f"{unviewed_indicator}{indicator} {error_indicator}[green]📋[/]{token_str}[green]Result[/] [dim]{escape_markup(result_preview)}[/]"
+
+        if isinstance(content_block, ErrorBlock):
+            # Error turn
+            return f"{unviewed_indicator}{indicator} [yellow]⚠ Error:[/] {escape_markup(content_block.reason)}"
+
+        if isinstance(content_block, InterruptionBlock):
+            # Interruption turn
+            return f"{unviewed_indicator}{indicator} [red]⚠ Interrupted:[/] {escape_markup(content_block.reason)}"
+
+        # Default: text turn (user or assistant message)
         icon = "👤" if role == "user" else "🤖"
 
-        # Count tool uses and check for errors if content_blocks provided
-        tool_count = 0
-        has_error = False
-        if content_blocks:
-            tool_count = sum(1 for b in content_blocks if isinstance(b, ToolUseBlock))
-            has_error = any(isinstance(b, ErrorBlock) for b in content_blocks)
-
-        preview = content[:30] + "..." if len(content) > 30 else content
+        preview = content[:40] + "..." if len(content) > 40 else content
         preview = preview.replace("\n", " ")
 
         # Format token count
-        kt_str = _format_kt(tokens)
-        token_str = f"[cyan]({kt_str})[/]" if kt_str else ""
+        kt_str = format_kt(tokens)
+        token_str = f"[green]({kt_str})[/] " if kt_str else ""
 
-        # Add tool indicator
-        tool_indicator = f" [cyan]🔧{tool_count}[/]" if tool_count > 0 else ""
-        # Add error indicator
-        error_indicator = " [yellow]⚠[/]" if has_error else ""
-        return f"{unviewed_indicator}{indicator} {icon}{tool_indicator}{error_indicator}{token_str} {escape_markup(preview)}"
+        return f"{unviewed_indicator}{indicator} {icon}{token_str}{escape_markup(preview)}"
 
     def _update_root_label(self) -> None:
         """Update root label with selected context tokens for current session.
@@ -1577,25 +1186,8 @@ class ContextTreeView(Vertical):
         turn_node = self._turn_nodes.get((session_id, turn_idx))
         if turn_node:
             turn_node.label = self._make_turn_label(
-                turn_data.role, turn_data.content, mode, turn_data.content_blocks, session_id=session_id, tokens=turn_data.tokens, viewed=turn_data.viewed
+                turn_data.role, turn_data.content, mode, turn_data.content_block, session_id=session_id, tokens=turn_data.tokens, viewed=turn_data.viewed
             )
-
-    def _update_merge_label(self, parent_session_id: str, fork_id: str, node_data: dict) -> None:
-        """Update a merge node's mode indicator label."""
-        # Find the merge node in the tree by walking children
-        session_node = self._session_nodes.get(parent_session_id)
-        if not session_node:
-            return
-
-        mode = self._state.get_merge_mode(parent_session_id, fork_id)
-
-        # Find the node in the session's children
-        for node in session_node.children:
-            if node.data and node.data.get("type") == "merge" and node.data.get("session_id") == fork_id:
-                fork_name = node_data.get("fork_name", fork_id[:8])
-                merge_message = node_data.get("message", "")
-                node.label = self._make_merge_label(fork_name, merge_message, mode, session_id=parent_session_id)
-                break
 
     def is_selection_curated(self) -> bool:
         """Check if selection differs from 'all current session turns as COPY'.
@@ -1627,7 +1219,7 @@ class ContextTreeView(Vertical):
 
         return False
 
-    def add_turn_to_current(self, role: str, content: str, raw_events: list[dict], content_blocks: list = None) -> None:
+    def add_turn_to_current(self, role: str, content: str, raw_events: list[dict], content_block=None) -> None:
         """Add a new turn to the current session."""
         current_session_id = self._state.get_current_session_id()
         if not current_session_id:
@@ -1646,20 +1238,15 @@ class ContextTreeView(Vertical):
         tokens = count_tokens(content) if content else 0
         # Streaming assistant turns start as unviewed, user turns are always viewed
         viewed = role != "assistant"
-        label = self._make_turn_label(role, content, ContextMode.COMPRESS, content_blocks, session_id=current_session_id, tokens=tokens, viewed=viewed)
+        label = self._make_turn_label(role, content, ContextMode.COMPRESS, content_block, session_id=current_session_id, tokens=tokens, viewed=viewed)
         if session_node:
-            # User turns are always leaves - no child nodes
-            has_children = role != "user" and self._has_displayable_children(content_blocks)
+            # All turns are leaf nodes
             turn_node = session_node.add(
                 label,
                 data={"type": "turn", "session_id": current_session_id, "turn_idx": idx},
-                allow_expand=has_children,
+                allow_expand=False,
             )
             self._turn_nodes[(current_session_id, idx)] = turn_node
-
-            # Add child nodes for tool uses and results (only for non-user turns)
-            if has_children:
-                self._add_content_block_nodes(turn_node, current_session_id, idx, content_blocks)
         else:
             turn_node = None
 
@@ -1735,7 +1322,17 @@ class ContextTreeView(Vertical):
 
     # --- Streaming-aware methods for incremental tree updates ---
 
-    def start_turn(self, session_id: str, turn_idx: int, role: str, exchange_id: str = None) -> None:
+    def start_turn(
+        self,
+        session_id: str,
+        turn_idx: int,
+        role: str,
+        exchange_id: str = None,
+        turn_type: str = "text",
+        tool_name: str = "",
+        tool_use_id: str = "",
+        result_preview: str = "",
+    ) -> None:
         """Start a new turn node when streaming begins.
 
         Called when a 'turn_started' event is received from SessionRunner.
@@ -1745,12 +1342,25 @@ class ContextTreeView(Vertical):
         Args:
             session_id: The session this turn belongs to
             turn_idx: The index of this turn in the session
-            role: "user" or "assistant"
+            role: "user", "assistant", or "tool"
             exchange_id: Optional ID to group turns in an agentic exchange
+            turn_type: "text", "tool_use", or "tool_result" - for proper labels during streaming
+            tool_name: For tool_use turns, the name of the tool
+            tool_use_id: For tool_use/tool_result turns, the tool use ID
+            result_preview: For tool_result turns, a preview of the result
         """
         # Notify TreeState - it will set context mode and fire TURN_STARTED event
         # The observer callback will create the UI node
-        self._state.start_turn(session_id, turn_idx, role, exchange_id=exchange_id)
+        self._state.start_turn(
+            session_id,
+            turn_idx,
+            role,
+            exchange_id=exchange_id,
+            turn_type=turn_type,
+            tool_name=tool_name,
+            tool_use_id=tool_use_id,
+            result_preview=result_preview,
+        )
 
     def add_tool_use_to_turn(
         self,
@@ -1761,57 +1371,12 @@ class ContextTreeView(Vertical):
         tool_input: dict,
         tool_index: int,
     ) -> None:
-        """Add a tool use node during streaming.
+        """DEPRECATED: Tool uses are now separate turn nodes.
 
-        Called when a 'tool_use' event is received from SessionRunner.
+        Tool use turns are created by TurnStartedAction (tool_use_turn_started event).
+        This method is kept for backwards compatibility but does nothing.
         """
-        turn_data = self._state.get_turn(session_id, turn_idx)
-        turn_node = self._turn_nodes.get((session_id, turn_idx))
-        if not turn_data or not turn_node:
-            return
-
-        import json
-        input_preview = json.dumps(tool_input)[:50]
-        if len(json.dumps(tool_input)) > 50:
-            input_preview += "..."
-        label = f"[cyan]🔧 {tool_name}[/] {escape_markup(input_preview)}"
-
-        tool_key = (session_id, turn_idx, tool_use_id)
-
-        # Check if node already exists (from tool_use_start) - update instead of creating
-        if tool_key in self._tool_use_nodes:
-            existing_node = self._tool_use_nodes[tool_key]
-            existing_node.label = label
-            existing_node.data["tool_input"] = tool_input
-            return
-
-        tool_node = turn_node.add(
-            label,
-            data={
-                "type": "tool_use",
-                "session_id": session_id,
-                "turn_idx": turn_idx,
-                "block_idx": tool_index,  # Use tool_index as block_idx
-                "tool_name": tool_name,
-                "tool_input": tool_input,
-                "tool_use_id": tool_use_id,
-            }
-        )
-
-        # Track for nesting results
-        self._tool_use_nodes[tool_key] = tool_node
-
-        # Update turn label to show tool count
-        tool_count = sum(1 for k in self._tool_use_nodes if k[0] == session_id and k[1] == turn_idx)
-        icon = "👤" if turn_data.role == "user" else "🤖"
-        mode = self._state.get_context_mode(session_id, turn_idx)
-        if mode == ContextMode.COPY:
-            indicator = "[green]☑[/]"
-        elif mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
-            indicator = "[yellow]Σ[/]"
-        else:
-            indicator = "☐"
-        turn_node.label = f"{indicator} {icon} [cyan]🔧{tool_count}[/] [dim]streaming...[/]"
+        pass
 
     def update_tool_input_streaming(
         self,
@@ -1821,67 +1386,12 @@ class ContextTreeView(Vertical):
         tool_name: str,
         partial_json: str,
     ) -> None:
-        """Update tool use node label with streaming partial JSON.
+        """DEPRECATED: Tool uses are now separate turn nodes.
 
-        Called when 'tool_input_delta' events arrive.
+        Tool input streaming is handled by the chat log widget, not the context tree.
+        This method is kept for backwards compatibility but does nothing.
         """
-        tool_key = (session_id, turn_idx, tool_use_id)
-        node = self._tool_use_nodes.get(tool_key)
-        if not node:
-            return
-
-        # Initialize streaming parser if needed
-        if "_json_parser" not in node.data:
-            node.data["_json_parser"] = StreamingJsonParser()
-            node.data["_streaming_input"] = ""
-
-        # Feed the delta to the parser and accumulate raw input
-        node.data["_json_parser"].feed(partial_json)
-        node.data["_streaming_input"] += partial_json
-
-        # Try to get a meaningful preview from parsed data
-        parsed = node.data["_json_parser"].get_partial()
-        if parsed and isinstance(parsed, dict):
-            # Show key fields in a compact format
-            preview = self._format_tool_preview(tool_name, parsed)
-        else:
-            # Fallback to raw JSON preview
-            accumulated = node.data["_streaming_input"]
-            preview = accumulated[:50]
-            if len(accumulated) > 50:
-                preview += "..."
-
-        node.label = f"[cyan]🔧 {tool_name}[/] [dim]{escape_markup(preview)}[/]"
-
-    def _format_tool_preview(self, tool_name: str, parsed: dict) -> str:
-        """Format a tool input preview based on the tool type."""
-        # Common fields to look for, in order of preference
-        if tool_name in ("Read", "read_file"):
-            if "file_path" in parsed:
-                return parsed["file_path"]
-        elif tool_name in ("Edit", "edit_file", "Write", "write_file"):
-            if "file_path" in parsed:
-                return parsed["file_path"]
-        elif tool_name in ("Bash", "bash", "execute"):
-            if "command" in parsed:
-                cmd = parsed["command"]
-                if len(cmd) > 50:
-                    cmd = cmd[:47] + "..."
-                return cmd
-        elif tool_name in ("Grep", "grep", "search"):
-            if "pattern" in parsed:
-                return f"/{parsed['pattern']}/"
-        elif tool_name in ("Glob", "glob"):
-            if "pattern" in parsed:
-                return parsed["pattern"]
-
-        # Generic fallback: show first string value
-        for key, value in parsed.items():
-            if isinstance(value, str) and value:
-                display = value[:40] if len(value) <= 40 else value[:37] + "..."
-                return f"{key}={display}"
-
-        return str(parsed)[:50]
+        pass
 
     def update_streaming_text(
         self,
@@ -1892,6 +1402,7 @@ class ContextTreeView(Vertical):
         """Update turn node to reflect streaming text content.
 
         Called when 'text_delta' events arrive.
+        Each text turn shows its own streaming content; tool turns are separate nodes.
         """
         turn_data = self._state.get_turn(session_id, turn_idx)
         turn_node = self._turn_nodes.get((session_id, turn_idx))
@@ -1919,12 +1430,7 @@ class ContextTreeView(Vertical):
         else:
             indicator = "☐"
 
-        # Show tool count if any
-        tool_count = sum(1 for k in self._tool_use_nodes if k[0] == session_id and k[1] == turn_idx)
-        if tool_count > 0:
-            turn_node.label = f"{indicator} {icon} [cyan]🔧{tool_count}[/] [dim]{escape_markup(preview)}[/]"
-        else:
-            turn_node.label = f"{indicator} {icon} [dim]{escape_markup(preview)}[/]"
+        turn_node.label = f"{indicator} {icon} [dim]{escape_markup(preview)}[/]"
 
     def flush_streaming_text(
         self,
@@ -1932,40 +1438,14 @@ class ContextTreeView(Vertical):
         turn_idx: int,
         text: str,
     ) -> None:
-        """Commit accumulated streaming text as a visible text node.
+        """Handle text segment completion during streaming.
 
         Called when a text segment completes (before tool use starts).
-        Creates a text child node and clears the streaming accumulator.
+        Turns are leaf nodes - we don't add children, just clear the accumulator.
+        The final turn label is set when finish_turn is called.
         """
-        turn_node = self._turn_nodes.get((session_id, turn_idx))
-        if not turn_node or not text.strip():
-            return
-
-        # Create text node as child of turn
-        text_preview = text[:50].replace("\n", " ")
-        if len(text) > 50:
-            text_preview += "..."
-        label = f"[dim]💬[/] {escape_markup(text_preview)}"
-
-        # Track how many text nodes we've added for this turn
-        text_key = (session_id, turn_idx)
-        text_node_count = sum(
-            1 for child in turn_node.children
-            if child.data and child.data.get("type") == "text"
-        )
-
-        turn_node.add(
-            label,
-            data={
-                "type": "text",
-                "session_id": session_id,
-                "turn_idx": turn_idx,
-                "block_idx": text_node_count,  # Index among text blocks
-                "text": text,
-            }
-        )
-
         # Clear streaming accumulator - subsequent text will be a new segment
+        text_key = (session_id, turn_idx)
         if text_key in self._streaming_text:
             del self._streaming_text[text_key]
 
@@ -1978,43 +1458,19 @@ class ContextTreeView(Vertical):
         is_error: bool = False,
         tool_index: int = None,
     ) -> None:
-        """Add a tool result node during streaming.
+        """DEPRECATED: Tool results are now separate turn nodes.
 
-        Called when a 'tool_result' event is received from SessionRunner.
-        Results are nested under their corresponding tool use.
+        Tool result turns are created by TurnStartedAction (tool_result_turn_started event).
+        This method is kept for backwards compatibility but does nothing.
         """
-        turn_node = self._turn_nodes.get((session_id, turn_idx))
-        if not turn_node:
-            return
-
-        content_preview = str(result)[:50]
-        if len(str(result)) > 50:
-            content_preview += "..."
-        error_indicator = "[red]❌[/] " if is_error else ""
-        label = f"{error_indicator}[blue]📋 Result[/] {escape_markup(content_preview)}"
-
-        # Find parent tool use node, or fall back to turn node
-        tool_key = (session_id, turn_idx, tool_use_id)
-        parent_node = self._tool_use_nodes.get(tool_key, turn_node)
-        parent_node.add(
-            label,
-            data={
-                "type": "tool_result",
-                "session_id": session_id,
-                "turn_idx": turn_idx,
-                "block_idx": tool_index,
-                "content": result,
-                "is_error": is_error,
-                "tool_use_id": tool_use_id,
-            }
-        )
+        pass
 
     def finish_turn(
         self,
         session_id: str,
         turn_idx: int,
         content: str,
-        content_blocks: list,
+        content_block,
         raw_events: list[dict],
     ) -> None:
         """Finalize a streaming turn when complete.
@@ -2024,7 +1480,7 @@ class ContextTreeView(Vertical):
         The observer callback (_finalize_turn_node) handles UI updates.
         """
         # Notify TreeState - the observer will handle UI update
-        self._state.finish_turn(session_id, turn_idx, content, content_blocks, raw_events)
+        self._state.finish_turn(session_id, turn_idx, content, content_block, raw_events)
 
         # Clean up streaming tracking state for this turn
         text_key = (session_id, turn_idx)
@@ -2052,55 +1508,32 @@ class ContextTreeView(Vertical):
                     self._populate_session_node(session_id, event.node)
 
     def _populate_session_node(self, session_id: str, session_node) -> None:
-        """Populate a session node with its turns after lazy loading."""
+        """Populate a session node with its turns after lazy loading.
+
+        Fork and merge markers are now proper turns (with ForkBlock/MergeBlock content),
+        so they appear naturally in the turn iteration at their correct positions.
+        """
         session_data = self._state.get_session(session_id)
         if not session_data or not session_data.is_loaded or not session_data.turns:
             return
 
-        tree = self.query_one("#turn-tree", SelectableTreeWidget)
-
-        # Clear existing turn-related children (turns AND exchange groups) to prevent
-        # double-nesting when streaming adds nodes and SESSION_LOADED triggers rebuild.
-        # Keep fork/merge nodes.
+        # Clear existing turn children to prevent double-nesting when streaming
+        # adds nodes and SESSION_LOADED triggers rebuild.
         keys_to_remove = [k for k in self._turn_nodes if k[0] == session_id]
         for key in keys_to_remove:
             del self._turn_nodes[key]
-        exchange_keys = [k for k in self._exchange_nodes if k[0] == session_id]
-        for key in exchange_keys:
-            del self._exchange_nodes[key]
 
         children_to_remove = []
         for child in session_node.children:
             if child.data:
                 node_type = child.data.get("type")
-                if node_type in ("turn", "exchange"):
+                if node_type == "turn":
                     children_to_remove.append(child)
         for child in children_to_remove:
             child.remove()
 
-        # Add turn nodes grouped by exchange_id
+        # Add turn nodes - fork/merge turns are included naturally since they're stored as turns
         self._add_turns_to_node(session_node, session_id, session_data.turns)
-
-        # Add fork and merge nodes from session_ref
-        session = session_data.session_ref
-        if session:
-            fork_points = {}
-            merge_points = {}
-            for child in session.children:
-                fork_point = child.get("fork_point", -1)
-                merge_point = child.get("merge_point", -1)
-                if fork_point >= 0:
-                    fork_points.setdefault(fork_point, []).append(child)
-                if merge_point >= 0 and child.get("status") == "merged":
-                    merge_points.setdefault(merge_point, []).append(child)
-
-            for fork_point, forks in fork_points.items():
-                for fork in forks:
-                    self._add_fork_node(session_node, session_id, fork, tree, fork_point=fork_point)
-
-            for merge_point, merges in merge_points.items():
-                for merge in merges:
-                    self._add_merge_node(session_node, session_id, merge, merge_point=merge_point)
 
     def on_tree_node_selected(self, event) -> None:
         """Handle node selection - show info in preview pane.
@@ -2259,7 +1692,7 @@ class ContextTreeView(Vertical):
                 "is_orphaned": node_data.get("is_orphaned", False),
             }, session_id=session_id))
         elif node_type == "fork_block":
-            # Fork marker stored in content_blocks - scroll to it and show info
+            # Fork turn - scroll to it and show info
             session_id = node_data.get("session_id")
             turn_idx = node_data.get("turn_idx")
             self.post_message(self.TurnInspected({
@@ -2272,7 +1705,7 @@ class ContextTreeView(Vertical):
                 "status": node_data.get("status"),
             }, session_id=session_id))
         elif node_type == "merge_block":
-            # Merge marker stored in content_blocks - scroll to it and show info
+            # Merge turn - scroll to it and show info
             session_id = node_data.get("session_id")
             turn_idx = node_data.get("turn_idx")
             self.post_message(self.TurnInspected({
@@ -2283,25 +1716,6 @@ class ContextTreeView(Vertical):
                 "fork_name": node_data.get("fork_name"),
                 "message": node_data.get("message"),
             }, session_id=session_id))
-        elif node_type == "exchange":
-            # Exchange nodes group multiple turns - scroll to first turn in exchange
-            # Use scroll_to_top=True so the first turn is at the top of viewport
-            session_id = node_data.get("session_id")
-            turn_indices = node_data.get("turn_indices", [])
-            if turn_indices:
-                first_turn_idx = turn_indices[0]
-                turn = self._state.get_turn(session_id, first_turn_idx)
-                if turn:
-                    mode = self._state.get_context_mode(session_id, first_turn_idx)
-                    self.post_message(self.TurnInspected({
-                        "type": "turn",
-                        "role": turn.role,
-                        "content": turn.content,
-                        "events": turn.events,
-                        "turn_idx": first_turn_idx,
-                        "context_mode": mode.name,
-                        "scroll_to_top": True,  # Exchange clicks should scroll first turn to top
-                    }, session_id=session_id))
 
     def on_selectable_tree_widget_activate_requested(self, event: SelectableTreeWidget.ActivateRequested) -> None:
         """Handle Enter key - activate session (load into chat view)."""
@@ -2364,25 +1778,6 @@ class ContextTreeView(Vertical):
             # Notify app to persist the change
             self.post_message(self.ContextModeChanged(session_id, turn_idx, new_mode))
 
-        elif node_type == "merge":
-            fork_id = event.node_data.get("session_id")
-            parent_session_id = event.node_data.get("parent_session_id")
-
-            # Get current mode and cycle
-            current_mode = self._state.get_merge_mode(parent_session_id, fork_id)
-            if current_mode == ContextMode.COPY:
-                new_mode = ContextMode.COMPRESS
-            elif current_mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
-                new_mode = ContextMode.DROP
-            else:  # DROP
-                new_mode = ContextMode.COPY
-
-            # Update TreeState (which fires CONTEXT_MODE_CHANGED event)
-            self._state.set_merge_mode(parent_session_id, fork_id, new_mode)
-
-            self._update_merge_label(parent_session_id, fork_id, event.node_data)
-            self._update_root_label()
-
     def on_selectable_tree_widget_select_all_requested(self, event: SelectableTreeWidget.SelectAllRequested) -> None:
         """Set all turns in CURRENT session to COPY mode."""
         current_session_id = self._state.get_current_session_id()
@@ -2437,40 +1832,6 @@ class ContextTreeView(Vertical):
         """Handle : key - bubble up to app to jump to text entry."""
         self.post_message(self.ColonPressed())
 
-    def on_selectable_tree_widget_exchange_jump_requested(self, event: SelectableTreeWidget.ExchangeJumpRequested) -> None:
-        """Handle [ and ] keys to jump to first/last turn in exchange."""
-        session_id = event.node_data.get("session_id")
-        turn_indices = event.node_data.get("turn_indices", [])
-        if not session_id or not turn_indices:
-            return
-
-        # Select the first or last turn index
-        if event.jump_to == "first":
-            target_idx = turn_indices[0]
-        else:  # "last"
-            target_idx = turn_indices[-1]
-
-        # Find and scroll to the turn node (if it exists in tree)
-        # Note: user turns in exchanges don't have tree nodes since they're always leaves
-        turn_node = self._turn_nodes.get((session_id, target_idx))
-        if turn_node:
-            tree = self.query_one("#turn-tree", SelectableTreeWidget)
-            tree.select_node(turn_node)
-            tree.scroll_to_node(turn_node)
-
-        # Always fire TurnInspected so chat log scrolls to the turn
-        # (even if turn doesn't have a tree node, like user turns in exchanges)
-        turn_data = self._state.get_turn(session_id, target_idx)
-        if turn_data:
-            self.post_message(self.TurnInspected({
-                "type": "turn",
-                "role": turn_data.role,
-                "content": turn_data.content,
-                "content_blocks": turn_data.content_blocks,
-                "turn_idx": target_idx,
-                "scroll_to_top": event.jump_to == "first",
-            }, session_id=session_id))
-
     def on_input_changed(self, event: Input.Changed) -> None:
         """Filter tree nodes as user types."""
         if event.input.id == "search-input":
@@ -2499,7 +1860,6 @@ class ContextTreeView(Vertical):
             tree.root.remove_children()
             self._session_nodes.clear()
             self._turn_nodes.clear()
-            self._exchange_nodes.clear()
             self._tool_use_nodes.clear()
 
             all_sessions = self._state.get_all_sessions()
@@ -2545,31 +1905,8 @@ class ContextTreeView(Vertical):
                     if session_id in sessions_to_expand:
                         session_node.expand()
 
-                    # Rebuild turn nodes grouped by exchange_id
+                    # Rebuild turn nodes - fork/merge turns are included since they're stored as turns
                     self._add_turns_to_node(session_node, session_id, session_data.turns)
-
-                    # Rebuild fork and merge nodes from session_ref if available
-                    if session_data.session_ref:
-                        session = session_data.session_ref
-                        fork_points = {}
-                        merge_points = {}
-                        for child in session.children:
-                            fork_point = child.get("fork_point", -1)
-                            merge_point = child.get("merge_point", -1)
-                            if fork_point >= 0:
-                                fork_points.setdefault(fork_point, []).append(child)
-                            if merge_point >= 0 and child.get("status") == "merged":
-                                merge_points.setdefault(merge_point, []).append(child)
-
-                        # Add forks at appropriate positions
-                        for fork_point, forks in fork_points.items():
-                            for fork in forks:
-                                self._add_fork_node(session_node, session_id, fork, tree, fork_point=fork_point)
-
-                        # Add merges at appropriate positions
-                        for merge_point, merges in merge_points.items():
-                            for merge in merges:
-                                self._add_merge_node(session_node, session_id, merge, merge_point=merge_point)
 
         debug_log.info(f"_rebuild_tree: done in {(time.time()-start_time)*1000:.0f}ms", category="tree")
         self._update_root_label()
@@ -2611,7 +1948,6 @@ class ContextTreeView(Vertical):
         tree.root.remove_children()
         self._session_nodes.clear()
         self._turn_nodes.clear()
-        self._exchange_nodes.clear()
 
         # Determine which sessions to expand:
         # - Always expand current session
@@ -2657,19 +1993,14 @@ class ContextTreeView(Vertical):
                 turns_to_show = matching_turns if self._search_query else session_data.turns
                 for turn in turns_to_show:
                     mode = self._state.get_context_mode(session_id, turn.idx)
-                    label = self._make_turn_label(turn.role, turn.content, mode, turn.content_blocks, session_id=session_id, tokens=turn.tokens, viewed=turn.viewed)
-                    # User turns are always leaves - no child nodes
-                    has_children = turn.role != "user" and self._has_displayable_children(turn.content_blocks)
+                    label = self._make_turn_label(turn.role, turn.content, mode, turn.content_block, session_id=session_id, tokens=turn.tokens, viewed=turn.viewed)
+                    # All turns are leaf nodes
                     turn_node = session_node.add(
                         label,
                         data={"type": "turn", "session_id": session_id, "turn_idx": turn.idx},
-                        allow_expand=has_children,
+                        allow_expand=False,
                     )
                     self._turn_nodes[(session_id, turn.idx)] = turn_node
-
-                    # Add content block children (only for non-user turns)
-                    if has_children:
-                        self._add_content_block_nodes(turn_node, session_id, turn.idx, turn.content_blocks)
 
                 # Expand session if it has matches, is current, or is parent of current fork
                 if matching_turns or session_id in sessions_to_expand:
@@ -2691,19 +2022,15 @@ class ContextTreeView(Vertical):
         if self._search_query in turn.content.lower():
             return True
 
-        # Check tool names
-        for block in turn.content_blocks:
-            if isinstance(block, ToolUseBlock):
-                if self._search_query in block.name.lower():
-                    return True
+        # Check tool names in content_block
+        if isinstance(turn.content_block, ToolUseBlock):
+            if self._search_query in turn.content_block.name.lower():
+                return True
 
         return False
 
     def get_cursor_turns(self) -> tuple[str, list[int]] | None:
         """Get the session_id and turn indices for the currently selected tree node.
-
-        If cursor is on a turn node, returns that single turn.
-        If cursor is on an exchange group node, returns all turns in that exchange.
 
         Returns (session_id, [turn_indices]) or None if no valid selection.
         """
@@ -2719,11 +2046,6 @@ class ContextTreeView(Vertical):
             turn_idx = node.data.get("turn_idx")
             if session_id is not None and turn_idx is not None:
                 return (session_id, [turn_idx])
-
-        elif node_type == "exchange":
-            turn_indices = node.data.get("turn_indices", [])
-            if session_id is not None and turn_indices:
-                return (session_id, turn_indices)
 
         return None
 
@@ -2751,22 +2073,12 @@ class ContextTreeView(Vertical):
             tree.scroll_to_node(turn_node)
             return True
 
-        # Turn might be in an exchange group - search for it
-        for key, exchange_node in self._exchange_nodes.items():
-            if key[0] == session_id and exchange_node.data:
-                turn_indices = exchange_node.data.get("turn_indices", [])
-                if turn_idx in turn_indices:
-                    tree.select_node(exchange_node)
-                    tree.scroll_to_node(exchange_node)
-                    return True
-
         return False
 
     def get_selected_messages(self) -> list:
         """Get included messages in order for context building.
 
-        Returns Message objects with context_mode and content_blocks set
-        from the original session message data.
+        Returns Message objects with context_mode set from the original session data.
         """
         # Use the indexed version and strip the indices
         indexed = self.get_selected_messages_with_indices()
@@ -2795,7 +2107,7 @@ class ContextTreeView(Vertical):
         if not session_data or not session_data.is_loaded or session_data.turns is None:
             return results
 
-        # Get session object for original message data (content_blocks, summary)
+        # Get session object for original turn data
         session = session_data.session_ref
         if not session:
             return results
@@ -2818,7 +2130,7 @@ class ContextTreeView(Vertical):
                     "turn_idx": turn.idx,
                     "role": turn.role,
                     "content": turn.content,
-                    "content_blocks": turn.content_blocks,  # Use TreeState's content_blocks
+                    "content_block": turn.content_block,  # Single content block
                     "mode": mode,
                     "orig_turn": orig_turn,
                 })
@@ -2861,22 +2173,24 @@ class ContextTreeView(Vertical):
         included_items.sort(key=lambda t: (t["session_created"], t["sort_key"]))
 
         for item in included_items:
-            orig = item.get("orig_msg")
-            if orig:
-                # Use rich content from original message
+            orig_turn = item.get("orig_turn")
+            content_block = item.get("content_block")
+
+            if orig_turn:
+                # Use content from original turn
                 msg = Message(
                     role=item["role"],
                     content=item["content"],
-                    content_blocks=orig.content_blocks,
+                    content_blocks=[orig_turn.content_block] if orig_turn.content_block else [TextBlock(text=item["content"])],
                     context_mode=item["mode"],
-                    summary=orig.summary,
+                    summary=orig_turn.summary if hasattr(orig_turn, 'summary') else "",
                 )
-            elif item.get("content_blocks"):
-                # Use content_blocks from TreeState (for streaming turns not yet saved)
+            elif content_block:
+                # Use content_block from TreeState (for streaming turns not yet saved)
                 msg = Message(
                     role=item["role"],
                     content=item["content"],
-                    content_blocks=item["content_blocks"],
+                    content_blocks=[content_block],
                     context_mode=item["mode"],
                 )
             else:

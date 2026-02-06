@@ -36,8 +36,8 @@ from typing import Callable, Any, Protocol
 from enum import Enum
 
 from models import (
-    ContextMode, TextBlock, ToolUseBlock, ToolResultBlock,
-    InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock
+    ContextMode, ContentBlock, TextBlock, ToolUseBlock, ToolResultBlock,
+    InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock, ForkBlock, MergeBlock
 )
 from core.context import ContextBuilder
 
@@ -66,15 +66,19 @@ class SessionProtocol(Protocol):
 
 @dataclass
 class TurnData:
-    """Data for a single turn in a session."""
+    """Data for a single turn in a session.
+
+    Each turn has exactly ONE content block (TextBlock, ToolUseBlock, ForkBlock, etc.).
+    The block type determines the turn type.
+    """
     idx: int
     role: str
-    content: str
-    content_blocks: list = field(default_factory=list)
+    content: str  # Display text extracted from content_block
+    content_block: ContentBlock | None = None  # Single content block
     events: list = field(default_factory=list)
     streaming: bool = False
     viewed: bool = True  # Whether user has seen this turn (False for new assistant turns)
-    tool_use_ids: list[str] = field(default_factory=list)
+    tool_use_ids: list[str] = field(default_factory=list)  # Tool IDs tracked during streaming
     exchange_id: str | None = None  # Groups turns in an agentic loop
     tokens: int = 0  # Estimated token count for this turn
 
@@ -344,8 +348,8 @@ class TreeState:
     def load_session(self, session_id: str, session: SessionProtocol) -> None:
         """Fully load a session with its turns.
 
-        Transforms legacy message format where a single Message contains multiple
-        content_blocks into the new model where each content block is its own turn.
+        Each turn in session.turns has exactly one content_block.
+        Maps directly to TurnData without expansion.
         """
         if session_id not in self._sessions:
             self.add_session(session, is_current=session_id == self._current_session_id)
@@ -354,35 +358,41 @@ class TreeState:
         session_data.is_loaded = True
         session_data.session_ref = session
 
-        # Load turns, expanding multi-block messages into separate turns
+        # Direct mapping: one Turn → one TurnData
         turns = []
-        turn_idx = 0
 
-        for msg in session.turns:
-            content_blocks = msg.content_blocks if hasattr(msg, 'content_blocks') else []
-            exchange_id = msg.exchange_id if hasattr(msg, 'exchange_id') else None
-            msg_context_mode = msg.context_mode if hasattr(msg, 'context_mode') and msg.context_mode else None
+        for turn_idx, turn in enumerate(session.turns):
+            content_block = turn.content_block if hasattr(turn, 'content_block') else None
+            exchange_id = turn.exchange_id if hasattr(turn, 'exchange_id') else None
+            turn_context_mode = turn.context_mode if hasattr(turn, 'context_mode') and turn.context_mode else None
 
-            # Transform: expand multiple content_blocks into separate turns
-            expanded_turns = self._expand_message_to_turns(
-                msg.role, msg.content, content_blocks, exchange_id
+            # Extract display content from the block
+            display_content = self._content_from_block(content_block, turn.content if hasattr(turn, 'content') else "")
+
+            turn_data = TurnData(
+                idx=turn_idx,
+                role=turn.role,
+                content=display_content,
+                content_block=content_block,
+                exchange_id=exchange_id,
+                tokens=_context_builder.count_turn_tokens(turn.role, [content_block] if content_block else []),
             )
 
-            for turn_data in expanded_turns:
-                turn_data.idx = turn_idx
-                turn_key = (session_id, turn_idx)
+            turn_key = (session_id, turn_idx)
 
-                # Initialize context mode from message or default
-                if msg_context_mode:
-                    self._context_modes[turn_key] = msg_context_mode
-                elif session_id == self._current_session_id:
-                    self._context_modes[turn_key] = ContextMode.COMPRESS
+            # Initialize context mode from turn or default
+            if turn_context_mode:
+                self._context_modes[turn_key] = turn_context_mode
+            elif session_id == self._current_session_id:
+                self._context_modes[turn_key] = ContextMode.COMPRESS
 
-                turns.append(turn_data)
-                turn_idx += 1
+            turns.append(turn_data)
 
         session_data.turns = turns
         session_data.message_count = len(turns)
+
+        # Update cached token count from freshly calculated turn tokens
+        session_data.cached_context_tokens = sum(t.tokens for t in turns)
 
         # Load merge modes for merged children
         for child in session.children:
@@ -394,80 +404,10 @@ class TreeState:
 
         self._notify(TreeEvent.SESSION_LOADED, {"session_id": session_id})
 
-    def _expand_message_to_turns(
-        self,
-        role: str,
-        content: str,
-        content_blocks: list,
-        exchange_id: str | None,
-    ) -> list[TurnData]:
-        """Expand a message with multiple content_blocks into separate turns.
-
-        This handles the transformation from legacy format (single Message with
-        multiple content_blocks) to the new model (one turn per block).
-
-        For messages with 0-1 blocks, returns a single turn (no expansion needed).
-        For messages with multiple blocks, each block becomes its own turn.
-        """
-        # No blocks or single text block - no expansion needed
-        if not content_blocks:
-            return [TurnData(
-                idx=0,  # Will be set by caller
-                role=role,
-                content=content,
-                content_blocks=[],
-                exchange_id=exchange_id,
-                tokens=_context_builder.count_turn_tokens(role, [TextBlock(text=content)] if content else []),
-            )]
-
-        if len(content_blocks) == 1:
-            block = content_blocks[0]
-            # Single block - create one turn with that block
-            block_content = self._content_from_block(block, content)
-            return [TurnData(
-                idx=0,
-                role=role,
-                content=block_content,
-                content_blocks=[block],
-                exchange_id=exchange_id,
-                tokens=_context_builder.count_turn_tokens(role, [block]),
-            )]
-
-        # Multiple blocks - expand into separate turns
-        turns = []
-        for block in content_blocks:
-            block_role = self._role_from_block(block, role)
-            block_content = self._content_from_block(block, "")
-
-            turns.append(TurnData(
-                idx=0,  # Will be set by caller
-                role=block_role,
-                content=block_content,
-                content_blocks=[block],
-                exchange_id=exchange_id,
-                tokens=_context_builder.count_turn_tokens(block_role, [block]),
-            ))
-
-        return turns
-
-    def _role_from_block(self, block, default_role: str) -> str:
-        """Determine the role for a turn based on its content block type."""
-        if isinstance(block, TextBlock):
-            return default_role
-        elif isinstance(block, ToolUseBlock):
-            return "assistant"  # Claude is calling a tool
-        elif isinstance(block, ToolResultBlock):
-            return "tool"  # Tool result
-        elif isinstance(block, (InterruptionBlock, ErrorBlock)):
-            return "system"  # Markers
-        elif isinstance(block, LinkBlock):
-            return "system"  # Links are system-level
-        elif isinstance(block, ArchiveBlock):
-            return "system"  # Archives are system-level
-        return default_role
-
-    def _content_from_block(self, block, fallback: str) -> str:
+    def _content_from_block(self, block: ContentBlock | None, fallback: str) -> str:
         """Extract display content from a content block."""
+        if block is None:
+            return fallback
         if isinstance(block, TextBlock):
             return block.text or fallback
         elif isinstance(block, ToolUseBlock):
@@ -487,6 +427,11 @@ class TreeState:
             return f"Link: {block.summary}"
         elif isinstance(block, ArchiveBlock):
             return f"Archive: {block.get_display_summary()}"
+        elif isinstance(block, ForkBlock):
+            return f"Fork: {block.fork_name}"
+        elif isinstance(block, MergeBlock):
+            msg_preview = block.message[:50] + "..." if len(block.message) > 50 else block.message
+            return f"Merged: {block.fork_name} - {msg_preview}"
         return fallback
 
     def is_session_loaded(self, session_id: str) -> bool:
@@ -496,8 +441,30 @@ class TreeState:
 
     # --- Turn Operations ---
 
-    def start_turn(self, session_id: str, turn_idx: int, role: str, exchange_id: str | None = None) -> None:
-        """Start a new turn when streaming begins."""
+    def start_turn(
+        self,
+        session_id: str,
+        turn_idx: int,
+        role: str,
+        exchange_id: str | None = None,
+        turn_type: str = "text",
+        tool_name: str = "",
+        tool_use_id: str = "",
+        result_preview: str = "",
+    ) -> None:
+        """Start a new turn when streaming begins.
+
+        Args:
+            session_id: The session this turn belongs to
+            turn_idx: The index of this turn
+            role: "user", "assistant", or "tool"
+            exchange_id: Optional ID to group turns in an agentic exchange
+            turn_type: "text", "tool_use", or "tool_result" - used to create
+                       a skeleton content_block for proper labeling during streaming
+            tool_name: For tool_use turns, the name of the tool being called
+            tool_use_id: For tool_use/tool_result turns, the tool use ID
+            result_preview: For tool_result turns, a preview of the result
+        """
         session_data = self._sessions.get(session_id)
         if not session_data or session_data.turns is None:
             return
@@ -508,16 +475,51 @@ class TreeState:
         # Assistant turns start as unviewed until user sees them
         is_viewed = role != "assistant"
 
-        turn = TurnData(
-            idx=turn_idx,
-            role=role,
-            content="",
-            streaming=True,
-            viewed=is_viewed,
-            exchange_id=exchange_id,
-        )
-        session_data.turns.append(turn)
-        session_data.message_count += 1
+        # Create a skeleton content_block for tool turns so labels display correctly
+        # during streaming (before finish_turn sets the real content_block)
+        content_block = None
+        content = ""
+        if turn_type == "tool_use" and tool_name:
+            from models import ToolUseBlock
+            content_block = ToolUseBlock(id=tool_use_id, name=tool_name, input={})
+            content = tool_name
+        elif turn_type == "tool_result":
+            from models import ToolResultBlock
+            content_block = ToolResultBlock(
+                tool_use_id=tool_use_id,
+                content=result_preview,
+                is_error=False,
+            )
+            content = result_preview
+
+        # Check if a turn with this index already exists
+        existing_turn = None
+        for t in session_data.turns:
+            if t.idx == turn_idx:
+                existing_turn = t
+                break
+
+        if existing_turn:
+            # Update existing turn instead of creating duplicate
+            existing_turn.role = role
+            existing_turn.content = content
+            existing_turn.content_block = content_block
+            existing_turn.streaming = True
+            existing_turn.viewed = is_viewed
+            existing_turn.exchange_id = exchange_id
+            turn = existing_turn
+        else:
+            turn = TurnData(
+                idx=turn_idx,
+                role=role,
+                content=content,
+                content_block=content_block,
+                streaming=True,
+                viewed=is_viewed,
+                exchange_id=exchange_id,
+            )
+            session_data.turns.append(turn)
+            session_data.message_count += 1
 
         self._notify(TreeEvent.TURN_STARTED, {
             "session_id": session_id,
@@ -546,7 +548,7 @@ class TreeState:
         session_id: str,
         turn_idx: int,
         content: str,
-        content_blocks: list,
+        content_block: ContentBlock | None,
         events: list[dict] = None,
     ) -> None:
         """Finalize a streaming turn when complete."""
@@ -557,10 +559,10 @@ class TreeState:
         for turn in session_data.turns:
             if turn.idx == turn_idx:
                 turn.content = content
-                turn.content_blocks = content_blocks
+                turn.content_block = content_block
                 turn.events = events or []
                 turn.streaming = False
-                turn.tokens = _context_builder.count_turn_tokens(turn.role, content_blocks)
+                turn.tokens = _context_builder.count_turn_tokens(turn.role, [content_block] if content_block else [])
 
                 # Update session's cached token count (sum all turn tokens)
                 session_data.cached_context_tokens = sum(t.tokens for t in session_data.turns)
@@ -569,7 +571,7 @@ class TreeState:
                     "session_id": session_id,
                     "turn_idx": turn_idx,
                     "content": content,
-                    "content_blocks": content_blocks,
+                    "content_block": content_block,
                 })
                 break
 

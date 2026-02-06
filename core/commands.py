@@ -255,6 +255,16 @@ class ClearAllSessionsCommand(Command):
     pass
 
 
+@dataclass
+class SnapCommand(Command):
+    """Capture the current screen as text and insert into conversation.
+
+    Takes a snapshot of the TUI screen content and adds it to the next
+    message as context. Useful for showing Claude the current UI state.
+    """
+    prompt: str = ""  # Optional prompt to send along with the snapshot
+
+
 # Command documentation for help display
 COMMAND_DOCS = [
     # Session management
@@ -293,6 +303,7 @@ COMMAND_DOCS = [
     (":reindex", "Rebuild session index from disk"),
     (":follow", "Toggle auto-scroll to follow new content"),
     (":clear-all-sessions", "Delete ALL sessions (requires confirmation)"),
+    (":snap [prompt]", "Capture screen as text and send to Claude"),
     (":help", "Show this help"),
 ]
 
@@ -475,6 +486,11 @@ class CommandParser:
         # Handle :clear-all-sessions
         if text == ":clear-all-sessions":
             return ClearAllSessionsCommand()
+
+        # Handle :snap [prompt]
+        if text == ":snap" or text.startswith(":snap "):
+            prompt = text[5:].strip() if len(text) > 5 else ""
+            return SnapCommand(prompt=prompt)
 
         # Unknown command
         cmd_name = text.split()[0]

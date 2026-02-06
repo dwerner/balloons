@@ -40,7 +40,7 @@ from session import Session
 from config import get_config, BackendConfig, save_last_view
 from models import (
     TextDelta, ToolUseEvent, ToolResultEvent,
-    TextBlock, ToolUseBlock, InterruptionBlock, ErrorBlock, Message, ContextMode,
+    TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, Message, ContextMode,
     ArchiveBlock,
 )
 from core import (
@@ -81,8 +81,11 @@ from core import (
     StashCommand,
     PopCommand,
     ClearAllSessionsCommand,
+    SnapCommand,
     debug_log,
     create_runner,
+    register_app_tool_handler,
+    unregister_app_tool_handler,
     # Streaming
     StreamingContext,
     StreamingCoordinator,
@@ -101,6 +104,7 @@ from core import (
     InputRequiredAction,
     HelperDoneAction,
     NoAction,
+    TurnStartedAction,
 )
 from core.summarizer import Summarizer
 from core.exceptions import BackendNotFoundError
@@ -221,7 +225,10 @@ class BalloonsApp(App):
         # Simple runner for helper streaming (summaries, etc.) - used for blocking operations
         self._helper_runner = create_runner(self._backend_config)
         # Summarizer for LLM-based summary generation
-        self._summarizer = Summarizer(self._helper_runner)
+        self._summarizer = Summarizer(
+            self._helper_runner,
+            backend_name=self._backend_config.name,
+        )
         # Timer for polling background sessions
         self._poll_timer = None
         # Per-session streaming contexts (session_id -> StreamingContext)
@@ -404,6 +411,13 @@ class BalloonsApp(App):
         # Start the background session polling timer
         self._poll_timer = self.set_interval(0.1, self._poll_background_sessions)
         self._initialize_session()
+        # Register app-level tool handlers
+        register_app_tool_handler("screen_snapshot", self._execute_screen_snapshot_tool)
+
+    def on_unmount(self) -> None:
+        """Clean up when the app is unmounted."""
+        # Unregister app-level tool handlers
+        unregister_app_tool_handler("screen_snapshot")
 
     def _on_tree_state_event(self, event: TreeEvent, data: dict) -> None:
         """Handle state changes from TreeState that affect token counts and UI."""
@@ -588,11 +602,48 @@ class BalloonsApp(App):
 
         elif isinstance(action, TextFlushAction):
             # Text segment complete before tool use - commit as visible node in tree
+            # and finish the turn so it displays correctly
             context_tree.flush_streaming_text(
                 session_id,
-                ctx.assistant_turn_idx,
+                action.turn_idx,
                 action.text,
             )
+            # Finish the text turn with proper content_block
+            content_block = TextBlock(text=action.text)
+            context_tree.finish_turn(
+                session_id, action.turn_idx, action.text, content_block, []
+            )
+
+        elif isinstance(action, TurnStartedAction):
+            # New turn started during streaming (text_turn, tool_use, or tool_result)
+            # Create a new turn node in the context tree with turn_type info
+            # so labels display correctly during streaming (not just after finish_turn)
+            context_tree.start_turn(
+                session_id,
+                action.turn_idx,
+                action.role,
+                exchange_id=action.exchange_id,
+                turn_type=action.turn_type,
+                tool_name=action.tool_name,
+                tool_use_id=action.tool_use_id,
+                result_preview=action.result_preview,
+            )
+            # Track (tool_use_id, turn_type) -> turn_idx mapping for finish_turn calls
+            # We need the turn_type in the key because tool_use and tool_result share the same tool_use_id
+            if action.tool_use_id and action.turn_type in ("tool_use", "tool_result"):
+                ctx.tool_turn_indices[(action.tool_use_id, action.turn_type)] = action.turn_idx
+            if action.turn_type == "tool_use":
+                debug_log.debug(
+                    f"Tool use turn started: {action.tool_name}",
+                    session_id=session_id,
+                    category="stream",
+                )
+            elif action.turn_type == "tool_result":
+                debug_log.debug(
+                    f"Tool result turn started",
+                    session_id=session_id,
+                    category="stream",
+                )
 
         elif isinstance(action, InitAction):
             # Update task with model info
@@ -625,15 +676,8 @@ class BalloonsApp(App):
                 self._update_context_tokens()
 
         elif isinstance(action, ToolUseStartAction):
-            # Add placeholder to tree
-            context_tree.add_tool_use_to_turn(
-                session_id,
-                ctx.assistant_turn_idx,
-                action.tool_use_id,
-                action.tool_name,
-                {},  # Empty input for now
-                action.tool_index,
-            )
+            # Note: Tree node is created by TurnStartedAction (tool_use_turn_started event)
+            # This action only updates the chat log streaming widget
 
             # Track tool count for task state
             ctx.tool_count = getattr(ctx, 'tool_count', 0) + 1
@@ -649,29 +693,26 @@ class BalloonsApp(App):
                 chat_log.add_streaming_tool_use(action.tool_name, action.tool_use_id)
 
         elif isinstance(action, ToolInputDeltaAction):
-            # Update tree with streaming input
-            context_tree.update_tool_input_streaming(
-                session_id,
-                ctx.assistant_turn_idx,
-                action.tool_use_id,
-                action.tool_name,
-                action.partial_json,
-            )
+            # Note: Tree node is created by TurnStartedAction (tool_use_turn_started event)
+            # This action only updates the chat log streaming widget
 
             if is_active:
                 # Update streaming tool widget
                 chat_log.update_streaming_tool(action.tool_use_id, action.partial_json)
 
         elif isinstance(action, ToolUseCompleteAction):
-            # Update tree with final input
-            context_tree.add_tool_use_to_turn(
-                session_id,
-                ctx.assistant_turn_idx,
-                action.tool_use_id,
-                action.tool_name,
-                action.tool_input,
-                action.tool_index,
-            )
+            # Finalize the tool_use turn with real content_block and token count
+            turn_idx = ctx.tool_turn_indices.get((action.tool_use_id, "tool_use"))
+            if turn_idx is not None:
+                content_block = ToolUseBlock(
+                    id=action.tool_use_id,
+                    name=action.tool_name,
+                    input=action.tool_input,
+                )
+                # content param not used for tool turns - label uses content_block
+                context_tree.finish_turn(
+                    session_id, turn_idx, "", content_block, []
+                )
 
             # Intercept propose_fork tool - show modal before execution
             # Only handle balloons-tool calls (id starts with "balloons-"), not native CLI tools
@@ -720,14 +761,18 @@ class BalloonsApp(App):
                 )
 
         elif isinstance(action, ToolResultAction):
-            # Add to tree
-            context_tree.add_tool_result_to_turn(
-                session_id,
-                ctx.assistant_turn_idx,
-                action.tool_use_id,
-                action.result,
-                action.tool_index,
-            )
+            # Finalize the tool_result turn with real content_block and token count
+            turn_idx = ctx.tool_turn_indices.get((action.tool_use_id, "tool_result"))
+            if turn_idx is not None:
+                content_block = ToolResultBlock(
+                    tool_use_id=action.tool_use_id,
+                    content=action.result,
+                )
+                # Use truncated result as preview
+                preview = action.result[:100] if action.result else ""
+                context_tree.finish_turn(
+                    session_id, turn_idx, preview, content_block, []
+                )
 
             # Tool done, back to streaming
             get_task_state().update_task(
@@ -955,7 +1000,7 @@ class BalloonsApp(App):
             # Start tree turns for child (with exchange_id for grouping)
             context_tree.start_turn(child_session.id, turn_idx, "user", exchange_id=exchange_id)
             context_tree.finish_turn(
-                child_session.id, turn_idx, prompt, [TextBlock(text=prompt)], []
+                child_session.id, turn_idx, prompt, TextBlock(text=prompt), []
             )
             context_tree.start_turn(child_session.id, turn_idx + 1, "assistant", exchange_id=exchange_id)
 
@@ -1112,11 +1157,14 @@ class BalloonsApp(App):
                         break
 
             # Finish the assistant turn in tree
+            # Note: assistant_blocks may have multiple blocks from legacy streaming model
+            # The tree view uses single content_block - take primary block (first text or tool use)
+            primary_block = assistant_blocks[0] if assistant_blocks else TextBlock(text=content)
             context_tree.finish_turn(
                 session_id,
                 ctx.assistant_turn_idx,
                 content,
-                assistant_blocks,
+                primary_block,
                 raw_events,
             )
 
@@ -1379,7 +1427,7 @@ class BalloonsApp(App):
         # Start the user turn in tree immediately (with exchange_id for grouping)
         context_tree.start_turn(self.session.id, turn_idx, "user", exchange_id=exchange_id)
         context_tree.finish_turn(
-            self.session.id, turn_idx, prompt, [TextBlock(text=prompt)], []
+            self.session.id, turn_idx, prompt, TextBlock(text=prompt), []
         )
 
         # Add user message to session immediately (before tool loops start)
@@ -1507,6 +1555,8 @@ class BalloonsApp(App):
             self._handle_pop_command()
         elif isinstance(cmd, ClearAllSessionsCommand):
             self._handle_clear_all_sessions_command()
+        elif isinstance(cmd, SnapCommand):
+            await self._handle_snap_command(cmd.prompt)
 
     def _format_tool_use(
         self, event: ToolUseEvent
@@ -1732,6 +1782,8 @@ class BalloonsApp(App):
             await asyncio.sleep(0)
 
             for session in resolve_result.needs_summary:
+                # Set session context for task tracking
+                self._summarizer.set_session_id(session.id)
                 session.summary = await self._summarizer.generate_session_summary(session)
 
             # Update target summaries in resolved list
@@ -1822,6 +1874,9 @@ class BalloonsApp(App):
         status_bar.set_status("Generating archive summary...", animate=True)
         self.refresh()
         await asyncio.sleep(0)
+
+        # Ensure summarizer has current session for task tracking
+        self._summarizer.set_session_id(self.session.id)
 
         try:
             summary = await self._summarizer.generate_archive_summary(turns_to_archive, hint)
@@ -2154,6 +2209,8 @@ class BalloonsApp(App):
 
     async def _generate_context_summary(self, messages: list) -> str:
         """Generate a summary of messages marked for summarization."""
+        if self.session:
+            self._summarizer.set_session_id(self.session.id)
         return await self._summarizer.generate_context_summary(messages)
 
     async def _build_context_with_summaries(
@@ -2220,6 +2277,8 @@ class BalloonsApp(App):
 
     async def _generate_merge_summary(self, fork_session: Session, user_prompt: str = "") -> str:
         """Generate a summary of what was accomplished in a fork."""
+        # Set the fork session context for task tracking
+        self._summarizer.set_session_id(fork_session.id)
         return await self._summarizer.generate_merge_summary(fork_session, user_prompt)
 
     # ===== FORK PROPOSAL HANDLING =====
@@ -2510,7 +2569,7 @@ class BalloonsApp(App):
 
             context_tree.start_turn(child_session.id, turn_idx, "user", exchange_id=exchange_id)
             context_tree.finish_turn(
-                child_session.id, turn_idx, result.prompt, [TextBlock(text=result.prompt)], []
+                child_session.id, turn_idx, result.prompt, TextBlock(text=result.prompt), []
             )
             context_tree.start_turn(child_session.id, turn_idx + 1, "assistant", exchange_id=exchange_id)
 
@@ -2756,6 +2815,8 @@ class BalloonsApp(App):
 
     async def _generate_return_summary(self, messages: list, return_prompt: str) -> str:
         """Generate a summary of selected messages using Claude."""
+        if self.session:
+            self._summarizer.set_session_id(self.session.id)
         return await self._summarizer.generate_return_summary(messages, return_prompt)
 
     def _check_auto_return(self, response_content: str) -> bool:
@@ -3710,6 +3771,92 @@ class BalloonsApp(App):
             details={"deleted_count": deleted_count},
         )
 
+    def export_screen_text(self, *, styles: bool = False) -> str:
+        """Export the current screen as plain text.
+
+        Uses the same compositor that Textual uses for SVG screenshots,
+        but exports as plain text instead.
+
+        Args:
+            styles: If True, include ANSI escape codes. If False, plain text only.
+
+        Returns:
+            String containing the screen contents as text.
+        """
+        import io
+        from rich.console import Console
+
+        assert self._driver is not None, "App must be running"
+        width, height = self.size
+
+        console = Console(
+            width=width,
+            height=height,
+            file=io.StringIO(),
+            force_terminal=True,
+            color_system="truecolor",
+            record=True,
+            legacy_windows=False,
+            safe_box=False,
+        )
+        screen_render = self.screen._compositor.render_update(
+            full=True, screen_stack=self._background_screens, simplify=True
+        )
+        console.print(screen_render)
+        return console.export_text(styles=styles)
+
+    def _execute_screen_snapshot_tool(self) -> tuple[str, bool]:
+        """Execute the screen_snapshot tool.
+
+        Called by the tool executor when Claude requests a screen snapshot.
+
+        Returns:
+            Tuple of (screen_text, is_error)
+        """
+        try:
+            screen_text = self.export_screen_text(styles=False)
+            width, height = self.size
+            result = f"# Screen Snapshot ({width}x{height})\n```\n{screen_text}```"
+            return result, False
+        except Exception as e:
+            return f"Error capturing screen: {e}", True
+
+    async def _handle_snap_command(self, prompt: str = "") -> None:
+        """Capture the screen as text and send to Claude.
+
+        Args:
+            prompt: Optional additional prompt text to include with the snapshot.
+        """
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        try:
+            # Capture the screen
+            screen_text = self.export_screen_text(styles=False)
+
+            # Build the message with the snapshot
+            message_parts = []
+            message_parts.append("# Current TUI Screen State\n")
+            message_parts.append("```\n")
+            message_parts.append(screen_text)
+            message_parts.append("```\n")
+
+            if prompt:
+                message_parts.append(f"\n{prompt}")
+            else:
+                message_parts.append("\nPlease analyze the current screen state shown above.")
+
+            full_prompt = "".join(message_parts)
+
+            # Send to Claude like a normal prompt
+            self._start_streaming(full_prompt)
+
+        except Exception as e:
+            status_bar.set_error(f"Failed to capture screen: {e}")
+            debug_log.error(
+                f"Screen capture failed: {e}",
+                category="command",
+            )
+
     def action_show_help(self) -> None:
         """Show the help modal."""
         self.push_screen(HelpModal())
@@ -3918,34 +4065,6 @@ class BalloonsApp(App):
             # Input is empty, show popup to retrieve
             self._show_stash_popup()
 
-    def on_key(self, event) -> None:
-        """Handle key events for stash popup navigation."""
-        stash_popup = self.query_one("#stash-popup", StashPopup)
-        if not stash_popup.display:
-            return  # Let event bubble normally
-
-        if event.key == "up":
-            event.prevent_default()
-            event.stop()
-            stash_popup.cycle(-1)
-        elif event.key == "down":
-            event.prevent_default()
-            event.stop()
-            stash_popup.cycle(1)
-        elif event.key == "enter":
-            event.prevent_default()
-            event.stop()
-            stash_popup.select_current()
-        elif event.key in ("delete", "backspace"):
-            event.prevent_default()
-            event.stop()
-            stash_popup.delete_current()
-        elif event.key == "escape":
-            event.prevent_default()
-            event.stop()
-            self._hide_stash_popup()
-            input_box = self.query_one("#input-box", InputBox)
-            input_box.focus()
 
     def action_quit(self) -> None:
         """Quit the application."""

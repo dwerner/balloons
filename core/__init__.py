@@ -33,6 +33,7 @@ from .commands import (
     StashCommand,
     PopCommand,
     ClearAllSessionsCommand,
+    SnapCommand,
     COMMAND_DOCS,
 )
 from .context import ContextBuilder
@@ -42,7 +43,7 @@ from .manager import SessionManager, SessionInfo
 from .debug_log import debug_log, DebugLog, LogLevel, LogEntry, dump_failed_json
 from .base_runner import BaseRunner, RunnerEvent
 from .exceptions import RateLimitError, InputRequiredError, BackendNotFoundError
-from .link_tools import LINK_TOOL_NAMES, execute_link_tool
+from .link_tools import LINK_TOOL_NAMES, execute_link_tool, register_app_tool_handler, unregister_app_tool_handler
 from .openai_runner import OpenAICompatibleRunner
 from .runner_factory import create_runner, resolve_env_var
 from .tools import TOOLS, LINK_TOOLS as LINK_TOOLS_OPENAI, BALLOON_TOOLS, BALLOON_TOOL_NAMES, get_tools_for_request
@@ -72,6 +73,7 @@ from .streaming import (
     InputRequiredAction,
     HelperDoneAction,
     NoAction,
+    TurnStartedAction,
 )
 from .fork import (
     ForkManager,
@@ -138,6 +140,7 @@ __all__ = [
     "StashCommand",
     "PopCommand",
     "ClearAllSessionsCommand",
+    "SnapCommand",
     "COMMAND_DOCS",
     # Context
     "ContextBuilder",
@@ -175,6 +178,8 @@ __all__ = [
     "get_tools_for_request",
     "execute_tool",
     "parse_fork_proposal",
+    "register_app_tool_handler",
+    "unregister_app_tool_handler",
     # Summarizer
     "Summarizer",
     # Context grouper

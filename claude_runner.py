@@ -248,7 +248,7 @@ class ClaudeRunner(BaseRunner):
                         block_texts.append(link_info)
                     elif isinstance(block, ArchiveBlock):
                         archive_info = f"[Archived {block.message_count} turns: {block.summary}]"
-                        archive_info += f"\n(Archive JSON path: {block.file_path})"
+                        archive_info += f"\n(Archive ID: {block.archive_id}, JSON path: {block.file_path})"
                         block_texts.append(archive_info)
 
                 if block_texts:
@@ -678,7 +678,7 @@ class ClaudeRunner(BaseRunner):
                             parts.append(link_info)
                         elif isinstance(block, ArchiveBlock):
                             archive_info = f"[Archived {block.message_count} turns: {block.summary}]"
-                            archive_info += f"\n(Archive JSON path: {block.file_path})"
+                            archive_info += f"\n(Archive ID: {block.archive_id}, JSON path: {block.file_path})"
                             parts.append(archive_info)
                         elif isinstance(block, TextBlock) and block.text:
                             parts.append(block.text)
@@ -713,7 +713,7 @@ class ClaudeRunner(BaseRunner):
                         block_texts.append(link_info)
                     elif isinstance(block, ArchiveBlock):
                         archive_info = f"[Archived {block.message_count} turns: {block.summary}]"
-                        archive_info += f"\n(Archive JSON path: {block.file_path})"
+                        archive_info += f"\n(Archive ID: {block.archive_id}, JSON path: {block.file_path})"
                         block_texts.append(archive_info)
 
                 if block_texts:

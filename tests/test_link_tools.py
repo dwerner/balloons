@@ -7,6 +7,8 @@ from unittest.mock import Mock, patch
 from core.link_tools import (
     LINK_TOOL_NAMES,
     execute_link_tool,
+    register_app_tool_handler,
+    unregister_app_tool_handler,
 )
 from claude_runner import ClaudeRunner
 from session import Session
@@ -21,6 +23,52 @@ class TestLinkToolNames:
         assert "follow_link" in LINK_TOOL_NAMES
         assert "search_linked_session" in LINK_TOOL_NAMES
         assert "session_info" in LINK_TOOL_NAMES
+        assert "screen_snapshot" in LINK_TOOL_NAMES
+
+
+class TestScreenSnapshotTool:
+    """Test screen_snapshot tool with app handler registration."""
+
+    def test_screen_snapshot_without_handler_returns_error(self):
+        """Without a registered handler, screen_snapshot returns an error."""
+        session = Mock(spec=Session)
+        result, is_error = execute_link_tool("screen_snapshot", {}, session)
+
+        assert is_error
+        assert "requires the Balloons app" in result
+
+    def test_screen_snapshot_with_handler(self):
+        """With a registered handler, screen_snapshot calls it."""
+        session = Mock(spec=Session)
+
+        # Register a mock handler
+        def mock_handler():
+            return "# Screen Snapshot\n```\nMocked screen content\n```", False
+
+        register_app_tool_handler("screen_snapshot", mock_handler)
+        try:
+            result, is_error = execute_link_tool("screen_snapshot", {}, session)
+
+            assert not is_error
+            assert "Mocked screen content" in result
+        finally:
+            # Clean up
+            unregister_app_tool_handler("screen_snapshot")
+
+    def test_unregister_handler(self):
+        """After unregistering, handler is no longer called."""
+        session = Mock(spec=Session)
+
+        def mock_handler():
+            return "Handler was called", False
+
+        register_app_tool_handler("screen_snapshot", mock_handler)
+        unregister_app_tool_handler("screen_snapshot")
+
+        result, is_error = execute_link_tool("screen_snapshot", {}, session)
+
+        assert is_error
+        assert "requires the Balloons app" in result
 
 
 class TestExecuteLinkTool:

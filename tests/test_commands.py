@@ -16,6 +16,7 @@ from core.commands import (
     ArchiveCommand,
     RehydrateCommand,
     FollowCommand,
+    SnapCommand,
 )
 
 
@@ -177,3 +178,23 @@ class TestFollowCommand:
         """':follow' creates FollowCommand."""
         cmd = parser.parse(":follow")
         assert isinstance(cmd, FollowCommand)
+
+
+class TestSnapCommand:
+    """Tests for :snap command."""
+
+    @pytest.fixture
+    def parser(self):
+        return CommandParser()
+
+    def test_snap_no_prompt(self, parser):
+        """':snap' creates SnapCommand with empty prompt."""
+        cmd = parser.parse(":snap")
+        assert isinstance(cmd, SnapCommand)
+        assert cmd.prompt == ""
+
+    def test_snap_with_prompt(self, parser):
+        """':snap <prompt>' includes the prompt."""
+        cmd = parser.parse(":snap what does this show?")
+        assert isinstance(cmd, SnapCommand)
+        assert cmd.prompt == "what does this show?"

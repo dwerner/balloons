@@ -11,16 +11,27 @@ default_backend: claude
 # Useful for postmortems when the in-memory log (500 entries) isn't enough.
 # debug_log_file: ~/.balloons/debug.log
 
+# Editor for :edit-config and :edit-prompt commands
+# Falls back to $VISUAL, then $EDITOR, then vi
+# editor: nvim
+
 # Available backends
 backends:
   # Direct Claude API (default) - uses claude CLI
   claude:
     type: claude  # optional, this is the default
+    context_window: 150000  # Max context tokens (default: 150000)
     # Uses your ANTHROPIC_API_KEY from environment
     # No additional configuration needed
     #
     # Optional: Add additional context to Claude's built-in system prompt
     # system_prompt: ~/.balloons/prompts/additional-context.md
+
+  # Claude with structured link tools - enables custom tool loop for link navigation
+  # claude-links:
+  #   type: claude-structured
+  #   # Optional: custom system prompt (link tools prompt is auto-prepended)
+  #   # system_prompt: ~/.balloons/prompts/additional-context.md
 
   # OpenRouter - access many models via OpenAI-compatible API
   # openrouter:

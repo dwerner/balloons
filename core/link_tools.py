@@ -1,17 +1,40 @@
-"""Custom tools for navigating linked sessions.
+"""Custom tools for navigating linked sessions and app state.
 
 These tools are used by the claude-structured backend to allow Claude
-to discover and search content in linked sessions.
+to discover and search content in linked sessions, and to interact
+with the Balloons app itself.
 """
 
 import json
-from typing import Any
+from typing import Any, Callable
 
 from session import Session
 
 
-# Tool names for checking if a tool is a link tool
-LINK_TOOL_NAMES = {"list_links", "follow_link", "search_linked_session", "session_info"}
+# Tool names for checking if a tool is a link/session tool
+LINK_TOOL_NAMES = {"list_links", "follow_link", "search_linked_session", "session_info", "screen_snapshot"}
+
+# Registry for app-level tool handlers (tools that need app access, not just session)
+# Maps tool_name -> callable that returns (result_string, is_error)
+_app_tool_handlers: dict[str, Callable[[], tuple[str, bool]]] = {}
+
+
+def register_app_tool_handler(tool_name: str, handler: Callable[[], tuple[str, bool]]) -> None:
+    """Register a handler for an app-level tool.
+
+    App-level tools need access to the running app instance (e.g., for screen capture).
+    The app registers handlers during startup.
+
+    Args:
+        tool_name: Name of the tool (e.g., "screen_snapshot")
+        handler: Callable that executes the tool and returns (result, is_error)
+    """
+    _app_tool_handlers[tool_name] = handler
+
+
+def unregister_app_tool_handler(tool_name: str) -> None:
+    """Unregister an app-level tool handler."""
+    _app_tool_handlers.pop(tool_name, None)
 
 
 def execute_link_tool(
@@ -29,6 +52,10 @@ def execute_link_tool(
     Returns:
         Tuple of (result_string, is_error)
     """
+    # Check for app-level tools first (registered by the running app)
+    if name in _app_tool_handlers:
+        return _app_tool_handlers[name]()
+
     if name == "list_links":
         return _execute_list_links(current_session)
     elif name == "follow_link":
@@ -37,6 +64,9 @@ def execute_link_tool(
         return _execute_search_linked(args, current_session)
     elif name == "session_info":
         return _execute_session_info(current_session)
+    elif name == "screen_snapshot":
+        # No handler registered - app not running or not set up
+        return "Error: screen_snapshot requires the Balloons app to be running", True
     else:
         return f"Unknown link tool: {name}", True
 

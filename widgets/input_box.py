@@ -52,7 +52,7 @@ class CompletionPopup(Static):
     """
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        super().__init__("", **kwargs)  # Initialize with empty content
         self._candidates: list[tuple[str, str]] = []
         self._selected_index: int = 0
 

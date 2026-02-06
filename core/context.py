@@ -50,22 +50,24 @@ class ContextBuilder:
             if msg.content_blocks:
                 block_parts = []
                 for block in msg.content_blocks:
-                    if isinstance(block, TextBlock):
+                    # Use type attribute for duck-typing compatibility
+                    block_type = getattr(block, 'type', None)
+                    if block_type == 'text' or isinstance(block, TextBlock):
                         if block.text:
                             block_parts.append(block.text)
-                    elif isinstance(block, ToolUseBlock):
+                    elif block_type == 'tool_use' or isinstance(block, ToolUseBlock):
                         # Format tool use so Claude knows what it did
                         input_str = json.dumps(block.input, indent=2)
                         block_parts.append(f"[Tool Use: {block.name}]\n{input_str}")
-                    elif isinstance(block, ToolResultBlock):
+                    elif block_type == 'tool_result' or isinstance(block, ToolResultBlock):
                         # Format tool result so Claude sees what the tool returned
-                        error_prefix = "[Error] " if block.is_error else ""
+                        error_prefix = "[Error] " if getattr(block, 'is_error', False) else ""
                         block_parts.append(f"[Tool Result]{error_prefix}\n{block.content}")
-                    elif isinstance(block, ArchiveBlock):
-                        # Format archive as a summary reference
+                    elif block_type == 'archive' or isinstance(block, ArchiveBlock):
+                        # Format archive as a summary reference with archive_id for retrieval
                         block_parts.append(
                             f"[Archived {block.message_count} turns: {block.summary}]\n"
-                            f"(Archive JSON path: {block.file_path})"
+                            f"(Archive ID: {block.archive_id}, JSON path: {block.file_path})"
                         )
 
                 if block_parts:
@@ -165,19 +167,21 @@ Provide a clear, actionable summary that can be used as context for continuing t
         block_parts = []
 
         for block in content_blocks:
-            if isinstance(block, TextBlock):
+            # Use type attribute for duck-typing compatibility
+            block_type = getattr(block, 'type', None)
+            if block_type == 'text' or isinstance(block, TextBlock):
                 if block.text:
                     block_parts.append(block.text)
-            elif isinstance(block, ToolUseBlock):
+            elif block_type == 'tool_use' or isinstance(block, ToolUseBlock):
                 input_str = json.dumps(block.input, indent=2)
                 block_parts.append(f"[Tool Use: {block.name}]\n{input_str}")
-            elif isinstance(block, ToolResultBlock):
-                error_prefix = "[Error] " if block.is_error else ""
+            elif block_type == 'tool_result' or isinstance(block, ToolResultBlock):
+                error_prefix = "[Error] " if getattr(block, 'is_error', False) else ""
                 block_parts.append(f"[Tool Result]{error_prefix}\n{block.content}")
-            elif isinstance(block, ArchiveBlock):
+            elif block_type == 'archive' or isinstance(block, ArchiveBlock):
                 block_parts.append(
                     f"[Archived {block.message_count} turns: {block.summary}]\n"
-                    f"(Archive JSON path: {block.file_path})"
+                    f"(Archive ID: {block.archive_id}, JSON path: {block.file_path})"
                 )
 
         if not block_parts:

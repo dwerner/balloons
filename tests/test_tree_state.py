@@ -27,6 +27,7 @@ sys.modules["models"] = models_module
 spec2.loader.exec_module(models_module)
 
 ContextMode = models_module.ContextMode
+TextBlock = models_module.TextBlock
 
 
 @dataclass
@@ -35,6 +36,7 @@ class MockMessage:
     role: str
     content: str
     content_blocks: list = field(default_factory=list)
+    content_block: object = None  # Single content block (new Turn model)
     context_mode: ContextMode = None
     exchange_id: str | None = None
 
@@ -259,6 +261,36 @@ class TestTreeStateSessionLoading:
 
         assert state.is_session_loaded("s1") is False
 
+    def test_load_session_calculates_cached_context_tokens(self):
+        """Loading a session should calculate cached_context_tokens from turn tokens."""
+        state = TreeState()
+        session = MockSession(
+            id="s1",
+            turns=[
+                MockMessage(
+                    role="user",
+                    content="Hello world",
+                    content_block=TextBlock(text="Hello world"),
+                ),
+                MockMessage(
+                    role="assistant",
+                    content="Hi there, how can I help?",
+                    content_block=TextBlock(text="Hi there, how can I help?"),
+                ),
+            ]
+        )
+
+        state.load_session("s1", session)
+
+        data = state.get_session("s1")
+        # Token counts should be calculated from content blocks
+        assert data.turns[0].tokens > 0, "User turn should have tokens"
+        assert data.turns[1].tokens > 0, "Assistant turn should have tokens"
+        # Session cached_context_tokens should be sum of turn tokens
+        expected_total = sum(t.tokens for t in data.turns)
+        assert data.cached_context_tokens == expected_total
+        assert data.cached_context_tokens > 0
+
 
 class TestTreeStateTurnOperations:
     """Test turn management during streaming."""
@@ -305,16 +337,51 @@ class TestTreeStateTurnOperations:
         state.finish_turn(
             "s1", 0,
             content="Final content",
-            content_blocks=[{"type": "text", "text": "Final content"}],
+            content_block=TextBlock(text="Final content"),
             events=[{"type": "done"}],
         )
 
         turn = state.get_turn("s1", 0)
         assert turn.streaming is False
         assert turn.content == "Final content"
-        assert len(turn.content_blocks) == 1
+        assert isinstance(turn.content_block, TextBlock)
 
         assert any(e[0] == TreeEvent.TURN_FINISHED for e in events)
+
+    def test_start_turn_updates_existing_turn_instead_of_duplicating(self):
+        """When start_turn is called with same index twice, update instead of duplicate.
+
+        This handles the scenario where an empty assistant turn is pre-created,
+        then a tool_use_turn_started event arrives with the same index.
+        """
+        state = TreeState()
+        session = MockSession(id="s1", turns=[])
+        state.load_session("s1", session)
+
+        # Create initial empty assistant turn (like _start_streaming does)
+        state.start_turn("s1", 0, "assistant")
+
+        data = state.get_session("s1")
+        assert len(data.turns) == 1
+        assert data.turns[0].role == "assistant"
+        assert data.turns[0].content == ""
+        assert data.message_count == 1
+
+        # Now start_turn is called again with same index but different content
+        # (like when tool_use_turn_started event arrives)
+        state.start_turn(
+            "s1", 0, "assistant",
+            turn_type="tool_use",
+            tool_name="Bash",
+            tool_use_id="tool-123",
+        )
+
+        # Should update existing turn, not create duplicate
+        data = state.get_session("s1")
+        assert len(data.turns) == 1
+        assert data.turns[0].role == "assistant"
+        assert data.turns[0].content == "Bash"  # Updated from tool_name
+        assert data.message_count == 1  # Still 1, not incremented
 
 
 class TestTreeStateContextModes:

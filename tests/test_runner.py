@@ -77,15 +77,16 @@ class TestStreamProcessing:
         # First add some text
         runner._process_event(TextDelta(text="some text"))
 
-        # Then tool use start (flushes text and emits text_flush event)
+        # Then tool use start (flushes text and emits text_turn_started + text_flush + tool_use_start events)
         start_results = runner._process_event(ToolUseStartEvent(
             tool_use_id="123",
             tool_name="Read",
         ))
-        # Should have text_flush + tool_use_start
-        assert len(start_results) == 2
-        assert start_results[0].event_type == "text_flush"
-        assert start_results[1].event_type == "tool_use_start"
+        # Should have text_turn_started + text_flush + tool_use_start
+        assert len(start_results) == 3
+        assert start_results[0].event_type == "text_turn_started"
+        assert start_results[1].event_type == "text_flush"
+        assert start_results[2].event_type == "tool_use_start"
 
         # Then tool use complete
         event = ToolUseEvent(
@@ -95,9 +96,11 @@ class TestStreamProcessing:
         )
         results = runner._process_event(event)
 
-        assert len(results) == 1
-        assert results[0].event_type == "tool_use"
-        assert results[0].data["tool_name"] == "Read"
+        # Should have tool_use_turn_started + tool_use
+        assert len(results) == 2
+        assert results[0].event_type == "tool_use_turn_started"
+        assert results[1].event_type == "tool_use"
+        assert results[1].data["tool_name"] == "Read"
         # Text should be flushed to content block by ToolUseStartEvent
         assert len(runner._content_blocks) == 2  # TextBlock + ToolUseBlock
 
@@ -106,9 +109,11 @@ class TestStreamProcessing:
         event = ToolResultEvent(tool_use_id="123", result="file contents")
         results = runner._process_event(event)
 
-        assert len(results) == 1
-        assert results[0].event_type == "tool_result"
-        assert results[0].data["result"] == "file contents"
+        # Should have tool_result_turn_started + tool_result
+        assert len(results) == 2
+        assert results[0].event_type == "tool_result_turn_started"
+        assert results[1].event_type == "tool_result"
+        assert results[1].data["result"] == "file contents"
 
     def test_process_result_event(self, runner, session):
         """ResultEvent updates session usage."""

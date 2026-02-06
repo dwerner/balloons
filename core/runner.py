@@ -414,20 +414,25 @@ class SessionRunner:
                 category="stream",
             )
 
-    def _flush_text_as_turn(self, emit_event: bool = False, save_now: bool = False) -> Optional[StreamEvent]:
+    def _flush_text_as_turn(self, emit_event: bool = False, save_now: bool = False) -> list[StreamEvent]:
         """Flush accumulated text buffer as a text turn if non-empty.
 
         Args:
-            emit_event: If True, return a text_flush event for UI notification
+            emit_event: If True, return events for UI notification
             save_now: If True, save session to disk after adding the turn
 
         Returns:
-            StreamEvent if emit_event=True and there was text to flush, else None
+            List of StreamEvents if emit_event=True and there was text to flush, else empty list
         """
+        events = []
         if self._text_buffer.strip():
             flushed_text = self._text_buffer
             text_block = TextBlock(text=flushed_text)
             self._content_blocks.append(text_block)  # Legacy
+
+            # Get turn index for this text turn
+            text_turn_idx = len(self.session.turns)
+
             # Create turn and save to session
             turn = self._create_turn("assistant", flushed_text, [text_block])
             self._turns.append(turn)
@@ -435,8 +440,19 @@ class SessionRunner:
             self._text_buffer = ""
 
             if emit_event:
-                return self._make_event("text_flush", {"text": flushed_text})
-        return None
+                # Emit turn_started for this text turn so UI creates a new node
+                events.append(self._make_event("text_turn_started", {
+                    "turn_index": text_turn_idx,
+                    "exchange_id": self._exchange_id,
+                    "role": "assistant",
+                    "turn_type": "text",
+                    "text_preview": flushed_text[:50] + "..." if len(flushed_text) > 50 else flushed_text,
+                }))
+                events.append(self._make_event("text_flush", {
+                    "text": flushed_text,
+                    "turn_index": text_turn_idx,
+                }))
+        return events
 
     def _process_event(self, event: Any) -> list[StreamEvent]:
         """Process a raw event from ClaudeRunner.
@@ -466,11 +482,10 @@ class SessionRunner:
 
             elif isinstance(event, ToolUseStartEvent):
                 # Tool use started - input is still streaming
-                # Flush text buffer before tool (emit event so UI can show it)
+                # Flush text buffer before tool (emit events so UI can show it)
                 events = []
-                flush_event = self._flush_text_as_turn(emit_event=True)
-                if flush_event:
-                    events.append(flush_event)
+                flush_events = self._flush_text_as_turn(emit_event=True)
+                events.extend(flush_events)
 
                 self._current_tool_use_id = event.tool_use_id
                 tool_idx = self._tool_index
@@ -499,6 +514,9 @@ class SessionRunner:
                 )
                 self._content_blocks.append(tool_block)  # Legacy
 
+                # Get turn index for this tool_use turn
+                tool_use_turn_idx = len(self.session.turns)
+
                 # Create tool_use turn and save to session (don't save to disk yet - wait for result)
                 turn = self._create_turn(
                     "assistant",
@@ -514,13 +532,25 @@ class SessionRunner:
                     if isinstance(b, ToolUseBlock) and b.id != event.tool_use_id
                 )
 
-                return [self._make_event("tool_use", {
+                events = []
+                # Emit turn_started for this tool_use turn so UI creates a new node
+                events.append(self._make_event("tool_use_turn_started", {
+                    "turn_index": tool_use_turn_idx,
+                    "exchange_id": self._exchange_id,
+                    "role": "assistant",
+                    "turn_type": "tool_use",
+                    "tool_use_id": event.tool_use_id,
+                    "tool_name": event.tool_name,
+                }))
+                events.append(self._make_event("tool_use", {
                     "tool_use_id": event.tool_use_id,
                     "tool_name": event.tool_name,
                     "tool_input": event.tool_input,
                     "tool_index": tool_idx,
                     "tool_block": tool_block,
-                })]
+                    "turn_index": tool_use_turn_idx,
+                }))
+                return events
 
             elif isinstance(event, ToolResultEvent):
                 result_block = ToolResultBlock(
@@ -529,6 +559,9 @@ class SessionRunner:
                     is_error=False,
                 )
                 self._content_blocks.append(result_block)  # Legacy
+
+                # Get turn index for this tool_result turn
+                tool_result_turn_idx = len(self.session.turns)
 
                 # Create tool_result turn and save to session immediately
                 # This is the key checkpoint - tool has executed, we must persist
@@ -551,12 +584,29 @@ class SessionRunner:
                         )
                         break
 
-                return [self._make_event("tool_result", {
+                # Create result preview for display
+                result_preview = event.result[:50] if event.result else ""
+                if len(event.result) > 50:
+                    result_preview += "..."
+
+                events = []
+                # Emit turn_started for this tool_result turn so UI creates a new node
+                events.append(self._make_event("tool_result_turn_started", {
+                    "turn_index": tool_result_turn_idx,
+                    "exchange_id": self._exchange_id,
+                    "role": "tool",
+                    "turn_type": "tool_result",
+                    "tool_use_id": event.tool_use_id,
+                    "result_preview": result_preview,
+                }))
+                events.append(self._make_event("tool_result", {
                     "tool_use_id": event.tool_use_id,
                     "result": event.result,
                     "tool_index": tool_idx,
                     "result_block": result_block,
-                })]
+                    "turn_index": tool_result_turn_idx,
+                }))
+                return events
 
             elif isinstance(event, ResultEvent):
                 self.session.update_usage(
