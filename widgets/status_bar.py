@@ -13,7 +13,8 @@ class StatusBar(Static):
 
     model: reactive[str] = reactive("")
     backend: reactive[str] = reactive("")  # Backend name (e.g., "openrouter", "claude")
-    context_tokens: reactive[int] = reactive(0)  # Estimated tokens for next API call
+    overhead_tokens: reactive[int] = reactive(0)  # System overhead (Claude prompt, etc.)
+    context_tokens: reactive[int] = reactive(0)  # Actual conversation context tokens
     context_window: reactive[int] = reactive(200000)
     cost: reactive[float] = reactive(0.0)
     streaming: reactive[bool] = reactive(False)
@@ -37,8 +38,9 @@ class StatusBar(Static):
     """
 
     def render(self) -> str:
+        total_tokens = self.overhead_tokens + self.context_tokens
         if self.context_window > 0:
-            percent = (self.context_tokens / self.context_window) * 100
+            percent = (total_tokens / self.context_window) * 100
         else:
             percent = 0
 
@@ -98,9 +100,19 @@ class StatusBar(Static):
         # Show follow indicator when not following (clickable to jump to bottom)
         follow_indicator = "" if self.following else " [bold yellow]↓ Follow[/]"
 
+        # Format tokens with 'k' suffix for readability
+        def fmt_k(n: int) -> str:
+            if n >= 1000:
+                return f"{n / 1000:.1f}k"
+            return str(n)
+
+        overhead_str = fmt_k(self.overhead_tokens)
+        context_str = fmt_k(self.context_tokens)
+        window_str = fmt_k(self.context_window)
+
         return (
             f"[{backend_display}{model_display}] "
-            f"ctx: {self.context_tokens:,} / {self.context_window:,} ({percent:.1f}%) | "
+            f"ctx: {overhead_str} + {context_str} / {window_str} ({percent:.1f}%) | "
             f"${self.cost:.4f}"
             f"{wd_display}"
             f"{follow_indicator}"
@@ -112,6 +124,7 @@ class StatusBar(Static):
         self,
         model: str = None,
         backend: str = None,
+        overhead_tokens: int = None,
         context_tokens: int = None,
         context_window: int = None,
         cost: float = None,
@@ -120,6 +133,8 @@ class StatusBar(Static):
             self.model = model
         if backend is not None:
             self.backend = backend
+        if overhead_tokens is not None:
+            self.overhead_tokens = overhead_tokens
         if context_tokens is not None:
             self.context_tokens = context_tokens
         if context_window is not None:

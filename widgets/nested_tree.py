@@ -631,7 +631,11 @@ class NestedTreeView(Vertical):
         children_map: dict[str | None, list[str]],
         current_id: str | None,
     ) -> None:
-        """Add a session and its nested forks to the tree."""
+        """Add a session and its nested forks to the tree.
+
+        Forks are interleaved with exchange groups based on their fork_point,
+        so they appear in the tree at the position where they were created.
+        """
         session_data = all_sessions.get(session_id)
         if not session_data:
             return
@@ -648,21 +652,98 @@ class NestedTreeView(Vertical):
         if is_current:
             session_node.expand()
 
-        # If session is loaded, add turns
-        if session_data.is_loaded and session_data.turns:
-            self._add_turns_to_node(session_node, session_id, session_data.turns)
-
-        # Add child sessions (forks) directly as children of this session
+        # Get child session IDs and their fork points
         child_ids = children_map.get(session_id, [])
-        for child_id in child_ids:
-            # Add fork session directly under parent (no wrapper node)
-            self._add_session_subtree(
+
+        # Build map of child_id -> fork_point from session_data.children
+        child_fork_points: dict[str, int] = {}
+        for child_info in session_data.children:
+            child_id = child_info.get("session_id")
+            fork_point = child_info.get("fork_point", -1)
+            if child_id and fork_point >= 0:
+                child_fork_points[child_id] = fork_point
+
+        # If session is loaded, interleave turns and forks
+        if session_data.is_loaded and session_data.turns:
+            self._add_turns_and_forks_interleaved(
                 session_node,
-                child_id,
+                session_id,
+                session_data.turns,
+                child_ids,
+                child_fork_points,
                 all_sessions,
                 children_map,
-                current_id
+                current_id,
             )
+        else:
+            # No turns loaded - just add child sessions at the end
+            for child_id in child_ids:
+                self._add_session_subtree(
+                    session_node,
+                    child_id,
+                    all_sessions,
+                    children_map,
+                    current_id
+                )
+
+    def _add_turns_and_forks_interleaved(
+        self,
+        session_node,
+        session_id: str,
+        turns: list[TurnData],
+        child_ids: list[str],
+        child_fork_points: dict[str, int],
+        all_sessions: dict[str, SessionData],
+        children_map: dict[str | None, list[str]],
+        current_id: str | None,
+    ) -> None:
+        """Add exchange groups and fork nodes interleaved by position.
+
+        Forks appear after the exchange group containing their fork_point turn.
+        """
+        # Get exchange groups
+        groups = self._state.get_turns_grouped_by_exchange(session_id)
+
+        # Build list of (position, item_type, item_data)
+        # position is the turn index AFTER which the item should appear
+        items: list[tuple[int, str, any]] = []
+
+        # Add exchange groups - position is the max turn index in the group
+        for group in groups:
+            max_turn_idx = max(t.idx for t in group)
+            items.append((max_turn_idx, "exchange", group))
+
+        # Add forks - position is fork_point (fork appears after turn at fork_point)
+        for child_id in child_ids:
+            fork_point = child_fork_points.get(child_id, -1)
+            if fork_point >= 0:
+                items.append((fork_point, "fork", child_id))
+            else:
+                # No fork_point - add at end
+                max_turn = max(t.idx for t in turns) if turns else -1
+                items.append((max_turn + 1, "fork", child_id))
+
+        # Sort by position, with forks appearing after exchange groups at same position
+        # (fork_point N means fork was created AFTER turn N, so it comes after that exchange)
+        items.sort(key=lambda x: (x[0], 0 if x[1] == "exchange" else 1))
+
+        # Add items in order
+        for _, item_type, item_data in items:
+            if item_type == "exchange":
+                group = item_data
+                if len(group) == 1:
+                    self._add_single_turn_node(session_node, session_id, group[0])
+                else:
+                    self._add_exchange_group_node(session_node, session_id, group)
+            else:  # fork
+                child_id = item_data
+                self._add_session_subtree(
+                    session_node,
+                    child_id,
+                    all_sessions,
+                    children_map,
+                    current_id
+                )
 
     def _add_turns_to_node(
         self,
@@ -765,6 +846,9 @@ class NestedTreeView(Vertical):
             )
             self._turn_nodes[(session_id, turn.idx)] = turn_node
 
+        # Collapse by default (user can expand to see individual turns)
+        group_node.collapse()
+
         # Store group node reference for updates
         if not hasattr(self, '_exchange_group_nodes'):
             self._exchange_group_nodes = {}
@@ -809,8 +893,7 @@ class NestedTreeView(Vertical):
     def _populate_session_turns(self, session_id: str) -> None:
         """Populate a session's turns after it's loaded.
 
-        Adds turn nodes at the beginning of the session node's children,
-        before any fork session children.
+        Rebuilds all children (turns and forks) interleaved by fork_point position.
         """
         session_node = self._session_nodes.get(session_id)
         if not session_node:
@@ -820,9 +903,7 @@ class NestedTreeView(Vertical):
         if not session_data or not session_data.turns:
             return
 
-        # Clear ALL turn-related children from session node
-        # to prevent double-nesting when streaming adds nodes and then
-        # SESSION_LOADED triggers rebuild
+        # Clear turn nodes for this session
         keys_to_remove = [k for k in self._turn_nodes if k[0] == session_id]
         for key in keys_to_remove:
             del self._turn_nodes[key]
@@ -833,21 +914,79 @@ class NestedTreeView(Vertical):
             for key in group_keys_to_remove:
                 del self._exchange_group_nodes[key]
 
-        # Remove all children that are turns or exchange groups (keep fork sessions)
-        children_to_remove = []
+        # Collect existing child session IDs (we need to rebuild them after clearing)
+        existing_child_ids: list[str] = []
         for child in session_node.children:
-            if child.data:
-                node_type = child.data.get("type")
-                if node_type in ("turn", "exchange_group"):
-                    children_to_remove.append(child)
-        for child in children_to_remove:
+            if child.data and child.data.get("type") == "session":
+                child_session_id = child.data.get("session_id")
+                if child_session_id:
+                    existing_child_ids.append(child_session_id)
+                    # Clear cached nodes for this fork subtree
+                    self._clear_session_subtree_caches(child_session_id)
+
+        # Remove ALL children
+        for child in list(session_node.children):
             child.remove()
 
-        # Add turn nodes
-        self._add_turns_to_node(session_node, session_id, session_data.turns)
+        # Build child_fork_points and child_ids from session metadata
+        child_fork_points: dict[str, int] = {}
+        child_ids: list[str] = []
+        for child_info in session_data.children:
+            child_id = child_info.get("session_id")
+            fork_point = child_info.get("fork_point", -1)
+            if child_id and child_id in existing_child_ids:
+                child_ids.append(child_id)
+                if fork_point >= 0:
+                    child_fork_points[child_id] = fork_point
+
+        # Build children_map for recursive _add_session_subtree calls
+        all_sessions = self._state.get_all_sessions()
+        children_map: dict[str | None, list[str]] = {}
+        for sid, sdata in all_sessions.items():
+            parent_id = sdata.parent_id
+            children_map.setdefault(parent_id, []).append(sid)
+
+        current_id = self._state.get_current_session_id()
+
+        # Re-add turns and forks interleaved
+        self._add_turns_and_forks_interleaved(
+            session_node,
+            session_id,
+            session_data.turns,
+            child_ids,
+            child_fork_points,
+            all_sessions,
+            children_map,
+            current_id,
+        )
 
         # Update session label (may have new message count)
         self._update_session_label(session_id)
+
+    def _clear_session_subtree_caches(self, session_id: str) -> None:
+        """Clear all cached nodes for a session and its descendants."""
+        # Clear session node cache
+        if session_id in self._session_nodes:
+            del self._session_nodes[session_id]
+
+        # Clear turn nodes for this session
+        keys_to_remove = [k for k in self._turn_nodes if k[0] == session_id]
+        for key in keys_to_remove:
+            del self._turn_nodes[key]
+
+        # Clear exchange group nodes
+        if hasattr(self, '_exchange_group_nodes'):
+            group_keys_to_remove = [k for k in self._exchange_group_nodes if k[0] == session_id]
+            for key in group_keys_to_remove:
+                del self._exchange_group_nodes[key]
+
+        # Recurse to child sessions
+        session_data = self._state.get_session(session_id)
+        if session_data:
+            for child_info in session_data.children:
+                child_id = child_info.get("session_id")
+                if child_id:
+                    self._clear_session_subtree_caches(child_id)
 
     def _add_turn_node(
         self,
@@ -1162,12 +1301,8 @@ class NestedTreeView(Vertical):
         else:
             streaming = ""
 
-        # Unviewed turns indicator
-        unviewed_count = self._state.get_unviewed_count(session_data.id)
-        if unviewed_count > 0:
-            unviewed = f" [bold blue]●{unviewed_count}[/]"
-        else:
-            unviewed = ""
+        # Unviewed turns indicator (hidden for now, tracking logic preserved)
+        unviewed = ""
 
         # Name
         if session_data.fork_name:
@@ -1205,8 +1340,8 @@ class NestedTreeView(Vertical):
         """
         from widgets.session_rendering import format_kt
 
-        # Unviewed indicator (blue dot for unviewed assistant turns)
-        unviewed_indicator = "[bold blue]● [/]" if not viewed else ""
+        # Unviewed indicator (hidden for now, tracking logic preserved)
+        unviewed_indicator = ""
 
         # Mode indicator: copy=green check, compress=yellow Σ, drop=empty box
         if mode == ContextMode.COPY:

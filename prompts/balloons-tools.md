@@ -196,10 +196,14 @@ propose creating a "fork" - a new conversation branch with curated context.
 **Exchange ranges:**
 - `"0"`, `"5"`: Single exchange by index
 - `"0-3"`: Range of exchanges (inclusive)
-- `"last"`: Most recent exchange
-- `"last-2"`: Last 3 exchanges
-- `"-3"`: Last 3 exchanges (negative indexing)
-- `"all"`: All exchanges
+- `"last"`: Most recent exchange *before* your current response
+- `"last-2"`: Last 3 exchanges (before your current response)
+- `"-3"`: Last 3 exchanges (negative indexing, before your current response)
+- `"all"`: All exchanges (excluding your current response)
+
+Note: Relative ranges (`"last"`, `"last-N"`, `"-N"`, `"all"`) automatically exclude the
+current exchange containing your fork proposal. When you reference `"last"`, you're
+referring to the exchange before your response, not the exchange containing this proposal.
 
 **Tips for context curation:**
 - Copy exchanges with exact requirements, approved designs, or code to reference

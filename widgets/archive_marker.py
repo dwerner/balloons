@@ -27,7 +27,7 @@ class ArchiveMarker(Static):
     DEFAULT_CSS = """
     ArchiveMarker {
         padding: 0 1;
-        margin: 1 0 1 2;
+        margin: 0 0 1 2;
         background: #1a2a2a;
         border-left: thick #4a9;
     }

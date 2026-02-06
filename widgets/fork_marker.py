@@ -19,7 +19,7 @@ class ForkMarker(Static):
     DEFAULT_CSS = """
     ForkMarker {
         padding: 0 1;
-        margin: 1 0 1 2;
+        margin: 0 0 1 2;
         background: #1a2a3a;
         border-left: thick $warning;
     }

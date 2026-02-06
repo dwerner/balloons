@@ -331,7 +331,7 @@ class BalloonsApp(App):
 
         self._tree_state.set_context_tokens(selected_tokens, total_tokens)
 
-    def _calculate_context_tokens(self, pending_prompt: str = "") -> int:
+    def _calculate_context_tokens(self, pending_prompt: str = "") -> tuple[int, int]:
         """Calculate estimated context tokens for the next API call.
 
         Includes:
@@ -343,7 +343,9 @@ class BalloonsApp(App):
             pending_prompt: Text currently in the input box
 
         Returns:
-            Estimated total context tokens
+            Tuple of (overhead_tokens, context_tokens) where:
+            - overhead_tokens: Fixed system overhead (Claude prompt, custom system prompt)
+            - context_tokens: Conversation context + pending input
         """
         backend = self._backend_config
         if self.session and self.session.backend_name:
@@ -353,12 +355,12 @@ class BalloonsApp(App):
 
         # System overhead
         if backend.type == "claude":
-            system_tokens = CLAUDE_SYSTEM_OVERHEAD
+            overhead_tokens = CLAUDE_SYSTEM_OVERHEAD
         else:
-            system_tokens = 0
+            overhead_tokens = 0
 
-        # Add configured system prompt tokens
-        system_tokens += backend.get_system_prompt_tokens()
+        # Add configured system prompt tokens to overhead
+        overhead_tokens += backend.get_system_prompt_tokens()
 
         # Conversation context from TreeState (base tokens calculated elsewhere)
         selected_tokens, _ = self._tree_state.get_context_tokens()
@@ -366,14 +368,14 @@ class BalloonsApp(App):
         # Pending input tokens
         input_tokens = count_tokens(pending_prompt) if pending_prompt else 0
 
-        return system_tokens + selected_tokens + input_tokens
+        return overhead_tokens, selected_tokens + input_tokens
 
     def _update_context_tokens(self, pending_prompt: str = "") -> None:
         """Update the status bar with current context token count."""
         try:
             status_bar = self.query_one("#status-bar", StatusBar)
-            context_tokens = self._calculate_context_tokens(pending_prompt)
-            status_bar.update_stats(context_tokens=context_tokens)
+            overhead_tokens, context_tokens = self._calculate_context_tokens(pending_prompt)
+            status_bar.update_stats(overhead_tokens=overhead_tokens, context_tokens=context_tokens)
         except Exception:
             # UI might not be ready
             pass
@@ -1465,7 +1467,7 @@ class BalloonsApp(App):
 
         # Register task for task pane with context info
         backend_name = self.session.backend_name or self._backend_config.name
-        context_tokens = self._calculate_context_tokens(prompt)
+        overhead_tokens, context_tokens = self._calculate_context_tokens(prompt)
         context_window = self._backend_config.context_window
         task = get_task_state().register_session_task(
             session_id=self.session.id,
@@ -1473,8 +1475,8 @@ class BalloonsApp(App):
             prompt=prompt,
             backend_name=backend_name,
         )
-        # Set initial context info
-        task.input_tokens = context_tokens
+        # Set initial context info (total tokens for task tracking)
+        task.input_tokens = overhead_tokens + context_tokens
         task.context_window = context_window
 
         if is_active:
@@ -1485,7 +1487,7 @@ class BalloonsApp(App):
             input_box.set_disabled(True)
             status_bar.set_streaming(True)
             # Update status bar to show context tokens being sent for this request
-            status_bar.update_stats(context_tokens=context_tokens)
+            status_bar.update_stats(overhead_tokens=overhead_tokens, context_tokens=context_tokens)
             self.streaming = True
 
             # Start assistant message
@@ -2408,10 +2410,22 @@ class BalloonsApp(App):
             on_result,
         )
 
-    def _get_exchange_summaries(self, session_id: str) -> list[str]:
-        """Get short summaries of each exchange for display in the proposal modal."""
+    def _get_exchange_summaries(self, session_id: str, exclude_current: bool = True) -> list[str]:
+        """Get short summaries of each exchange for display in the proposal modal.
+
+        Args:
+            session_id: The session to get exchange summaries for
+            exclude_current: If True, exclude the last exchange (the one containing
+                           the fork proposal). This aligns with how Claude thinks
+                           about exchanges when proposing a fork - "last" means
+                           the last exchange before its current response.
+        """
         summaries = []
         groups = self._tree_state.get_turns_grouped_by_exchange(session_id)
+
+        # Exclude the current (proposal) exchange if requested
+        if exclude_current and groups:
+            groups = groups[:-1]
 
         for group in groups:
             if not group:
@@ -2442,8 +2456,11 @@ class BalloonsApp(App):
         groups = self._tree_state.get_turns_grouped_by_exchange(session_id)
         total_exchanges = len(groups)
 
-        # Resolve the proposal's context plan to exchange indices
-        exchange_modes = proposal.resolve_exchange_indices(total_exchanges)
+        # Resolve the proposal's context plan to exchange indices.
+        # exclude_current=True because the proposal was made during the current
+        # exchange, so "last" should refer to the previous exchange (the one
+        # before Claude's response containing the proposal).
+        exchange_modes = proposal.resolve_exchange_indices(total_exchanges, exclude_current=True)
 
         # Apply context modes to all turns in each exchange
         # (TreeState fires CONTEXT_MODE_CHANGED events which update the tree)

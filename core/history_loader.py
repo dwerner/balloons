@@ -143,7 +143,7 @@ class HistoryLoader:
 
         Args:
             messages: List of Message objects to transform
-            session: Optional session for fork/merge metadata
+            session: Optional session (unused, kept for API compatibility)
             start_turn_id: Starting turn counter (for appending to existing history)
 
         Returns:
@@ -151,9 +151,6 @@ class HistoryLoader:
         """
         instructions: list[RenderInstruction] = []
         turn_counter = start_turn_id
-
-        # Build fork and merge points maps from session children
-        fork_points, merge_points = self._build_fork_merge_maps(session)
 
         for turn_idx, msg in enumerate(messages):
             turn_counter += 1
@@ -177,56 +174,10 @@ class HistoryLoader:
                         block_idx=0
                     ))
 
-            # Add fork markers after this turn
-            instructions.extend(
-                self._get_fork_instructions(fork_points, turn_idx, turn_id)
-            )
-            # Add merge markers after this turn
-            instructions.extend(
-                self._get_merge_instructions(merge_points, turn_idx, turn_id)
-            )
-
-        # Add any markers at the end (point == len(messages))
-        instructions.extend(
-            self._get_fork_instructions(fork_points, len(messages), turn_counter)
-        )
-        instructions.extend(
-            self._get_merge_instructions(merge_points, len(messages), turn_counter)
-        )
-
         return HistoryLoadResult(
             instructions=instructions,
             final_turn_id=turn_counter
         )
-
-    def _build_fork_merge_maps(
-        self, session: Session | None
-    ) -> tuple[dict[int, list[dict]], dict[int, list[dict]]]:
-        """Build maps of fork and merge points from session children.
-
-        Returns:
-            Tuple of (fork_points, merge_points) where each maps
-            turn_index -> list of child info dicts
-        """
-        fork_points: dict[int, list[dict]] = {}
-        merge_points: dict[int, list[dict]] = {}
-
-        if not session:
-            return fork_points, merge_points
-
-        for child in session.children:
-            # Fork markers: all children have fork points
-            fork_point = child.get("fork_point", -1)
-            if fork_point >= 0:
-                fork_points.setdefault(fork_point, []).append(child)
-
-            # Merge markers: only merged children
-            if child.get("status") == "merged":
-                merge_point = child.get("merge_point", -1)
-                if merge_point >= 0:
-                    merge_points.setdefault(merge_point, []).append(child)
-
-        return fork_points, merge_points
 
     def _process_block(
         self,
@@ -332,52 +283,3 @@ class HistoryLoader:
             )
 
         return None
-
-    def _get_fork_instructions(
-        self,
-        fork_points: dict[int, list[dict]],
-        fork_point_idx: int,
-        turn_id: int
-    ) -> list[RenderFork]:
-        """Get fork render instructions for a given fork point."""
-        instructions = []
-
-        for child_info in fork_points.get(fork_point_idx, []):
-            child_session = self._session_loader(child_info["session_id"])
-            if child_session:
-                instructions.append(RenderFork(
-                    turn_id=turn_id,
-                    prompt=child_info.get("prompt", ""),
-                    child_session_id=child_session.id,
-                    fork_name=(
-                        child_info.get("name") or
-                        child_session.get_fork_display_name()
-                    ),
-                    status=child_info.get("status", "active")
-                ))
-
-        return instructions
-
-    def _get_merge_instructions(
-        self,
-        merge_points: dict[int, list[dict]],
-        merge_point_idx: int,
-        turn_id: int
-    ) -> list[RenderMerge]:
-        """Get merge render instructions for a given merge point."""
-        instructions = []
-
-        for child_info in merge_points.get(merge_point_idx, []):
-            child_session = self._session_loader(child_info["session_id"])
-            if child_session:
-                instructions.append(RenderMerge(
-                    turn_id=turn_id,
-                    message=child_session.merge_message,
-                    child_session_id=child_session.id,
-                    fork_name=(
-                        child_info.get("name") or
-                        child_session.get_fork_display_name()
-                    )
-                ))
-
-        return instructions

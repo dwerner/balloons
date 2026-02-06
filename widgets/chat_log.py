@@ -131,7 +131,7 @@ class ToolUseWidget(Static):
     DEFAULT_CSS = """
     ToolUseWidget {
         padding: 0 1;
-        margin: 0 0 1 4;
+        margin: 0 0 1 2;
         background: #1a1a1a;
         border-left: thick $warning;
     }
@@ -298,7 +298,7 @@ class ToolResultWidget(Static):
     DEFAULT_CSS = """
     ToolResultWidget {
         padding: 0 1;
-        margin: 0 0 1 4;
+        margin: 0 0 1 2;
         background: #1a1a1a;
         border-left: thick #d4d422;
         max-height: 15;
@@ -819,9 +819,13 @@ class ChatLogView(VerticalScroll):
 
         Args:
             unviewed_turn_ids: List of 1-indexed turn IDs that are unviewed
+
+        Note: Markers are currently disabled (hidden) while tracking logic is preserved.
         """
         self._unviewed_turn_ids = set(unviewed_turn_ids)
-        self._update_scrollbar_markers()
+        # Markers disabled for now - just clear them
+        MarkedScrollBarRender.markers = []
+        self.vertical_scrollbar.refresh()
 
     def _update_scrollbar_markers(self) -> None:
         """Recalculate and apply scrollbar markers based on unviewed turns."""

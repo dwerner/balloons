@@ -48,20 +48,32 @@ class ForkProposal:
     context_plan: list[ContextAssignment] = field(default_factory=list)
     initial_prompt: str = ""  # Optional starting prompt
 
-    def resolve_exchange_indices(self, total_exchanges: int) -> dict[int, ContextMode]:
+    def resolve_exchange_indices(
+        self,
+        total_exchanges: int,
+        exclude_current: bool = False,
+    ) -> dict[int, ContextMode]:
         """Convert exchange_range strings to actual indices with modes.
 
         Args:
             total_exchanges: Total number of exchanges in the session
+            exclude_current: If True, exclude the last exchange when resolving
+                           relative ranges like "last". This is used when the
+                           proposal is being made during the current exchange,
+                           so "last" should refer to the previous exchange.
 
         Returns:
             Dict mapping exchange index -> ContextMode
         """
         result: dict[int, ContextMode] = {}
 
+        # When exclude_current is True, resolve relative ranges against
+        # total_exchanges - 1 (the exchange before the proposal)
+        effective_total = total_exchanges - 1 if exclude_current else total_exchanges
+
         for assignment in self.context_plan:
             mode = ContextMode(assignment.mode)
-            indices = self._parse_range(assignment.exchange_range, total_exchanges)
+            indices = self._parse_range(assignment.exchange_range, effective_total)
             for idx in indices:
                 result[idx] = mode
 

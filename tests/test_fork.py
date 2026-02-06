@@ -435,6 +435,101 @@ class TestForkProposal:
 
         assert result == {}
 
+    def test_resolve_last_exclude_current(self):
+        """'last' with exclude_current should resolve to second-to-last exchange.
+
+        This is the fix for the timing issue where Claude proposes a fork during
+        the current exchange, so 'last' should mean the exchange before Claude's
+        response, not the exchange containing the proposal itself.
+        """
+        proposal = ForkProposal(
+            name="test",
+            description="test",
+            context_plan=[
+                ContextAssignment(exchange_range="last", mode="copy"),
+            ],
+        )
+
+        # 5 exchanges total, but current (proposal) exchange is excluded
+        # So "last" resolves against 4 exchanges, giving index 3
+        result = proposal.resolve_exchange_indices(5, exclude_current=True)
+
+        assert result == {3: ContextMode.COPY}
+
+    def test_resolve_last_n_exclude_current(self):
+        """'last-2' with exclude_current should exclude current exchange."""
+        proposal = ForkProposal(
+            name="test",
+            description="test",
+            context_plan=[
+                ContextAssignment(exchange_range="last-2", mode="compress"),
+            ],
+        )
+
+        # 5 exchanges, exclude current -> effective 4 exchanges
+        # "last-2" means last 3 exchanges: indices 1, 2, 3
+        result = proposal.resolve_exchange_indices(5, exclude_current=True)
+
+        assert result == {
+            1: ContextMode.COMPRESS,
+            2: ContextMode.COMPRESS,
+            3: ContextMode.COMPRESS,
+        }
+
+    def test_resolve_all_exclude_current(self):
+        """'all' with exclude_current should exclude current exchange."""
+        proposal = ForkProposal(
+            name="test",
+            description="test",
+            context_plan=[
+                ContextAssignment(exchange_range="all", mode="copy"),
+            ],
+        )
+
+        # 5 exchanges, exclude current -> copies exchanges 0-3 (not 4)
+        result = proposal.resolve_exchange_indices(5, exclude_current=True)
+
+        assert result == {
+            0: ContextMode.COPY,
+            1: ContextMode.COPY,
+            2: ContextMode.COPY,
+            3: ContextMode.COPY,
+        }
+
+    def test_resolve_absolute_index_unaffected_by_exclude_current(self):
+        """Absolute indices like '0' should not be affected by exclude_current."""
+        proposal = ForkProposal(
+            name="test",
+            description="test",
+            context_plan=[
+                ContextAssignment(exchange_range="0", mode="copy"),
+            ],
+        )
+
+        # Absolute index 0 should work the same regardless of exclude_current
+        result = proposal.resolve_exchange_indices(5, exclude_current=True)
+
+        assert result == {0: ContextMode.COPY}
+
+    def test_resolve_range_unaffected_by_exclude_current(self):
+        """Absolute ranges like '1-3' should not be affected by exclude_current."""
+        proposal = ForkProposal(
+            name="test",
+            description="test",
+            context_plan=[
+                ContextAssignment(exchange_range="1-3", mode="compress"),
+            ],
+        )
+
+        # Range 1-3 should work the same regardless of exclude_current
+        result = proposal.resolve_exchange_indices(5, exclude_current=True)
+
+        assert result == {
+            1: ContextMode.COMPRESS,
+            2: ContextMode.COMPRESS,
+            3: ContextMode.COMPRESS,
+        }
+
 
 class TestMergeProposal:
     """Tests for MergeProposal dataclass."""

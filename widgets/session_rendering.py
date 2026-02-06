@@ -221,11 +221,8 @@ class SessionLabelRenderer:
         else:
             streaming_indicator = ""
 
-        # Unviewed turns indicator
-        if unviewed_count > 0:
-            unviewed_indicator = f" [bold blue]●{unviewed_count}[/]"
-        else:
-            unviewed_indicator = ""
+        # Unviewed turns indicator (hidden for now, tracking logic preserved)
+        unviewed_indicator = ""
 
         # Model icon for visual differentiation
         if self._include_model_icon:
@@ -310,8 +307,8 @@ class TurnLabelRenderer:
         Returns:
             Rich markup string for the turn label
         """
-        # Unviewed indicator (blue dot for unviewed assistant turns)
-        unviewed_indicator = "[bold blue]● [/]" if not viewed else ""
+        # Unviewed indicator (hidden for now, tracking logic preserved)
+        unviewed_indicator = ""
 
         # Mode indicator: copy=green check, compress=yellow Σ, drop=empty box
         if mode == ContextMode.COPY:

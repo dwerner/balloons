@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from textual.widgets import Tree, Input
 from textual.containers import Vertical
 from textual.message import Message
@@ -904,12 +905,8 @@ class ContextTreeView(Vertical):
         else:
             streaming_indicator = ""
 
-        # Unviewed turns indicator
-        unviewed_count = self._state.get_unviewed_count(session_id)
-        if unviewed_count > 0:
-            unviewed_indicator = f" [bold blue]●{unviewed_count}[/]"
-        else:
-            unviewed_indicator = ""
+        # Unviewed turns indicator (hidden for now, tracking logic preserved)
+        unviewed_indicator = ""
 
         # Model icon for visual differentiation
         model_icon = get_model_icon(session_data.model, session_data.backend_name)
@@ -1126,6 +1123,9 @@ class ContextTreeView(Vertical):
                 allow_expand=False,
             )
             self._turn_nodes[(session_id, turn.idx)] = turn_node
+
+        # Collapse by default (user can expand to see individual turns)
+        group_node.collapse()
 
         # Store group node reference for updates
         if not hasattr(self, '_exchange_group_nodes'):
@@ -1347,8 +1347,8 @@ class ContextTreeView(Vertical):
             tokens: Token count for this turn
             viewed: Whether this turn has been viewed
         """
-        # Unviewed indicator (blue dot for unviewed assistant turns)
-        unviewed_indicator = "[bold blue]● [/]" if not viewed else ""
+        # Unviewed indicator (hidden for now, tracking logic preserved)
+        unviewed_indicator = ""
 
         # Mode indicator: copy=green check, compress=yellow Σ, drop=empty box
         if mode == ContextMode.COPY:
@@ -1394,14 +1394,19 @@ class ContextTreeView(Vertical):
             tool_input = content_block.input or {}
             preview = ""
             if tool_name in ("Read", "Write", "Edit"):
-                # Show filename and parent dir for context
-                path = tool_input.get("file_path", "")
-                if path:
-                    parts = path.split("/")
-                    if len(parts) >= 2:
-                        preview = f" {parts[-2]}/{parts[-1]}"
-                    else:
-                        preview = f" {parts[-1]}"
+                # Show relative path from cwd
+                file_path = tool_input.get("file_path", "")
+                if file_path:
+                    try:
+                        rel_path = str(Path(file_path).relative_to(Path.cwd()))
+                        preview = f" {rel_path}"
+                    except ValueError:
+                        # Path not relative to cwd, show last 2 parts
+                        parts = file_path.split("/")
+                        if len(parts) >= 2:
+                            preview = f" {parts[-2]}/{parts[-1]}"
+                        else:
+                            preview = f" {parts[-1]}"
             elif tool_name == "Glob":
                 pattern = tool_input.get("pattern", "")
                 if pattern:
@@ -1409,14 +1414,18 @@ class ContextTreeView(Vertical):
             elif tool_name == "Grep":
                 # Show pattern and path if available
                 pattern = tool_input.get("pattern", "")
-                path = tool_input.get("path", "")
+                grep_path = tool_input.get("path", "")
                 if pattern:
                     pat_preview = pattern[:15] + "..." if len(pattern) > 15 else pattern
                     preview = f" /{pat_preview}/"
-                    if path:
-                        path_parts = path.split("/")
-                        path_preview = path_parts[-1] if path_parts else path
-                        preview += f" {path_preview}"
+                    if grep_path:
+                        try:
+                            rel_path = str(Path(grep_path).relative_to(Path.cwd()))
+                            preview += f" {rel_path}"
+                        except ValueError:
+                            path_parts = grep_path.split("/")
+                            path_preview = path_parts[-1] if path_parts else grep_path
+                            preview += f" {path_preview}"
             elif tool_name == "Bash":
                 cmd = tool_input.get("command", "")
                 if cmd:
