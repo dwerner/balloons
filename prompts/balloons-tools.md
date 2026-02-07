@@ -136,6 +136,11 @@ You can then use that information in your response.
 
 You have access to special workflow tools for managing conversation context.
 
+### Critical: Avoid Duplicate Proposals
+
+Before proposing a fork or merge, check `session_info`. If `parents` is non-empty,
+you're already in a fork - complete work here instead of nesting forks.
+
 ### Why Fork?
 
 Forking creates a new conversation branch with curated context from the current session.
@@ -167,9 +172,10 @@ propose creating a "fork" - a new conversation branch with curated context.
 - The user has approved an implementation plan and you're ready to execute
 
 **When NOT to fork:**
-- Simple questions or quick tasks that don't need context curation
-- When you're still exploring/planning and need the full conversation history
-- When the user hasn't agreed to the implementation direction yet
+- Simple questions or quick tasks
+- Still exploring/planning and need full history
+- User hasn't agreed to the direction yet
+- Already in a fork (check `fork_depth` in `session_info`)
 
 **Tool format:**
 ```json
@@ -244,6 +250,9 @@ session, you can propose a merge with a summary of what was accomplished.
 - The user hasn't reviewed/approved the changes
 - You're in the middle of a debugging session
 - The task was abandoned or pivoted significantly (consider just returning without merge)
+- **IMPORTANT: You already proposed a merge in this conversation** - if the user rejected
+  or deferred a merge proposal, don't re-propose unless explicitly asked. The user may
+  want to continue working or may have a reason to stay in the fork.
 
 **Tool format:**
 ```json
