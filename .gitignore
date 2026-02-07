@@ -97,4 +97,6 @@ cython_debug/
 *.log
 *.local
 
+# Balloons-specific
 .claude
+.venv-*
