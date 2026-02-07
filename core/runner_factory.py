@@ -21,6 +21,27 @@ def _load_balloons_tools_prompt() -> str:
         return ""
 
 
+def validate_backend_config(backend: BackendConfig) -> str | None:
+    """Validate a backend configuration before creating a runner.
+
+    Args:
+        backend: Backend configuration to validate
+
+    Returns:
+        None if valid, error message string if invalid
+    """
+    backend_type = backend.type or "claude"
+
+    if backend_type == "openai":
+        if not backend.base_url:
+            return f"Backend '{backend.name}' requires base_url for type 'openai'"
+        # Note: model is optional for local servers like llama.cpp that only have one model loaded
+    elif backend_type not in ("claude", "claude-structured"):
+        return f"Unknown backend type: {backend_type}. Valid types: 'claude', 'claude-structured', 'openai'"
+
+    return None
+
+
 def resolve_env_var(value: str) -> str:
     """Resolve environment variable references in a string.
 
@@ -65,18 +86,19 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
 
         if not backend.base_url:
             raise ValueError(f"Backend '{backend.name}' requires base_url for type 'openai'")
-        if not backend.model:
-            raise ValueError(f"Backend '{backend.name}' requires model for type 'openai'")
 
         api_key = resolve_env_var(backend.api_key or "")
 
         # Load system prompt if configured
         system_prompt = backend.load_system_prompt()
 
+        # Model defaults to "default" for local servers like llama.cpp that ignore this field
+        model = backend.model or "default"
+
         return OpenAICompatibleRunner(
             base_url=backend.base_url,
             api_key=api_key,
-            model=backend.model,
+            model=model,
             system_prompt=system_prompt,
             context_window=backend.context_window,
         )

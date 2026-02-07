@@ -333,7 +333,8 @@ class TestCommandExecutorBackend:
         """Test setting backend successfully."""
         mock_config = MagicMock()
         mock_config.backends = {"claude": MagicMock(), "openai": MagicMock()}
-        mock_config.get_backend.return_value = MagicMock(model="gpt-4")
+        # Must mock type to pass validation (claude type doesn't need base_url/model)
+        mock_config.get_backend.return_value = MagicMock(type="claude", model="gpt-4")
 
         result = executor.set_backend(sample_session, "openai", mock_config)
 
@@ -341,6 +342,23 @@ class TestCommandExecutorBackend:
         assert result.new_backend == "openai"
         assert result.model == "gpt-4"
         assert sample_session.backend_name == "openai"
+
+    def test_set_backend_invalid_config(self, executor, sample_session):
+        """Test setting backend with invalid config fails gracefully."""
+        mock_config = MagicMock()
+        mock_config.backends = {"openai": MagicMock()}
+        # OpenAI type requires base_url and model
+        mock_config.get_backend.return_value = MagicMock(
+            name="openai",
+            type="openai",
+            base_url=None,  # Missing required field
+            model=None,
+        )
+
+        result = executor.set_backend(sample_session, "openai", mock_config)
+
+        assert not result.success
+        assert "requires base_url" in result.error
 
     def test_set_backend_unknown(self, executor, sample_session):
         """Test setting unknown backend fails."""

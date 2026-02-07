@@ -21,6 +21,7 @@ import uuid
 
 from models import ArchiveBlock, LinkBlock
 from session import Session, Turn
+from .debug_log import debug_log
 
 
 # =============================================================================
@@ -439,6 +440,8 @@ class CommandExecutor:
         Returns:
             BackendResult with new backend info
         """
+        from .runner_factory import validate_backend_config
+
         if backend_name not in config.backends:
             available = list(config.backends.keys())
             return BackendResult(
@@ -446,11 +449,23 @@ class CommandExecutor:
                 error=f"Unknown backend: {backend_name}. Available: {', '.join(available)}",
             )
 
+        # Get backend config for validation and model info
+        backend_config = config.get_backend(backend_name)
+
+        # Validate backend config before switching
+        validation_error = validate_backend_config(backend_config)
+        if validation_error:
+            debug_log.error(
+                f"Backend config validation failed: {validation_error}",
+                category="backend",
+            )
+            return BackendResult(
+                success=False,
+                error=validation_error,
+            )
+
         # Update session
         session.backend_name = backend_name
-
-        # Get backend config for model info
-        backend_config = config.get_backend(backend_name)
 
         return BackendResult(
             success=True,
