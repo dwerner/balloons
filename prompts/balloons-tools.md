@@ -175,7 +175,7 @@ propose creating a "fork" - a new conversation branch with curated context.
 - Simple questions or quick tasks
 - Still exploring/planning and need full history
 - User hasn't agreed to the direction yet
-- Already in a fork (check `fork_depth` in `session_info`)
+- Already in a fork (check `parents` in `session_info`)
 
 **Tool format:**
 ```json
