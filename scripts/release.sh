@@ -51,6 +51,7 @@ check_clean_tree() {
 }
 
 # Create tarball without git history
+# Sets DIST_FILE to the created tarball path
 create_tarball() {
     local version="$1"
     local tarball_name="balloons-v${version}.tar.gz"
@@ -64,8 +65,9 @@ create_tarball() {
         --output="$DIST_DIR/$tarball_name" \
         HEAD
 
-    log_info "Tarball created: $DIST_DIR/$tarball_name"
-    ls -lh "$DIST_DIR/$tarball_name"
+    DIST_FILE="$DIST_DIR/$tarball_name"
+    log_info "Tarball created: $DIST_FILE"
+    ls -lh "$DIST_FILE"
 }
 
 # Push to all configured remotes
@@ -140,6 +142,10 @@ do_release() {
 
     echo ""
     log_info "Release v${new_version} complete!"
+
+    # Output dist file path for scripting (last line of stdout)
+    echo ""
+    echo "DIST_FILE=$DIST_FILE"
 }
 
 # Entry point
@@ -152,6 +158,9 @@ main() {
             ;;
         --tarball)
             create_tarball "$(get_version)"
+            # Output dist file path for scripting
+            echo ""
+            echo "DIST_FILE=$DIST_FILE"
             ;;
         --sync)
             sync_remotes ""
