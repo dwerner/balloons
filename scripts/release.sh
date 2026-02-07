@@ -120,6 +120,15 @@ do_release() {
     validate_version "$new_version"
     check_clean_tree
 
+    # Check if we're already at this version
+    if [[ "$new_version" == "$current_version" ]]; then
+        log_info "Already at version $new_version, creating tarball only"
+        create_tarball "$new_version"
+        echo ""
+        echo "DIST_FILE=$DIST_FILE"
+        return 0
+    fi
+
     log_info "Releasing: $current_version -> $new_version"
 
     # Update VERSION file
