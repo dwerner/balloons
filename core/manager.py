@@ -5,7 +5,7 @@ Manages multiple sessions and their runners, enabling background execution.
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Callable
 from datetime import datetime
 
 from session import Session
@@ -48,11 +48,25 @@ class SessionManager:
                 # Handle event
     """
 
-    def __init__(self, backend_config: BackendConfig | None = None):
+    def __init__(
+        self,
+        backend_config: BackendConfig | None = None,
+        runner_factory: Callable[[Session], SessionRunner] | None = None,
+    ):
+        """Initialize the session manager.
+
+        Args:
+            backend_config: Default backend config for new sessions
+            runner_factory: Optional callback to create runners for sessions.
+                           If provided, this is used instead of the default
+                           which uses backend_config for all sessions.
+                           The callback should respect session.backend_name.
+        """
         self._sessions: Dict[str, Session] = {}
         self._runners: Dict[str, SessionRunner] = {}
         self._active_session_id: Optional[str] = None
         self._backend_config = backend_config or BackendConfig(name="claude")
+        self._runner_factory = runner_factory
 
     @property
     def active_session(self) -> Optional[Session]:
@@ -83,9 +97,15 @@ class SessionManager:
         session.save()
 
         self._sessions[session.id] = session
-        self._runners[session.id] = SessionRunner(session, runner=create_runner(self._backend_config))
+        self._runners[session.id] = self._create_runner(session)
 
         return session
+
+    def _create_runner(self, session: Session) -> SessionRunner:
+        """Create a runner for a session, respecting session's backend preference."""
+        if self._runner_factory:
+            return self._runner_factory(session)
+        return SessionRunner(session, runner=create_runner(self._backend_config))
 
     def load_session(self, session_id: str) -> Optional[Session]:
         """Load a session by ID.
@@ -102,7 +122,7 @@ class SessionManager:
         session = Session.load(session_id)
         if session:
             self._sessions[session.id] = session
-            self._runners[session.id] = SessionRunner(session, runner=create_runner(self._backend_config))
+            self._runners[session.id] = self._create_runner(session)
 
         return session
 
@@ -185,7 +205,7 @@ class SessionManager:
 
         # Track in manager
         self._sessions[child.id] = child
-        self._runners[child.id] = SessionRunner(child, runner=create_runner(self._backend_config))
+        self._runners[child.id] = self._create_runner(child)
 
         return child
 

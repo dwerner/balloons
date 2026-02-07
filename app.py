@@ -266,7 +266,11 @@ class BalloonsApp(App):
         # Shared tree state - used by ContextTreeView and (future) NestedTreeView
         self._tree_state = TreeState()
         # Session manager handles all sessions and runners
-        self._manager = SessionManager(backend_config=self._backend_config)
+        # Pass runner factory so manager respects per-session backend preferences
+        self._manager = SessionManager(
+            backend_config=self._backend_config,
+            runner_factory=self._create_session_runner,
+        )
         # Simple runner for helper streaming (summaries, etc.) - used for blocking operations
         self._helper_runner = create_runner(self._backend_config)
         # Summarizer for LLM-based summary generation
