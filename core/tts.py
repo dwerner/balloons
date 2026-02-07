@@ -1,10 +1,7 @@
-"""Text-to-speech support for Balloons.
+"""Text-to-speech support for Balloons using Tortoise-TTS.
 
-Provides TTS generation and playback using various backends:
-- tortoise: High-quality neural TTS (slow, requires GPU)
-- piper: Fast neural TTS (CPU-friendly)
-- say: macOS built-in TTS
-- espeak: Cross-platform fallback
+Provides high-quality neural TTS generation and playback.
+Tortoise-TTS produces natural-sounding speech but requires GPU and takes time to generate.
 """
 
 import asyncio
@@ -13,51 +10,40 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Callable
-from enum import Enum
 
 from .debug_log import debug_log
 
 
-class TTSBackend(str, Enum):
-    """Available TTS backends."""
-    TORTOISE = "tortoise"
-    PIPER = "piper"
-    SAY = "say"  # macOS
-    ESPEAK = "espeak"
-
-
 @dataclass
 class TTSConfig:
-    """TTS configuration.
+    """Tortoise-TTS configuration.
 
     Attributes:
-        backend: Which TTS engine to use
-        voice: Voice identifier (backend-specific)
-        speed: Speech rate multiplier (1.0 = normal)
         enabled: Whether TTS is enabled
-        cache_dir: Directory for caching generated audio
+        voice: Voice name or path to voice samples directory
+        tortoise_quality: Quality preset (ultra_fast, fast, standard, high_quality)
     """
-    backend: str = "say"  # Default to macOS say for simplicity
-    voice: Optional[str] = None
-    speed: float = 1.0
+    backend: str = "tortoise"  # Keep for compatibility but only tortoise is supported
     enabled: bool = True
-    cache_dir: Optional[str] = None
-
-    # Tortoise-specific
+    voice: Optional[str] = None  # None = random voice
     tortoise_quality: str = "fast"  # ultra_fast, fast, standard, high_quality
 
-    # Piper-specific
-    piper_model: Optional[str] = None  # Path to .onnx model
+    # Legacy fields kept for config compatibility
+    speed: float = 1.0
+    piper_model: Optional[str] = None
+
+
+# For backwards compatibility
+TTSBackend = str
 
 
 class TTSRunner:
-    """Manages TTS generation and playback.
+    """Manages Tortoise-TTS generation and playback.
 
     Handles:
-    - Async audio generation via subprocess
+    - Async audio generation via tortoise-tts CLI
     - Sequential playback queue
     - Stop/cancel support
-    - Backend auto-detection
     """
 
     def __init__(self, config: Optional[TTSConfig] = None):
@@ -190,7 +176,7 @@ class TTSRunner:
                 break
 
             try:
-                await self._speak_text(text)
+                await self._speak_tortoise(text)
                 if on_complete:
                     on_complete()
             except asyncio.CancelledError:
@@ -198,148 +184,15 @@ class TTSRunner:
             except Exception as e:
                 debug_log.error(f"TTS error: {e}", category="tts")
 
-    async def _speak_text(self, text: str) -> None:
-        """Generate and play speech for text.
-
-        Args:
-            text: Text to speak
-        """
-        backend = self.config.backend.lower()
-
-        if backend == "say":
-            await self._speak_say(text)
-        elif backend == "espeak":
-            await self._speak_espeak(text)
-        elif backend == "piper":
-            await self._speak_piper(text)
-        elif backend == "tortoise":
-            await self._speak_tortoise(text)
-        else:
-            # Auto-detect available backend
-            await self._speak_auto(text)
-
-    async def _speak_say(self, text: str) -> None:
-        """Speak using macOS say command."""
-        cmd = ["say"]
-
-        if self.config.voice:
-            cmd.extend(["-v", self.config.voice])
-
-        if self.config.speed != 1.0:
-            # say uses words per minute, default ~175
-            rate = int(175 * self.config.speed)
-            cmd.extend(["-r", str(rate)])
-
-        cmd.append(text)
-
-        self._playback_process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        await self._playback_process.wait()
-        self._playback_process = None
-
-    async def _speak_espeak(self, text: str) -> None:
-        """Speak using espeak."""
-        cmd = ["espeak"]
-
-        if self.config.voice:
-            cmd.extend(["-v", self.config.voice])
-
-        if self.config.speed != 1.0:
-            # espeak uses words per minute, default 175
-            rate = int(175 * self.config.speed)
-            cmd.extend(["-s", str(rate)])
-
-        cmd.append(text)
-
-        self._playback_process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        await self._playback_process.wait()
-        self._playback_process = None
-
-    async def _speak_piper(self, text: str) -> None:
-        """Speak using Piper TTS.
-
-        Piper generates audio to stdout, which we pipe to aplay/afplay.
-        """
-        if not self.config.piper_model:
-            debug_log.error("Piper model not configured", category="tts")
-            return
-
-        # Generate audio with piper
-        piper_cmd = [
-            "piper",
-            "--model", self.config.piper_model,
-            "--output-raw",
-        ]
-
-        # Determine playback command
-        if shutil.which("afplay"):
-            # macOS - need to write to file first
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                temp_path = f.name
-
-            piper_cmd = [
-                "piper",
-                "--model", self.config.piper_model,
-                "--output_file", temp_path,
-            ]
-
-            self._current_process = await asyncio.create_subprocess_exec(
-                *piper_cmd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await self._current_process.communicate(input=text.encode())
-            self._current_process = None
-
-            # Play the file
-            self._playback_process = await asyncio.create_subprocess_exec(
-                "afplay", temp_path,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await self._playback_process.wait()
-            self._playback_process = None
-
-            # Clean up
-            Path(temp_path).unlink(missing_ok=True)
-
-        elif shutil.which("aplay"):
-            # Linux - can pipe directly
-            self._current_process = await asyncio.create_subprocess_exec(
-                *piper_cmd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-
-            self._playback_process = await asyncio.create_subprocess_exec(
-                "aplay", "-r", "22050", "-f", "S16_LE", "-t", "raw", "-",
-                stdin=self._current_process.stdout,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-
-            await self._playback_process.wait()
-            await self._current_process.wait()
-            self._current_process = None
-            self._playback_process = None
-
     async def _speak_tortoise(self, text: str) -> None:
-        """Speak using Tortoise TTS.
+        """Speak using Tortoise-TTS.
 
-        Tortoise is slow but high quality. Generates to temp file then plays.
+        Generates audio to temp file then plays it.
         """
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             temp_path = f.name
 
+        # Build tortoise-tts command
         cmd = [
             "tortoise-tts",
             "--text", text,
@@ -350,27 +203,44 @@ class TTSRunner:
         if self.config.voice:
             cmd.extend(["--voice", self.config.voice])
 
-        debug_log.info(f"Generating TTS with tortoise (preset={self.config.tortoise_quality})", category="tts")
+        debug_log.info(
+            f"Generating TTS with Tortoise (preset={self.config.tortoise_quality}, voice={self.config.voice or 'random'})",
+            category="tts"
+        )
 
+        # Generate audio
         self._current_process = await asyncio.create_subprocess_exec(
             *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-        await self._current_process.wait()
+        stdout, stderr = await self._current_process.communicate()
+        return_code = self._current_process.returncode
         self._current_process = None
 
-        if not Path(temp_path).exists():
-            debug_log.error("Tortoise failed to generate audio", category="tts")
+        if return_code != 0:
+            debug_log.error(
+                f"Tortoise-TTS failed (exit {return_code}): {stderr.decode()[:500]}",
+                category="tts"
+            )
+            Path(temp_path).unlink(missing_ok=True)
             return
 
+        if not Path(temp_path).exists():
+            debug_log.error("Tortoise failed to generate audio file", category="tts")
+            return
+
+        debug_log.info(f"Generated audio, playing: {temp_path}", category="tts")
+
         # Play the file
-        if shutil.which("afplay"):
-            play_cmd = ["afplay", temp_path]
-        elif shutil.which("aplay"):
+        if shutil.which("aplay"):
             play_cmd = ["aplay", temp_path]
+        elif shutil.which("afplay"):
+            play_cmd = ["afplay", temp_path]
+        elif shutil.which("paplay"):
+            play_cmd = ["paplay", temp_path]
         else:
-            debug_log.error("No audio player found", category="tts")
+            debug_log.error("No audio player found (tried aplay, afplay, paplay)", category="tts")
             Path(temp_path).unlink(missing_ok=True)
             return
 
@@ -382,18 +252,8 @@ class TTSRunner:
         await self._playback_process.wait()
         self._playback_process = None
 
+        # Clean up temp file
         Path(temp_path).unlink(missing_ok=True)
-
-    async def _speak_auto(self, text: str) -> None:
-        """Auto-detect available TTS backend and use it."""
-        if shutil.which("say"):
-            await self._speak_say(text)
-        elif shutil.which("espeak"):
-            await self._speak_espeak(text)
-        elif shutil.which("piper") and self.config.piper_model:
-            await self._speak_piper(text)
-        else:
-            debug_log.warning("No TTS backend available", category="tts")
 
 
 # Global TTS runner instance
@@ -422,9 +282,7 @@ def get_tts_runner(config: Optional[TTSConfig] = None) -> TTSRunner:
                 config = TTSConfig(
                     backend=app_config.tts.backend,
                     voice=app_config.tts.voice,
-                    speed=app_config.tts.speed,
                     enabled=app_config.tts.enabled,
-                    piper_model=app_config.tts.piper_model,
                     tortoise_quality=app_config.tts.tortoise_quality,
                 )
             except Exception:

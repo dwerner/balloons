@@ -1,4 +1,4 @@
-"""Tests for TTS module."""
+"""Tests for TTS module (Tortoise-TTS)."""
 
 import pytest
 import asyncio
@@ -13,28 +13,20 @@ class TestTTSConfig:
     def test_defaults(self):
         """Test default configuration values."""
         config = TTSConfig()
-        assert config.backend == "say"
+        assert config.backend == "tortoise"
         assert config.voice is None
-        assert config.speed == 1.0
         assert config.enabled is True
-        assert config.piper_model is None
         assert config.tortoise_quality == "fast"
 
     def test_custom_values(self):
         """Test custom configuration values."""
         config = TTSConfig(
-            backend="piper",
-            voice="en_US-lessac-medium",
-            speed=1.5,
+            voice="train_grace",
             enabled=False,
-            piper_model="/path/to/model.onnx",
             tortoise_quality="high_quality",
         )
-        assert config.backend == "piper"
-        assert config.voice == "en_US-lessac-medium"
-        assert config.speed == 1.5
+        assert config.voice == "train_grace"
         assert config.enabled is False
-        assert config.piper_model == "/path/to/model.onnx"
         assert config.tortoise_quality == "high_quality"
 
 
@@ -92,59 +84,83 @@ class TestTTSRunner:
         assert enabled_runner._queue.empty()
 
     @patch("shutil.which")
-    async def test_speak_say_command(self, mock_which, enabled_runner):
-        """Test that say command is constructed correctly."""
-        mock_which.return_value = "/usr/bin/say"
+    async def test_speak_tortoise_command(self, mock_which, enabled_runner):
+        """Test that tortoise-tts command is constructed correctly."""
+        mock_which.return_value = "/usr/bin/aplay"
 
         with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
-            mock_process = MagicMock()
-            mock_process.wait = AsyncMock()
-            mock_exec.return_value = mock_process
+            # Mock the generation process
+            mock_gen_process = MagicMock()
+            mock_gen_process.communicate = AsyncMock(return_value=(b"", b""))
+            mock_gen_process.returncode = 0
 
-            await enabled_runner._speak_say("Hello world")
+            # Mock the playback process
+            mock_play_process = MagicMock()
+            mock_play_process.wait = AsyncMock()
 
-            # Verify say was called
-            mock_exec.assert_called_once()
-            args = mock_exec.call_args[0]
-            assert args[0] == "say"
-            assert "Hello world" in args
+            mock_exec.side_effect = [mock_gen_process, mock_play_process]
+
+            with patch("pathlib.Path.exists", return_value=True):
+                with patch("pathlib.Path.unlink"):
+                    await enabled_runner._speak_tortoise("Hello world")
+
+            # Verify tortoise-tts was called
+            first_call_args = mock_exec.call_args_list[0][0]
+            assert first_call_args[0] == "tortoise-tts"
+            assert "--text" in first_call_args
+            assert "Hello world" in first_call_args
+            assert "--preset" in first_call_args
+            assert "fast" in first_call_args
 
     @patch("shutil.which")
-    async def test_speak_say_with_voice(self, mock_which):
-        """Test say command with custom voice."""
-        mock_which.return_value = "/usr/bin/say"
-        config = TTSConfig(backend="say", voice="Samantha")
+    async def test_speak_tortoise_with_voice(self, mock_which):
+        """Test tortoise command with custom voice."""
+        mock_which.return_value = "/usr/bin/aplay"
+        config = TTSConfig(voice="train_grace")
         runner = TTSRunner(config)
 
         with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
-            mock_process = MagicMock()
-            mock_process.wait = AsyncMock()
-            mock_exec.return_value = mock_process
+            mock_gen_process = MagicMock()
+            mock_gen_process.communicate = AsyncMock(return_value=(b"", b""))
+            mock_gen_process.returncode = 0
 
-            await runner._speak_say("Hello")
+            mock_play_process = MagicMock()
+            mock_play_process.wait = AsyncMock()
 
-            args = mock_exec.call_args[0]
-            assert "-v" in args
-            assert "Samantha" in args
+            mock_exec.side_effect = [mock_gen_process, mock_play_process]
+
+            with patch("pathlib.Path.exists", return_value=True):
+                with patch("pathlib.Path.unlink"):
+                    await runner._speak_tortoise("Hello")
+
+            first_call_args = mock_exec.call_args_list[0][0]
+            assert "--voice" in first_call_args
+            assert "train_grace" in first_call_args
 
     @patch("shutil.which")
-    async def test_speak_say_with_speed(self, mock_which):
-        """Test say command with custom speed."""
-        mock_which.return_value = "/usr/bin/say"
-        config = TTSConfig(backend="say", speed=1.5)
+    async def test_speak_tortoise_quality_preset(self, mock_which):
+        """Test tortoise command with different quality preset."""
+        mock_which.return_value = "/usr/bin/aplay"
+        config = TTSConfig(tortoise_quality="high_quality")
         runner = TTSRunner(config)
 
         with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
-            mock_process = MagicMock()
-            mock_process.wait = AsyncMock()
-            mock_exec.return_value = mock_process
+            mock_gen_process = MagicMock()
+            mock_gen_process.communicate = AsyncMock(return_value=(b"", b""))
+            mock_gen_process.returncode = 0
 
-            await runner._speak_say("Hello")
+            mock_play_process = MagicMock()
+            mock_play_process.wait = AsyncMock()
 
-            args = mock_exec.call_args[0]
-            assert "-r" in args
-            # Speed 1.5 * 175 wpm = 262
-            assert "262" in args
+            mock_exec.side_effect = [mock_gen_process, mock_play_process]
+
+            with patch("pathlib.Path.exists", return_value=True):
+                with patch("pathlib.Path.unlink"):
+                    await runner._speak_tortoise("Hello")
+
+            first_call_args = mock_exec.call_args_list[0][0]
+            assert "--preset" in first_call_args
+            assert "high_quality" in first_call_args
 
 
 class TestGetTTSRunner:
