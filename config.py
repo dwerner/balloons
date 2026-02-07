@@ -12,6 +12,26 @@ from tokenizer import count_tokens
 
 
 @dataclass
+class TTSConfig:
+    """TTS configuration.
+
+    Attributes:
+        backend: Which TTS engine to use (say, espeak, piper, tortoise)
+        voice: Voice identifier (backend-specific)
+        speed: Speech rate multiplier (1.0 = normal)
+        enabled: Whether TTS is enabled
+        piper_model: Path to Piper .onnx model (for piper backend)
+        tortoise_quality: Quality preset for Tortoise (ultra_fast, fast, standard, high_quality)
+    """
+    backend: str = "say"  # Default to macOS say
+    voice: Optional[str] = None
+    speed: float = 1.0
+    enabled: bool = True
+    piper_model: Optional[str] = None
+    tortoise_quality: str = "fast"
+
+
+@dataclass
 class BackendConfig:
     """Configuration for an LLM backend.
 
@@ -86,6 +106,7 @@ class Config:
     editor: Optional[str] = None  # Editor command (falls back to $VISUAL, $EDITOR, vi)
     last_view_session_id: Optional[str] = None  # Last viewed session ID
     last_view_turn_index: Optional[int] = None  # Last viewed turn index (0-based)
+    tts: TTSConfig = field(default_factory=TTSConfig)  # TTS configuration
     _config_path: Optional[Path] = field(default=None, repr=False)  # Where config was loaded from
 
     def get_editor(self) -> str:
@@ -161,6 +182,18 @@ class Config:
 
         # Load last_view as dict if present
         last_view = data.get("last_view", {})
+
+        # Load TTS config
+        tts_data = data.get("tts", {})
+        tts_config = TTSConfig(
+            backend=tts_data.get("backend", "say"),
+            voice=tts_data.get("voice"),
+            speed=tts_data.get("speed", 1.0),
+            enabled=tts_data.get("enabled", True),
+            piper_model=tts_data.get("piper_model"),
+            tortoise_quality=tts_data.get("tortoise_quality", "fast"),
+        )
+
         return cls(
             default_backend=data.get("default_backend", "claude"),
             backends=backends,
@@ -168,6 +201,7 @@ class Config:
             editor=data.get("editor"),
             last_view_session_id=last_view.get("session_id") if last_view else None,
             last_view_turn_index=last_view.get("turn_index") if last_view else None,
+            tts=tts_config,
             _config_path=path,
         )
 

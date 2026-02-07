@@ -399,12 +399,42 @@ Content constraints for 1080p display:
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "speak",
+            "description": """Speak text aloud using text-to-speech. Use this to provide audio feedback or read content to the user.
+
+Use this tool when:
+- The user asks you to read something aloud
+- You want to announce important information
+- During presentations or demos
+- When the user has indicated they prefer audio output
+
+The speech will be queued and played sequentially. The user can stop speech at any time.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "The text to speak aloud"
+                    },
+                    "voice": {
+                        "type": "string",
+                        "description": "Optional voice to use (overrides default). Backend-specific."
+                    }
+                },
+                "required": ["text"]
+            }
+        }
+    },
 ]
 
 # Names of balloon tools for easy checking (includes all non-standard tools)
 BALLOON_TOOL_NAMES = {
     "balloon", "propose_fork", "propose_merge", "create_slide",
     "list_links", "follow_link", "search_linked_session", "session_info",
+    "speak",
 }
 
 

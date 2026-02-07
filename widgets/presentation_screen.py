@@ -1,5 +1,6 @@
 """Fullscreen presentation mode for slides."""
 
+import asyncio
 from textual.screen import Screen
 from textual.widgets import Static
 from textual.containers import Vertical, Horizontal, Center
@@ -10,6 +11,7 @@ from rich.panel import Panel
 from rich.console import Group
 
 from models import SlideBlock
+from core.tts import get_tts_runner, TTSConfig
 
 
 class PresentationScreen(Screen[None]):
@@ -105,6 +107,9 @@ class PresentationScreen(Screen[None]):
         Binding("n", "toggle_notes", "Toggle Notes", show=True),
         Binding("home", "first", "First"),
         Binding("end", "last", "Last"),
+        Binding("r", "read_slide", "Read Aloud", show=True),
+        Binding("a", "toggle_auto_read", "Auto-Read", show=True),
+        Binding("s", "stop_speech", "Stop Speech"),
     ]
 
     def __init__(
@@ -123,12 +128,14 @@ class PresentationScreen(Screen[None]):
         self._slides = slides
         self._current_index = max(0, min(start_index, len(slides) - 1))
         self._show_notes = False
+        self._auto_read = False
+        self._tts_runner = get_tts_runner()
 
     def compose(self):
         # Progress bar docks to bottom - must be yielded first for docking to work
         with Vertical(id="progress-bar"):
             yield Static("", id="progress-indicator")
-            yield Static("← → navigate  |  n notes  |  q exit", id="navigation-hint")
+            yield Static("← → navigate  |  r read  |  a auto  |  n notes  |  q exit", id="navigation-hint")
         # Slide container takes remaining space
         with Vertical(id="slide-container"):
             with Vertical(id="slide-content"):
@@ -238,3 +245,82 @@ class PresentationScreen(Screen[None]):
                 notes_widget.add_class("visible")
             else:
                 notes_widget.remove_class("visible")
+
+    def _get_slide_text(self) -> str:
+        """Get the text content of the current slide for TTS."""
+        if not self._slides:
+            return ""
+
+        _, slide = self._slides[self._current_index]
+        parts = []
+
+        if slide.title:
+            parts.append(slide.title)
+
+        if slide.content:
+            # Strip markdown formatting for cleaner speech
+            # Remove headers, bullets, and code blocks
+            content = slide.content
+            # Remove markdown headers
+            import re
+            content = re.sub(r'^#+\s*', '', content, flags=re.MULTILINE)
+            # Remove bullet points
+            content = re.sub(r'^[\*\-]\s*', '', content, flags=re.MULTILINE)
+            # Remove code block markers
+            content = re.sub(r'```\w*\n?', '', content)
+            # Remove inline code backticks
+            content = re.sub(r'`([^`]+)`', r'\1', content)
+            parts.append(content.strip())
+
+        return ". ".join(parts)
+
+    async def action_read_slide(self) -> None:
+        """Read the current slide aloud using TTS."""
+        text = self._get_slide_text()
+        if text:
+            await self._tts_runner.speak(text)
+
+    async def action_toggle_auto_read(self) -> None:
+        """Toggle auto-read mode (read each slide then advance)."""
+        self._auto_read = not self._auto_read
+
+        # Update the hint to show auto mode status
+        hint_widget = self.query_one("#navigation-hint", Static)
+        if self._auto_read:
+            hint_widget.update("← → navigate  |  r read  |  [AUTO ON]  |  n notes  |  q exit")
+            # Start reading current slide
+            await self._auto_read_current()
+        else:
+            hint_widget.update("← → navigate  |  r read  |  a auto  |  n notes  |  q exit")
+            # Stop any current speech
+            await self._tts_runner.cancel()
+
+    async def _auto_read_current(self) -> None:
+        """Read current slide and advance when done (if auto-read is on)."""
+        if not self._auto_read:
+            return
+
+        text = self._get_slide_text()
+        if text:
+            def on_complete():
+                # Schedule next slide advance on the main thread
+                if self._auto_read and self._current_index < len(self._slides) - 1:
+                    self.call_later(self._advance_and_read)
+
+            await self._tts_runner.speak(text, on_complete)
+
+    def _advance_and_read(self) -> None:
+        """Advance to next slide and read it (called from TTS completion callback)."""
+        if self._current_index < len(self._slides) - 1:
+            self._current_index += 1
+            self._render_current_slide()
+            # Schedule the async read
+            asyncio.create_task(self._auto_read_current())
+
+    async def action_stop_speech(self) -> None:
+        """Stop any current speech."""
+        self._auto_read = False
+        await self._tts_runner.cancel()
+        # Update hint
+        hint_widget = self.query_one("#navigation-hint", Static)
+        hint_widget.update("← → navigate  |  r read  |  a auto  |  n notes  |  q exit")

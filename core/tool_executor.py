@@ -18,6 +18,7 @@ from .debug_log import debug_log
 from .tools import BALLOON_TOOL_NAMES
 from .link_tools import LINK_TOOL_NAMES, execute_link_tool
 from .fork import ForkProposal, ContextAssignment, MergeProposal
+from .tts import get_tts_runner, TTSConfig
 
 if TYPE_CHECKING:
     from session import Session
@@ -110,6 +111,8 @@ async def execute_tool(
             return execute_propose_merge(args)
         elif name == "create_slide":
             return execute_create_slide(args, session)
+        elif name == "speak":
+            return await execute_speak(args)
         else:
             return f"Unknown tool: {name}", True
 
@@ -671,3 +674,42 @@ def parse_create_slide(args: dict) -> SlideData | None:
         )
     except Exception:
         return None
+
+
+async def execute_speak(args: dict) -> tuple[str, bool]:
+    """Handle a speak tool call.
+
+    Queues text to be spoken using the TTS system.
+
+    Args:
+        args: Tool arguments containing text and optional voice
+
+    Returns:
+        Tuple of (result_string, is_error)
+    """
+    text = args.get("text")
+    if not text:
+        return "Error: text is required", True
+
+    voice = args.get("voice")
+
+    try:
+        runner = get_tts_runner()
+
+        # If voice override specified, temporarily update config
+        if voice:
+            original_voice = runner.config.voice
+            runner.config.voice = voice
+
+        await runner.speak(text)
+
+        # Restore original voice
+        if voice:
+            runner.config.voice = original_voice
+
+        debug_log.info(f"Speak tool: queued '{text[:50]}...'", category="tts")
+        return f"Speaking: {text[:100]}{'...' if len(text) > 100 else ''}", False
+
+    except Exception as e:
+        debug_log.error(f"Speak tool error: {e}", category="tts")
+        return f"Error speaking: {e}", True

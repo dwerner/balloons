@@ -109,6 +109,14 @@ from .task_state import (
     AsyncObserver,
     get_task_state,
 )
+from .tts import (
+    TTSRunner,
+    TTSConfig,
+    TTSBackend,
+    get_tts_runner,
+    speak,
+    stop_speaking,
+)
 
 __all__ = [
     # Commands
@@ -252,4 +260,11 @@ __all__ = [
     "SessionTaskInfo",
     "AsyncObserver",
     "get_task_state",
+    # TTS
+    "TTSRunner",
+    "TTSConfig",
+    "TTSBackend",
+    "get_tts_runner",
+    "speak",
+    "stop_speaking",
 ]
