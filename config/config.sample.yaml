@@ -27,12 +27,6 @@ backends:
     # Optional: Add additional context to Claude's built-in system prompt
     # system_prompt: ~/.balloons/prompts/additional-context.md
 
-  # Claude with structured link tools - enables custom tool loop for link navigation
-  # claude-links:
-  #   type: claude-structured
-  #   # Optional: custom system prompt (link tools prompt is auto-prepended)
-  #   # system_prompt: ~/.balloons/prompts/additional-context.md
-
   # OpenRouter - access many models via OpenAI-compatible API
   # openrouter:
   #   type: openai

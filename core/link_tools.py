@@ -1,8 +1,10 @@
 """Custom tools for navigating linked sessions and app state.
 
-These tools are used by the claude-structured backend to allow Claude
-to discover and search content in linked sessions, and to interact
-with the Balloons app itself.
+These tools allow the LLM to discover and search content in linked sessions,
+and to interact with the Balloons app itself.
+
+Tool definitions are in tools.py (BALLOON_TOOLS). This module contains
+the execution logic.
 """
 
 import json
@@ -11,7 +13,7 @@ from typing import Any, Callable
 from session import Session
 
 
-# Tool names for checking if a tool is a link/session tool
+# Tool names handled by this module
 LINK_TOOL_NAMES = {"list_links", "follow_link", "search_linked_session", "session_info", "screen_snapshot"}
 
 # Registry for app-level tool handlers (tools that need app access, not just session)

@@ -15,12 +15,6 @@ class TestValidateBackendConfig:
         result = validate_backend_config(backend)
         assert result is None
 
-    def test_claude_structured_type_valid(self):
-        """Claude-structured type backends don't require extra fields."""
-        backend = MagicMock(type="claude-structured", name="test")
-        result = validate_backend_config(backend)
-        assert result is None
-
     def test_none_type_defaults_to_claude(self):
         """None type defaults to claude and is valid."""
         backend = MagicMock(type=None, name="test")

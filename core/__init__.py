@@ -50,7 +50,7 @@ from .exceptions import RateLimitError, InputRequiredError, BackendNotFoundError
 from .link_tools import LINK_TOOL_NAMES, execute_link_tool, register_app_tool_handler, unregister_app_tool_handler
 from .openai_runner import OpenAICompatibleRunner
 from .runner_factory import create_runner, resolve_env_var, validate_backend_config
-from .tools import TOOLS, LINK_TOOLS as LINK_TOOLS_OPENAI, BALLOON_TOOLS, BALLOON_TOOL_NAMES, get_tools_for_request
+from .tools import TOOLS, BALLOON_TOOLS, BALLOON_TOOL_NAMES, get_tools_for_request
 from .tool_executor import execute_tool, parse_fork_proposal, parse_create_slide, SlideData
 from .summarizer import Summarizer
 from .context_grouper import (
@@ -180,10 +180,9 @@ __all__ = [
     "validate_backend_config",
     # Tools
     "TOOLS",
-    "LINK_TOOLS_OPENAI",
-    "LINK_TOOL_NAMES",
     "BALLOON_TOOLS",
     "BALLOON_TOOL_NAMES",
+    "LINK_TOOL_NAMES",
     "get_tools_for_request",
     "execute_tool",
     "parse_fork_proposal",

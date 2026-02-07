@@ -17,15 +17,14 @@ class BackendConfig:
 
     Attributes:
         name: Backend identifier
-        type: Backend type - "claude" (CLI subprocess), "claude-structured" (CLI with custom tools),
-              or "openai" (OpenAI-compatible API)
+        type: Backend type - "claude" (CLI subprocess) or "openai" (OpenAI-compatible API)
         base_url: API base URL (required for openai type, optional for claude)
         api_key: API key (supports ${ENV_VAR} syntax)
         model: Model identifier (required for openai type)
         system_prompt: Path to system prompt file (supports ~ expansion)
     """
     name: str
-    type: str = "claude"  # "claude", "claude-structured", or "openai"
+    type: str = "claude"  # "claude" or "openai"
     base_url: Optional[str] = None
     api_key: Optional[str] = None
     model: Optional[str] = None

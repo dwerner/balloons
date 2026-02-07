@@ -2,6 +2,13 @@
 
 Defines tools in OpenAI function calling format for use with OpenRouter,
 llamacpp, and other OpenAI-compatible APIs.
+
+All tools are organized into categories:
+- TOOLS: Standard file/shell tools (Read, Write, Bash, Glob, Grep, List)
+- BALLOON_TOOLS: Balloons-specific tools including:
+  - Workflow tools (propose_fork, propose_merge, create_slide)
+  - Session/link tools (list_links, follow_link, search_linked_session, session_info)
+  - UI tools (balloon)
 """
 
 # Standard file/shell tools in OpenAI function format
@@ -140,6 +147,10 @@ TOOLS = [
             }
         }
     },
+]
+
+# Balloons-specific tools - UI interaction, workflow, and session/link navigation
+BALLOON_TOOLS = [
     {
         "type": "function",
         "function": {
@@ -162,10 +173,6 @@ TOOLS = [
             }
         }
     },
-]
-
-# Balloons-specific tools - for UI interaction and workflow
-BALLOON_TOOLS = [
     {
         "type": "function",
         "function": {
@@ -305,13 +312,7 @@ Content constraints for 1080p display:
             }
         }
     },
-]
-
-# Names of balloon tools for easy checking
-BALLOON_TOOL_NAMES = {"propose_fork", "propose_merge", "create_slide"}
-
-# Link navigation tools - for traversing linked sessions
-LINK_TOOLS = [
+    # Session/link navigation tools
     {
         "type": "function",
         "function": {
@@ -336,9 +337,17 @@ LINK_TOOLS = [
                         "type": "string",
                         "description": "The link ID to follow (from list_links)"
                     },
-                    "include_messages": {
+                    "limit": {
                         "type": "integer",
-                        "description": "Number of recent messages to include (default 10)"
+                        "description": "Number of turns to return (default 10)"
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Turn index to start from. If omitted, returns the last N turns."
+                    },
+                    "full_content": {
+                        "type": "boolean",
+                        "description": "If true, returns full turn content. Default returns truncated content."
                     }
                 },
                 "required": ["link_id"]
@@ -360,6 +369,18 @@ LINK_TOOLS = [
                     "query": {
                         "type": "string",
                         "description": "Search query (case-insensitive substring match)"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results to return (default 20)"
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Skip first N matches for pagination (default 0)"
+                    },
+                    "full_content": {
+                        "type": "boolean",
+                        "description": "If true, returns full turn content. Default returns a preview."
                     }
                 },
                 "required": ["link_id", "query"]
@@ -380,6 +401,13 @@ LINK_TOOLS = [
     },
 ]
 
+# Names of balloon tools for easy checking (includes all non-standard tools)
+BALLOON_TOOL_NAMES = {
+    "balloon", "propose_fork", "propose_merge", "create_slide",
+    "list_links", "follow_link", "search_linked_session", "session_info",
+}
+
+
 def get_tools_for_request(
     allowed_tools: list[str] | None = None,
     disable_tools: bool = False,
@@ -387,13 +415,13 @@ def get_tools_for_request(
 ) -> list[dict] | None:
     """Get the list of tools to include in an API request.
 
-    Includes standard file/shell tools, link navigation tools, and optionally
-    Balloons-specific workflow tools.
+    Includes standard file/shell tools and optionally Balloons-specific tools
+    (workflow, UI, session/link navigation).
 
     Args:
         allowed_tools: List of tool names to allow, or None for all
         disable_tools: If True, return None (no tools)
-        include_balloon_tools: If True, include propose_fork and other balloon tools
+        include_balloon_tools: If True, include balloon-specific tools
 
     Returns:
         List of tool definitions, or None if tools disabled
@@ -401,8 +429,8 @@ def get_tools_for_request(
     if disable_tools:
         return None
 
-    # Combine all tool categories
-    all_tools = TOOLS + LINK_TOOLS
+    # Combine tool categories
+    all_tools = TOOLS
     if include_balloon_tools:
         all_tools = all_tools + BALLOON_TOOLS
 
