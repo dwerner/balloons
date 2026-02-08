@@ -34,15 +34,16 @@ class TurnData:
 @rust_schema
 @dataclass
 class SessionData:
-    """Full session data for storage.
+    """Session metadata for storage (turns stored separately).
 
     Simplified version of Session from session.py.
+    Turns are stored in TURNS table, linked via TURN_ORDER table.
     """
     id: str
     created: str  # ISO 8601 format
     last_modified: str  # ISO 8601 format
     model: str
-    turns: list[TurnData]
+    # NOTE: turns are stored separately in TURNS table, linked via TURN_ORDER
 
     # Token/cost tracking
     total_input_tokens: int
@@ -74,6 +75,18 @@ class SessionData:
 
     # Message queue (stored as dict for flexibility)
     message_queue: dict = field(default_factory=dict)
+
+
+@rust_schema
+@dataclass
+class TurnOrder:
+    """Ordered list of turn IDs for a session.
+
+    This is the relationship entity that links sessions to their turns.
+    Stored in TURN_ORDER table keyed by session_id.
+    """
+    session_id: str
+    turn_ids: list[str]
 
 
 @rust_schema

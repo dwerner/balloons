@@ -100,20 +100,30 @@ class AsyncStorage:
     async def save_session(self, session: Session) -> None:
         """Save a session to storage.
 
-        Converts the Session object to the wire format (SessionData) and
-        serializes to JSON for the Rust backend.
+        Uses split storage model:
+        1. Save session metadata (without turns) to SESSIONS table
+        2. Save each turn to TURNS table
 
         Args:
             session: The Session object to save
         """
-        # Build the wire format data
+        # Build the wire format data (without turns - they're stored separately)
         session_data = self._session_to_wire(session)
         json_data = json.dumps(session_data)
 
+        # Save session metadata
         await self._run_sync(self._storage.save_session, session.id, json_data)
+
+        # Save each turn individually
+        for turn in session.turns:
+            await self.save_turn(session.id, turn)
 
     async def load_session(self, session_id: str) -> Optional[Session]:
         """Load a session from storage.
+
+        Uses split storage model:
+        1. Load session metadata from SESSIONS table
+        2. Load turns from TURNS table via TURN_ORDER
 
         Args:
             session_id: The session ID to load
@@ -126,7 +136,15 @@ class AsyncStorage:
             return None
 
         data = json.loads(json_data)
-        return self._wire_to_session(data)
+        session = self._wire_to_session(data)
+
+        # Load turns separately
+        turns_data = await self.load_turns(session_id)
+        for turn_data in turns_data:
+            turn = self._wire_to_turn(turn_data)
+            session.turns.append(turn)
+
+        return session
 
     async def delete_session(self, session_id: str) -> None:
         """Delete a session from storage.
@@ -205,13 +223,14 @@ class AsyncStorage:
         """Convert a Session to the wire format for storage.
 
         This matches the SessionData schema expected by Rust.
+        Note: turns are NOT included - they are stored separately in the TURNS table.
         """
         return {
             "id": session.id,
             "created": session.created,
             "last_modified": session.last_modified,
             "model": session.model,
-            "turns": [self._turn_to_wire(t) for t in session.turns],
+            # NOTE: turns are stored separately, not embedded in session data
             "total_input_tokens": session.total_input_tokens,
             "total_output_tokens": session.total_output_tokens,
             "total_cost": session.total_cost,
@@ -341,6 +360,7 @@ class AsyncStorage:
         """Convert wire format data to a Session object.
 
         This is the inverse of _session_to_wire.
+        Note: turns are NOT included in data - they are loaded separately.
         """
         # Import here to avoid circular imports
         from session import Session
@@ -372,10 +392,7 @@ class AsyncStorage:
             message_queue=MessageQueue.from_dict(data.get("message_queue", {})),
         )
 
-        # Deserialize turns
-        for turn_data in data.get("turns", []):
-            turn = self._wire_to_turn(turn_data)
-            session.turns.append(turn)
+        # NOTE: turns are loaded separately via load_turns() and appended by the caller
 
         return session
 

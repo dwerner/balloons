@@ -288,3 +288,107 @@ async def test_concurrent_access(temp_db):
         loaded = await storage.load_session(session_id)
         assert loaded is not None
         assert loaded.title == f"Concurrent Session {i}"
+
+
+@pytest.mark.asyncio
+async def test_save_turn_independently(temp_db, sample_session):
+    """Test saving turns independently after session creation."""
+    storage = AsyncStorage(temp_db)
+
+    # Save session (which saves all turns)
+    await storage.save_session(sample_session)
+    original_turn_count = len(sample_session.turns)
+
+    # Load and verify
+    loaded = await storage.load_session(sample_session.id)
+    assert len(loaded.turns) == original_turn_count
+
+    # Now save an additional turn directly
+    from models import Turn, TextBlock, ContextMode
+    new_turn = Turn(
+        role="user",
+        content_block=TextBlock(text="New independent turn"),
+        tokens=10,
+        context_mode=ContextMode.COPY,
+    )
+    await storage.save_turn(sample_session.id, new_turn)
+
+    # Reload and verify the new turn is present
+    loaded = await storage.load_session(sample_session.id)
+    assert len(loaded.turns) == original_turn_count + 1
+    assert loaded.turns[-1].content_block.text == "New independent turn"
+
+
+@pytest.mark.asyncio
+async def test_delete_turn(temp_db, sample_session):
+    """Test deleting a single turn."""
+    storage = AsyncStorage(temp_db)
+
+    await storage.save_session(sample_session)
+    original_count = len(sample_session.turns)
+
+    # Load turns to get the IDs
+    turns_data = await storage.load_turns(sample_session.id)
+    assert len(turns_data) == original_count
+
+    # Delete the first turn
+    first_turn_id = turns_data[0]["id"]
+    await storage.delete_turn(sample_session.id, first_turn_id)
+
+    # Verify turn was deleted
+    loaded = await storage.load_session(sample_session.id)
+    assert len(loaded.turns) == original_count - 1
+
+
+@pytest.mark.asyncio
+async def test_reorder_turns(temp_db):
+    """Test reordering turns within a session."""
+    storage = AsyncStorage(temp_db)
+
+    session = Session()
+    session.add_turn(role="user", content_block=TextBlock(text="First"))
+    session.add_turn(role="assistant", content_block=TextBlock(text="Second"))
+    session.add_turn(role="user", content_block=TextBlock(text="Third"))
+
+    await storage.save_session(session)
+
+    # Get turn IDs
+    turns_data = await storage.load_turns(session.id)
+    turn_ids = [t["id"] for t in turns_data]
+    assert len(turn_ids) == 3
+
+    # Reorder: third, first, second
+    new_order = [turn_ids[2], turn_ids[0], turn_ids[1]]
+    await storage.reorder_turns(session.id, new_order)
+
+    # Verify new order
+    loaded = await storage.load_session(session.id)
+    assert loaded.turns[0].content_block.text == "Third"
+    assert loaded.turns[1].content_block.text == "First"
+    assert loaded.turns[2].content_block.text == "Second"
+
+
+@pytest.mark.asyncio
+async def test_session_metadata_update_preserves_turns(temp_db, sample_session):
+    """Test that updating session metadata doesn't affect turns."""
+    storage = AsyncStorage(temp_db)
+
+    await storage.save_session(sample_session)
+    original_turn_count = len(sample_session.turns)
+
+    # Modify session metadata only (not turns)
+    sample_session.title = "Updated Title"
+    sample_session.total_input_tokens = 999
+
+    # Save just the session metadata (clear turns first to avoid re-saving)
+    sample_session.turns = []
+    session_data = storage._session_to_wire(sample_session)
+    import json
+    json_data = json.dumps(session_data)
+    await storage._run_sync(storage._storage.save_session, sample_session.id, json_data)
+
+    # Load and verify turns are still there
+    loaded = await storage.load_session(sample_session.id)
+    assert loaded.title == "Updated Title"
+    assert loaded.total_input_tokens == 999
+    assert len(loaded.turns) == original_turn_count

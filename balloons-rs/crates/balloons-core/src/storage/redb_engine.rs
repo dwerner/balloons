@@ -4,7 +4,7 @@ use redb::{Database, ReadableTable, TableDefinition};
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::generated::{SessionData, SessionMetadata, TurnData};
+use crate::generated::{SessionData, SessionMetadata, TurnData, TurnOrder};
 use super::traits::{Error, Result, StorageEngine};
 
 /// Parse an ISO 8601 timestamp string to Unix timestamp (seconds).
@@ -26,10 +26,20 @@ fn parse_iso_to_unix(iso_str: &str) -> i64 {
 }
 
 // Table definitions
-// Key: session_id, Value: JSON-encoded SessionData
 // Note: We use JSON instead of postcard because the schema contains serde_json::Value
 // fields (for flexible content_block storage), and postcard doesn't support self-describing types.
+
+/// Sessions table - metadata only (no embedded turns)
+/// Key: session_id, Value: JSON-encoded SessionData
 const SESSIONS: TableDefinition<&str, &[u8]> = TableDefinition::new("sessions");
+
+/// Turns table - standalone turn entities
+/// Key: turn_id, Value: JSON-encoded TurnData
+const TURNS: TableDefinition<&str, &[u8]> = TableDefinition::new("turns");
+
+/// Turn order table - relationship: session_id → ordered list of turn_ids
+/// Key: session_id, Value: JSON-encoded TurnOrder
+const TURN_ORDER: TableDefinition<&str, &[u8]> = TableDefinition::new("turn_order");
 
 /// Redb-backed storage engine with JSON serialization
 pub struct RedbEngine {
@@ -41,12 +51,18 @@ impl RedbEngine {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let db = Database::create(path).map_err(|e| Error::Database(e.to_string()))?;
 
-        // Ensure tables exist
+        // Ensure all tables exist
         let write_txn = db.begin_write().map_err(|e| Error::Database(e.to_string()))?;
         {
             // Opening the table creates it if it doesn't exist
             let _ = write_txn
                 .open_table(SESSIONS)
+                .map_err(|e| Error::Database(e.to_string()))?;
+            let _ = write_txn
+                .open_table(TURNS)
+                .map_err(|e| Error::Database(e.to_string()))?;
+            let _ = write_txn
+                .open_table(TURN_ORDER)
                 .map_err(|e| Error::Database(e.to_string()))?;
         }
         write_txn
@@ -102,68 +118,196 @@ impl StorageEngine for RedbEngine {
     }
 
     async fn save_turn(&self, session_id: &str, turn: &TurnData) -> Result<()> {
-        // Load session, update turn, save session
-        let mut session = self
+        // Verify session exists
+        let _ = self
             .load_session(session_id)
             .await?
             .ok_or_else(|| Error::SessionNotFound(session_id.to_string()))?;
 
-        // Find and update or append turn
-        if let Some(existing) = session.turns.iter_mut().find(|t| t.id == turn.id) {
-            *existing = turn.clone();
-        } else {
-            session.turns.push(turn.clone());
-        }
+        let turn_bytes =
+            serde_json::to_vec(turn).map_err(|e| Error::Serialization(e.to_string()))?;
 
-        self.save_session(session_id, &session).await
+        let write_txn = self
+            .db
+            .begin_write()
+            .map_err(|e| Error::Database(e.to_string()))?;
+        {
+            // Save turn to TURNS table
+            let mut turns_table = write_txn
+                .open_table(TURNS)
+                .map_err(|e| Error::Database(e.to_string()))?;
+            turns_table
+                .insert(turn.id.as_str(), turn_bytes.as_slice())
+                .map_err(|e| Error::Database(e.to_string()))?;
+
+            // Update turn order
+            let mut order_table = write_txn
+                .open_table(TURN_ORDER)
+                .map_err(|e| Error::Database(e.to_string()))?;
+
+            let mut turn_order = match order_table
+                .get(session_id)
+                .map_err(|e| Error::Database(e.to_string()))?
+            {
+                Some(bytes) => serde_json::from_slice::<TurnOrder>(bytes.value())
+                    .map_err(|e| Error::Serialization(e.to_string()))?,
+                None => TurnOrder {
+                    session_id: session_id.to_string(),
+                    turn_ids: vec![],
+                },
+            };
+
+            // Add turn ID if not already present (upsert semantics)
+            if !turn_order.turn_ids.contains(&turn.id) {
+                turn_order.turn_ids.push(turn.id.clone());
+            }
+
+            let order_bytes =
+                serde_json::to_vec(&turn_order).map_err(|e| Error::Serialization(e.to_string()))?;
+            order_table
+                .insert(session_id, order_bytes.as_slice())
+                .map_err(|e| Error::Database(e.to_string()))?;
+        }
+        write_txn
+            .commit()
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        Ok(())
     }
 
     async fn load_turns(&self, session_id: &str) -> Result<Vec<TurnData>> {
-        match self.load_session(session_id).await? {
-            Some(session) => Ok(session.turns),
-            None => Ok(vec![]),
+        let read_txn = self
+            .db
+            .begin_read()
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        // Get turn order
+        let order_table = read_txn
+            .open_table(TURN_ORDER)
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        let turn_order = match order_table
+            .get(session_id)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
+            Some(bytes) => serde_json::from_slice::<TurnOrder>(bytes.value())
+                .map_err(|e| Error::Serialization(e.to_string()))?,
+            None => return Ok(vec![]), // No turns for this session
+        };
+
+        // Load turns in order
+        let turns_table = read_txn
+            .open_table(TURNS)
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        let mut turns = Vec::with_capacity(turn_order.turn_ids.len());
+        for turn_id in &turn_order.turn_ids {
+            if let Some(bytes) = turns_table
+                .get(turn_id.as_str())
+                .map_err(|e| Error::Database(e.to_string()))?
+            {
+                let turn: TurnData = serde_json::from_slice(bytes.value())
+                    .map_err(|e| Error::Serialization(e.to_string()))?;
+                turns.push(turn);
+            }
+            // Note: We silently skip missing turns (orphaned references)
         }
+
+        Ok(turns)
     }
 
     async fn delete_turn(&self, session_id: &str, turn_id: &str) -> Result<()> {
-        let mut session = self
-            .load_session(session_id)
-            .await?
-            .ok_or_else(|| Error::SessionNotFound(session_id.to_string()))?;
+        let write_txn = self
+            .db
+            .begin_write()
+            .map_err(|e| Error::Database(e.to_string()))?;
+        {
+            // Remove from turn order first
+            let mut order_table = write_txn
+                .open_table(TURN_ORDER)
+                .map_err(|e| Error::Database(e.to_string()))?;
 
-        let original_len = session.turns.len();
-        session.turns.retain(|t| t.id != turn_id);
+            let mut turn_order = match order_table
+                .get(session_id)
+                .map_err(|e| Error::Database(e.to_string()))?
+            {
+                Some(bytes) => serde_json::from_slice::<TurnOrder>(bytes.value())
+                    .map_err(|e| Error::Serialization(e.to_string()))?,
+                None => return Err(Error::SessionNotFound(session_id.to_string())),
+            };
 
-        if session.turns.len() == original_len {
-            return Err(Error::TurnNotFound(turn_id.to_string()));
+            let original_len = turn_order.turn_ids.len();
+            turn_order.turn_ids.retain(|id| id != turn_id);
+
+            if turn_order.turn_ids.len() == original_len {
+                return Err(Error::TurnNotFound(turn_id.to_string()));
+            }
+
+            let order_bytes =
+                serde_json::to_vec(&turn_order).map_err(|e| Error::Serialization(e.to_string()))?;
+            order_table
+                .insert(session_id, order_bytes.as_slice())
+                .map_err(|e| Error::Database(e.to_string()))?;
+
+            // Remove from turns table
+            let mut turns_table = write_txn
+                .open_table(TURNS)
+                .map_err(|e| Error::Database(e.to_string()))?;
+            turns_table
+                .remove(turn_id)
+                .map_err(|e| Error::Database(e.to_string()))?;
         }
+        write_txn
+            .commit()
+            .map_err(|e| Error::Database(e.to_string()))?;
 
-        self.save_session(session_id, &session).await
+        Ok(())
     }
 
     async fn reorder_turns(&self, session_id: &str, turn_ids: &[String]) -> Result<()> {
-        let mut session = self
-            .load_session(session_id)
-            .await?
-            .ok_or_else(|| Error::SessionNotFound(session_id.to_string()))?;
+        let write_txn = self
+            .db
+            .begin_write()
+            .map_err(|e| Error::Database(e.to_string()))?;
+        {
+            let mut order_table = write_txn
+                .open_table(TURN_ORDER)
+                .map_err(|e| Error::Database(e.to_string()))?;
 
-        // Build a map of turn_id -> TurnData
-        let turn_map: std::collections::HashMap<_, _> = session
-            .turns
-            .drain(..)
-            .map(|t| (t.id.clone(), t))
-            .collect();
+            // Verify session has a turn order
+            let turn_order = match order_table
+                .get(session_id)
+                .map_err(|e| Error::Database(e.to_string()))?
+            {
+                Some(bytes) => serde_json::from_slice::<TurnOrder>(bytes.value())
+                    .map_err(|e| Error::Serialization(e.to_string()))?,
+                None => return Err(Error::SessionNotFound(session_id.to_string())),
+            };
 
-        // Rebuild turns in the specified order
-        for id in turn_ids {
-            if let Some(turn) = turn_map.get(id) {
-                session.turns.push(turn.clone());
-            } else {
-                return Err(Error::TurnNotFound(id.clone()));
+            // Verify all turn_ids exist in current order
+            for id in turn_ids {
+                if !turn_order.turn_ids.contains(id) {
+                    return Err(Error::TurnNotFound(id.clone()));
+                }
             }
-        }
 
-        self.save_session(session_id, &session).await
+            // Create new order
+            let new_order = TurnOrder {
+                session_id: session_id.to_string(),
+                turn_ids: turn_ids.to_vec(),
+            };
+
+            let order_bytes =
+                serde_json::to_vec(&new_order).map_err(|e| Error::Serialization(e.to_string()))?;
+            order_table
+                .insert(session_id, order_bytes.as_slice())
+                .map_err(|e| Error::Database(e.to_string()))?;
+        }
+        write_txn
+            .commit()
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        Ok(())
     }
 
     async fn list_sessions(&self) -> Result<Vec<SessionMetadata>> {
@@ -171,22 +315,43 @@ impl StorageEngine for RedbEngine {
             .db
             .begin_read()
             .map_err(|e| Error::Database(e.to_string()))?;
-        let table = read_txn
+
+        let sessions_table = read_txn
             .open_table(SESSIONS)
             .map_err(|e| Error::Database(e.to_string()))?;
 
+        let order_table = read_txn
+            .open_table(TURN_ORDER)
+            .map_err(|e| Error::Database(e.to_string()))?;
+
         let mut sessions = Vec::new();
-        for entry in table.iter().map_err(|e| Error::Database(e.to_string()))? {
-            let (_, value) = entry.map_err(|e| Error::Database(e.to_string()))?;
+        for entry in sessions_table
+            .iter()
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
+            let (key, value) = entry.map_err(|e| Error::Database(e.to_string()))?;
             let data: SessionData = serde_json::from_slice(value.value())
                 .map_err(|e| Error::Serialization(e.to_string()))?;
+
+            // Get turn count from turn order table
+            let turn_count = match order_table
+                .get(key.value())
+                .map_err(|e| Error::Database(e.to_string()))?
+            {
+                Some(bytes) => {
+                    let order: TurnOrder = serde_json::from_slice(bytes.value())
+                        .map_err(|e| Error::Serialization(e.to_string()))?;
+                    order.turn_ids.len() as i64
+                }
+                None => 0,
+            };
 
             sessions.push(SessionMetadata {
                 id: data.id,
                 name: data.title.clone(),
                 created_at: parse_iso_to_unix(&data.created),
                 updated_at: parse_iso_to_unix(&data.last_modified),
-                turn_count: data.turns.len() as i64,
+                turn_count,
             });
         }
 
@@ -199,10 +364,43 @@ impl StorageEngine for RedbEngine {
             .begin_write()
             .map_err(|e| Error::Database(e.to_string()))?;
         {
-            let mut table = write_txn
+            // Get turn order to know which turns to delete
+            let mut order_table = write_txn
+                .open_table(TURN_ORDER)
+                .map_err(|e| Error::Database(e.to_string()))?;
+
+            let turn_ids_to_delete = match order_table
+                .get(id)
+                .map_err(|e| Error::Database(e.to_string()))?
+            {
+                Some(bytes) => {
+                    let order: TurnOrder = serde_json::from_slice(bytes.value())
+                        .map_err(|e| Error::Serialization(e.to_string()))?;
+                    order.turn_ids
+                }
+                None => vec![],
+            };
+
+            // Delete turn order
+            order_table
+                .remove(id)
+                .map_err(|e| Error::Database(e.to_string()))?;
+
+            // Delete all turns
+            let mut turns_table = write_txn
+                .open_table(TURNS)
+                .map_err(|e| Error::Database(e.to_string()))?;
+            for turn_id in turn_ids_to_delete {
+                turns_table
+                    .remove(turn_id.as_str())
+                    .map_err(|e| Error::Database(e.to_string()))?;
+            }
+
+            // Delete session
+            let mut sessions_table = write_txn
                 .open_table(SESSIONS)
                 .map_err(|e| Error::Database(e.to_string()))?;
-            table
+            sessions_table
                 .remove(id)
                 .map_err(|e| Error::Database(e.to_string()))?;
         }
@@ -226,7 +424,6 @@ mod tests {
             created: "2024-01-01T00:00:00Z".to_string(),
             last_modified: "2024-01-01T00:00:00Z".to_string(),
             model: "test-model".to_string(),
-            turns: vec![],
             total_input_tokens: 0,
             total_output_tokens: 0,
             total_cost: 0.0,
@@ -357,14 +554,14 @@ mod tests {
         let dir = TestDir::new("test_delete_turn");
         let engine = RedbEngine::open(dir.db_path()).unwrap();
 
-        let mut session = make_session("sess-1", "Test Session");
-        session.turns.push(make_turn("turn-1", "user", "Hello"));
-        session
-            .turns
-            .push(make_turn("turn-2", "assistant", "Hi there!"));
+        let session = make_session("sess-1", "Test Session");
+        let turn1 = make_turn("turn-1", "user", "Hello");
+        let turn2 = make_turn("turn-2", "assistant", "Hi there!");
 
         future::block_on(async {
             engine.save_session("sess-1", &session).await.unwrap();
+            engine.save_turn("sess-1", &turn1).await.unwrap();
+            engine.save_turn("sess-1", &turn2).await.unwrap();
             engine.delete_turn("sess-1", "turn-1").await.unwrap();
 
             let turns = engine.load_turns("sess-1").await.unwrap();
@@ -383,6 +580,23 @@ mod tests {
         future::block_on(async {
             engine.save_session("sess-1", &session).await.unwrap();
             let result = engine.delete_turn("sess-1", "nonexistent").await;
+            // Session exists but has no turns, so turn order doesn't exist
+            assert!(matches!(result, Err(Error::SessionNotFound(_))));
+        });
+    }
+
+    #[test]
+    fn test_delete_turn_not_in_order() {
+        let dir = TestDir::new("test_delete_turn_not_in_order");
+        let engine = RedbEngine::open(dir.db_path()).unwrap();
+
+        let session = make_session("sess-1", "Test Session");
+        let turn = make_turn("turn-1", "user", "Hello");
+
+        future::block_on(async {
+            engine.save_session("sess-1", &session).await.unwrap();
+            engine.save_turn("sess-1", &turn).await.unwrap();
+            let result = engine.delete_turn("sess-1", "nonexistent").await;
             assert!(matches!(result, Err(Error::TurnNotFound(_))));
         });
     }
@@ -392,13 +606,16 @@ mod tests {
         let dir = TestDir::new("test_reorder_turns");
         let engine = RedbEngine::open(dir.db_path()).unwrap();
 
-        let mut session = make_session("sess-1", "Test Session");
-        session.turns.push(make_turn("turn-1", "user", "First"));
-        session.turns.push(make_turn("turn-2", "user", "Second"));
-        session.turns.push(make_turn("turn-3", "user", "Third"));
+        let session = make_session("sess-1", "Test Session");
+        let turn1 = make_turn("turn-1", "user", "First");
+        let turn2 = make_turn("turn-2", "user", "Second");
+        let turn3 = make_turn("turn-3", "user", "Third");
 
         future::block_on(async {
             engine.save_session("sess-1", &session).await.unwrap();
+            engine.save_turn("sess-1", &turn1).await.unwrap();
+            engine.save_turn("sess-1", &turn2).await.unwrap();
+            engine.save_turn("sess-1", &turn3).await.unwrap();
 
             // Reorder: 3, 1, 2
             engine
@@ -426,12 +643,13 @@ mod tests {
         let engine = RedbEngine::open(dir.db_path()).unwrap();
 
         let session1 = make_session("sess-1", "First Session");
-        let mut session2 = make_session("sess-2", "Second Session");
-        session2.turns.push(make_turn("turn-1", "user", "Hello"));
+        let session2 = make_session("sess-2", "Second Session");
+        let turn = make_turn("turn-1", "user", "Hello");
 
         future::block_on(async {
             engine.save_session("sess-1", &session1).await.unwrap();
             engine.save_session("sess-2", &session2).await.unwrap();
+            engine.save_turn("sess-2", &turn).await.unwrap();
 
             let sessions = engine.list_sessions().await.unwrap();
             assert_eq!(sessions.len(), 2);
@@ -440,8 +658,11 @@ mod tests {
             let sess2_meta = sessions.iter().find(|s| s.id == "sess-2").unwrap();
             assert_eq!(sess2_meta.turn_count, 1);
 
-            // Verify timestamps are parsed (2024-01-01T00:00:00Z = 1704067200)
+            // Find session1 and verify zero turns
             let sess1_meta = sessions.iter().find(|s| s.id == "sess-1").unwrap();
+            assert_eq!(sess1_meta.turn_count, 0);
+
+            // Verify timestamps are parsed (2024-01-01T00:00:00Z = 1704067200)
             assert_eq!(sess1_meta.created_at, 1704067200);
             assert_eq!(sess1_meta.updated_at, 1704067200);
         });
@@ -479,24 +700,93 @@ mod tests {
     }
 
     #[test]
+    fn test_delete_session_with_turns() {
+        let dir = TestDir::new("test_delete_session_with_turns");
+        let engine = RedbEngine::open(dir.db_path()).unwrap();
+
+        let session = make_session("sess-1", "Test Session");
+        let turn1 = make_turn("turn-1", "user", "Hello");
+        let turn2 = make_turn("turn-2", "assistant", "Hi!");
+
+        future::block_on(async {
+            engine.save_session("sess-1", &session).await.unwrap();
+            engine.save_turn("sess-1", &turn1).await.unwrap();
+            engine.save_turn("sess-1", &turn2).await.unwrap();
+
+            // Verify turns exist
+            let turns = engine.load_turns("sess-1").await.unwrap();
+            assert_eq!(turns.len(), 2);
+
+            // Delete session
+            engine.delete_session("sess-1").await.unwrap();
+
+            // Verify session is gone
+            let loaded = engine.load_session("sess-1").await.unwrap();
+            assert!(loaded.is_none());
+
+            // Verify turns are gone
+            let turns = engine.load_turns("sess-1").await.unwrap();
+            assert_eq!(turns.len(), 0);
+        });
+    }
+
+    #[test]
     fn test_persistence_across_reopen() {
         let dir = TestDir::new("test_persistence_across_reopen");
         let db_path = dir.db_path();
 
         let session = make_session("sess-1", "Persistent Session");
+        let turn = make_turn("turn-1", "user", "Hello");
 
         // Save and close
         {
             let engine = RedbEngine::open(&db_path).unwrap();
-            future::block_on(engine.save_session("sess-1", &session)).unwrap();
+            future::block_on(async {
+                engine.save_session("sess-1", &session).await.unwrap();
+                engine.save_turn("sess-1", &turn).await.unwrap();
+            });
         }
 
         // Reopen and verify
         {
             let engine = RedbEngine::open(&db_path).unwrap();
-            let loaded = future::block_on(engine.load_session("sess-1")).unwrap();
-            assert!(loaded.is_some());
-            assert_eq!(loaded.unwrap().title, "Persistent Session");
+            future::block_on(async {
+                let loaded = engine.load_session("sess-1").await.unwrap();
+                assert!(loaded.is_some());
+                assert_eq!(loaded.unwrap().title, "Persistent Session");
+
+                let turns = engine.load_turns("sess-1").await.unwrap();
+                assert_eq!(turns.len(), 1);
+                assert_eq!(turns[0].id, "turn-1");
+            });
         }
+    }
+
+    #[test]
+    fn test_turns_independent_of_session() {
+        // Verify that turns can be loaded even after session is reloaded
+        let dir = TestDir::new("test_turns_independent");
+        let engine = RedbEngine::open(dir.db_path()).unwrap();
+
+        let session = make_session("sess-1", "Test Session");
+        let turn1 = make_turn("turn-1", "user", "Hello");
+        let turn2 = make_turn("turn-2", "assistant", "Hi!");
+
+        future::block_on(async {
+            engine.save_session("sess-1", &session).await.unwrap();
+            engine.save_turn("sess-1", &turn1).await.unwrap();
+            engine.save_turn("sess-1", &turn2).await.unwrap();
+
+            // Update session metadata (shouldn't affect turns)
+            let mut updated_session = session.clone();
+            updated_session.title = "Updated Title".to_string();
+            engine.save_session("sess-1", &updated_session).await.unwrap();
+
+            // Verify turns are still intact
+            let turns = engine.load_turns("sess-1").await.unwrap();
+            assert_eq!(turns.len(), 2);
+            assert_eq!(get_turn_text(&turns[0]), "Hello");
+            assert_eq!(get_turn_text(&turns[1]), "Hi!");
+        });
     }
 }

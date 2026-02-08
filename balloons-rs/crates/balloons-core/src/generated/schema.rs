@@ -2,7 +2,7 @@
 //!
 //! Generated from Python domain entities marked with @rust_schema.
 //! Source: models.py and other domain modules
-//! Generated: 2026-02-08T11:03:46.731877
+//! Generated: 2026-02-08T13:35:52.802020
 //!
 //! To regenerate:
 //!     python -m codegen.generate_rust
@@ -30,7 +30,6 @@ pub struct SessionData {
     pub created: String,
     pub last_modified: String,
     pub model: String,
-    pub turns: Vec<TurnData>,
     pub total_input_tokens: i64,
     pub total_output_tokens: i64,
     pub total_cost: f64,
@@ -50,6 +49,12 @@ pub struct SessionData {
     pub backend_name: String,
     pub cached_context_tokens: i64,
     pub message_queue: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TurnOrder {
+    pub session_id: String,
+    pub turn_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
