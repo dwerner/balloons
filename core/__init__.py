@@ -87,6 +87,8 @@ from .fork import (
     SwitchResult,
     ForkProposal,
     ContextAssignment,
+    ForkData,
+    DeriveData,
 )
 from .command_executor import (
     CommandExecutor,
@@ -124,6 +126,7 @@ from .tts import (
     speak,
     stop_speaking,
 )
+from .stash import StashedMessage, MessageStash
 
 __all__ = [
     # Commands
@@ -239,6 +242,8 @@ __all__ = [
     "SwitchResult",
     "ForkProposal",
     "ContextAssignment",
+    "ForkData",
+    "DeriveData",
     # Command executor
     "CommandExecutor",
     "ArchiveResult",
@@ -281,4 +286,7 @@ __all__ = [
     "get_tts_runner",
     "speak",
     "stop_speaking",
+    # Stash
+    "StashedMessage",
+    "MessageStash",
 ]

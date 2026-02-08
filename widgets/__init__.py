@@ -1,6 +1,7 @@
 from .chat_log import ChatLogView, MoreBelowIndicator, NewMessagesIndicator
 from .input_box import InputBox
-from .stash_popup import StashPopup, MessageStash, StashedMessage
+from .stash_popup import StashPopup
+from core.stash import MessageStash, StashedMessage
 from .message_queue_popup import MessageQueuePopup
 from .status_bar import StatusBar
 from .context_tree import ContextTreeView

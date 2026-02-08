@@ -18,8 +18,12 @@ class TestSessionProgressiveSaving:
         """Use a temporary directory for sessions."""
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()
-        with patch("session.SESSIONS_DIR", sessions_dir):
+        index_file = sessions_dir / "index.json"
+        with patch("session.SESSIONS_DIR", sessions_dir), \
+             patch("session.INDEX_FILE", index_file):
+            SessionIndex._instance = None
             yield sessions_dir
+            SessionIndex._instance = None
 
     def test_session_save_persists_turns(self, temp_sessions_dir):
         """Basic test: saved session can be loaded."""
@@ -194,8 +198,12 @@ class TestSessionSaveAtomicity:
         """Use a temporary directory for sessions."""
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()
-        with patch("session.SESSIONS_DIR", sessions_dir):
+        index_file = sessions_dir / "index.json"
+        with patch("session.SESSIONS_DIR", sessions_dir), \
+             patch("session.INDEX_FILE", index_file):
+            SessionIndex._instance = None
             yield sessions_dir
+            SessionIndex._instance = None
 
     def test_save_writes_valid_json(self, temp_sessions_dir):
         """Save should always produce valid JSON."""
@@ -328,8 +336,12 @@ class TestSessionArchive:
         """Use a temporary directory for sessions."""
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()
-        with patch("session.SESSIONS_DIR", sessions_dir):
+        index_file = sessions_dir / "index.json"
+        with patch("session.SESSIONS_DIR", sessions_dir), \
+             patch("session.INDEX_FILE", index_file):
+            SessionIndex._instance = None
             yield sessions_dir
+            SessionIndex._instance = None
 
     @pytest.fixture
     def temp_archives_dir(self, tmp_path):
@@ -453,8 +465,12 @@ class TestSessionLoadBackwardsCompat:
         """Use a temporary directory for sessions."""
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()
-        with patch("session.SESSIONS_DIR", sessions_dir):
+        index_file = sessions_dir / "index.json"
+        with patch("session.SESSIONS_DIR", sessions_dir), \
+             patch("session.INDEX_FILE", index_file):
+            SessionIndex._instance = None
             yield sessions_dir
+            SessionIndex._instance = None
 
     def test_load_session_without_content_blocks(self, temp_sessions_dir):
         """Old sessions without content_blocks should still load and migrate to turns."""

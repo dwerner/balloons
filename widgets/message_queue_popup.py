@@ -2,6 +2,9 @@
 
 Shows queued messages waiting to be processed after streaming completes.
 Allows users to view, edit, reorder, or remove queued messages.
+
+This widget observes QueueState and renders from QueueSnapshot, following
+the MVC pattern used by TreeState/TaskState.
 """
 
 from textual.widgets import Static
@@ -9,7 +12,7 @@ from textual.message import Message
 from textual.events import Key
 from rich.text import Text
 
-from session import MessageQueue, QueuedMessage
+from core.queue_state import get_queue_state, QueueEvent, QueueSnapshot, QueuedMessageSnapshot
 
 # Circled numbers for visual ordering
 CIRCLED_NUMBERS = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"]
@@ -31,6 +34,9 @@ class MessageQueuePopup(Static, can_focus=True):
     - Paused messages block those behind them (shown as ◌ blocked)
     - Allows editing and removing individual messages
     - Shows preview of message content
+
+    This widget observes QueueState and re-renders when state changes.
+    Selection is ID-based to avoid invalidation when messages are removed.
     """
 
     DEFAULT_CSS = """
@@ -82,33 +88,100 @@ class MessageQueuePopup(Static, can_focus=True):
 
     def __init__(self, **kwargs):
         super().__init__("", **kwargs)
-        self._queue: MessageQueue | None = None
-        self._selected_index: int = 0
+        # Current snapshot for rendering (immutable, from QueueState)
+        self._snapshot: QueueSnapshot | None = None
+        # ID-based selection (stable across removals)
+        self._selected_message_id: str | None = None
+        # QueueState observer registration
+        self._queue_state = get_queue_state()
 
     def on_mount(self) -> None:
-        """Initialize display on mount."""
+        """Initialize display and subscribe to queue state changes."""
+        self._queue_state.add_observer(self._on_queue_event)
         self._refresh_display()
 
-    def show_queue(self, queue: MessageQueue, take_focus: bool = False) -> None:
-        """Show the queue popup with current queue state.
+    def on_unmount(self) -> None:
+        """Unsubscribe from queue state changes."""
+        self._queue_state.remove_observer(self._on_queue_event)
 
-        The queue popup is always visible (as a status area), even when empty.
+    async def _on_queue_event(
+        self,
+        event: QueueEvent,
+        snapshot: QueueSnapshot,
+        data: dict,
+    ) -> None:
+        """Handle queue state change events.
 
-        Args:
-            queue: The message queue to display
-            take_focus: If True, focus the popup for interaction. Default False
-                       keeps it as informational overlay.
+        Called by QueueState when any mutation occurs. Updates our
+        snapshot and re-renders.
         """
-        self._queue = queue
-        self._selected_index = 0 if queue and len(queue) > 0 else -1
+        # Store the new snapshot
+        self._snapshot = snapshot
+
+        # Handle selection updates based on event type
+        if event == QueueEvent.MESSAGE_REMOVED:
+            removed_id = data.get("message_id")
+            if self._selected_message_id == removed_id:
+                # Selected message was removed - move to next or previous
+                self._select_nearest_message(snapshot)
+        elif event == QueueEvent.QUEUE_CLEARED:
+            self._selected_message_id = None
+        elif event == QueueEvent.MESSAGE_ADDED:
+            # Select the newly added message if nothing selected
+            if not self._selected_message_id and snapshot.messages:
+                self._selected_message_id = snapshot.messages[-1].id
+        elif event == QueueEvent.SESSION_CHANGED:
+            # Reset selection on session switch
+            if snapshot.messages:
+                self._selected_message_id = snapshot.messages[0].id
+            else:
+                self._selected_message_id = None
+        elif event == QueueEvent.FULL_REBUILD:
+            # Loaded from persistence - select first if nothing selected
+            if snapshot.messages and not self._selected_message_id:
+                self._selected_message_id = snapshot.messages[0].id
+            elif not snapshot.messages:
+                self._selected_message_id = None
+
         self._refresh_display()
-        if take_focus and queue and len(queue) > 0:
+
+    def _select_nearest_message(self, snapshot: QueueSnapshot) -> None:
+        """Select the nearest message after current selection was removed."""
+        if not snapshot.messages:
+            self._selected_message_id = None
+            return
+
+        # Just select the first message for simplicity
+        # A more sophisticated approach would track the previous index
+        self._selected_message_id = snapshot.messages[0].id
+
+    def _get_selected_index(self) -> int:
+        """Get the index of the currently selected message, or -1."""
+        if not self._snapshot or not self._selected_message_id:
+            return -1
+        return self._snapshot.get_message_index(self._selected_message_id)
+
+    def _get_selected_message(self) -> QueuedMessageSnapshot | None:
+        """Get the currently selected message snapshot."""
+        if not self._snapshot or not self._selected_message_id:
+            return None
+        return self._snapshot.get_message(self._selected_message_id)
+
+    # Legacy methods for compatibility (app.py may call these during transition)
+
+    def show_queue(self, queue, take_focus: bool = False) -> None:
+        """Legacy: Show the queue popup with current queue state.
+
+        This method is deprecated. The popup now auto-updates via observer.
+        """
+        # No-op for legacy compatibility - popup auto-updates via observer
+        if take_focus and self._snapshot and len(self._snapshot) > 0:
             self.focus()
 
     def hide(self) -> None:
         """Clear the queue content (popup stays visible with empty state)."""
-        self._queue = None
-        self._selected_index = -1
+        self._snapshot = None
+        self._selected_message_id = None
         self._refresh_display()
 
     def dismiss(self) -> None:
@@ -119,52 +192,57 @@ class MessageQueuePopup(Static, can_focus=True):
         """No-op for compatibility (dismissed state no longer tracked)."""
         pass
 
-    def toggle(self, queue: MessageQueue) -> bool:
+    def toggle(self, queue=None) -> bool:
         """Toggle focus to queue popup.
 
         Returns True if queue has items and was focused, False otherwise.
         """
-        if queue and len(queue) > 0:
-            self._queue = queue
-            self._selected_index = 0 if self._selected_index < 0 else self._selected_index
+        if self._snapshot and len(self._snapshot) > 0:
+            if not self._selected_message_id:
+                self._selected_message_id = self._snapshot.messages[0].id
             self._refresh_display()
             self.focus()
             return True
         return False
 
-    def update_queue(self, queue: MessageQueue) -> None:
-        """Update the displayed queue (always visible, even when empty)."""
-        self._queue = queue
-        if queue and len(queue) > 0:
-            if self._selected_index >= len(queue):
-                self._selected_index = max(0, len(queue) - 1)
-        else:
-            self._selected_index = -1
-        self._refresh_display()
+    def update_queue(self, queue) -> None:
+        """Legacy: Update the displayed queue.
+
+        This method is deprecated. The popup now auto-updates via observer.
+        """
+        # No-op for legacy compatibility - popup auto-updates via observer
+        pass
 
     def cycle(self, delta: int) -> None:
         """Cycle through messages by delta."""
-        if not self._queue or len(self._queue) == 0:
+        if not self._snapshot or len(self._snapshot) == 0:
             return
-        self._selected_index = (self._selected_index + delta) % len(self._queue)
+
+        messages = self._snapshot.messages
+        current_idx = self._get_selected_index()
+        if current_idx < 0:
+            current_idx = 0
+
+        new_idx = (current_idx + delta) % len(messages)
+        self._selected_message_id = messages[new_idx].id
         self._refresh_display()
 
     def remove_current(self) -> None:
         """Remove the currently selected message."""
-        if self._queue and 0 <= self._selected_index < len(self._queue):
-            msg = self._queue.messages[self._selected_index]
+        msg = self._get_selected_message()
+        if msg:
             self.post_message(self.MessageRemoved(msg.id))
 
     def toggle_pause_current(self) -> None:
         """Toggle pause on the currently selected message."""
-        if self._queue and 0 <= self._selected_index < len(self._queue):
-            msg = self._queue.messages[self._selected_index]
+        msg = self._get_selected_message()
+        if msg:
             self.post_message(self.MessagePauseToggled(msg.id))
 
     def edit_current(self) -> None:
         """Request to edit the currently selected message."""
-        if self._queue and 0 <= self._selected_index < len(self._queue):
-            msg = self._queue.messages[self._selected_index]
+        msg = self._get_selected_message()
+        if msg:
             self.post_message(self.MessageEditRequested(msg.id, msg.content))
 
     def clear_all(self) -> None:
@@ -216,25 +294,25 @@ class MessageQueuePopup(Static, can_focus=True):
     def _refresh_display(self) -> None:
         """Update the displayed queue list.
 
-        Renders in a vertical format with each message on its own line.
+        Renders from the current QueueSnapshot in a vertical format
+        with each message on its own line.
         """
-        if not self._queue or len(self._queue) == 0:
+        if not self._snapshot or len(self._snapshot) == 0:
             result = Text()
             result.append("📬 Queue", style="dim")
             result.append(" (empty)", style="dim italic")
-            result.append("  Type during streaming to queue messages", style="dim italic")
+            result.append("  Shows prompts you submit while streaming", style="dim italic")
             self.update(result)
             return
 
         result = Text()
-
-        # Find first paused message to determine blocked state
-        first_pause_idx = self._queue.first_pause_index()
+        snapshot = self._snapshot
+        selected_idx = self._get_selected_index()
 
         # Header with count and blocked indicator
         result.append("📬 Queue", style="bold yellow")
-        result.append(f" ({len(self._queue)})", style="dim")
-        if self._queue.is_blocked():
+        result.append(f" ({len(snapshot)})", style="dim")
+        if snapshot.is_blocked:
             result.append(" ⏸BLOCKED", style="bold red")
         result.append("  ")
         # Help on header line
@@ -248,7 +326,8 @@ class MessageQueuePopup(Static, can_focus=True):
         result.append(" rm", style="dim")
 
         # Message items, one per line
-        for i, msg in enumerate(self._queue.messages):
+        first_pause_idx = snapshot.first_pause_index
+        for i, msg in enumerate(snapshot.messages):
             result.append("\n")
 
             # Preview: first 50 chars, single line (more room in vertical layout)
@@ -274,7 +353,7 @@ class MessageQueuePopup(Static, can_focus=True):
             # Circled number for ordering
             num = get_circled_number(i + 1)
 
-            if i == self._selected_index:
+            if i == selected_idx:
                 # Selected item - highlight
                 result.append(f"  {checkbox}", style=checkbox_style)
                 result.append(f"{num} ", style="bold yellow")

@@ -262,7 +262,11 @@ class TestTreeStateSessionLoading:
         assert state.is_session_loaded("s1") is False
 
     def test_load_session_calculates_cached_context_tokens(self):
-        """Loading a session should calculate cached_context_tokens from turn tokens."""
+        """Loading a session should calculate cached_context_tokens from turn tokens.
+
+        Note: Only non-DROPped turns are counted. For the current session,
+        turns default to COMPRESS, so they're all counted.
+        """
         state = TreeState()
         session = MockSession(
             id="s1",
@@ -280,6 +284,8 @@ class TestTreeStateSessionLoading:
             ]
         )
 
+        # Must set as current session so turns default to COMPRESS (not DROP)
+        state.add_session(session, is_current=True)
         state.load_session("s1", session)
 
         data = state.get_session("s1")
@@ -347,6 +353,33 @@ class TestTreeStateTurnOperations:
         assert isinstance(turn.content_block, TextBlock)
 
         assert any(e[0] == TreeEvent.TURN_FINISHED for e in events)
+
+    def test_finish_turn_updates_cached_tokens_incrementally(self):
+        """finish_turn should add to cached_context_tokens, not recalculate entire sum."""
+        state = TreeState()
+        session = MockSession(id="s1", turns=[])
+        state.add_session(session, is_current=True)
+        state.load_session("s1", session)
+
+        data = state.get_session("s1")
+        assert data.cached_context_tokens == 0  # Empty session
+
+        # Start and finish first turn
+        state.start_turn("s1", 0, "user")
+        state.finish_turn("s1", 0, "Hello", TextBlock(text="Hello"), [])
+
+        turn0_tokens = data.turns[0].tokens
+        assert turn0_tokens > 0
+        assert data.cached_context_tokens == turn0_tokens
+
+        # Start and finish second turn
+        state.start_turn("s1", 1, "assistant")
+        state.finish_turn("s1", 1, "Hi there!", TextBlock(text="Hi there!"), [])
+
+        turn1_tokens = data.turns[1].tokens
+        assert turn1_tokens > 0
+        # Should be sum of both turns (incremental add, not recalc)
+        assert data.cached_context_tokens == turn0_tokens + turn1_tokens
 
     def test_start_turn_updates_existing_turn_instead_of_duplicating(self):
         """When start_turn is called with same index twice, update instead of duplicate.
@@ -426,6 +459,39 @@ class TestTreeStateContextModes:
         assert len(events) == 1
         assert events[0][0] == TreeEvent.CONTEXT_MODE_CHANGED
         assert events[0][1]["mode"].value == "copy"
+
+    def test_set_context_mode_updates_cached_tokens_incrementally(self):
+        """Setting context mode to/from DROP should update cached_context_tokens."""
+        state = TreeState()
+        session = MockSession(
+            id="s1",
+            turns=[
+                MockMessage(role="user", content="Hello", content_block=TextBlock(text="Hello")),
+                MockMessage(role="assistant", content="Hi there", content_block=TextBlock(text="Hi there")),
+            ],
+        )
+        state.add_session(session, is_current=True)
+        state.load_session("s1", session)
+
+        data = state.get_session("s1")
+        initial_tokens = data.cached_context_tokens
+        assert initial_tokens > 0, "Should have tokens from loaded turns"
+
+        # Get the first turn's tokens
+        turn0_tokens = data.turns[0].tokens
+        assert turn0_tokens > 0
+
+        # DROP the first turn - tokens should decrease
+        state.set_context_mode("s1", 0, ContextMode.DROP)
+        assert data.cached_context_tokens == initial_tokens - turn0_tokens
+
+        # Un-DROP it (set to COPY) - tokens should increase back
+        state.set_context_mode("s1", 0, ContextMode.COPY)
+        assert data.cached_context_tokens == initial_tokens
+
+        # COPY -> COMPRESS should NOT change tokens (both are counted)
+        state.set_context_mode("s1", 0, ContextMode.COMPRESS)
+        assert data.cached_context_tokens == initial_tokens
 
     def test_merge_modes(self):
         state = TreeState()

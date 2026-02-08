@@ -135,10 +135,6 @@ class InputBox(TextArea):
         border: solid $accent;
     }
 
-    InputBox.disabled {
-        opacity: 0.5;
-    }
-
     /* Streaming mode: yellow border - prompts will be queued */
     InputBox.streaming-mode {
         border: solid $warning;
@@ -223,7 +219,6 @@ class InputBox(TextArea):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self._disabled = False
         self._streaming_mode = False  # When True, only commands are allowed
         self._history: list[str] = []
         self._history_index: int = -1
@@ -260,8 +255,6 @@ class InputBox(TextArea):
         # Escape: during streaming, always bubble up first to cancel stream
         # Otherwise: close completions first, then clear text, then bubble up
         if event.key == "escape":
-            if self._disabled:
-                return  # Bubble up to app for cancel
             if self._streaming_mode:
                 # During streaming, Escape should cancel the stream first
                 # Don't consume the event - let it bubble to app.action_cancel_stream
@@ -452,8 +445,6 @@ class InputBox(TextArea):
 
     def _submit(self) -> None:
         """Submit the current input."""
-        if self._disabled:
-            return
         self._hide_completions()
         value = self.text.strip()
         if value:
@@ -464,15 +455,6 @@ class InputBox(TextArea):
             self._current_input = ""
             self.post_message(self.Submitted(value))
             self.clear()
-
-    def set_disabled(self, disabled: bool) -> None:
-        """Enable or disable the input box."""
-        self._disabled = disabled
-        if disabled:
-            self.add_class("disabled")
-        else:
-            self.remove_class("disabled")
-            self.focus()
 
     def set_streaming_mode(self, streaming: bool) -> None:
         """Set streaming mode - commands still work, prompts are queued.

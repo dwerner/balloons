@@ -392,7 +392,12 @@ class TreeState:
         session_data.message_count = len(turns)
 
         # Update cached token count from freshly calculated turn tokens
-        session_data.cached_context_tokens = sum(t.tokens for t in turns)
+        # Only count non-DROPped turns (consistent with finish_turn and set_context_mode)
+        # Compare by .value to handle different ContextMode class instances
+        session_data.cached_context_tokens = sum(
+            t.tokens for t in turns
+            if self.get_context_mode(session_id, t.idx).value != ContextMode.DROP.value
+        )
 
         # Load merge modes for merged children
         for child in session.children:
@@ -564,11 +569,11 @@ class TreeState:
                 turn.streaming = False
                 turn.tokens = _context_builder.count_turn_tokens(turn.role, [content_block] if content_block else [])
 
-                # Update session's cached token count (sum only non-DROPped turns)
-                session_data.cached_context_tokens = sum(
-                    t.tokens for t in session_data.turns
-                    if self.get_context_mode(session_id, t.idx) != ContextMode.DROP
-                )
+                # Incremental update: add this turn's tokens if not DROP
+                # (O(1) instead of O(N) sum over all turns)
+                # Compare by .value to handle different ContextMode class instances
+                if self.get_context_mode(session_id, turn_idx).value != ContextMode.DROP.value:
+                    session_data.cached_context_tokens += turn.tokens
 
                 self._notify(TreeEvent.TURN_FINISHED, {
                     "session_id": session_id,
@@ -696,8 +701,29 @@ class TreeState:
         return ContextMode.DROP
 
     def set_context_mode(self, session_id: str, turn_idx: int, mode: ContextMode) -> None:
-        """Set the context mode for a turn."""
+        """Set the context mode for a turn.
+
+        Also updates cached_context_tokens when toggling to/from DROP.
+        """
+        old_mode = self.get_context_mode(session_id, turn_idx)
         self._context_modes[(session_id, turn_idx)] = mode
+
+        # Update cached token count if transitioning to/from DROP
+        # Note: Compare by .value to handle different ContextMode class instances
+        # (can happen when modules are imported through different paths)
+        session_data = self._sessions.get(session_id)
+        if session_data and session_data.turns is not None:
+            turn = next((t for t in session_data.turns if t.idx == turn_idx), None)
+            if turn:
+                was_dropped = old_mode.value == ContextMode.DROP.value
+                is_dropped = mode.value == ContextMode.DROP.value
+                if was_dropped and not is_dropped:
+                    # Adding turn back to context
+                    session_data.cached_context_tokens += turn.tokens
+                elif not was_dropped and is_dropped:
+                    # Removing turn from context
+                    session_data.cached_context_tokens -= turn.tokens
+
         self._notify(TreeEvent.CONTEXT_MODE_CHANGED, {
             "session_id": session_id,
             "turn_idx": turn_idx,

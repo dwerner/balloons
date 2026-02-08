@@ -113,12 +113,13 @@ from core import (
 from core.summarizer import Summarizer
 from core.exceptions import BackendNotFoundError
 from core.context_grouper import group_messages_by_context_mode, build_context_messages
-from core.fork import ForkManager, ForkResult, MergeResult, DeriveResult, SwitchResult, ForkProposal, MergeProposal
+from core.fork import ForkManager, ForkResult, MergeResult, DeriveResult, SwitchResult, ForkProposal, MergeProposal, ForkData, DeriveData
 from core.command_executor import CommandExecutor, ArchiveResult, RehydrateResult, LinkResult, BackendResult, ShellResult
 from core.tool_executor import parse_fork_proposal, parse_merge_proposal
 from core.tree_state import TreeState, TreeEvent
 from core.task_state import get_task_state, TaskStatus
 from core.sounds import play_error_sound, play_done_sound, play_notification_sound
+from core.queue_state import get_queue_state, QueueState, QueueEvent, QueueSnapshot
 from tokenizer import count_tokens
 
 
@@ -275,6 +276,8 @@ class BalloonsApp(App):
         self._context_builder = ContextBuilder()
         # Shared tree state - used by ContextTreeView and (future) NestedTreeView
         self._tree_state = TreeState()
+        # Shared queue state - event-driven message queue management
+        self._queue_state = get_queue_state()
         # Session manager handles all sessions and runners
         # Pass runner factory so manager respects per-session backend preferences
         self._manager = SessionManager(
@@ -544,12 +547,15 @@ class BalloonsApp(App):
         status_bar.set_streaming_count(len(self._streaming_contexts))
 
     def _update_queue_indicator(self) -> None:
-        """Update the input box and queue popup to show queue status."""
+        """Update the input box to show queue status.
+
+        The popup auto-updates via QueueState observer, so we only
+        need to update the input box border here.
+        """
         if not self.session:
             return
         input_box = self.query_one("#input-box", InputBox)
-        queue_popup = self.query_one("#queue-popup", MessageQueuePopup)
-        queue_len = len(self.session.message_queue)
+        queue_len = self._queue_state.get_message_count(self.session.id)
 
         # Update input box border title
         # During streaming: show QUEUE mode with count
@@ -563,29 +569,28 @@ class BalloonsApp(App):
         else:
             input_box.border_title = ""
 
-        # Update queue popup content (always visible)
-        queue_popup.update_queue(self.session.message_queue)
-
     def _process_message_queue(self) -> None:
         """Process queued messages after streaming completes.
 
         Drains messages until a paused one is reached, combining them
         into a single prompt with newline separators.
         """
-        if not self.session or not self.session.message_queue:
+        if not self.session:
             return
 
+        session_id = self.session.id
+
         # Check if queue is blocked (first message is paused)
-        if self.session.message_queue.is_blocked():
+        if self._queue_state.is_blocked(session_id):
             debug_log.info(
                 "Queue is blocked - first message is paused",
                 category="queue",
-                session_id=self.session.id,
+                session_id=session_id,
             )
             return
 
         # Drain all non-paused messages
-        messages = self.session.message_queue.drain()
+        messages = self._queue_state.drain(session_id)
         if not messages:
             return
 
@@ -598,7 +603,7 @@ class BalloonsApp(App):
         debug_log.info(
             f"Processing {len(messages)} queued messages as single prompt ({len(combined_prompt)} chars)",
             category="queue",
-            session_id=self.session.id,
+            session_id=session_id,
         )
         # Start streaming the combined prompt
         self._start_streaming(combined_prompt)
@@ -1031,9 +1036,7 @@ class BalloonsApp(App):
             del self._streaming_contexts[helper_id]
 
         if error or cancelled:
-            # Helper failed - clean up and re-enable input
-            input_box = self.query_one("#input-box", InputBox)
-            input_box.set_disabled(False)
+            # Helper failed - clean up
             status_bar.set_streaming(False)
             self.streaming = False
             if error:
@@ -1059,27 +1062,24 @@ class BalloonsApp(App):
         The compression result is in ctx.content, and fork_data has the original params.
         """
         fork_data = ctx.fork_data
-        if not fork_data:
+        if not fork_data or not isinstance(fork_data, ForkData):
             debug_log.error("No fork_data in context after compression", category="stream")
             # Clean up UI state
-            input_box = self.query_one("#input-box", InputBox)
-            input_box.set_disabled(False)
             status_bar.set_streaming(False)
             self.streaming = False
             self.notify("Fork failed: missing context data", severity="error")
             return
 
         context_tree = self.query_one("#context-tree", ContextTreeView)
-        input_box = self.query_one("#input-box", InputBox)
 
-        # Extract fork params
-        child_session = fork_data["child_session"]
-        prompt = fork_data["prompt"]
-        name = fork_data["name"]
-        background = fork_data["background"]
-        allowed_tools = fork_data["allowed_tools"]
-        copy_items = fork_data["copy_items"]
-        compress_group_positions = fork_data["compress_group_positions"]  # list of (summary_text, first_idx)
+        # Extract fork params from typed dataclass
+        child_session = fork_data.child_session
+        prompt = fork_data.prompt
+        name = fork_data.name
+        background = fork_data.background
+        allowed_tools = fork_data.allowed_tools
+        copy_items = fork_data.copy_items
+        compress_group_positions = fork_data.compress_group_positions
 
         # Build the summary items from compression result
         # For now, we only support one compress group streaming at a time
@@ -1104,8 +1104,8 @@ class BalloonsApp(App):
         asyncio.create_task(child_session.save_async())
 
         # Register child in parent and add fork turn marker
-        parent_session = fork_data["parent_session"]
-        fork_point = fork_data["fork_point"]
+        parent_session = fork_data.parent_session
+        fork_point = fork_data.fork_point
         parent_session.add_child(
             child_session.id,
             prompt,
@@ -1177,7 +1177,6 @@ class BalloonsApp(App):
                 allowed_tools=allowed_tools,
             )
             self.notify(f"Fork '{name or child_session.id[:8]}' started in background")
-            input_box.set_disabled(False)
             self.streaming = False
         else:
             # Foreground mode - switch to child
@@ -1201,25 +1200,22 @@ class BalloonsApp(App):
 
         Similar to fork completion but simpler - no parent/child relationship.
         """
-        fork_data = ctx.fork_data
-        if not fork_data:
-            debug_log.error("No fork_data in context after derive compression", category="stream")
-            input_box = self.query_one("#input-box", InputBox)
-            input_box.set_disabled(False)
+        derive_data = ctx.fork_data
+        if not derive_data or not isinstance(derive_data, DeriveData):
+            debug_log.error("No derive_data in context after derive compression", category="stream")
             status_bar.set_streaming(False)
             self.streaming = False
             self.notify("Derive failed: missing context data", severity="error")
             return
 
         context_tree = self.query_one("#context-tree", ContextTreeView)
-        input_box = self.query_one("#input-box", InputBox)
 
-        # Extract params
-        new_session = fork_data["new_session"]
-        prompt = fork_data["prompt"]
-        allowed_tools = fork_data["allowed_tools"]
-        copy_items = fork_data["copy_items"]
-        compress_group_positions = fork_data["compress_group_positions"]
+        # Extract params from typed dataclass
+        new_session = derive_data.new_session
+        prompt = derive_data.prompt
+        allowed_tools = derive_data.allowed_tools
+        copy_items = derive_data.copy_items
+        compress_group_positions = derive_data.compress_group_positions
 
         # Build the summary items from compression result
         summary_text = ctx.content.strip()
@@ -1360,7 +1356,7 @@ class BalloonsApp(App):
                 self._update_queue_indicator()
 
                 # Process any queued messages
-                if session and len(session.message_queue) > 0:
+                if session and self._queue_state.has_messages(session.id):
                     self._process_message_queue()
 
                 # Check for auto-return conditions
@@ -1577,10 +1573,10 @@ class BalloonsApp(App):
         # Regular prompts queued during streaming
         if self.streaming:
             if self.session:
-                self.session.message_queue.add(prompt)
+                self._queue_state.add_message(self.session.id, prompt)
                 # NOTE: Don't save here - would race with streaming modifying turns.
                 # Queue will be persisted when streaming finishes and session saves.
-                queue_len = len(self.session.message_queue)
+                queue_len = self._queue_state.get_message_count(self.session.id)
                 self.notify(f"Message queued ({queue_len} pending)")
                 self._update_queue_indicator()
             else:
@@ -2343,7 +2339,6 @@ class BalloonsApp(App):
             self._shell_process.kill()
             self._shell_process = None
             self.query_one("#status-bar", StatusBar).set_status("")
-            self.query_one("#input-box", InputBox).set_disabled(False)
 
         # Cancel any streaming (main runner)
         if self.streaming and self._session_runner and self._session_runner.is_streaming:
@@ -2444,11 +2439,7 @@ class BalloonsApp(App):
 
     async def _handle_shell_command(self, cmd: str) -> None:
         """Run a shell command and submit output to Claude."""
-        input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
-
-        # Show processing state
-        input_box.set_disabled(True)
 
         # Use session's working directory if set
         cwd = self.session.working_directory if self.session.working_directory else None
@@ -2457,7 +2448,6 @@ class BalloonsApp(App):
         result = await self._command_executor.execute_shell(cmd, cwd)
 
         if result.was_cancelled:
-            input_box.set_disabled(False)
             return
 
         if not result.success:
@@ -2479,7 +2469,6 @@ class BalloonsApp(App):
         self,
         indexed_messages: list[tuple],
         status_bar,
-        input_box,
     ) -> list[Message]:
         """Build context messages with summaries inserted at their original positions.
 
@@ -2491,7 +2480,6 @@ class BalloonsApp(App):
             indexed_messages: List of (Message, original_index) tuples from
                               get_selected_messages_with_indices()
             status_bar: StatusBar widget for progress updates
-            input_box: InputBox widget to disable during summarization
 
         Returns:
             List of Message objects in correct order, with COMPRESS messages
@@ -2507,7 +2495,6 @@ class BalloonsApp(App):
         summary_items = []  # (summary_msg, insert_idx)
         if groups.needs_compression:
             self.notify("Compressing context...")
-            input_box.set_disabled(True)
 
             for i, group in enumerate(groups.compress_groups):
                 group_messages = [msg for msg, _ in group]
@@ -2522,8 +2509,6 @@ class BalloonsApp(App):
                         content_blocks=[TextBlock(text=f"[Context Summary]\n{summary}")],
                     )
                     summary_items.append((summary_msg, first_idx))
-
-            input_box.set_disabled(False)
 
         return build_context_messages(groups.copy_items, summary_items)
 
@@ -2782,7 +2767,6 @@ class BalloonsApp(App):
             self._streaming_contexts[result.helper_id] = ctx
 
             # Set up UI for compression streaming
-            input_box.set_disabled(True)
             status_bar.set_streaming(True)
             self.streaming = True
 
@@ -2958,7 +2942,6 @@ class BalloonsApp(App):
             )
             self._streaming_contexts[result.helper_id] = ctx
 
-            input_box.set_disabled(True)
             status_bar.set_streaming(True)
             self.streaming = True
 
@@ -3030,11 +3013,8 @@ class BalloonsApp(App):
 
         # Generate LLM summary of the child session
         self.notify("Generating summary...")
-        input_box.set_disabled(True)
 
         return_content = await self._generate_return_summary(selected_messages, return_prompt)
-
-        input_box.set_disabled(False)
 
         # Mark child as returned
         self.session.returned = True
@@ -3213,6 +3193,11 @@ class BalloonsApp(App):
             self._tree_state.set_context_tokens(session.cached_context_tokens, 0)
 
         context_tree.set_active_session(session.id)
+
+        # Update QueueState for the new session
+        # Sync from persistence if this session has queued messages
+        self._queue_state.sync_from_message_queue(session.id, session.message_queue)
+        self._queue_state.set_active_session(session.id)
 
         # Update breadcrumb to show current position in hierarchy
         breadcrumb.set_session(session)
@@ -4489,15 +4474,23 @@ class BalloonsApp(App):
 
     # --- Message Queue Handlers ---
 
+    def _sync_and_save_queue(self) -> None:
+        """Sync queue state to session and save (if not streaming)."""
+        if not self.session:
+            return
+        # Sync QueueState back to session.message_queue for persistence
+        self._queue_state.sync_to_message_queue(self.session.id, self.session.message_queue)
+        # Only save if not streaming (avoid race with turn modifications)
+        if not self.streaming:
+            asyncio.create_task(self.session.save_async())
+
     def on_message_queue_popup_message_removed(self, event: MessageQueuePopup.MessageRemoved) -> None:
         """Handle removing a queued message."""
         if not self.session:
             return
-        removed = self.session.message_queue.remove(event.message_id)
+        removed = self._queue_state.remove_message(self.session.id, event.message_id)
         if removed:
-            # Only save if not streaming (avoid race with turn modifications)
-            if not self.streaming:
-                asyncio.create_task(self.session.save_async())
+            self._sync_and_save_queue()
             self._update_queue_indicator()
             self.notify("Message removed from queue")
 
@@ -4505,10 +4498,8 @@ class BalloonsApp(App):
         """Handle clearing all queued messages."""
         if not self.session:
             return
-        count = self.session.message_queue.clear()
-        # Only save if not streaming (avoid race with turn modifications)
-        if not self.streaming:
-            asyncio.create_task(self.session.save_async())
+        count = self._queue_state.clear(self.session.id)
+        self._sync_and_save_queue()
         self._update_queue_indicator()
         self.notify(f"Cleared {count} queued messages")
 
@@ -4526,24 +4517,20 @@ class BalloonsApp(App):
         """Handle toggling pause on a queued message."""
         if not self.session:
             return
-        new_paused = self.session.message_queue.toggle_pause(event.message_id)
-        # Only save if not streaming (avoid race with turn modifications)
-        if not self.streaming:
-            asyncio.create_task(self.session.save_async())
+        new_paused = self._queue_state.toggle_pause(self.session.id, event.message_id)
+        self._sync_and_save_queue()
         self._update_queue_indicator()
-        queue_popup = self.query_one("#queue-popup", MessageQueuePopup)
-        queue_popup.update_queue(self.session.message_queue)
-        self.notify(f"Message {'paused' if new_paused else 'resumed'}")
+        # Popup auto-updates via observer
+        if new_paused is not None:
+            self.notify(f"Message {'paused' if new_paused else 'resumed'}")
 
     def on_message_queue_popup_message_edit_requested(self, event: MessageQueuePopup.MessageEditRequested) -> None:
         """Handle request to edit a queued message."""
         if not self.session:
             return
         # Remove from queue
-        self.session.message_queue.remove(event.message_id)
-        # Only save if not streaming (avoid race with turn modifications)
-        if not self.streaming:
-            asyncio.create_task(self.session.save_async())
+        self._queue_state.remove_message(self.session.id, event.message_id)
+        self._sync_and_save_queue()
         self._update_queue_indicator()
 
         # Put content in input box and focus it
@@ -4552,10 +4539,7 @@ class BalloonsApp(App):
         input_box.insert(event.content)
         input_box.focus()
 
-        # Update queue popup
-        queue_popup = self.query_one("#queue-popup", MessageQueuePopup)
-        queue_popup.update_queue(self.session.message_queue)
-
+        # Popup auto-updates via observer
         self.notify("Editing queued message")
 
     def action_stash_toggle(self) -> None:

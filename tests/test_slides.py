@@ -4,7 +4,7 @@ import json
 import pytest
 from unittest.mock import patch
 
-from session import Session, Turn
+from session import Session, Turn, SessionIndex
 from models import SlideBlock, TextBlock
 from widgets.presentation_screen import PresentationScreen
 
@@ -203,8 +203,12 @@ class TestSlideSerialization:
         """Use a temporary directory for sessions."""
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()
-        with patch("session.SESSIONS_DIR", sessions_dir):
+        index_file = sessions_dir / "index.json"
+        with patch("session.SESSIONS_DIR", sessions_dir), \
+             patch("session.INDEX_FILE", index_file):
+            SessionIndex._instance = None
             yield sessions_dir
+            SessionIndex._instance = None
 
     def test_serialize_slide_block(self):
         """SlideBlock should serialize correctly."""

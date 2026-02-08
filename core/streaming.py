@@ -11,13 +11,14 @@ Pattern:
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from models import (
     TextBlock, ToolUseBlock, InterruptionBlock, ErrorBlock, Message,
     ToolUseEvent, ToolResultEvent,
 )
 from .debug_log import debug_log
+from .fork import ForkData, DeriveData
 
 
 # =============================================================================
@@ -48,8 +49,8 @@ class StreamingContext:
     # Helper task tracking (for context compression, merge summaries)
     is_helper: bool = False  # True if this is a helper task, not a normal prompt
     helper_type: str = ""  # "compress", "merge", etc.
-    # For fork context compression: data needed to complete the fork after compression
-    fork_data: dict = None  # Contains indexed_messages, allowed_tools, name, background, etc.
+    # For fork/derive context compression: data needed to complete after compression
+    fork_data: Optional[Union[ForkData, DeriveData]] = None
 
     def __post_init__(self):
         if self.tool_events is None:
@@ -58,8 +59,6 @@ class StreamingContext:
             self.tool_turn_indices = {}
         if self.tool_names is None:
             self.tool_names = {}
-        if self.fork_data is None:
-            self.fork_data = {}
 
 
 # =============================================================================
@@ -174,7 +173,7 @@ class HelperDoneAction(StreamingAction):
     """Helper task completed."""
     helper_type: str
     content: str
-    fork_data: dict
+    fork_data: Optional[Union[ForkData, DeriveData]]
     error: Optional[str] = None
     cancelled: bool = False
 

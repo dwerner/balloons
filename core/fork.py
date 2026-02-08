@@ -20,6 +20,42 @@ from .context_grouper import group_messages_by_context_mode, ContextGroups
 
 
 # =============================================================================
+# Data Transfer Objects - Typed data passed between fork/derive phases
+# =============================================================================
+
+@dataclass
+class ForkData:
+    """Data needed to complete a fork after context compression.
+
+    This replaces the untyped dict previously used in ForkResult.fork_data
+    and StreamingContext.fork_data for fork operations.
+    """
+    child_session: Session
+    parent_session: Session
+    prompt: str
+    name: str
+    background: bool
+    allowed_tools: list[str]
+    copy_items: list[tuple[Message, int]]  # (message, original_index)
+    compress_group_positions: list[int]  # First index of each compress group
+    fork_point: int
+
+
+@dataclass
+class DeriveData:
+    """Data needed to complete a derive after context compression.
+
+    This replaces the untyped dict previously used in DeriveResult.derive_data
+    for derive operations.
+    """
+    new_session: Session
+    prompt: str
+    allowed_tools: list[str]
+    copy_items: list[tuple[Message, int]]  # (message, original_index)
+    compress_group_positions: list[int]  # First index of each compress group
+
+
+# =============================================================================
 # Result Dataclasses - UI-agnostic operation results
 # =============================================================================
 
@@ -170,7 +206,7 @@ class ForkResult:
     # For compression: helper context data
     helper_id: Optional[str] = None
     compression_prompt: Optional[str] = None
-    fork_data: dict = field(default_factory=dict)
+    fork_data: Optional[ForkData] = None
 
     # For immediate execution (no compression)
     prompt: str = ""
@@ -206,7 +242,7 @@ class DeriveResult:
     # For compression: helper context data
     helper_id: Optional[str] = None
     compression_prompt: Optional[str] = None
-    derive_data: dict = field(default_factory=dict)
+    derive_data: Optional[DeriveData] = None
 
     # For immediate execution
     prompt: str = ""
@@ -352,17 +388,17 @@ class ForkManager:
                 needs_compression=True,
                 helper_id=helper_id,
                 compression_prompt=compression_prompt,
-                fork_data={
-                    "child_session": child_session,
-                    "parent_session": current_session,
-                    "prompt": prompt,
-                    "name": name,
-                    "background": background,
-                    "allowed_tools": allowed_tools,
-                    "copy_items": groups.copy_items,
-                    "compress_group_positions": groups.compress_group_positions[:1],
-                    "fork_point": fork_point,
-                },
+                fork_data=ForkData(
+                    child_session=child_session,
+                    parent_session=current_session,
+                    prompt=prompt,
+                    name=name,
+                    background=background,
+                    allowed_tools=allowed_tools,
+                    copy_items=groups.copy_items,
+                    compress_group_positions=groups.compress_group_positions[:1],
+                    fork_point=fork_point,
+                ),
                 prompt=prompt,
                 name=name,
                 allowed_tools=allowed_tools,
@@ -370,7 +406,7 @@ class ForkManager:
 
     def complete_fork_after_compression(
         self,
-        fork_data: dict,
+        fork_data: ForkData,
         compressed_summary: str,
     ) -> ForkResult:
         """Complete a fork after context compression.
@@ -379,21 +415,21 @@ class ForkManager:
         at the correct position and finalizes the fork.
 
         Args:
-            fork_data: Data from the original prepare_fork call
+            fork_data: Typed data from the original prepare_fork call
             compressed_summary: LLM-generated summary of compressed context
 
         Returns:
             ForkResult ready for UI updates
         """
-        child_session = fork_data["child_session"]
-        parent_session = fork_data["parent_session"]
-        copy_items = fork_data["copy_items"]
-        compress_positions = fork_data["compress_group_positions"]
-        prompt = fork_data["prompt"]
-        name = fork_data["name"]
-        background = fork_data["background"]
-        allowed_tools = fork_data["allowed_tools"]
-        fork_point = fork_data["fork_point"]
+        child_session = fork_data.child_session
+        parent_session = fork_data.parent_session
+        copy_items = fork_data.copy_items
+        compress_positions = fork_data.compress_group_positions
+        prompt = fork_data.prompt
+        name = fork_data.name
+        background = fork_data.background
+        allowed_tools = fork_data.allowed_tools
+        fork_point = fork_data.fork_point
 
         # Build messages with summary inserted at correct position
         all_items = []
@@ -583,36 +619,36 @@ class ForkManager:
                 needs_compression=True,
                 helper_id=helper_id,
                 compression_prompt=compression_prompt,
-                derive_data={
-                    "new_session": new_session,
-                    "prompt": prompt,
-                    "allowed_tools": allowed_tools,
-                    "copy_items": groups.copy_items,
-                    "compress_group_positions": groups.compress_group_positions[:1],
-                },
+                derive_data=DeriveData(
+                    new_session=new_session,
+                    prompt=prompt,
+                    allowed_tools=allowed_tools,
+                    copy_items=groups.copy_items,
+                    compress_group_positions=groups.compress_group_positions[:1],
+                ),
                 prompt=prompt,
                 allowed_tools=allowed_tools,
             )
 
     def complete_derive_after_compression(
         self,
-        derive_data: dict,
+        derive_data: DeriveData,
         compressed_summary: str,
     ) -> DeriveResult:
         """Complete a derive after context compression.
 
         Args:
-            derive_data: Data from the original prepare_derive call
+            derive_data: Typed data from the original prepare_derive call
             compressed_summary: LLM-generated summary
 
         Returns:
             DeriveResult ready for UI updates
         """
-        new_session = derive_data["new_session"]
-        copy_items = derive_data["copy_items"]
-        compress_positions = derive_data["compress_group_positions"]
-        prompt = derive_data["prompt"]
-        allowed_tools = derive_data["allowed_tools"]
+        new_session = derive_data.new_session
+        copy_items = derive_data.copy_items
+        compress_positions = derive_data.compress_group_positions
+        prompt = derive_data.prompt
+        allowed_tools = derive_data.allowed_tools
 
         # Build messages with summary
         all_items = []
