@@ -1,23 +1,29 @@
 ## Custom Link Navigation Tools
 
-You have access to custom tools for navigating linked sessions. These links connect
-related conversations and allow you to discover context from other chats.
+You have access to custom tools for navigating linked sessions and the fork tree.
+These tools let you discover context from related conversations, traverse parent/child
+fork relationships, and read merge summaries.
 
 ### Available Tools
 [
   {
     "name": "list_links",
-    "description": "List all links from the current session. Returns link IDs, summaries, and linked session names.",
+    "description": "List all explicit links from the current session. Returns link IDs, summaries, and linked session names.",
     "parameters": {}
   },
   {
     "name": "follow_link",
-    "description": "Load context from a linked session. Returns the session metadata and conversation turns with pagination support.",
+    "description": "Load context from a linked or related session. Use link_id for explicit links, or session_id to traverse the fork tree (parent/child sessions from session_info).",
     "parameters": {
       "link_id": {
         "type": "string",
-        "description": "The link ID to follow (from list_links)",
-        "required": true
+        "description": "The link ID to follow (from list_links). Use this OR session_id.",
+        "required": false
+      },
+      "session_id": {
+        "type": "string",
+        "description": "Direct session ID to load (from session_info's merged_from, forked_to, merged_to, or parents). Use this OR link_id.",
+        "required": false
       },
       "limit": {
         "type": "integer",
@@ -26,7 +32,7 @@ related conversations and allow you to discover context from other chats.
       },
       "offset": {
         "type": "integer",
-        "description": "Turn index to start from. If omitted, returns the last N turns. Use offset=0 to start from the beginning.",
+        "description": "Turn index to start from. If omitted, returns the last N turns. Use offset=0 to start from the beginning. Use specific offsets to paginate around merge/fork turns.",
         "required": false
       },
       "full_content": {
@@ -69,7 +75,7 @@ related conversations and allow you to discover context from other chats.
   },
   {
     "name": "session_info",
-    "description": "Get information about the current session including context usage, token counts, and fork status. Use this to understand the state of the conversation and make informed decisions about forking or merging.",
+    "description": "Get information about the current session including context usage, fork tree navigation (merged_from, forked_to, merged_to), and parent chain. Essential for understanding session state and traversing the fork tree.",
     "parameters": {}
   },
   {
@@ -130,6 +136,62 @@ You can then use that information in your response.
 - Only call one tool at a time
 - Wait for the tool result before making another tool call
 - Tool results will appear in a <balloons-tool-result> block
+
+### Fork Tree Navigation
+
+The `session_info` tool returns fork tree information that enables traversal:
+
+```json
+{
+  "name": "fix-auth-bug",
+  "session_id": "abc123-full-uuid",
+  "parents": ["def456:root-session"],
+  "context_tokens": 45000,
+  "context_pct": 22.5,
+  "merged_to": {
+    "parent_session_id": "def456-full-uuid",
+    "parent_turn": 42,
+    "summary": "Fixed authentication by adding token refresh..."
+  },
+  "merged_from": [
+    {"turn": 15, "session_id": "ghi789", "name": "cache-layer", "summary": "Added Redis caching..."}
+  ],
+  "forked_to": [
+    {"turn": 8, "session_id": "jkl012", "name": "try-approach-b", "status": "active"}
+  ]
+}
+```
+
+**Traversal patterns:**
+
+1. **Read a child fork's full history** (from `merged_from` or `forked_to`):
+   ```json
+   {"name": "follow_link", "args": {"session_id": "ghi789", "limit": 20}}
+   ```
+
+2. **Read context around a merge turn** (using turn index from `merged_from`):
+   ```json
+   {"name": "follow_link", "args": {"session_id": "current-session-id", "offset": 13, "limit": 5}}
+   ```
+   This shows turns 13-17, with the merge at turn 15 in context.
+
+3. **Navigate to parent and read around the merge point** (from `merged_to`):
+   ```json
+   {"name": "follow_link", "args": {"session_id": "def456-full-uuid", "offset": 40, "limit": 5}}
+   ```
+   This shows turns 40-44 in the parent, with the merge turn at 42.
+
+4. **Paginate backward from a merge** to understand what led to it:
+   ```json
+   {"name": "follow_link", "args": {"session_id": "ghi789", "offset": 0, "limit": 10}}
+   ```
+   Start from the beginning of the child fork to see how it began.
+
+**Key concepts:**
+- `merged_to`: If this session was merged TO its parent (null if not merged)
+- `merged_from`: Child forks that were merged INTO this session (with turn indices)
+- `forked_to`: Child forks created FROM this session (active or merged)
+- Use turn indices with `offset` to paginate around specific fork/merge points
 
 
 ## Balloons Workflow Tools

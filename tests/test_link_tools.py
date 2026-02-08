@@ -12,7 +12,7 @@ from core.link_tools import (
 )
 from claude_runner import ClaudeRunner
 from session import Session
-from models import Message, TextBlock, LinkBlock
+from models import Message, TextBlock, LinkBlock, ForkBlock, MergeBlock, Turn
 
 
 class TestLinkToolNames:
@@ -118,7 +118,7 @@ class TestExecuteLinkTool:
         result, is_error = execute_link_tool("follow_link", {}, session)
 
         assert is_error
-        assert "link_id is required" in result
+        assert "link_id or session_id is required" in result
 
     def test_follow_link_not_found(self):
         session = Mock(spec=Session)
@@ -164,16 +164,21 @@ class TestExecuteLinkTool:
         session.context_window = 200000
         session.is_merged.return_value = False
         session.parent_id = None
+        session.get_all_merge_blocks.return_value = []
+        session.get_all_fork_blocks.return_value = []
 
         result, is_error = execute_link_tool("session_info", {}, session)
 
         assert not is_error
         data = json.loads(result)
 
-        # Check minimal structure (refactored to be concise for LLM)
+        # Check structure
         assert data["name"] == "Test Session"
+        assert data["session_id"] == "test-session-12345678"
         assert data["parents"] == []  # Root session has no parents
-        assert data["merged"] is False
+        assert data["merged_to"] is None  # Not merged
+        assert data["merged_from"] == []  # No child merges
+        assert data["forked_to"] == []  # No child forks
         assert data["context_tokens"] == 40000
         assert data["context_pct"] == 20.0
 
@@ -187,6 +192,8 @@ class TestExecuteLinkTool:
         session.context_window = 200000
         session.is_merged.return_value = False
         session.parent_id = "parent-1234"
+        session.get_all_merge_blocks.return_value = []
+        session.get_all_fork_blocks.return_value = []
 
         # Mock parent session
         parent_session = Mock(spec=Session)
@@ -207,6 +214,131 @@ class TestExecuteLinkTool:
         # Should have one parent in the chain
         assert len(data["parents"]) == 1
         assert "Parent Session" in data["parents"][0]
+        # Not merged, so no merged_to
+        assert data["merged_to"] is None
+
+    def test_session_info_with_merge_and_fork_blocks(self):
+        """Test session_info shows merged_from and forked_to from turns."""
+        session = Mock(spec=Session)
+        session.id = "test-session-12345678"
+        session.title = "Main Session"
+        session.fork_name = ""
+        session.cached_context_tokens = 50000
+        session.context_window = 200000
+        session.is_merged.return_value = False
+        session.parent_id = None
+
+        # Mock merge block (child merged into this session at turn 15)
+        merge_block = MergeBlock(
+            merge_id="merge-123",
+            child_session_id="child-abc",
+            fork_name="fix-cache",
+            message="Added Redis caching with TTL support",
+        )
+        session.get_all_merge_blocks.return_value = [(15, merge_block)]
+
+        # Mock fork block (this session forked to a child at turn 8)
+        fork_block = ForkBlock(
+            fork_id="fork-456",
+            child_session_id="child-def",
+            fork_name="try-memcached",
+            status="active",
+        )
+        session.get_all_fork_blocks.return_value = [(8, fork_block)]
+
+        result, is_error = execute_link_tool("session_info", {}, session)
+
+        assert not is_error
+        data = json.loads(result)
+
+        # Check merged_from
+        assert len(data["merged_from"]) == 1
+        assert data["merged_from"][0]["turn"] == 15
+        assert data["merged_from"][0]["session_id"] == "child-abc"
+        assert data["merged_from"][0]["name"] == "fix-cache"
+        assert "Redis" in data["merged_from"][0]["summary"]
+
+        # Check forked_to
+        assert len(data["forked_to"]) == 1
+        assert data["forked_to"][0]["turn"] == 8
+        assert data["forked_to"][0]["session_id"] == "child-def"
+        assert data["forked_to"][0]["name"] == "try-memcached"
+        assert data["forked_to"][0]["status"] == "active"
+
+    def test_session_info_merged_session(self):
+        """Test session_info shows merged_to when session is merged to parent."""
+        session = Mock(spec=Session)
+        session.id = "child-session-123"
+        session.title = ""
+        session.fork_name = "auth-fix"
+        session.cached_context_tokens = 30000
+        session.context_window = 200000
+        session.is_merged.return_value = True
+        session.parent_id = "parent-session-456"
+        session.merge_point_turn = 42
+        session.merge_message = "Fixed authentication by refreshing tokens"
+        session.get_all_merge_blocks.return_value = []
+        session.get_all_fork_blocks.return_value = []
+
+        # Mock parent session for parents chain
+        parent_session = Mock(spec=Session)
+        parent_session.id = "parent-session-456"
+        parent_session.title = "Main Project"
+        parent_session.fork_name = ""
+        parent_session.parent_id = None
+
+        with patch.object(Session, 'load', return_value=parent_session):
+            result, is_error = execute_link_tool("session_info", {}, session)
+
+        assert not is_error
+        data = json.loads(result)
+
+        # Check merged_to
+        assert data["merged_to"] is not None
+        assert data["merged_to"]["parent_session_id"] == "parent-session-456"
+        assert data["merged_to"]["parent_turn"] == 42
+        assert "authentication" in data["merged_to"]["summary"]
+
+    def test_follow_link_with_session_id(self):
+        """Test follow_link can directly load a session by ID."""
+        current_session = Mock(spec=Session)
+
+        # Target session to load
+        target_session = Mock(spec=Session)
+        target_session.id = "target-session-123"
+        target_session.title = "Target Session"
+        target_session.fork_name = ""
+        target_session.created = "2024-01-01T00:00:00"
+        target_session.last_modified = "2024-01-02T00:00:00"
+        target_session.turns = []
+
+        with patch.object(Session, 'load', return_value=target_session):
+            result, is_error = execute_link_tool(
+                "follow_link",
+                {"session_id": "target-session-123"},
+                current_session
+            )
+
+        assert not is_error
+        data = json.loads(result)
+
+        assert data["session_id"] == "target-session-123"
+        assert data["name"] == "Target Session"
+        assert "link_summary" not in data  # No link_summary when using session_id
+
+    def test_follow_link_session_id_not_found(self):
+        """Test follow_link returns error when session_id doesn't exist."""
+        current_session = Mock(spec=Session)
+
+        with patch.object(Session, 'load', return_value=None):
+            result, is_error = execute_link_tool(
+                "follow_link",
+                {"session_id": "nonexistent-123"},
+                current_session
+            )
+
+        assert is_error
+        assert "Session not found" in result
 
 
 class TestClaudeRunnerSession:

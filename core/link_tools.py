@@ -106,10 +106,17 @@ def _execute_list_links(session: Session) -> tuple[str, bool]:
 
 
 def _execute_follow_link(args: dict[str, Any], current_session: Session) -> tuple[str, bool]:
-    """Load context from a linked session."""
+    """Load context from a linked session.
+
+    Accepts either:
+    - link_id: Follow an explicit LinkBlock by its ID
+    - session_id: Directly load any session by ID (for fork/merge traversal)
+    """
     link_id = args.get("link_id")
-    if not link_id:
-        return "Error: link_id is required", True
+    session_id = args.get("session_id")
+
+    if not link_id and not session_id:
+        return "Error: link_id or session_id is required", True
 
     # Pagination parameters
     limit = args.get("limit", 10)  # Number of turns to return
@@ -119,18 +126,24 @@ def _execute_follow_link(args: dict[str, Any], current_session: Session) -> tupl
     full_content = args.get("full_content", False)
     max_content_len = 100000 if full_content else 10000
 
-    # Find the link (use get_all_active_links to include turn-based LinkBlocks)
-    links = current_session.get_all_active_links()
-    link = next((l for l in links if l.get("link_id") == link_id), None)
+    # Direct session access (for fork/merge traversal)
+    if session_id:
+        linked_session = Session.load(session_id)
+        if not linked_session:
+            return f"Error: Session not found: {session_id}", True
+    else:
+        # Find the link (use get_all_active_links to include turn-based LinkBlocks)
+        links = current_session.get_all_active_links()
+        link = next((l for l in links if l.get("link_id") == link_id), None)
 
-    if not link:
-        return f"Error: Link not found: {link_id}", True
+        if not link:
+            return f"Error: Link not found: {link_id}", True
 
-    linked_session_id = link.get("linked_session_id", "")
-    linked_session = Session.load(linked_session_id)
+        linked_session_id = link.get("linked_session_id", "")
+        linked_session = Session.load(linked_session_id)
 
-    if not linked_session:
-        return f"Error: Linked session not found or deleted: {linked_session_id}", True
+        if not linked_session:
+            return f"Error: Linked session not found or deleted: {linked_session_id}", True
 
     total_turns = len(linked_session.turns)
 
@@ -141,8 +154,11 @@ def _execute_follow_link(args: dict[str, Any], current_session: Session) -> tupl
         "created": linked_session.created,
         "last_modified": linked_session.last_modified,
         "total_turns": total_turns,
-        "link_summary": link.get("summary", ""),
     }
+
+    # Include link summary if accessed via link_id
+    if link_id and not session_id:
+        result["link_summary"] = link.get("summary", "")
 
     # Get turns with pagination
     if offset is not None:
@@ -272,7 +288,7 @@ def _execute_search_linked(args: dict[str, Any], current_session: Session) -> tu
 def _execute_session_info(session: Session) -> tuple[str, bool]:
     """Get information about the current session.
 
-    Returns minimal info to help the LLM understand session state.
+    Returns info to help the LLM understand session state and navigate the fork tree.
     """
     # Calculate context usage
     context_tokens = session.cached_context_tokens
@@ -284,11 +300,43 @@ def _execute_session_info(session: Session) -> tuple[str, bool]:
 
     result = {
         "name": session.title or session.fork_name or session.id[:8],
+        "session_id": session.id,  # Full session ID for navigation
         "parents": parents,  # empty = root session, non-empty = in a fork
-        "merged": session.is_merged(),
         "context_tokens": context_tokens,
         "context_pct": round(context_usage_pct, 1),
     }
+
+    # If this session was merged TO its parent, include that info
+    if session.is_merged() and session.parent_id:
+        result["merged_to"] = {
+            "parent_session_id": session.parent_id,
+            "parent_turn": session.merge_point_turn,
+            "summary": session.merge_message[:500] if session.merge_message else "",
+        }
+    else:
+        result["merged_to"] = None
+
+    # Find merge turns FROM child forks into this session
+    merged_from = []
+    for turn_idx, block in session.get_all_merge_blocks():
+        merged_from.append({
+            "turn": turn_idx,
+            "session_id": block.child_session_id,
+            "name": block.fork_name,
+            "summary": block.message[:200] if block.message else "",
+        })
+    result["merged_from"] = merged_from
+
+    # Find fork turns TO child sessions (active or merged)
+    forked_to = []
+    for turn_idx, block in session.get_all_fork_blocks():
+        forked_to.append({
+            "turn": turn_idx,
+            "session_id": block.child_session_id,
+            "name": block.fork_name,
+            "status": block.status,
+        })
+    result["forked_to"] = forked_to
 
     return json.dumps(result, indent=2), False
 
