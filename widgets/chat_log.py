@@ -855,17 +855,27 @@ class ChatLogView(VerticalScroll):
         MarkedScrollBarRender.markers = sorted(markers)
         self.vertical_scrollbar.refresh()
 
-    def _check_at_bottom(self) -> None:
-        """Check if we're at the bottom and update following state."""
-        self._scroll_controller.check_at_bottom()
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        """Called by Textual whenever scroll_y changes.
 
-    def on_mouse_scroll_down(self, event) -> None:
-        """Track scrolling down (toward bottom)."""
-        self._scroll_controller.check_at_bottom()
-
-    def on_mouse_scroll_up(self, event) -> None:
-        """Track scrolling up (toward top)."""
-        self._scroll_controller.check_at_bottom()
+        This catches ALL scroll changes: mouse wheel, keyboard (PageUp/Down, arrows),
+        and programmatic scrolls. The scroll controller distinguishes between
+        user and programmatic scrolls using a flag.
+        """
+        from core.debug_log import debug_log
+        debug_log.debug(
+            f"watch_scroll_y: {old_value:.0f} -> {new_value:.0f}, "
+            f"max={self.max_scroll_y:.0f}, "
+            f"programmatic={self._scroll_controller.is_programmatic_scroll}, "
+            f"following_before={self._scroll_controller.following}",
+            category="scroll"
+        )
+        super().watch_scroll_y(old_value, new_value)
+        self._scroll_controller.on_scroll_changed()
+        debug_log.debug(
+            f"watch_scroll_y after: following={self._scroll_controller.following}",
+            category="scroll"
+        )
 
     def _smart_scroll(self) -> None:
         """Scroll to end only if user hasn't scrolled up."""

@@ -564,8 +564,11 @@ class TreeState:
                 turn.streaming = False
                 turn.tokens = _context_builder.count_turn_tokens(turn.role, [content_block] if content_block else [])
 
-                # Update session's cached token count (sum all turn tokens)
-                session_data.cached_context_tokens = sum(t.tokens for t in session_data.turns)
+                # Update session's cached token count (sum only non-DROPped turns)
+                session_data.cached_context_tokens = sum(
+                    t.tokens for t in session_data.turns
+                    if self.get_context_mode(session_id, t.idx) != ContextMode.DROP
+                )
 
                 self._notify(TreeEvent.TURN_FINISHED, {
                     "session_id": session_id,

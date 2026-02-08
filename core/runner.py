@@ -403,13 +403,26 @@ class SessionRunner:
 
         Args:
             turn: The Turn to add to the session
-            save_now: If True, save session to disk immediately
+            save_now: If True, save session to disk asynchronously (non-blocking)
         """
         self.session.turns.append(turn)
         if save_now:
-            self.session.save()
+            # Fire-and-forget async save to avoid blocking the UI
+            # The save runs in background without blocking event processing
+            asyncio.create_task(self._async_save_session())
+
+    async def _async_save_session(self) -> None:
+        """Save session asynchronously without blocking the event loop."""
+        try:
+            await self.session.save_async()
             debug_log.debug(
                 f"Session saved incrementally ({len(self.session.turns)} turns)",
+                session_id=self.session.id,
+                category="stream",
+            )
+        except Exception as e:
+            debug_log.error(
+                f"Async session save failed: {e}",
                 session_id=self.session.id,
                 category="stream",
             )

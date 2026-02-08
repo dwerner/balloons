@@ -4,6 +4,7 @@ Collapsible bottom drawer showing debug log entries for Claude observability.
 Uses RichLog for simple append-only display with strict ordering by sequence number.
 """
 
+from textual.events import Click
 from textual.message import Message
 from textual.widgets import RichLog
 from rich.text import Text
@@ -29,6 +30,16 @@ class DebugPane(RichLog):
         def __init__(self, entry: LogEntry) -> None:
             super().__init__()
             self.entry = entry
+
+    class LogLineSelected(Message):
+        """Message posted when user Ctrl+clicks a log line.
+
+        The app can use this to insert the log line into the input box.
+        """
+
+        def __init__(self, text: str) -> None:
+            super().__init__()
+            self.text = text
 
     DEFAULT_CSS = """
     DebugPane {
@@ -67,6 +78,7 @@ class DebugPane(RichLog):
         self._expanded = False
         self._auto_expanded = False
         self._last_seq = 0  # Track last displayed sequence number
+        self._line_entries: list[LogEntry] = []  # Map line number to entry
 
     def on_mount(self) -> None:
         """Subscribe to debug log updates."""
@@ -107,6 +119,9 @@ class DebugPane(RichLog):
             return
 
         self._last_seq = entry.seq
+
+        # Store entry for click handling
+        self._line_entries.append(entry)
 
         # Format and write the entry
         label = self._format_entry(entry)
@@ -172,7 +187,46 @@ class DebugPane(RichLog):
         """Clear all displayed entries."""
         self.clear()
         self._last_seq = 0
+        self._line_entries.clear()
         debug_log.clear()
+
+    def on_click(self, event: Click) -> None:
+        """Handle click on log lines. Ctrl+click inserts into input."""
+        if event.ctrl:
+            # Get line number from y position (relative to scroll)
+            # RichLog stores lines, so we can calculate which line was clicked
+            line_idx = event.y + self.scroll_offset.y
+            if 0 <= line_idx < len(self._line_entries):
+                entry = self._line_entries[line_idx]
+                full_text = self._format_entry_full(entry)
+                self.post_message(self.LogLineSelected(full_text))
+                event.stop()
+
+    def _format_entry_full(self, entry: LogEntry) -> str:
+        """Format a log entry as full text for insertion into input."""
+        parts = [f"[{entry.timestamp}]"]
+        symbol = self.LEVEL_SYMBOLS.get(entry.level, "?")
+        parts.append(f"[{symbol}]")
+
+        if entry.run_id:
+            parts.append(f"pid:{entry.run_id}")
+
+        if entry.category:
+            parts.append(f"{entry.category}:")
+
+        parts.append(entry.message)
+
+        # Include full details for context
+        if entry.details:
+            details_parts = []
+            for k, v in entry.details.items():
+                str_v = str(v)
+                # Don't truncate for full text
+                details_parts.append(f"{k}={str_v}")
+            if details_parts:
+                parts.append(f"({', '.join(details_parts)})")
+
+        return " ".join(parts)
 
     @property
     def is_expanded(self) -> bool:

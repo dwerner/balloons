@@ -10,13 +10,20 @@ from typing import Optional
 
 @dataclass
 class Command:
-    """Base class for all commands."""
-    pass
+    """Base class for all commands.
+
+    Attributes:
+        is_global: If True, command can execute even during streaming.
+                   Global commands don't need the current session to be idle.
+    """
+    # Class attribute - override in subclasses
+    is_global: bool = False
 
 
 @dataclass
 class NewSessionCommand(Command):
     """Create a new blank session, optionally with an initial prompt."""
+    is_global: bool = True  # Can create new session during streaming
     prompt: str = ""
     title: str = ""
 
@@ -83,6 +90,7 @@ class SwitchCommand(Command):
     Without name: show picker
     With name: switch to that named fork
     """
+    is_global: bool = True  # Can switch sessions during streaming
     name: str = ""
 
 
@@ -95,19 +103,20 @@ class ReturnCommand(Command):
 @dataclass
 class PwdCommand(Command):
     """Show current working directory."""
-    pass
+    is_global: bool = True  # UI-only, no session interaction
 
 
 @dataclass
 class CdCommand(Command):
     """Change working directory."""
+    # Not global - changes session's working directory
     path: str = ""
 
 
 @dataclass
 class ReloadCommand(Command):
     """Hot reload the app."""
-    pass
+    # Not global - reloading during streaming could cause issues
 
 
 @dataclass
@@ -119,48 +128,50 @@ class TitleCommand(Command):
 @dataclass
 class HelpCommand(Command):
     """Show help modal with all commands."""
-    pass
+    is_global: bool = True  # UI-only
 
 
 @dataclass
 class DebugToggleCommand(Command):
     """Toggle the debug log pane visibility."""
-    pass
+    is_global: bool = True  # UI-only
 
 
 @dataclass
 class DebugClearCommand(Command):
     """Clear all debug log entries."""
-    pass
+    is_global: bool = True  # UI-only
 
 
 @dataclass
 class DebugPauseCommand(Command):
     """Toggle whether new entries are added to the debug log."""
-    pass
+    is_global: bool = True  # UI-only
 
 
 @dataclass
 class BackendCommand(Command):
     """Set or show the backend for this session."""
+    # Not global - changing backend mid-stream would be confusing
     backend_name: str = ""  # Empty = show current, non-empty = set
 
 
 @dataclass
 class PrefsCommand(Command):
     """Open preferences modal."""
-    pass
+    is_global: bool = True  # UI-only
 
 
 @dataclass
 class EditConfigCommand(Command):
     """Open config file in external editor."""
-    pass
+    # Not global - config changes could affect streaming behavior
 
 
 @dataclass
 class EditPromptCommand(Command):
     """Open a prompt file in external editor."""
+    # Not global - prompt changes could affect next message
     prompt_name: str = ""  # Empty = show picker
 
 
@@ -212,7 +223,7 @@ class ReindexCommand(Command):
     Scans all session files and rebuilds the index with their metadata.
     Use this if sessions are missing from the tree or index is corrupted.
     """
-    pass
+    is_global: bool = True  # Index operation, no session interaction
 
 
 @dataclass
@@ -222,7 +233,7 @@ class FollowCommand(Command):
     When enabled, chat scrolls to show new content as it arrives.
     When disabled, you can scroll freely without jumping.
     """
-    pass
+    is_global: bool = True  # UI toggle
 
 
 @dataclass
@@ -242,7 +253,7 @@ class PopCommand(Command):
 
     Opens a picker to select and retrieve a stashed message.
     """
-    pass
+    is_global: bool = True  # UI-only, opens picker
 
 
 @dataclass
@@ -283,7 +294,7 @@ class PresentCommand(Command):
     Shows slides one at a time with ←/→ navigation.
     Press Esc or q to exit.
     """
-    pass
+    is_global: bool = True  # UI mode switch
 
 
 @dataclass
@@ -292,7 +303,7 @@ class SlidesCommand(Command):
 
     Shows all presentation slides in the current session.
     """
-    pass
+    is_global: bool = True  # UI tab switch
 
 
 @dataclass
@@ -301,7 +312,7 @@ class ChatCommand(Command):
 
     Returns to the main chat conversation view.
     """
-    pass
+    is_global: bool = True  # UI tab switch
 
 
 # Command documentation for help display
@@ -329,7 +340,7 @@ COMMAND_DOCS = [
     (":suspend <cmd>", "Suspend TUI and run interactive shell command"),
     # Navigation
     (":pwd", "Show current working directory"),
-    (":cd [path]", "Change working directory"),
+    (":cd [path]", "Change working directory (shows browser if no path)"),
     # Misc
     (":reload", "Hot reload the app"),
     (":backend [name]", "Show or set the backend for this session"),

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 import uuid
 import os
 from dataclasses import dataclass, field, asdict
@@ -10,6 +11,142 @@ from typing import Optional, AsyncIterator
 import aiofiles
 
 from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, ArchiveBlock, ArchiveSummary, SlideBlock, ContentBlock, ContextMode
+
+
+# Inline MessageQueue to avoid circular import with core/
+@dataclass
+class QueuedMessage:
+    """A message waiting to be sent."""
+    id: str
+    content: str
+    created: datetime
+    paused: bool = False  # When True, this message and all after it are blocked
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "content": self.content,
+            "created": self.created.isoformat(),
+            "paused": self.paused,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "QueuedMessage":
+        return cls(
+            id=data["id"],
+            content=data["content"],
+            created=datetime.fromisoformat(data["created"]),
+            paused=data.get("paused", False),
+        )
+
+
+@dataclass
+class MessageQueue:
+    """Queue of messages pending for a session."""
+    messages: list[QueuedMessage] = field(default_factory=list)
+
+    def add(self, content: str) -> QueuedMessage:
+        """Add a message to the queue."""
+        msg = QueuedMessage(
+            id=str(uuid.uuid4()),
+            content=content,
+            created=datetime.now(),
+        )
+        self.messages.append(msg)
+        return msg
+
+    def pop(self) -> Optional[QueuedMessage]:
+        """Remove and return the next message, or None if empty."""
+        if self.messages:
+            return self.messages.pop(0)
+        return None
+
+    def peek(self) -> Optional[QueuedMessage]:
+        """Return the next message without removing it."""
+        if self.messages:
+            return self.messages[0]
+        return None
+
+    def remove(self, message_id: str) -> bool:
+        """Remove a specific message by ID. Returns True if found."""
+        for i, msg in enumerate(self.messages):
+            if msg.id == message_id:
+                self.messages.pop(i)
+                return True
+        return False
+
+    def toggle_pause(self, message_id: str) -> bool:
+        """Toggle the paused state of a message. Returns new paused state."""
+        for msg in self.messages:
+            if msg.id == message_id:
+                msg.paused = not msg.paused
+                return msg.paused
+        return False
+
+    def get(self, message_id: str) -> Optional[QueuedMessage]:
+        """Get a message by ID."""
+        for msg in self.messages:
+            if msg.id == message_id:
+                return msg
+        return None
+
+    def update_content(self, message_id: str, new_content: str) -> bool:
+        """Update the content of a message. Returns True if found."""
+        for msg in self.messages:
+            if msg.id == message_id:
+                msg.content = new_content
+                return True
+        return False
+
+    def is_blocked(self) -> bool:
+        """Check if the queue is blocked (first message is paused)."""
+        if self.messages:
+            return self.messages[0].paused
+        return False
+
+    def first_pause_index(self) -> int:
+        """Return index of first paused message, or -1 if none."""
+        for i, msg in enumerate(self.messages):
+            if msg.paused:
+                return i
+        return -1
+
+    def drain(self) -> list[str]:
+        """Remove and return content of all messages up to (but not including) the first paused message.
+
+        Returns list of message content strings. If no messages or blocked, returns empty list.
+        """
+        if not self.messages or self.messages[0].paused:
+            return []
+
+        result: list[str] = []
+        while self.messages and not self.messages[0].paused:
+            msg = self.messages.pop(0)
+            result.append(msg.content)
+        return result
+
+    def clear(self) -> int:
+        """Clear all messages. Returns count of cleared messages."""
+        count = len(self.messages)
+        self.messages = []
+        return count
+
+    def __len__(self) -> int:
+        return len(self.messages)
+
+    def __bool__(self) -> bool:
+        return bool(self.messages)
+
+    def to_dict(self) -> dict:
+        return {
+            "messages": [m.to_dict() for m in self.messages],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "MessageQueue":
+        return cls(
+            messages=[QueuedMessage.from_dict(m) for m in data.get("messages", [])],
+        )
 
 
 SESSIONS_DIR = Path.home() / ".balloons" / "sessions"
@@ -53,6 +190,7 @@ class SessionIndex:
     _sessions: dict[str, dict]
     _dirty: bool
     _file_mtime: float  # Tracks file modification time for cache invalidation
+    _save_lock: asyncio.Lock  # Prevents concurrent index writes
 
     def __new__(cls) -> "SessionIndex":
         """Singleton pattern - only one index instance."""
@@ -62,6 +200,7 @@ class SessionIndex:
             cls._instance._dirty = False
             cls._instance._loaded = False
             cls._instance._file_mtime = 0.0
+            cls._instance._save_lock = asyncio.Lock()
         return cls._instance
 
     def _get_file_mtime(self) -> float:
@@ -143,19 +282,27 @@ class SessionIndex:
         self._file_mtime = self._get_file_mtime()  # Update mtime after our write
 
     async def save_async(self) -> None:
-        """Async version of save()."""
+        """Async version of save().
+
+        Uses a lock to prevent concurrent index writes from multiple sessions.
+        """
         if not self._dirty:
             return
 
-        SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-        data = {
-            "version": INDEX_VERSION,
-            "sessions": self._sessions,
-        }
-        async with aiofiles.open(INDEX_FILE, "w", encoding="utf-8") as f:
-            await f.write(json.dumps(data, indent=2))
-        self._dirty = False
-        self._file_mtime = self._get_file_mtime()  # Update mtime after our write
+        async with self._save_lock:
+            # Re-check dirty after acquiring lock (another task may have saved)
+            if not self._dirty:
+                return
+
+            SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+            data = {
+                "version": INDEX_VERSION,
+                "sessions": self._sessions,
+            }
+            async with aiofiles.open(INDEX_FILE, "w", encoding="utf-8") as f:
+                await f.write(json.dumps(data, indent=2))
+            self._dirty = False
+            self._file_mtime = self._get_file_mtime()  # Update mtime after our write
 
     def get(self, session_id: str) -> dict | None:
         """Get metadata for a session."""
@@ -361,6 +508,17 @@ class Turn:
         return [self.content_block]
 
 
+# Per-session save locks to prevent concurrent writes
+_session_save_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_save_lock(session_id: str) -> asyncio.Lock:
+    """Get or create a lock for saving a specific session."""
+    if session_id not in _session_save_locks:
+        _session_save_locks[session_id] = asyncio.Lock()
+    return _session_save_locks[session_id]
+
+
 @dataclass
 class Session:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -395,6 +553,8 @@ class Session:
     # Cached context token count (calculated from compiled context, not turn content)
     # This is recalculated when turns change and saved to avoid expensive recomputation on load
     cached_context_tokens: int = 0
+    # Message queue for prompts submitted during streaming
+    message_queue: MessageQueue = field(default_factory=MessageQueue)
     # Note: Links are stored as LinkBlock content blocks in messages (turn-based).
     # The legacy `links` field has been removed - old sessions with links data
     # will have those links ignored (they were never actively used).
@@ -627,9 +787,10 @@ class Session:
         return deleted_count
 
     def delete(self) -> bool:
-        """Delete this session's file from disk.
+        """Delete this session's file from disk (sync version).
 
         Returns True if deleted, False if file didn't exist.
+        Note: Prefer delete_async() to avoid blocking the UI.
         """
         path = SESSIONS_DIR / f"{self.id}.json"
         if path.exists():
@@ -639,6 +800,22 @@ class Session:
             index.ensure_loaded()
             index.remove(self.id)
             index.save()
+            return True
+        return False
+
+    async def delete_async(self) -> bool:
+        """Delete this session's file from disk (async version).
+
+        Returns True if deleted, False if file didn't exist.
+        """
+        path = SESSIONS_DIR / f"{self.id}.json"
+        if path.exists():
+            path.unlink()  # File unlink is fast, OK to be sync
+            # Remove from index
+            index = SessionIndex()
+            await index.ensure_loaded_async()
+            index.remove(self.id)
+            await index.save_async()
             return True
         return False
 
@@ -1060,9 +1237,11 @@ class Session:
             "merge_message": self.merge_message,
             "backend_name": self.backend_name,
             "cached_context_tokens": self.cached_context_tokens,
+            "message_queue": self.message_queue.to_dict() if self.message_queue else {},
         }
 
     def save(self):
+        start = time.perf_counter()
         SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
         path = SESSIONS_DIR / f"{self.id}.json"
         data = self._build_save_data()
@@ -1073,20 +1252,31 @@ class Session:
         index.ensure_loaded()
         index.update(self)
         index.save()
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        if elapsed_ms > 50:
+            # Log slow saves to stderr for debugging
+            import sys
+            print(f"SLOW save: {elapsed_ms:.1f}ms for session {self.id[:8]}", file=sys.stderr)
 
     async def save_async(self):
-        """Async version of save()."""
-        SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-        path = SESSIONS_DIR / f"{self.id}.json"
-        data = self._build_save_data()
-        async with aiofiles.open(path, "w", encoding="utf-8") as f:
-            await f.write(json.dumps(data, indent=2))
+        """Async version of save().
 
-        # Update session index
-        index = SessionIndex()
-        await index.ensure_loaded_async()
-        index.update(self)
-        await index.save_async()
+        Uses a per-session lock to prevent concurrent writes to the same session.
+        If a save is already in progress, this will wait for it to complete.
+        """
+        lock = _get_save_lock(self.id)
+        async with lock:
+            SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+            path = SESSIONS_DIR / f"{self.id}.json"
+            data = self._build_save_data()
+            async with aiofiles.open(path, "w", encoding="utf-8") as f:
+                await f.write(json.dumps(data, indent=2))
+
+            # Update session index
+            index = SessionIndex()
+            await index.ensure_loaded_async()
+            index.update(self)
+            await index.save_async()
 
     @classmethod
     def _load_working_directories(cls, data: dict) -> list[str]:
@@ -1228,6 +1418,7 @@ class Session:
             merge_message=data.get("merge_message", ""),
             backend_name=data.get("backend_name", ""),
             cached_context_tokens=data.get("cached_context_tokens", 0),
+            message_queue=MessageQueue.from_dict(data.get("message_queue", {})),
         )
 
         # Load turns (new format)
@@ -1277,7 +1468,10 @@ class Session:
         path = SESSIONS_DIR / f"{session_id}.json"
         if not path.exists():
             return None
-        data = json.loads(path.read_text())
+        content = path.read_text()
+        if not content:
+            return None
+        data = json.loads(content)
         return cls._build_session_from_data(data)
 
     @classmethod
@@ -1288,6 +1482,8 @@ class Session:
             return None
         async with aiofiles.open(path, encoding="utf-8") as f:
             content = await f.read()
+        if not content:
+            return None
         data = json.loads(content)
         return cls._build_session_from_data(data)
 

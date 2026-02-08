@@ -1,6 +1,7 @@
 from .chat_log import ChatLogView, MoreBelowIndicator, NewMessagesIndicator
 from .input_box import InputBox
 from .stash_popup import StashPopup, MessageStash, StashedMessage
+from .message_queue_popup import MessageQueuePopup
 from .status_bar import StatusBar
 from .context_tree import ContextTreeView
 from .nested_tree import NestedTreeView
@@ -20,6 +21,7 @@ from .fork_proposal_modal import ForkProposalModal, ForkProposalResult
 from .merge_proposal_modal import MergeProposalModal, MergeProposalResult
 from .slides_pane import SlidesPane, SlideCard
 from .presentation_screen import PresentationScreen
+from .directory_picker import DirectoryBrowser
 
 # Backwards compatibility aliases
 ContextTree = ContextTreeView
@@ -33,6 +35,7 @@ __all__ = [
     "StashPopup",
     "MessageStash",
     "StashedMessage",
+    "MessageQueuePopup",
     "StatusBar",
     "ContextTreeView",
     "NestedTreeView",
@@ -65,4 +68,5 @@ __all__ = [
     "SlidesPane",
     "SlideCard",
     "PresentationScreen",
+    "DirectoryBrowser",
 ]

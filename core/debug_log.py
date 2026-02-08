@@ -293,3 +293,34 @@ async def _dump_failed_json_async(filepath: Path, content: str) -> None:
             await f.write(content)
     except Exception:
         pass  # Don't let file errors crash
+
+
+import time
+from contextlib import contextmanager
+
+
+@contextmanager
+def timed(name: str, threshold_ms: float = 50.0):
+    """Context manager that logs a warning if the block takes too long.
+
+    Usage:
+        with timed("session.save"):
+            session.save()
+
+    If the operation takes longer than threshold_ms, logs a warning.
+
+    Args:
+        name: Name to identify the operation in logs
+        threshold_ms: Log warning if operation takes longer than this (default 50ms)
+    """
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        if elapsed_ms > threshold_ms:
+            debug_log.warning(
+                f"SLOW: {name} took {elapsed_ms:.1f}ms (threshold: {threshold_ms}ms)",
+                category="perf",
+                details={"elapsed_ms": elapsed_ms, "threshold_ms": threshold_ms},
+            )

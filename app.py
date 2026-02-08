@@ -32,7 +32,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, TaskPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, MessageStash, StashPopup, SlidesPane, PresentationScreen
+from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, TaskPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, MessageStash, StashPopup, SlidesPane, PresentationScreen, MessageQueuePopup
 from widgets.input_box import CompletionPopup
 from widgets.archive_marker import ArchiveMarker
 from claude_runner import ClaudeRunner
@@ -118,6 +118,7 @@ from core.command_executor import CommandExecutor, ArchiveResult, RehydrateResul
 from core.tool_executor import parse_fork_proposal, parse_merge_proposal
 from core.tree_state import TreeState, TreeEvent
 from core.task_state import get_task_state, TaskStatus
+from core.sounds import play_error_sound, play_done_sound, play_notification_sound
 from tokenizer import count_tokens
 
 
@@ -226,6 +227,15 @@ class BalloonsApp(App):
         margin-left: 1;
         width: auto;
         max-width: 60;
+    }
+
+    #queue-popup {
+        dock: bottom;
+        height: auto;
+        max-height: 10;
+        width: 100%;
+        margin: 0;
+        padding: 0 1;
     }
     """
 
@@ -340,42 +350,45 @@ class BalloonsApp(App):
             )
             # Clear invalid backend and use default
             session.backend_name = ""
-            session.save()
+            asyncio.create_task(session.save_async())
             backend = self._backend_config
         return SessionRunner(session, runner=create_runner(backend))
 
     def _update_base_context_tokens(self, use_cache: bool = False) -> None:
         """Calculate and store base context tokens in TreeState.
 
-        This calculates tokens from the compiled context (selected messages)
-        and stores the result in TreeState. Both the tree and status bar
-        can observe this value. Called when turns change or context modes change.
+        Uses the incrementally-updated cached token count from TreeState's SessionData,
+        which is maintained by finish_turn() as turns are added. Only falls back to
+        expensive full-context tokenization when use_cache=False AND no cached value.
 
         Args:
-            use_cache: If True and session has cached tokens, use those instead
-                       of recalculating. Use this on session load/switch.
+            use_cache: If True, always use cached tokens. If False, may recalculate
+                       if no cached value exists (e.g., after context mode change).
         """
         selected_tokens = 0
         total_tokens = 0
 
         if self.session:
-            # Check for cached value on load
-            if use_cache and self.session.cached_context_tokens > 0:
+            # Get cached tokens from TreeState (updated incrementally during streaming)
+            session_data = self._tree_state.get_session(self.session.id)
+            if session_data and session_data.cached_context_tokens > 0:
+                selected_tokens = session_data.cached_context_tokens
+            elif use_cache and self.session.cached_context_tokens > 0:
+                # Fall back to session's persisted cache
                 selected_tokens = self.session.cached_context_tokens
-            else:
+            elif not use_cache:
+                # No cached value and not using cache - do expensive recompute
+                # This happens after context mode changes
                 try:
                     context_tree = self.query_one("#context-tree", ContextTreeView)
                     selected_messages = context_tree.get_selected_messages()
                     if selected_messages:
                         selected_tokens = self._context_builder.count_messages_tokens(selected_messages)
-                    # Update cached value on session for persistence
-                    self.session.cached_context_tokens = selected_tokens
                 except Exception:
-                    # Tree might not be mounted yet
                     pass
-            # TODO: Calculate total_tokens from all session turns if needed
 
-            # Update TreeState's SessionData so tree label shows new value
+            # Sync caches
+            self.session.cached_context_tokens = selected_tokens
             self._tree_state.update_session_tokens(self.session.id, selected_tokens)
 
         self._tree_state.set_context_tokens(selected_tokens, total_tokens)
@@ -450,6 +463,7 @@ class BalloonsApp(App):
                     with Vertical(id="content-area"):
                         yield ChatLogView(id="chat-log")
                         yield SlidesPane(id="slides-pane")
+                        yield MessageQueuePopup(id="queue-popup")
                     yield MoreBelowIndicator(id="more-below")
                 yield TaskPane(id="task-pane", classes="hidden")
             yield DebugPane(id="debug-pane")
@@ -479,10 +493,14 @@ class BalloonsApp(App):
         """Handle state changes from TreeState that affect token counts and UI."""
         if event == TreeEvent.TURN_FINISHED:
             # Turn completed - recalculate tokens for the session
+            # SKIP during streaming to avoid blocking UI with expensive tokenization
             session_id = data.get("session_id")
             if session_id == self._tree_state.get_current_session_id():
-                self._update_base_context_tokens()
-                self._update_context_tokens()
+                # Only update tokens if not actively streaming
+                # Token counts will be updated when streaming finishes (DoneAction)
+                if not self.streaming:
+                    self._update_base_context_tokens()
+                    self._update_context_tokens()
                 # Update scrollbar markers for unviewed turns
                 self._update_unviewed_markers()
 
@@ -524,6 +542,66 @@ class BalloonsApp(App):
         """Update the status bar with total streaming sessions count."""
         status_bar = self.query_one("#status-bar", StatusBar)
         status_bar.set_streaming_count(len(self._streaming_contexts))
+
+    def _update_queue_indicator(self) -> None:
+        """Update the input box and queue popup to show queue status."""
+        if not self.session:
+            return
+        input_box = self.query_one("#input-box", InputBox)
+        queue_popup = self.query_one("#queue-popup", MessageQueuePopup)
+        queue_len = len(self.session.message_queue)
+
+        # Update input box border title
+        # During streaming: show QUEUE mode with count
+        if queue_len > 0 and self.streaming:
+            input_box.border_title = f"[QUEUE] {queue_len} pending"
+        elif queue_len > 0:
+            # Not streaming but have queued items
+            input_box.border_title = f"{queue_len} queued"
+        elif self.streaming:
+            input_box.border_title = "[QUEUE]"
+        else:
+            input_box.border_title = ""
+
+        # Update queue popup content (always visible)
+        queue_popup.update_queue(self.session.message_queue)
+
+    def _process_message_queue(self) -> None:
+        """Process queued messages after streaming completes.
+
+        Drains messages until a paused one is reached, combining them
+        into a single prompt with newline separators.
+        """
+        if not self.session or not self.session.message_queue:
+            return
+
+        # Check if queue is blocked (first message is paused)
+        if self.session.message_queue.is_blocked():
+            debug_log.info(
+                "Queue is blocked - first message is paused",
+                category="queue",
+                session_id=self.session.id,
+            )
+            return
+
+        # Drain all non-paused messages
+        messages = self.session.message_queue.drain()
+        if not messages:
+            return
+
+        # Update queue indicator (may still have items if we stopped at paused)
+        self._update_queue_indicator()
+
+        # Combine all messages with double-newline separator
+        combined_prompt = "\n\n".join(messages)
+
+        debug_log.info(
+            f"Processing {len(messages)} queued messages as single prompt ({len(combined_prompt)} chars)",
+            category="queue",
+            session_id=self.session.id,
+        )
+        # Start streaming the combined prompt
+        self._start_streaming(combined_prompt)
 
     def _poll_background_sessions(self) -> None:
         """Poll ALL streaming sessions for events and update UI.
@@ -869,15 +947,18 @@ class BalloonsApp(App):
 
         elif isinstance(action, DoneAction):
             debug_log.info("Received done action, calling finalize", category="stream", session_id=session_id)
+            play_done_sound()
             self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar)
 
         elif isinstance(action, ErrorAction):
             debug_log.error(action.error, session_id=session_id, category="stream")
+            play_error_sound()
             if is_active:
                 chat_log.append_to_current(f"\n\n[Error: {action.error}]")
             self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar, error=action.error)
 
         elif isinstance(action, RateLimitAction):
+            play_error_sound()
             if is_active:
                 chat_log.append_to_current(f"\n\n[Rate Limit] {action.message}")
             self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar, error=action.message)
@@ -886,9 +967,10 @@ class BalloonsApp(App):
             self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar, cancelled=True)
 
         elif isinstance(action, InputRequiredAction):
+            play_notification_sound()
             if is_active:
                 chat_log.append_to_current("\n\n[Claude is asking a question - session ended]")
-                status_bar.set_status("Claude asked a question (not supported in non-interactive mode)", animate=False)
+                self.notify("Claude asked a question (not supported)", severity="warning")
             self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar)
 
     def _dispatch_helper_event(
@@ -955,7 +1037,7 @@ class BalloonsApp(App):
             status_bar.set_streaming(False)
             self.streaming = False
             if error:
-                status_bar.set_error(f"Helper failed: {error}")
+                self.notify(f"Helper failed: {error}", severity="error")
             return
 
         # Success - trigger next phase based on helper type
@@ -984,7 +1066,7 @@ class BalloonsApp(App):
             input_box.set_disabled(False)
             status_bar.set_streaming(False)
             self.streaming = False
-            status_bar.set_error("Fork failed: missing context data")
+            self.notify("Fork failed: missing context data", severity="error")
             return
 
         context_tree = self.query_one("#context-tree", ContextTreeView)
@@ -1019,7 +1101,7 @@ class BalloonsApp(App):
         for msg in context_messages:
             child_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
-        child_session.save()
+        asyncio.create_task(child_session.save_async())
 
         # Register child in parent and add fork turn marker
         parent_session = fork_data["parent_session"]
@@ -1037,7 +1119,7 @@ class BalloonsApp(App):
             fork_name=name or "fork",
             prompt=prompt,
         )
-        parent_session.save()
+        asyncio.create_task(parent_session.save_async())
 
         # Add fork marker to parent's chat log
         chat_log.add_fork_marker(
@@ -1085,7 +1167,7 @@ class BalloonsApp(App):
             # This ensures it's persisted even if we crash mid-exchange
             user_blocks = [TextBlock(text=prompt)]
             child_session.add_message("user", prompt, content_blocks=user_blocks, exchange_id=exchange_id)
-            child_session.save()
+            asyncio.create_task(child_session.save_async())
 
             # Start background streaming
             child_runner = self._manager._runners[child_session.id]
@@ -1094,7 +1176,7 @@ class BalloonsApp(App):
                 messages=child_session.turns,
                 allowed_tools=allowed_tools,
             )
-            status_bar.set_status(f"Fork '{name or child_session.id[:8]}' started in background", animate=False)
+            self.notify(f"Fork '{name or child_session.id[:8]}' started in background")
             input_box.set_disabled(False)
             self.streaming = False
         else:
@@ -1126,7 +1208,7 @@ class BalloonsApp(App):
             input_box.set_disabled(False)
             status_bar.set_streaming(False)
             self.streaming = False
-            status_bar.set_error("Derive failed: missing context data")
+            self.notify("Derive failed: missing context data", severity="error")
             return
 
         context_tree = self.query_one("#context-tree", ContextTreeView)
@@ -1158,7 +1240,7 @@ class BalloonsApp(App):
         for msg in context_messages:
             new_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
-        new_session.save()
+        asyncio.create_task(new_session.save_async())
 
         # Register and switch to new session
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
@@ -1264,15 +1346,22 @@ class BalloonsApp(App):
                     session.add_message("assistant", content, content_blocks=assistant_blocks, exchange_id=exchange_id)
 
                 # Final save to ensure all state is persisted
-                session.save()
+                asyncio.create_task(session.save_async())
 
             if ctx.is_active:
-                # Re-enable input
+                # Exit streaming mode (re-enable normal input)
                 debug_log.info("Re-enabling input (active session)", category="stream", session_id=session_id)
                 self.streaming = False
                 status_bar.set_streaming(False)
                 input_box = self.query_one("#input-box", InputBox)
-                input_box.set_disabled(False)
+                input_box.set_streaming_mode(False)
+
+                # Update queue indicator
+                self._update_queue_indicator()
+
+                # Process any queued messages
+                if session and len(session.message_queue) > 0:
+                    self._process_message_queue()
 
                 # Check for auto-return conditions
                 if session and self._check_auto_return(content):
@@ -1283,9 +1372,9 @@ class BalloonsApp(App):
                 if with_widget:
                     with_widget.mark_done()
                 if error:
-                    status_bar.set_error(f"Background error: {error}")
+                    self.notify(f"Background error: {error}", severity="error")
                 elif not cancelled:
-                    status_bar.set_status(f"Background session done: {session_id[:8]}", animate=False)
+                    self.notify(f"Background session done: {session_id[:8]}")
 
         except Exception as e:
             debug_log.error(
@@ -1299,13 +1388,15 @@ class BalloonsApp(App):
                     self.streaming = False
                     status_bar.set_streaming(False)
                     input_box = self.query_one("#input-box", InputBox)
-                    input_box.set_disabled(False)
+                    input_box.set_streaming_mode(False)
                 except Exception:
                     pass
 
         finally:
-            # Always clean up streaming context
-            if session_id in self._streaming_contexts:
+            # Clean up streaming context - but only if it's the SAME context we started with.
+            # If _process_message_queue() started a NEW stream, we must NOT delete it.
+            current_ctx = self._streaming_contexts.get(session_id)
+            if current_ctx is ctx:
                 # Update task state
                 task_state = get_task_state()
                 if cancelled:
@@ -1321,6 +1412,21 @@ class BalloonsApp(App):
                 self._tree_state.stop_streaming(session_id)
                 self._update_streaming_count()
                 debug_log.info("Finalization complete, context cleaned up", category="stream", session_id=session_id)
+            elif current_ctx is not None:
+                # A new stream was started (likely from queue processing) - don't clean up
+                debug_log.info(
+                    "New stream started during finalization, preserving context",
+                    category="stream",
+                    session_id=session_id,
+                )
+                # Still complete the OLD task
+                task_state = get_task_state()
+                if cancelled:
+                    task_state.cancel_task(ctx.exchange_id)
+                elif error:
+                    task_state.fail_task(ctx.exchange_id, error)
+                else:
+                    task_state.complete_task(ctx.exchange_id)
 
     def _load_last_viewed_session(self) -> tuple[Session | None, int | None]:
         """Load the last viewed session and turn index from config.
@@ -1447,23 +1553,38 @@ class BalloonsApp(App):
 
     async def on_input_box_submitted(self, event: InputBox.Submitted) -> None:
         """Handle user input submission."""
-        if self.streaming:
-            return
-
         prompt = event.value.strip()
+        if not prompt:
+            return
 
         # Try to parse as a command
         try:
             cmd = self._command_parser.parse(prompt)
         except ValueError as e:
             # Invalid command
-            status_bar = self.query_one("#status-bar", StatusBar)
-            status_bar.set_error(str(e))
+            self.notify(str(e), severity="error")
             return
 
-        # Dispatch to command handlers
+        # Commands execute immediately (even during streaming for global commands)
         if cmd is not None:
+            # Check if this is a "global" command that can run during streaming
+            if self.streaming and not cmd.is_global:
+                self.notify("Command unavailable during streaming", severity="warning")
+                return
             await self._execute_command(cmd)
+            return
+
+        # Regular prompts queued during streaming
+        if self.streaming:
+            if self.session:
+                self.session.message_queue.add(prompt)
+                # NOTE: Don't save here - would race with streaming modifying turns.
+                # Queue will be persisted when streaming finishes and session saves.
+                queue_len = len(self.session.message_queue)
+                self.notify(f"Message queued ({queue_len} pending)")
+                self._update_queue_indicator()
+            else:
+                self.notify("No session to queue message", severity="error")
             return
 
         # Log and start streaming in background (event-driven)
@@ -1511,7 +1632,7 @@ class BalloonsApp(App):
         # This ensures the user prompt is persisted even if we crash mid-exchange
         user_blocks = [TextBlock(text=prompt)]
         self.session.add_message("user", prompt, content_blocks=user_blocks, exchange_id=exchange_id)
-        self.session.save()
+        asyncio.create_task(self.session.save_async())
 
         # Start the assistant turn in tree (with same exchange_id)
         assistant_turn_idx = turn_idx + 1
@@ -1551,8 +1672,8 @@ class BalloonsApp(App):
             # Add user message to display
             chat_log.add_user_message(prompt)
 
-            # Disable input during streaming
-            input_box.set_disabled(True)
+            # Enable streaming mode (allows queueing prompts)
+            input_box.set_streaming_mode(True)
             status_bar.set_streaming(True)
             # Update status bar to show context tokens being sent for this request
             status_bar.update_stats(overhead_tokens=overhead_tokens, context_tokens=context_tokens)
@@ -1714,7 +1835,7 @@ class BalloonsApp(App):
         chat_log.clear()
         context_tree.load_all_sessions(self.session)
         breadcrumb.set_session(self.session)
-        status_bar.set_status("New session created", animate=False)
+        self.notify("New session created")
 
         # Update context tokens for new empty session
         self._update_base_context_tokens()
@@ -1726,25 +1847,25 @@ class BalloonsApp(App):
 
     def _handle_pwd_command(self) -> None:
         """Show the current working directory for the session."""
-        status_bar = self.query_one("#status-bar", StatusBar)
         if self.session.working_directory:
-            status_bar.set_status(f"Working directory: {self.session.working_directory}", animate=False)
+            self.notify(f"Working directory: {self.session.working_directory}")
         else:
-            status_bar.set_status(f"No working directory set (process cwd: {os.getcwd()})", animate=False)
+            self.notify(f"No working directory set (process cwd: {os.getcwd()})")
 
     def _handle_cd_command(self, path_arg: str) -> None:
         """Change the working directory for the session."""
-        status_bar = self.query_one("#status-bar", StatusBar)
-
         if not path_arg:
-            # No argument - clear working directory or show current
-            if self.session.working_directory:
-                status_bar.set_status(f"Working directory: {self.session.working_directory}", animate=False)
-            else:
-                status_bar.set_status("No working directory set. Use :cd <path> to set one.", animate=False)
+            # No argument - switch to files tab and show directory browser
+            self._switch_to_files_tab()
             return
 
         # Expand ~ and resolve relative paths
+        self._set_working_directory(path_arg)
+
+    def _set_working_directory(self, path_arg: str) -> None:
+        """Set the working directory to the given path."""
+        status_bar = self.query_one("#status-bar", StatusBar)
+
         try:
             target_path = Path(path_arg).expanduser()
             if not target_path.is_absolute():
@@ -1755,25 +1876,25 @@ class BalloonsApp(App):
                 target_path = target_path.resolve()
 
             if not target_path.exists():
-                status_bar.set_error(f"Path does not exist: {target_path}")
+                self.notify(f"Path does not exist: {target_path}", severity="error")
                 return
 
             if not target_path.is_dir():
-                status_bar.set_error(f"Not a directory: {target_path}")
+                self.notify(f"Not a directory: {target_path}", severity="error")
                 return
 
             # Set the working directory (resolves to canonical absolute path)
             self.session.set_working_directory(str(target_path))
-            self.session.save()
+            asyncio.create_task(self.session.save_async())
             status_bar.update_working_directory(self.session.working_directory)
-            status_bar.set_status(f"Changed to: {target_path}", animate=False)
+            self.notify(f"Changed to: {target_path}")
 
         except Exception as e:
-            status_bar.set_error(f"Invalid path: {e}")
+            self.notify(f"Invalid path: {e}", severity="error")
 
     def _handle_reload(self) -> None:
         """Reload the app by re-executing the process."""
-        self.session.save()
+        asyncio.create_task(self.session.save_async())
         # Save current view position so we return here after reload
         turn_index = len(self.session.turns) - 1 if self.session.turns else None
         save_last_view(self.session.id, turn_index)
@@ -1781,10 +1902,8 @@ class BalloonsApp(App):
 
     def _handle_title_command(self, title: str) -> None:
         """Set the session title."""
-        status_bar = self.query_one("#status-bar", StatusBar)
-
         self.session.title = title
-        self.session.save()
+        asyncio.create_task(self.session.save_async())
 
         # Update UI with new title
         chat_log = self.query_one("#chat-log", ChatLogView)
@@ -1794,7 +1913,7 @@ class BalloonsApp(App):
         context_tree = self.query_one("#context-tree", ContextTreeView)
         context_tree.load_all_sessions(self.session)
 
-        status_bar.set_status(f"Session titled: {title}", animate=False)
+        self.notify(f"Session titled: {title}")
 
     async def _handle_backend_command(self, backend_name: str) -> None:
         """Set or show the backend for this session."""
@@ -1806,26 +1925,20 @@ class BalloonsApp(App):
             result = self._command_executor.get_backend_info(self.session, config)
             info = result.info
             if info.is_missing:
-                status_bar.set_status(
-                    f"Backend: {info.current} (MISSING - will use default). Available: {', '.join(info.available)}",
-                    animate=False
-                )
+                self.notify(f"Backend: {info.current} (MISSING - will use default)", severity="warning")
             else:
-                status_bar.set_status(
-                    f"Backend: {info.current} (available: {', '.join(info.available)})",
-                    animate=False
-                )
+                self.notify(f"Backend: {info.current} (available: {', '.join(info.available)})")
             return
 
         # Set backend for this session
         result = self._command_executor.set_backend(self.session, backend_name, config)
 
         if not result.success:
-            status_bar.set_status(result.error, animate=False)
+            self.notify(result.error, severity="error")
             return
 
         # Save session and recreate runner
-        self.session.save()
+        asyncio.create_task(self.session.save_async())
 
         backend_config = config.get_backend(result.new_backend)
         self._manager._runners[self.session.id] = SessionRunner(
@@ -1834,7 +1947,7 @@ class BalloonsApp(App):
 
         # Update status bar with new backend and model
         status_bar.update_stats(backend=result.new_backend, model=result.model)
-        status_bar.set_status(f"Backend set to: {result.new_backend}", animate=False)
+        self.notify(f"Backend set to: {result.new_backend}")
 
     async def _handle_link_command(self, target_prefixes: list[str]) -> None:
         """Create bidirectional links to one or more sessions.
@@ -1857,14 +1970,12 @@ class BalloonsApp(App):
         )
 
         if not resolve_result.success:
-            status_bar.set_error(resolve_result.error)
+            self.notify(resolve_result.error, severity="error")
             return
 
         # Phase 2: Generate any needed summaries
         if resolve_result.needs_summary:
-            status_bar.set_status("Generating session summaries...", animate=True)
-            self.refresh()
-            await asyncio.sleep(0)
+            self.notify("Generating session summaries...")
 
             for session in resolve_result.needs_summary:
                 # Set session context for task tracking
@@ -1885,7 +1996,7 @@ class BalloonsApp(App):
 
         # Save all modified sessions
         for session in link_result.sessions_to_save:
-            session.save()
+            asyncio.create_task(session.save_async())
 
         # Update UI for each link
         linked_names = []
@@ -1910,9 +2021,9 @@ class BalloonsApp(App):
             linked_names.append(target_name)
 
         if len(linked_names) == 1:
-            status_bar.set_status(f"Linked to '{linked_names[0]}'", animate=False)
+            self.notify(f"Linked to '{linked_names[0]}'")
         else:
-            status_bar.set_status(f"Linked to {len(linked_names)} sessions", animate=False)
+            self.notify(f"Linked to {len(linked_names)} sessions")
 
     async def _handle_archive_command(self, hint: str) -> None:
         """Archive selected turns to a file with LLM-generated summary.
@@ -1926,20 +2037,20 @@ class BalloonsApp(App):
         status_bar = self.query_one("#status-bar", StatusBar)
 
         if not self.session:
-            status_bar.set_error("No active session")
+            self.notify("No active session", severity="error")
             return
 
         # Get the cursor selection from the tree (turn or exchange group)
         cursor_selection = context_tree.get_cursor_turns()
         if not cursor_selection:
-            status_bar.set_error("Select a turn or exchange to archive")
+            self.notify("Select a turn or exchange to archive", severity="error")
             return
 
         cursor_session_id, turn_indices = cursor_selection
 
         # Must be in the current session
         if cursor_session_id != self.session.id:
-            status_bar.set_error("Selected turn must be in the current session")
+            self.notify("Selected turn must be in the current session", severity="error")
             return
 
         # Archive the selected range (contiguous turns)
@@ -1956,9 +2067,7 @@ class BalloonsApp(App):
         )
 
         # Generate structured summary using LLM
-        status_bar.set_status("Generating archive summary...", animate=True)
-        self.refresh()
-        await asyncio.sleep(0)
+        self.notify("Generating archive summary...")
 
         # Ensure summarizer has current session for task tracking
         self._summarizer.set_session_id(self.session.id)
@@ -1979,12 +2088,12 @@ class BalloonsApp(App):
 
         if not result.success:
             debug_log.error(f"Archive failed: {result.error}", category="archive")
-            status_bar.set_error(f"Archive failed: {result.error}")
+            self.notify(f"Archive failed: {result.error}", severity="error")
             return
 
         # Update session state
         self.session.turns = result.new_turns
-        self.session.save()
+        asyncio.create_task(self.session.save_async())
 
         # Reload the UI first so TreeState has updated turns
         chat_log.clear()
@@ -1996,10 +2105,7 @@ class BalloonsApp(App):
         self._update_base_context_tokens()
         self._update_context_tokens()
 
-        status_bar.set_status(
-            f"Archived {result.archived_count} turns to {result.file_path}",
-            animate=False,
-        )
+        self.notify(f"Archived {result.archived_count} turns")
 
     async def _archive_turns_from_tree(self, session_id: str, turn_indices: list[int]) -> None:
         """Archive turns requested from tree view (ctrl+shift+click or x key).
@@ -2033,10 +2139,7 @@ class BalloonsApp(App):
         )
 
         # Generate structured summary using LLM
-        status_bar = self.query_one("#status-bar", StatusBar)
-        status_bar.set_status("Generating archive summary...", animate=True)
-        self.refresh()
-        await asyncio.sleep(0)
+        self.notify("Generating archive summary...")
 
         # Ensure summarizer has current session for task tracking
         self._summarizer.set_session_id(self.session.id)
@@ -2057,12 +2160,12 @@ class BalloonsApp(App):
 
         if not result.success:
             debug_log.error(f"Archive failed: {result.error}", category="archive")
-            status_bar.set_error(f"Archive failed: {result.error}")
+            self.notify(f"Archive failed: {result.error}", severity="error")
             return
 
         # Update session state
         self.session.turns = result.new_turns
-        self.session.save()
+        asyncio.create_task(self.session.save_async())
 
         # Reload the UI first so TreeState has updated turns
         chat_log = self.query_one("#chat-log", ChatLogView)
@@ -2077,19 +2180,15 @@ class BalloonsApp(App):
         self._update_base_context_tokens()
         self._update_context_tokens()
 
-        status_bar.set_status(
-            f"Archived {result.archived_count} turns to {result.file_path}",
-            animate=False,
-        )
+        self.notify(f"Archived {result.archived_count} turns")
 
     async def _handle_rehydrate_command(self) -> None:
         """Rehydrate selected archive marker back to original turns."""
         context_tree = self.query_one("#context-tree", ContextTreeView)
         chat_log = self.query_one("#chat-log", ChatLogView)
-        status_bar = self.query_one("#status-bar", StatusBar)
 
         if not self.session:
-            status_bar.set_error("No active session")
+            self.notify("No active session", severity="error")
             return
 
         # Get selected turn indices - should contain the archive marker
@@ -2097,7 +2196,7 @@ class BalloonsApp(App):
         selected_indices = [idx for _msg, idx in indexed_messages]
 
         if not selected_indices:
-            status_bar.set_error("No archive marker selected")
+            self.notify("No archive marker selected", severity="error")
             return
 
         # Find archive block in selected turns
@@ -2113,7 +2212,7 @@ class BalloonsApp(App):
                 break
 
         if archive_turn_index is None:
-            status_bar.set_error("No archive marker in selection")
+            self.notify("No archive marker in selection", severity="error")
             return
 
         debug_log.info(
@@ -2129,12 +2228,12 @@ class BalloonsApp(App):
 
         if not result.success:
             debug_log.error(f"Rehydration failed: {result.error}", category="archive")
-            status_bar.set_error(f"Rehydration failed: {result.error}")
+            self.notify(f"Rehydration failed: {result.error}", severity="error")
             return
 
         # Update session state
         self.session.turns = result.new_turns
-        self.session.save()
+        asyncio.create_task(self.session.save_async())
 
         # Reload the UI first so TreeState has updated turns
         chat_log.clear()
@@ -2146,7 +2245,7 @@ class BalloonsApp(App):
         self._update_base_context_tokens()
         self._update_context_tokens()
 
-        status_bar.set_status(f"Restored {result.restored_count} archived turns", animate=False)
+        self.notify(f"Restored {result.restored_count} archived turns")
 
     def _handle_suspend(self, cmd: str) -> None:
         """Suspend TUI and run interactive command in session's working directory."""
@@ -2196,7 +2295,7 @@ class BalloonsApp(App):
             prompt_files.extend(user_prompts_dir.glob("*.md"))
 
         if not prompt_files:
-            status_bar.set_error("No prompt files found")
+            self.notify("No prompt files found", severity="error")
             return
 
         if prompt_name:
@@ -2208,11 +2307,11 @@ class BalloonsApp(App):
 
             if not matching:
                 available = ", ".join(f.stem for f in prompt_files)
-                status_bar.set_error(f"Prompt not found: {prompt_name}. Available: {available}")
+                self.notify(f"Prompt not found: {prompt_name}", severity="error")
                 return
             elif len(matching) > 1:
                 matches = ", ".join(f.stem for f in matching)
-                status_bar.set_error(f"Ambiguous: {matches}")
+                self.notify(f"Ambiguous: {matches}", severity="error")
                 return
 
             prompt_path = matching[0]
@@ -2273,7 +2372,7 @@ class BalloonsApp(App):
         new_session = Session()
         for msg in selected_messages:
             new_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
-        new_session.save()
+        asyncio.create_task(new_session.save_async())
 
         # Switch to new session through manager
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
@@ -2329,8 +2428,8 @@ class BalloonsApp(App):
         context_tree.set_session_streaming(new_session.id, True)
         self._update_streaming_count()
 
-        # Disable input during streaming
-        input_box.set_disabled(True)
+        # Enable streaming mode (allows queueing prompts)
+        input_box.set_streaming_mode(True)
         status_bar.set_streaming(True)
         self.streaming = True
 
@@ -2350,15 +2449,12 @@ class BalloonsApp(App):
 
         # Show processing state
         input_box.set_disabled(True)
-        status_bar.set_status(f"Running: {cmd[:30]}...")
 
         # Use session's working directory if set
         cwd = self.session.working_directory if self.session.working_directory else None
 
         # Execute via CommandExecutor
         result = await self._command_executor.execute_shell(cmd, cwd)
-
-        status_bar.set_status("")
 
         if result.was_cancelled:
             input_box.set_disabled(False)
@@ -2410,21 +2506,12 @@ class BalloonsApp(App):
         # Generate summaries for each COMPRESS group
         summary_items = []  # (summary_msg, insert_idx)
         if groups.needs_compression:
-            status_bar.set_status("Compressing context...", animate=True)
+            self.notify("Compressing context...")
             input_box.set_disabled(True)
-            # Force UI refresh before starting long operation
-            self.refresh()
-            await asyncio.sleep(0)
 
             for i, group in enumerate(groups.compress_groups):
                 group_messages = [msg for msg, _ in group]
                 first_idx = group[0][1]  # Position of first message in group
-
-                # Update status with progress
-                if len(groups.compress_groups) > 1:
-                    status_bar.set_status(f"Compressing context ({i+1}/{len(groups.compress_groups)})...", animate=True)
-                    self.refresh()
-                    await asyncio.sleep(0)
 
                 summary = await self._generate_context_summary(group_messages)
 
@@ -2436,7 +2523,6 @@ class BalloonsApp(App):
                     )
                     summary_items.append((summary_msg, first_idx))
 
-            status_bar.set_status("", animate=False)
             input_box.set_disabled(False)
 
         return build_context_messages(groups.copy_items, summary_items)
@@ -2469,7 +2555,7 @@ class BalloonsApp(App):
         def on_result(result: ForkProposalResult | None) -> None:
             if result is None or not result.accepted:
                 # User rejected - send rejection back to Claude via chat
-                status_bar.set_status("Fork proposal rejected")
+                self.notify("Fork proposal rejected")
                 chat_log = self.query_one("#chat-log", ChatLogView)
                 chat_log.add_user_message("[Fork proposal rejected by user]")
                 return
@@ -2548,7 +2634,7 @@ class BalloonsApp(App):
         self._update_context_tokens()
 
         # Show confirmation
-        status_bar.set_status(f"Creating fork: {proposal.name}")
+        self.notify(f"Creating fork: {proposal.name}")
 
         # Create the fork with the proposal's settings
         # Use initial_prompt if provided, otherwise a default
@@ -2573,16 +2659,15 @@ class BalloonsApp(App):
         When the LLM calls propose_merge, we show a modal for the user to
         accept, edit the summary, or reject the merge.
         """
-        status_bar = self.query_one("#status-bar", StatusBar)
         chat_log = self.query_one("#chat-log", ChatLogView)
 
         # Validate that we're in a fork
         if not self.session.is_fork():
-            status_bar.set_error("Cannot merge: not in a fork")
+            self.notify("Cannot merge: not in a fork", severity="error")
             return
 
         if self.session.is_merged():
-            status_bar.set_error("Cannot merge: fork already merged")
+            self.notify("Cannot merge: fork already merged", severity="error")
             return
 
         fork_name = self.session.get_fork_display_name()
@@ -2590,7 +2675,7 @@ class BalloonsApp(App):
         def on_result(result: MergeProposalResult | None) -> None:
             if result is None or not result.accepted:
                 # User rejected - inform Claude via chat
-                status_bar.set_status("Merge proposal rejected")
+                self.notify("Merge proposal rejected")
                 chat_log.add_user_message("[Merge proposal rejected by user]")
                 return
 
@@ -2612,7 +2697,7 @@ class BalloonsApp(App):
         # Validate merge via ForkManager
         prep_result = self._fork_manager.prepare_merge(self.session)
         if not prep_result.success:
-            status_bar.set_error(prep_result.error)
+            self.notify(prep_result.error, severity="error")
             return
 
         # Complete the merge with the provided summary (no need to generate)
@@ -2632,7 +2717,7 @@ class BalloonsApp(App):
         context_tree.load_all_sessions(result.parent_session)
         breadcrumb.set_session(result.parent_session)
 
-        status_bar.set_status(f"Merged from '{result.fork_name}'", animate=False)
+        self.notify(f"Merged from '{result.fork_name}'")
 
     # ===== FORK/MERGE COMMANDS =====
 
@@ -2672,7 +2757,7 @@ class BalloonsApp(App):
         )
 
         if not result.success:
-            status_bar.set_error(result.error)
+            self.notify(result.error, severity="error")
             return
 
         if not result.needs_compression:
@@ -2758,7 +2843,7 @@ class BalloonsApp(App):
             # This ensures it's persisted even if we crash mid-exchange
             user_blocks = [TextBlock(text=result.prompt)]
             child_session.add_message("user", result.prompt, content_blocks=user_blocks, exchange_id=exchange_id)
-            child_session.save()
+            asyncio.create_task(child_session.save_async())
 
             child_runner = self._manager._runners[child_session.id]
             child_runner.start_background(
@@ -2766,10 +2851,10 @@ class BalloonsApp(App):
                 messages=child_session.turns,
                 allowed_tools=result.allowed_tools,
             )
-            status_bar.set_status(f"Fork '{result.name or child_session.id[:8]}' started in background", animate=False)
+            self.notify(f"Fork '{result.name or child_session.id[:8]}' started in background")
         else:
             # Foreground mode - switch to child
-            child_session.save()  # Ensure recent timestamp
+            asyncio.create_task(child_session.save_async())  # Ensure recent timestamp
 
             breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
             self._manager.set_active(child_session.id)
@@ -2797,13 +2882,11 @@ class BalloonsApp(App):
         # Validate merge via ForkManager
         prep_result = self._fork_manager.prepare_merge(self.session)
         if not prep_result.success:
-            status_bar.set_error(prep_result.error)
+            self.notify(prep_result.error, severity="error")
             return
 
         # Generate merge summary via LLM
-        status_bar.set_status("Generating merge summary...", animate=True)
-        self.refresh()
-        await asyncio.sleep(0)
+        self.notify("Generating merge summary...")
         merge_message = await self._generate_merge_summary(self.session, prompt)
 
         # Complete the merge
@@ -2823,7 +2906,7 @@ class BalloonsApp(App):
         context_tree.load_all_sessions(result.parent_session)
         breadcrumb.set_session(result.parent_session)
 
-        status_bar.set_status(f"Merged from '{result.fork_name}'", animate=False)
+        self.notify(f"Merged from '{result.fork_name}'")
 
     async def _handle_derive_command(self, prompt: str) -> None:
         """Create a new independent session with selected context.
@@ -2852,7 +2935,7 @@ class BalloonsApp(App):
         )
 
         if not result.success:
-            status_bar.set_error(result.error)
+            self.notify(result.error, severity="error")
             return
 
         if not result.needs_compression:
@@ -2919,15 +3002,15 @@ class BalloonsApp(App):
                     f.get("name") or f.get("session_id", "")[:8]
                     for f in result.available_forks
                 )
-                status_bar.set_status(f"Forks: {fork_list}", animate=False)
+                self.notify(f"Forks: {fork_list}")
             else:
-                status_bar.set_status("No forks in current session", animate=False)
+                self.notify("No forks in current session")
             return
 
         if result.success:
             self._switch_to_session(result.target_session)
         else:
-            status_bar.set_error(result.error)
+            self.notify(result.error, severity="error")
 
     # ===== END NEW COMMANDS =====
 
@@ -2935,38 +3018,36 @@ class BalloonsApp(App):
         """Return from child session to parent."""
         chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
-        status_bar = self.query_one("#status-bar", StatusBar)
         input_box = self.query_one("#input-box", InputBox)
 
         # Check we're in a child session
         if not self.session.is_child_session():
-            status_bar.set_error("Not in a child session")
+            self.notify("Not in a child session", severity="error")
             return
 
         # Get selected messages from context tree for return content
         selected_messages = context_tree.get_selected_messages()
 
         # Generate LLM summary of the child session
-        status_bar.set_status("Generating summary...")
+        self.notify("Generating summary...")
         input_box.set_disabled(True)
 
         return_content = await self._generate_return_summary(selected_messages, return_prompt)
 
         input_box.set_disabled(False)
-        status_bar.set_status("")
 
         # Mark child as returned
         self.session.returned = True
-        self.session.save()
+        asyncio.create_task(self.session.save_async())
 
         # Load parent and update it
         parent = self.session.get_parent()
         if not parent:
-            status_bar.set_error("Parent session not found")
+            self.notify("Parent session not found", severity="error")
             return
 
         parent.mark_child_returned(self.session.id)
-        parent.save()
+        asyncio.create_task(parent.save_async())
 
         child_id = self.session.id
 
@@ -2992,7 +3073,7 @@ class BalloonsApp(App):
             return_prompt=return_prompt,
         )
 
-        status_bar.set_status("Returned from child session", animate=False)
+        self.notify("Returned from child session")
 
     async def _generate_return_summary(self, messages: list, return_prompt: str) -> str:
         """Generate a summary of selected messages using Claude."""
@@ -3050,7 +3131,7 @@ class BalloonsApp(App):
             # Rehydrate the archive
             new_turns = archiver.rehydrate(self.session.turns, event.turn_index)
             self.session.turns = new_turns
-            self.session.save()
+            asyncio.create_task(self.session.save_async())
 
             debug_log.info(
                 f"Rehydrated archive from {event.file_path}",
@@ -3149,7 +3230,7 @@ class BalloonsApp(App):
             # Resume streaming display for this session
             new_ctx.is_active = True
             self.streaming = True
-            input_box.set_disabled(True)
+            input_box.set_streaming_mode(True)
             status_bar.set_streaming(True)
             debug_log.info(
                 f"Resuming streaming session {session.id[:8]} with {len(new_ctx.content)} chars, {len(new_ctx.tool_events)} tools",
@@ -3167,9 +3248,9 @@ class BalloonsApp(App):
                 format_tool_result_fn=self._format_tool_result_for_resume,
             )
         else:
-            # New session is not streaming - enable input
+            # New session is not streaming - exit streaming mode
             self.streaming = False
-            input_box.set_disabled(False)
+            input_box.set_streaming_mode(False)
             status_bar.set_streaming(False)
 
         # Update working directory in status bar
@@ -3180,9 +3261,7 @@ class BalloonsApp(App):
             session_backend = self._get_backend_for_session(session)
         except BackendNotFoundError as e:
             # Backend no longer exists - warn user and fall back to default
-            status_bar.set_error(
-                f"Backend '{e.backend_name}' not found, using default"
-            )
+            self.notify(f"Backend '{e.backend_name}' not found, using default", severity="warning")
             debug_log.info(
                 f"Session backend '{e.backend_name}' not found, falling back to default",
                 category="session",
@@ -3190,7 +3269,7 @@ class BalloonsApp(App):
             )
             # Clear the invalid backend from the session
             session.backend_name = ""
-            session.save()
+            asyncio.create_task(session.save_async())
             session_backend = self._backend_config
 
         status_bar.update_stats(
@@ -3237,6 +3316,9 @@ class BalloonsApp(App):
         # Update slides pane with the new session
         self._refresh_slides_pane()
 
+        # Update queue popup for the new session
+        self._update_queue_indicator()
+
     def on_context_tree_view_selection_changed(self, event: ContextTreeView.SelectionChanged) -> None:
         """Handle tree selection changes - apply visual context mode indicators."""
         chat_log = self.query_one("#chat-log", ChatLogView)
@@ -3269,7 +3351,7 @@ class BalloonsApp(App):
         # Persist to session turn and save
         if turn_idx < len(self.session.turns):
             self.session.turns[turn_idx].context_mode = new_mode
-            self.session.save()
+            asyncio.create_task(self.session.save_async())
 
         # Update tree label - root label and token count updated via TreeState observer
         context_tree._update_turn_label(self.session.id, turn_idx)
@@ -3278,6 +3360,10 @@ class BalloonsApp(App):
         """Handle click on chat widget to highlight the turn in the tree."""
         if not self.session:
             return
+
+        # Break out of follow mode when user clicks a turn
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        chat_log.following = False
 
         context_tree = self.query_one("#context-tree", ContextTreeView)
         # Convert 1-indexed turn_id to 0-indexed turn_idx
@@ -3294,7 +3380,7 @@ class BalloonsApp(App):
 
         if session and event.turn_idx < len(session.turns):
             session.turns[event.turn_idx].context_mode = event.new_mode
-            session.save()
+            asyncio.create_task(session.save_async())
 
     def on_context_tree_view_turn_delete_requested(self, event: ContextTreeView.TurnDeleteRequested) -> None:
         """Handle turn delete request - show confirmation dialog."""
@@ -3307,12 +3393,12 @@ class BalloonsApp(App):
             session = Session.load(event.session_id)
 
         if not session:
-            status_bar.set_error("Session not found")
+            self.notify("Session not found", severity="error")
             return
 
         # Check if session is read-only (merged fork)
         if session.is_read_only():
-            status_bar.set_error("Cannot delete from merged (read-only) session")
+            self.notify("Cannot delete from merged (read-only) session", severity="error")
             return
 
         # Get turn preview for dialog
@@ -3337,7 +3423,6 @@ class BalloonsApp(App):
 
     def _execute_turn_delete(self, session_id: str, turn_index: int, session: Session) -> None:
         """Execute the turn deletion after confirmation."""
-        status_bar = self.query_one("#status-bar", StatusBar)
         context_tree = self.query_one("#context-tree", ContextTreeView)
 
         if session.delete_turn(turn_index):
@@ -3347,7 +3432,7 @@ class BalloonsApp(App):
                 category="event",
                 details={"turn_index": turn_index},
             )
-            session.save()
+            asyncio.create_task(session.save_async())
 
             # Efficiently update the tree without reloading everything
             context_tree.remove_turn(session_id, turn_index, updated_session=session)
@@ -3358,18 +3443,16 @@ class BalloonsApp(App):
                 chat_log.clear()
                 chat_log.load_history(session.turns, session=session)
 
-            status_bar.set_status(f"Deleted turn {turn_index + 1}", animate=False)
+            self.notify(f"Deleted turn {turn_index + 1}")
         else:
-            status_bar.set_error("Could not delete turn")
+            self.notify("Could not delete turn", severity="error")
 
     def on_context_tree_view_session_delete_requested(self, event: ContextTreeView.SessionDeleteRequested) -> None:
         """Handle session delete request - show confirmation dialog."""
-        status_bar = self.query_one("#status-bar", StatusBar)
-
         # Load the session to get info for confirmation
         session = Session.load(event.session_id)
         if not session:
-            status_bar.set_error("Session not found")
+            self.notify("Session not found", severity="error")
             return
 
         is_active = self.session and self.session.id == event.session_id
@@ -3403,9 +3486,19 @@ class BalloonsApp(App):
             linked_session = Session.load(link.get("linked_session_id", ""))
             if linked_session:
                 linked_session.mark_link_orphaned(link.get("link_id", ""))
-                linked_session.save()
+                asyncio.create_task(linked_session.save_async())
 
-        if session.delete():
+        # Schedule async delete and handle result
+        async def do_delete():
+            return await session.delete_async()
+
+        asyncio.create_task(self._complete_session_delete(session_id, session, was_active, do_delete()))
+
+    async def _complete_session_delete(self, session_id: str, session: Session, was_active: bool, delete_coro) -> None:
+        """Complete session deletion after async delete."""
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+
+        if await delete_coro:
             debug_log.info(
                 f"Deleted session {session_id[:8]}",
                 session_id=session_id,
@@ -3429,22 +3522,20 @@ class BalloonsApp(App):
                     new_session = context_tree.create_new_session()
                     self._switch_to_session(new_session)
 
-            status_bar.set_status(f"Deleted session {session_id[:8]}", animate=False)
+            self.notify(f"Deleted session {session_id[:8]}")
         else:
-            status_bar.set_error("Could not delete session")
+            self.notify("Could not delete session", severity="error")
 
     def on_context_tree_view_exchange_delete_requested(self, event: ContextTreeView.ExchangeDeleteRequested) -> None:
         """Handle exchange group delete request - show confirmation dialog."""
-        status_bar = self.query_one("#status-bar", StatusBar)
-
         # Load the session
         session = Session.load(event.session_id)
         if not session:
-            status_bar.set_error("Session not found")
+            self.notify("Session not found", severity="error")
             return
 
         if session.is_read_only():
-            status_bar.set_error("Cannot delete from merged (read-only) session")
+            self.notify("Cannot delete from merged (read-only) session", severity="error")
             return
 
         turn_count = len(event.turn_indices)
@@ -3462,7 +3553,6 @@ class BalloonsApp(App):
 
     def _execute_exchange_delete(self, session_id: str, turn_indices: list[int], session: Session) -> None:
         """Execute the exchange deletion after confirmation."""
-        status_bar = self.query_one("#status-bar", StatusBar)
         context_tree = self.query_one("#context-tree", ContextTreeView)
 
         deleted_count = session.delete_turns(turn_indices)
@@ -3473,7 +3563,7 @@ class BalloonsApp(App):
                 category="event",
                 details={"turn_indices": turn_indices, "deleted_count": deleted_count},
             )
-            session.save()
+            asyncio.create_task(session.save_async())
 
             # Reload the tree for this session (easier than updating multiple turns)
             context_tree.load_all_sessions(session)
@@ -3484,9 +3574,9 @@ class BalloonsApp(App):
                 chat_log.clear()
                 chat_log.load_history(session.turns, session=session)
 
-            status_bar.set_status(f"Deleted {deleted_count} turns", animate=False)
+            self.notify(f"Deleted {deleted_count} turns")
         else:
-            status_bar.set_error("Could not delete turns")
+            self.notify("Could not delete turns", severity="error")
 
     def on_context_tree_view_session_activated(self, event: ContextTreeView.SessionActivated) -> None:
         """Handle clicking on a session - switch to it."""
@@ -3504,8 +3594,7 @@ class BalloonsApp(App):
 
         # Don't allow linking to the current session
         if self.session and event.session_id == self.session.id:
-            status_bar = self.query_one("#status-bar", StatusBar)
-            status_bar.set_error("Cannot link to current session")
+            self.notify("Cannot link to current session", severity="error")
             return
 
         input_box = self.query_one("#input-box", InputBox)
@@ -3522,8 +3611,7 @@ class BalloonsApp(App):
             # Check if this hash is already in the list
             hash_list = [h.strip() for h in existing_hashes.split(",")]
             if new_hash in hash_list:
-                status_bar = self.query_one("#status-bar", StatusBar)
-                status_bar.set_error(f"Session {new_hash} already in link list")
+                self.notify(f"Session {new_hash} already in link list", severity="error")
                 return
 
             # Append the new hash
@@ -3707,7 +3795,7 @@ class BalloonsApp(App):
 
         if session and event.turn_idx < len(session.turns):
             session.turns[event.turn_idx].context_mode = event.new_mode
-            session.save()
+            asyncio.create_task(session.save_async())
 
     def on_nested_tree_view_session_activated(self, event: NestedTreeView.SessionActivated) -> None:
         """Handle clicking on a session in nested tree - switch to it."""
@@ -3826,7 +3914,7 @@ class BalloonsApp(App):
         # Set title if provided
         if result.title:
             self.session.title = result.title
-            self.session.save()
+            asyncio.create_task(self.session.save_async())
             # Update UI
             context_tree = self.query_one("#context-tree", ContextTreeView)
             context_tree.load_all_sessions(self.session)
@@ -3899,43 +3987,55 @@ class BalloonsApp(App):
         state = "enabled" if debug_log.enabled else "paused"
         self.notify(f"Debug logging {state}")
 
+    def on_debug_pane_log_line_selected(self, event: DebugPane.LogLineSelected) -> None:
+        """Handle Ctrl+click on a debug log line - insert into input."""
+        input_box = self.query_one("#input-box", InputBox)
+        # Insert with newlines before and after for clarity
+        current_text = input_box.text
+        if current_text and not current_text.endswith("\n"):
+            input_box.insert("\n")
+        input_box.insert(f"\n{event.text}\n\n")
+        input_box.focus()
+
     def _handle_reindex_command(self) -> None:
         """Rebuild the session index from disk."""
         from session import SessionIndex
-        status_bar = self.query_one("#status-bar", StatusBar)
         context_tree = self.query_one("#context-tree", ContextTreeView)
 
-        status_bar.set_status("Rebuilding session index...", animate=True)
+        self.notify("Rebuilding session index...")
 
         # Force rebuild
         index = SessionIndex()
         index.rebuild_from_files()
-        index.save()
+        asyncio.create_task(index.save_async())
 
         session_count = len(index._sessions)
-        status_bar.set_status(f"Index rebuilt: {session_count} sessions", animate=False)
+        self.notify(f"Index rebuilt: {session_count} sessions")
 
         # Reload tree with new index data
         context_tree.load_all_sessions(self.session)
 
     def _handle_clear_all_sessions_command(self) -> None:
         """Delete all sessions after confirmation."""
+        asyncio.create_task(self._handle_clear_all_sessions_async())
+
+    async def _handle_clear_all_sessions_async(self) -> None:
+        """Async implementation of clear all sessions command."""
         from session import SessionIndex, SESSIONS_DIR
 
         # Count sessions first
         index = SessionIndex()
-        index.ensure_loaded()
+        await index.ensure_loaded_async()
         session_count = len(index._sessions)
 
         if session_count == 0:
-            status_bar = self.query_one("#status-bar", StatusBar)
-            status_bar.set_status("No sessions to delete", animate=False)
+            self.notify("No sessions to delete")
             return
 
         # Show confirmation dialog
         def on_confirm(confirmed: bool) -> None:
             if confirmed:
-                self._execute_clear_all_sessions()
+                asyncio.create_task(self._execute_clear_all_sessions_async())
 
         self.push_screen(
             ConfirmDialog(
@@ -3945,19 +4045,17 @@ class BalloonsApp(App):
             on_confirm,
         )
 
-    def _execute_clear_all_sessions(self) -> None:
-        """Execute deletion of all sessions after confirmation."""
+    async def _execute_clear_all_sessions_async(self) -> None:
+        """Execute deletion of all sessions after confirmation (async)."""
         from session import SessionIndex, SESSIONS_DIR
-        import shutil
 
-        status_bar = self.query_one("#status-bar", StatusBar)
         context_tree = self.query_one("#context-tree", ContextTreeView)
         chat_log = self.query_one("#chat-log", ChatLogView)
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
 
         # Count before deletion
         index = SessionIndex()
-        index.ensure_loaded()
+        await index.ensure_loaded_async()
         deleted_count = len(index._sessions)
 
         # Delete all session files
@@ -3971,7 +4069,7 @@ class BalloonsApp(App):
         # Clear the index
         index._sessions = {}
         index._dirty = True
-        index.save()
+        asyncio.create_task(index.save_async())
 
         # Clear manager state
         self._manager._sessions.clear()
@@ -3997,7 +4095,7 @@ class BalloonsApp(App):
         self._update_base_context_tokens()
         self._update_context_tokens()
 
-        status_bar.set_status(f"Deleted {deleted_count} sessions", animate=False)
+        self.notify(f"Deleted {deleted_count} sessions")
         debug_log.info(
             f"Cleared all sessions",
             category="session",
@@ -4084,7 +4182,7 @@ class BalloonsApp(App):
             self._start_streaming(full_prompt)
 
         except Exception as e:
-            status_bar.set_error(f"Failed to capture screen: {e}")
+            self.notify(f"Failed to capture screen: {e}", severity="error")
             debug_log.error(
                 f"Screen capture failed: {e}",
                 category="command",
@@ -4100,10 +4198,8 @@ class BalloonsApp(App):
         Args:
             title: Optional slide title
         """
-        status_bar = self.query_one("#status-bar", StatusBar)
-
         if not self.session:
-            status_bar.set_error("No active session")
+            self.notify("No active session", severity="error")
             return
 
         # Create the slide
@@ -4112,7 +4208,7 @@ class BalloonsApp(App):
             content="",
             notes="",
         )
-        self.session.save()
+        asyncio.create_task(self.session.save_async())
 
         # Refresh UI
         self._refresh_slides_pane()
@@ -4123,15 +4219,13 @@ class BalloonsApp(App):
 
     def _handle_present_command(self) -> None:
         """Enter fullscreen presentation mode."""
-        status_bar = self.query_one("#status-bar", StatusBar)
-
         if not self.session:
-            status_bar.set_error("No active session")
+            self.notify("No active session", severity="error")
             return
 
         slides = self.session.get_all_slides()
         if not slides:
-            status_bar.set_error("No slides to present")
+            self.notify("No slides to present", severity="error")
             return
 
         debug_log.info(f"Entering presentation mode: {len(slides)} slides", category="slides")
@@ -4320,24 +4414,23 @@ class BalloonsApp(App):
             # When enabling follow, scroll to bottom
             chat_log.scroll_end(animate=False)
             indicator.hide()
-            status_bar.set_status("Follow enabled")
+            self.notify("Follow enabled")
         else:
-            status_bar.set_status("Follow disabled - scroll freely")
+            self.notify("Follow disabled - scroll freely")
 
     def _handle_stash_command(self, name: str = "") -> None:
         """Handle :stash command - stash current input."""
         input_box = self.query_one("#input-box", InputBox)
-        status_bar = self.query_one("#status-bar", StatusBar)
 
         content = input_box.text.strip()
         if not content:
-            status_bar.set_error("Nothing to stash")
+            self.notify("Nothing to stash", severity="error")
             return
 
         self._message_stash.add(content, name if name else None)
         input_box.clear()
         count = len(self._message_stash)
-        status_bar.set_status(f"Stashed ({count} total)")
+        self.notify(f"Stashed ({count} total)")
 
     def _handle_pop_command(self) -> None:
         """Handle :pop command - show stash picker."""
@@ -4346,11 +4439,10 @@ class BalloonsApp(App):
     def _show_stash_popup(self) -> None:
         """Show the stash popup for selection."""
         stash_popup = self.query_one("#stash-popup", StashPopup)
-        status_bar = self.query_one("#status-bar", StatusBar)
 
         messages = self._message_stash.all()
         if not messages:
-            status_bar.set_error("Stash is empty")
+            self.notify("Stash is empty", severity="error")
             return
 
         stash_popup.show_messages(messages)
@@ -4363,7 +4455,6 @@ class BalloonsApp(App):
     def on_stash_popup_message_selected(self, event: StashPopup.MessageSelected) -> None:
         """Handle selection of a stashed message."""
         input_box = self.query_one("#input-box", InputBox)
-        status_bar = self.query_one("#status-bar", StatusBar)
 
         # Pop the message from stash (removes it)
         self._message_stash.pop(event.index)
@@ -4374,11 +4465,10 @@ class BalloonsApp(App):
         input_box.focus()
 
         self._hide_stash_popup()
-        status_bar.set_status("Loaded from stash")
+        self.notify("Loaded from stash")
 
     def on_stash_popup_message_deleted(self, event: StashPopup.MessageDeleted) -> None:
         """Handle deletion of a stashed message."""
-        status_bar = self.query_one("#status-bar", StatusBar)
         stash_popup = self.query_one("#stash-popup", StashPopup)
 
         self._message_stash.remove(event.index)
@@ -4389,13 +4479,84 @@ class BalloonsApp(App):
             stash_popup.show_messages(messages)
         else:
             self._hide_stash_popup()
-            status_bar.set_status("Stash empty")
+            self.notify("Stash empty")
 
     def on_stash_popup_closed(self, event: StashPopup.Closed) -> None:
         """Handle stash popup being closed without selection."""
         self._hide_stash_popup()
         input_box = self.query_one("#input-box", InputBox)
         input_box.focus()
+
+    # --- Message Queue Handlers ---
+
+    def on_message_queue_popup_message_removed(self, event: MessageQueuePopup.MessageRemoved) -> None:
+        """Handle removing a queued message."""
+        if not self.session:
+            return
+        removed = self.session.message_queue.remove(event.message_id)
+        if removed:
+            # Only save if not streaming (avoid race with turn modifications)
+            if not self.streaming:
+                asyncio.create_task(self.session.save_async())
+            self._update_queue_indicator()
+            self.notify("Message removed from queue")
+
+    def on_message_queue_popup_queue_cleared(self, event: MessageQueuePopup.QueueCleared) -> None:
+        """Handle clearing all queued messages."""
+        if not self.session:
+            return
+        count = self.session.message_queue.clear()
+        # Only save if not streaming (avoid race with turn modifications)
+        if not self.streaming:
+            asyncio.create_task(self.session.save_async())
+        self._update_queue_indicator()
+        self.notify(f"Cleared {count} queued messages")
+
+    def on_message_queue_popup_closed(self, event: MessageQueuePopup.Closed) -> None:
+        """Handle queue popup being closed."""
+        input_box = self.query_one("#input-box", InputBox)
+        input_box.focus()
+
+    def on_message_queue_popup_focus_input(self, event: MessageQueuePopup.FocusInput) -> None:
+        """Handle request to switch focus from queue popup to input."""
+        input_box = self.query_one("#input-box", InputBox)
+        input_box.focus()
+
+    def on_message_queue_popup_message_pause_toggled(self, event: MessageQueuePopup.MessagePauseToggled) -> None:
+        """Handle toggling pause on a queued message."""
+        if not self.session:
+            return
+        new_paused = self.session.message_queue.toggle_pause(event.message_id)
+        # Only save if not streaming (avoid race with turn modifications)
+        if not self.streaming:
+            asyncio.create_task(self.session.save_async())
+        self._update_queue_indicator()
+        queue_popup = self.query_one("#queue-popup", MessageQueuePopup)
+        queue_popup.update_queue(self.session.message_queue)
+        self.notify(f"Message {'paused' if new_paused else 'resumed'}")
+
+    def on_message_queue_popup_message_edit_requested(self, event: MessageQueuePopup.MessageEditRequested) -> None:
+        """Handle request to edit a queued message."""
+        if not self.session:
+            return
+        # Remove from queue
+        self.session.message_queue.remove(event.message_id)
+        # Only save if not streaming (avoid race with turn modifications)
+        if not self.streaming:
+            asyncio.create_task(self.session.save_async())
+        self._update_queue_indicator()
+
+        # Put content in input box and focus it
+        input_box = self.query_one("#input-box", InputBox)
+        input_box.clear()
+        input_box.insert(event.content)
+        input_box.focus()
+
+        # Update queue popup
+        queue_popup = self.query_one("#queue-popup", MessageQueuePopup)
+        queue_popup.update_queue(self.session.message_queue)
+
+        self.notify("Editing queued message")
 
     def action_stash_toggle(self) -> None:
         """Toggle stash: if input has text, stash it; if empty, show popup (Ctrl+S)."""

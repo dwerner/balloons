@@ -6,35 +6,44 @@ from textual.reactive import reactive
 from rich.text import Text
 
 # Commands available for completion with descriptions
+# Format: (command, description, is_global)
+# is_global=True means command executes immediately during streaming
 COMMANDS = [
-    (":new", "New session"),
-    (":title", "Set title"),
-    (":switch", "Switch session"),
-    (":fork", "Fork session"),
-    (":merge", "Merge to parent"),
-    (":derive", "Derive session"),
-    (":link", "Link sessions"),
-    (":query-with", "Query with context"),
-    (":copy-turns", "Copy turns"),
-    (":archive", "Archive turns"),
-    (":rehydrate", "Restore archive"),
-    (":stash", "Stash current input"),
-    (":pop", "Pop from stash"),
-    (":!", "Shell command"),
-    (":suspend", "Suspend for shell"),
-    (":pwd", "Show directory"),
-    (":cd", "Change directory"),
-    (":reload", "Reload app"),
-    (":backend", "Set backend"),
-    (":prefs", "Preferences"),
-    (":edit-config", "Edit config"),
-    (":edit-prompt", "Edit prompt"),
-    (":debug", "Toggle debug"),
-    (":debug-pause", "Pause debug"),
-    (":debug-clear", "Clear debug"),
-    (":follow", "Toggle follow"),
-    (":help", "Show help"),
+    (":new", "New session", True),
+    (":title", "Set title", False),
+    (":switch", "Switch session", True),
+    (":fork", "Fork session", False),
+    (":merge", "Merge to parent", False),
+    (":derive", "Derive session", False),
+    (":link", "Link sessions", False),
+    (":query-with", "Query with context", False),
+    (":copy-turns", "Copy turns", False),
+    (":archive", "Archive turns", False),
+    (":rehydrate", "Restore archive", False),
+    (":stash", "Stash current input", False),
+    (":pop", "Pop from stash", True),
+    (":!", "Shell command", False),
+    (":suspend", "Suspend for shell", False),
+    (":pwd", "Show directory", True),
+    (":cd", "Change directory", False),
+    (":reload", "Reload app", False),
+    (":backend", "Set backend", False),
+    (":prefs", "Preferences", True),
+    (":edit-config", "Edit config", False),
+    (":edit-prompt", "Edit prompt", False),
+    (":debug", "Toggle debug", True),
+    (":debug-pause", "Pause debug", True),
+    (":debug-clear", "Clear debug", True),
+    (":follow", "Toggle follow", True),
+    (":reindex", "Rebuild index", True),
+    (":present", "Presentation mode", True),
+    (":slides", "Slides tab", True),
+    (":chat", "Chat tab", True),
+    (":help", "Show help", True),
 ]
+
+# Set of global command prefixes for quick lookup
+GLOBAL_COMMANDS = {cmd for cmd, _, is_global in COMMANDS if is_global}
 
 
 class CompletionPopup(Static):
@@ -53,13 +62,15 @@ class CompletionPopup(Static):
 
     def __init__(self, **kwargs):
         super().__init__("", **kwargs)  # Initialize with empty content
-        self._candidates: list[tuple[str, str]] = []
+        self._candidates: list[tuple[str, str, bool]] = []  # (cmd, desc, is_global)
         self._selected_index: int = 0
+        self._streaming_mode: bool = False  # For showing global indicators
 
-    def show_candidates(self, candidates: list[tuple[str, str]], selected: int = 0) -> None:
+    def show_candidates(self, candidates: list[tuple[str, str, bool]], selected: int = 0, streaming: bool = False) -> None:
         """Show completion candidates with one highlighted."""
         self._candidates = candidates
         self._selected_index = selected
+        self._streaming_mode = streaming
         self._render_candidates()
         self.display = True
 
@@ -75,14 +86,23 @@ class CompletionPopup(Static):
             return
 
         lines = []
-        for i, (cmd, desc) in enumerate(self._candidates):
+        for i, (cmd, desc, is_global) in enumerate(self._candidates):
             if i == self._selected_index:
                 # Highlighted
                 line = Text(f" {cmd} ", style="reverse")
                 line.append(f" {desc}", style="dim")
             else:
-                line = Text(f" {cmd} ", style="bold green")
+                # Show global commands in green, others in default
+                if is_global and self._streaming_mode:
+                    line = Text(f" {cmd} ", style="bold green")
+                else:
+                    line = Text(f" {cmd} ", style="bold")
                 line.append(f" {desc}", style="dim")
+            # Add global indicator during streaming
+            if self._streaming_mode and is_global:
+                line.append(" [now]", style="green")
+            elif self._streaming_mode and not is_global:
+                line.append(" [queue]", style="yellow dim")
             lines.append(line)
 
         # Join with newlines
@@ -119,12 +139,46 @@ class InputBox(TextArea):
         opacity: 0.5;
     }
 
+    /* Streaming mode: yellow border - prompts will be queued */
+    InputBox.streaming-mode {
+        border: solid $warning;
+        border-title-color: $warning;
+    }
+
+    InputBox.streaming-mode:focus {
+        border: solid $warning;
+        border-title-color: $warning;
+    }
+
+    /* Command mode (typing a :command) - dim green */
     InputBox.command-mode {
-        border: solid green;
+        border: solid darkgreen;
     }
 
     InputBox.command-mode:focus {
+        border: solid darkgreen;
+    }
+
+    /* Global command during streaming - bright green (will execute immediately) */
+    InputBox.streaming-mode.global-command {
         border: solid green;
+        border-title-color: green;
+    }
+
+    InputBox.streaming-mode.global-command:focus {
+        border: solid green;
+        border-title-color: green;
+    }
+
+    /* Non-global command during streaming - cyan (will be queued) */
+    InputBox.streaming-mode.command-mode {
+        border: solid cyan;
+        border-title-color: cyan;
+    }
+
+    InputBox.streaming-mode.command-mode:focus {
+        border: solid cyan;
+        border-title-color: cyan;
     }
     """
 
@@ -144,11 +198,16 @@ class InputBox(TextArea):
     class CompletionChanged(Message):
         """Message sent when completion candidates change."""
 
-        def __init__(self, candidates: list[tuple[str, str]], selected: int, visible: bool) -> None:
+        def __init__(self, candidates: list[tuple[str, str, bool]], selected: int, visible: bool, streaming: bool = False) -> None:
             self.candidates = candidates
             self.selected = selected
             self.visible = visible
+            self.streaming = streaming
             super().__init__()
+
+    class FocusQueueRequested(Message):
+        """Message sent when user wants to focus the queue popup."""
+        pass
 
     class StashRequested(Message):
         """Message sent when user wants to stash current input (Ctrl+S)."""
@@ -165,6 +224,7 @@ class InputBox(TextArea):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._disabled = False
+        self._streaming_mode = False  # When True, only commands are allowed
         self._history: list[str] = []
         self._history_index: int = -1
         self._current_input: str = ""
@@ -189,7 +249,7 @@ class InputBox(TextArea):
         self.max_height = new_height
 
     # Keys that should bubble up to the app (not handled by TextArea)
-    APP_KEYS = {"ctrl+t", "ctrl+o", "ctrl+q", "ctrl+r", "ctrl+g", "ctrl+c", "ctrl+s"}
+    APP_KEYS = {"ctrl+t", "ctrl+o", "ctrl+q", "ctrl+r", "ctrl+g", "ctrl+c", "ctrl+s", "ctrl+b"}
 
     async def _on_key(self, event: Key) -> None:
         """Intercept key events before TextArea processes them."""
@@ -197,10 +257,15 @@ class InputBox(TextArea):
         if event.key in self.APP_KEYS:
             return  # Don't stop, let it bubble up
 
-        # Escape: close completions first, then clear text, then bubble up
+        # Escape: during streaming, always bubble up first to cancel stream
+        # Otherwise: close completions first, then clear text, then bubble up
         if event.key == "escape":
             if self._disabled:
                 return  # Bubble up to app for cancel
+            if self._streaming_mode:
+                # During streaming, Escape should cancel the stream first
+                # Don't consume the event - let it bubble to app.action_cancel_stream
+                return
             if self._completion_visible:
                 event.prevent_default()
                 event.stop()
@@ -252,12 +317,19 @@ class InputBox(TextArea):
                 event.stop()
                 self._history_forward()
                 return
-        if event.key == "tab" and self._completion_visible:
-            # Accept current completion
-            event.prevent_default()
-            event.stop()
-            self._accept_completion()
-            return
+        if event.key == "tab":
+            if self._completion_visible:
+                # Accept current completion
+                event.prevent_default()
+                event.stop()
+                self._accept_completion()
+                return
+            elif self._streaming_mode:
+                # During streaming, Tab switches focus to queue popup
+                event.prevent_default()
+                event.stop()
+                self.post_message(self.FocusQueueRequested())
+                return
         await super()._on_key(event)
 
     def _history_back(self) -> None:
@@ -288,11 +360,13 @@ class InputBox(TextArea):
         """Update completion candidates based on current text.
 
         Shows all commands but highlights the first one matching the typed prefix.
+        Also updates command-mode class based on whether current command is global.
         """
         current_text = self.text
 
         if not current_text.startswith(":"):
             self._hide_completions()
+            self.remove_class("global-command")
             return
 
         # Get command prefix (text before any space or '=')
@@ -303,10 +377,17 @@ class InputBox(TextArea):
 
         # Find the first matching command to highlight
         selected_index = 0
-        for i, (cmd, _) in enumerate(candidates):
+        for i, (cmd, _, _) in enumerate(candidates):
             if cmd.startswith(cmd_text):
                 selected_index = i
                 break
+
+        # Update global-command class based on current command
+        is_global = cmd_text in GLOBAL_COMMANDS
+        if is_global:
+            self.add_class("global-command")
+        else:
+            self.remove_class("global-command")
 
         self._completion_candidates = candidates
         self._completion_original = current_text
@@ -317,6 +398,7 @@ class InputBox(TextArea):
             candidates=candidates,
             selected=selected_index,
             visible=True,
+            streaming=self._streaming_mode,
         ))
 
     def _cycle_completion(self, delta: int) -> None:
@@ -330,6 +412,7 @@ class InputBox(TextArea):
             candidates=self._completion_candidates,
             selected=self._completion_index,
             visible=True,
+            streaming=self._streaming_mode,
         ))
 
     def _accept_completion(self) -> None:
@@ -337,7 +420,7 @@ class InputBox(TextArea):
         if not self._completion_candidates or self._completion_index < 0:
             return
 
-        candidate_cmd, _ = self._completion_candidates[self._completion_index]
+        candidate_cmd, _, _ = self._completion_candidates[self._completion_index]
 
         # Preserve any text after the command (space or =)
         original_cmd = self._completion_original.split(" ")[0].split("=")[0]
@@ -356,6 +439,7 @@ class InputBox(TextArea):
 
     def _hide_completions(self) -> None:
         """Hide the completion popup."""
+        self.remove_class("global-command")
         if self._completion_visible:
             self._completion_visible = False
             self._completion_candidates = []
@@ -389,6 +473,31 @@ class InputBox(TextArea):
         else:
             self.remove_class("disabled")
             self.focus()
+
+    def set_streaming_mode(self, streaming: bool) -> None:
+        """Set streaming mode - commands still work, prompts are queued.
+
+        In streaming mode:
+        - The input box remains fully interactive
+        - Global commands execute immediately (green border when typing)
+        - Non-global commands are queued (cyan border when typing)
+        - Regular prompts are queued (yellow border)
+        - Visual indicator shows "QUEUE" mode
+        """
+        self._streaming_mode = streaming
+        if streaming:
+            self.add_class("streaming-mode")
+            self.remove_class("disabled")
+            # Don't set border_title here - let _update_queue_indicator handle it
+        else:
+            self.remove_class("streaming-mode")
+            self.remove_class("global-command")
+            self.border_title = ""
+
+    @property
+    def is_streaming(self) -> bool:
+        """Whether the input box is in streaming mode."""
+        return self._streaming_mode
 
     def _on_text_area_changed(self, event) -> None:
         """Update command-mode class and completions when text changes."""

@@ -6,7 +6,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from session import Session, Turn, SessionIndex, SESSIONS_DIR, INDEX_FILE
+from session import Session, Turn, SessionIndex, SESSIONS_DIR, INDEX_FILE, MessageQueue, QueuedMessage
 from models import Message, TextBlock, ToolUseBlock, ToolResultBlock
 
 
@@ -596,3 +596,160 @@ class TestAsyncSessionIO:
         for session in sessions:
             path = temp_sessions_dir / f"{session.id}.json"
             assert path.exists()
+
+
+class TestMessageQueue:
+    """Tests for the MessageQueue with pause/blocked functionality."""
+
+    def test_add_and_pop(self):
+        """Test basic add and pop operations."""
+        queue = MessageQueue()
+        m1 = queue.add("First")
+        m2 = queue.add("Second")
+
+        assert len(queue) == 2
+        popped = queue.pop()
+        assert popped.content == "First"
+        assert len(queue) == 1
+
+    def test_paused_field_default(self):
+        """Test that messages start unpaused."""
+        queue = MessageQueue()
+        msg = queue.add("Test message")
+        assert msg.paused is False
+
+    def test_toggle_pause(self):
+        """Test toggling pause state."""
+        queue = MessageQueue()
+        msg = queue.add("Test message")
+
+        # Toggle on
+        result = queue.toggle_pause(msg.id)
+        assert result is True
+        assert msg.paused is True
+
+        # Toggle off
+        result = queue.toggle_pause(msg.id)
+        assert result is False
+        assert msg.paused is False
+
+    def test_toggle_pause_nonexistent(self):
+        """Test toggle on nonexistent message returns False."""
+        queue = MessageQueue()
+        result = queue.toggle_pause("nonexistent-id")
+        assert result is False
+
+    def test_is_blocked(self):
+        """Test is_blocked when first message is paused."""
+        queue = MessageQueue()
+        m1 = queue.add("First")
+        m2 = queue.add("Second")
+
+        # Not blocked initially
+        assert queue.is_blocked() is False
+
+        # Pausing second doesn't block (first is still active)
+        queue.toggle_pause(m2.id)
+        assert queue.is_blocked() is False
+
+        # Pausing first blocks the queue
+        queue.toggle_pause(m1.id)
+        assert queue.is_blocked() is True
+
+    def test_first_pause_index(self):
+        """Test finding first paused message index."""
+        queue = MessageQueue()
+        m1 = queue.add("First")
+        m2 = queue.add("Second")
+        m3 = queue.add("Third")
+
+        # No paused messages
+        assert queue.first_pause_index() == -1
+
+        # Pause second
+        queue.toggle_pause(m2.id)
+        assert queue.first_pause_index() == 1
+
+        # Pause first - should return 0 now
+        queue.toggle_pause(m1.id)
+        assert queue.first_pause_index() == 0
+
+    def test_get(self):
+        """Test get message by ID."""
+        queue = MessageQueue()
+        m1 = queue.add("First")
+        m2 = queue.add("Second")
+
+        found = queue.get(m1.id)
+        assert found is m1
+        assert found.content == "First"
+
+        not_found = queue.get("nonexistent-id")
+        assert not_found is None
+
+    def test_update_content(self):
+        """Test updating message content."""
+        queue = MessageQueue()
+        msg = queue.add("Original content")
+
+        result = queue.update_content(msg.id, "Updated content")
+        assert result is True
+        assert msg.content == "Updated content"
+
+        # Verify via get
+        found = queue.get(msg.id)
+        assert found.content == "Updated content"
+
+    def test_update_content_nonexistent(self):
+        """Test update on nonexistent message returns False."""
+        queue = MessageQueue()
+        result = queue.update_content("nonexistent-id", "New content")
+        assert result is False
+
+    def test_serialization_with_pause(self):
+        """Test that paused state serializes and deserializes."""
+        queue = MessageQueue()
+        m1 = queue.add("First")
+        m2 = queue.add("Second")
+
+        # Pause first message
+        queue.toggle_pause(m1.id)
+
+        # Serialize
+        data = queue.to_dict()
+        assert data["messages"][0]["paused"] is True
+        assert data["messages"][1]["paused"] is False
+
+        # Deserialize
+        loaded = MessageQueue.from_dict(data)
+        assert loaded.messages[0].paused is True
+        assert loaded.messages[1].paused is False
+        assert loaded.is_blocked() is True
+
+    def test_drain_respects_pause(self):
+        """Test that draining stops at paused messages."""
+        queue = MessageQueue()
+        m1 = queue.add("First")
+        m2 = queue.add("Second")
+        m3 = queue.add("Third")
+
+        # Pause second message - first should drain, second and third should stay
+        queue.toggle_pause(m2.id)
+
+        # Simulate drain logic: pop until we hit paused
+        drained = []
+        while queue:
+            next_msg = queue.peek()
+            if next_msg and next_msg.paused:
+                break
+            msg = queue.pop()
+            if msg:
+                drained.append(msg.content)
+
+        # Should have drained only first message
+        assert drained == ["First"]
+        # Queue should still have 2 messages
+        assert len(queue) == 2
+        # First remaining should be the paused one
+        assert queue.peek().content == "Second"
+        assert queue.peek().paused is True

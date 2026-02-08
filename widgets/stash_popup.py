@@ -4,10 +4,13 @@ Allows users to stash draft messages and retrieve them later.
 Similar to command completion popup but for stored messages.
 """
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+import aiofiles
 import yaml
 
 from textual.widgets import Static
@@ -24,14 +27,15 @@ class StashedMessage:
     timestamp: datetime = field(default_factory=datetime.now)
 
     def display_name(self) -> str:
-        """Get display name for the stash entry."""
+        """Get display name for the stash entry.
+
+        Returns full content (newlines replaced with spaces).
+        Truncation is handled by the popup widget based on available width.
+        """
         if self.name:
             return self.name
-        # Show first 30 chars of content, single line
-        preview = self.content.replace("\n", " ")[:30]
-        if len(self.content) > 30:
-            preview += "..."
-        return preview
+        # Return full content, single line (let widget handle truncation)
+        return self.content.replace("\n", " ")
 
     def to_dict(self) -> dict:
         """Convert to dict for YAML serialization."""
@@ -60,7 +64,7 @@ class MessageStash:
         self._load()
 
     def _load(self) -> None:
-        """Load stash from file."""
+        """Load stash from file (sync, used at init)."""
         if self._stash_file.exists():
             try:
                 with open(self._stash_file) as f:
@@ -71,25 +75,38 @@ class MessageStash:
             except Exception:
                 self._messages = []
 
-    def _save(self) -> None:
-        """Save stash to file."""
+    async def _save_async(self) -> None:
+        """Save stash to file (async, non-blocking)."""
         self._stash_file.parent.mkdir(parents=True, exist_ok=True)
         data = {"messages": [m.to_dict() for m in self._messages]}
-        with open(self._stash_file, "w") as f:
-            yaml.safe_dump(data, f, default_flow_style=False)
+        content = yaml.safe_dump(data, default_flow_style=False)
+        async with aiofiles.open(self._stash_file, "w") as f:
+            await f.write(content)
+
+    def _schedule_save(self) -> None:
+        """Schedule an async save (fire-and-forget)."""
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._save_async())
+        except RuntimeError:
+            # No event loop - fall back to sync save
+            self._stash_file.parent.mkdir(parents=True, exist_ok=True)
+            data = {"messages": [m.to_dict() for m in self._messages]}
+            with open(self._stash_file, "w") as f:
+                yaml.safe_dump(data, f, default_flow_style=False)
 
     def add(self, content: str, name: Optional[str] = None) -> StashedMessage:
         """Add a message to the stash."""
         msg = StashedMessage(content=content, name=name)
         self._messages.insert(0, msg)  # Most recent first
-        self._save()
+        self._schedule_save()
         return msg
 
     def remove(self, index: int) -> Optional[StashedMessage]:
         """Remove and return message at index."""
         if 0 <= index < len(self._messages):
             msg = self._messages.pop(index)
-            self._save()
+            self._schedule_save()
             return msg
         return None
 
@@ -122,7 +139,6 @@ class StashPopup(Static, can_focus=True):
         min-width: 30;
         height: auto;
         max-height: 14;
-        max-width: 60;
     }
     StashPopup:focus {
         border: solid $accent;

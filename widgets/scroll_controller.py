@@ -5,10 +5,16 @@ enabling:
 - Unit testing without full Textual widget instantiation
 - Clear separation of scroll logic from content management
 - Reusable scroll behavior for other scrolling containers
+
+Key design decisions:
+- Programmatic scrolls (from smart_scroll) should NOT break follow mode
+- User scrolls (keyboard, mouse) SHOULD break follow mode when scrolling away
+- We use a flag (_programmatic_scroll) to distinguish these cases
 """
 
 from dataclasses import dataclass
 from typing import Protocol, Callable, Any, runtime_checkable
+from contextlib import contextmanager
 
 
 @runtime_checkable
@@ -110,6 +116,8 @@ class ScrollController:
         self._on_new_content_while_not_following = on_new_content_while_not_following
         self._debug_log = debug_log
         self._following = True
+        # Flag to distinguish programmatic scrolls from user scrolls
+        self._programmatic_scroll = False
 
     @property
     def following(self) -> bool:
@@ -121,19 +129,56 @@ class ScrollController:
         """Set following state and notify if changed."""
         if self._following != value:
             self._following = value
-            self._log_info(f"following changed to {value}")
+            self._log_debug(f"following changed to {value}")
             if self._on_following_changed:
                 self._on_following_changed(value)
+
+    @property
+    def is_programmatic_scroll(self) -> bool:
+        """Whether the current scroll is programmatic (not user-initiated)."""
+        return self._programmatic_scroll
+
+    @contextmanager
+    def programmatic_scroll_context(self):
+        """Context manager to mark scrolls as programmatic.
+
+        Use this when performing scrolls that should NOT break follow mode,
+        such as auto-scrolling to new content.
+        """
+        self._programmatic_scroll = True
+        try:
+            yield
+        finally:
+            self._programmatic_scroll = False
+
+    def on_scroll_changed(self) -> None:
+        """Called when scroll position changes (from watch_scroll_y).
+
+        This is the main entry point for detecting user scrolls.
+        Programmatic scrolls are ignored.
+        """
+        if self._programmatic_scroll:
+            return
+
+        if not self._container.is_mounted:
+            return
+
+        self._check_at_bottom_internal()
 
     def check_at_bottom(self) -> None:
         """Check if we're at the bottom and update following state.
 
         Called after scroll events to determine if user has scrolled away
         from the bottom (stopping auto-follow) or back to it (resuming).
+
+        DEPRECATED: Prefer using on_scroll_changed() which respects programmatic scroll flag.
         """
         if not self._container.is_mounted:
             return
+        self._check_at_bottom_internal()
 
+    def _check_at_bottom_internal(self) -> None:
+        """Internal implementation of at-bottom check."""
         max_y = self._container.max_scroll_y
         scroll_y = self._container.scroll_y
 
@@ -145,9 +190,9 @@ class ScrollController:
 
         # Only update if changed to avoid callback spam
         if self._following != at_bottom:
-            self._log_info(
-                f"check_at_bottom: following changing from {self._following} to {at_bottom}, "
-                f"max_scroll_y={max_y}, scroll_y={scroll_y}, gap={max_y - scroll_y}"
+            self._log_debug(
+                f"at_bottom check: {self._following} -> {at_bottom}, "
+                f"gap={max_y - scroll_y:.0f}px"
             )
             self.following = at_bottom
 
@@ -159,25 +204,13 @@ class ScrollController:
         to read history, it won't jump them to the bottom.
         """
         if self._following:
-            self._log_debug("smart_scroll: following=True, scheduling scroll_end")
             # Defer scroll until after layout refresh so scroll_end knows the true max_scroll_y
-            self._container.call_after_refresh(self._scroll_end_and_verify)
-        else:
-            self._log_debug("smart_scroll: following=False, NOT scrolling")
+            self._container.call_after_refresh(self._scroll_end_programmatic)
 
-    def _scroll_end_and_verify(self) -> None:
-        """Scroll to end and re-check if we're actually at the bottom."""
-        self._log_debug(
-            f"_scroll_end_and_verify: before scroll_end, "
-            f"scroll_y={self._container.scroll_y}, max_scroll_y={self._container.max_scroll_y}"
-        )
-        self._container.scroll_end(animate=False)
-        self._log_debug(
-            f"_scroll_end_and_verify: after scroll_end, "
-            f"scroll_y={self._container.scroll_y}, max_scroll_y={self._container.max_scroll_y}"
-        )
-        # Re-check after scroll in case content grew during the frame
-        self._container.call_later(self.check_at_bottom)
+    def _scroll_end_programmatic(self) -> None:
+        """Scroll to end as a programmatic scroll (won't break follow mode)."""
+        with self.programmatic_scroll_context():
+            self._container.scroll_end(animate=False)
 
     def notify_new_content(self) -> None:
         """Notify that new content was added while not following.
@@ -186,7 +219,6 @@ class ScrollController:
         indicator if the user has scrolled away.
         """
         if not self._following:
-            self._log_info("notify_new_content: NOT following, triggering callback")
             if self._on_new_content_while_not_following:
                 self._on_new_content_while_not_following()
 
@@ -203,6 +235,9 @@ class ScrollController:
             at_top: If True, always scroll widget to top of viewport.
                    If False, use smart scroll that minimizes movement.
             content_offset_y: Content offset to subtract (for padding/borders)
+
+        Note: This is a user-initiated scroll (e.g., clicking a turn in the tree),
+        so it SHOULD update follow state based on final position.
         """
         if at_top:
             self._scroll_widget_to_top(widget_region, content_offset_y)
@@ -210,7 +245,8 @@ class ScrollController:
             self._scroll_widget_smart(widget_region)
 
         # After scrolling, check if we're at the bottom
-        self._container.call_later(self.check_at_bottom)
+        # Use call_later to let the scroll settle before checking
+        self._container.call_later(self._check_at_bottom_internal)
 
     def _scroll_widget_smart(self, widget_region: WidgetRegion) -> None:
         """Scroll to widget using minimal movement strategy.
@@ -226,12 +262,6 @@ class ScrollController:
         widget_top = widget_region.y
         widget_bottom = widget_top + widget_height
 
-        self._log_info(
-            f"scroll_widget_smart: widget_region=(y={widget_top}, h={widget_height}), "
-            f"viewport_height={viewport_height}, effective_viewport={effective_viewport}, "
-            f"current_scroll_y={self._container.scroll_y}"
-        )
-
         if widget_height <= effective_viewport:
             # Widget fits in viewport - ensure entire widget is visible above indicator
             current_scroll = self._container.scroll_y
@@ -240,47 +270,30 @@ class ScrollController:
 
             if widget_top >= visible_top and widget_bottom <= visible_bottom:
                 # Already fully visible - no scroll needed
-                self._log_info("  -> already visible, no scroll")
+                pass
             elif widget_top < visible_top:
                 # Widget is above viewport - scroll up to show it
-                self._log_info(f"  -> widget above viewport, scrolling to y={widget_top}")
                 self._container.scroll_to(y=widget_top, animate=False)
             else:
                 # Widget is below viewport - scroll down so bottom of widget
                 # is at bottom of effective viewport (above indicator)
                 target_y = widget_bottom - effective_viewport
-                self._log_info(f"  -> widget below viewport, scrolling to y={target_y}")
                 self._container.scroll_to(y=target_y, animate=False)
         else:
             # Widget doesn't fit - scroll so top of widget is at top of viewport
-            self._log_info(f"  -> widget too tall, scrolling to y={widget_top}")
             self._container.scroll_to(y=widget_top, animate=False)
 
     def _scroll_widget_to_top(self, widget_region: WidgetRegion, content_offset_y: float) -> None:
         """Scroll so the widget is at the top of the viewport."""
         widget_top = widget_region.y
         adjusted_y = max(0, widget_top - content_offset_y)
-
-        self._log_info(
-            f"scroll_widget_to_top: widget_region=(y={widget_top}), "
-            f"content_offset_y={content_offset_y}, current_scroll_y={self._container.scroll_y}, "
-            f"scrolling to y={adjusted_y}"
-        )
         self._container.scroll_to(y=adjusted_y, animate=False)
 
     def reset_to_following(self) -> None:
         """Reset to following state (e.g., when user sends a message)."""
         self.following = True
 
-    def _log_info(self, message: str) -> None:
-        """Log info message if debug_log is available.
-
-        Note: Using debug level to reduce noise - change back to info if debugging scroll issues.
-        """
-        if self._debug_log:
-            self._debug_log.debug(message, category="scroll_controller")
-
     def _log_debug(self, message: str) -> None:
         """Log debug message if debug_log is available."""
         if self._debug_log:
-            self._debug_log.debug(message, category="scroll_controller")
+            self._debug_log.debug(message, category="scroll")

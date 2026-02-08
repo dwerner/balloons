@@ -122,8 +122,8 @@ class TestScrollControllerBasics:
         assert controller.following is True
 
 
-class TestCheckAtBottom:
-    """Test the check_at_bottom logic."""
+class TestOnScrollChanged:
+    """Test the on_scroll_changed behavior (for user scrolls)."""
 
     def test_at_bottom_sets_following_true(self):
         """When at bottom, following becomes True."""
@@ -132,7 +132,7 @@ class TestCheckAtBottom:
         controller = ScrollController(container)
         controller._following = False  # Start not following
 
-        controller.check_at_bottom()
+        controller.on_scroll_changed()
 
         assert controller.following is True
 
@@ -141,7 +141,7 @@ class TestCheckAtBottom:
         container = MockScrollContainer(scroll_y=0, max_scroll_y=1000)
         controller = ScrollController(container)
 
-        controller.check_at_bottom()
+        controller.on_scroll_changed()
 
         assert controller.following is False
 
@@ -150,7 +150,7 @@ class TestCheckAtBottom:
         container = MockScrollContainer(scroll_y=0, max_scroll_y=1)
         controller = ScrollController(container)
 
-        controller.check_at_bottom()
+        controller.on_scroll_changed()
 
         assert controller.following is True
 
@@ -159,7 +159,7 @@ class TestCheckAtBottom:
         container = MockScrollContainer(scroll_y=0, max_scroll_y=1000, is_mounted=False)
         controller = ScrollController(container)
 
-        controller.check_at_bottom()
+        controller.on_scroll_changed()
 
         # Should still be True (initial state) since we didn't process
         assert controller.following is True
@@ -172,7 +172,7 @@ class TestCheckAtBottom:
         controller = ScrollController(container)
         controller._following = True  # Start following
 
-        controller.check_at_bottom()
+        controller.on_scroll_changed()
 
         # 1000 - 950 = 50, which is NOT < 50, so not at bottom
         assert controller.following is False
@@ -183,8 +183,34 @@ class TestCheckAtBottom:
         container = MockScrollContainer(scroll_y=949, max_scroll_y=1000)
         controller = ScrollController(container)
 
-        controller.check_at_bottom()
+        controller.on_scroll_changed()
 
+        assert controller.following is False
+
+    def test_programmatic_scroll_ignored(self):
+        """Programmatic scrolls should not change following state."""
+        container = MockScrollContainer(scroll_y=0, max_scroll_y=1000)
+        controller = ScrollController(container)
+        controller._following = True  # Start following
+
+        # Simulate a programmatic scroll (like smart_scroll does)
+        with controller.programmatic_scroll_context():
+            container._scroll_y = 0  # Scroll to top
+            controller.on_scroll_changed()
+
+        # Should still be following because it was a programmatic scroll
+        assert controller.following is True
+
+    def test_user_scroll_updates_following(self):
+        """User scrolls should update following state."""
+        container = MockScrollContainer(scroll_y=0, max_scroll_y=1000)
+        controller = ScrollController(container)
+        controller._following = True  # Start following
+
+        # Simulate a user scroll (no programmatic context)
+        controller.on_scroll_changed()
+
+        # Should no longer be following because user scrolled away from bottom
         assert controller.following is False
 
 
@@ -211,6 +237,26 @@ class TestSmartScroll:
         container.flush_callbacks()
 
         assert container._scroll_end_called is False
+
+    def test_smart_scroll_uses_programmatic_context(self):
+        """smart_scroll should mark its scroll as programmatic."""
+        container = MockScrollContainer()
+        controller = ScrollController(container)
+
+        # Track whether programmatic flag was set during scroll_end
+        programmatic_during_scroll = []
+        original_scroll_end = container.scroll_end
+
+        def tracking_scroll_end(*, animate=False):
+            programmatic_during_scroll.append(controller.is_programmatic_scroll)
+            original_scroll_end(animate=animate)
+
+        container.scroll_end = tracking_scroll_end
+
+        controller.smart_scroll()
+        container.flush_callbacks()
+
+        assert programmatic_during_scroll == [True]
 
 
 class TestNotifyNewContent:
