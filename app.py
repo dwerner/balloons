@@ -109,6 +109,11 @@ from core import (
     HelperDoneAction,
     NoAction,
     TurnStartedAction,
+    # Helper data types
+    ArchiveData,
+    MergeData,
+    LinkData,
+    ReturnData,
 )
 from core.summarizer import Summarizer
 from core.exceptions import BackendNotFoundError
@@ -310,6 +315,8 @@ class BalloonsApp(App):
         self._pending_token_text = ""
         # Message stash for deferred drafts
         self._message_stash = MessageStash()
+        # Pending link targets for async link operations
+        self._pending_link_targets: list = []
 
     @property
     def session(self) -> Session | None:
@@ -1050,6 +1057,18 @@ class BalloonsApp(App):
         elif ctx.helper_type == "derive":
             # Context compression complete - now start the derived session
             self._complete_derive_after_compression(ctx, chat_log, status_bar)
+        elif ctx.helper_type == "archive":
+            # Archive summary complete - now finalize the archive
+            asyncio.create_task(self._complete_archive_after_summary(ctx, chat_log))
+        elif ctx.helper_type == "merge":
+            # Merge summary complete - now finalize the merge
+            asyncio.create_task(self._complete_merge_after_summary(ctx, chat_log))
+        elif ctx.helper_type == "link":
+            # Link summary complete - continue with next target or finalize
+            asyncio.create_task(self._continue_link_after_summary(ctx, chat_log))
+        elif ctx.helper_type == "return":
+            # Return summary complete - now finalize the return
+            asyncio.create_task(self._complete_return_after_summary(ctx, chat_log))
 
     def _complete_fork_after_compression(
         self,
@@ -1251,6 +1270,273 @@ class BalloonsApp(App):
 
         # Start streaming the actual prompt
         self._start_streaming(prompt)
+
+    async def _complete_archive_after_summary(
+        self,
+        ctx: StreamingContext,
+        chat_log: ChatLogView,
+    ) -> None:
+        """Complete an archive after summary generation finishes.
+
+        The summary is in ctx.content, and archive_data has the original params.
+        """
+        status_bar = self.query_one("#status-bar", StatusBar)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+
+        archive_data = ctx.archive_data
+        if not archive_data:
+            debug_log.error("No archive_data in context after summary generation", category="archive")
+            status_bar.set_streaming(False)
+            self.streaming = False
+            self.notify("Archive failed: missing context data", severity="error")
+            return
+
+        # Get the summary from the helper's output
+        summary = ctx.content.strip()
+        if not summary:
+            # Fall back to simple summary
+            summary = f"Archived turns {archive_data.turn_start}-{archive_data.turn_end - 1}"
+
+        debug_log.info(
+            f"Archive summary generated: {summary[:100]}...",
+            category="archive",
+        )
+
+        # Get the session we're archiving from
+        session = self._manager._sessions.get(archive_data.session_id)
+        if not session:
+            debug_log.error(f"Session {archive_data.session_id} not found", category="archive")
+            status_bar.set_streaming(False)
+            self.streaming = False
+            self.notify("Archive failed: session not found", severity="error")
+            return
+
+        # Use command executor for business logic
+        result = self._command_executor.prepare_archive(
+            session=session,
+            turn_indices=archive_data.turn_indices,
+            summary=summary,
+        )
+
+        if not result.success:
+            debug_log.error(f"Archive failed: {result.error}", category="archive")
+            status_bar.set_streaming(False)
+            self.streaming = False
+            self.notify(f"Archive failed: {result.error}", severity="error")
+            return
+
+        # Update session state
+        session.turns = result.new_turns
+        await session.save_async()
+
+        # Reload the UI first so TreeState has updated turns
+        chat_log.clear()
+        chat_log.load_history(session.turns, session)
+        context_tree.load_all_sessions(session)
+
+        # Recalculate token count after archiving (turns removed)
+        # Must be after tree reload so TreeState has the new turns
+        self._update_base_context_tokens()
+        self._update_context_tokens()
+
+        status_bar.set_streaming(False)
+        self.streaming = False
+        self.notify(f"Archived {result.archived_count} turns")
+
+    async def _complete_merge_after_summary(
+        self,
+        ctx: StreamingContext,
+        chat_log: ChatLogView,
+    ) -> None:
+        """Complete a merge after summary generation finishes.
+
+        The summary is in ctx.content, and merge_data has the session info.
+        """
+        status_bar = self.query_one("#status-bar", StatusBar)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
+
+        merge_data = ctx.merge_data
+        if not merge_data:
+            debug_log.error("No merge_data in context after summary generation", category="merge")
+            status_bar.set_streaming(False)
+            self.streaming = False
+            self.notify("Merge failed: missing context data", severity="error")
+            return
+
+        # Get the summary from the helper's output
+        merge_message = ctx.content.strip()
+        if not merge_message:
+            # Fall back to simple summary
+            merge_message = f"Merged from {merge_data.fork_name}"
+
+        debug_log.info(
+            f"Merge summary generated: {merge_message[:100]}...",
+            category="merge",
+        )
+
+        # Get the sessions
+        fork_session = self._manager._sessions.get(merge_data.fork_session_id)
+        parent_session = self._manager._sessions.get(merge_data.parent_session_id)
+
+        if not fork_session or not parent_session:
+            debug_log.error("Session not found for merge", category="merge")
+            status_bar.set_streaming(False)
+            self.streaming = False
+            self.notify("Merge failed: session not found", severity="error")
+            return
+
+        # Complete the merge
+        result = self._fork_manager.complete_merge(
+            fork_session=fork_session,
+            parent_session=parent_session,
+            merge_message=merge_message,
+        )
+
+        # Switch to parent
+        self._manager._sessions[result.parent_session.id] = result.parent_session
+        self._manager._runners[result.parent_session.id] = self._create_session_runner(result.parent_session)
+        self._manager.set_active(result.parent_session.id)
+        chat_log.clear()
+        chat_log.load_history(result.parent_session.turns, session=result.parent_session)
+        context_tree.load_all_sessions(result.parent_session)
+        breadcrumb.set_session(result.parent_session)
+
+        status_bar.set_streaming(False)
+        self.streaming = False
+        self.notify(f"Merged from '{result.fork_name}'")
+
+    async def _continue_link_after_summary(
+        self,
+        ctx: StreamingContext,
+        chat_log: ChatLogView,
+    ) -> None:
+        """Continue link operation after a summary generation finishes.
+
+        Updates the summary in link_data, then either starts the next
+        summary or completes the link operation.
+        """
+        status_bar = self.query_one("#status-bar", StatusBar)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+
+        link_data = ctx.link_data
+        if not link_data:
+            debug_log.error("No link_data in context after summary generation", category="link")
+            status_bar.set_streaming(False)
+            self.streaming = False
+            self.notify("Link failed: missing context data", severity="error")
+            return
+
+        # Get the summary from the helper's output
+        summary = ctx.content.strip()
+        if not summary:
+            summary = "[No summary generated]"
+
+        # Update the target's summary in the targets list
+        current_idx = link_data.current_target_index
+        targets = link_data.targets
+        session_id, _ = targets[current_idx]
+        targets[current_idx] = (session_id, summary)
+
+        debug_log.info(
+            f"Link summary generated for target {current_idx}: {summary[:100]}...",
+            category="link",
+        )
+
+        # Get the pending linked targets
+        linked_targets = getattr(self, "_pending_link_targets", None)
+        if not linked_targets:
+            debug_log.error("No pending link targets", category="link")
+            status_bar.set_streaming(False)
+            self.streaming = False
+            self.notify("Link failed: missing target data", severity="error")
+            return
+
+        # Continue to next summary or complete
+        self._start_next_link_summary_or_complete(
+            targets, current_idx + 1, linked_targets, chat_log, context_tree, status_bar
+        )
+
+    async def _complete_return_after_summary(
+        self,
+        ctx: StreamingContext,
+        chat_log: ChatLogView,
+    ) -> None:
+        """Complete a return after summary generation finishes.
+
+        The summary is in ctx.content, and return_data has the session info.
+        """
+        status_bar = self.query_one("#status-bar", StatusBar)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
+
+        return_data = ctx.return_data
+        if not return_data:
+            debug_log.error("No return_data in context after summary generation", category="return")
+            status_bar.set_streaming(False)
+            self.streaming = False
+            self.notify("Return failed: missing context data", severity="error")
+            return
+
+        # Get the summary from the helper's output
+        return_content = ctx.content.strip()
+        if not return_content:
+            return_content = "[Return summary not available]"
+
+        debug_log.info(
+            f"Return summary generated: {return_content[:100]}...",
+            category="return",
+        )
+
+        # Get the sessions
+        child_session = self._manager._sessions.get(return_data.child_session_id)
+        parent_session = self._manager._sessions.get(return_data.parent_session_id)
+
+        # If parent not in manager, try to load it
+        if not parent_session:
+            parent_session = Session.load(return_data.parent_session_id)
+
+        if not child_session or not parent_session:
+            debug_log.error("Session not found for return", category="return")
+            status_bar.set_streaming(False)
+            self.streaming = False
+            self.notify("Return failed: session not found", severity="error")
+            return
+
+        # Mark child as returned
+        child_session.returned = True
+        await child_session.save_async()
+
+        # Update parent
+        parent_session.mark_child_returned(child_session.id)
+        await parent_session.save_async()
+
+        child_id = child_session.id
+
+        # Switch to parent session through manager
+        self._manager._sessions[parent_session.id] = parent_session
+        self._manager._runners[parent_session.id] = self._create_session_runner(parent_session)
+        self._manager.set_active(parent_session.id)
+        chat_log.clear()
+        chat_log.load_history(parent_session.turns, session=parent_session)
+        context_tree.load_all_sessions(parent_session)
+        breadcrumb.set_session(parent_session)
+
+        # Find and update the WithWidget
+        with_widget = chat_log.find_with_widget(child_id)
+        if with_widget:
+            with_widget.mark_returned()
+
+        # Add WithResultWidget to parent
+        chat_log.add_with_result_widget(
+            content=return_content,
+            child_session_id=child_id,
+            return_prompt=return_data.return_prompt,
+        )
+
+        status_bar.set_streaming(False)
+        self.streaming = False
+        self.notify("Returned from child session")
 
     def _finalize_streaming(
         self,
@@ -1952,6 +2238,8 @@ class BalloonsApp(App):
         - Current session's link marker shows summary of target session
         - Target session's link marker shows summary of current session
 
+        Uses non-blocking helper runner pattern to generate summaries.
+
         Args:
             target_prefixes: List of 8-char hash prefixes of target sessions
         """
@@ -1969,24 +2257,180 @@ class BalloonsApp(App):
             self.notify(resolve_result.error, severity="error")
             return
 
-        # Phase 2: Generate any needed summaries
-        if resolve_result.needs_summary:
-            self.notify("Generating session summaries...")
+        # Build targets list: (session_id, summary or None)
+        targets: list[tuple[str, str | None]] = []
+        for target in resolve_result.linked_targets:
+            # If target has a summary, use it; otherwise mark as needing generation
+            if target.summary:
+                targets.append((target.session.id, target.summary))
+            elif target.session.summary:
+                targets.append((target.session.id, target.session.summary))
+            else:
+                targets.append((target.session.id, None))
 
-            for session in resolve_result.needs_summary:
-                # Set session context for task tracking
-                self._summarizer.set_session_id(session.id)
-                session.summary = await self._summarizer.generate_session_summary(session)
+        # Check if any summaries need generation
+        needs_summary = any(summary is None for _, summary in targets)
 
-            # Update target summaries in resolved list
-            for target in resolve_result.linked_targets:
-                if not target.summary:
-                    target.summary = target.session.summary
+        if not needs_summary:
+            # All summaries available - complete immediately
+            self._complete_link_operation(resolve_result.linked_targets, chat_log, context_tree)
+            return
 
+        # Phase 2: Generate summaries using helper runner
+        # Find the first target needing a summary
+        first_idx = next(i for i, (_, s) in enumerate(targets) if s is None)
+        first_session_id = targets[first_idx][0]
+        first_session = self._manager._sessions.get(first_session_id)
+
+        if not first_session:
+            self.notify(f"Session {first_session_id} not found", severity="error")
+            return
+
+        summary_prompt = self._summarizer.build_session_summary_prompt(first_session)
+        if not summary_prompt:
+            # Empty session - use empty summary and continue
+            targets[first_idx] = (first_session_id, "[Empty session]")
+            # Try next target or complete
+            self._start_next_link_summary_or_complete(
+                targets, first_idx + 1, resolve_result.linked_targets, chat_log, context_tree, status_bar
+            )
+            return
+
+        # Create helper runner for background summary generation
+        helper_id = f"link-{uuid.uuid4().hex[:8]}"
+        helper_runner = HelperRunner(helper_id, runner=create_runner(self._backend_config))
+        self._helper_runners[helper_id] = helper_runner
+
+        # Create streaming context with link data
+        ctx = StreamingContext(
+            session_id=helper_id,
+            user_turn_idx=-1,
+            assistant_turn_idx=-1,
+            prompt="",
+            is_active=True,
+            is_helper=True,
+            helper_type="link",
+            link_data=LinkData(
+                current_session_id=self.session.id,
+                targets=targets,
+                current_target_index=first_idx,
+            ),
+        )
+        self._streaming_contexts[helper_id] = ctx
+
+        # Store resolve result for later use
+        self._pending_link_targets = resolve_result.linked_targets
+
+        # Set up UI for summary streaming
+        status_bar.set_streaming(True)
+        self.streaming = True
+
+        session_name = first_session.title or first_session.name or first_session.id[:8]
+        chat_log.add_user_message(f"[Generating summary for '{session_name}'...]")
+        chat_log.add_assistant_message()
+
+        # Start background streaming
+        helper_runner.start_background(summary_prompt)
+
+    def _start_next_link_summary_or_complete(
+        self,
+        targets: list[tuple[str, str | None]],
+        start_from_index: int,
+        linked_targets: list,  # List[LinkTarget]
+        chat_log: ChatLogView,
+        context_tree: ContextTreeView,
+        status_bar: StatusBar,
+    ) -> None:
+        """Start the next link summary generation or complete the operation.
+
+        Finds the next target needing a summary and starts a helper, or
+        completes the link operation if all summaries are ready.
+        """
+        # Find next target needing a summary
+        next_idx = None
+        for i in range(start_from_index, len(targets)):
+            if targets[i][1] is None:
+                next_idx = i
+                break
+
+        if next_idx is None:
+            # All summaries ready - update linked_targets and complete
+            for i, (session_id, summary) in enumerate(targets):
+                if linked_targets[i].session.id == session_id:
+                    linked_targets[i].summary = summary or ""
+                    # Also update the session's summary
+                    session = self._manager._sessions.get(session_id)
+                    if session and not session.summary:
+                        session.summary = summary or ""
+
+            status_bar.set_streaming(False)
+            self.streaming = False
+            self._complete_link_operation(linked_targets, chat_log, context_tree)
+            return
+
+        # Start next summary generation
+        session_id = targets[next_idx][0]
+        session = self._manager._sessions.get(session_id)
+
+        if not session:
+            # Skip missing session
+            targets[next_idx] = (session_id, "[Session not found]")
+            self._start_next_link_summary_or_complete(
+                targets, next_idx + 1, linked_targets, chat_log, context_tree, status_bar
+            )
+            return
+
+        summary_prompt = self._summarizer.build_session_summary_prompt(session)
+        if not summary_prompt:
+            # Empty session
+            targets[next_idx] = (session_id, "[Empty session]")
+            self._start_next_link_summary_or_complete(
+                targets, next_idx + 1, linked_targets, chat_log, context_tree, status_bar
+            )
+            return
+
+        # Create helper runner
+        helper_id = f"link-{uuid.uuid4().hex[:8]}"
+        helper_runner = HelperRunner(helper_id, runner=create_runner(self._backend_config))
+        self._helper_runners[helper_id] = helper_runner
+
+        # Create streaming context
+        ctx = StreamingContext(
+            session_id=helper_id,
+            user_turn_idx=-1,
+            assistant_turn_idx=-1,
+            prompt="",
+            is_active=True,
+            is_helper=True,
+            helper_type="link",
+            link_data=LinkData(
+                current_session_id=self.session.id,
+                targets=targets,
+                current_target_index=next_idx,
+            ),
+        )
+        self._streaming_contexts[helper_id] = ctx
+
+        # Store linked targets for completion
+        self._pending_link_targets = linked_targets
+
+        session_name = session.title or session.name or session.id[:8]
+        chat_log.add_user_message(f"[Generating summary for '{session_name}'...]")
+        chat_log.add_assistant_message()
+
+        helper_runner.start_background(summary_prompt)
+
+    def _complete_link_operation(
+        self,
+        linked_targets: list,  # List[LinkTarget]
+        chat_log: ChatLogView,
+        context_tree: ContextTreeView,
+    ) -> None:
+        """Complete the link operation after all summaries are ready."""
         # Phase 3: Complete the link operation
         link_result = self._command_executor.complete_link(
             current_session=self.session,
-            targets=resolve_result.linked_targets,
+            targets=linked_targets,
             current_summary=self.session.summary,
         )
 
@@ -2027,6 +2471,8 @@ class BalloonsApp(App):
         Archives the turn(s) at the cursor position:
         - Single turn: archives just that turn
         - Exchange group: archives all turns in the exchange
+
+        Uses non-blocking helper runner pattern to generate summary.
         """
         context_tree = self.query_one("#context-tree", ContextTreeView)
         chat_log = self.query_one("#chat-log", ChatLogView)
@@ -2062,53 +2508,51 @@ class BalloonsApp(App):
             details={"hint": hint},
         )
 
-        # Generate structured summary using LLM
-        self.notify("Generating archive summary...")
+        # Build the summary prompt (non-blocking)
+        summary_prompt = self._summarizer.build_archive_summary_prompt(turns_to_archive, hint)
 
-        # Ensure summarizer has current session for task tracking
-        self._summarizer.set_session_id(self.session.id)
+        # Create helper runner for background summary generation
+        helper_id = f"archive-{uuid.uuid4().hex[:8]}"
+        helper_runner = HelperRunner(helper_id, runner=create_runner(self._backend_config))
+        self._helper_runners[helper_id] = helper_runner
 
-        try:
-            summary = await self._summarizer.generate_archive_summary(turns_to_archive, hint)
-        except Exception as e:
-            debug_log.error(f"Summary generation failed: {e}", category="archive")
-            # Fall back to simple summary
-            summary = f"Archived turns {turn_start}-{turn_end - 1}"
-
-        # Use command executor for business logic
-        result = self._command_executor.prepare_archive(
-            session=self.session,
-            turn_indices=turn_indices,
-            summary=summary,
+        # Create streaming context with archive data
+        ctx = StreamingContext(
+            session_id=helper_id,
+            user_turn_idx=-1,
+            assistant_turn_idx=-1,
+            prompt="",
+            is_active=True,
+            is_helper=True,
+            helper_type="archive",
+            archive_data=ArchiveData(
+                session_id=self.session.id,
+                turn_indices=list(turn_indices),
+                turn_start=turn_start,
+                turn_end=turn_end,
+                hint=hint,
+                message_count=len(turns_to_archive),
+            ),
         )
+        self._streaming_contexts[helper_id] = ctx
 
-        if not result.success:
-            debug_log.error(f"Archive failed: {result.error}", category="archive")
-            self.notify(f"Archive failed: {result.error}", severity="error")
-            return
+        # Set up UI for archive summary streaming
+        status_bar.set_streaming(True)
+        self.streaming = True
 
-        # Update session state
-        self.session.turns = result.new_turns
-        asyncio.create_task(self.session.save_async())
+        chat_log.add_user_message("[Generating archive summary...]")
+        chat_log.add_assistant_message()
 
-        # Reload the UI first so TreeState has updated turns
-        chat_log.clear()
-        chat_log.load_history(self.session.turns, self.session)
-        context_tree.load_all_sessions(self.session)
-
-        # Recalculate token count after archiving (turns removed)
-        # Must be after tree reload so TreeState has the new turns
-        self._update_base_context_tokens()
-        self._update_context_tokens()
-
-        self.notify(f"Archived {result.archived_count} turns")
+        # Start background streaming
+        helper_runner.start_background(summary_prompt)
 
     async def _archive_turns_from_tree(self, session_id: str, turn_indices: list[int]) -> None:
         """Archive turns requested from tree view (ctrl+shift+click or x key).
 
-        Uses LLM to generate a summary of the archived turns.
+        Uses non-blocking helper runner pattern to generate summary.
         """
-        from core.archiver import ArchiveError
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        status_bar = self.query_one("#status-bar", StatusBar)
 
         if not self.session:
             self.notify("No active session", severity="error")
@@ -2134,49 +2578,43 @@ class BalloonsApp(App):
             category="archive",
         )
 
-        # Generate structured summary using LLM
-        self.notify("Generating archive summary...")
+        # Build the summary prompt (non-blocking)
+        summary_prompt = self._summarizer.build_archive_summary_prompt(turns_to_archive, "")
 
-        # Ensure summarizer has current session for task tracking
-        self._summarizer.set_session_id(self.session.id)
+        # Create helper runner for background summary generation
+        helper_id = f"archive-tree-{uuid.uuid4().hex[:8]}"
+        helper_runner = HelperRunner(helper_id, runner=create_runner(self._backend_config))
+        self._helper_runners[helper_id] = helper_runner
 
-        try:
-            summary = await self._summarizer.generate_archive_summary(turns_to_archive, "")
-        except Exception as e:
-            debug_log.error(f"Summary generation failed: {e}", category="archive")
-            # Fall back to simple summary
-            summary = f"Archived turns {turn_start}-{turn_end - 1}"
-
-        # Use command executor for business logic
-        result = self._command_executor.prepare_archive(
-            session=self.session,
-            turn_indices=turn_indices,
-            summary=summary,
+        # Create streaming context with archive data
+        ctx = StreamingContext(
+            session_id=helper_id,
+            user_turn_idx=-1,
+            assistant_turn_idx=-1,
+            prompt="",
+            is_active=True,
+            is_helper=True,
+            helper_type="archive",
+            archive_data=ArchiveData(
+                session_id=self.session.id,
+                turn_indices=list(turn_indices),
+                turn_start=turn_start,
+                turn_end=turn_end,
+                hint="",
+                message_count=len(turns_to_archive),
+            ),
         )
+        self._streaming_contexts[helper_id] = ctx
 
-        if not result.success:
-            debug_log.error(f"Archive failed: {result.error}", category="archive")
-            self.notify(f"Archive failed: {result.error}", severity="error")
-            return
+        # Set up UI for archive summary streaming
+        status_bar.set_streaming(True)
+        self.streaming = True
 
-        # Update session state
-        self.session.turns = result.new_turns
-        asyncio.create_task(self.session.save_async())
+        chat_log.add_user_message("[Generating archive summary...]")
+        chat_log.add_assistant_message()
 
-        # Reload the UI first so TreeState has updated turns
-        chat_log = self.query_one("#chat-log", ChatLogView)
-        chat_log.clear()
-        chat_log.load_history(self.session.turns, self.session)
-
-        context_tree = self.query_one("#context-tree", ContextTreeView)
-        context_tree.load_all_sessions(self.session)
-
-        # Recalculate token count after archiving (turns removed)
-        # Must be after tree reload so TreeState has the new turns
-        self._update_base_context_tokens()
-        self._update_context_tokens()
-
-        self.notify(f"Archived {result.archived_count} turns")
+        # Start background streaming
+        helper_runner.start_background(summary_prompt)
 
     async def _handle_rehydrate_command(self) -> None:
         """Rehydrate selected archive marker back to original turns."""
@@ -2858,6 +3296,8 @@ class BalloonsApp(App):
         - Fork becomes read-only
         - View switches to parent
         - Merge marker appears in parent with LLM summary
+
+        Uses non-blocking helper runner pattern to generate summary.
         """
         chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
@@ -2869,28 +3309,40 @@ class BalloonsApp(App):
             self.notify(prep_result.error, severity="error")
             return
 
-        # Generate merge summary via LLM
-        self.notify("Generating merge summary...")
-        merge_message = await self._generate_merge_summary(self.session, prompt)
+        # Build the summary prompt (non-blocking)
+        summary_prompt = self._summarizer.build_merge_summary_prompt(self.session, prompt)
 
-        # Complete the merge
-        result = self._fork_manager.complete_merge(
-            fork_session=prep_result.fork_session,
-            parent_session=prep_result.parent_session,
-            merge_message=merge_message,
+        # Create helper runner for background summary generation
+        helper_id = f"merge-{uuid.uuid4().hex[:8]}"
+        helper_runner = HelperRunner(helper_id, runner=create_runner(self._backend_config))
+        self._helper_runners[helper_id] = helper_runner
+
+        # Create streaming context with merge data
+        ctx = StreamingContext(
+            session_id=helper_id,
+            user_turn_idx=-1,
+            assistant_turn_idx=-1,
+            prompt="",
+            is_active=True,
+            is_helper=True,
+            helper_type="merge",
+            merge_data=MergeData(
+                fork_session_id=prep_result.fork_session.id,
+                parent_session_id=prep_result.parent_session.id,
+                fork_name=prep_result.fork_session.get_fork_display_name(),
+            ),
         )
+        self._streaming_contexts[helper_id] = ctx
 
-        # Switch to parent
-        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
-        self._manager._sessions[result.parent_session.id] = result.parent_session
-        self._manager._runners[result.parent_session.id] = self._create_session_runner(result.parent_session)
-        self._manager.set_active(result.parent_session.id)
-        chat_log.clear()
-        chat_log.load_history(result.parent_session.turns, session=result.parent_session)
-        context_tree.load_all_sessions(result.parent_session)
-        breadcrumb.set_session(result.parent_session)
+        # Set up UI for merge summary streaming
+        status_bar.set_streaming(True)
+        self.streaming = True
 
-        self.notify(f"Merged from '{result.fork_name}'")
+        chat_log.add_user_message("[Generating merge summary...]")
+        chat_log.add_assistant_message()
+
+        # Start background streaming
+        helper_runner.start_background(summary_prompt)
 
     async def _handle_derive_command(self, prompt: str) -> None:
         """Create a new independent session with selected context.
@@ -2998,62 +3450,62 @@ class BalloonsApp(App):
     # ===== END NEW COMMANDS =====
 
     async def _handle_return_command(self, return_prompt: str = "") -> None:
-        """Return from child session to parent."""
+        """Return from child session to parent.
+
+        Uses non-blocking helper runner pattern to generate summary.
+        """
         chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
-        input_box = self.query_one("#input-box", InputBox)
+        status_bar = self.query_one("#status-bar", StatusBar)
 
         # Check we're in a child session
         if not self.session.is_child_session():
             self.notify("Not in a child session", severity="error")
             return
 
-        # Get selected messages from context tree for return content
-        selected_messages = context_tree.get_selected_messages()
-
-        # Generate LLM summary of the child session
-        self.notify("Generating summary...")
-
-        return_content = await self._generate_return_summary(selected_messages, return_prompt)
-
-        # Mark child as returned
-        self.session.returned = True
-        asyncio.create_task(self.session.save_async())
-
-        # Load parent and update it
+        # Get parent session ID before we start
         parent = self.session.get_parent()
         if not parent:
             self.notify("Parent session not found", severity="error")
             return
 
-        parent.mark_child_returned(self.session.id)
-        asyncio.create_task(parent.save_async())
+        # Get selected messages from context tree for return content
+        selected_messages = context_tree.get_selected_messages()
 
-        child_id = self.session.id
+        # Build the summary prompt (non-blocking)
+        summary_prompt = self._summarizer.build_return_summary_prompt(selected_messages, return_prompt)
 
-        # Switch to parent session through manager
-        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
-        self._manager._sessions[parent.id] = parent
-        self._manager._runners[parent.id] = self._create_session_runner(parent)
-        self._manager.set_active(parent.id)
-        chat_log.clear()
-        chat_log.load_history(parent.turns, session=parent)
-        context_tree.load_all_sessions(parent)
-        breadcrumb.set_session(parent)
+        # Create helper runner for background summary generation
+        helper_id = f"return-{uuid.uuid4().hex[:8]}"
+        helper_runner = HelperRunner(helper_id, runner=create_runner(self._backend_config))
+        self._helper_runners[helper_id] = helper_runner
 
-        # Find and update the WithWidget
-        with_widget = chat_log.find_with_widget(child_id)
-        if with_widget:
-            with_widget.mark_returned()
-
-        # Add WithResultWidget to parent
-        chat_log.add_with_result_widget(
-            content=return_content,
-            child_session_id=child_id,
-            return_prompt=return_prompt,
+        # Create streaming context with return data
+        ctx = StreamingContext(
+            session_id=helper_id,
+            user_turn_idx=-1,
+            assistant_turn_idx=-1,
+            prompt="",
+            is_active=True,
+            is_helper=True,
+            helper_type="return",
+            return_data=ReturnData(
+                child_session_id=self.session.id,
+                parent_session_id=parent.id,
+                return_prompt=return_prompt,
+            ),
         )
+        self._streaming_contexts[helper_id] = ctx
 
-        self.notify("Returned from child session")
+        # Set up UI for return summary streaming
+        status_bar.set_streaming(True)
+        self.streaming = True
+
+        chat_log.add_user_message("[Generating return summary...]")
+        chat_log.add_assistant_message()
+
+        # Start background streaming
+        helper_runner.start_background(summary_prompt)
 
     async def _generate_return_summary(self, messages: list, return_prompt: str) -> str:
         """Generate a summary of selected messages using Claude."""

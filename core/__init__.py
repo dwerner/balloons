@@ -78,6 +78,11 @@ from .streaming import (
     HelperDoneAction,
     NoAction,
     TurnStartedAction,
+    # Helper data types
+    ArchiveData,
+    MergeData,
+    LinkData,
+    ReturnData,
 )
 from .fork import (
     ForkManager,
@@ -127,6 +132,7 @@ from .tts import (
     stop_speaking,
 )
 from .stash import StashedMessage, MessageStash
+from .preferences import DEFAULT_TOOLS, ToolPreferences
 
 __all__ = [
     # Commands
@@ -234,6 +240,12 @@ __all__ = [
     "InputRequiredAction",
     "HelperDoneAction",
     "NoAction",
+    "TurnStartedAction",
+    # Helper data types
+    "ArchiveData",
+    "MergeData",
+    "LinkData",
+    "ReturnData",
     # Fork operations
     "ForkManager",
     "ForkResult",
@@ -289,4 +301,7 @@ __all__ = [
     # Stash
     "StashedMessage",
     "MessageStash",
+    # Preferences
+    "DEFAULT_TOOLS",
+    "ToolPreferences",
 ]

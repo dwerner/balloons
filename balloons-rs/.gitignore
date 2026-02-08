@@ -1,0 +1,17 @@
+# Rust build artifacts
+/target/
+
+# Cargo lock for library crates (keep for binaries/workspaces)
+# Cargo.lock
+
+# Test artifacts (preserved test runs)
+/.test-runs/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db

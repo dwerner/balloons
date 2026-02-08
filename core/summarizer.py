@@ -144,6 +144,36 @@ class Summarizer:
 
         return "".join(summary_parts) if summary_parts else ""
 
+    def build_session_summary_prompt(self, session: Session) -> str | None:
+        """Build the prompt for session (link) summary generation.
+
+        This is separate from generate_session_summary() to support
+        non-blocking helper runner streaming.
+
+        Args:
+            session: The session to summarize
+
+        Returns:
+            The prompt string, or None if session is empty
+        """
+        # Build conversation context from the session
+        turns_text = []
+        for turn in session.turns:
+            role = "User" if turn.role == "user" else "Assistant"
+            content = turn.content if isinstance(turn.content, str) else str(turn.content)
+            # Truncate very long messages
+            if len(content) > 2000:
+                content = content[:2000] + "... [truncated]"
+            turns_text.append(f"{role}: {content}")
+
+        if not turns_text:
+            return None
+
+        conversation = "\n\n".join(turns_text)
+
+        # Use the prompt template from file
+        return _LINK_SUMMARY_PROMPT.format(conversation=conversation)
+
     async def generate_session_summary(self, session: Session) -> str:
         """Generate a summary of a session's conversation for linking.
 
@@ -158,23 +188,10 @@ class Summarizer:
         Returns:
             A concise summary of the session's content (max ~100 chars)
         """
-        # Build conversation context from the session
-        turns_text = []
-        for turn in session.turns:
-            role = "User" if turn.role == "user" else "Assistant"
-            content = turn.content if isinstance(turn.content, str) else str(turn.content)
-            # Truncate very long messages
-            if len(content) > 2000:
-                content = content[:2000] + "... [truncated]"
-            turns_text.append(f"{role}: {content}")
-
-        if not turns_text:
+        summary_prompt = self.build_session_summary_prompt(session)
+        if summary_prompt is None:
             return session.title or "Empty session"
 
-        conversation = "\n\n".join(turns_text)
-
-        # Use the prompt template from file
-        summary_prompt = _LINK_SUMMARY_PROMPT.format(conversation=conversation)
         task_id = self._register_task(TaskType.LINK_SUMMARY, f"Summarizing session: {session.title or session.id[:8]}")
 
         summary_parts = []
@@ -193,17 +210,20 @@ class Summarizer:
         result = "".join(summary_parts).strip()
         return result if result else (session.title or "Session")
 
-    async def generate_merge_summary(
+    def build_merge_summary_prompt(
         self, fork_session: Session, user_prompt: str = ""
     ) -> str:
-        """Generate a summary of what was accomplished in a fork.
+        """Build the prompt for merge summary generation.
+
+        This is separate from generate_merge_summary() to support
+        non-blocking helper runner streaming.
 
         Args:
             fork_session: The fork session to summarize
             user_prompt: Optional user guidance for the summary
 
         Returns:
-            A concise summary of the fork's work
+            The prompt string to send to the LLM
         """
         # Build conversation context from the fork
         turns_text = []
@@ -219,7 +239,7 @@ class Summarizer:
 
         # Build the summary prompt
         if user_prompt:
-            summary_prompt = f"""Summarize the following conversation, focusing on: {user_prompt}
+            return f"""Summarize the following conversation, focusing on: {user_prompt}
 
 The summary should be 1-3 sentences describing what was accomplished or discovered.
 Be specific about outcomes, not process.
@@ -229,7 +249,7 @@ Conversation:
 
 Summary:"""
         else:
-            summary_prompt = f"""Summarize the following conversation in 1-3 sentences.
+            return f"""Summarize the following conversation in 1-3 sentences.
 Focus on what was accomplished or discovered, not the process.
 Be specific about outcomes.
 
@@ -238,6 +258,19 @@ Conversation:
 
 Summary:"""
 
+    async def generate_merge_summary(
+        self, fork_session: Session, user_prompt: str = ""
+    ) -> str:
+        """Generate a summary of what was accomplished in a fork.
+
+        Args:
+            fork_session: The fork session to summarize
+            user_prompt: Optional user guidance for the summary
+
+        Returns:
+            A concise summary of the fork's work
+        """
+        summary_prompt = self.build_merge_summary_prompt(fork_session, user_prompt)
         task_id = self._register_task(TaskType.MERGE_SUMMARY, f"Summarizing merge: {fork_session.title or fork_session.id[:8]}")
 
         summary_parts = []
@@ -292,21 +325,38 @@ Summary:"""
 
         return "".join(summary_parts) if summary_parts else ""
 
-    async def generate_archive_summary(
+    def build_return_summary_prompt(
+        self, messages: list[Message], return_prompt: str = ""
+    ) -> str:
+        """Build the prompt for return summary generation.
+
+        This is separate from generate_return_summary() to support
+        non-blocking helper runner streaming.
+
+        Args:
+            messages: Messages from child session to summarize
+            return_prompt: Optional user-provided context for the summary
+
+        Returns:
+            The prompt string to send to the LLM
+        """
+        return self._context_builder.build_return_summary_prompt(messages, return_prompt)
+
+    def build_archive_summary_prompt(
         self, messages: list[Message], user_hint: str = ""
-    ) -> ArchiveSummary:
-        """Generate a structured summary of messages for archiving.
+    ) -> str:
+        """Build the prompt for archive summary generation.
+
+        This is separate from generate_archive_summary() to support
+        non-blocking helper runner streaming.
 
         Args:
             messages: Messages to summarize for archiving
             user_hint: Optional user hint for what to focus on
 
         Returns:
-            ArchiveSummary with structured information about the archived content
+            The prompt string to send to the LLM
         """
-        if not messages:
-            return ArchiveSummary()
-
         # Build conversation context
         turns_text = []
         for msg in messages:
@@ -322,7 +372,7 @@ Summary:"""
         # Build the structured summary prompt
         hint_section = f"\nUser hint: {user_hint}\n" if user_hint else ""
 
-        summary_prompt = f"""Analyze this conversation segment and provide a structured summary.
+        return f"""Analyze this conversation segment and provide a structured summary.
 {hint_section}
 Respond in EXACTLY this format (keep field names exactly as shown):
 
@@ -345,6 +395,22 @@ Conversation:
 
 Structured summary:"""
 
+    async def generate_archive_summary(
+        self, messages: list[Message], user_hint: str = ""
+    ) -> ArchiveSummary:
+        """Generate a structured summary of messages for archiving.
+
+        Args:
+            messages: Messages to summarize for archiving
+            user_hint: Optional user hint for what to focus on
+
+        Returns:
+            ArchiveSummary with structured information about the archived content
+        """
+        if not messages:
+            return ArchiveSummary()
+
+        summary_prompt = self.build_archive_summary_prompt(messages, user_hint)
         task_id = self._register_task(TaskType.ARCHIVE_SUMMARY, f"Summarizing archive ({len(messages)} turns)")
 
         response_parts = []

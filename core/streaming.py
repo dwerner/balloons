@@ -22,6 +22,60 @@ from .fork import ForkData, DeriveData
 
 
 # =============================================================================
+# Helper Data Classes - Typed data passed to helper completion handlers
+# =============================================================================
+
+@dataclass
+class ArchiveData:
+    """Data needed to complete an archive after summary generation.
+
+    Tracks the session, turn range, and context needed to finalize archiving
+    after the LLM generates a summary.
+    """
+    session_id: str
+    turn_indices: list[int]
+    turn_start: int
+    turn_end: int
+    hint: str = ""  # User-provided hint for what to focus on
+    message_count: int = 0  # Number of messages being archived (for fallback summary)
+
+
+@dataclass
+class MergeData:
+    """Data needed to complete a merge after summary generation.
+
+    Tracks the fork and parent sessions for finalizing the merge.
+    """
+    fork_session_id: str
+    parent_session_id: str
+    fork_name: str
+
+
+@dataclass
+class LinkData:
+    """Data needed to complete a link after summary generation.
+
+    Tracks which sessions need summaries and final link targets.
+    """
+    current_session_id: str
+    # List of (session_id, summary) tuples - summary may be None if not yet generated
+    targets: list[tuple[str, str | None]]
+    # Index of the target currently being summarized (for sequential generation)
+    current_target_index: int = 0
+
+
+@dataclass
+class ReturnData:
+    """Data needed to complete a return after summary generation.
+
+    Tracks the child session being returned from and the parent session.
+    """
+    child_session_id: str
+    parent_session_id: str
+    return_prompt: str = ""  # User-provided return message
+
+
+# =============================================================================
 # StreamingContext - Tracks streaming state for a session
 # =============================================================================
 
@@ -46,11 +100,19 @@ class StreamingContext:
     tool_turn_indices: dict = None
     # Track tool_use_id -> tool_name for tools that need post-result actions
     tool_names: dict = None
-    # Helper task tracking (for context compression, merge summaries)
+    # Helper task tracking (for context compression, merge summaries, archives, links)
     is_helper: bool = False  # True if this is a helper task, not a normal prompt
-    helper_type: str = ""  # "compress", "merge", etc.
+    helper_type: str = ""  # "compress", "merge", "derive", "archive", "link"
     # For fork/derive context compression: data needed to complete after compression
     fork_data: Optional[Union[ForkData, DeriveData]] = None
+    # For archive summary generation
+    archive_data: Optional["ArchiveData"] = None
+    # For merge summary generation
+    merge_data: Optional["MergeData"] = None
+    # For link summary generation
+    link_data: Optional["LinkData"] = None
+    # For return summary generation
+    return_data: Optional["ReturnData"] = None
 
     def __post_init__(self):
         if self.tool_events is None:
@@ -173,7 +235,11 @@ class HelperDoneAction(StreamingAction):
     """Helper task completed."""
     helper_type: str
     content: str
-    fork_data: Optional[Union[ForkData, DeriveData]]
+    fork_data: Optional[Union[ForkData, DeriveData]] = None
+    archive_data: Optional["ArchiveData"] = None
+    merge_data: Optional["MergeData"] = None
+    link_data: Optional["LinkData"] = None
+    return_data: Optional["ReturnData"] = None
     error: Optional[str] = None
     cancelled: bool = False
 
@@ -424,7 +490,7 @@ class StreamingCoordinator:
         event,  # StreamEvent
         ctx: StreamingContext,
     ) -> StreamingAction:
-        """Dispatch a helper event (context compression, merge summary).
+        """Dispatch a helper event (context compression, merge summary, archive, link).
 
         Helper events stream into the chat like regular messages, but when done
         trigger the next phase (e.g., start the actual fork after compression).
@@ -449,6 +515,10 @@ class StreamingCoordinator:
                 helper_type=ctx.helper_type,
                 content=ctx.content,
                 fork_data=ctx.fork_data,
+                archive_data=ctx.archive_data,
+                merge_data=ctx.merge_data,
+                link_data=ctx.link_data,
+                return_data=ctx.return_data,
             )
 
         elif event.event_type == "error":
@@ -457,6 +527,10 @@ class StreamingCoordinator:
                 helper_type=ctx.helper_type,
                 content=ctx.content,
                 fork_data=ctx.fork_data,
+                archive_data=ctx.archive_data,
+                merge_data=ctx.merge_data,
+                link_data=ctx.link_data,
+                return_data=ctx.return_data,
                 error=event.data,
             )
 
@@ -466,6 +540,10 @@ class StreamingCoordinator:
                 helper_type=ctx.helper_type,
                 content=ctx.content,
                 fork_data=ctx.fork_data,
+                archive_data=ctx.archive_data,
+                merge_data=ctx.merge_data,
+                link_data=ctx.link_data,
+                return_data=ctx.return_data,
                 cancelled=True,
             )
 

@@ -5,6 +5,8 @@ from textual.events import Key
 from textual.reactive import reactive
 from rich.text import Text
 
+from core.debug_log import debug_log
+
 # Commands available for completion with descriptions
 # Format: (command, description, is_global)
 # is_global=True means command executes immediately during streaming
@@ -274,6 +276,7 @@ class InputBox(TextArea):
 
         if event.key == "enter":
             # Submit on Enter
+            debug_log.info(f"Enter pressed, text={self.text!r}", category="input")
             event.prevent_default()
             event.stop()
             self._submit()
@@ -445,9 +448,11 @@ class InputBox(TextArea):
 
     def _submit(self) -> None:
         """Submit the current input."""
+        debug_log.info(f"_submit called, text={self.text!r}", category="input")
         self._hide_completions()
         value = self.text.strip()
         if value:
+            debug_log.info(f"Submitting value: {value!r}", category="input")
             # Add to history (avoid duplicates)
             if not self._history or self._history[-1] != value:
                 self._history.append(value)
@@ -455,6 +460,8 @@ class InputBox(TextArea):
             self._current_input = ""
             self.post_message(self.Submitted(value))
             self.clear()
+        else:
+            debug_log.info("Empty value, not submitting", category="input")
 
     def set_streaming_mode(self, streaming: bool) -> None:
         """Set streaming mode - commands still work, prompts are queued.

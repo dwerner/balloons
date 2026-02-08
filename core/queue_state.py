@@ -552,7 +552,7 @@ class QueueState:
             session_id: The session ID
             message_queue: The MessageQueue from session.py
         """
-        from session import MessageQueue  # Avoid circular import at module level
+        from models import MessageQueue  # Import from domain models
 
         queue = self._ensure_queue(session_id)
         queue.messages.clear()
@@ -582,7 +582,7 @@ class QueueState:
             session_id: The session ID
             message_queue: The MessageQueue to update
         """
-        from session import MessageQueue, QueuedMessage  # Avoid circular import
+        from models import MessageQueue, QueuedMessage  # Import from domain models
 
         queue = self._queues.get(session_id)
         if not queue:

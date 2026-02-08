@@ -1,26 +1,14 @@
 """Preferences modal for configuring backends and tools."""
 
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
-import yaml
 from textual.screen import ModalScreen
-from textual.widgets import Static, Button, Select, Switch, Label, Input, TextArea
+from textual.widgets import Static, Button, Select, Switch, Label
 from textual.containers import Vertical, Horizontal, ScrollableContainer
 from textual.message import Message
 
-from config import get_config, BackendConfig
-
-
-# Default tools available
-DEFAULT_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch"]
-
-
-@dataclass
-class ToolPreferences:
-    """Tool preferences for a backend."""
-    enabled_tools: set[str] = field(default_factory=lambda: set(DEFAULT_TOOLS))
+from config import get_config
+from core.preferences import DEFAULT_TOOLS, ToolPreferences
 
 
 class PreferencesModal(ModalScreen[None]):
