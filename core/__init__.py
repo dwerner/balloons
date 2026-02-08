@@ -133,6 +133,7 @@ from .tts import (
 )
 from .stash import StashedMessage, MessageStash
 from .preferences import DEFAULT_TOOLS, ToolPreferences
+from .async_storage import AsyncStorage, is_rust_storage_available, DEFAULT_DB_PATH
 
 __all__ = [
     # Commands
@@ -304,4 +305,8 @@ __all__ = [
     # Preferences
     "DEFAULT_TOOLS",
     "ToolPreferences",
+    # Storage
+    "AsyncStorage",
+    "is_rust_storage_available",
+    "DEFAULT_DB_PATH",
 ]
