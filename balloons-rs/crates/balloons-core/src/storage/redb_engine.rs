@@ -1,10 +1,29 @@
 use async_trait::async_trait;
+use chrono::DateTime;
 use redb::{Database, ReadableTable, TableDefinition};
 use std::path::Path;
 use std::sync::Arc;
 
 use crate::generated::{SessionData, SessionMetadata, TurnData};
 use super::traits::{Error, Result, StorageEngine};
+
+/// Parse an ISO 8601 timestamp string to Unix timestamp (seconds).
+/// Returns 0 if parsing fails (graceful fallback for legacy data).
+fn parse_iso_to_unix(iso_str: &str) -> i64 {
+    // Try parsing with timezone info first (e.g., "2024-01-01T00:00:00Z")
+    if let Ok(dt) = DateTime::parse_from_rfc3339(iso_str) {
+        return dt.timestamp();
+    }
+    // Try parsing as UTC without timezone suffix (e.g., "2024-01-01T00:00:00")
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(iso_str, "%Y-%m-%dT%H:%M:%S") {
+        return dt.and_utc().timestamp();
+    }
+    // Try parsing date-only format (e.g., "2024-01-01")
+    if let Ok(dt) = chrono::NaiveDate::parse_from_str(iso_str, "%Y-%m-%d") {
+        return dt.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc().timestamp()).unwrap_or(0);
+    }
+    0 // Fallback for unparseable timestamps
+}
 
 // Table definitions
 // Key: session_id, Value: JSON-encoded SessionData
@@ -165,8 +184,8 @@ impl StorageEngine for RedbEngine {
             sessions.push(SessionMetadata {
                 id: data.id,
                 name: data.title.clone(),
-                created_at: 0, // TODO: parse ISO timestamp to unix
-                updated_at: 0, // TODO: parse ISO timestamp to unix
+                created_at: parse_iso_to_unix(&data.created),
+                updated_at: parse_iso_to_unix(&data.last_modified),
                 turn_count: data.turns.len() as i64,
             });
         }
@@ -420,7 +439,27 @@ mod tests {
             // Find session2 and verify turn count
             let sess2_meta = sessions.iter().find(|s| s.id == "sess-2").unwrap();
             assert_eq!(sess2_meta.turn_count, 1);
+
+            // Verify timestamps are parsed (2024-01-01T00:00:00Z = 1704067200)
+            let sess1_meta = sessions.iter().find(|s| s.id == "sess-1").unwrap();
+            assert_eq!(sess1_meta.created_at, 1704067200);
+            assert_eq!(sess1_meta.updated_at, 1704067200);
         });
+    }
+
+    #[test]
+    fn test_parse_iso_to_unix() {
+        // RFC3339 with Z suffix
+        assert_eq!(parse_iso_to_unix("2024-01-01T00:00:00Z"), 1704067200);
+        // RFC3339 with timezone offset
+        assert_eq!(parse_iso_to_unix("2024-01-01T00:00:00+00:00"), 1704067200);
+        // Without timezone (treated as UTC)
+        assert_eq!(parse_iso_to_unix("2024-01-01T00:00:00"), 1704067200);
+        // Date only
+        assert_eq!(parse_iso_to_unix("2024-01-01"), 1704067200);
+        // Invalid format returns 0
+        assert_eq!(parse_iso_to_unix("not-a-date"), 0);
+        assert_eq!(parse_iso_to_unix(""), 0);
     }
 
     #[test]

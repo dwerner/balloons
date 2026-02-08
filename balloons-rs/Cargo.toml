@@ -27,6 +27,9 @@ futures-lite = "2"
 # Error handling
 thiserror = "2"
 
+# Time handling
+chrono = "0.4"
+
 # Testing
 tempfile = "3"
 
