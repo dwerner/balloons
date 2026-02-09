@@ -1,0 +1,275 @@
+//! Individual supervised process management.
+
+use std::collections::VecDeque;
+use std::sync::Arc;
+
+use chrono::{DateTime, Utc};
+use futures_lite::StreamExt;
+use procstream::{ProcessEvent, ProcessEventType};
+use tokio::sync::{mpsc, RwLock};
+use tracing::{debug, info};
+
+use crate::error::{Error, Result};
+use crate::types::{LogEntry, LogSource, OutputQuery, ProcessId, ProcessInfo, ProcessStatus};
+
+/// Maximum number of log entries to keep in memory per process.
+const MAX_LOG_ENTRIES: usize = 10_000;
+
+/// A process being supervised with its log buffer.
+pub struct SupervisedProcess {
+    /// Unique identifier for this process.
+    pub id: ProcessId,
+    /// Friendly name (if provided).
+    pub name: Option<String>,
+    /// The command being executed.
+    pub command: String,
+    /// Working directory.
+    pub working_dir: String,
+    /// Session this process belongs to.
+    pub session_id: String,
+    /// When the process was started.
+    pub started_at: DateTime<Utc>,
+    /// When the process ended (if completed).
+    pub ended_at: Option<DateTime<Utc>>,
+    /// Current status.
+    status: RwLock<ProcessStatus>,
+    /// Captured log entries (circular buffer).
+    logs: RwLock<VecDeque<LogEntry>>,
+    /// Channel to send stop signal.
+    stop_tx: Option<mpsc::Sender<()>>,
+}
+
+impl SupervisedProcess {
+    /// Create a new supervised process record.
+    pub fn new(
+        id: ProcessId,
+        name: Option<String>,
+        command: String,
+        working_dir: String,
+        session_id: String,
+        pid: u32,
+        stop_tx: mpsc::Sender<()>,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            command,
+            working_dir,
+            session_id,
+            started_at: Utc::now(),
+            ended_at: None,
+            status: RwLock::new(ProcessStatus::Running { pid }),
+            logs: RwLock::new(VecDeque::with_capacity(MAX_LOG_ENTRIES)),
+            stop_tx: Some(stop_tx),
+        }
+    }
+
+    /// Get the current status.
+    pub async fn status(&self) -> ProcessStatus {
+        self.status.read().await.clone()
+    }
+
+    /// Check if the process is running.
+    pub async fn is_running(&self) -> bool {
+        self.status.read().await.is_running()
+    }
+
+    /// Add a log entry.
+    pub async fn add_log(&self, entry: LogEntry) {
+        let mut logs = self.logs.write().await;
+        if logs.len() >= MAX_LOG_ENTRIES {
+            logs.pop_front();
+        }
+        logs.push_back(entry);
+    }
+
+    /// Get log entries matching the query.
+    pub async fn get_logs(&self, query: &OutputQuery) -> Vec<LogEntry> {
+        let logs = self.logs.read().await;
+        let mut result: Vec<LogEntry> = logs
+            .iter()
+            .filter(|entry| {
+                // Filter by timestamp
+                if let Some(since) = &query.since {
+                    if entry.timestamp < *since {
+                        return false;
+                    }
+                }
+                // Filter by source
+                if let Some(source) = &query.source {
+                    if entry.source != *source {
+                        return false;
+                    }
+                }
+                // Filter by pattern
+                if let Some(pattern) = &query.pattern {
+                    if !entry.content.contains(pattern.as_str()) {
+                        return false;
+                    }
+                }
+                true
+            })
+            .cloned()
+            .collect();
+
+        // Apply limit (from the end, most recent first)
+        if let Some(limit) = query.limit {
+            if result.len() > limit {
+                result = result.into_iter().rev().take(limit).rev().collect();
+            }
+        }
+
+        result
+    }
+
+    /// Get the number of log entries.
+    pub async fn log_count(&self) -> usize {
+        self.logs.read().await.len()
+    }
+
+    /// Get a preview of recent output (last non-empty line).
+    pub async fn output_preview(&self) -> Option<String> {
+        let logs = self.logs.read().await;
+        logs.iter()
+            .rev()
+            .find(|e| !e.content.trim().is_empty() && e.source != LogSource::System)
+            .map(|e| {
+                let content = e.content.trim();
+                if content.len() > 100 {
+                    format!("{}...", &content[..100])
+                } else {
+                    content.to_string()
+                }
+            })
+    }
+
+    /// Convert to ProcessInfo for API responses.
+    pub async fn to_info(&self) -> ProcessInfo {
+        ProcessInfo {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            command: self.command.clone(),
+            working_dir: self.working_dir.clone(),
+            session_id: self.session_id.clone(),
+            status: self.status().await,
+            started_at: self.started_at,
+            ended_at: self.ended_at,
+            log_count: self.log_count().await,
+            output_preview: self.output_preview().await,
+        }
+    }
+
+    /// Mark the process as exited.
+    #[allow(dead_code)]
+    pub async fn set_exited(&mut self, code: Option<i32>, signal: Option<i32>) {
+        let mut status = self.status.write().await;
+        *status = ProcessStatus::Exited { code, signal };
+        self.ended_at = Some(Utc::now());
+        self.stop_tx = None; // No longer need the stop channel
+
+        // Add system log entry
+        let exit_msg = match (code, signal) {
+            (Some(c), _) => format!("Process exited with code {}", c),
+            (_, Some(s)) => format!("Process killed by signal {}", s),
+            (None, None) => "Process exited".to_string(),
+        };
+        self.add_log(LogEntry::system(exit_msg)).await;
+    }
+
+    /// Mark the process as failed.
+    #[allow(dead_code)]
+    pub async fn set_failed(&mut self, error: String) {
+        let mut status = self.status.write().await;
+        *status = ProcessStatus::Failed {
+            error: error.clone(),
+        };
+        self.ended_at = Some(Utc::now());
+        self.stop_tx = None;
+
+        self.add_log(LogEntry::system(format!("Process failed: {}", error)))
+            .await;
+    }
+
+    /// Request the process to stop.
+    pub async fn stop(&self) -> Result<()> {
+        if let Some(tx) = &self.stop_tx {
+            tx.send(())
+                .await
+                .map_err(|_| Error::StopFailed("stop channel closed".to_string()))?;
+            Ok(())
+        } else {
+            Err(Error::ProcessNotRunning(self.id.clone()))
+        }
+    }
+}
+
+/// Handle procstream events and update the supervised process.
+pub async fn handle_process_events(
+    process: Arc<SupervisedProcess>,
+    mut events: impl StreamExt<Item = ProcessEvent> + Unpin,
+    mut stop_rx: mpsc::Receiver<()>,
+) {
+    debug!(process_id = %process.id, "Starting event handler");
+
+    loop {
+        tokio::select! {
+            // Check for stop signal
+            _ = stop_rx.recv() => {
+                info!(process_id = %process.id, "Received stop signal");
+                // TODO: Actually kill the process via procstream
+                break;
+            }
+
+            // Process events from procstream
+            event = events.next() => {
+                match event {
+                    Some(event) => {
+                        let entry = match &event.event_type {
+                            ProcessEventType::Started { pid } => {
+                                debug!(process_id = %process.id, pid = pid, "Process started");
+                                LogEntry::system(format!("Process started (PID {})", pid))
+                            }
+                            ProcessEventType::Stdout => {
+                                let content = event.data.clone().unwrap_or_default();
+                                LogEntry::stdout(content)
+                            }
+                            ProcessEventType::Stderr => {
+                                let content = event.data.clone().unwrap_or_default();
+                                LogEntry::stderr(content)
+                            }
+                            ProcessEventType::Exited { code, signal } => {
+                                info!(
+                                    process_id = %process.id,
+                                    code = ?code,
+                                    signal = ?signal,
+                                    "Process exited"
+                                );
+                                // The status update happens separately
+                                let msg = match (code, signal) {
+                                    (Some(c), _) => format!("Process exited with code {}", c),
+                                    (_, Some(s)) => format!("Process killed by signal {}", s),
+                                    (None, None) => "Process exited".to_string(),
+                                };
+                                LogEntry::system(msg)
+                            }
+                        };
+
+                        process.add_log(entry).await;
+
+                        // If process exited, we're done
+                        if matches!(event.event_type, ProcessEventType::Exited { .. }) {
+                            break;
+                        }
+                    }
+                    None => {
+                        // Stream ended
+                        debug!(process_id = %process.id, "Event stream ended");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    debug!(process_id = %process.id, "Event handler finished");
+}

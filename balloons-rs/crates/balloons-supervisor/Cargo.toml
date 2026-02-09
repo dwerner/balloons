@@ -1,0 +1,36 @@
+[package]
+name = "balloons-supervisor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Process supervisor for long-running commands with streaming output"
+
+[dependencies]
+# Process management
+procstream.workspace = true
+
+# Async runtime
+tokio.workspace = true
+core-executor.workspace = true
+async-trait.workspace = true
+futures-lite.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# Time handling
+chrono.workspace = true
+
+# Unique IDs
+uuid.workspace = true
+
+# Logging
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
