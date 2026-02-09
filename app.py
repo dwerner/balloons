@@ -32,7 +32,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, TaskPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, MessageStash, StashPopup, SlidesPane, PresentationScreen, MessageQueuePopup, EntityPane, ActionableToastRack, ActionableNotification, ActionableToast
+from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, TaskPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, ReviewMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, MessageStash, StashPopup, SlidesPane, PresentationScreen, MessageQueuePopup, EntityPane, ActionableToastRack, ActionableNotification, ActionableToast
 from widgets.input_box import CompletionPopup
 from widgets.archive_marker import ArchiveMarker
 from claude_runner import ClaudeRunner
@@ -3695,6 +3695,12 @@ class BalloonsApp(App):
 
     async def on_merge_marker_child_clicked(self, event: MergeMarker.ChildClicked) -> None:
         """Handle clicking on MergeMarker to navigate to the (read-only) fork."""
+        child_session = await Session.load_async(event.child_session_id)
+        if child_session:
+            await self._switch_to_session(child_session)
+
+    async def on_review_marker_child_clicked(self, event: ReviewMarker.ChildClicked) -> None:
+        """Handle clicking on ReviewMarker to navigate to the review session."""
         child_session = await Session.load_async(event.child_session_id)
         if child_session:
             await self._switch_to_session(child_session)

@@ -388,7 +388,7 @@ class AsyncStorage:
         from models import (
             TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock,
             ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock,
-            ArchiveBlock, SlideBlock
+            ArchiveBlock, SlideBlock, ReviewBlock
         )
 
         if isinstance(block, TextBlock):
@@ -472,6 +472,17 @@ class AsyncStorage:
                 "content": block.content,
                 "notes": block.notes,
             }
+        elif isinstance(block, ReviewBlock):
+            return {
+                "type": "review",
+                "review_id": block.review_id,
+                "child_session_id": block.child_session_id,
+                "model_under_review": block.model_under_review,
+                "status": block.status,
+                "overall_score": block.overall_score,
+                "task_category": block.task_category,
+                "task_description": block.task_description,
+            }
         return {"type": "unknown"}
 
     def _wire_to_session(self, data: dict) -> Session:
@@ -551,7 +562,7 @@ class AsyncStorage:
         from models import (
             TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock,
             ErrorBlock, LinkBlock, ForkBlock, MergeBlock, ArchiveBlock, SlideBlock,
-            ArchiveSummary
+            ReviewBlock, ArchiveSummary
         )
 
         block_type = data.get("type", "text")
@@ -640,6 +651,16 @@ class AsyncStorage:
                 title=data.get("title", ""),
                 content=data.get("content", ""),
                 notes=data.get("notes", ""),
+            )
+        elif block_type == "review":
+            return ReviewBlock(
+                review_id=data.get("review_id", ""),
+                child_session_id=data.get("child_session_id", ""),
+                model_under_review=data.get("model_under_review", ""),
+                status=data.get("status", "active"),
+                overall_score=data.get("overall_score", 0.0),
+                task_category=data.get("task_category", ""),
+                task_description=data.get("task_description", ""),
             )
         # Fallback to text
         return TextBlock(text=str(data))

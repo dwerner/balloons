@@ -16,7 +16,7 @@ from typing import Any
 from models import (
     Message, Turn, TextBlock, ToolUseBlock, ToolResultBlock,
     InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock,
-    MergeBlock, MergedToBlock, ArchiveBlock, Sentiment
+    MergeBlock, MergedToBlock, ArchiveBlock, ReviewBlock, Sentiment
 )
 from session import Session
 
@@ -120,6 +120,17 @@ class RenderMergedTo(RenderInstruction):
     files_changed: list[str] = field(default_factory=list)
     key_accomplishments: list[str] = field(default_factory=list)
     reason: str = ""
+
+
+@dataclass
+class RenderReview(RenderInstruction):
+    """Instruction to render a review marker."""
+    child_session_id: str = ""
+    model_under_review: str = ""
+    status: str = "active"
+    overall_score: float = 0.0
+    task_category: str = ""
+    task_description: str = ""
 
 
 # =============================================================================
@@ -319,6 +330,17 @@ class HistoryLoader:
                 files_changed=block.files_changed,
                 key_accomplishments=block.key_accomplishments,
                 reason=block.reason,
+            )
+
+        elif isinstance(block, ReviewBlock):
+            return RenderReview(
+                turn_id=turn_id,
+                child_session_id=block.child_session_id,
+                model_under_review=block.model_under_review,
+                status=block.status,
+                overall_score=block.overall_score,
+                task_category=block.task_category,
+                task_description=block.task_description,
             )
 
         return None

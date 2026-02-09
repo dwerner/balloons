@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 from datetime import datetime
 
 from session import Session
-from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock, ErrorBlock, ArchiveBlock, ForkBlock, MergeBlock, MergedToBlock, LinkBlock, InterruptionBlock
+from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock, ErrorBlock, ArchiveBlock, ForkBlock, MergeBlock, MergedToBlock, LinkBlock, InterruptionBlock, ReviewBlock
 from core.tree_state import TreeState, TreeEvent, SessionData, TurnData
 from core.debug_log import debug_log
 
@@ -1380,6 +1380,15 @@ class NestedTreeView(Vertical):
             msg_preview = content_block.message[:40] + "..." if len(content_block.message) > 40 else content_block.message
             msg_preview = msg_preview.replace("\n", " ")
             return f"{token_part}{unviewed_indicator}{indicator} [green]➡️ Merged to parent[/] {escape_markup(msg_preview)}"
+
+        if isinstance(content_block, ReviewBlock):
+            status_str = ""
+            if content_block.status == "completed":
+                score_str = f" {content_block.overall_score:.1f}" if content_block.overall_score > 0 else ""
+                status_str = f" [green][completed{score_str}][/]"
+            elif content_block.status == "abandoned":
+                status_str = " [red][abandoned][/]"
+            return f"{token_part}{unviewed_indicator}{indicator} [magenta]📋 Review: {escape_markup(content_block.model_under_review)}{status_str}[/]"
 
         if isinstance(content_block, LinkBlock):
             preview = content_block.summary[:40] + "..." if len(content_block.summary) > 40 else content_block.summary

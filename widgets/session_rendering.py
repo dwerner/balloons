@@ -37,6 +37,7 @@ from models import (
     ToolResultBlock,
     ErrorBlock,
     InterruptionBlock,
+    ReviewBlock,
 )
 
 if TYPE_CHECKING:
@@ -437,6 +438,15 @@ class TurnLabelRenderer:
             )
             msg_preview = msg_preview.replace("\n", " ")
             return f"{unviewed_indicator}{indicator} [green]➡️ Merged to parent[/] {escape_markup(msg_preview)}"
+
+        if isinstance(content_block, ReviewBlock):
+            status_str = ""
+            if content_block.status == "completed":
+                score_str = f" {content_block.overall_score:.1f}" if content_block.overall_score > 0 else ""
+                status_str = f" [green][completed{score_str}][/]"
+            elif content_block.status == "abandoned":
+                status_str = " [red][abandoned][/]"
+            return f"{unviewed_indicator}{indicator} [magenta]📋 Review: {escape_markup(content_block.model_under_review)}{status_str}[/]"
 
         if isinstance(content_block, LinkBlock):
             preview = (

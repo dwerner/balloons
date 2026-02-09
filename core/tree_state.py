@@ -37,7 +37,7 @@ from enum import Enum
 
 from models import (
     ContextMode, ContentBlock, TextBlock, ToolUseBlock, ToolResultBlock,
-    InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock, ForkBlock, MergeBlock
+    InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock, ForkBlock, MergeBlock, ReviewBlock
 )
 from core.context import ContextBuilder
 
@@ -457,6 +457,9 @@ class TreeState:
         elif isinstance(block, MergeBlock):
             msg_preview = block.message[:50] + "..." if len(block.message) > 50 else block.message
             return f"Merged: {block.fork_name} - {msg_preview}"
+        elif isinstance(block, ReviewBlock):
+            status = f"[{block.status}]" if block.status != "active" else ""
+            return f"Review: {block.model_under_review} {status}"
         return fallback
 
     def is_session_loaded(self, session_id: str) -> bool:

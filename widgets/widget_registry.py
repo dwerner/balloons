@@ -100,6 +100,17 @@ class ArchiveMarkerProtocol(Protocol):
         ...
 
 
+@runtime_checkable
+class ReviewMarkerProtocol(Protocol):
+    """Protocol for review marker widgets.
+
+    Distinguished by having model_under_review attribute.
+    """
+    child_session_id: str
+    turn_id: int
+    model_under_review: str  # Distinguishes from ForkMarker/MergeMarker
+
+
 class WidgetRegistry:
     """Provides lookup and highlight operations for chat widgets.
 
@@ -176,6 +187,13 @@ class WidgetRegistry:
             if isinstance(child, ArchiveMarkerProtocol):
                 if hasattr(child.archive_block, 'archive_id') and child.archive_block.archive_id == archive_id:
                     return child
+        return None
+
+    def find_review_marker(self, child_session_id: str) -> Any | None:
+        """Find a ReviewMarker by its child session ID."""
+        for child in self._get_children():
+            if isinstance(child, ReviewMarkerProtocol) and child.child_session_id == child_session_id:
+                return child
         return None
 
     # -------------------------------------------------------------------------

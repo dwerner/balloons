@@ -147,6 +147,25 @@ class SlideBlock:
     type: str = "slide"
     title: str = ""  # Slide title, max ~50 chars for 1080p
     content: str = ""  # Markdown body, max ~10 lines for 1080p
+
+
+@dataclass
+class ReviewBlock:
+    """Marker indicating where a quality review was initiated.
+
+    Stored as a turn in the reviewed session's history. The review itself
+    happens in a child session (like a fork), allowing the review conversation
+    to be preserved separately.
+    """
+    type: str = "review"
+    review_id: str = ""  # UUID for this review
+    child_session_id: str = ""  # The review session's ID
+    model_under_review: str = ""  # Backend name of model being evaluated
+    status: str = "active"  # "active", "completed", "abandoned"
+    # Summary fields populated when review completes
+    overall_score: float = 0.0  # Average of rubric scores (1-5)
+    task_category: str = ""  # debugging, feature, refactor, etc.
+    task_description: str = ""  # 1-sentence description
     notes: str = ""  # Speaker notes (not shown in presentation)
 
 
@@ -197,7 +216,7 @@ class ArchiveBlock:
 
 
 # Union type for all content block types
-ContentBlock = Union[TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, SlideBlock]
+ContentBlock = Union[TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, SlideBlock, ReviewBlock]
 
 
 @dataclass

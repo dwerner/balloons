@@ -18,6 +18,7 @@ from .debug_pane import DebugPane
 from .fork_marker import ForkMarker
 from .merge_marker import MergeMarker
 from .link_marker import LinkMarker
+from .review_marker import ReviewMarker
 from .breadcrumb import Breadcrumb
 from .fork_proposal_modal import ForkProposalModal, ForkProposalResult
 from .merge_proposal_modal import MergeProposalModal, MergeProposalResult
@@ -69,6 +70,7 @@ __all__ = [
     "ForkMarker",
     "MergeMarker",
     "LinkMarker",
+    "ReviewMarker",
     "Breadcrumb",
     "ForkProposalModal",
     "ForkProposalResult",

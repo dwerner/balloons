@@ -10,7 +10,7 @@ from typing import Optional, AsyncIterator
 
 import aiofiles
 
-from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, ArchiveSummary, SlideBlock, ContentBlock, ContextMode, QueuedMessage, MessageQueue, Turn
+from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, ArchiveSummary, SlideBlock, ReviewBlock, ContentBlock, ContextMode, QueuedMessage, MessageQueue, Turn
 
 # Rust storage availability (checked lazily to avoid circular imports)
 _rust_storage_checked = False
@@ -470,6 +470,66 @@ class Session:
         )
         return self.add_turn(role="system", content_block=merged_to_block, exchange_id=exchange_id)
 
+    def add_review_turn(
+        self,
+        review_id: str,
+        child_session_id: str,
+        model_under_review: str,
+        status: str = "active",
+        exchange_id: str | None = None,
+    ) -> Turn:
+        """Add a review marker as a turn in the conversation.
+
+        This records that a quality review was initiated at this point.
+
+        Args:
+            review_id: UUID for this review
+            child_session_id: The review session's ID
+            model_under_review: Backend name of model being evaluated
+            status: "active", "completed", or "abandoned"
+            exchange_id: If provided, groups this marker with other turns
+        """
+        review_block = ReviewBlock(
+            review_id=review_id,
+            child_session_id=child_session_id,
+            model_under_review=model_under_review,
+            status=status,
+        )
+        return self.add_turn(role="system", content_block=review_block, exchange_id=exchange_id)
+
+    def update_review_status(
+        self,
+        child_session_id: str,
+        status: str,
+        overall_score: float = 0.0,
+        task_category: str = "",
+        task_description: str = "",
+    ) -> bool:
+        """Update the status and results of a review block.
+
+        Returns True if found and updated, False if not found.
+        """
+        for turn in self.turns:
+            if isinstance(turn.content_block, ReviewBlock) and turn.content_block.child_session_id == child_session_id:
+                turn.content_block.status = status
+                turn.content_block.overall_score = overall_score
+                turn.content_block.task_category = task_category
+                turn.content_block.task_description = task_description
+                return True
+        return False
+
+    def get_all_review_blocks(self) -> list[tuple[int, ReviewBlock]]:
+        """Get all review blocks with their turn indices.
+
+        Returns:
+            List of (turn_index, ReviewBlock) tuples
+        """
+        reviews = []
+        for i, turn in enumerate(self.turns):
+            if isinstance(turn.content_block, ReviewBlock):
+                reviews.append((i, turn.content_block))
+        return reviews
+
     def get_merged_to_block(self) -> Optional[MergedToBlock]:
         """Get the MergedToBlock if this session was merged.
 
@@ -789,6 +849,17 @@ class Session:
                 "content": block.content,
                 "notes": block.notes,
             }
+        elif isinstance(block, ReviewBlock):
+            return {
+                "type": "review",
+                "review_id": block.review_id,
+                "child_session_id": block.child_session_id,
+                "model_under_review": block.model_under_review,
+                "status": block.status,
+                "overall_score": block.overall_score,
+                "task_category": block.task_category,
+                "task_description": block.task_description,
+            }
         return {"type": "unknown"}
 
     def _serialize_turn(self, turn: Turn) -> dict:
@@ -974,6 +1045,16 @@ class Session:
                 title=data.get("title", ""),
                 content=data.get("content", ""),
                 notes=data.get("notes", ""),
+            )
+        elif block_type == "review":
+            return ReviewBlock(
+                review_id=data.get("review_id", ""),
+                child_session_id=data.get("child_session_id", ""),
+                model_under_review=data.get("model_under_review", ""),
+                status=data.get("status", "active"),
+                overall_score=data.get("overall_score", 0.0),
+                task_category=data.get("task_category", ""),
+                task_description=data.get("task_description", ""),
             )
         # Fallback to text
         return TextBlock(text=str(data))

@@ -48,6 +48,7 @@ from models import (
     ForkBlock,
     MergeBlock,
     MergedToBlock,
+    ReviewBlock,
     ContentBlock,
     ContextMode,
 )
@@ -132,6 +133,17 @@ class Archiver:
                 "key_accomplishments": block.key_accomplishments,
                 "reason": block.reason,
             }
+        elif isinstance(block, ReviewBlock):
+            return {
+                "type": "review",
+                "review_id": block.review_id,
+                "child_session_id": block.child_session_id,
+                "model_under_review": block.model_under_review,
+                "status": block.status,
+                "overall_score": block.overall_score,
+                "task_category": block.task_category,
+                "task_description": block.task_description,
+            }
         elif isinstance(block, ArchiveBlock):
             data = {
                 "type": "archive",
@@ -214,6 +226,16 @@ class Archiver:
                 files_changed=data.get("files_changed", []),
                 key_accomplishments=data.get("key_accomplishments", []),
                 reason=data.get("reason", ""),
+            )
+        elif block_type == "review":
+            return ReviewBlock(
+                review_id=data.get("review_id", ""),
+                child_session_id=data.get("child_session_id", ""),
+                model_under_review=data.get("model_under_review", ""),
+                status=data.get("status", "active"),
+                overall_score=data.get("overall_score", 0.0),
+                task_category=data.get("task_category", ""),
+                task_description=data.get("task_description", ""),
             )
         elif block_type == "archive":
             structured_summary = None

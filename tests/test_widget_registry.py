@@ -14,6 +14,7 @@ from widgets.widget_registry import (
     MergeMarkerProtocol,
     LinkMarkerProtocol,
     ArchiveMarkerProtocol,
+    ReviewMarkerProtocol,
 )
 
 
@@ -90,6 +91,13 @@ class MockArchiveMarker(MockWidget):
     archive_block: MockArchiveBlock = field(default_factory=lambda: MockArchiveBlock(""))
 
 
+@dataclass
+class MockReviewMarker(MockWidget):
+    """Mock ReviewMarker."""
+    child_session_id: str = ""
+    model_under_review: str = ""
+
+
 # -------------------------------------------------------------------------
 # Test fixtures
 # -------------------------------------------------------------------------
@@ -115,6 +123,7 @@ def sample_widgets():
         MockWithWidget(turn_id=6, child_session_id="with_session_1"),
         MockLinkMarker(turn_id=7, linked_session_id="linked_session_1"),
         MockArchiveMarker(turn_id=8, archive_block=MockArchiveBlock("archive_1")),
+        MockReviewMarker(turn_id=9, child_session_id="review_session_1", model_under_review="claude-sonnet"),
     ]
 
 
@@ -218,6 +227,24 @@ class TestFindMethods:
 
         assert result is None
 
+    def test_find_review_marker_exists(self, sample_widgets):
+        """find_review_marker returns marker when it exists."""
+        registry = WidgetRegistry(get_children=lambda: iter(sample_widgets))
+
+        result = registry.find_review_marker("review_session_1")
+
+        assert result is not None
+        assert result.child_session_id == "review_session_1"
+        assert result.model_under_review == "claude-sonnet"
+
+    def test_find_review_marker_not_found(self, sample_widgets):
+        """find_review_marker returns None when not found."""
+        registry = WidgetRegistry(get_children=lambda: iter(sample_widgets))
+
+        result = registry.find_review_marker("nonexistent")
+
+        assert result is None
+
     def test_find_on_empty_registry(self, empty_registry):
         """All find methods return None for empty registry."""
         assert empty_registry.find_fork_marker("any") is None
@@ -225,6 +252,7 @@ class TestFindMethods:
         assert empty_registry.find_with_widget("any") is None
         assert empty_registry.find_link_marker("any") is None
         assert empty_registry.find_archive_marker("any") is None
+        assert empty_registry.find_review_marker("any") is None
 
 
 # -------------------------------------------------------------------------
@@ -546,6 +574,15 @@ class TestProtocolCompliance:
             archive_block=MockArchiveBlock("test")
         )
         assert isinstance(widget, ArchiveMarkerProtocol)
+
+    def test_review_marker_protocol(self):
+        """MockReviewMarker satisfies ReviewMarkerProtocol."""
+        widget = MockReviewMarker(
+            turn_id=1,
+            child_session_id="review-123",
+            model_under_review="claude-sonnet"
+        )
+        assert isinstance(widget, ReviewMarkerProtocol)
 
 
 # -------------------------------------------------------------------------

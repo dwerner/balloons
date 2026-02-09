@@ -25,6 +25,7 @@ from .merge_marker import MergeMarker
 from .merged_to_marker import MergedToMarker
 from .link_marker import LinkMarker
 from .archive_marker import ArchiveMarker
+from .review_marker import ReviewMarker
 from models import TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, Sentiment
 from core.formatter import format_edit_as_diff, guess_language
 from core.json_stream import StreamingJsonParser
@@ -32,7 +33,7 @@ from core.history_loader import (
     HistoryLoader,
     RenderMessage, RenderToolUse, RenderToolResult,
     RenderInterruption, RenderError, RenderLink, RenderArchive,
-    RenderFork, RenderMerge, RenderMergedTo
+    RenderFork, RenderMerge, RenderMergedTo, RenderReview
 )
 from .scroll_controller import ScrollController, WidgetRegion
 from .widget_registry import WidgetRegistry
@@ -1609,6 +1610,17 @@ class ChatLogView(VerticalScroll):
                 turn_id=instr.turn_id,
             )
 
+        elif isinstance(instr, RenderReview):
+            return ReviewMarker(
+                child_session_id=instr.child_session_id,
+                model_under_review=instr.model_under_review,
+                status=instr.status,
+                overall_score=instr.overall_score,
+                task_category=instr.task_category,
+                task_description=instr.task_description,
+                turn_id=instr.turn_id,
+            )
+
         return None
 
     def add_with_widget(
@@ -1720,6 +1732,28 @@ class ChatLogView(VerticalScroll):
     def find_merge_marker(self, child_session_id: str) -> MergeMarker | None:
         """Find a MergeMarker by its child session ID."""
         return self._widget_registry.find_merge_marker(child_session_id)
+
+    def add_review_marker(
+        self,
+        child_session_id: str,
+        model_under_review: str,
+        status: str = "active",
+    ) -> ReviewMarker:
+        """Add a review marker to the log (shows where a quality review was initiated)."""
+        turn_id = self._turn_counter
+        widget = ReviewMarker(
+            child_session_id=child_session_id,
+            model_under_review=model_under_review,
+            status=status,
+            turn_id=turn_id,
+        )
+        self.mount(widget)
+        self._smart_scroll()
+        return widget
+
+    def find_review_marker(self, child_session_id: str) -> ReviewMarker | None:
+        """Find a ReviewMarker by its child session ID."""
+        return self._widget_registry.find_review_marker(child_session_id)
 
     def scroll_to_merge_marker(self, child_session_id: str) -> bool:
         """Scroll to a merge marker by its child session ID.

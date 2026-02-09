@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 from tokenizer import count_tokens
 from session import Session
-from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ArchiveBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock
+from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ArchiveBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ReviewBlock
 from core.tree_state import TreeState, TreeEvent, SessionData, TurnData
 from core.context import ContextBuilder
 from core.json_stream import StreamingJsonParser
@@ -1491,6 +1491,16 @@ class ContextTreeView(Vertical):
             msg_preview = content_block.message[:40] + "..." if len(content_block.message) > 40 else content_block.message
             msg_preview = msg_preview.replace("\n", " ")
             return f"{unviewed_indicator}{indicator} [green]➡️ Merged to parent[/] {escape_markup(msg_preview)}"
+
+        if isinstance(content_block, ReviewBlock):
+            # Review turn - show review icon and model
+            status_str = ""
+            if content_block.status == "completed":
+                score_str = f" {content_block.overall_score:.1f}" if content_block.overall_score > 0 else ""
+                status_str = f" [green][completed{score_str}][/]"
+            elif content_block.status == "abandoned":
+                status_str = " [red][abandoned][/]"
+            return f"{unviewed_indicator}{indicator} [magenta]📋 Review: {escape_markup(content_block.model_under_review)}{status_str}[/]"
 
         if isinstance(content_block, LinkBlock):
             # Link turn - show link icon

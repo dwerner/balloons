@@ -5,12 +5,12 @@ from core.history_loader import (
     HistoryLoader, HistoryLoadResult,
     RenderMessage, RenderToolUse, RenderToolResult,
     RenderInterruption, RenderError, RenderLink, RenderArchive,
-    RenderFork, RenderMerge
+    RenderFork, RenderMerge, RenderReview
 )
 from models import (
     Message, TextBlock, ToolUseBlock, ToolResultBlock,
     InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock,
-    MergeBlock, ArchiveBlock
+    MergeBlock, ArchiveBlock, ReviewBlock
 )
 
 
@@ -320,6 +320,35 @@ class TestForkMergeBlocks:
         assert instr.child_session_id == "child-123"
         assert instr.fork_name == "refactor-branch"
         assert instr.message == "Refactoring complete"
+
+    def test_review_block_in_content(self):
+        """ReviewBlock in content produces RenderReview."""
+        loader = HistoryLoader()
+        msg = Message(
+            role="assistant",
+            content="",
+            content_blocks=[
+                ReviewBlock(
+                    review_id="review-1",
+                    child_session_id="review-session-123",
+                    model_under_review="claude-sonnet",
+                    status="completed",
+                    overall_score=4.2,
+                    task_category="feature",
+                    task_description="Implemented user auth",
+                )
+            ]
+        )
+        result = loader.load([msg])
+
+        instr = result.instructions[0]
+        assert isinstance(instr, RenderReview)
+        assert instr.child_session_id == "review-session-123"
+        assert instr.model_under_review == "claude-sonnet"
+        assert instr.status == "completed"
+        assert instr.overall_score == 4.2
+        assert instr.task_category == "feature"
+        assert instr.task_description == "Implemented user auth"
 
 
 class TestMixedContent:
