@@ -2166,14 +2166,21 @@ class BalloonsApp(App):
         status_bar = self.query_one("#status-bar", StatusBar)
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
 
+        # Background old session (mark streaming as inactive, sync queue)
+        old_session_id = self._manager._active_session_id
+        self._background_old_session(old_session_id)
+
+        # Show loading indicator while creating session
+        chat_log.show_loading("Creating new session...")
+
         # Create new session through manager
         new_session = await self._manager.create_session()
         if title:
             new_session.title = title
         await self._manager.set_active(new_session.id)
 
-        # Clear and reload UI
-        chat_log.clear()
+        # Reload UI (hide_loading is called automatically since new session has no history)
+        chat_log.hide_loading()
         await context_tree.load_all_sessions(self.session)
         await breadcrumb.set_session(self.session)
         self.notify("New session created")
@@ -3664,6 +3671,33 @@ class BalloonsApp(App):
             debug_log.error(f"Rehydration failed: {e}", category="archive")
             self.notify(f"Failed to rehydrate: {e}", severity="error")
 
+    def _background_old_session(self, old_session_id: str | None) -> None:
+        """Mark old session's streaming context as inactive and sync queue state.
+
+        This should be called before switching away from a session to ensure:
+        1. Streaming events go to background widgets instead of main chat log
+        2. Queue state is persisted to the session's message_queue
+        """
+        if not old_session_id:
+            return
+
+        # Mark streaming context as inactive
+        old_ctx = self._streaming_contexts.get(old_session_id)
+        if old_ctx:
+            old_ctx.is_active = False
+            debug_log.info(
+                f"Backgrounding streaming session {old_session_id[:8]}",
+                category="stream",
+                session_id=old_session_id,
+            )
+
+        # Sync queue state to old session's message_queue before switching
+        old_session = self._manager._sessions.get(old_session_id)
+        if old_session:
+            self._queue_state.sync_to_message_queue(old_session_id, old_session.message_queue)
+            # Save async to persist the queue (safe even while streaming - only saving queue)
+            asyncio.create_task(old_session.save_async())
+
     async def _switch_to_session(self, session: Session, target_turn_index: int | None = None) -> None:
         """Switch to a different session.
 
@@ -3695,23 +3729,11 @@ class BalloonsApp(App):
         input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
 
-        # Mark OLD session's streaming context as inactive (if streaming)
-        # Also sync queue state to persistence so it survives session switches
-        if old_session_id:
-            old_ctx = self._streaming_contexts.get(old_session_id)
-            if old_ctx:
-                old_ctx.is_active = False
-                debug_log.info(
-                    f"Backgrounding streaming session {old_session_id[:8]}",
-                    category="stream",
-                    session_id=old_session_id,
-                )
-            # Sync queue state to old session's message_queue before switching
-            old_session = self._manager._sessions.get(old_session_id)
-            if old_session:
-                self._queue_state.sync_to_message_queue(old_session_id, old_session.message_queue)
-                # Save async to persist the queue (safe even while streaming - only saving queue)
-                asyncio.create_task(old_session.save_async())
+        # Background old session (mark streaming as inactive, sync queue)
+        self._background_old_session(old_session_id)
+
+        # Show loading indicator while switching
+        chat_log.show_loading("Switching session...")
 
         # Register session with manager if not already known
         if session.id not in self._manager._sessions:
@@ -3734,8 +3756,7 @@ class BalloonsApp(App):
         # Update breadcrumb to show current position in hierarchy
         await breadcrumb.set_session(session)
 
-        # Load session turns and filter by selection
-        chat_log.clear()
+        # Load session turns (this also hides the loading indicator)
         chat_log.load_history(session.turns, session=session)
 
         # Update scrollbar markers for unviewed turns
@@ -4109,6 +4130,8 @@ class BalloonsApp(App):
     def on_context_tree_view_session_link_requested(self, event: ContextTreeView.SessionLinkRequested) -> None:
         """Handle ctrl+click on a session - populate or append to link command."""
         import re
+
+        debug_log.info(f"LINK DEBUG: event.session_id = '{event.session_id}' (len={len(event.session_id)})", category="link")
 
         # Don't allow linking to the current session
         if self.session and event.session_id == self.session.id:

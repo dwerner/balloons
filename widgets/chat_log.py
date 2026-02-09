@@ -3,8 +3,8 @@ from math import ceil
 from pathlib import Path
 from typing import ClassVar
 
-from textual.widgets import Static
-from textual.containers import VerticalScroll
+from textual.widgets import Static, LoadingIndicator
+from textual.containers import VerticalScroll, Center
 from textual.reactive import reactive
 from textual.message import Message
 from textual.events import Click, Key
@@ -738,6 +738,17 @@ class ChatLogView(VerticalScroll):
         padding: 1;
         scrollbar-gutter: stable;
     }
+
+    ChatLogView #chat-loading {
+        height: 100%;
+        align: center middle;
+    }
+
+    ChatLogView .loading-message {
+        text-align: center;
+        color: $text-muted;
+        margin-top: 1;
+    }
     """
 
     def __init__(self, **kwargs):
@@ -1252,6 +1263,29 @@ class ChatLogView(VerticalScroll):
         self._unviewed_turn_ids.clear()
         MarkedScrollBarRender.markers = []
 
+    def show_loading(self, message: str = "Switching session...") -> None:
+        """Show a loading indicator in the chat log.
+
+        Call this before clearing/loading to provide visual feedback during session switches.
+        The loading indicator is automatically removed when load_history is called.
+        """
+        self.clear()
+        # Mount a centered loading indicator
+        loading_container = Center(
+            LoadingIndicator(),
+            Static(message, classes="loading-message"),
+            id="chat-loading",
+        )
+        self.mount(loading_container)
+
+    def hide_loading(self) -> None:
+        """Hide the loading indicator if present."""
+        try:
+            loading = self.query_one("#chat-loading")
+            loading.remove()
+        except Exception:
+            pass  # No loading indicator to remove
+
     def highlight_tool(self, tool_use_id: str) -> None:
         """Highlight a tool use and its result by tool_use_id, scrolling to it."""
         scroll_target = self._widget_registry.highlight_tool(tool_use_id)
@@ -1317,6 +1351,9 @@ class ChatLogView(VerticalScroll):
         Uses HistoryLoader to transform messages into render instructions, then
         interprets those instructions to create and mount widgets.
         """
+        # Hide loading indicator if present
+        self.hide_loading()
+
         loader = HistoryLoader()
         result = loader.load(messages, session=session, start_turn_id=self._turn_counter)
 
