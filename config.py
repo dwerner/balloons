@@ -12,6 +12,22 @@ from tokenizer import count_tokens
 
 
 @dataclass
+class SoundsConfig:
+    """Sound notification configuration.
+
+    Attributes:
+        enabled: Whether sound notifications are enabled
+        done: Sound file for completion (in ~/.balloons/sounds/)
+        error: Sound file for errors
+        notification: Sound file for general notifications (e.g., input required)
+    """
+    enabled: bool = True
+    done: str = "Chord.ogg"
+    error: str = "Glitch.ogg"
+    notification: str = "Polite.ogg"
+
+
+@dataclass
 class TTSConfig:
     """TTS configuration.
 
@@ -107,6 +123,7 @@ class Config:
     last_view_session_id: Optional[str] = None  # Last viewed session ID
     last_view_turn_index: Optional[int] = None  # Last viewed turn index (0-based)
     tts: TTSConfig = field(default_factory=TTSConfig)  # TTS configuration
+    sounds: SoundsConfig = field(default_factory=SoundsConfig)  # Sound notifications
     _config_path: Optional[Path] = field(default=None, repr=False)  # Where config was loaded from
 
     def get_editor(self) -> str:
@@ -194,6 +211,15 @@ class Config:
             tortoise_quality=tts_data.get("tortoise_quality", "fast"),
         )
 
+        # Load sounds config
+        sounds_data = data.get("sounds", {})
+        sounds_config = SoundsConfig(
+            enabled=sounds_data.get("enabled", True),
+            done=sounds_data.get("done", "Chord.ogg"),
+            error=sounds_data.get("error", "Glitch.ogg"),
+            notification=sounds_data.get("notification", "Polite.ogg"),
+        )
+
         return cls(
             default_backend=data.get("default_backend", "claude"),
             backends=backends,
@@ -202,6 +228,7 @@ class Config:
             last_view_session_id=last_view.get("session_id") if last_view else None,
             last_view_turn_index=last_view.get("turn_index") if last_view else None,
             tts=tts_config,
+            sounds=sounds_config,
             _config_path=path,
         )
 
