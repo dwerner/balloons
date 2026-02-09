@@ -16,7 +16,7 @@ from typing import Any
 from models import (
     Message, TextBlock, ToolUseBlock, ToolResultBlock,
     InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock,
-    MergeBlock, ArchiveBlock
+    MergeBlock, MergedToBlock, ArchiveBlock
 )
 from session import Session
 
@@ -103,6 +103,22 @@ class RenderMerge(RenderInstruction):
     message: str = ""
     child_session_id: str = ""
     fork_name: str = ""
+    files_changed: list[str] = field(default_factory=list)
+    key_accomplishments: list[str] = field(default_factory=list)
+    reason: str = ""
+
+
+@dataclass
+class RenderMergedTo(RenderInstruction):
+    """Instruction to render a 'merged to parent' marker."""
+    message: str = ""
+    parent_session_id: str = ""
+    parent_name: str = ""
+    parent_turn: int = 0
+    merge_id: str = ""
+    files_changed: list[str] = field(default_factory=list)
+    key_accomplishments: list[str] = field(default_factory=list)
+    reason: str = ""
 
 
 # =============================================================================
@@ -279,7 +295,23 @@ class HistoryLoader:
                 turn_id=turn_id,
                 message=block.message,
                 child_session_id=block.child_session_id,
-                fork_name=block.fork_name
+                fork_name=block.fork_name,
+                files_changed=block.files_changed,
+                key_accomplishments=block.key_accomplishments,
+                reason=block.reason,
+            )
+
+        elif isinstance(block, MergedToBlock):
+            return RenderMergedTo(
+                turn_id=turn_id,
+                message=block.message,
+                parent_session_id=block.parent_session_id,
+                parent_name=block.parent_name,
+                parent_turn=block.parent_turn,
+                merge_id=block.merge_id,
+                files_changed=block.files_changed,
+                key_accomplishments=block.key_accomplishments,
+                reason=block.reason,
             )
 
         return None

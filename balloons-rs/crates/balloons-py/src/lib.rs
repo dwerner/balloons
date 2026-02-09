@@ -8,7 +8,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use std::sync::{Arc, Mutex};
 
-use balloons_core::{RedbEngine, SessionData, StorageClient};
+use balloons_core::{LmdbEngine, SessionData, StorageClient};
 
 /// Python-facing storage handle
 ///
@@ -25,7 +25,7 @@ impl Storage {
     /// Open a storage database at the given path
     #[new]
     fn new(path: &str) -> PyResult<Self> {
-        let engine = RedbEngine::open(path).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let engine = LmdbEngine::open(path).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let client = StorageClient::new(engine);
         // Use a single-core executor for storage operations
         let executor = ThreadPoolExecutor::new(1);
@@ -167,6 +167,71 @@ impl Storage {
             let mut executor = self.executor.lock().unwrap();
             let task = executor
                 .spawn_on_any(async move { client.reorder_turns(&session_id, &turn_ids).await });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Save a session and all its turns atomically (single transaction).
+    ///
+    /// Args:
+    ///     id: Session ID
+    ///     session_json: JSON-encoded session data (without turns)
+    ///     turns_json: JSON array of turn data
+    ///
+    /// This is more efficient than calling save_session + N×save_turn.
+    fn save_session_with_turns(
+        &self,
+        py: Python<'_>,
+        id: &str,
+        session_json: &str,
+        turns_json: &str,
+    ) -> PyResult<()> {
+        let session: balloons_core::SessionData = serde_json::from_str(session_json)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let turns: Vec<balloons_core::TurnData> = serde_json::from_str(turns_json)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        let client = Arc::clone(&self.client);
+        let id = id.to_string();
+
+        py.allow_threads(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move {
+                client.save_session_with_turns(&id, &session, &turns).await
+            });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Atomically replace all turns for a session (single transaction).
+    ///
+    /// Args:
+    ///     session_id: Session ID (must already exist)
+    ///     turns_json: JSON array of turn data
+    ///
+    /// This deletes any turns not in the new list, upserts all new turns,
+    /// and updates the turn order - all atomically.
+    fn replace_session_turns(
+        &self,
+        py: Python<'_>,
+        session_id: &str,
+        turns_json: &str,
+    ) -> PyResult<()> {
+        let turns: Vec<balloons_core::TurnData> = serde_json::from_str(turns_json)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        let client = Arc::clone(&self.client);
+        let session_id = session_id.to_string();
+
+        py.allow_threads(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move {
+                client.replace_session_turns(&session_id, &turns).await
+            });
             future::block_on(task)
                 .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))

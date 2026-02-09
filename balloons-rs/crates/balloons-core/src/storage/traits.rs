@@ -52,4 +52,38 @@ pub trait StorageEngine: Send + Sync {
 
     /// Delete a session and all its turns
     async fn delete_session(&self, id: &str) -> Result<()>;
+
+    // =========================================================================
+    // Batch Operations - atomic multi-item operations in a single transaction
+    // =========================================================================
+
+    /// Save a session along with all its turns atomically.
+    ///
+    /// This is more efficient than calling save_session + N×save_turn because
+    /// it uses a single database transaction. The turn order is determined by
+    /// the order of turns in the slice.
+    ///
+    /// If the session already exists, it will be overwritten. Any existing turns
+    /// for this session are preserved unless they have the same ID as a new turn.
+    async fn save_session_with_turns(
+        &self,
+        id: &str,
+        session: &SessionData,
+        turns: &[TurnData],
+    ) -> Result<()>;
+
+    /// Atomically replace all turns for a session.
+    ///
+    /// This operation:
+    /// 1. Deletes all existing turns for the session
+    /// 2. Inserts all new turns in order
+    /// 3. Updates the turn order to match the new turns
+    ///
+    /// All in a single transaction, so either everything succeeds or nothing changes.
+    /// This is the preferred way to sync Python's in-memory turns to storage.
+    async fn replace_session_turns(
+        &self,
+        session_id: &str,
+        turns: &[TurnData],
+    ) -> Result<()>;
 }

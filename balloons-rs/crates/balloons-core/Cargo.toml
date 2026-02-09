@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 core-executor.workspace = true
-redb.workspace = true
+heed.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 async-trait.workspace = true

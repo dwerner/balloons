@@ -1,4 +1,4 @@
-"""Merge marker widget - shows where a fork was merged back in the chat log."""
+"""MergedTo marker widget - shows that this fork was merged to its parent."""
 
 from textual.widgets import Static
 from textual.message import Message
@@ -6,61 +6,62 @@ from rich.console import RenderableType
 from rich.text import Text
 
 
-class MergeMarker(Static):
-    """Shows where a fork was merged back in the chat log.
+class MergedToMarker(Static):
+    """Shows that this fork was merged back to its parent.
 
     Displays:
-        ⬅️ Merged from: auth-bug
+        ➡️ Merged to: parent-session-name
         Summary of what was accomplished
         Files changed: file1.py, file2.py
         ✓ Key accomplishment 1
         ✓ Key accomplishment 2
 
-    Clicking navigates to the (now read-only) fork.
+    Clicking navigates to the parent session.
     """
 
     DEFAULT_CSS = """
-    MergeMarker {
+    MergedToMarker {
         padding: 0 1;
         margin: 0 0 1 2;
         background: #1a3a1a;
         border-left: thick $success;
     }
 
-    MergeMarker:hover {
+    MergedToMarker:hover {
         background: #2a4a2a;
     }
 
-    MergeMarker.hidden {
+    MergedToMarker.hidden {
         display: none;
     }
 
-    /* Context mode visual indicators - use background color to avoid layout shifts */
-    /* COPY is the default - no special styling needed */
-    MergeMarker.context-copy {
+    /* Context mode visual indicators */
+    MergedToMarker.context-copy {
     }
 
-    MergeMarker.context-compress {
-        background: #2d2a1a;  /* Yellow/orange tint for summarize */
+    MergedToMarker.context-compress {
+        background: #2d2a1a;
     }
 
-    MergeMarker.context-drop {
+    MergedToMarker.context-drop {
         opacity: 0.4;
     }
     """
 
-    class ChildClicked(Message):
-        """Posted when user clicks to navigate to the merged fork."""
+    class ParentClicked(Message):
+        """Posted when user clicks to navigate to the parent session."""
 
-        def __init__(self, child_session_id: str) -> None:
+        def __init__(self, parent_session_id: str) -> None:
             super().__init__()
-            self.child_session_id = child_session_id
+            self.parent_session_id = parent_session_id
 
     def __init__(
         self,
         message: str,
-        child_session_id: str,
-        fork_name: str,
+        parent_session_id: str,
+        parent_name: str = "",
+        parent_turn: int = 0,
+        merge_id: str = "",
         files_changed: list[str] | None = None,
         key_accomplishments: list[str] | None = None,
         reason: str = "",
@@ -69,8 +70,10 @@ class MergeMarker(Static):
     ):
         super().__init__(**kwargs)
         self.message = message
-        self.child_session_id = child_session_id
-        self.fork_name = fork_name
+        self.parent_session_id = parent_session_id
+        self.parent_name = parent_name or parent_session_id[:8]
+        self.parent_turn = parent_turn
+        self.merge_id = merge_id
         self.files_changed = files_changed or []
         self.key_accomplishments = key_accomplishments or []
         self.reason = reason
@@ -79,8 +82,8 @@ class MergeMarker(Static):
     def render(self) -> RenderableType:
         # Build the display text
         text = Text()
-        text.append("⬅️ Merged from: ", style="bold green")
-        text.append(self.fork_name, style="cyan bold")
+        text.append("➡️ Merged to: ", style="bold green")
+        text.append(self.parent_name, style="cyan bold")
         text.append("\n\n")
 
         # Summary
@@ -104,5 +107,5 @@ class MergeMarker(Static):
         return text
 
     def on_click(self) -> None:
-        """Navigate to the fork when clicked."""
-        self.post_message(self.ChildClicked(self.child_session_id))
+        """Navigate to the parent when clicked."""
+        self.post_message(self.ParentClicked(self.parent_session_id))

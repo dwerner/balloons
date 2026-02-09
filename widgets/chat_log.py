@@ -22,16 +22,17 @@ from .with_widget import WithWidget
 from .with_result_widget import WithResultWidget
 from .fork_marker import ForkMarker
 from .merge_marker import MergeMarker
+from .merged_to_marker import MergedToMarker
 from .link_marker import LinkMarker
 from .archive_marker import ArchiveMarker
-from models import TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, ArchiveBlock
+from models import TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock
 from core.formatter import format_edit_as_diff, guess_language
 from core.json_stream import StreamingJsonParser
 from core.history_loader import (
     HistoryLoader,
     RenderMessage, RenderToolUse, RenderToolResult,
     RenderInterruption, RenderError, RenderLink, RenderArchive,
-    RenderFork, RenderMerge
+    RenderFork, RenderMerge, RenderMergedTo
 )
 from .scroll_controller import ScrollController, WidgetRegion
 from .widget_registry import WidgetRegistry
@@ -871,7 +872,7 @@ class ChatLogView(VerticalScroll):
             category="scroll"
         )
         super().watch_scroll_y(old_value, new_value)
-        self._scroll_controller.on_scroll_changed()
+        self._scroll_controller.on_scroll_changed(old_scroll_y=old_value)
         debug_log.debug(
             f"watch_scroll_y after: following={self._scroll_controller.following}",
             category="scroll"
@@ -1412,6 +1413,22 @@ class ChatLogView(VerticalScroll):
                 message=instr.message,
                 child_session_id=instr.child_session_id,
                 fork_name=instr.fork_name,
+                files_changed=instr.files_changed,
+                key_accomplishments=instr.key_accomplishments,
+                reason=instr.reason,
+                turn_id=instr.turn_id,
+            )
+
+        elif isinstance(instr, RenderMergedTo):
+            return MergedToMarker(
+                message=instr.message,
+                parent_session_id=instr.parent_session_id,
+                parent_name=instr.parent_name,
+                parent_turn=instr.parent_turn,
+                merge_id=instr.merge_id,
+                files_changed=instr.files_changed,
+                key_accomplishments=instr.key_accomplishments,
+                reason=instr.reason,
                 turn_id=instr.turn_id,
             )
 

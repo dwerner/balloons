@@ -212,9 +212,10 @@ class TestCommandExecutorRehydrate:
 class TestCommandExecutorLink:
     """Tests for CommandExecutor link operations."""
 
-    def test_resolve_no_session(self, executor):
+    @pytest.mark.asyncio
+    async def test_resolve_no_session(self, executor):
         """Test link resolution fails without a session."""
-        result = executor.resolve_link_targets(
+        result = await executor.resolve_link_targets(
             current_session=None,
             target_prefixes=["abc123"],
         )
@@ -222,9 +223,10 @@ class TestCommandExecutorLink:
         assert not result.success
         assert "No active session" in result.error
 
-    def test_resolve_no_targets(self, executor, sample_session):
+    @pytest.mark.asyncio
+    async def test_resolve_no_targets(self, executor, sample_session):
         """Test link resolution fails with no targets."""
-        result = executor.resolve_link_targets(
+        result = await executor.resolve_link_targets(
             current_session=sample_session,
             target_prefixes=[],
         )
@@ -232,12 +234,16 @@ class TestCommandExecutorLink:
         assert not result.success
         assert "No target sessions" in result.error
 
-    @patch('core.command_executor.Session.list_sessions')
-    def test_resolve_no_match(self, mock_list, executor, sample_session):
+    @pytest.mark.asyncio
+    @patch('core.command_executor.Session.list_sessions_async')
+    async def test_resolve_no_match(self, mock_list, executor, sample_session):
         """Test link resolution fails if no session matches."""
-        mock_list.return_value = []
+        async def async_iter():
+            for item in []:
+                yield item
+        mock_list.return_value = async_iter()
 
-        result = executor.resolve_link_targets(
+        result = await executor.resolve_link_targets(
             current_session=sample_session,
             target_prefixes=["nonexist"],
         )
@@ -245,15 +251,16 @@ class TestCommandExecutorLink:
         assert not result.success
         assert "No session found" in result.error
 
-    @patch('core.command_executor.Session.list_sessions')
-    def test_resolve_multiple_matches(self, mock_list, executor, sample_session):
+    @pytest.mark.asyncio
+    @patch('core.command_executor.Session.list_sessions_async')
+    async def test_resolve_multiple_matches(self, mock_list, executor, sample_session):
         """Test link resolution fails with ambiguous prefix."""
-        mock_list.return_value = [
-            {"id": "abc12345-1"},
-            {"id": "abc12345-2"},
-        ]
+        async def async_iter():
+            for item in [{"id": "abc12345-1"}, {"id": "abc12345-2"}]:
+                yield item
+        mock_list.return_value = async_iter()
 
-        result = executor.resolve_link_targets(
+        result = await executor.resolve_link_targets(
             current_session=sample_session,
             target_prefixes=["abc123"],
         )
@@ -261,12 +268,16 @@ class TestCommandExecutorLink:
         assert not result.success
         assert "Multiple sessions match" in result.error
 
-    @patch('core.command_executor.Session.list_sessions')
-    def test_resolve_self_link(self, mock_list, executor, sample_session):
+    @pytest.mark.asyncio
+    @patch('core.command_executor.Session.list_sessions_async')
+    async def test_resolve_self_link(self, mock_list, executor, sample_session):
         """Test link resolution fails when linking to self."""
-        mock_list.return_value = [{"id": sample_session.id}]
+        async def async_iter():
+            for item in [{"id": sample_session.id}]:
+                yield item
+        mock_list.return_value = async_iter()
 
-        result = executor.resolve_link_targets(
+        result = await executor.resolve_link_targets(
             current_session=sample_session,
             target_prefixes=[sample_session.id[:8]],
         )

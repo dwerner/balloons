@@ -12,7 +12,7 @@ from core.link_tools import (
 )
 from claude_runner import ClaudeRunner
 from session import Session
-from models import Message, TextBlock, LinkBlock, ForkBlock, MergeBlock, Turn
+from models import Message, TextBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, Turn
 
 
 class TestLinkToolNames:
@@ -29,15 +29,17 @@ class TestLinkToolNames:
 class TestScreenSnapshotTool:
     """Test screen_snapshot tool with app handler registration."""
 
-    def test_screen_snapshot_without_handler_returns_error(self):
+    @pytest.mark.asyncio
+    async def test_screen_snapshot_without_handler_returns_error(self):
         """Without a registered handler, screen_snapshot returns an error."""
         session = Mock(spec=Session)
-        result, is_error = execute_link_tool("screen_snapshot", {}, session)
+        result, is_error = await execute_link_tool("screen_snapshot", {}, session)
 
         assert is_error
         assert "requires the Balloons app" in result
 
-    def test_screen_snapshot_with_handler(self):
+    @pytest.mark.asyncio
+    async def test_screen_snapshot_with_handler(self):
         """With a registered handler, screen_snapshot calls it."""
         session = Mock(spec=Session)
 
@@ -47,7 +49,7 @@ class TestScreenSnapshotTool:
 
         register_app_tool_handler("screen_snapshot", mock_handler)
         try:
-            result, is_error = execute_link_tool("screen_snapshot", {}, session)
+            result, is_error = await execute_link_tool("screen_snapshot", {}, session)
 
             assert not is_error
             assert "Mocked screen content" in result
@@ -55,7 +57,8 @@ class TestScreenSnapshotTool:
             # Clean up
             unregister_app_tool_handler("screen_snapshot")
 
-    def test_unregister_handler(self):
+    @pytest.mark.asyncio
+    async def test_unregister_handler(self):
         """After unregistering, handler is no longer called."""
         session = Mock(spec=Session)
 
@@ -65,7 +68,7 @@ class TestScreenSnapshotTool:
         register_app_tool_handler("screen_snapshot", mock_handler)
         unregister_app_tool_handler("screen_snapshot")
 
-        result, is_error = execute_link_tool("screen_snapshot", {}, session)
+        result, is_error = await execute_link_tool("screen_snapshot", {}, session)
 
         assert is_error
         assert "requires the Balloons app" in result
@@ -74,23 +77,26 @@ class TestScreenSnapshotTool:
 class TestExecuteLinkTool:
     """Test link tool execution."""
 
-    def test_unknown_tool_returns_error(self):
+    @pytest.mark.asyncio
+    async def test_unknown_tool_returns_error(self):
         session = Mock(spec=Session)
-        result, is_error = execute_link_tool("unknown_tool", {}, session)
+        result, is_error = await execute_link_tool("unknown_tool", {}, session)
 
         assert is_error
         assert "Unknown link tool" in result
 
-    def test_list_links_empty_session(self):
+    @pytest.mark.asyncio
+    async def test_list_links_empty_session(self):
         session = Mock(spec=Session)
         session.get_all_active_links.return_value = []
 
-        result, is_error = execute_link_tool("list_links", {}, session)
+        result, is_error = await execute_link_tool("list_links", {}, session)
 
         assert not is_error
         assert "No links found" in result
 
-    def test_list_links_with_links(self):
+    @pytest.mark.asyncio
+    async def test_list_links_with_links(self):
         # Create a mock session with links
         session = Mock(spec=Session)
         session.get_all_active_links.return_value = [
@@ -103,8 +109,8 @@ class TestExecuteLinkTool:
         linked_session.fork_name = None
         linked_session.turns = [Mock(), Mock()]
 
-        with patch.object(Session, 'load', return_value=linked_session):
-            result, is_error = execute_link_tool("list_links", {}, session)
+        with patch.object(Session, 'load_async', return_value=linked_session):
+            result, is_error = await execute_link_tool("list_links", {}, session)
 
         assert not is_error
         data = json.loads(result)
@@ -113,18 +119,20 @@ class TestExecuteLinkTool:
         assert data[0]["linked_session_name"] == "Linked Session"
         assert data[0]["message_count"] == 2
 
-    def test_follow_link_missing_link_id(self):
+    @pytest.mark.asyncio
+    async def test_follow_link_missing_link_id(self):
         session = Mock(spec=Session)
-        result, is_error = execute_link_tool("follow_link", {}, session)
+        result, is_error = await execute_link_tool("follow_link", {}, session)
 
         assert is_error
         assert "link_id or session_id is required" in result
 
-    def test_follow_link_not_found(self):
+    @pytest.mark.asyncio
+    async def test_follow_link_not_found(self):
         session = Mock(spec=Session)
         session.get_all_active_links.return_value = []
 
-        result, is_error = execute_link_tool(
+        result, is_error = await execute_link_tool(
             "follow_link",
             {"link_id": "nonexistent"},
             session
@@ -133,11 +141,12 @@ class TestExecuteLinkTool:
         assert is_error
         assert "Link not found" in result
 
-    def test_search_linked_session_missing_args(self):
+    @pytest.mark.asyncio
+    async def test_search_linked_session_missing_args(self):
         session = Mock(spec=Session)
 
         # Missing link_id
-        result, is_error = execute_link_tool(
+        result, is_error = await execute_link_tool(
             "search_linked_session",
             {"query": "test"},
             session
@@ -146,7 +155,7 @@ class TestExecuteLinkTool:
         assert "link_id is required" in result
 
         # Missing query
-        result, is_error = execute_link_tool(
+        result, is_error = await execute_link_tool(
             "search_linked_session",
             {"link_id": "abc"},
             session
@@ -154,7 +163,8 @@ class TestExecuteLinkTool:
         assert is_error
         assert "query is required" in result
 
-    def test_session_info_basic(self):
+    @pytest.mark.asyncio
+    async def test_session_info_basic(self):
         """Test session_info returns expected minimal structure."""
         session = Mock(spec=Session)
         session.id = "test-session-12345678"
@@ -166,8 +176,9 @@ class TestExecuteLinkTool:
         session.parent_id = None
         session.get_all_merge_blocks.return_value = []
         session.get_all_fork_blocks.return_value = []
+        session.get_merged_to_block.return_value = None
 
-        result, is_error = execute_link_tool("session_info", {}, session)
+        result, is_error = await execute_link_tool("session_info", {}, session)
 
         assert not is_error
         data = json.loads(result)
@@ -182,7 +193,8 @@ class TestExecuteLinkTool:
         assert data["context_tokens"] == 40000
         assert data["context_pct"] == 20.0
 
-    def test_session_info_with_parent(self):
+    @pytest.mark.asyncio
+    async def test_session_info_with_parent(self):
         """Test session_info shows parent chain for forked sessions."""
         session = Mock(spec=Session)
         session.id = "test-session-12345678"
@@ -194,6 +206,7 @@ class TestExecuteLinkTool:
         session.parent_id = "parent-1234"
         session.get_all_merge_blocks.return_value = []
         session.get_all_fork_blocks.return_value = []
+        session.get_merged_to_block.return_value = None
 
         # Mock parent session
         parent_session = Mock(spec=Session)
@@ -202,8 +215,8 @@ class TestExecuteLinkTool:
         parent_session.fork_name = ""
         parent_session.parent_id = None  # Root parent
 
-        with patch.object(Session, 'load', return_value=parent_session):
-            result, is_error = execute_link_tool("session_info", {}, session)
+        with patch.object(Session, 'load_async', return_value=parent_session):
+            result, is_error = await execute_link_tool("session_info", {}, session)
 
         assert not is_error
         data = json.loads(result)
@@ -217,7 +230,8 @@ class TestExecuteLinkTool:
         # Not merged, so no merged_to
         assert data["merged_to"] is None
 
-    def test_session_info_with_merge_and_fork_blocks(self):
+    @pytest.mark.asyncio
+    async def test_session_info_with_merge_and_fork_blocks(self):
         """Test session_info shows merged_from and forked_to from turns."""
         session = Mock(spec=Session)
         session.id = "test-session-12345678"
@@ -227,6 +241,7 @@ class TestExecuteLinkTool:
         session.context_window = 200000
         session.is_merged.return_value = False
         session.parent_id = None
+        session.get_merged_to_block.return_value = None
 
         # Mock merge block (child merged into this session at turn 15)
         merge_block = MergeBlock(
@@ -246,7 +261,7 @@ class TestExecuteLinkTool:
         )
         session.get_all_fork_blocks.return_value = [(8, fork_block)]
 
-        result, is_error = execute_link_tool("session_info", {}, session)
+        result, is_error = await execute_link_tool("session_info", {}, session)
 
         assert not is_error
         data = json.loads(result)
@@ -265,7 +280,8 @@ class TestExecuteLinkTool:
         assert data["forked_to"][0]["name"] == "try-memcached"
         assert data["forked_to"][0]["status"] == "active"
 
-    def test_session_info_merged_session(self):
+    @pytest.mark.asyncio
+    async def test_session_info_merged_session(self):
         """Test session_info shows merged_to when session is merged to parent."""
         session = Mock(spec=Session)
         session.id = "child-session-123"
@@ -280,6 +296,15 @@ class TestExecuteLinkTool:
         session.get_all_merge_blocks.return_value = []
         session.get_all_fork_blocks.return_value = []
 
+        # Mock MergedToBlock (now the primary source for merged_to info)
+        merged_to_block = MergedToBlock(
+            merge_id="merge-xyz",
+            parent_session_id="parent-session-456",
+            parent_turn=42,
+            message="Fixed authentication by refreshing tokens",
+        )
+        session.get_merged_to_block.return_value = merged_to_block
+
         # Mock parent session for parents chain
         parent_session = Mock(spec=Session)
         parent_session.id = "parent-session-456"
@@ -287,19 +312,21 @@ class TestExecuteLinkTool:
         parent_session.fork_name = ""
         parent_session.parent_id = None
 
-        with patch.object(Session, 'load', return_value=parent_session):
-            result, is_error = execute_link_tool("session_info", {}, session)
+        with patch.object(Session, 'load_async', return_value=parent_session):
+            result, is_error = await execute_link_tool("session_info", {}, session)
 
         assert not is_error
         data = json.loads(result)
 
         # Check merged_to
         assert data["merged_to"] is not None
+        assert data["merged_to"]["merge_id"] == "merge-xyz"
         assert data["merged_to"]["parent_session_id"] == "parent-session-456"
         assert data["merged_to"]["parent_turn"] == 42
         assert "authentication" in data["merged_to"]["summary"]
 
-    def test_follow_link_with_session_id(self):
+    @pytest.mark.asyncio
+    async def test_follow_link_with_session_id(self):
         """Test follow_link can directly load a session by ID."""
         current_session = Mock(spec=Session)
 
@@ -312,8 +339,8 @@ class TestExecuteLinkTool:
         target_session.last_modified = "2024-01-02T00:00:00"
         target_session.turns = []
 
-        with patch.object(Session, 'load', return_value=target_session):
-            result, is_error = execute_link_tool(
+        with patch.object(Session, 'load_async', return_value=target_session):
+            result, is_error = await execute_link_tool(
                 "follow_link",
                 {"session_id": "target-session-123"},
                 current_session
@@ -326,12 +353,13 @@ class TestExecuteLinkTool:
         assert data["name"] == "Target Session"
         assert "link_summary" not in data  # No link_summary when using session_id
 
-    def test_follow_link_session_id_not_found(self):
+    @pytest.mark.asyncio
+    async def test_follow_link_session_id_not_found(self):
         """Test follow_link returns error when session_id doesn't exist."""
         current_session = Mock(spec=Session)
 
-        with patch.object(Session, 'load', return_value=None):
-            result, is_error = execute_link_tool(
+        with patch.object(Session, 'load_async', return_value=None):
+            result, is_error = await execute_link_tool(
                 "follow_link",
                 {"session_id": "nonexistent-123"},
                 current_session

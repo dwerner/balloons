@@ -82,7 +82,7 @@ class SessionManager:
             return self._runners.get(self._active_session_id)
         return None
 
-    def create_session(self, working_directory: str = None) -> Session:
+    async def create_session(self, working_directory: str = None) -> Session:
         """Create a new session.
 
         Args:
@@ -94,7 +94,7 @@ class SessionManager:
         session = Session()
         # Default to current working directory if not specified
         session.set_working_directory(working_directory or os.getcwd())
-        session.save()
+        await session.save_async()
 
         self._sessions[session.id] = session
         self._runners[session.id] = self._create_runner(session)
@@ -107,7 +107,7 @@ class SessionManager:
             return self._runner_factory(session)
         return SessionRunner(session, runner=create_runner(self._backend_config))
 
-    def load_session(self, session_id: str) -> Optional[Session]:
+    async def load_session(self, session_id: str) -> Optional[Session]:
         """Load a session by ID.
 
         Args:
@@ -119,14 +119,14 @@ class SessionManager:
         if session_id in self._sessions:
             return self._sessions[session_id]
 
-        session = Session.load(session_id)
+        session = await Session.load_async(session_id)
         if session:
             self._sessions[session.id] = session
             self._runners[session.id] = self._create_runner(session)
 
         return session
 
-    def set_active(self, session_id: str) -> bool:
+    async def set_active(self, session_id: str) -> bool:
         """Set the active session.
 
         Args:
@@ -137,7 +137,7 @@ class SessionManager:
         """
         if session_id not in self._sessions:
             # Try to load it
-            if not self.load_session(session_id):
+            if not await self.load_session(session_id):
                 return False
 
         self._active_session_id = session_id
@@ -165,7 +165,7 @@ class SessionManager:
         """
         return self._runners.get(session_id)
 
-    def fork_session(
+    async def fork_session(
         self,
         parent_id: str,
         prompt: str,
@@ -197,11 +197,11 @@ class SessionManager:
         for msg in messages:
             child.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
-        child.save()
+        await child.save_async()
 
         # Register child with parent
         parent.add_child(child.id, prompt, return_condition)
-        parent.save()
+        await parent.save_async()
 
         # Track in manager
         self._sessions[child.id] = child
@@ -209,7 +209,7 @@ class SessionManager:
 
         return child
 
-    def return_from_child(
+    async def return_from_child(
         self,
         child_id: str,
         return_content: str = "",
@@ -227,21 +227,21 @@ class SessionManager:
         if not child or not child.parent_id:
             return None
 
-        parent = self.load_session(child.parent_id)
+        parent = await self.load_session(child.parent_id)
         if not parent:
             return None
 
         # Mark child as returned
         child.returned = True
-        child.save()
+        await child.save_async()
 
         # Update parent
         parent.mark_child_returned(child_id)
-        parent.save()
+        await parent.save_async()
 
         return parent
 
-    def list_sessions(self) -> List[SessionInfo]:
+    async def list_sessions(self) -> List[SessionInfo]:
         """List all available sessions.
 
         Returns:
@@ -250,20 +250,23 @@ class SessionManager:
         infos = []
 
         # Get sessions from disk
-        for session_metadata in Session.list_sessions():
+        async for session_metadata in Session.list_sessions_async():
             session_id = session_metadata["id"]
-            title = session_metadata.get("title", "")
+            # Handle Rust storage field names: name vs title
+            title = session_metadata.get("title") or session_metadata.get("name", "")
             # Load to get more info if not already loaded
-            session = self._sessions.get(session_id) or Session.load(session_id)
+            session = self._sessions.get(session_id)
+            if not session:
+                session = await Session.load_async(session_id)
             if session:
                 runner = self._runners.get(session_id)
                 status = runner.status if runner else RunnerStatus.IDLE
 
                 infos.append(SessionInfo(
                     id=session_id,
-                    title=title or f"Session {session_id[:8]}",
-                    created=created,
-                    model=model,
+                    title=title or session.title or f"Session {session_id[:8]}",
+                    created=session.created,
+                    model=session.model,
                     message_count=len(session.turns),
                     is_child=session.parent_id is not None,
                     is_returned=session.returned,

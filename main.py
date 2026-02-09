@@ -2,6 +2,7 @@
 """Balloons - A TUI wrapper for Claude CLI."""
 
 import argparse
+import asyncio
 import os
 import sys
 
@@ -68,7 +69,12 @@ def main():
     backend_env = config.get_env_for_backend(backend_name)
 
     if args.list:
-        sessions = Session.list_sessions()
+        async def list_sessions():
+            sessions = []
+            async for metadata in Session.list_sessions_async():
+                sessions.append(metadata)
+            return sessions
+        sessions = asyncio.run(list_sessions())
         if not sessions:
             print("No sessions found.")
         else:
@@ -76,9 +82,16 @@ def main():
             print("-" * 80)
             for session_metadata in sessions:
                 session_id = session_metadata["id"]
+                # Handle Rust storage: created_at (unix) vs created (ISO)
                 created = session_metadata.get("created", "")
+                if not created:
+                    created_at = session_metadata.get("created_at", 0)
+                    if created_at:
+                        from datetime import datetime, timezone
+                        created = datetime.fromtimestamp(created_at, tz=timezone.utc).isoformat()
                 model = session_metadata.get("model", "")
-                title = session_metadata.get("title", "")
+                # Handle Rust storage: name vs title
+                title = session_metadata.get("title") or session_metadata.get("name", "")
                 display = title[:30] if title else model
                 print(f"{session_id:<40} {created[:19]:<20} {display}")
         return
@@ -86,7 +99,7 @@ def main():
     session = None
 
     if args.resume:
-        session = Session.load(args.resume)
+        session = asyncio.run(Session.load_async(args.resume))
         if session is None:
             print(f"Error: Session '{args.resume}' not found.", file=sys.stderr)
             sys.exit(1)

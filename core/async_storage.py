@@ -1,13 +1,10 @@
-"""Async wrapper for Rust balloons_storage.
+"""Async wrapper for Rust storage backend.
 
 Provides an async interface to the synchronous Rust storage backend,
 using ThreadPoolExecutor to run blocking calls without blocking the event loop.
 
-The Rust backend (balloons_storage.Storage) provides ACID-compliant session
-persistence via redb, with JSON serialization at the Python boundary.
-
 Usage:
-    storage = AsyncStorage("/path/to/sessions.redb")
+    storage = AsyncStorage()
 
     # Save a session
     await storage.save_session(session)
@@ -43,7 +40,8 @@ if TYPE_CHECKING:
 
 
 # Default database path
-DEFAULT_DB_PATH = Path.home() / ".balloons" / "sessions.redb"
+# Note: LMDB uses a directory, not a single file (unlike redb)
+DEFAULT_DB_PATH = Path.home() / ".balloons" / "sessions.lmdb"
 
 
 class AsyncStorage:
@@ -63,7 +61,7 @@ class AsyncStorage:
         """Initialize async storage.
 
         Args:
-            db_path: Path to the redb database file. Defaults to ~/.balloons/sessions.redb
+            db_path: Path to the database file. Defaults to ~/.balloons/sessions.db
         """
         if not RUST_STORAGE_AVAILABLE:
             raise RuntimeError(
@@ -100,23 +98,28 @@ class AsyncStorage:
     async def save_session(self, session: Session) -> None:
         """Save a session to storage.
 
-        Uses split storage model:
-        1. Save session metadata (without turns) to SESSIONS table
-        2. Save each turn to TURNS table
+        Uses atomic batch operations for efficiency:
+        1. Save session metadata to SESSIONS table
+        2. Atomically replace all turns (handles insert/update/delete/reorder)
+
+        All operations happen in a single database transaction.
 
         Args:
             session: The Session object to save
         """
-        # Build the wire format data (without turns - they're stored separately)
+        # Build the wire format data
         session_data = self._session_to_wire(session)
-        json_data = json.dumps(session_data)
+        session_json = json.dumps(session_data)
 
-        # Save session metadata
-        await self._run_sync(self._storage.save_session, session.id, json_data)
+        # Build wire format for all turns
+        turns_data = [self._turn_to_wire(turn) for turn in session.turns]
+        turns_json = json.dumps(turns_data)
 
-        # Save each turn individually
-        for turn in session.turns:
-            await self.save_turn(session.id, turn)
+        # Save session metadata first (required for replace_session_turns)
+        await self._run_sync(self._storage.save_session, session.id, session_json)
+
+        # Atomically replace all turns (handles deletes, upserts, and ordering)
+        await self._run_sync(self._storage.replace_session_turns, session.id, turns_json)
 
     async def load_session(self, session_id: str) -> Optional[Session]:
         """Load a session from storage.
@@ -285,7 +288,8 @@ class AsyncStorage:
         """
         from models import (
             TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock,
-            ErrorBlock, LinkBlock, ForkBlock, MergeBlock, ArchiveBlock, SlideBlock
+            ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock,
+            ArchiveBlock, SlideBlock
         )
 
         if isinstance(block, TextBlock):
@@ -328,6 +332,21 @@ class AsyncStorage:
                 "child_session_id": block.child_session_id,
                 "fork_name": block.fork_name,
                 "message": block.message,
+                "files_changed": block.files_changed,
+                "key_accomplishments": block.key_accomplishments,
+                "reason": block.reason,
+            }
+        elif isinstance(block, MergedToBlock):
+            return {
+                "type": "merged_to",
+                "merge_id": block.merge_id,
+                "parent_session_id": block.parent_session_id,
+                "parent_name": block.parent_name,
+                "parent_turn": block.parent_turn,
+                "message": block.message,
+                "files_changed": block.files_changed,
+                "key_accomplishments": block.key_accomplishments,
+                "reason": block.reason,
             }
         elif isinstance(block, ArchiveBlock):
             data = {
@@ -472,6 +491,21 @@ class AsyncStorage:
                 child_session_id=data.get("child_session_id", ""),
                 fork_name=data.get("fork_name", ""),
                 message=data.get("message", ""),
+                files_changed=data.get("files_changed", []),
+                key_accomplishments=data.get("key_accomplishments", []),
+                reason=data.get("reason", ""),
+            )
+        elif block_type == "merged_to":
+            from models import MergedToBlock
+            return MergedToBlock(
+                merge_id=data.get("merge_id", ""),
+                parent_session_id=data.get("parent_session_id", ""),
+                parent_name=data.get("parent_name", ""),
+                parent_turn=data.get("parent_turn", 0),
+                message=data.get("message", ""),
+                files_changed=data.get("files_changed", []),
+                key_accomplishments=data.get("key_accomplishments", []),
+                reason=data.get("reason", ""),
             )
         elif block_type == "archive":
             structured_summary = None
@@ -515,6 +549,6 @@ def is_rust_storage_available() -> bool:
 async def get_default_storage() -> AsyncStorage:
     """Get the default AsyncStorage instance.
 
-    Uses the default database path (~/.balloons/sessions.redb).
+    Uses the default database path (~/.balloons/sessions.db).
     """
     return AsyncStorage(DEFAULT_DB_PATH)

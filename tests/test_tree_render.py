@@ -8,6 +8,7 @@ Renders the tree once and exits, printing any errors encountered.
 """
 
 import argparse
+import asyncio
 import sys
 import tempfile
 from io import StringIO
@@ -19,7 +20,7 @@ from core.tree_state import TreeState
 from session import Session
 
 
-def test_headless(session: Session):
+async def test_headless(session: Session):
     """Test tree state population without Textual app (no TUI)."""
     print("=== Headless Test ===")
 
@@ -30,7 +31,9 @@ def test_headless(session: Session):
     tree_state.add_session(session, is_current=True)
 
     # Load all session metadata
-    all_metadata = Session.list_sessions()
+    all_metadata = []
+    async for meta in Session.list_sessions_async():
+        all_metadata.append(meta)
     for meta in all_metadata:
         if meta["id"] != session.id:
             tree_state.add_session_from_metadata(meta, is_current=False)
@@ -69,7 +72,7 @@ def test_headless(session: Session):
     return True
 
 
-def test_with_textual(session: Session):
+async def test_with_textual(session: Session):
     """Test full Textual app rendering."""
     from textual.app import App, ComposeResult
     from textual.containers import Container
@@ -101,7 +104,7 @@ def test_with_textual(session: Session):
         async def on_mount(self) -> None:
             try:
                 context_tree = self.query_one(ContextTreeView)
-                context_tree.load_all_sessions(self._session)
+                await context_tree.load_all_sessions(self._session)
 
                 # Collect info
                 results["info"]["session_count"] = len(self._tree_state._sessions)
@@ -155,7 +158,7 @@ def main():
 
     # Load or create session
     if args.session:
-        session = Session.load(args.session)
+        session = asyncio.run(Session.load_async(args.session))
         if session is None:
             print(f"Error: Session '{args.session}' not found.", file=sys.stderr)
             sys.exit(1)
@@ -181,10 +184,10 @@ def main():
         args.textual = True
 
     if args.headless:
-        success = test_headless(session) and success
+        success = asyncio.run(test_headless(session)) and success
 
     if args.textual:
-        success = test_with_textual(session) and success
+        success = asyncio.run(test_with_textual(session)) and success
 
     # Clean up temp dir if used
     if temp_dir:

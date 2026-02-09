@@ -1,7 +1,7 @@
 """Storage schema definitions for Rust code generation.
 
 These are the "wire format" types used for storage - simplified versions of
-domain entities optimized for serialization to Rust/redb.
+domain entities optimized for serialization to Rust.
 
 The @rust_schema decorator registers these for Rust code generation.
 To regenerate: python -m codegen.generate_rust

@@ -13,7 +13,7 @@ repository = "https://github.com/dwerner/balloons"
 core-executor = { git = "https://github.com/dwerner/core-executor" }
 
 # Storage
-redb = "2"
+heed = "0.21"
 postcard = { version = "1", features = ["alloc"] }
 
 # Serialization

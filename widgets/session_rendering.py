@@ -31,6 +31,7 @@ from models import (
     ArchiveBlock,
     ForkBlock,
     MergeBlock,
+    MergedToBlock,
     LinkBlock,
     ToolUseBlock,
     ToolResultBlock,
@@ -343,6 +344,15 @@ class TurnLabelRenderer:
             )
             msg_preview = msg_preview.replace("\n", " ")
             return f"{unviewed_indicator}{indicator} [green]⬅️ Merged: {escape_markup(content_block.fork_name)}[/] {escape_markup(msg_preview)}"
+
+        if isinstance(content_block, MergedToBlock):
+            msg_preview = (
+                content_block.message[:40] + "..."
+                if len(content_block.message) > 40
+                else content_block.message
+            )
+            msg_preview = msg_preview.replace("\n", " ")
+            return f"{unviewed_indicator}{indicator} [green]➡️ Merged to parent[/] {escape_markup(msg_preview)}"
 
         if isinstance(content_block, LinkBlock):
             preview = (

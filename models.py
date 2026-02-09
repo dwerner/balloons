@@ -98,6 +98,27 @@ class MergeBlock:
     child_session_id: str = ""  # The fork session that was merged
     fork_name: str = ""  # Name of the fork
     message: str = ""  # Summary of what was accomplished in the fork
+    files_changed: list[str] = field(default_factory=list)  # Key files modified
+    key_accomplishments: list[str] = field(default_factory=list)  # What was done
+    reason: str = ""  # Why the merge happened now
+
+
+@dataclass
+class MergedToBlock:
+    """Marker indicating this fork was merged back to its parent.
+
+    Stored as the final turn in a fork session's history when it is merged.
+    This is the counterpart to MergeBlock which is stored in the parent.
+    """
+    type: str = "merged_to"
+    merge_id: str = ""  # UUID for this merge event (same as MergeBlock)
+    parent_session_id: str = ""  # The parent session that received the merge
+    parent_name: str = ""  # Name of the parent session
+    parent_turn: int = 0  # Turn index in parent where merge marker was added
+    message: str = ""  # Summary of what was accomplished (same as in parent)
+    files_changed: list[str] = field(default_factory=list)  # Key files modified
+    key_accomplishments: list[str] = field(default_factory=list)  # What was done
+    reason: str = ""  # Why the merge happened now
 
 
 @dataclass
@@ -163,7 +184,7 @@ class ArchiveBlock:
 
 
 # Union type for all content block types
-ContentBlock = Union[TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, ArchiveBlock, SlideBlock]
+ContentBlock = Union[TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, SlideBlock]
 
 
 @dataclass

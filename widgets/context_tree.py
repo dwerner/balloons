@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 from tokenizer import count_tokens
 from session import Session
-from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ArchiveBlock, LinkBlock, ForkBlock, MergeBlock
+from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ArchiveBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock
 from core.tree_state import TreeState, TreeEvent, SessionData, TurnData
 from core.context import ContextBuilder
 from core.json_stream import StreamingJsonParser
@@ -761,7 +761,7 @@ class ContextTreeView(Vertical):
         """Get the color assigned to a session, assigning one if needed."""
         return self._state.get_session_color(session_id)
 
-    def load_all_sessions(self, current_session: Session) -> None:
+    async def load_all_sessions(self, current_session: Session) -> None:
         """Load all sessions into the tree.
 
         Uses lazy loading: only metadata is loaded initially.
@@ -772,7 +772,9 @@ class ContextTreeView(Vertical):
         The observer handles UI updates in response to TreeState events.
         """
         # Get all session metadata (lightweight - no message content)
-        all_session_metadata = Session.list_sessions()
+        all_session_metadata = []
+        async for metadata in Session.list_sessions_async():
+            all_session_metadata.append(metadata)
 
         # Clear TreeState - this fires FULL_REBUILD which clears and rebuilds the tree
         # (tree will be empty at this point since no sessions yet)
@@ -968,8 +970,25 @@ class ContextTreeView(Vertical):
             )
             return self._make_session_label_from_session_data(temp_data, is_active)
 
-    def _load_full_session(self, session_id: str, session: Session = None) -> bool:
-        """Fully load a session's messages and turns.
+    def _load_full_session(self, session_id: str, session: Session) -> bool:
+        """Fully load a session's messages and turns (sync - requires pre-loaded session).
+
+        Args:
+            session_id: The session to load
+            session: Pre-loaded Session object (required)
+
+        Returns True if loaded successfully.
+        """
+        if self._state.is_session_loaded(session_id):
+            return True  # Already loaded
+
+        # Load into TreeState (which manages session data, turns, context modes, and merge modes)
+        self._state.load_session(session_id, session)
+
+        return True
+
+    async def _load_full_session_async(self, session_id: str, session: Session = None) -> bool:
+        """Fully load a session's messages and turns (async - can load from disk).
 
         Args:
             session_id: The session to load
@@ -981,7 +1000,7 @@ class ContextTreeView(Vertical):
             return True  # Already loaded
 
         if session is None:
-            session = Session.load(session_id)
+            session = await Session.load_async(session_id)
             if not session:
                 return False
 
@@ -994,11 +1013,11 @@ class ContextTreeView(Vertical):
         """Check if a session's full data has been loaded."""
         return self._state.is_session_loaded(session_id)
 
-    def _activate_session(self, session_id: str) -> None:
+    async def _activate_session(self, session_id: str) -> None:
         """Activate a session - load it if needed and post SessionActivated."""
         # Ensure session is loaded
         if not self._is_session_loaded(session_id):
-            if not self._load_full_session(session_id):
+            if not await self._load_full_session_async(session_id):
                 return  # Session not found
 
         session_data = self._state.get_session(session_id)
@@ -1378,6 +1397,12 @@ class ContextTreeView(Vertical):
             msg_preview = content_block.message[:40] + "..." if len(content_block.message) > 40 else content_block.message
             msg_preview = msg_preview.replace("\n", " ")
             return f"{unviewed_indicator}{indicator} [green]⬅️ Merged: {escape_markup(content_block.fork_name)}[/] {escape_markup(msg_preview)}"
+
+        if isinstance(content_block, MergedToBlock):
+            # MergedTo turn - show that this fork was merged to parent
+            msg_preview = content_block.message[:40] + "..." if len(content_block.message) > 40 else content_block.message
+            msg_preview = msg_preview.replace("\n", " ")
+            return f"{unviewed_indicator}{indicator} [green]➡️ Merged to parent[/] {escape_markup(msg_preview)}"
 
         if isinstance(content_block, LinkBlock):
             # Link turn - show link icon
@@ -1824,7 +1849,7 @@ class ContextTreeView(Vertical):
         for key in keys_to_remove:
             del self._tool_use_nodes[key]
 
-    def on_tree_node_expanded(self, event) -> None:
+    async def on_tree_node_expanded(self, event) -> None:
         """Handle node expansion - lazy load session data when expanded."""
         node_data = event.node.data
         if not node_data:
@@ -1835,7 +1860,7 @@ class ContextTreeView(Vertical):
             session_id = node_data.get("session_id")
             if session_id and not self._is_session_loaded(session_id):
                 # Lazy load the session
-                if self._load_full_session(session_id):
+                if await self._load_full_session_async(session_id):
                     # Rebuild just this session's children
                     self._populate_session_node(session_id, event.node)
 
@@ -2071,7 +2096,7 @@ class ContextTreeView(Vertical):
                 "message": node_data.get("message"),
             }, session_id=session_id))
 
-    def on_selectable_tree_widget_activate_requested(self, event: SelectableTreeWidget.ActivateRequested) -> None:
+    async def on_selectable_tree_widget_activate_requested(self, event: SelectableTreeWidget.ActivateRequested) -> None:
         """Handle Enter key - activate session (load into chat view)."""
         node_data = event.node_data
         node_type = node_data.get("type")
@@ -2079,30 +2104,30 @@ class ContextTreeView(Vertical):
         if node_type == "session":
             # Activate session - load and switch to it
             session_id = node_data.get("session_id")
-            self._activate_session(session_id)
+            await self._activate_session(session_id)
         elif node_type == "fork":
             # Activate fork session
             session_id = node_data.get("session_id")
-            self._activate_session(session_id)
+            await self._activate_session(session_id)
         elif node_type == "merge":
             # Activate merged fork session
             session_id = node_data.get("session_id")
-            self._activate_session(session_id)
+            await self._activate_session(session_id)
         elif node_type == "fork_block":
             # Activate fork session from content_block
             child_session_id = node_data.get("child_session_id")
             if child_session_id:
-                self._activate_session(child_session_id)
+                await self._activate_session(child_session_id)
         elif node_type == "merge_block":
             # Activate merged fork session from content_block
             child_session_id = node_data.get("child_session_id")
             if child_session_id:
-                self._activate_session(child_session_id)
+                await self._activate_session(child_session_id)
         elif node_type == "link":
             # Activate linked session
             linked_session_id = node_data.get("linked_session_id")
             if linked_session_id and not node_data.get("is_orphaned"):
-                self._activate_session(linked_session_id)
+                await self._activate_session(linked_session_id)
         elif node_type == "turn":
             # Toggle context mode on Enter for turns (same as space)
             session_id = node_data.get("session_id")
@@ -2268,9 +2293,8 @@ class ContextTreeView(Vertical):
                 current_data = self._state.get_session(current_session_id)
                 if current_data and current_data.parent_id:
                     sessions_to_expand.add(current_data.parent_id)
-                    # Ensure parent is loaded too
-                    if not self._is_session_loaded(current_data.parent_id):
-                        self._load_full_session(current_data.parent_id)
+                    # Note: Parent loading is deferred to on_tree_node_expanded
+                    # to avoid sync Session.load() calls here
 
             # Rebuild tree nodes for each session
             for session_id in sorted_session_ids:
@@ -2457,6 +2481,11 @@ class ContextTreeView(Vertical):
         # Try to find the turn node
         turn_node = self._turn_nodes.get((session_id, turn_idx))
         if turn_node:
+            # If the turn is inside an exchange group, expand the parent first
+            parent = turn_node.parent
+            if parent and parent.data and parent.data.get("type") == "exchange_group":
+                parent.expand()
+
             tree.select_node(turn_node)
             tree.scroll_to_node(turn_node)
             return True
@@ -2536,8 +2565,10 @@ class ContextTreeView(Vertical):
             if mode == ContextMode.DROP:
                 continue
 
-            # Load the fork session to get the merge message
-            fork_session = Session.load(fork_id)
+            # Get the fork session to get the merge message
+            # Try from state first to avoid sync disk load
+            fork_data = self._state.get_session(fork_id)
+            fork_session = fork_data.session_ref if fork_data else None
             if not fork_session or not fork_session.merge_message:
                 continue
 

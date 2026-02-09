@@ -88,7 +88,7 @@ async def execute_tool(
         if name in LINK_TOOL_NAMES:
             if session is None:
                 return "Error: Link tools require a session context", True
-            return execute_link_tool(name, args, session)
+            return await execute_link_tool(name, args, session)
 
         # Standard file/shell tools
         if name == "Read":
@@ -110,7 +110,7 @@ async def execute_tool(
         elif name == "propose_merge":
             return execute_propose_merge(args)
         elif name == "create_slide":
-            return execute_create_slide(args, session)
+            return await execute_create_slide(args, session)
         elif name == "speak":
             return await execute_speak(args)
         else:
@@ -596,7 +596,7 @@ def parse_merge_proposal(args: dict) -> MergeProposal | None:
         return None
 
 
-def execute_create_slide(args: dict, session: "Session | None" = None) -> tuple[str, bool]:
+async def execute_create_slide(args: dict, session: "Session | None" = None) -> tuple[str, bool]:
     """Handle a create_slide tool call.
 
     Creates a slide turn in the session.
@@ -633,7 +633,7 @@ def execute_create_slide(args: dict, session: "Session | None" = None) -> tuple[
         content=content,
         notes=notes,
     )
-    session.save()
+    await session.save_async()
 
     debug_log.info(f"Slide created in session {session.id[:8]}: '{title}' - session now has {session.get_slide_count()} slides", category="slides")
 

@@ -49,4 +49,29 @@ impl StorageClient {
     pub async fn delete_session(&self, id: &str) -> Result<()> {
         self.engine.delete_session(id).await
     }
+
+    /// Save a session along with all its turns atomically.
+    ///
+    /// This is more efficient than calling save_session + N×save_turn because
+    /// it uses a single database transaction.
+    pub async fn save_session_with_turns(
+        &self,
+        id: &str,
+        session: &SessionData,
+        turns: &[TurnData],
+    ) -> Result<()> {
+        self.engine.save_session_with_turns(id, session, turns).await
+    }
+
+    /// Atomically replace all turns for a session.
+    ///
+    /// Deletes any turns not in the new list, upserts all new turns,
+    /// and updates the turn order - all in a single transaction.
+    pub async fn replace_session_turns(
+        &self,
+        session_id: &str,
+        turns: &[TurnData],
+    ) -> Result<()> {
+        self.engine.replace_session_turns(session_id, turns).await
+    }
 }

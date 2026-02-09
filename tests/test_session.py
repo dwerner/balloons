@@ -6,26 +6,14 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-from session import Session, Turn, SessionIndex, SESSIONS_DIR, INDEX_FILE, MessageQueue, QueuedMessage
+from session import Session, Turn, SESSIONS_DIR, INDEX_FILE, MessageQueue, QueuedMessage
 from models import Message, TextBlock, ToolUseBlock, ToolResultBlock
 
 
 class TestSessionProgressiveSaving:
     """Tests demonstrating that sessions should save after each turn."""
 
-    @pytest.fixture
-    def temp_sessions_dir(self, tmp_path):
-        """Use a temporary directory for sessions."""
-        sessions_dir = tmp_path / "sessions"
-        sessions_dir.mkdir()
-        index_file = sessions_dir / "index.json"
-        with patch("session.SESSIONS_DIR", sessions_dir), \
-             patch("session.INDEX_FILE", index_file):
-            SessionIndex._instance = None
-            yield sessions_dir
-            SessionIndex._instance = None
-
-    def test_session_save_persists_turns(self, temp_sessions_dir):
+    def test_session_save_persists_turns(self, temp_storage):
         """Basic test: saved session can be loaded."""
         session = Session()
         session.add_message("user", "Hello")
@@ -39,7 +27,7 @@ class TestSessionProgressiveSaving:
         assert loaded.turns[0].content == "Hello"
         assert loaded.turns[1].content == "Hi there"
 
-    def test_progressive_save_each_turn(self, temp_sessions_dir):
+    def test_progressive_save_each_turn(self, temp_storage):
         """Each turn should be persisted immediately after being added.
 
         This demonstrates the EXPECTED behavior: if we crash after adding
@@ -64,7 +52,7 @@ class TestSessionProgressiveSaving:
             assert len(loaded.turns) == len(session.turns)
             assert loaded.turns[-1].content == content
 
-    def test_crash_recovery_with_progressive_saves(self, temp_sessions_dir):
+    def test_crash_recovery_with_progressive_saves(self, temp_storage):
         """Simulate crash recovery: only saved turns should survive."""
         session = Session()
         session.save()
@@ -88,7 +76,7 @@ class TestSessionProgressiveSaving:
         assert recovered.turns[0].content == "Turn 1"
         assert recovered.turns[1].content == "Turn 2"
 
-    def test_tool_loop_saves_each_step(self, temp_sessions_dir):
+    def test_tool_loop_saves_each_step(self, temp_storage):
         """A tool use loop should save after each step.
 
         Scenario: User asks a question, assistant uses tools in a loop.
@@ -140,7 +128,7 @@ class TestSessionProgressiveSaving:
         loaded = Session.load(session.id)
         assert len(loaded.turns) == 6
 
-    def test_long_agent_loop_crash_midway(self, temp_sessions_dir):
+    def test_long_agent_loop_crash_midway(self, temp_storage):
         """Simulate a long agent loop where we crash midway.
 
         This is the bug scenario: if saves only happen at the end,
@@ -171,7 +159,7 @@ class TestSessionProgressiveSaving:
         for i in range(6):
             assert recovered.turns[i].content == f"Turn {i}"
 
-    def test_usage_updates_persisted(self, temp_sessions_dir):
+    def test_usage_updates_persisted(self, temp_storage):
         """Token usage should be saved with each turn."""
         session = Session()
         session.save()
@@ -190,51 +178,7 @@ class TestSessionProgressiveSaving:
         assert loaded.total_cost == pytest.approx(0.003)
 
 
-class TestSessionSaveAtomicity:
-    """Tests for atomic save operations."""
-
-    @pytest.fixture
-    def temp_sessions_dir(self, tmp_path):
-        """Use a temporary directory for sessions."""
-        sessions_dir = tmp_path / "sessions"
-        sessions_dir.mkdir()
-        index_file = sessions_dir / "index.json"
-        with patch("session.SESSIONS_DIR", sessions_dir), \
-             patch("session.INDEX_FILE", index_file):
-            SessionIndex._instance = None
-            yield sessions_dir
-            SessionIndex._instance = None
-
-    def test_save_writes_valid_json(self, temp_sessions_dir):
-        """Save should always produce valid JSON."""
-        session = Session()
-        session.add_message("user", "Test message with 'quotes' and \"escapes\"")
-        session.add_message("assistant", "Response with\nnewlines\tand tabs")
-        session.save()
-
-        # Read raw file and verify it's valid JSON
-        path = temp_sessions_dir / f"{session.id}.json"
-        raw_content = path.read_text()
-        data = json.loads(raw_content)  # Should not raise
-
-        assert data["id"] == session.id
-        assert len(data["turns"]) == 2
-        assert data["messages"] == []  # Messages are truncated
-
-    def test_last_modified_updated_on_each_save(self, temp_sessions_dir):
-        """Each save should update last_modified timestamp."""
-        session = Session()
-        session.save()
-        first_modified = session.last_modified
-
-        import time
-        time.sleep(0.01)  # Small delay to ensure timestamp changes
-
-        session.add_message("user", "New message")
-        session.save()
-        second_modified = session.last_modified
-
-        assert second_modified > first_modified
+# JSON-specific tests removed - now using Rust storage only
 
 
 class TestSessionDeleteTurns:
@@ -332,18 +276,6 @@ class TestSessionArchive:
     """Tests for session archive/rehydrate methods."""
 
     @pytest.fixture
-    def temp_sessions_dir(self, tmp_path):
-        """Use a temporary directory for sessions."""
-        sessions_dir = tmp_path / "sessions"
-        sessions_dir.mkdir()
-        index_file = sessions_dir / "index.json"
-        with patch("session.SESSIONS_DIR", sessions_dir), \
-             patch("session.INDEX_FILE", index_file):
-            SessionIndex._instance = None
-            yield sessions_dir
-            SessionIndex._instance = None
-
-    @pytest.fixture
     def temp_archives_dir(self, tmp_path):
         """Use a temporary directory for archives."""
         archives_dir = tmp_path / "archives"
@@ -351,7 +283,7 @@ class TestSessionArchive:
         with patch("core.archiver.ARCHIVES_DIR", archives_dir):
             yield archives_dir
 
-    def test_archive_turns_modifies_session(self, temp_sessions_dir, temp_archives_dir):
+    def test_archive_turns_modifies_session(self, temp_storage, temp_archives_dir):
         """archive_turns replaces turns with archive marker."""
         session = Session()
         session.add_message("user", "Message 1")
@@ -370,7 +302,7 @@ class TestSessionArchive:
         assert session.turns[2].content == "Message 5"
         assert archive_block.message_count == 3
 
-    def test_archive_persists_after_save(self, temp_sessions_dir, temp_archives_dir):
+    def test_archive_persists_after_save(self, temp_storage, temp_archives_dir):
         """Archived session can be saved and loaded."""
         session = Session()
         session.add_message("user", "Message 1")
@@ -387,7 +319,7 @@ class TestSessionArchive:
         assert len(loaded.turns) == 3
         assert loaded.has_archives()
 
-    def test_rehydrate_restores_turns(self, temp_sessions_dir, temp_archives_dir):
+    def test_rehydrate_restores_turns(self, temp_storage, temp_archives_dir):
         """rehydrate_archive restores original turns."""
         session = Session()
         session.add_message("user", "Message 1")
@@ -405,7 +337,7 @@ class TestSessionArchive:
         assert len(session.turns) == 3
         assert session.turns[0].content == "Message 1"
 
-    def test_archive_rehydrate_round_trip_with_persistence(self, temp_sessions_dir, temp_archives_dir):
+    def test_archive_rehydrate_round_trip_with_persistence(self, temp_storage, temp_archives_dir):
         """Archive, save, load, rehydrate works correctly."""
         # Create and archive
         session = Session()
@@ -428,7 +360,7 @@ class TestSessionArchive:
         assert loaded.turns[0].content == "Question"
         assert loaded.turns[1].content == "Answer"
 
-    def test_get_all_archives(self, temp_sessions_dir, temp_archives_dir):
+    def test_get_all_archives(self, temp_storage, temp_archives_dir):
         """get_all_archives returns all archive blocks with indices."""
         session = Session()
         for i in range(10):
@@ -444,7 +376,7 @@ class TestSessionArchive:
         assert archives[0][1].summary == "First archive"
         assert archives[1][1].summary == "Second archive"
 
-    def test_has_archives(self, temp_sessions_dir, temp_archives_dir):
+    def test_has_archives(self, temp_storage, temp_archives_dir):
         """has_archives returns correct boolean."""
         session = Session()
         session.add_message("user", "Test")
@@ -457,87 +389,31 @@ class TestSessionArchive:
         assert session.has_archives()
 
 
-class TestSessionLoadBackwardsCompat:
-    """Tests for loading old session formats."""
-
-    @pytest.fixture
-    def temp_sessions_dir(self, tmp_path):
-        """Use a temporary directory for sessions."""
-        sessions_dir = tmp_path / "sessions"
-        sessions_dir.mkdir()
-        index_file = sessions_dir / "index.json"
-        with patch("session.SESSIONS_DIR", sessions_dir), \
-             patch("session.INDEX_FILE", index_file):
-            SessionIndex._instance = None
-            yield sessions_dir
-            SessionIndex._instance = None
-
-    def test_load_session_without_content_blocks(self, temp_sessions_dir):
-        """Old sessions without content_blocks should still load and migrate to turns."""
-        # Write an old-format session directly
-        old_session_data = {
-            "id": "old-session-123",
-            "created": "2024-01-01T00:00:00",
-            "model": "claude-3",
-            "messages": [
-                {"role": "user", "content": "Hello", "tokens": 10},
-                {"role": "assistant", "content": "Hi", "tokens": 5},
-            ],
-            "total_input_tokens": 10,
-            "total_output_tokens": 5,
-            "total_cost": 0.0,
-        }
-
-        path = temp_sessions_dir / "old-session-123.json"
-        path.write_text(json.dumps(old_session_data))
-
-        # Load and verify - should migrate to turns
-        loaded = Session.load("old-session-123")
-        assert loaded is not None
-        assert len(loaded.turns) == 2
-        # Content should be converted to TextBlock
-        assert isinstance(loaded.turns[0].content_block, TextBlock)
-        assert loaded.turns[0].content_block.text == "Hello"
-        assert loaded.turns[0].content == "Hello"  # Via property
+# JSON backward compatibility tests removed - now using Rust storage only
 
 
 class TestAsyncSessionIO:
     """Tests for async session I/O methods."""
 
-    @pytest.fixture
-    def temp_sessions_dir(self, tmp_path):
-        """Use a temporary directory for sessions."""
-        sessions_dir = tmp_path / "sessions"
-        sessions_dir.mkdir()
-        index_file = sessions_dir / "index.json"
-        with patch("session.SESSIONS_DIR", sessions_dir), \
-             patch("session.INDEX_FILE", index_file):
-            # Reset the singleton for each test
-            SessionIndex._instance = None
-            yield sessions_dir
-            SessionIndex._instance = None
-
     @pytest.mark.asyncio
-    async def test_save_async(self, temp_sessions_dir):
+    async def test_save_async(self, temp_storage):
         """Test async session save."""
         session = Session()
         session.add_message("user", "Hello async")
         session.add_message("assistant", "Hi there")
         await session.save_async()
 
-        # Verify file was written
-        path = temp_sessions_dir / f"{session.id}.json"
-        assert path.exists()
-        data = json.loads(path.read_text())
-        assert len(data["turns"]) == 2
+        # Verify session can be loaded
+        loaded = await Session.load_async(session.id)
+        assert loaded is not None
+        assert len(loaded.turns) == 2
 
     @pytest.mark.asyncio
-    async def test_load_async(self, temp_sessions_dir):
+    async def test_load_async(self, temp_storage):
         """Test async session load."""
-        # Create session with sync save
         session = Session()
         session.add_message("user", "Test message")
-        session.save()
+        await session.save_async()
 
         # Load with async
         loaded = await Session.load_async(session.id)
@@ -546,13 +422,13 @@ class TestAsyncSessionIO:
         assert loaded.turns[0].content == "Test message"
 
     @pytest.mark.asyncio
-    async def test_load_async_nonexistent(self, temp_sessions_dir):
+    async def test_load_async_nonexistent(self, temp_storage):
         """Test async load of nonexistent session returns None."""
         loaded = await Session.load_async("nonexistent-id")
         assert loaded is None
 
     @pytest.mark.asyncio
-    async def test_save_async_load_async_roundtrip(self, temp_sessions_dir):
+    async def test_save_async_load_async_roundtrip(self, temp_storage):
         """Test async save and load roundtrip."""
         session = Session()
         session.add_message("user", "Question")
@@ -567,7 +443,7 @@ class TestAsyncSessionIO:
         assert loaded.total_output_tokens == 50
 
     @pytest.mark.asyncio
-    async def test_list_sessions_async(self, temp_sessions_dir):
+    async def test_list_sessions_async(self, temp_storage):
         """Test async session listing."""
         # Create a few sessions
         for i in range(3):
@@ -583,23 +459,24 @@ class TestAsyncSessionIO:
         assert len(sessions) == 3
 
     @pytest.mark.asyncio
-    async def test_index_async_operations(self, temp_sessions_dir):
-        """Test async index load/save operations."""
-        index = SessionIndex()
-        await index.ensure_loaded_async()
-
+    async def test_session_appears_in_list_after_save(self, temp_storage):
+        """Test that saved sessions appear in list_sessions_async."""
         # Create a session
         session = Session()
         session.add_message("user", "Test")
         await session.save_async()
 
-        # Verify index was updated
-        metadata = index.get(session.id)
-        assert metadata is not None
-        assert metadata["turn_count"] == 1
+        # Verify session appears in list
+        found = False
+        async for metadata in Session.list_sessions_async():
+            if metadata["id"] == session.id:
+                found = True
+                assert metadata["turn_count"] == 1
+                break
+        assert found, "Session should appear in list after save"
 
     @pytest.mark.asyncio
-    async def test_concurrent_saves(self, temp_sessions_dir):
+    async def test_concurrent_saves(self, temp_storage):
         """Test multiple concurrent async saves."""
         sessions = [Session() for _ in range(5)]
         for i, session in enumerate(sessions):
@@ -610,8 +487,8 @@ class TestAsyncSessionIO:
 
         # Verify all were saved
         for session in sessions:
-            path = temp_sessions_dir / f"{session.id}.json"
-            assert path.exists()
+            loaded = await Session.load_async(session.id)
+            assert loaded is not None
 
 
 class TestMessageQueue:

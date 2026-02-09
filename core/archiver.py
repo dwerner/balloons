@@ -47,6 +47,7 @@ from models import (
     LinkBlock,
     ForkBlock,
     MergeBlock,
+    MergedToBlock,
     ContentBlock,
     ContextMode,
 )
@@ -115,6 +116,21 @@ class Archiver:
                 "child_session_id": block.child_session_id,
                 "fork_name": block.fork_name,
                 "message": block.message,
+                "files_changed": block.files_changed,
+                "key_accomplishments": block.key_accomplishments,
+                "reason": block.reason,
+            }
+        elif isinstance(block, MergedToBlock):
+            return {
+                "type": "merged_to",
+                "merge_id": block.merge_id,
+                "parent_session_id": block.parent_session_id,
+                "parent_name": block.parent_name,
+                "parent_turn": block.parent_turn,
+                "message": block.message,
+                "files_changed": block.files_changed,
+                "key_accomplishments": block.key_accomplishments,
+                "reason": block.reason,
             }
         elif isinstance(block, ArchiveBlock):
             data = {
@@ -184,6 +200,20 @@ class Archiver:
                 child_session_id=data.get("child_session_id", ""),
                 fork_name=data.get("fork_name", ""),
                 message=data.get("message", ""),
+                files_changed=data.get("files_changed", []),
+                key_accomplishments=data.get("key_accomplishments", []),
+                reason=data.get("reason", ""),
+            )
+        elif block_type == "merged_to":
+            return MergedToBlock(
+                merge_id=data.get("merge_id", ""),
+                parent_session_id=data.get("parent_session_id", ""),
+                parent_name=data.get("parent_name", ""),
+                parent_turn=data.get("parent_turn", 0),
+                message=data.get("message", ""),
+                files_changed=data.get("files_changed", []),
+                key_accomplishments=data.get("key_accomplishments", []),
+                reason=data.get("reason", ""),
             )
         elif block_type == "archive":
             structured_summary = None

@@ -8,4 +8,4 @@ mod testutil;
 pub use generated::{SessionData, SessionMetadata, TurnData, TurnOrder};
 
 // Re-export storage types
-pub use storage::{Error, RedbEngine, Result, StorageClient, StorageEngine};
+pub use storage::{Error, LmdbEngine, Result, StorageClient, StorageEngine};

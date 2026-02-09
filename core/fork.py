@@ -294,7 +294,7 @@ class ForkManager:
         """
         self._context_builder = context_builder
 
-    def prepare_fork(
+    async def prepare_fork(
         self,
         current_session: Session,
         indexed_messages: list[tuple[Message, int]],
@@ -341,7 +341,7 @@ class ForkManager:
             for msg, _ in sorted(groups.copy_items, key=lambda x: x[1]):
                 child_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
-            child_session.save()
+            await child_session.save_async()
 
             # Register child in parent
             current_session.add_child(
@@ -351,14 +351,15 @@ class ForkManager:
                 fork_point=fork_point,
             )
 
-            # Add fork turn marker to parent session
+            # Add fork turn marker to parent session (part of the fork proposal exchange)
             current_session.add_fork_turn(
                 fork_id=str(uuid.uuid4()),
                 child_session_id=child_session.id,
                 fork_name=name or "fork",
                 prompt=prompt,
+                exchange_id=current_session.get_last_exchange_id(),
             )
-            current_session.save()
+            await current_session.save_async()
 
             return ForkResult(
                 success=True,
@@ -404,7 +405,7 @@ class ForkManager:
                 allowed_tools=allowed_tools,
             )
 
-    def complete_fork_after_compression(
+    async def complete_fork_after_compression(
         self,
         fork_data: ForkData,
         compressed_summary: str,
@@ -453,7 +454,7 @@ class ForkManager:
         for msg, _, _ in all_items:
             child_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
-        child_session.save()
+        await child_session.save_async()
 
         # Register child in parent
         parent_session.add_child(
@@ -463,14 +464,15 @@ class ForkManager:
             fork_point=fork_point,
         )
 
-        # Add fork turn marker to parent session
+        # Add fork turn marker to parent session (part of the fork proposal exchange)
         parent_session.add_fork_turn(
             fork_id=str(uuid.uuid4()),
             child_session_id=child_session.id,
             fork_name=name or "fork",
             prompt=prompt,
+            exchange_id=parent_session.get_last_exchange_id(),
         )
-        parent_session.save()
+        await parent_session.save_async()
 
         return ForkResult(
             success=True,
@@ -484,7 +486,7 @@ class ForkManager:
             allowed_tools=allowed_tools,
         )
 
-    def prepare_merge(self, fork_session: Session) -> MergeResult:
+    async def prepare_merge(self, fork_session: Session) -> MergeResult:
         """Validate and prepare a merge operation.
 
         Does not generate the merge summary - that's done separately
@@ -508,7 +510,7 @@ class ForkManager:
                 error="This fork is already merged",
             )
 
-        parent = fork_session.get_parent()
+        parent = await fork_session.get_parent_async()
         if not parent:
             return MergeResult(
                 success=False,
@@ -522,11 +524,14 @@ class ForkManager:
             fork_name=fork_session.get_fork_display_name(),
         )
 
-    def complete_merge(
+    async def complete_merge(
         self,
         fork_session: Session,
         parent_session: Session,
         merge_message: str,
+        files_changed: list[str] | None = None,
+        key_accomplishments: list[str] | None = None,
+        reason: str = "",
     ) -> MergeResult:
         """Complete a merge after summary generation.
 
@@ -534,15 +539,39 @@ class ForkManager:
             fork_session: The fork being merged
             parent_session: The parent session
             merge_message: LLM-generated merge summary
+            files_changed: List of key files that were modified
+            key_accomplishments: List of what was done
+            reason: Why the merge happened now
 
         Returns:
             MergeResult ready for UI updates
         """
+        merge_id = str(uuid.uuid4())
         merge_point = len(parent_session.turns)
+        files_changed = files_changed or []
+        key_accomplishments = key_accomplishments or []
 
-        # Mark fork as merged
+        # Get the exchange_id from the fork session (the merge proposal exchange)
+        fork_exchange_id = fork_session.get_last_exchange_id()
+        # Get the exchange_id from the parent session (for the merge marker)
+        parent_exchange_id = parent_session.get_last_exchange_id()
+
+        # Mark fork as merged (metadata)
         fork_session.mark_merged(merge_message, merge_point)
-        fork_session.save()
+
+        # Add "merged to" turn marker to fork session (part of the merge proposal exchange)
+        fork_session.add_merged_to_turn(
+            merge_id=merge_id,
+            parent_session_id=parent_session.id,
+            parent_name=parent_session.title or parent_session.fork_name or parent_session.id[:8],
+            parent_turn=merge_point,
+            message=merge_message,
+            files_changed=files_changed,
+            key_accomplishments=key_accomplishments,
+            reason=reason,
+            exchange_id=fork_exchange_id,
+        )
+        await fork_session.save_async()
 
         # Update parent's child record
         parent_session.mark_child_merged(fork_session.id, merge_point)
@@ -550,14 +579,18 @@ class ForkManager:
         # Update the ForkBlock status to merged (if it exists)
         parent_session.update_fork_status(fork_session.id, "merged")
 
-        # Add merge turn marker to parent session
+        # Add merge turn marker to parent session (part of the parent's current exchange if any)
         parent_session.add_merge_turn(
-            merge_id=str(uuid.uuid4()),
+            merge_id=merge_id,
             child_session_id=fork_session.id,
             fork_name=fork_session.get_fork_display_name(),
             message=merge_message,
+            files_changed=files_changed,
+            key_accomplishments=key_accomplishments,
+            reason=reason,
+            exchange_id=parent_exchange_id,
         )
-        parent_session.save()
+        await parent_session.save_async()
 
         return MergeResult(
             success=True,
@@ -567,7 +600,7 @@ class ForkManager:
             merge_message=merge_message,
         )
 
-    def prepare_derive(
+    async def prepare_derive(
         self,
         indexed_messages: list[tuple[Message, int]],
         prompt: str,
@@ -596,7 +629,7 @@ class ForkManager:
             for msg, _ in sorted(groups.copy_items, key=lambda x: x[1]):
                 new_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
-            new_session.save()
+            await new_session.save_async()
 
             return DeriveResult(
                 success=True,
@@ -630,7 +663,7 @@ class ForkManager:
                 allowed_tools=allowed_tools,
             )
 
-    def complete_derive_after_compression(
+    async def complete_derive_after_compression(
         self,
         derive_data: DeriveData,
         compressed_summary: str,
@@ -669,7 +702,7 @@ class ForkManager:
         for msg, _, _ in all_items:
             new_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
-        new_session.save()
+        await new_session.save_async()
 
         return DeriveResult(
             success=True,
@@ -679,7 +712,7 @@ class ForkManager:
             allowed_tools=allowed_tools,
         )
 
-    def find_switch_target(
+    async def find_switch_target(
         self,
         current_session: Session,
         name: str,
@@ -710,24 +743,24 @@ class ForkManager:
             fork_name = fork.get("name", "")
             fork_id = fork.get("session_id", "")
             if fork_name == name or fork_id.startswith(name):
-                target_session = Session.load(fork_id)
+                target_session = await Session.load_async(fork_id)
                 break
 
         # If not found and in a fork, check parent's forks
         if not target_session and current_session.is_fork():
-            parent = current_session.get_parent()
+            parent = await current_session.get_parent_async()
             if parent:
                 for fork in parent.get_all_forks():
                     fork_name = fork.get("name", "")
                     fork_id = fork.get("session_id", "")
                     if fork_name == name or fork_id.startswith(name):
-                        target_session = Session.load(fork_id)
+                        target_session = await Session.load_async(fork_id)
                         break
 
         # Check for parent request
         if not target_session and name in ("parent", ".."):
             if current_session.is_fork():
-                target_session = current_session.get_parent()
+                target_session = await current_session.get_parent_async()
 
         if target_session:
             return SwitchResult(success=True, target_session=target_session)

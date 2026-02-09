@@ -380,6 +380,80 @@ class TestScrollToWidgetAtTop:
         assert container.scroll_y == 0
 
 
+class TestUpwardScrollExitsFollow:
+    """Test that any upward scroll immediately exits follow mode."""
+
+    def test_upward_scroll_exits_follow_mode(self):
+        """Scrolling up should immediately exit follow mode."""
+        container = MockScrollContainer(scroll_y=1000, max_scroll_y=1000)
+        controller = ScrollController(container)
+        assert controller.following is True
+
+        # User scrolls up
+        container._scroll_y = 900
+        controller.on_scroll_changed(old_scroll_y=1000)
+
+        assert controller.following is False
+
+    def test_upward_scroll_exits_even_near_bottom(self):
+        """Scrolling up exits follow mode even if still near bottom."""
+        container = MockScrollContainer(scroll_y=1000, max_scroll_y=1000)
+        controller = ScrollController(container)
+
+        # Scroll up just 10 pixels - still within threshold but direction matters
+        container._scroll_y = 990
+        controller.on_scroll_changed(old_scroll_y=1000)
+
+        # Should exit follow mode because user scrolled UP
+        assert controller.following is False
+
+    def test_downward_scroll_does_not_exit_follow(self):
+        """Scrolling down should not exit follow mode (uses at-bottom check)."""
+        container = MockScrollContainer(scroll_y=900, max_scroll_y=1000)
+        controller = ScrollController(container)
+
+        # Scroll down toward bottom
+        container._scroll_y = 980
+        controller.on_scroll_changed(old_scroll_y=900)
+
+        # Still following since we're near bottom and scrolled down
+        assert controller.following is True
+
+    def test_programmatic_scroll_up_does_not_exit(self):
+        """Programmatic scrolls up should not exit follow mode."""
+        container = MockScrollContainer(scroll_y=1000, max_scroll_y=1000)
+        controller = ScrollController(container)
+
+        # Programmatic scroll up (e.g., from scroll_to_widget)
+        with controller.programmatic_scroll_context():
+            container._scroll_y = 500
+            controller.on_scroll_changed(old_scroll_y=1000)
+
+        # Should still be following - programmatic scrolls are ignored
+        assert controller.following is True
+
+    def test_upward_scroll_tracks_position_correctly(self):
+        """Position tracking works across multiple scrolls."""
+        container = MockScrollContainer(scroll_y=1000, max_scroll_y=1000)
+        controller = ScrollController(container)
+
+        # First user scroll up
+        container._scroll_y = 800
+        controller.on_scroll_changed(old_scroll_y=1000)
+        assert controller.following is False
+
+        # Scroll back to bottom
+        container._scroll_y = 1000
+        controller.on_scroll_changed(old_scroll_y=800)
+        assert controller.following is True
+
+        # Another scroll up using tracked position (no old_scroll_y passed)
+        container._scroll_y = 900
+        controller.on_scroll_changed()  # Uses _last_scroll_y = 1000
+
+        assert controller.following is False
+
+
 class TestProtocolCompliance:
     """Test that MockScrollContainer properly implements the protocol."""
 

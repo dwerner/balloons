@@ -409,7 +409,12 @@ class SessionRunner:
         if save_now:
             # Fire-and-forget async save to avoid blocking the UI
             # The save runs in background without blocking event processing
-            asyncio.create_task(self._async_save_session())
+            try:
+                asyncio.get_running_loop()
+                asyncio.create_task(self._async_save_session())
+            except RuntimeError:
+                # No running event loop (e.g., in tests). Do a sync save instead.
+                self.session.save()
 
     async def _async_save_session(self) -> None:
         """Save session asynchronously without blocking the event loop."""

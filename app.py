@@ -32,7 +32,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, TaskPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, MessageStash, StashPopup, SlidesPane, PresentationScreen, MessageQueuePopup
+from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, TaskPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, MessageStash, StashPopup, SlidesPane, PresentationScreen, MessageQueuePopup, EntityPane
 from widgets.input_box import CompletionPopup
 from widgets.archive_marker import ArchiveMarker
 from claude_runner import ClaudeRunner
@@ -470,9 +470,11 @@ class BalloonsApp(App):
                     with Horizontal(id="content-tabs"):
                         yield Button("💬 Chat", id="tab-chat", classes="active")
                         yield Button("📊 Slides", id="tab-slides")
+                        yield Button("🗄️ Entities", id="tab-entities")
                     with Vertical(id="content-area"):
                         yield ChatLogView(id="chat-log")
                         yield SlidesPane(id="slides-pane")
+                        yield EntityPane(id="entity-pane")
                         yield MessageQueuePopup(id="queue-popup")
                     yield MoreBelowIndicator(id="more-below")
                 yield TaskPane(id="task-pane", classes="hidden")
@@ -484,13 +486,13 @@ class BalloonsApp(App):
                 yield StashPopup(id="stash-popup")
                 yield InputBox(id="input-box")
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         """Initialize the app after mounting."""
         # Subscribe to TreeState for context mode changes
         self._tree_state.add_observer(self._on_tree_state_event)
         # Start the background session polling timer
         self._poll_timer = self.set_interval(0.1, self._poll_background_sessions)
-        self._initialize_session()
+        await self._initialize_session()
         # Register app-level tool handlers
         register_app_tool_handler("screen_snapshot", self._execute_screen_snapshot_tool)
 
@@ -1053,10 +1055,10 @@ class BalloonsApp(App):
         # Success - trigger next phase based on helper type
         if ctx.helper_type == "compress":
             # Context compression complete - now start the actual fork
-            self._complete_fork_after_compression(ctx, chat_log, status_bar)
+            asyncio.create_task(self._complete_fork_after_compression(ctx, chat_log, status_bar))
         elif ctx.helper_type == "derive":
             # Context compression complete - now start the derived session
-            self._complete_derive_after_compression(ctx, chat_log, status_bar)
+            asyncio.create_task(self._complete_derive_after_compression(ctx, chat_log, status_bar))
         elif ctx.helper_type == "archive":
             # Archive summary complete - now finalize the archive
             asyncio.create_task(self._complete_archive_after_summary(ctx, chat_log))
@@ -1070,7 +1072,7 @@ class BalloonsApp(App):
             # Return summary complete - now finalize the return
             asyncio.create_task(self._complete_return_after_summary(ctx, chat_log))
 
-    def _complete_fork_after_compression(
+    async def _complete_fork_after_compression(
         self,
         ctx: StreamingContext,
         chat_log: ChatLogView,
@@ -1131,12 +1133,13 @@ class BalloonsApp(App):
             name=name,
             fork_point=fork_point,
         )
-        # Add fork turn marker to parent session (so fork shows in turn tree)
+        # Add fork turn marker to parent session (part of the fork proposal exchange)
         parent_session.add_fork_turn(
             fork_id=str(uuid.uuid4()),
             child_session_id=child_session.id,
             fork_name=name or "fork",
             prompt=prompt,
+            exchange_id=parent_session.get_last_exchange_id(),
         )
         asyncio.create_task(parent_session.save_async())
 
@@ -1200,16 +1203,16 @@ class BalloonsApp(App):
         else:
             # Foreground mode - switch to child
             breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
-            self._manager.set_active(child_session.id)
+            await self._manager.set_active(child_session.id)
             chat_log.clear()
             chat_log.load_history(child_session.turns, session=child_session)
-            context_tree.load_all_sessions(child_session)
-            breadcrumb.set_session(child_session)
+            await context_tree.load_all_sessions(child_session)
+            await breadcrumb.set_session(child_session)
 
             # Start streaming the actual prompt
             self._start_streaming(prompt)
 
-    def _complete_derive_after_compression(
+    async def _complete_derive_after_compression(
         self,
         ctx: StreamingContext,
         chat_log: ChatLogView,
@@ -1261,12 +1264,12 @@ class BalloonsApp(App):
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
         self._manager._sessions[new_session.id] = new_session
         self._manager._runners[new_session.id] = self._create_session_runner(new_session)
-        self._manager.set_active(new_session.id)
+        await self._manager.set_active(new_session.id)
 
         chat_log.clear()
         chat_log.load_history(new_session.turns, session=new_session)
-        context_tree.load_all_sessions(new_session)
-        breadcrumb.set_session(new_session)
+        await context_tree.load_all_sessions(new_session)
+        await breadcrumb.set_session(new_session)
 
         # Start streaming the actual prompt
         self._start_streaming(prompt)
@@ -1332,7 +1335,7 @@ class BalloonsApp(App):
         # Reload the UI first so TreeState has updated turns
         chat_log.clear()
         chat_log.load_history(session.turns, session)
-        context_tree.load_all_sessions(session)
+        await context_tree.load_all_sessions(session)
 
         # Recalculate token count after archiving (turns removed)
         # Must be after tree reload so TreeState has the new turns
@@ -1387,7 +1390,7 @@ class BalloonsApp(App):
             return
 
         # Complete the merge
-        result = self._fork_manager.complete_merge(
+        result = await self._fork_manager.complete_merge(
             fork_session=fork_session,
             parent_session=parent_session,
             merge_message=merge_message,
@@ -1396,11 +1399,11 @@ class BalloonsApp(App):
         # Switch to parent
         self._manager._sessions[result.parent_session.id] = result.parent_session
         self._manager._runners[result.parent_session.id] = self._create_session_runner(result.parent_session)
-        self._manager.set_active(result.parent_session.id)
+        await self._manager.set_active(result.parent_session.id)
         chat_log.clear()
         chat_log.load_history(result.parent_session.turns, session=result.parent_session)
-        context_tree.load_all_sessions(result.parent_session)
-        breadcrumb.set_session(result.parent_session)
+        await context_tree.load_all_sessions(result.parent_session)
+        await breadcrumb.set_session(result.parent_session)
 
         status_bar.set_streaming(False)
         self.streaming = False
@@ -1494,7 +1497,7 @@ class BalloonsApp(App):
 
         # If parent not in manager, try to load it
         if not parent_session:
-            parent_session = Session.load(return_data.parent_session_id)
+            parent_session = await Session.load_async(return_data.parent_session_id)
 
         if not child_session or not parent_session:
             debug_log.error("Session not found for return", category="return")
@@ -1516,11 +1519,11 @@ class BalloonsApp(App):
         # Switch to parent session through manager
         self._manager._sessions[parent_session.id] = parent_session
         self._manager._runners[parent_session.id] = self._create_session_runner(parent_session)
-        self._manager.set_active(parent_session.id)
+        await self._manager.set_active(parent_session.id)
         chat_log.clear()
         chat_log.load_history(parent_session.turns, session=parent_session)
-        context_tree.load_all_sessions(parent_session)
-        breadcrumb.set_session(parent_session)
+        await context_tree.load_all_sessions(parent_session)
+        await breadcrumb.set_session(parent_session)
 
         # Find and update the WithWidget
         with_widget = chat_log.find_with_widget(child_id)
@@ -1710,7 +1713,7 @@ class BalloonsApp(App):
                 else:
                     task_state.complete_task(ctx.exchange_id)
 
-    def _load_last_viewed_session(self) -> tuple[Session | None, int | None]:
+    async def _load_last_viewed_session(self) -> tuple[Session | None, int | None]:
         """Load the last viewed session and turn index from config.
 
         Returns (session, turn_index) where turn_index may be None.
@@ -1720,19 +1723,23 @@ class BalloonsApp(App):
 
         # Try last viewed session first
         if config.last_view_session_id:
-            session = self._manager.load_session(config.last_view_session_id)
+            session = await self._manager.load_session(config.last_view_session_id)
             if session:
                 return session, config.last_view_turn_index
 
-        # Fall back to most recently modified (fast path using file mtime)
-        session_id = Session.get_most_recent_session_id()
+        # Fall back to most recently modified session
+        session_id = None
+        async for metadata in Session.list_sessions_async():
+            session_id = metadata["id"]
+            break  # Just need the first one (most recent)
+
         if not session_id:
             return None, None
 
-        session = self._manager.load_session(session_id)
+        session = await self._manager.load_session(session_id)
         return session, None  # No saved turn index for fallback
 
-    def _initialize_session(self) -> None:
+    async def _initialize_session(self) -> None:
         """Initialize the UI with the current session."""
         restore_turn_index = None  # Turn index to scroll to after init
 
@@ -1740,15 +1747,15 @@ class BalloonsApp(App):
             # Load initial session into manager (passed via --resume)
             self._manager._sessions[self._initial_session.id] = self._initial_session
             self._manager._runners[self._initial_session.id] = self._create_session_runner(self._initial_session)
-            self._manager.set_active(self._initial_session.id)
+            await self._manager.set_active(self._initial_session.id)
             self._initial_session = None  # Clear so we don't reload on subsequent calls
         elif self.session is None:
             # No session passed - try to load the last viewed session
-            session, restore_turn_index = self._load_last_viewed_session()
+            session, restore_turn_index = await self._load_last_viewed_session()
             if session is None:
                 # No sessions exist - create a new one
-                session = self._manager.create_session()
-            self._manager.set_active(session.id)
+                session = await self._manager.create_session()
+            await self._manager.set_active(session.id)
 
         chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
@@ -1763,7 +1770,7 @@ class BalloonsApp(App):
 
         # Load all sessions from index (fast - single file read)
         # Sessions are lazy-loaded: only metadata initially, full data on expand/activate
-        context_tree.load_all_sessions(self.session)
+        await context_tree.load_all_sessions(self.session)
 
         # Load current session's messages into chat view
         if self.session.turns:
@@ -1774,7 +1781,7 @@ class BalloonsApp(App):
             chat_log.set_session_title(self.session.title)
 
         # Update breadcrumb to show current position in hierarchy
-        breadcrumb.set_session(self.session)
+        await breadcrumb.set_session(self.session)
 
         # Update status bar with session info
         backend_name = self.session.backend_name or get_config().default_backend
@@ -1977,7 +1984,7 @@ class BalloonsApp(App):
         if isinstance(cmd, NewSessionCommand):
             await self._handle_new_session(cmd.prompt, cmd.title)
         elif isinstance(cmd, CopyTurnsCommand):
-            self._handle_copy_turns()
+            await self._handle_copy_turns()
         elif isinstance(cmd, QueryWithCommand):
             await self._handle_query_with(cmd.prompt)
         elif isinstance(cmd, SuspendCommand):
@@ -1992,7 +1999,7 @@ class BalloonsApp(App):
         elif isinstance(cmd, DeriveCommand):
             await self._handle_derive_command(cmd.prompt)
         elif isinstance(cmd, SwitchCommand):
-            self._handle_switch_command(cmd.name)
+            await self._handle_switch_command(cmd.name)
         elif isinstance(cmd, ReturnCommand):
             await self._handle_return_command(cmd.return_prompt)
         elif isinstance(cmd, PwdCommand):
@@ -2002,7 +2009,7 @@ class BalloonsApp(App):
         elif isinstance(cmd, ReloadCommand):
             self._handle_reload()
         elif isinstance(cmd, TitleCommand):
-            self._handle_title_command(cmd.title)
+            await self._handle_title_command(cmd.title)
         elif isinstance(cmd, HelpCommand):
             self.push_screen(HelpModal())
         elif isinstance(cmd, PrefsCommand):
@@ -2026,7 +2033,7 @@ class BalloonsApp(App):
         elif isinstance(cmd, RehydrateCommand):
             await self._handle_rehydrate_command()
         elif isinstance(cmd, ReindexCommand):
-            self._handle_reindex_command()
+            await self._handle_reindex_command()
         elif isinstance(cmd, FollowCommand):
             self._handle_follow_toggle()
         elif isinstance(cmd, StashCommand):
@@ -2108,15 +2115,15 @@ class BalloonsApp(App):
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
 
         # Create new session through manager
-        new_session = self._manager.create_session()
+        new_session = await self._manager.create_session()
         if title:
             new_session.title = title
-        self._manager.set_active(new_session.id)
+        await self._manager.set_active(new_session.id)
 
         # Clear and reload UI
         chat_log.clear()
-        context_tree.load_all_sessions(self.session)
-        breadcrumb.set_session(self.session)
+        await context_tree.load_all_sessions(self.session)
+        await breadcrumb.set_session(self.session)
         self.notify("New session created")
 
         # Update context tokens for new empty session
@@ -2182,10 +2189,10 @@ class BalloonsApp(App):
         save_last_view(self.session.id, turn_index)
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
-    def _handle_title_command(self, title: str) -> None:
+    async def _handle_title_command(self, title: str) -> None:
         """Set the session title."""
         self.session.title = title
-        asyncio.create_task(self.session.save_async())
+        await self.session.save_async()
 
         # Update UI with new title
         chat_log = self.query_one("#chat-log", ChatLogView)
@@ -2193,7 +2200,7 @@ class BalloonsApp(App):
 
         # Reload context tree to show title
         context_tree = self.query_one("#context-tree", ContextTreeView)
-        context_tree.load_all_sessions(self.session)
+        await context_tree.load_all_sessions(self.session)
 
         self.notify(f"Session titled: {title}")
 
@@ -2248,7 +2255,7 @@ class BalloonsApp(App):
         status_bar = self.query_one("#status-bar", StatusBar)
 
         # Phase 1: Resolve targets and identify what needs summaries
-        resolve_result = self._command_executor.resolve_link_targets(
+        resolve_result = await self._command_executor.resolve_link_targets(
             current_session=self.session,
             target_prefixes=target_prefixes,
         )
@@ -2672,7 +2679,7 @@ class BalloonsApp(App):
         # Reload the UI first so TreeState has updated turns
         chat_log.clear()
         chat_log.load_history(self.session.turns, self.session)
-        context_tree.load_all_sessions(self.session)
+        await context_tree.load_all_sessions(self.session)
 
         # Recalculate token count after rehydration (turns restored)
         # Must be after tree reload so TreeState has the new turns
@@ -2791,7 +2798,7 @@ class BalloonsApp(App):
         input_box = self.query_one("#input-box", InputBox)
         input_box.focus()
 
-    def _handle_copy_turns(self) -> None:
+    async def _handle_copy_turns(self) -> None:
         """Copy selected turns to a new session."""
         context_tree = self.query_one("#context-tree", ContextTreeView)
         chat_log = self.query_one("#chat-log", ChatLogView)
@@ -2812,10 +2819,10 @@ class BalloonsApp(App):
         chat_log.clear()
         self._manager._sessions[new_session.id] = new_session
         self._manager._runners[new_session.id] = self._create_session_runner(new_session)
-        self._manager.set_active(new_session.id)
-        context_tree.load_all_sessions(new_session)
+        await self._manager.set_active(new_session.id)
+        await context_tree.load_all_sessions(new_session)
         chat_log.load_history(new_session.turns, session=new_session)
-        breadcrumb.set_session(new_session)
+        await breadcrumb.set_session(new_session)
 
     async def _handle_query_with(self, prompt: str) -> None:
         """Query with selected turns as context, only response goes to new session.
@@ -2834,13 +2841,13 @@ class BalloonsApp(App):
         allowed_tools = self._get_enabled_tools()
 
         # Create new session for the response through manager
-        new_session = self._manager.create_session()
-        self._manager.set_active(new_session.id)
+        new_session = await self._manager.create_session()
+        await self._manager.set_active(new_session.id)
 
         # Clear chat log and switch to new session
         chat_log.clear()
-        context_tree.load_all_sessions(new_session)
-        breadcrumb.set_session(new_session)
+        await context_tree.load_all_sessions(new_session)
+        await breadcrumb.set_session(new_session)
 
         # Create streaming context for query_with (special: no user turn saved)
         # assistant_turn_idx is 0 since we don't save the user message
@@ -3104,41 +3111,55 @@ class BalloonsApp(App):
 
             # User accepted - execute the merge with the (potentially edited) summary
             summary = result.edited_summary or result.proposal.summary
-            asyncio.create_task(self._execute_merge_proposal(summary))
+            asyncio.create_task(self._execute_merge_proposal(
+                summary,
+                files_changed=result.proposal.files_changed,
+                key_accomplishments=result.proposal.key_accomplishments,
+                reason=result.proposal.reason,
+            ))
 
         self.push_screen(
             MergeProposalModal(proposal, fork_name=fork_name),
             on_result,
         )
 
-    async def _execute_merge_proposal(self, summary: str) -> None:
+    async def _execute_merge_proposal(
+        self,
+        summary: str,
+        files_changed: list[str] | None = None,
+        key_accomplishments: list[str] | None = None,
+        reason: str = "",
+    ) -> None:
         """Execute an accepted merge proposal with the given summary."""
         chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
         status_bar = self.query_one("#status-bar", StatusBar)
 
         # Validate merge via ForkManager
-        prep_result = self._fork_manager.prepare_merge(self.session)
+        prep_result = await self._fork_manager.prepare_merge(self.session)
         if not prep_result.success:
             self.notify(prep_result.error, severity="error")
             return
 
-        # Complete the merge with the provided summary (no need to generate)
-        result = self._fork_manager.complete_merge(
+        # Complete the merge with the provided summary and metadata
+        result = await self._fork_manager.complete_merge(
             fork_session=prep_result.fork_session,
             parent_session=prep_result.parent_session,
             merge_message=summary,
+            files_changed=files_changed,
+            key_accomplishments=key_accomplishments,
+            reason=reason,
         )
 
         # Switch to parent
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
         self._manager._sessions[result.parent_session.id] = result.parent_session
         self._manager._runners[result.parent_session.id] = self._create_session_runner(result.parent_session)
-        self._manager.set_active(result.parent_session.id)
+        await self._manager.set_active(result.parent_session.id)
         chat_log.clear()
         chat_log.load_history(result.parent_session.turns, session=result.parent_session)
-        context_tree.load_all_sessions(result.parent_session)
-        breadcrumb.set_session(result.parent_session)
+        await context_tree.load_all_sessions(result.parent_session)
+        await breadcrumb.set_session(result.parent_session)
 
         self.notify(f"Merged from '{result.fork_name}'")
 
@@ -3170,7 +3191,7 @@ class BalloonsApp(App):
         allowed_tools = self._get_enabled_tools()
 
         # Prepare fork via ForkManager (handles validation and session creation)
-        result = self._fork_manager.prepare_fork(
+        result = await self._fork_manager.prepare_fork(
             current_session=self.session,
             indexed_messages=indexed_messages,
             prompt=prompt,
@@ -3185,7 +3206,7 @@ class BalloonsApp(App):
 
         if not result.needs_compression:
             # No compression - proceed with UI updates
-            self._complete_fork_ui(result, chat_log, context_tree, status_bar)
+            await self._complete_fork_ui(result, chat_log, context_tree, status_bar)
         else:
             # Compression needed - start helper streaming
             helper_runner = HelperRunner(result.helper_id, runner=create_runner(self._backend_config))
@@ -3213,7 +3234,7 @@ class BalloonsApp(App):
 
             helper_runner.start_background(result.compression_prompt)
 
-    def _complete_fork_ui(self, result: ForkResult, chat_log: ChatLogView, context_tree: ContextTreeView, status_bar: StatusBar) -> None:
+    async def _complete_fork_ui(self, result: ForkResult, chat_log: ChatLogView, context_tree: ContextTreeView, status_bar: StatusBar) -> None:
         """Complete fork UI updates after business logic is done.
 
         Called either directly (no compression) or after compression helper completes.
@@ -3279,11 +3300,11 @@ class BalloonsApp(App):
             asyncio.create_task(child_session.save_async())  # Ensure recent timestamp
 
             breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
-            self._manager.set_active(child_session.id)
+            await self._manager.set_active(child_session.id)
             chat_log.clear()
             chat_log.load_history(child_session.turns, session=child_session)
-            context_tree.load_all_sessions(child_session)
-            breadcrumb.set_session(child_session)
+            await context_tree.load_all_sessions(child_session)
+            await breadcrumb.set_session(child_session)
 
             self._start_streaming(result.prompt)
 
@@ -3304,7 +3325,7 @@ class BalloonsApp(App):
         status_bar = self.query_one("#status-bar", StatusBar)
 
         # Validate merge via ForkManager
-        prep_result = self._fork_manager.prepare_merge(self.session)
+        prep_result = await self._fork_manager.prepare_merge(self.session)
         if not prep_result.success:
             self.notify(prep_result.error, severity="error")
             return
@@ -3364,7 +3385,7 @@ class BalloonsApp(App):
         allowed_tools = self._get_enabled_tools()
 
         # Prepare derive via ForkManager
-        result = self._fork_manager.prepare_derive(
+        result = await self._fork_manager.prepare_derive(
             indexed_messages=indexed_messages,
             prompt=prompt,
             allowed_tools=allowed_tools,
@@ -3376,7 +3397,7 @@ class BalloonsApp(App):
 
         if not result.needs_compression:
             # No compression - proceed with UI updates
-            self._complete_derive_ui(result, chat_log, context_tree)
+            await self._complete_derive_ui(result, chat_log, context_tree)
         else:
             # Compression needed - start helper streaming
             helper_runner = HelperRunner(result.helper_id, runner=create_runner(self._backend_config))
@@ -3402,7 +3423,7 @@ class BalloonsApp(App):
 
             helper_runner.start_background(result.compression_prompt)
 
-    def _complete_derive_ui(self, result: DeriveResult, chat_log: ChatLogView, context_tree: ContextTreeView) -> None:
+    async def _complete_derive_ui(self, result: DeriveResult, chat_log: ChatLogView, context_tree: ContextTreeView) -> None:
         """Complete derive UI updates after business logic is done."""
         new_session = result.new_session
 
@@ -3410,16 +3431,16 @@ class BalloonsApp(App):
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
         self._manager._sessions[new_session.id] = new_session
         self._manager._runners[new_session.id] = self._create_session_runner(new_session)
-        self._manager.set_active(new_session.id)
+        await self._manager.set_active(new_session.id)
 
         chat_log.clear()
         chat_log.load_history(new_session.turns, session=new_session)
-        context_tree.load_all_sessions(new_session)
-        breadcrumb.set_session(new_session)
+        await context_tree.load_all_sessions(new_session)
+        await breadcrumb.set_session(new_session)
 
         self._start_streaming(result.prompt)
 
-    def _handle_switch_command(self, name: str = "") -> None:
+    async def _handle_switch_command(self, name: str = "") -> None:
         """Switch view to a different session or fork.
 
         Args:
@@ -3428,7 +3449,7 @@ class BalloonsApp(App):
         status_bar = self.query_one("#status-bar", StatusBar)
 
         # Use ForkManager to find target
-        result = self._fork_manager.find_switch_target(self.session, name)
+        result = await self._fork_manager.find_switch_target(self.session, name)
 
         if not name:
             # List available forks
@@ -3443,7 +3464,7 @@ class BalloonsApp(App):
             return
 
         if result.success:
-            self._switch_to_session(result.target_session)
+            await self._switch_to_session(result.target_session)
         else:
             self.notify(result.error, severity="error")
 
@@ -3464,7 +3485,7 @@ class BalloonsApp(App):
             return
 
         # Get parent session ID before we start
-        parent = self.session.get_parent()
+        parent = await self.session.get_parent_async()
         if not parent:
             self.notify("Parent session not found", severity="error")
             return
@@ -3517,38 +3538,38 @@ class BalloonsApp(App):
         """Check if auto-return condition is met. Delegates to Session."""
         return self.session.check_auto_return(response_content)
 
-    def on_with_widget_child_clicked(self, event: WithWidget.ChildClicked) -> None:
+    async def on_with_widget_child_clicked(self, event: WithWidget.ChildClicked) -> None:
         """Handle clicking on WithWidget to navigate to child session."""
-        child_session = Session.load(event.child_session_id)
+        child_session = await Session.load_async(event.child_session_id)
         if child_session:
-            self._switch_to_session(child_session)
+            await self._switch_to_session(child_session)
 
-    def on_with_result_widget_child_clicked(self, event: WithResultWidget.ChildClicked) -> None:
+    async def on_with_result_widget_child_clicked(self, event: WithResultWidget.ChildClicked) -> None:
         """Handle clicking on WithResultWidget to navigate to child session."""
-        child_session = Session.load(event.child_session_id)
+        child_session = await Session.load_async(event.child_session_id)
         if child_session:
-            self._switch_to_session(child_session)
+            await self._switch_to_session(child_session)
 
-    def on_fork_marker_child_clicked(self, event: ForkMarker.ChildClicked) -> None:
+    async def on_fork_marker_child_clicked(self, event: ForkMarker.ChildClicked) -> None:
         """Handle clicking on ForkMarker to navigate to the fork."""
-        child_session = Session.load(event.child_session_id)
+        child_session = await Session.load_async(event.child_session_id)
         if child_session:
-            self._switch_to_session(child_session)
+            await self._switch_to_session(child_session)
 
-    def on_link_marker_linked_session_clicked(self, event: LinkMarker.LinkedSessionClicked) -> None:
+    async def on_link_marker_linked_session_clicked(self, event: LinkMarker.LinkedSessionClicked) -> None:
         """Handle clicking on LinkMarker to navigate to the linked session."""
-        linked_session = Session.load(event.linked_session_id)
+        linked_session = await Session.load_async(event.linked_session_id)
         if linked_session:
-            self._switch_to_session(linked_session)
+            await self._switch_to_session(linked_session)
             # TODO: Could scroll to the link_point turn in the target session
 
-    def on_merge_marker_child_clicked(self, event: MergeMarker.ChildClicked) -> None:
+    async def on_merge_marker_child_clicked(self, event: MergeMarker.ChildClicked) -> None:
         """Handle clicking on MergeMarker to navigate to the (read-only) fork."""
-        child_session = Session.load(event.child_session_id)
+        child_session = await Session.load_async(event.child_session_id)
         if child_session:
-            self._switch_to_session(child_session)
+            await self._switch_to_session(child_session)
 
-    def on_archive_marker_rehydrate_requested(self, event: ArchiveMarker.RehydrateRequested) -> None:
+    async def on_archive_marker_rehydrate_requested(self, event: ArchiveMarker.RehydrateRequested) -> None:
         """Handle ctrl+shift+click on ArchiveMarker to rehydrate archived turns."""
         from core.archiver import Archiver, ArchiveError
 
@@ -3563,7 +3584,7 @@ class BalloonsApp(App):
             # Rehydrate the archive
             new_turns = archiver.rehydrate(self.session.turns, event.turn_index)
             self.session.turns = new_turns
-            asyncio.create_task(self.session.save_async())
+            await self.session.save_async()
 
             debug_log.info(
                 f"Rehydrated archive from {event.file_path}",
@@ -3578,7 +3599,7 @@ class BalloonsApp(App):
 
             # Update context tree
             context_tree = self.query_one("#context-tree", ContextTreeView)
-            context_tree.load_all_sessions(self.session)
+            await context_tree.load_all_sessions(self.session)
 
             # Recalculate token count after rehydration (turns restored)
             # Must be after tree reload so TreeState has the new turns
@@ -3591,7 +3612,7 @@ class BalloonsApp(App):
             debug_log.error(f"Rehydration failed: {e}", category="archive")
             self.notify(f"Failed to rehydrate: {e}", severity="error")
 
-    def _switch_to_session(self, session: Session, target_turn_index: int | None = None) -> None:
+    async def _switch_to_session(self, session: Session, target_turn_index: int | None = None) -> None:
         """Switch to a different session.
 
         Supports switching while other sessions stream in background:
@@ -3623,6 +3644,7 @@ class BalloonsApp(App):
         status_bar = self.query_one("#status-bar", StatusBar)
 
         # Mark OLD session's streaming context as inactive (if streaming)
+        # Also sync queue state to persistence so it survives session switches
         if old_session_id:
             old_ctx = self._streaming_contexts.get(old_session_id)
             if old_ctx:
@@ -3632,12 +3654,18 @@ class BalloonsApp(App):
                     category="stream",
                     session_id=old_session_id,
                 )
+            # Sync queue state to old session's message_queue before switching
+            old_session = self._manager._sessions.get(old_session_id)
+            if old_session:
+                self._queue_state.sync_to_message_queue(old_session_id, old_session.message_queue)
+                # Save async to persist the queue (safe even while streaming - only saving queue)
+                asyncio.create_task(old_session.save_async())
 
         # Register session with manager if not already known
         if session.id not in self._manager._sessions:
             self._manager._sessions[session.id] = session
             self._manager._runners[session.id] = self._create_session_runner(session)
-        self._manager.set_active(session.id)
+        await self._manager.set_active(session.id)
 
         # Pre-seed TreeState with cached token count before switching
         # This ensures the tree displays correct count immediately
@@ -3652,7 +3680,7 @@ class BalloonsApp(App):
         self._queue_state.set_active_session(session.id)
 
         # Update breadcrumb to show current position in hierarchy
-        breadcrumb.set_session(session)
+        await breadcrumb.set_session(session)
 
         # Load session turns and filter by selection
         chat_log.clear()
@@ -3807,19 +3835,19 @@ class BalloonsApp(App):
         turn_idx = event.turn_id - 1
         context_tree.scroll_to_turn(self.session.id, turn_idx)
 
-    def on_context_tree_view_context_mode_changed(self, event: ContextTreeView.ContextModeChanged) -> None:
+    async def on_context_tree_view_context_mode_changed(self, event: ContextTreeView.ContextModeChanged) -> None:
         """Handle context mode change from tree - persist to session."""
         # Use in-memory session if it's the current one, otherwise load from disk
         if self.session and self.session.id == event.session_id:
             session = self.session
         else:
-            session = Session.load(event.session_id)
+            session = await Session.load_async(event.session_id)
 
         if session and event.turn_idx < len(session.turns):
             session.turns[event.turn_idx].context_mode = event.new_mode
             asyncio.create_task(session.save_async())
 
-    def on_context_tree_view_turn_delete_requested(self, event: ContextTreeView.TurnDeleteRequested) -> None:
+    async def on_context_tree_view_turn_delete_requested(self, event: ContextTreeView.TurnDeleteRequested) -> None:
         """Handle turn delete request - show confirmation dialog."""
         status_bar = self.query_one("#status-bar", StatusBar)
 
@@ -3827,7 +3855,7 @@ class BalloonsApp(App):
         if self.session and self.session.id == event.session_id:
             session = self.session
         else:
-            session = Session.load(event.session_id)
+            session = await Session.load_async(event.session_id)
 
         if not session:
             self.notify("Session not found", severity="error")
@@ -3884,10 +3912,10 @@ class BalloonsApp(App):
         else:
             self.notify("Could not delete turn", severity="error")
 
-    def on_context_tree_view_session_delete_requested(self, event: ContextTreeView.SessionDeleteRequested) -> None:
+    async def on_context_tree_view_session_delete_requested(self, event: ContextTreeView.SessionDeleteRequested) -> None:
         """Handle session delete request - show confirmation dialog."""
         # Load the session to get info for confirmation
-        session = Session.load(event.session_id)
+        session = await Session.load_async(event.session_id)
         if not session:
             self.notify("Session not found", severity="error")
             return
@@ -3905,14 +3933,14 @@ class BalloonsApp(App):
         # Show confirmation dialog
         def on_confirm(confirmed: bool) -> None:
             if confirmed:
-                self._execute_session_delete(event.session_id, session, is_active)
+                asyncio.create_task(self._execute_session_delete(event.session_id, session, is_active))
 
         self.push_screen(
             ConfirmDialog("Delete Session?", message),
             on_confirm,
         )
 
-    def _execute_session_delete(self, session_id: str, session: Session, was_active: bool) -> None:
+    async def _execute_session_delete(self, session_id: str, session: Session, was_active: bool) -> None:
         """Execute the session deletion after confirmation."""
         status_bar = self.query_one("#status-bar", StatusBar)
         context_tree = self.query_one("#context-tree", ContextTreeView)
@@ -3920,16 +3948,13 @@ class BalloonsApp(App):
         # Mark links as orphaned in linked sessions before deletion
         # Check both legacy links and turn-based LinkBlocks
         for link in session.get_all_active_links():
-            linked_session = Session.load(link.get("linked_session_id", ""))
+            linked_session = await Session.load_async(link.get("linked_session_id", ""))
             if linked_session:
                 linked_session.mark_link_orphaned(link.get("link_id", ""))
-                asyncio.create_task(linked_session.save_async())
+                await linked_session.save_async()
 
-        # Schedule async delete and handle result
-        async def do_delete():
-            return await session.delete_async()
-
-        asyncio.create_task(self._complete_session_delete(session_id, session, was_active, do_delete()))
+        # Execute async delete and handle result
+        await self._complete_session_delete(session_id, session, was_active, session.delete_async())
 
     async def _complete_session_delete(self, session_id: str, session: Session, was_active: bool, delete_coro) -> None:
         """Complete session deletion after async delete."""
@@ -3947,26 +3972,30 @@ class BalloonsApp(App):
 
             # If we deleted the active session, switch to another one
             if was_active:
-                # Find another session to switch to
-                remaining_sessions = Session.list_sessions()
-                if remaining_sessions:
+                # Find another session to switch to - get just the first one
+                first_session = None
+                async for session_info in Session.list_sessions_async():
+                    first_session = session_info
+                    break
+
+                if first_session:
                     # Switch to the first remaining session
-                    next_session = Session.load(remaining_sessions[0]["id"])
+                    next_session = await Session.load_async(first_session["id"])
                     if next_session:
-                        self._switch_to_session(next_session)
+                        await self._switch_to_session(next_session)
                 else:
                     # No sessions left, create a new one
                     new_session = context_tree.create_new_session()
-                    self._switch_to_session(new_session)
+                    await self._switch_to_session(new_session)
 
             self.notify(f"Deleted session {session_id[:8]}")
         else:
             self.notify("Could not delete session", severity="error")
 
-    def on_context_tree_view_exchange_delete_requested(self, event: ContextTreeView.ExchangeDeleteRequested) -> None:
+    async def on_context_tree_view_exchange_delete_requested(self, event: ContextTreeView.ExchangeDeleteRequested) -> None:
         """Handle exchange group delete request - show confirmation dialog."""
         # Load the session
-        session = Session.load(event.session_id)
+        session = await Session.load_async(event.session_id)
         if not session:
             self.notify("Session not found", severity="error")
             return
@@ -3981,14 +4010,14 @@ class BalloonsApp(App):
         # Show confirmation dialog
         def on_confirm(confirmed: bool) -> None:
             if confirmed:
-                self._execute_exchange_delete(event.session_id, event.turn_indices, session)
+                asyncio.create_task(self._execute_exchange_delete(event.session_id, event.turn_indices, session))
 
         self.push_screen(
             ConfirmDialog("Delete Exchange?", message),
             on_confirm,
         )
 
-    def _execute_exchange_delete(self, session_id: str, turn_indices: list[int], session: Session) -> None:
+    async def _execute_exchange_delete(self, session_id: str, turn_indices: list[int], session: Session) -> None:
         """Execute the exchange deletion after confirmation."""
         context_tree = self.query_one("#context-tree", ContextTreeView)
 
@@ -4000,10 +4029,10 @@ class BalloonsApp(App):
                 category="event",
                 details={"turn_indices": turn_indices, "deleted_count": deleted_count},
             )
-            asyncio.create_task(session.save_async())
+            await session.save_async()
 
             # Reload the tree for this session (easier than updating multiple turns)
-            context_tree.load_all_sessions(session)
+            await context_tree.load_all_sessions(session)
 
             # Refresh chat log if this is the current session
             if self.session and self.session.id == session_id:
@@ -4015,10 +4044,10 @@ class BalloonsApp(App):
         else:
             self.notify("Could not delete turns", severity="error")
 
-    def on_context_tree_view_session_activated(self, event: ContextTreeView.SessionActivated) -> None:
+    async def on_context_tree_view_session_activated(self, event: ContextTreeView.SessionActivated) -> None:
         """Handle clicking on a session - switch to it."""
         # Switch to this session (works even while other sessions stream)
-        self._switch_to_session(event.session)
+        await self._switch_to_session(event.session)
 
     def on_context_tree_view_archive_requested(self, event: ContextTreeView.ArchiveRequested) -> None:
         """Handle ctrl+shift+click on turns to archive them."""
@@ -4071,20 +4100,20 @@ class BalloonsApp(App):
         if not input_box.text:
             input_box.insert(":")
 
-    def on_context_tree_view_jump_to_exchange_end(self, event: ContextTreeView.JumpToExchangeEnd) -> None:
+    async def on_context_tree_view_jump_to_exchange_end(self, event: ContextTreeView.JumpToExchangeEnd) -> None:
         """Handle 'g' key on exchange group - scroll to last turn in the exchange."""
         chat_log = self.query_one("#chat-log", ChatLogView)
         # Check if we need to switch sessions
         if self.session and event.session_id != self.session.id:
-            target_session = Session.load(event.session_id)
+            target_session = await Session.load_async(event.session_id)
             if target_session:
-                self._switch_to_session(target_session, target_turn_index=event.last_turn_idx)
+                await self._switch_to_session(target_session, target_turn_index=event.last_turn_idx)
                 return
         # Scroll to the last turn in the exchange
         turn_id = event.last_turn_idx + 1
         self.call_after_refresh(lambda tid=turn_id: chat_log.scroll_to_turn(tid))
 
-    def on_context_tree_view_turn_inspected(self, event: ContextTreeView.TurnInspected) -> None:
+    async def on_context_tree_view_turn_inspected(self, event: ContextTreeView.TurnInspected) -> None:
         """Handle turn inspection - highlight and scroll to turns and tool uses.
 
         If the turn belongs to a different session, switch to that session first.
@@ -4108,10 +4137,10 @@ class BalloonsApp(App):
         if turn_session_id and turn_session_id != self.session.id:
             # Switch to the turn's session first - it handles scrolling
             debug_log.info(f"Switching to different session: {turn_session_id[:8]}...", category="tree")
-            target_session = Session.load(turn_session_id)
+            target_session = await Session.load_async(turn_session_id)
             if target_session:
                 debug_log.info(f"Loaded target session, calling _switch_to_session with turn_idx={turn_idx}", category="tree")
-                self._switch_to_session(target_session, target_turn_index=turn_idx)
+                await self._switch_to_session(target_session, target_turn_index=turn_idx)
                 # For tool_use and tool_result, we need to highlight after session switch
                 if node_type in ("tool_use", "tool_result"):
                     tool_use_id = event.turn_data.get("tool_use_id", "")
@@ -4213,7 +4242,7 @@ class BalloonsApp(App):
         chat_log.set_turn_context_modes(event.turn_modes)
         # Token count already updated via TreeState observer
 
-    def on_nested_tree_view_context_mode_changed(self, event: NestedTreeView.ContextModeChanged) -> None:
+    async def on_nested_tree_view_context_mode_changed(self, event: NestedTreeView.ContextModeChanged) -> None:
         """Handle context mode change from nested tree - persist to session."""
         # Update TreeState - this triggers observer chain for token recalculation
         context_tree = self.query_one("#context-tree", ContextTreeView)
@@ -4228,17 +4257,17 @@ class BalloonsApp(App):
         if self.session and self.session.id == event.session_id:
             session = self.session
         else:
-            session = Session.load(event.session_id)
+            session = await Session.load_async(event.session_id)
 
         if session and event.turn_idx < len(session.turns):
             session.turns[event.turn_idx].context_mode = event.new_mode
             asyncio.create_task(session.save_async())
 
-    def on_nested_tree_view_session_activated(self, event: NestedTreeView.SessionActivated) -> None:
+    async def on_nested_tree_view_session_activated(self, event: NestedTreeView.SessionActivated) -> None:
         """Handle clicking on a session in nested tree - switch to it."""
-        self._switch_to_session(event.session)
+        await self._switch_to_session(event.session)
 
-    def on_nested_tree_view_turn_inspected(self, event: NestedTreeView.TurnInspected) -> None:
+    async def on_nested_tree_view_turn_inspected(self, event: NestedTreeView.TurnInspected) -> None:
         """Handle turn inspection from nested tree."""
         chat_log = self.query_one("#chat-log", ChatLogView)
 
@@ -4248,9 +4277,9 @@ class BalloonsApp(App):
         # Check if we need to switch sessions
         turn_session_id = event.session_id
         if turn_session_id and self.session and turn_session_id != self.session.id:
-            target_session = Session.load(turn_session_id)
+            target_session = await Session.load_async(turn_session_id)
             if target_session:
-                self._switch_to_session(target_session, target_turn_index=turn_idx)
+                await self._switch_to_session(target_session, target_turn_index=turn_idx)
                 chat_log.clear_highlights()
                 return
 
@@ -4297,9 +4326,9 @@ class BalloonsApp(App):
         context_tree_event = ContextTreeView.SessionLinkRequested(event.session_id)
         self.on_context_tree_session_link_requested(context_tree_event)
 
-    def on_nested_tree_view_session_load_requested(self, event: NestedTreeView.SessionLoadRequested) -> None:
+    async def on_nested_tree_view_session_load_requested(self, event: NestedTreeView.SessionLoadRequested) -> None:
         """Handle request to load a session's data for display in nested tree."""
-        session = Session.load(event.session_id)
+        session = await Session.load_async(event.session_id)
         if session:
             # Load the session into TreeState
             self._tree_state.load_session(event.session_id, session)
@@ -4311,14 +4340,14 @@ class BalloonsApp(App):
         if not input_box.text:
             input_box.insert(":")
 
-    def on_nested_tree_view_jump_to_exchange_end(self, event: NestedTreeView.JumpToExchangeEnd) -> None:
+    async def on_nested_tree_view_jump_to_exchange_end(self, event: NestedTreeView.JumpToExchangeEnd) -> None:
         """Handle 'g' key on exchange group - scroll to last turn in the exchange."""
         chat_log = self.query_one("#chat-log", ChatLogView)
         # Check if we need to switch sessions
         if self.session and event.session_id != self.session.id:
-            target_session = Session.load(event.session_id)
+            target_session = await Session.load_async(event.session_id)
             if target_session:
-                self._switch_to_session(target_session, target_turn_index=event.last_turn_idx)
+                await self._switch_to_session(target_session, target_turn_index=event.last_turn_idx)
                 return
         # Scroll to the last turn in the exchange
         turn_id = event.last_turn_idx + 1
@@ -4329,11 +4358,11 @@ class BalloonsApp(App):
         # Delegate to async handler
         asyncio.create_task(self._archive_turns_from_tree(event.session_id, event.turn_indices))
 
-    def on_breadcrumb_segment_clicked(self, event: Breadcrumb.SegmentClicked) -> None:
+    async def on_breadcrumb_segment_clicked(self, event: Breadcrumb.SegmentClicked) -> None:
         """Handle clicking a breadcrumb segment to navigate up."""
-        target_session = Session.load(event.session_id)
+        target_session = await Session.load_async(event.session_id)
         if target_session:
-            self._switch_to_session(target_session)
+            await self._switch_to_session(target_session)
 
     def action_new_session(self) -> None:
         """Create a new session from anywhere (ctrl+space)."""
@@ -4354,9 +4383,9 @@ class BalloonsApp(App):
             asyncio.create_task(self.session.save_async())
             # Update UI
             context_tree = self.query_one("#context-tree", ContextTreeView)
-            context_tree.load_all_sessions(self.session)
+            await context_tree.load_all_sessions(self.session)
             breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
-            breadcrumb.set_session(self.session)
+            await breadcrumb.set_session(self.session)
 
     def action_toggle_tree(self) -> None:
         """Toggle the tree sidebar visibility."""
@@ -4434,23 +4463,19 @@ class BalloonsApp(App):
         input_box.insert(f"\n{event.text}\n\n")
         input_box.focus()
 
-    def _handle_reindex_command(self) -> None:
-        """Rebuild the session index from disk."""
-        from session import SessionIndex
+    async def _handle_reindex_command(self) -> None:
+        """Refresh the session list."""
+        from session import Session
         context_tree = self.query_one("#context-tree", ContextTreeView)
 
-        self.notify("Rebuilding session index...")
+        self.notify("Refreshing session list...")
+        session_count = 0
+        async for _ in Session.list_sessions_async():
+            session_count += 1
+        self.notify(f"Found {session_count} sessions")
 
-        # Force rebuild
-        index = SessionIndex()
-        index.rebuild_from_files()
-        asyncio.create_task(index.save_async())
-
-        session_count = len(index._sessions)
-        self.notify(f"Index rebuilt: {session_count} sessions")
-
-        # Reload tree with new index data
-        context_tree.load_all_sessions(self.session)
+        # Reload tree with new data
+        await context_tree.load_all_sessions(self.session)
 
     def _handle_clear_all_sessions_command(self) -> None:
         """Delete all sessions after confirmation."""
@@ -4458,12 +4483,12 @@ class BalloonsApp(App):
 
     async def _handle_clear_all_sessions_async(self) -> None:
         """Async implementation of clear all sessions command."""
-        from session import SessionIndex, SESSIONS_DIR
+        from session import Session
 
-        # Count sessions first
-        index = SessionIndex()
-        await index.ensure_loaded_async()
-        session_count = len(index._sessions)
+        # Count sessions first (from Rust if available, else JSON index)
+        session_count = 0
+        async for _ in Session.list_sessions_async():
+            session_count += 1
 
         if session_count == 0:
             self.notify("No sessions to delete")
@@ -4484,29 +4509,24 @@ class BalloonsApp(App):
 
     async def _execute_clear_all_sessions_async(self) -> None:
         """Execute deletion of all sessions after confirmation (async)."""
-        from session import SessionIndex, SESSIONS_DIR
+        from session import Session
+        from core.async_storage import get_default_storage
 
         context_tree = self.query_one("#context-tree", ContextTreeView)
         chat_log = self.query_one("#chat-log", ChatLogView)
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
 
-        # Count before deletion
-        index = SessionIndex()
-        await index.ensure_loaded_async()
-        deleted_count = len(index._sessions)
-
-        # Delete all session files
-        if SESSIONS_DIR.exists():
-            for path in SESSIONS_DIR.glob("*.json"):
+        # Delete all sessions from storage
+        try:
+            storage = await get_default_storage()
+            sessions = await storage.list_sessions()
+            for session_meta in sessions:
                 try:
-                    path.unlink()
-                except OSError:
-                    pass
-
-        # Clear the index
-        index._sessions = {}
-        index._dirty = True
-        asyncio.create_task(index.save_async())
+                    await storage.delete_session(session_meta["id"])
+                except Exception:
+                    pass  # Continue even if individual deletion fails
+        except Exception:
+            pass
 
         # Clear manager state
         self._manager._sessions.clear()
@@ -4516,8 +4536,8 @@ class BalloonsApp(App):
         self._streaming_contexts.clear()
 
         # Create a fresh session
-        new_session = self._manager.create_session()
-        self._manager.set_active(new_session.id)
+        new_session = await self._manager.create_session()
+        await self._manager.set_active(new_session.id)
 
         # Reset TreeState
         self._tree_state.clear()
@@ -4525,8 +4545,8 @@ class BalloonsApp(App):
 
         # Update UI
         chat_log.clear()
-        context_tree.load_all_sessions(new_session)
-        breadcrumb.set_session(new_session)
+        await context_tree.load_all_sessions(new_session)
+        await breadcrumb.set_session(new_session)
 
         # Update tokens
         self._update_base_context_tokens()
@@ -4672,16 +4692,20 @@ class BalloonsApp(App):
         """Switch to the Slides tab view."""
         chat_log = self.query_one("#chat-log", ChatLogView)
         slides_pane = self.query_one("#slides-pane", SlidesPane)
+        database_pane = self.query_one("#entity-pane", EntityPane)
         tab_chat = self.query_one("#tab-chat", Button)
         tab_slides = self.query_one("#tab-slides", Button)
+        tab_database = self.query_one("#tab-entities", Button)
 
         # Update button states
         tab_chat.remove_class("active")
         tab_slides.add_class("active")
+        tab_database.remove_class("active")
 
         # Update visibility
         chat_log.add_class("hidden")
         slides_pane.add_class("visible")
+        database_pane.hide()
 
         # Update slide count in tab
         if self.session:
@@ -4694,18 +4718,43 @@ class BalloonsApp(App):
         """Switch to the Chat tab view."""
         chat_log = self.query_one("#chat-log", ChatLogView)
         slides_pane = self.query_one("#slides-pane", SlidesPane)
+        database_pane = self.query_one("#entity-pane", EntityPane)
         tab_chat = self.query_one("#tab-chat", Button)
         tab_slides = self.query_one("#tab-slides", Button)
+        tab_database = self.query_one("#tab-entities", Button)
 
         # Update button states
         tab_chat.add_class("active")
         tab_slides.remove_class("active")
+        tab_database.remove_class("active")
 
         # Update visibility
         chat_log.remove_class("hidden")
         slides_pane.remove_class("visible")
+        database_pane.hide()
 
         debug_log.info("Switched to Chat tab", category="ui")
+
+    def _switch_to_entities_tab(self) -> None:
+        """Switch to the Entities tab view."""
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        slides_pane = self.query_one("#slides-pane", SlidesPane)
+        database_pane = self.query_one("#entity-pane", EntityPane)
+        tab_chat = self.query_one("#tab-chat", Button)
+        tab_slides = self.query_one("#tab-slides", Button)
+        tab_database = self.query_one("#tab-entities", Button)
+
+        # Update button states
+        tab_chat.remove_class("active")
+        tab_slides.remove_class("active")
+        tab_database.add_class("active")
+
+        # Update visibility
+        chat_log.add_class("hidden")
+        slides_pane.remove_class("visible")
+        database_pane.show()
+
+        debug_log.info("Switched to Entities tab", category="ui")
 
     def _refresh_slides_pane(self) -> None:
         """Refresh the slides pane with current session data."""
@@ -4731,6 +4780,8 @@ class BalloonsApp(App):
             self._switch_to_chat_tab()
         elif event.button.id == "tab-slides":
             self._switch_to_slides_tab()
+        elif event.button.id == "tab-entities":
+            self._switch_to_entities_tab()
         elif event.button.id == "present-btn":
             self._handle_present_command()
 

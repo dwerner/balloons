@@ -246,14 +246,34 @@ class TreeState:
             self._notify(TreeEvent.SESSION_UPDATED, {"session_id": session.id})
 
     def add_session_from_metadata(self, metadata: dict, is_current: bool = False) -> None:
-        """Add a session from metadata dict (for lazy loading)."""
+        """Add a session from metadata dict (for lazy loading).
+
+        Handles both Rust storage format (name, created_at, updated_at, turn_count)
+        and legacy format (title, created, last_modified, message_count).
+        """
+        # Handle Rust storage field name mappings
+        # Rust SessionMetadata uses: name, created_at, updated_at, turn_count
+        # Python expects: title, created, last_modified, message_count
+        title = metadata.get("title") or metadata.get("name", "")
+        created = metadata.get("created") or metadata.get("created_at", "")
+        last_modified = metadata.get("last_modified") or metadata.get("updated_at", "")
+        message_count = metadata.get("message_count") or metadata.get("turn_count", 0)
+
+        # Convert Unix timestamps from Rust to ISO format if needed
+        if isinstance(created, (int, float)) and created > 0:
+            from datetime import datetime, timezone
+            created = datetime.fromtimestamp(created, tz=timezone.utc).isoformat()
+        if isinstance(last_modified, (int, float)) and last_modified > 0:
+            from datetime import datetime, timezone
+            last_modified = datetime.fromtimestamp(last_modified, tz=timezone.utc).isoformat()
+
         session_data = SessionData(
             id=metadata["id"],
-            created=metadata.get("created", ""),
-            last_modified=metadata.get("last_modified", ""),
+            created=created if isinstance(created, str) else "",
+            last_modified=last_modified if isinstance(last_modified, str) else "",
             model=metadata.get("model", ""),
-            title=metadata.get("title", ""),
-            message_count=metadata.get("message_count", 0),
+            title=title,
+            message_count=message_count,
             total_input_tokens=metadata.get("total_input_tokens", 0),
             total_output_tokens=metadata.get("total_output_tokens", 0),
             total_cost=metadata.get("total_cost", 0.0),

@@ -5,34 +5,14 @@ during streaming, not just after finalization.
 """
 
 import pytest
-import sys
-import importlib.util
 from dataclasses import dataclass, field
-from pathlib import Path
 
-# Direct imports to avoid heavy dependencies
-project_root = Path(__file__).parent.parent
-
-# Import models directly
-spec = importlib.util.spec_from_file_location("models", project_root / "models.py")
-models_module = importlib.util.module_from_spec(spec)
-sys.modules["models"] = models_module
-spec.loader.exec_module(models_module)
-
-ContextMode = models_module.ContextMode
-TextBlock = models_module.TextBlock
-ToolUseBlock = models_module.ToolUseBlock
-ToolResultBlock = models_module.ToolResultBlock
-
-# Import tree_state directly
-spec2 = importlib.util.spec_from_file_location("tree_state", project_root / "core" / "tree_state.py")
-tree_state_module = importlib.util.module_from_spec(spec2)
-sys.modules["tree_state"] = tree_state_module
-spec2.loader.exec_module(tree_state_module)
-
-TreeState = tree_state_module.TreeState
-TreeEvent = tree_state_module.TreeEvent
-TurnData = tree_state_module.TurnData
+# Standard imports - let Python's import system handle everything normally.
+# The previous approach of manually loading modules via importlib.util polluted
+# sys.modules and caused class identity issues (isinstance would fail because
+# the same class loaded twice has different identity).
+from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock
+from core.tree_state import TreeState, TreeEvent, TurnData
 
 
 @dataclass

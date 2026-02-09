@@ -87,26 +87,30 @@ class TestSlidesPaneIntegration:
 class TestCreateSlideTool:
     """Tests for the create_slide tool execution."""
 
-    def test_execute_create_slide_basic(self):
+    @pytest.mark.asyncio
+    async def test_execute_create_slide_basic(self):
         """create_slide should create a slide in the session."""
+        from unittest.mock import AsyncMock, patch
         from core.tool_executor import execute_create_slide
 
         session = Session()
-        result, is_error = execute_create_slide(
-            {"title": "Test Slide", "content": "Test Content", "notes": "Notes"},
-            session=session,
-        )
+        with patch.object(session, 'save_async', new_callable=AsyncMock):
+            result, is_error = await execute_create_slide(
+                {"title": "Test Slide", "content": "Test Content", "notes": "Notes"},
+                session=session,
+            )
 
         assert not is_error
         assert "Test Slide" in result
         assert session.get_slide_count() == 1
         assert session.get_all_slides()[0][1].title == "Test Slide"
 
-    def test_execute_create_slide_no_session(self):
+    @pytest.mark.asyncio
+    async def test_execute_create_slide_no_session(self):
         """create_slide should error without a session."""
         from core.tool_executor import execute_create_slide
 
-        result, is_error = execute_create_slide(
+        result, is_error = await execute_create_slide(
             {"title": "Test", "content": "Content"},
             session=None,
         )
@@ -114,33 +118,35 @@ class TestCreateSlideTool:
         assert is_error
         assert "No session" in result
 
-    def test_execute_create_slide_validation(self):
+    @pytest.mark.asyncio
+    async def test_execute_create_slide_validation(self):
         """create_slide should validate input."""
         from core.tool_executor import execute_create_slide
 
         session = Session()
 
         # Empty title and content
-        result, is_error = execute_create_slide({}, session=session)
+        result, is_error = await execute_create_slide({}, session=session)
         assert is_error
         assert "required" in result.lower()
 
         # Title too long
-        result, is_error = execute_create_slide(
+        result, is_error = await execute_create_slide(
             {"title": "A" * 150, "content": "X"},
             session=session,
         )
         assert is_error
         assert "too long" in result.lower()
 
-    def test_execute_create_slide_content_too_long(self):
+    @pytest.mark.asyncio
+    async def test_execute_create_slide_content_too_long(self):
         """create_slide should warn about very long content."""
         from core.tool_executor import execute_create_slide
 
         session = Session()
         long_content = "\n".join(["Line " + str(i) for i in range(25)])
 
-        result, is_error = execute_create_slide(
+        result, is_error = await execute_create_slide(
             {"title": "Test", "content": long_content},
             session=session,
         )

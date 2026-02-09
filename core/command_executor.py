@@ -137,11 +137,11 @@ class CommandExecutor:
         )
         if result.success:
             session.turns = result.new_turns
-            session.save()
+            await session.save_async()
             # Update UI with result.archive_block
 
         # Link command
-        result = executor.prepare_link(
+        result = await executor.resolve_link_targets(
             current_session=session,
             target_prefixes=["abc123", "def456"],
         )
@@ -150,7 +150,7 @@ class CommandExecutor:
             pass
         if result.success:
             for session in result.sessions_to_save:
-                session.save()
+                await session.save_async()
     """
 
     def __init__(self):
@@ -269,7 +269,7 @@ class CommandExecutor:
     # Link Operations
     # =========================================================================
 
-    def resolve_link_targets(
+    async def resolve_link_targets(
         self,
         current_session: Session,
         target_prefixes: list[str],
@@ -293,7 +293,9 @@ class CommandExecutor:
         if not target_prefixes:
             return LinkResult(success=False, error="No target sessions specified")
 
-        all_sessions = Session.list_sessions()
+        all_sessions = []
+        async for s in Session.list_sessions_async():
+            all_sessions.append(s)
         resolved: list[LinkTarget] = []
         needs_summary: list[Session] = []
 
@@ -317,7 +319,7 @@ class CommandExecutor:
                 return LinkResult(success=False, error="Cannot link session to itself")
 
             # Load target session
-            target_session = Session.load(target_id)
+            target_session = await Session.load_async(target_id)
             if not target_session:
                 return LinkResult(success=False, error=f"Failed to load session {prefix}")
 
@@ -363,23 +365,29 @@ class CommandExecutor:
         link_turns: list[Turn] = []
         sessions_to_save: list[Session] = []
 
+        # Get current exchange_id for grouping link markers
+        current_exchange_id = current_session.get_last_exchange_id()
+
         for target in targets:
             # Create unique link ID (same for both sides)
             link_id = str(uuid.uuid4())
 
-            # Add link as a turn in current session with target's summary
+            # Add link as a turn in current session with target's summary (part of link exchange)
             link_turn = current_session.add_link_turn(
                 link_id=link_id,
                 linked_session_id=target.session.id,
                 summary=target.summary,
+                exchange_id=current_exchange_id,
             )
             link_turns.append(link_turn)
 
             # Add link as a turn in target session with current session's summary
+            # (uses target's last exchange_id if any)
             target.session.add_link_turn(
                 link_id=link_id,
                 linked_session_id=current_session.id,
                 summary=current_summary,
+                exchange_id=target.session.get_last_exchange_id(),
             )
             sessions_to_save.append(target.session)
 

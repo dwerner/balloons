@@ -68,10 +68,10 @@ class Breadcrumb(Static):
 
         return text
 
-    def set_session(self, session: Session) -> None:
+    async def set_session(self, session: Session) -> None:
         """Update the breadcrumb to show the path to the given session."""
         self._session = session
-        self._path = self._build_path(session)
+        self._path = await self._build_path(session)
         self.refresh()
 
         # Show/hide based on whether we're in a fork
@@ -80,7 +80,7 @@ class Breadcrumb(Static):
         else:
             self.remove_class("hidden")
 
-    def _build_path(self, session: Session) -> list[dict]:
+    async def _build_path(self, session: Session) -> list[dict]:
         """Build the path from root session to current."""
         path = []
 
@@ -94,7 +94,7 @@ class Breadcrumb(Static):
                 "is_merged": current.is_merged(),
             })
             if current.parent_id:
-                current = Session.load(current.parent_id)
+                current = await Session.load_async(current.parent_id)
             else:
                 current = None
 

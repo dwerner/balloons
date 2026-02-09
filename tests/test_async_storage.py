@@ -22,7 +22,7 @@ pytestmark = pytest.mark.skipif(
 def temp_db():
     """Create a temporary database file."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir) / "test.redb"
+        yield Path(tmpdir) / "test.db"
 
 
 @pytest.fixture

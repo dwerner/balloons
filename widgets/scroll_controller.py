@@ -118,6 +118,8 @@ class ScrollController:
         self._following = True
         # Flag to distinguish programmatic scrolls from user scrolls
         self._programmatic_scroll = False
+        # Track last scroll position to detect scroll direction
+        self._last_scroll_y: float | None = None
 
     @property
     def following(self) -> bool:
@@ -151,18 +153,39 @@ class ScrollController:
         finally:
             self._programmatic_scroll = False
 
-    def on_scroll_changed(self) -> None:
+    def on_scroll_changed(self, old_scroll_y: float | None = None) -> None:
         """Called when scroll position changes (from watch_scroll_y).
 
         This is the main entry point for detecting user scrolls.
         Programmatic scrolls are ignored.
+
+        Args:
+            old_scroll_y: Previous scroll position (optional, for direction detection)
         """
         if self._programmatic_scroll:
+            # Still track position for next comparison
+            self._last_scroll_y = self._container.scroll_y
             return
 
         if not self._container.is_mounted:
             return
 
+        current_scroll_y = self._container.scroll_y
+
+        # Detect upward scroll - user is expressing intent to read history
+        # Any upward scroll should immediately exit follow mode
+        if self._following:
+            prev_y = old_scroll_y if old_scroll_y is not None else self._last_scroll_y
+            if prev_y is not None and current_scroll_y < prev_y:
+                self._log_debug(
+                    f"upward scroll detected: {prev_y:.0f} -> {current_scroll_y:.0f}, "
+                    f"exiting follow mode"
+                )
+                self.following = False
+                self._last_scroll_y = current_scroll_y
+                return
+
+        self._last_scroll_y = current_scroll_y
         self._check_at_bottom_internal()
 
     def check_at_bottom(self) -> None:

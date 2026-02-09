@@ -1,7 +1,7 @@
 """Tests for the session manager, particularly event polling."""
 
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, AsyncMock
 
 from core.manager import SessionManager
 from core.runner import SessionRunner, RunnerStatus, StreamEvent, StreamResult
@@ -11,11 +11,12 @@ from session import Session
 class TestPollAll:
     """Tests for poll_all() behavior - the critical event polling."""
 
-    @patch.object(Session, 'save')  # Don't write to disk
-    def test_poll_all_returns_events_from_streaming_runner(self, mock_save):
+    @pytest.mark.asyncio
+    @patch.object(Session, 'save_async', new_callable=AsyncMock)  # Don't write to disk
+    async def test_poll_all_returns_events_from_streaming_runner(self, mock_save):
         """Events from actively streaming runners are returned."""
         manager = SessionManager()
-        session = manager.create_session()
+        session = await manager.create_session()
         runner = manager.get_runner(session.id)
 
         # Simulate streaming state with queued events
@@ -32,8 +33,9 @@ class TestPollAll:
         assert events[0].data == "hello"
         assert events[1].data == " world"
 
-    @patch.object(Session, 'save')
-    def test_poll_all_returns_events_from_idle_runner_regression(self, mock_save):
+    @pytest.mark.asyncio
+    @patch.object(Session, 'save_async', new_callable=AsyncMock)
+    async def test_poll_all_returns_events_from_idle_runner_regression(self, mock_save):
         """REGRESSION TEST: Events from finished (IDLE) runners MUST be returned.
 
         This tests the bug where the "done" event was never polled because
@@ -48,7 +50,7 @@ class TestPollAll:
         6. "done" event stuck in queue forever, UI frozen in streaming state
         """
         manager = SessionManager()
-        session = manager.create_session()
+        session = await manager.create_session()
         runner = manager.get_runner(session.id)
 
         # Simulate the race condition that caused the bug:
@@ -65,11 +67,12 @@ class TestPollAll:
         assert len(events) == 1
         assert events[0].event_type == "done"
 
-    @patch.object(Session, 'save')
-    def test_poll_all_returns_events_from_error_runner(self, mock_save):
+    @pytest.mark.asyncio
+    @patch.object(Session, 'save_async', new_callable=AsyncMock)
+    async def test_poll_all_returns_events_from_error_runner(self, mock_save):
         """Events from errored runners must still be returned."""
         manager = SessionManager()
-        session = manager.create_session()
+        session = await manager.create_session()
         runner = manager.get_runner(session.id)
 
         # Simulate error with queued error event
@@ -82,22 +85,24 @@ class TestPollAll:
         _, events = results[0]
         assert events[0].event_type == "error"
 
-    @patch.object(Session, 'save')
-    def test_poll_all_empty_when_no_events(self, mock_save):
+    @pytest.mark.asyncio
+    @patch.object(Session, 'save_async', new_callable=AsyncMock)
+    async def test_poll_all_empty_when_no_events(self, mock_save):
         """No results when runners have no queued events."""
         manager = SessionManager()
-        session = manager.create_session()
+        session = await manager.create_session()
 
         results = manager.poll_all()
 
         assert len(results) == 0
 
-    @patch.object(Session, 'save')
-    def test_poll_all_multiple_sessions(self, mock_save):
+    @pytest.mark.asyncio
+    @patch.object(Session, 'save_async', new_callable=AsyncMock)
+    async def test_poll_all_multiple_sessions(self, mock_save):
         """Events from multiple sessions are all returned."""
         manager = SessionManager()
-        session1 = manager.create_session()
-        session2 = manager.create_session()
+        session1 = await manager.create_session()
+        session2 = await manager.create_session()
 
         runner1 = manager.get_runner(session1.id)
         runner2 = manager.get_runner(session2.id)
@@ -116,11 +121,12 @@ class TestPollAll:
 class TestStreamingLifecycle:
     """Tests for the full streaming lifecycle."""
 
-    @patch.object(Session, 'save')
-    def test_events_drained_completely(self, mock_save):
+    @pytest.mark.asyncio
+    @patch.object(Session, 'save_async', new_callable=AsyncMock)
+    async def test_events_drained_completely(self, mock_save):
         """After draining events, queue should be empty."""
         manager = SessionManager()
-        session = manager.create_session()
+        session = await manager.create_session()
         runner = manager.get_runner(session.id)
 
         # Queue up a full sequence
@@ -140,11 +146,12 @@ class TestStreamingLifecycle:
         results = manager.poll_all()
         assert len(results) == 0
 
-    @patch.object(Session, 'save')
-    def test_runner_status_transitions(self, mock_save):
+    @pytest.mark.asyncio
+    @patch.object(Session, 'save_async', new_callable=AsyncMock)
+    async def test_runner_status_transitions(self, mock_save):
         """Runner status transitions correctly through lifecycle."""
         manager = SessionManager()
-        session = manager.create_session()
+        session = await manager.create_session()
         runner = manager.get_runner(session.id)
 
         # Initial state

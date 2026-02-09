@@ -325,14 +325,20 @@ class MessageQueuePopup(Static, can_focus=True):
         result.append("x", style="dim yellow")
         result.append(" rm", style="dim")
 
+        # Calculate available width for message preview
+        # Account for: 2 spaces indent + checkbox + circled number + space + padding
+        # Prefix is "  ☑① " which is about 6 chars, plus 2 for padding
+        prefix_width = 8
+        available_width = max(20, self.size.width - prefix_width)
+
         # Message items, one per line
         first_pause_idx = snapshot.first_pause_index
         for i, msg in enumerate(snapshot.messages):
             result.append("\n")
 
-            # Preview: first 50 chars, single line (more room in vertical layout)
-            preview = msg.content.replace("\n", " ")[:50]
-            if len(msg.content) > 50:
+            # Preview: fill available width, single line
+            preview = msg.content.replace("\n", " ")[:available_width]
+            if len(msg.content) > available_width:
                 preview += "…"
 
             # Determine state: paused, blocked (after a paused), or active

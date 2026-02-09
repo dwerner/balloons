@@ -10,340 +10,26 @@ from typing import Optional, AsyncIterator
 
 import aiofiles
 
-from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, ArchiveBlock, ArchiveSummary, SlideBlock, ContentBlock, ContextMode, QueuedMessage, MessageQueue, Turn
+from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, ArchiveSummary, SlideBlock, ContentBlock, ContextMode, QueuedMessage, MessageQueue, Turn
+
+# Rust storage availability (checked lazily to avoid circular imports)
+_rust_storage_checked = False
+_rust_storage_available = False
+_rust_storage: Optional[object] = None  # Will be AsyncStorage when initialized
 
 
+def _get_storage():
+    """Get or create the singleton Rust storage instance."""
+    global _rust_storage
+    if _rust_storage is None:
+        from core.async_storage import AsyncStorage
+        _rust_storage = AsyncStorage()
+    return _rust_storage
+
+
+# Legacy paths - kept for cleanup only (can be used to delete old JSON files)
 SESSIONS_DIR = Path.home() / ".balloons" / "sessions"
 INDEX_FILE = SESSIONS_DIR / "index.json"
-INDEX_VERSION = 1
-
-
-class SessionIndex:
-    """Manages the session index file for fast startup.
-
-    The index stores metadata for all sessions, avoiding the need to
-    read each session file individually on startup. The index is updated
-    whenever a session is saved.
-
-    Index structure:
-    {
-        "version": 1,
-        "sessions": {
-            "session_id": {
-                "id": "...",
-                "created": "...",
-                "last_modified": "...",
-                "model": "...",
-                "title": "...",
-                "turn_count": 0,
-                "total_input_tokens": 0,
-                "total_output_tokens": 0,
-                "total_cost": 0.0,
-                "parent_id": null,
-                "children": [],
-                "fork_name": "",
-                "fork_status": "active",
-                "backend_name": "",
-                "cached_context_tokens": 0
-            }
-        }
-    }
-    """
-
-    _instance: "SessionIndex | None" = None
-    _sessions: dict[str, dict]
-    _dirty: bool
-    _file_mtime: float  # Tracks file modification time for cache invalidation
-    _save_lock: asyncio.Lock  # Prevents concurrent index writes
-
-    def __new__(cls) -> "SessionIndex":
-        """Singleton pattern - only one index instance."""
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._sessions = {}
-            cls._instance._dirty = False
-            cls._instance._loaded = False
-            cls._instance._file_mtime = 0.0
-            cls._instance._save_lock = asyncio.Lock()
-        return cls._instance
-
-    def _get_file_mtime(self) -> float:
-        """Get the index file's modification time, or 0 if it doesn't exist."""
-        try:
-            return INDEX_FILE.stat().st_mtime
-        except OSError:
-            return 0.0
-
-    def _is_stale(self) -> bool:
-        """Check if our in-memory data is stale (file changed on disk)."""
-        if not self._loaded:
-            return False  # Not loaded yet, so not "stale"
-        current_mtime = self._get_file_mtime()
-        return current_mtime > self._file_mtime
-
-    def load(self) -> bool:
-        """Load the index from disk.
-
-        Returns True if index was loaded successfully, False if index
-        doesn't exist or is invalid (requiring a rebuild).
-        """
-        if not INDEX_FILE.exists():
-            return False
-
-        try:
-            self._file_mtime = self._get_file_mtime()
-            data = json.loads(INDEX_FILE.read_text())
-            if data.get("version") != INDEX_VERSION:
-                return False
-            self._sessions = data.get("sessions", {})
-            self._loaded = True
-            self._dirty = False
-            return True
-        except (json.JSONDecodeError, KeyError, OSError):
-            return False
-
-    async def load_async(self) -> bool:
-        """Async version of load()."""
-        if not INDEX_FILE.exists():
-            return False
-
-        try:
-            self._file_mtime = self._get_file_mtime()
-            async with aiofiles.open(INDEX_FILE, encoding="utf-8") as f:
-                content = await f.read()
-            data = json.loads(content)
-            if data.get("version") != INDEX_VERSION:
-                return False
-            self._sessions = data.get("sessions", {})
-            self._loaded = True
-            self._dirty = False
-            return True
-        except (json.JSONDecodeError, KeyError, OSError):
-            return False
-
-    def reload_if_stale(self) -> bool:
-        """Reload from disk if the file has been modified by another process.
-
-        Returns True if reloaded, False if not needed.
-        """
-        if not self._is_stale():
-            return False
-        self.load()
-        return True
-
-    def save(self) -> None:
-        """Save the index to disk if dirty."""
-        if not self._dirty:
-            return
-
-        SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-        data = {
-            "version": INDEX_VERSION,
-            "sessions": self._sessions,
-        }
-        INDEX_FILE.write_text(json.dumps(data, indent=2))
-        self._dirty = False
-        self._file_mtime = self._get_file_mtime()  # Update mtime after our write
-
-    async def save_async(self) -> None:
-        """Async version of save().
-
-        Uses a lock to prevent concurrent index writes from multiple sessions.
-        """
-        if not self._dirty:
-            return
-
-        async with self._save_lock:
-            # Re-check dirty after acquiring lock (another task may have saved)
-            if not self._dirty:
-                return
-
-            SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-            data = {
-                "version": INDEX_VERSION,
-                "sessions": self._sessions,
-            }
-            async with aiofiles.open(INDEX_FILE, "w", encoding="utf-8") as f:
-                await f.write(json.dumps(data, indent=2))
-            self._dirty = False
-            self._file_mtime = self._get_file_mtime()  # Update mtime after our write
-
-    def get(self, session_id: str) -> dict | None:
-        """Get metadata for a session."""
-        return self._sessions.get(session_id)
-
-    def update(self, session: "Session") -> None:
-        """Update index entry for a session."""
-        turn_count = len(session.turns)
-        self._sessions[session.id] = {
-            "id": session.id,
-            "created": session.created,
-            "last_modified": session.last_modified,
-            "model": session.model,
-            "title": session.title,
-            "turn_count": turn_count,
-            "message_count": turn_count,  # Backwards compat alias
-            "total_input_tokens": session.total_input_tokens,
-            "total_output_tokens": session.total_output_tokens,
-            "total_cost": session.total_cost,
-            "parent_id": session.parent_id,
-            "children": session.children,
-            "fork_name": session.fork_name,
-            "fork_status": session.fork_status,
-            "backend_name": session.backend_name,
-            "cached_context_tokens": session.cached_context_tokens,
-        }
-        self._dirty = True
-
-    def remove(self, session_id: str) -> None:
-        """Remove a session from the index."""
-        if session_id in self._sessions:
-            del self._sessions[session_id]
-            self._dirty = True
-
-    def get_all(self) -> list[dict]:
-        """Get all session metadata, sorted by last_modified descending."""
-        sessions = list(self._sessions.values())
-        sessions.sort(key=lambda x: x.get("last_modified", ""), reverse=True)
-        return sessions
-
-    def rebuild_from_files(self) -> None:
-        """Rebuild the index by scanning all session files.
-
-        This is a fallback when the index doesn't exist or is invalid.
-        """
-        self._sessions = {}
-        if not SESSIONS_DIR.exists():
-            return
-
-        for path in SESSIONS_DIR.glob("*.json"):
-            if path.name == "index.json":
-                continue
-            try:
-                data = json.loads(path.read_text())
-                session_id = data["id"]
-                last_modified = data.get("last_modified", data.get("created", ""))
-                turn_count = len(data.get("turns", []))
-                if turn_count == 0:
-                    for m in data.get("messages", []):
-                        blocks = m.get("content_blocks", [])
-                        turn_count += len(blocks) if blocks else 1
-
-                self._sessions[session_id] = {
-                    "id": session_id,
-                    "created": data["created"],
-                    "last_modified": last_modified,
-                    "model": data.get("model", ""),
-                    "title": data.get("title", ""),
-                    "turn_count": turn_count,
-                    "message_count": turn_count,
-                    "total_input_tokens": data.get("total_input_tokens", 0),
-                    "total_output_tokens": data.get("total_output_tokens", 0),
-                    "total_cost": data.get("total_cost", 0.0),
-                    "parent_id": data.get("parent_id"),
-                    "children": data.get("children", []),
-                    "fork_name": data.get("fork_name", ""),
-                    "fork_status": data.get("fork_status", "active"),
-                    "backend_name": data.get("backend_name", ""),
-                    "cached_context_tokens": data.get("cached_context_tokens", 0),
-                }
-            except (json.JSONDecodeError, KeyError, OSError):
-                continue
-
-        self._dirty = True
-        self._loaded = True
-
-    async def rebuild_from_files_async(self) -> None:
-        """Async version of rebuild_from_files()."""
-        self._sessions = {}
-        if not SESSIONS_DIR.exists():
-            return
-
-        for path in SESSIONS_DIR.glob("*.json"):
-            if path.name == "index.json":
-                continue
-            try:
-                async with aiofiles.open(path, encoding="utf-8") as f:
-                    content = await f.read()
-                data = json.loads(content)
-                session_id = data["id"]
-                last_modified = data.get("last_modified", data.get("created", ""))
-                turn_count = len(data.get("turns", []))
-                if turn_count == 0:
-                    for m in data.get("messages", []):
-                        blocks = m.get("content_blocks", [])
-                        turn_count += len(blocks) if blocks else 1
-
-                self._sessions[session_id] = {
-                    "id": session_id,
-                    "created": data["created"],
-                    "last_modified": last_modified,
-                    "model": data.get("model", ""),
-                    "title": data.get("title", ""),
-                    "turn_count": turn_count,
-                    "message_count": turn_count,
-                    "total_input_tokens": data.get("total_input_tokens", 0),
-                    "total_output_tokens": data.get("total_output_tokens", 0),
-                    "total_cost": data.get("total_cost", 0.0),
-                    "parent_id": data.get("parent_id"),
-                    "children": data.get("children", []),
-                    "fork_name": data.get("fork_name", ""),
-                    "fork_status": data.get("fork_status", "active"),
-                    "backend_name": data.get("backend_name", ""),
-                    "cached_context_tokens": data.get("cached_context_tokens", 0),
-                }
-            except (json.JSONDecodeError, KeyError, OSError):
-                continue
-
-        self._dirty = True
-        self._loaded = True
-
-    def is_loaded(self) -> bool:
-        """Check if index has been loaded or rebuilt."""
-        return self._loaded
-
-    def ensure_loaded(self) -> None:
-        """Ensure index is loaded and up-to-date.
-
-        This method:
-        1. Loads the index from disk if not already loaded
-        2. Creates empty index if file is missing/invalid
-        3. Reloads from disk if another process modified the file
-
-        Note: Dir scanning for orphan sessions is disabled for performance.
-        Sessions not in the index will only appear after being saved.
-        """
-        # If already loaded, check if file was modified by another process
-        if self._loaded:
-            if self._is_stale():
-                self.load()
-            return
-
-        # First load
-        if not self.load():
-            # Index missing/invalid - start with empty index
-            # Sessions will be added as they are saved
-            self._sessions = {}
-            self._loaded = True
-            self._dirty = True
-            self.save()
-
-    async def ensure_loaded_async(self) -> None:
-        """Async version of ensure_loaded()."""
-        # If already loaded, check if file was modified by another process
-        if self._loaded:
-            if self._is_stale():
-                await self.load_async()
-            return
-
-        # First load
-        if not await self.load_async():
-            # Index missing/invalid - start with empty index
-            # Sessions will be added as they are saved
-            self._sessions = {}
-            self._loaded = True
-            self._dirty = True
-            await self.save_async()
 
 
 # Per-session save locks to prevent concurrent writes
@@ -507,11 +193,11 @@ class Session:
                     child["merge_point"] = merge_point
                 break
 
-    def get_parent(self) -> Optional["Session"]:
-        """Load and return the parent session if this is a child."""
+    async def get_parent_async(self) -> Optional["Session"]:
+        """Load and return the parent session if this is a child (async version)."""
         if not self.parent_id:
             return None
-        return Session.load(self.parent_id)
+        return await Session.load_async(self.parent_id)
 
     def is_child_session(self) -> bool:
         """Check if this session is a child of another session."""
@@ -594,6 +280,17 @@ class Session:
         else:
             return self.id[:8]
 
+    def get_last_exchange_id(self) -> str | None:
+        """Get the exchange_id of the most recent turn that has one.
+
+        Useful for grouping marker turns (fork/merge/link) with their
+        triggering proposal exchange.
+        """
+        for turn in reversed(self.turns):
+            if turn.exchange_id:
+                return turn.exchange_id
+        return None
+
     def delete_turn(self, turn_index: int) -> bool:
         """Delete a turn from the session history.
 
@@ -625,37 +322,33 @@ class Session:
         return deleted_count
 
     def delete(self) -> bool:
-        """Delete this session's file from disk (sync version).
+        """Delete this session from storage (sync version).
 
-        Returns True if deleted, False if file didn't exist.
+        Returns True if deleted, False if not found.
         Note: Prefer delete_async() to avoid blocking the UI.
         """
-        path = SESSIONS_DIR / f"{self.id}.json"
-        if path.exists():
-            path.unlink()
-            # Remove from index
-            index = SessionIndex()
-            index.ensure_loaded()
-            index.remove(self.id)
-            index.save()
-            return True
-        return False
+        try:
+            asyncio.get_running_loop()
+            raise RuntimeError(
+                "Session.delete() called from async context. "
+                "Use 'await session.delete_async()' instead."
+            )
+        except RuntimeError as e:
+            if "no running event loop" not in str(e).lower():
+                raise
+            return asyncio.run(self.delete_async())
 
     async def delete_async(self) -> bool:
-        """Delete this session's file from disk (async version).
+        """Delete this session from storage.
 
-        Returns True if deleted, False if file didn't exist.
+        Returns True if deleted, False if not found.
         """
-        path = SESSIONS_DIR / f"{self.id}.json"
-        if path.exists():
-            path.unlink()  # File unlink is fast, OK to be sync
-            # Remove from index
-            index = SessionIndex()
-            await index.ensure_loaded_async()
-            index.remove(self.id)
-            await index.save_async()
+        storage = _get_storage()
+        try:
+            await storage.delete_session(self.id)
             return True
-        return False
+        except Exception:
+            return False
 
     def get_active_forks(self) -> list[dict]:
         """Get list of active (non-merged) child forks."""
@@ -665,15 +358,25 @@ class Session:
         """Get all child forks (active and merged)."""
         return self.children
 
-    def add_link_turn(self, link_id: str, linked_session_id: str, summary: str) -> Turn:
-        """Add a link as a turn in the conversation."""
+    def add_link_turn(
+        self,
+        link_id: str,
+        linked_session_id: str,
+        summary: str,
+        exchange_id: str | None = None,
+    ) -> Turn:
+        """Add a link as a turn in the conversation.
+
+        Args:
+            exchange_id: If provided, groups this marker with the link proposal exchange
+        """
         link_block = LinkBlock(
             link_id=link_id,
             linked_session_id=linked_session_id,
             summary=summary,
             is_orphaned=False,
         )
-        return self.add_turn(role="system", content_block=link_block)
+        return self.add_turn(role="system", content_block=link_block, exchange_id=exchange_id)
 
     # =========================================================================
     # Fork/Merge Turn Methods
@@ -686,11 +389,15 @@ class Session:
         fork_name: str,
         prompt: str,
         status: str = "active",
+        exchange_id: str | None = None,
     ) -> Turn:
         """Add a fork marker as a turn in the conversation.
 
         This records where a fork was created, allowing nested fork history
         to propagate through merges.
+
+        Args:
+            exchange_id: If provided, groups this marker with the fork proposal exchange
         """
         fork_block = ForkBlock(
             fork_id=fork_id,
@@ -699,7 +406,7 @@ class Session:
             prompt=prompt,
             status=status,
         )
-        return self.add_turn(role="system", content_block=fork_block)
+        return self.add_turn(role="system", content_block=fork_block, exchange_id=exchange_id)
 
     def add_merge_turn(
         self,
@@ -707,19 +414,72 @@ class Session:
         child_session_id: str,
         fork_name: str,
         message: str,
+        files_changed: list[str] | None = None,
+        key_accomplishments: list[str] | None = None,
+        reason: str = "",
+        exchange_id: str | None = None,
     ) -> Turn:
         """Add a merge marker as a turn in the conversation.
 
         This records where a fork was merged back, including the merge summary.
         Nested merge blocks propagate through subsequent merges.
+
+        Args:
+            exchange_id: If provided, groups this marker with the merge proposal exchange
         """
         merge_block = MergeBlock(
             merge_id=merge_id,
             child_session_id=child_session_id,
             fork_name=fork_name,
             message=message,
+            files_changed=files_changed or [],
+            key_accomplishments=key_accomplishments or [],
+            reason=reason,
         )
-        return self.add_turn(role="system", content_block=merge_block)
+        return self.add_turn(role="system", content_block=merge_block, exchange_id=exchange_id)
+
+    def add_merged_to_turn(
+        self,
+        merge_id: str,
+        parent_session_id: str,
+        parent_name: str,
+        parent_turn: int,
+        message: str,
+        files_changed: list[str] | None = None,
+        key_accomplishments: list[str] | None = None,
+        reason: str = "",
+        exchange_id: str | None = None,
+    ) -> Turn:
+        """Add a 'merged to' marker as the final turn in a fork.
+
+        This records that this fork was merged back to its parent.
+        Counterpart to add_merge_turn which is called on the parent.
+
+        Args:
+            exchange_id: If provided, groups this marker with the merge proposal exchange
+        """
+        merged_to_block = MergedToBlock(
+            merge_id=merge_id,
+            parent_session_id=parent_session_id,
+            parent_name=parent_name,
+            parent_turn=parent_turn,
+            message=message,
+            files_changed=files_changed or [],
+            key_accomplishments=key_accomplishments or [],
+            reason=reason,
+        )
+        return self.add_turn(role="system", content_block=merged_to_block, exchange_id=exchange_id)
+
+    def get_merged_to_block(self) -> Optional[MergedToBlock]:
+        """Get the MergedToBlock if this session was merged.
+
+        Returns:
+            MergedToBlock if found, None otherwise
+        """
+        for turn in reversed(self.turns):
+            if isinstance(turn.content_block, MergedToBlock):
+                return turn.content_block
+        return None
 
     def get_all_fork_blocks(self) -> list[tuple[int, ForkBlock]]:
         """Get all fork blocks with their turn indices.
@@ -988,6 +748,21 @@ class Session:
                 "child_session_id": block.child_session_id,
                 "fork_name": block.fork_name,
                 "message": block.message,
+                "files_changed": block.files_changed,
+                "key_accomplishments": block.key_accomplishments,
+                "reason": block.reason,
+            }
+        elif isinstance(block, MergedToBlock):
+            return {
+                "type": "merged_to",
+                "merge_id": block.merge_id,
+                "parent_session_id": block.parent_session_id,
+                "parent_name": block.parent_name,
+                "parent_turn": block.parent_turn,
+                "message": block.message,
+                "files_changed": block.files_changed,
+                "key_accomplishments": block.key_accomplishments,
+                "reason": block.reason,
             }
         elif isinstance(block, ArchiveBlock):
             data = {
@@ -1079,42 +854,25 @@ class Session:
         }
 
     def save(self):
-        start = time.perf_counter()
-        SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-        path = SESSIONS_DIR / f"{self.id}.json"
-        data = self._build_save_data()
-        path.write_text(json.dumps(data, indent=2))
+        """Save session to storage (sync version).
 
-        # Update session index
-        index = SessionIndex()
-        index.ensure_loaded()
-        index.update(self)
-        index.save()
-        elapsed_ms = (time.perf_counter() - start) * 1000
-        if elapsed_ms > 50:
-            # Log slow saves to stderr for debugging
-            import sys
-            print(f"SLOW save: {elapsed_ms:.1f}ms for session {self.id[:8]}", file=sys.stderr)
+        For async code, prefer save_async() to avoid blocking.
+        """
+        try:
+            asyncio.get_running_loop()
+            raise RuntimeError(
+                "Session.save() called from async context. "
+                "Use 'await session.save_async()' instead."
+            )
+        except RuntimeError as e:
+            if "no running event loop" not in str(e).lower():
+                raise
+            asyncio.run(self.save_async())
 
     async def save_async(self):
-        """Async version of save().
-
-        Uses a per-session lock to prevent concurrent writes to the same session.
-        If a save is already in progress, this will wait for it to complete.
-        """
-        lock = _get_save_lock(self.id)
-        async with lock:
-            SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-            path = SESSIONS_DIR / f"{self.id}.json"
-            data = self._build_save_data()
-            async with aiofiles.open(path, "w", encoding="utf-8") as f:
-                await f.write(json.dumps(data, indent=2))
-
-            # Update session index
-            index = SessionIndex()
-            await index.ensure_loaded_async()
-            index.update(self)
-            await index.save_async()
+        """Save session to storage."""
+        storage = _get_storage()
+        await storage.save_session(self)
 
     @classmethod
     def _load_working_directories(cls, data: dict) -> list[str]:
@@ -1177,6 +935,20 @@ class Session:
                 child_session_id=data.get("child_session_id", ""),
                 fork_name=data.get("fork_name", ""),
                 message=data.get("message", ""),
+                files_changed=data.get("files_changed", []),
+                key_accomplishments=data.get("key_accomplishments", []),
+                reason=data.get("reason", ""),
+            )
+        elif block_type == "merged_to":
+            return MergedToBlock(
+                merge_id=data.get("merge_id", ""),
+                parent_session_id=data.get("parent_session_id", ""),
+                parent_name=data.get("parent_name", ""),
+                parent_turn=data.get("parent_turn", 0),
+                message=data.get("message", ""),
+                files_changed=data.get("files_changed", []),
+                key_accomplishments=data.get("key_accomplishments", []),
+                reason=data.get("reason", ""),
             )
         elif block_type == "archive":
             structured_summary = None
@@ -1303,77 +1075,75 @@ class Session:
 
     @classmethod
     def load(cls, session_id: str) -> Optional["Session"]:
-        path = SESSIONS_DIR / f"{session_id}.json"
-        if not path.exists():
-            return None
-        content = path.read_text()
-        if not content:
-            return None
-        data = json.loads(content)
-        return cls._build_session_from_data(data)
+        """Load a session by ID (sync version).
+
+        For async code, prefer load_async() to avoid blocking.
+        """
+        try:
+            asyncio.get_running_loop()
+            raise RuntimeError(
+                "Session.load() called from async context. "
+                "Use 'await Session.load_async()' instead."
+            )
+        except RuntimeError as e:
+            if "no running event loop" not in str(e).lower():
+                raise
+            return asyncio.run(cls.load_async(session_id))
 
     @classmethod
     async def load_async(cls, session_id: str) -> Optional["Session"]:
-        """Async version of load()."""
-        path = SESSIONS_DIR / f"{session_id}.json"
-        if not path.exists():
-            return None
-        async with aiofiles.open(path, encoding="utf-8") as f:
-            content = await f.read()
-        if not content:
-            return None
-        data = json.loads(content)
-        return cls._build_session_from_data(data)
+        """Load a session by ID."""
+        storage = _get_storage()
+        return await storage.load_session(session_id)
 
     @classmethod
     def list_sessions(cls) -> list[dict]:
-        """Return list of session metadata dicts without loading full data.
+        """Return list of session metadata dicts (sync version).
 
-        Uses the session index for fast lookup. Rebuilds index from files
-        if it doesn't exist.
-
-        Returns list of dicts with keys: id, created, last_modified, model, title,
-        turn_count, total_input_tokens, total_output_tokens, total_cost,
-        parent_id, children, fork_name, fork_status.
+        For async code, prefer list_sessions_async().
+        Returns list of dicts with keys: id, name, created_at, updated_at, turn_count.
         """
-        index = SessionIndex()
-        index.ensure_loaded()
-        return index.get_all()
+        try:
+            asyncio.get_running_loop()
+            raise RuntimeError(
+                "Session.list_sessions() called from async context. "
+                "Use 'async for s in Session.list_sessions_async()' instead."
+            )
+        except RuntimeError as e:
+            if "no running event loop" not in str(e).lower():
+                raise
+            storage = _get_storage()
+            return asyncio.run(storage.list_sessions())
 
     @classmethod
     async def list_sessions_async(cls) -> AsyncIterator[dict]:
         """Async generator that yields session metadata dicts one at a time.
 
-        Uses the session index for instant loading. The index is loaded
-        asynchronously on first call, then sessions are yielded immediately
-        from memory.
-
         Sessions are yielded in order of last_modified (most recent first).
-
-        Yields dicts with keys: id, created, last_modified, model, title,
-        turn_count, total_input_tokens, total_output_tokens, total_cost,
-        parent_id, children, fork_name, fork_status.
+        Yields dicts with keys: id, name, created_at, updated_at, turn_count.
         """
-        index = SessionIndex()
-
-        # Load index asynchronously if not already loaded
-        if not index.is_loaded():
-            await index.ensure_loaded_async()
-
-        # Yield sessions from index (already sorted by last_modified desc)
-        for metadata in index.get_all():
+        storage = _get_storage()
+        sessions = await storage.list_sessions()
+        for metadata in sessions:
             yield metadata
 
     @classmethod
     def get_most_recent_session_id(cls) -> Optional[str]:
-        """Get the ID of the most recently modified session without loading all data.
+        """Get the ID of the most recently modified session (sync version).
 
-        Uses the session index for instant lookup.
         Returns None if no sessions exist.
         """
-        index = SessionIndex()
-        index.ensure_loaded()
-        sessions = index.get_all()
+        try:
+            asyncio.get_running_loop()
+            raise RuntimeError(
+                "Session.get_most_recent_session_id() called from async context. "
+                "Use 'async for s in Session.list_sessions_async()' instead."
+            )
+        except RuntimeError as e:
+            if "no running event loop" not in str(e).lower():
+                raise
+            storage = _get_storage()
+            sessions = asyncio.run(storage.list_sessions())
         if sessions:
             return sessions[0]["id"]  # Already sorted by last_modified desc
         return None

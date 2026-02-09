@@ -39,7 +39,7 @@ def unregister_app_tool_handler(tool_name: str) -> None:
     _app_tool_handlers.pop(tool_name, None)
 
 
-def execute_link_tool(
+async def execute_link_tool(
     name: str,
     args: dict[str, Any],
     current_session: Session,
@@ -59,13 +59,13 @@ def execute_link_tool(
         return _app_tool_handlers[name]()
 
     if name == "list_links":
-        return _execute_list_links(current_session)
+        return await _execute_list_links(current_session)
     elif name == "follow_link":
-        return _execute_follow_link(args, current_session)
+        return await _execute_follow_link(args, current_session)
     elif name == "search_linked_session":
-        return _execute_search_linked(args, current_session)
+        return await _execute_search_linked(args, current_session)
     elif name == "session_info":
-        return _execute_session_info(current_session)
+        return await _execute_session_info(current_session)
     elif name == "screen_snapshot":
         # No handler registered - app not running or not set up
         return "Error: screen_snapshot requires the Balloons app to be running", True
@@ -73,7 +73,7 @@ def execute_link_tool(
         return f"Unknown link tool: {name}", True
 
 
-def _execute_list_links(session: Session) -> tuple[str, bool]:
+async def _execute_list_links(session: Session) -> tuple[str, bool]:
     """List all links from the current session."""
     links = session.get_all_active_links()
 
@@ -87,7 +87,7 @@ def _execute_list_links(session: Session) -> tuple[str, bool]:
         summary = link.get("summary", "")
 
         # Load the linked session to get its name
-        linked_session = Session.load(linked_session_id)
+        linked_session = await Session.load_async(linked_session_id)
         if linked_session:
             name = linked_session.title or linked_session.fork_name or linked_session_id[:8]
             message_count = len(linked_session.turns)
@@ -105,7 +105,7 @@ def _execute_list_links(session: Session) -> tuple[str, bool]:
     return json.dumps(results, indent=2), False
 
 
-def _execute_follow_link(args: dict[str, Any], current_session: Session) -> tuple[str, bool]:
+async def _execute_follow_link(args: dict[str, Any], current_session: Session) -> tuple[str, bool]:
     """Load context from a linked session.
 
     Accepts either:
@@ -128,7 +128,7 @@ def _execute_follow_link(args: dict[str, Any], current_session: Session) -> tupl
 
     # Direct session access (for fork/merge traversal)
     if session_id:
-        linked_session = Session.load(session_id)
+        linked_session = await Session.load_async(session_id)
         if not linked_session:
             return f"Error: Session not found: {session_id}", True
     else:
@@ -140,7 +140,7 @@ def _execute_follow_link(args: dict[str, Any], current_session: Session) -> tupl
             return f"Error: Link not found: {link_id}", True
 
         linked_session_id = link.get("linked_session_id", "")
-        linked_session = Session.load(linked_session_id)
+        linked_session = await Session.load_async(linked_session_id)
 
         if not linked_session:
             return f"Error: Linked session not found or deleted: {linked_session_id}", True
@@ -198,7 +198,7 @@ def _execute_follow_link(args: dict[str, Any], current_session: Session) -> tupl
     return json.dumps(result, indent=2), False
 
 
-def _execute_search_linked(args: dict[str, Any], current_session: Session) -> tuple[str, bool]:
+async def _execute_search_linked(args: dict[str, Any], current_session: Session) -> tuple[str, bool]:
     """Search within a linked session's conversation history."""
     link_id = args.get("link_id")
     query = args.get("query")
@@ -224,7 +224,7 @@ def _execute_search_linked(args: dict[str, Any], current_session: Session) -> tu
         return f"Error: Link not found: {link_id}", True
 
     linked_session_id = link.get("linked_session_id", "")
-    linked_session = Session.load(linked_session_id)
+    linked_session = await Session.load_async(linked_session_id)
 
     if not linked_session:
         return f"Error: Linked session not found or deleted: {linked_session_id}", True
@@ -285,7 +285,7 @@ def _execute_search_linked(args: dict[str, Any], current_session: Session) -> tu
     return json.dumps(result, indent=2), False
 
 
-def _execute_session_info(session: Session) -> tuple[str, bool]:
+async def _execute_session_info(session: Session) -> tuple[str, bool]:
     """Get information about the current session.
 
     Returns info to help the LLM understand session state and navigate the fork tree.
@@ -296,7 +296,7 @@ def _execute_session_info(session: Session) -> tuple[str, bool]:
     context_usage_pct = (context_tokens / context_window * 100) if context_window > 0 else 0
 
     # Build parents array (empty if root session)
-    parents = _build_parents(session)
+    parents = await _build_parents(session)
 
     result = {
         "name": session.title or session.fork_name or session.id[:8],
@@ -307,7 +307,17 @@ def _execute_session_info(session: Session) -> tuple[str, bool]:
     }
 
     # If this session was merged TO its parent, include that info
-    if session.is_merged() and session.parent_id:
+    # First try to get from MergedToBlock turn (has merge_id for proper linking)
+    merged_to_block = session.get_merged_to_block()
+    if merged_to_block:
+        result["merged_to"] = {
+            "merge_id": merged_to_block.merge_id,
+            "parent_session_id": merged_to_block.parent_session_id,
+            "parent_turn": merged_to_block.parent_turn,
+            "summary": merged_to_block.message[:500] if merged_to_block.message else "",
+        }
+    elif session.is_merged() and session.parent_id:
+        # Fallback to session metadata for older sessions
         result["merged_to"] = {
             "parent_session_id": session.parent_id,
             "parent_turn": session.merge_point_turn,
@@ -341,18 +351,18 @@ def _execute_session_info(session: Session) -> tuple[str, bool]:
     return json.dumps(result, indent=2), False
 
 
-def _build_parents(session: Session) -> list[str]:
+async def _build_parents(session: Session) -> list[str]:
     """Build list of parent sessions from immediate parent to root.
 
     Returns list like ["def456:auth-bug", "abc123:root"] (immediate parent first).
     Empty list means this is a root session.
     """
     parents = []
-    current = Session.load(session.parent_id) if session.parent_id else None
+    current = await Session.load_async(session.parent_id) if session.parent_id else None
 
     while current:
         name = current.fork_name or current.title or current.id[:8]
         parents.append(f"{current.id[:8]}:{name}")
-        current = Session.load(current.parent_id) if current.parent_id else None
+        current = await Session.load_async(current.parent_id) if current.parent_id else None
 
     return parents
