@@ -16,7 +16,7 @@ from models import (
     ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultEvent,
     TextBlock, ToolUseBlock, ToolResultBlock, ErrorBlock,
 )
-from .exceptions import RateLimitError, InputRequiredError
+from .exceptions import RateLimitError, InputRequiredError, StreamTimeoutError
 from session import Session, Turn
 from .debug_log import debug_log
 from .base_runner import BaseRunner
@@ -213,6 +213,28 @@ class SessionRunner:
             await self._finalize_stream()
             self._result.error = "Claude is asking a question"
             yield self._make_event("input_required", str(e))
+        except StreamTimeoutError as e:
+            self._status = RunnerStatus.ERROR
+            debug_log.error(f"Stream timeout: {e}", session_id=self.session.id, category="stream")
+            # Create an error turn with the timeout info
+            error_block = ErrorBlock(
+                reason="timeout",
+                details=str(e),
+            )
+            self._content_blocks.append(error_block)
+            turn = self._create_turn("assistant", f"[Timeout: {e}]", [error_block])
+            self._turns.append(turn)
+            self._save_turn_to_session(turn, save_now=True)
+            await self._flush_pending_save()
+            self._result = StreamResult(
+                content=self._text_buffer,
+                content_blocks=self._content_blocks,
+                raw_events=self._raw_events,
+                error=str(e),
+                exchange_id=self._exchange_id,
+                turns=self._turns,
+            )
+            yield self._make_event("error", str(e))
         except Exception as e:
             self._status = RunnerStatus.ERROR
             debug_log.error(f"Stream error: {e}", session_id=self.session.id, category="stream")
@@ -301,6 +323,28 @@ class SessionRunner:
             await self._finalize_stream()
             self._result.error = "Claude is asking a question"
             await self._event_queue.put(self._make_event("input_required", str(e)))
+        except StreamTimeoutError as e:
+            self._status = RunnerStatus.ERROR
+            debug_log.error(f"Stream timeout: {e}", session_id=self.session.id, category="stream")
+            # Create an error turn with the timeout info
+            error_block = ErrorBlock(
+                reason="timeout",
+                details=str(e),
+            )
+            self._content_blocks.append(error_block)
+            turn = self._create_turn("assistant", f"[Timeout: {e}]", [error_block])
+            self._turns.append(turn)
+            self._save_turn_to_session(turn, save_now=True)
+            await self._flush_pending_save()
+            self._result = StreamResult(
+                content=self._text_buffer,
+                content_blocks=self._content_blocks,
+                raw_events=self._raw_events,
+                error=str(e),
+                exchange_id=self._exchange_id,
+                turns=self._turns,
+            )
+            await self._event_queue.put(self._make_event("error", str(e)))
         except Exception as e:
             self._status = RunnerStatus.ERROR
             debug_log.error(f"Stream error: {e}", session_id=self.session.id, category="stream")
