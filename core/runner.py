@@ -129,6 +129,11 @@ class SessionRunner:
         self._turns: list[Turn] = []  # Completed turns in this exchange
         self._user_message_saved: bool = False  # Track if user message added to session
 
+        # Debounced save state - coalesce rapid save requests
+        self._save_pending: bool = False
+        self._save_task: Optional[asyncio.Task] = None
+        self._save_debounce_interval: float = 0.5  # 500ms debounce
+
     @property
     def status(self) -> RunnerStatus:
         return self._status
@@ -186,7 +191,7 @@ class SessionRunner:
                     yield stream_event
 
             # Finalize
-            self._finalize_stream()
+            await self._finalize_stream()
             yield self._make_event("done", self._result)
 
         except asyncio.CancelledError:
@@ -205,7 +210,7 @@ class SessionRunner:
         except InputRequiredError as e:
             self._status = RunnerStatus.IDLE  # Not an error - just needs input
             debug_log.info(f"Input required: {e}", session_id=self.session.id, category="stream")
-            self._finalize_stream()
+            await self._finalize_stream()
             self._result.error = "Claude is asking a question"
             yield self._make_event("input_required", str(e))
         except Exception as e:
@@ -272,7 +277,7 @@ class SessionRunner:
                     await self._event_queue.put(stream_event)
 
             # Finalize
-            self._finalize_stream()
+            await self._finalize_stream()
             debug_log.info("Emitting done event", category="stream", session_id=self.session.id)
             await self._event_queue.put(self._make_event("done", self._result))
             self._status = RunnerStatus.IDLE
@@ -293,7 +298,7 @@ class SessionRunner:
         except InputRequiredError as e:
             self._status = RunnerStatus.IDLE  # Not an error - just needs input
             debug_log.info(f"Input required: {e}", session_id=self.session.id, category="stream")
-            self._finalize_stream()
+            await self._finalize_stream()
             self._result.error = "Claude is asking a question"
             await self._event_queue.put(self._make_event("input_required", str(e)))
         except Exception as e:
@@ -403,18 +408,38 @@ class SessionRunner:
 
         Args:
             turn: The Turn to add to the session
-            save_now: If True, save session to disk asynchronously (non-blocking)
+            save_now: If True, schedule a debounced save to disk (non-blocking)
         """
         self.session.turns.append(turn)
         if save_now:
-            # Fire-and-forget async save to avoid blocking the UI
-            # The save runs in background without blocking event processing
+            self._schedule_debounced_save()
+
+    def _schedule_debounced_save(self) -> None:
+        """Schedule a debounced save - coalesces rapid save requests.
+
+        Instead of saving immediately on every tool result, we mark the session
+        as needing a save and schedule it after a short delay. Multiple save
+        requests within the debounce interval are coalesced into a single save.
+        """
+        self._save_pending = True
+
+        # Only schedule new task if one isn't already pending
+        if self._save_task is None or self._save_task.done():
             try:
                 asyncio.get_running_loop()
-                asyncio.create_task(self._async_save_session())
+                self._save_task = asyncio.create_task(self._debounced_save())
             except RuntimeError:
                 # No running event loop (e.g., in tests). Do a sync save instead.
+                self._save_pending = False
                 self.session.save()
+
+    async def _debounced_save(self) -> None:
+        """Wait for debounce interval then save if still pending."""
+        await asyncio.sleep(self._save_debounce_interval)
+
+        if self._save_pending:
+            self._save_pending = False
+            await self._async_save_session()
 
     async def _async_save_session(self) -> None:
         """Save session asynchronously without blocking the event loop."""
@@ -431,6 +456,18 @@ class SessionRunner:
                 session_id=self.session.id,
                 category="stream",
             )
+
+    async def _flush_pending_save(self) -> None:
+        """Immediately save if there's a pending save (call on stream completion)."""
+        if self._save_pending:
+            self._save_pending = False
+            if self._save_task is not None and not self._save_task.done():
+                self._save_task.cancel()
+                try:
+                    await self._save_task
+                except asyncio.CancelledError:
+                    pass
+            await self._async_save_session()
 
     def _flush_text_as_turn(self, emit_event: bool = False, save_now: bool = False) -> list[StreamEvent]:
         """Flush accumulated text buffer as a text turn if non-empty.
@@ -649,7 +686,7 @@ class SessionRunner:
             )
             return []  # Skip bad event
 
-    def _finalize_stream(self) -> None:
+    async def _finalize_stream(self) -> None:
         """Finalize stream and create result."""
         # Flush remaining text as turn (also adds to legacy content_blocks)
         self._flush_text_as_turn()
@@ -662,6 +699,9 @@ class SessionRunner:
             turn = self._create_turn("assistant", f"[Error: {error_block.reason}]", [error_block])
             self._turns.append(turn)
             self._save_turn_to_session(turn, save_now=True)
+
+        # Flush any pending debounced saves now that streaming is complete
+        await self._flush_pending_save()
 
         # Reconstruct full text content from all TextBlocks (legacy)
         text_parts = []

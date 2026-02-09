@@ -4539,8 +4539,8 @@ class BalloonsApp(App):
         new_session = await self._manager.create_session()
         await self._manager.set_active(new_session.id)
 
-        # Reset TreeState
-        self._tree_state.clear()
+        # Reset TreeState (don't preserve streaming - all sessions deleted)
+        self._tree_state.clear(preserve_streaming=False)
         self._tree_state.add_session(new_session, is_current=True)
 
         # Update UI

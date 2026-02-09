@@ -948,13 +948,21 @@ class TreeState:
 
     # --- Bulk Operations ---
 
-    def clear(self) -> None:
-        """Clear all state."""
+    def clear(self, preserve_streaming: bool = True) -> None:
+        """Clear all state.
+
+        Args:
+            preserve_streaming: If True (default), streaming session IDs are preserved
+                so that sessions that were streaming before clear() remain streaming
+                after being re-added. This prevents animation interruption during
+                load_all_sessions() calls.
+        """
         self._sessions.clear()
         self._context_modes.clear()
         self._merge_modes.clear()
         self._current_session_id = None
-        self._streaming_sessions.clear()
+        if not preserve_streaming:
+            self._streaming_sessions.clear()
         self._session_colors.clear()
         self._notify(TreeEvent.FULL_REBUILD, {})
 

@@ -506,6 +506,12 @@ class ContextTreeView(Vertical):
         # (session_id, turn_idx) -> accumulated streaming text
         self._streaming_text: dict[tuple[str, int], str] = {}
 
+        # Streaming label debounce state
+        # Rate-limit tree label updates during streaming to reduce UI overhead
+        self._streaming_label_timer: Timer | None = None
+        self._streaming_label_dirty: set[tuple[str, int]] = set()  # (session_id, turn_idx) needing update
+        self._streaming_label_interval: float = 0.1  # 100ms = 10 updates/sec max
+
         # Local UI state (not shared)
         self._search_query: str = ""
 
@@ -531,9 +537,17 @@ class ContextTreeView(Vertical):
             self._start_spinner()
 
     def on_unmount(self) -> None:
-        """Clean up observer registration."""
+        """Clean up observer registration and timers."""
         self._state.remove_observer(self._on_tree_state_event)
         self._stop_spinner()
+        self._stop_streaming_label_timer()
+
+    def _stop_streaming_label_timer(self) -> None:
+        """Stop the streaming label debounce timer."""
+        if self._streaming_label_timer is not None:
+            self._streaming_label_timer.stop()
+            self._streaming_label_timer = None
+        self._streaming_label_dirty.clear()
 
     def _on_tree_state_event(self, event: TreeEvent, data: dict) -> None:
         """Handle state change notifications from TreeState.
@@ -1835,6 +1849,10 @@ class ContextTreeView(Vertical):
 
         Called when 'text_delta' events arrive.
         Each text turn shows its own streaming content; tool turns are separate nodes.
+
+        Uses debouncing to reduce UI refresh overhead - labels are updated at most
+        every 100ms (10 updates/sec) to prevent blocking the event loop during
+        fast streaming.
         """
         turn_data = self._state.get_turn(session_id, turn_idx)
         turn_node = self._turn_nodes.get((session_id, turn_idx))
@@ -1847,22 +1865,52 @@ class ContextTreeView(Vertical):
             self._streaming_text[text_key] = ""
         self._streaming_text[text_key] += text_delta
 
-        # Update turn label with text preview
-        text = self._streaming_text[text_key]
-        preview = text[:30].replace("\n", " ")
-        if len(text) > 30:
-            preview += "..."
+        # Mark this turn as needing a label update (debounced)
+        self._streaming_label_dirty.add(text_key)
 
-        icon = "👤" if turn_data.role == "user" else "🤖"
-        mode = self._state.get_context_mode(session_id, turn_idx)
-        if mode == ContextMode.COPY:
-            indicator = "[green]☑[/]"
-        elif mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
-            indicator = "[yellow]Σ[/]"
-        else:
-            indicator = "☐"
+        # Start debounce timer if not already running
+        if self._streaming_label_timer is None:
+            self._streaming_label_timer = self.set_timer(
+                self._streaming_label_interval,
+                self._flush_streaming_labels,
+            )
 
-        turn_node.label = f"{indicator} {icon} [dim]{escape_markup(preview)}[/]"
+    def _flush_streaming_labels(self) -> None:
+        """Flush all pending streaming label updates.
+
+        Called by the debounce timer to batch-update all dirty labels at once.
+        """
+        self._streaming_label_timer = None
+
+        if not self._streaming_label_dirty:
+            return
+
+        # Copy and clear to allow new updates during flush
+        dirty_keys = list(self._streaming_label_dirty)
+        self._streaming_label_dirty.clear()
+
+        for text_key in dirty_keys:
+            session_id, turn_idx = text_key
+            turn_data = self._state.get_turn(session_id, turn_idx)
+            turn_node = self._turn_nodes.get(text_key)
+            if not turn_data or not turn_node:
+                continue
+
+            text = self._streaming_text.get(text_key, "")
+            preview = text[:30].replace("\n", " ")
+            if len(text) > 30:
+                preview += "..."
+
+            icon = "👤" if turn_data.role == "user" else "🤖"
+            mode = self._state.get_context_mode(session_id, turn_idx)
+            if mode == ContextMode.COPY:
+                indicator = "[green]☑[/]"
+            elif mode in (ContextMode.COMPRESS, ContextMode.SUMMARIZE):
+                indicator = "[yellow]Σ[/]"
+            else:
+                indicator = "☐"
+
+            turn_node.label = f"{indicator} {icon} [dim]{escape_markup(preview)}[/]"
 
     def flush_streaming_text(
         self,
@@ -1880,6 +1928,8 @@ class ContextTreeView(Vertical):
         text_key = (session_id, turn_idx)
         if text_key in self._streaming_text:
             del self._streaming_text[text_key]
+        # Also remove from dirty set to avoid stale updates
+        self._streaming_label_dirty.discard(text_key)
 
     def add_tool_result_to_turn(
         self,
@@ -1918,6 +1968,8 @@ class ContextTreeView(Vertical):
         text_key = (session_id, turn_idx)
         if text_key in self._streaming_text:
             del self._streaming_text[text_key]
+        # Also remove from dirty set to avoid stale updates
+        self._streaming_label_dirty.discard(text_key)
 
         # Clean up tool use nodes for this turn
         keys_to_remove = [k for k in self._tool_use_nodes if k[0] == session_id and k[1] == turn_idx]

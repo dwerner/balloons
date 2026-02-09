@@ -563,6 +563,18 @@ class TestTreeStateClear:
         assert state.get_session("s1") is None
         assert state.get_current_session_id() is None
         assert state.get_context_mode("s1", 0).value == "drop"
+        # Streaming is preserved by default (for load_all_sessions)
+        assert state.is_streaming("s1") is True
+
+    def test_clear_without_preserving_streaming(self):
+        """Test that clear(preserve_streaming=False) clears streaming state."""
+        state = TreeState()
+        state.add_session(MockSession(id="s1"), is_current=True)
+        state.start_streaming("s1")
+
+        state.clear(preserve_streaming=False)
+
+        assert state.get_session("s1") is None
         assert state.is_streaming("s1") is False
 
     def test_request_rebuild_fires_event(self):

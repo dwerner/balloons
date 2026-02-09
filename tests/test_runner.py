@@ -29,8 +29,9 @@ def session(temp_sessions_dir):
 
 @pytest.fixture
 def runner(session):
-    """Create a test runner."""
-    return SessionRunner(session)
+    """Create a test runner with mocked session save to avoid storage dependency."""
+    with patch.object(session, 'save', MagicMock()):
+        yield SessionRunner(session)
 
 
 class TestRunnerStatus:
@@ -153,22 +154,24 @@ class TestStreamProcessing:
 class TestFinalization:
     """Tests for stream finalization."""
 
-    def test_finalize_creates_result(self, runner):
+    @pytest.mark.asyncio
+    async def test_finalize_creates_result(self, runner):
         """Finalization creates StreamResult."""
         runner._text_buffer = "test content"
         runner._raw_events = [{"type": "test"}]
 
-        runner._finalize_stream()
+        await runner._finalize_stream()
 
         assert runner._result is not None
         assert runner._result.raw_events == [{"type": "test"}]
         assert runner.status == RunnerStatus.IDLE
 
-    def test_finalize_flushes_text_buffer(self, runner):
+    @pytest.mark.asyncio
+    async def test_finalize_flushes_text_buffer(self, runner):
         """Finalization flushes remaining text to content blocks."""
         runner._text_buffer = "remaining text"
 
-        runner._finalize_stream()
+        await runner._finalize_stream()
 
         assert len(runner._content_blocks) == 1
         assert runner._content_blocks[0].text == "remaining text"
