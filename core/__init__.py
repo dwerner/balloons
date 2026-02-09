@@ -49,7 +49,7 @@ from .base_runner import BaseRunner, RunnerEvent
 from .exceptions import RateLimitError, InputRequiredError, BackendNotFoundError
 from .link_tools import LINK_TOOL_NAMES, execute_link_tool, register_app_tool_handler, unregister_app_tool_handler
 from .openai_runner import OpenAICompatibleRunner
-from .runner_factory import create_runner, resolve_env_var, validate_backend_config
+from .runner_factory import create_runner, resolve_env_var, validate_backend_config, ensure_prompts_installed
 from .tools import TOOLS, BALLOON_TOOLS, BALLOON_TOOL_NAMES, get_tools_for_request
 from .tool_executor import execute_tool, parse_fork_proposal, parse_create_slide, SlideData
 from .summarizer import Summarizer
@@ -204,6 +204,7 @@ __all__ = [
     "create_runner",
     "resolve_env_var",
     "validate_backend_config",
+    "ensure_prompts_installed",
     # Tools
     "TOOLS",
     "BALLOON_TOOLS",

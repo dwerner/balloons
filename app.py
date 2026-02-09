@@ -32,7 +32,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, TaskPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, MessageStash, StashPopup, SlidesPane, PresentationScreen, MessageQueuePopup, EntityPane
+from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, TaskPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, MessageStash, StashPopup, SlidesPane, PresentationScreen, MessageQueuePopup, EntityPane, ActionableToastRack, ActionableNotification, ActionableToast
 from widgets.input_box import CompletionPopup
 from widgets.archive_marker import ArchiveMarker
 from claude_runner import ClaudeRunner
@@ -88,6 +88,7 @@ from core import (
     ChatCommand,
     debug_log,
     create_runner,
+    ensure_prompts_installed,
     register_app_tool_handler,
     unregister_app_tool_handler,
     # Streaming
@@ -485,9 +486,12 @@ class BalloonsApp(App):
                 yield CompletionPopup(id="completion-popup")
                 yield StashPopup(id="stash-popup")
                 yield InputBox(id="input-box")
+            yield ActionableToastRack(id="actionable-toast-rack")
 
     async def on_mount(self) -> None:
         """Initialize the app after mounting."""
+        # Ensure default prompts are installed to ~/.balloons/prompts/
+        ensure_prompts_installed()
         # Subscribe to TreeState for context mode changes
         self._tree_state.add_observer(self._on_tree_state_event)
         # Start the background session polling timer
@@ -554,6 +558,42 @@ class BalloonsApp(App):
         """Update the status bar with total streaming sessions count."""
         status_bar = self.query_one("#status-bar", StatusBar)
         status_bar.set_streaming_count(len(self._streaming_contexts))
+
+    def _show_actionable_notification(
+        self,
+        message: str,
+        action: str,
+        action_data: dict | None = None,
+        action_label: str = "Click to view",
+        title: str = "",
+        severity: str = "information",
+        timeout: float = 8,
+    ) -> None:
+        """Show an actionable notification that triggers a callback when clicked.
+
+        Args:
+            message: The notification message
+            action: The action type (e.g., "switch_session")
+            action_data: Additional data for the action
+            action_label: Label shown indicating clickability
+            title: Optional notification title
+            severity: One of "information", "warning", "error"
+            timeout: How long to show the notification (seconds)
+        """
+        try:
+            toast_rack = self.query_one("#actionable-toast-rack", ActionableToastRack)
+            notification = ActionableNotification(
+                message=message,
+                title=title,
+                severity=severity,  # type: ignore
+                timeout=timeout,
+                action_data={"action": action, **(action_data or {})},
+                action_label=action_label,
+            )
+            toast_rack.add_notification(notification)
+        except Exception:
+            # Fall back to regular notification if actionable toast fails
+            self.notify(message, title=title, severity=severity)  # type: ignore
 
     def _update_queue_indicator(self) -> None:
         """Update the input box to show queue status.
@@ -1659,7 +1699,19 @@ class BalloonsApp(App):
                 if error:
                     self.notify(f"Background error: {error}", severity="error")
                 elif not cancelled:
-                    self.notify(f"Background session done: {session_id[:8]}")
+                    # Show actionable toast that switches to the session when clicked
+                    # Prefer fork_name (more descriptive), then title, then ID prefix
+                    display_name = (
+                        (session.fork_name if session else None)
+                        or (session.title if session else None)
+                        or session_id[:8]
+                    )
+                    self._show_actionable_notification(
+                        f"Background session done: {display_name}",
+                        action="switch_session",
+                        action_data={"session_id": session_id},
+                        action_label="Click to view",
+                    )
 
         except Exception as e:
             debug_log.error(
@@ -2332,7 +2384,7 @@ class BalloonsApp(App):
         status_bar.set_streaming(True)
         self.streaming = True
 
-        session_name = first_session.title or first_session.name or first_session.id[:8]
+        session_name = first_session.title or first_session.fork_name or first_session.id[:8]
         chat_log.add_user_message(f"[Generating summary for '{session_name}'...]")
         chat_log.add_assistant_message()
 
@@ -2421,7 +2473,7 @@ class BalloonsApp(App):
         # Store linked targets for completion
         self._pending_link_targets = linked_targets
 
-        session_name = session.title or session.name or session.id[:8]
+        session_name = session.title or session.fork_name or session.id[:8]
         chat_log.add_user_message(f"[Generating summary for '{session_name}'...]")
         chat_log.add_assistant_message()
 
@@ -4880,6 +4932,26 @@ class BalloonsApp(App):
     def on_more_below_indicator_clicked(self, event: MoreBelowIndicator.Clicked) -> None:
         """Handle click on more-below indicator - scroll to bottom."""
         self.action_scroll_to_bottom()
+
+    async def on_actionable_toast_clicked(self, event: ActionableToast.Clicked) -> None:
+        """Handle click on an actionable toast notification.
+
+        Supports action types:
+        - "switch_session": Switch to session (action_data["session_id"])
+        """
+        action = event.action_data.get("action")
+        if action == "switch_session":
+            session_id = event.action_data.get("session_id")
+            if session_id:
+                session = self._manager._sessions.get(session_id)
+                if not session:
+                    # Try to load it
+                    session = await Session.load(session_id)
+                if session:
+                    await self._switch_to_session(session)
+                    # Scroll to end to show latest content
+                    chat_log = self.query_one("#chat-log", ChatLogView)
+                    chat_log.scroll_end(animate=False)
 
     def action_scroll_to_bottom(self) -> None:
         """Scroll to bottom of chat and re-enable following."""

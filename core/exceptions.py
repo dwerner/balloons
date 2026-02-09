@@ -20,3 +20,13 @@ class BackendNotFoundError(Exception):
         super().__init__(
             f"Backend '{backend_name}' not found. Available: {', '.join(available_backends)}"
         )
+
+
+class StreamTimeoutError(Exception):
+    """Raised when streaming stalls with no data for too long."""
+
+    def __init__(self, timeout_seconds: float):
+        self.timeout_seconds = timeout_seconds
+        super().__init__(
+            f"Stream timed out after {timeout_seconds:.0f}s with no data"
+        )

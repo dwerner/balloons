@@ -13,7 +13,12 @@ from models import (
 )
 from core.debug_log import debug_log, dump_failed_json
 from core.base_runner import BaseRunner, RunnerEvent
-from core.exceptions import RateLimitError
+from core.exceptions import RateLimitError, StreamTimeoutError
+
+# Timeout for reading lines from Claude stream (3 minutes)
+# This is a hard timeout when waiting for Claude to stream text.
+# When waiting for tool execution, we use a soft timeout (warning only).
+STREAM_READLINE_TIMEOUT = 180.0
 from core.tool_executor import execute_tool
 from core.link_tools import LINK_TOOL_NAMES
 
@@ -28,15 +33,55 @@ if TYPE_CHECKING:
     from session import Session
 
 
-async def readline_unlimited(stream: asyncio.StreamReader) -> bytes:
-    """Read a line from stream without size limit."""
+async def readline_unlimited(
+    stream: asyncio.StreamReader,
+    timeout: float = STREAM_READLINE_TIMEOUT,
+    run_id: str = "",
+    hard_timeout: bool = True,
+    session_name: str = "",
+) -> bytes:
+    """Read a line from stream without size limit, with timeout.
+
+    Args:
+        stream: The stream to read from
+        timeout: Max seconds to wait (default 3 minutes)
+        run_id: Process ID for logging
+        hard_timeout: If True, raise StreamTimeoutError. If False, just warn and keep waiting.
+        session_name: Session name for logging (used in soft timeout warnings)
+
+    Returns:
+        The line read (including newline), or partial data on EOF
+
+    Raises:
+        StreamTimeoutError: If hard_timeout=True and no data received within timeout
+    """
     chunks = []
+    wait_count = 0
     while True:
         try:
-            # Read up to separator
-            chunk = await stream.readuntil(b'\n')
+            # Read up to separator, with timeout
+            chunk = await asyncio.wait_for(
+                stream.readuntil(b'\n'),
+                timeout=timeout,
+            )
             chunks.append(chunk)
             break
+        except asyncio.TimeoutError:
+            wait_count += 1
+            total_wait = wait_count * timeout
+            if hard_timeout:
+                # Hard timeout - raise error
+                raise StreamTimeoutError(total_wait)
+            else:
+                # Soft timeout - log warning and keep waiting
+                session_info = f" [{session_name}]" if session_name else ""
+                debug_log.warning(
+                    f"Tool execution taking {total_wait:.0f}s{session_info}",
+                    category="stream",
+                    run_id=run_id,
+                )
+                # TODO: Could emit a notification event here for UI
+                continue
         except asyncio.IncompleteReadError as e:
             # EOF reached
             chunks.append(e.partial)
@@ -400,12 +445,24 @@ class ClaudeRunner(BaseRunner):
         """
         pending_tool_calls: list[dict] = []  # Collect tool calls from current response
         awaiting_balloons_tool_response = False  # True after we send a balloons-tool result
+        awaiting_tool_execution = False  # True when CLI is executing a tool
+
+        # Get session name for logging
+        session_name = ""
+        if self._current_session:
+            session_name = self._current_session.title or self._current_session.fork_name or self._current_session.id[:8]
 
         while True:
             if self._terminated:
                 break
 
-            line = await readline_unlimited(self.process.stdout)
+            # Use soft timeout when waiting for tool execution, hard timeout when waiting for Claude
+            line = await readline_unlimited(
+                self.process.stdout,
+                run_id=self._run_id,
+                hard_timeout=not awaiting_tool_execution,
+                session_name=session_name,
+            )
             if not line:
                 break
 
@@ -487,6 +544,8 @@ class ClaudeRunner(BaseRunner):
                             "name": tool_name,
                             "input": tool_input,
                         })
+                        # CLI will execute this tool - use soft timeout for next read
+                        awaiting_tool_execution = True
                 continue
 
             # Handle user message (tool results from CLI)
@@ -516,6 +575,10 @@ class ClaudeRunner(BaseRunner):
                             category="claude",
                             run_id=self._run_id,
                         )
+
+                # Tool results received - back to hard timeout for Claude's response
+                if not pending_tool_calls:
+                    awaiting_tool_execution = False
                 continue
 
             # Handle result event (turn complete)

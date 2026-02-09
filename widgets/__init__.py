@@ -25,6 +25,12 @@ from .slides_pane import SlidesPane, SlideCard
 from .presentation_screen import PresentationScreen
 from .directory_picker import DirectoryBrowser
 from .entity_pane import EntityPane
+from .actionable_toast import (
+    ActionableToast,
+    ActionableToastRack,
+    ActionableToastHolder,
+    ActionableNotification,
+)
 
 # Backwards compatibility aliases
 ContextTree = ContextTreeView
@@ -73,4 +79,8 @@ __all__ = [
     "PresentationScreen",
     "DirectoryBrowser",
     "EntityPane",
+    "ActionableToast",
+    "ActionableToastRack",
+    "ActionableToastHolder",
+    "ActionableNotification",
 ]
