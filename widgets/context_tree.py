@@ -26,6 +26,7 @@ from widgets.session_rendering import (
     SessionLabelRenderer,
     TurnLabelRenderer,
     format_kt,
+    token_style,
     get_model_icon,
     CLAUDE_SYSTEM_OVERHEAD,
     SESSION_COLORS,
@@ -472,9 +473,13 @@ class ContextTreeView(Vertical):
     ):
         super().__init__(**kwargs)
 
-        # Spinner animation state
+        # Spinner animation state (also used for pulsing high-token nodes)
         self._spinner_frame: int = 0
         self._spinner_timer: Timer | None = None
+
+        # Track nodes with high token counts that need pulsing animation
+        # Set of (session_id, turn_idx) for turn nodes, or (session_id, exchange_id) for groups
+        self._pulsing_nodes: set[tuple[str, str | int]] = set()
 
         # Background loading flag - when True, observer skips expensive updates
         self._background_loading: bool = False
@@ -653,11 +658,56 @@ class ContextTreeView(Vertical):
             self._spinner_frame = 0
 
     def _advance_spinner(self) -> None:
-        """Advance the spinner to the next frame and update streaming labels."""
+        """Advance the spinner to the next frame and update streaming/pulsing labels."""
         self._spinner_frame = (self._spinner_frame + 1) % len(self._spinner_chars)
         # Update labels for all streaming sessions
         for session_id in self._state.get_streaming_sessions():
             self._update_session_label(session_id)
+
+        # Update labels for pulsing nodes (high token counts)
+        self._update_pulsing_nodes()
+
+    def _update_pulsing_nodes(self) -> None:
+        """Update labels for all nodes that are pulsing due to high token counts."""
+        # Use spinner_frame for pulse animation (0-9 mapped from spinner chars length)
+        pulse_frame = self._spinner_frame % 10
+
+        for key in list(self._pulsing_nodes):
+            session_id, identifier = key
+            if isinstance(identifier, int):
+                # Turn node
+                turn_node = self._turn_nodes.get((session_id, identifier))
+                if turn_node:
+                    turn_data = self._state.get_turn(session_id, identifier)
+                    if turn_data:
+                        mode = self._state.get_context_mode(session_id, identifier)
+                        turn_node.label = self._make_turn_label(
+                            turn_data.role, turn_data.content, mode,
+                            turn_data.content_block, session_id=session_id,
+                            tokens=turn_data.tokens, viewed=turn_data.viewed,
+                            pulse_frame=pulse_frame
+                        )
+            else:
+                # Exchange group node
+                if hasattr(self, '_exchange_group_nodes'):
+                    group_node = self._exchange_group_nodes.get((session_id, identifier))
+                    if group_node and group_node.data:
+                        turn_indices = group_node.data.get("turn_indices", [])
+                        turns = [self._state.get_turn(session_id, idx) for idx in turn_indices]
+                        turns = [t for t in turns if t]
+                        if turns:
+                            total_tokens = sum(t.tokens for t in turns)
+                            # Determine group mode
+                            modes = set(self._state.get_context_mode(session_id, t.idx) for t in turns)
+                            if len(modes) == 1:
+                                group_mode = modes.pop()
+                            elif ContextMode.DROP in modes and len(modes) == 1:
+                                group_mode = ContextMode.DROP
+                            else:
+                                group_mode = ContextMode.COMPRESS
+                            group_node.label = self._make_exchange_group_label(
+                                turns, total_tokens, group_mode, pulse_frame=pulse_frame
+                            )
 
     def _update_session_label(self, session_id: str) -> None:
         """Update a session node's label (for streaming indicator, etc.)."""
@@ -1088,6 +1138,12 @@ class ContextTreeView(Vertical):
         )
         self._turn_nodes[(session_id, turn.idx)] = turn_node
 
+        # Register for pulsing animation if tokens are high
+        PULSE_THRESHOLD = 10000
+        if turn.tokens >= PULSE_THRESHOLD:
+            self._pulsing_nodes.add((session_id, turn.idx))
+            self._start_spinner()  # Ensure animation is running
+
     def _add_exchange_group_node(
         self,
         parent_node,
@@ -1151,19 +1207,34 @@ class ContextTreeView(Vertical):
             self._exchange_group_nodes = {}
         self._exchange_group_nodes[(session_id, exchange_id)] = group_node
 
+        # Register for pulsing animation if tokens are high
+        PULSE_THRESHOLD = 10000
+        if total_tokens >= PULSE_THRESHOLD:
+            self._pulsing_nodes.add((session_id, exchange_id))
+            self._start_spinner()  # Ensure animation is running
+        # Also register child turns that are high-token
+        for turn in turns:
+            if turn.tokens >= PULSE_THRESHOLD:
+                self._pulsing_nodes.add((session_id, turn.idx))
+                self._start_spinner()
+
     def _make_exchange_group_label(
         self,
         turns: list,
         total_tokens: int,
         group_mode: ContextMode,
+        pulse_frame: int = 0,
     ) -> str:
         """Create a label for an exchange group node.
 
         Format: [green]1.2kt[/] ☑ 🤖 Agent exchange (5 turns)
+        Token color lerps from green to red as tokens approach 50k.
+        Nodes over 10k tokens will pulse with animated color.
         """
-        # Token count in green (like tool turns)
+        # Token count with color based on size (green -> red), pulsing if over 10k
         kt_str = format_kt(total_tokens)
-        token_part = f"[green]{kt_str}[/] " if kt_str else ""
+        style = token_style(total_tokens, pulse_frame=pulse_frame)
+        token_part = f"{style}{kt_str}[/] " if kt_str else ""
 
         # Mode indicator
         if group_mode == ContextMode.COPY:
@@ -1354,7 +1425,7 @@ class ContextTreeView(Vertical):
         # Update the group label with new totals
         self._update_exchange_group_label(session_id, exchange_id)
 
-    def _make_turn_label(self, role: str, content: str, mode: ContextMode, content_block=None, session_id: str = None, tokens: int = 0, viewed: bool = True) -> str:
+    def _make_turn_label(self, role: str, content: str, mode: ContextMode, content_block=None, session_id: str = None, tokens: int = 0, viewed: bool = True, pulse_frame: int = 0) -> str:
         """Create a label for a turn node.
 
         Args:
@@ -1365,6 +1436,7 @@ class ContextTreeView(Vertical):
             session_id: Session ID (for future use)
             tokens: Token count for this turn
             viewed: Whether this turn has been viewed
+            pulse_frame: Animation frame for pulsing high-token nodes (0-9)
         """
         # Unviewed indicator (hidden for now, tracking logic preserved)
         unviewed_indicator = ""
@@ -1413,7 +1485,8 @@ class ContextTreeView(Vertical):
         if isinstance(content_block, ToolUseBlock):
             # Tool use turn - show tool name + key input parameter
             kt_str = format_kt(tokens)
-            token_str = f"[green]({kt_str})[/] " if kt_str else ""
+            style = token_style(tokens, pulse_frame=pulse_frame)
+            token_str = f"{style}({kt_str})[/] " if kt_str else ""
             tool_name = content_block.name
             # Extract meaningful preview from input based on tool type
             tool_input = content_block.input or {}
@@ -1468,7 +1541,8 @@ class ContextTreeView(Vertical):
             result_preview = result_preview[:40] + "..." if len(result_preview) > 40 else result_preview
             error_indicator = "[red]❌ [/]" if content_block.is_error else ""
             kt_str = format_kt(tokens)
-            token_str = f"[green]({kt_str})[/] " if kt_str else ""
+            style = token_style(tokens, pulse_frame=pulse_frame)
+            token_str = f"{style}({kt_str})[/] " if kt_str else ""
             return f"{unviewed_indicator}{indicator} {error_indicator}[green]📋[/]{token_str}[green]Result[/] [dim]{escape_markup(result_preview)}[/]"
 
         if isinstance(content_block, ErrorBlock):
@@ -1485,9 +1559,10 @@ class ContextTreeView(Vertical):
         preview = content[:40] + "..." if len(content) > 40 else content
         preview = preview.replace("\n", " ")
 
-        # Format token count
+        # Format token count with color based on size, pulsing if over 10k
         kt_str = format_kt(tokens)
-        token_str = f"[green]({kt_str})[/] " if kt_str else ""
+        style = token_style(tokens, pulse_frame=pulse_frame)
+        token_str = f"{style}({kt_str})[/] " if kt_str else ""
 
         return f"{unviewed_indicator}{indicator} {icon}{token_str}{escape_markup(preview)}"
 

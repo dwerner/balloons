@@ -76,6 +76,90 @@ def format_kt(tokens: int) -> str:
     return f"{kt:.1f}kt"
 
 
+def token_color(tokens: int, min_tokens: int = 0, max_tokens: int = 50000) -> str:
+    """Get a Rich color for token count, lerping green → yellow → bright red.
+
+    Args:
+        tokens: The token count to color
+        min_tokens: Tokens at or below this are fully green (default 0)
+        max_tokens: Tokens at or above this are fully red (default 50k)
+
+    Returns:
+        A Rich color string like "rgb(r,g,b)"
+
+    Color progression:
+        0 tokens: bright green (0, 255, 0)
+        25k tokens: bright yellow (255, 255, 0)
+        50k+ tokens: bright red (255, 50, 50)
+    """
+    if tokens <= min_tokens:
+        return "green"
+    if tokens >= max_tokens:
+        return "rgb(255,50,50)"  # Bright red
+
+    # Two-phase lerp: green → yellow → bright red
+    t = (tokens - min_tokens) / (max_tokens - min_tokens)
+    mid_point = 0.5
+
+    if t <= mid_point:
+        # Phase 1: green (0, 255, 0) → yellow (255, 255, 0)
+        phase_t = t / mid_point
+        r = int(255 * phase_t)
+        g = 255
+        b = 0
+    else:
+        # Phase 2: yellow (255, 255, 0) → bright red (255, 50, 50)
+        phase_t = (t - mid_point) / (1 - mid_point)
+        r = 255
+        g = int(255 * (1 - phase_t) + 50 * phase_t)  # 255 → 50
+        b = int(50 * phase_t)  # 0 → 50
+
+    return f"rgb({r},{g},{b})"
+
+
+def token_style(tokens: int, pulse_frame: int = 0, pulse_threshold: int = 10000) -> str:
+    """Get a Rich style string for token count, with animated pulsing.
+
+    Args:
+        tokens: The token count to style
+        pulse_frame: Animation frame (0-9) for pulsing effect
+        pulse_threshold: Tokens above this will pulse (default 10k)
+
+    Returns:
+        A Rich style string like "[rgb(r,g,b)]"
+
+    The pulse effect smoothly varies brightness using a sine wave pattern.
+    Call this with incrementing pulse_frame values (0-9) to animate.
+    """
+    color = token_color(tokens)
+    if tokens >= pulse_threshold:
+        # Pulse by varying the color intensity using sine wave
+        # pulse_frame goes 0-9, we want a smooth sine wave
+        import math
+        # Map frame to 0-2π for full sine cycle
+        angle = (pulse_frame / 10) * 2 * math.pi
+        # Sine gives -1 to 1, map to 0.5 to 1.0 for brightness multiplier
+        brightness = 0.75 + 0.25 * math.sin(angle)
+
+        # Parse the color and apply brightness
+        if color == "green":
+            r, g, b = 0, 255, 0
+        elif color.startswith("rgb("):
+            # Parse rgb(r,g,b)
+            parts = color[4:-1].split(",")
+            r, g, b = int(parts[0]), int(parts[1]), int(parts[2])
+        else:
+            # Fallback
+            r, g, b = 255, 255, 255
+
+        # Apply brightness (keep minimum so it doesn't go too dark)
+        r = int(r * brightness)
+        g = int(g * brightness)
+        b = int(b * brightness)
+        return f"[rgb({r},{g},{b})]"
+    return f"[{color}]"
+
+
 def get_model_icon(model: str, backend_name: str) -> str:
     """Get a visual icon for a model/backend combination.
 
