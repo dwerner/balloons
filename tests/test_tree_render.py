@@ -15,12 +15,23 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from widgets import ContextTreeView
 from core.tree_state import TreeState
 from session import Session
 
 
-async def test_headless(session: Session):
+@pytest.fixture
+def session(temp_storage):
+    """Create a test session."""
+    sess = Session()
+    sess.add_message("user", "Test message")
+    sess.add_message("assistant", "Test reply")
+    return sess
+
+
+async def test_headless(session: Session, temp_storage):
     """Test tree state population without Textual app (no TUI)."""
     print("=== Headless Test ===")
 
@@ -72,12 +83,10 @@ async def test_headless(session: Session):
     return True
 
 
-async def test_with_textual(session: Session):
+async def test_with_textual(session: Session, temp_storage):
     """Test full Textual app rendering."""
     from textual.app import App, ComposeResult
     from textual.containers import Container
-
-    results = {"success": False, "error": None, "info": {}}
 
     class TreeTestApp(App):
         CSS = """
@@ -96,45 +105,25 @@ async def test_with_textual(session: Session):
             super().__init__()
             self._session = sess
             self._tree_state = TreeState()
+            self.test_results = {"session_count": 0, "current_session": None}
 
         def compose(self) -> ComposeResult:
             with Container(id="tree-container"):
                 yield ContextTreeView(tree_state=self._tree_state)
 
-        async def on_mount(self) -> None:
-            try:
-                context_tree = self.query_one(ContextTreeView)
-                await context_tree.load_all_sessions(self._session)
-
-                # Collect info
-                results["info"]["session_count"] = len(self._tree_state._sessions)
-                results["info"]["current_session"] = self._tree_state._current_session_id
-                results["info"]["streaming"] = list(self._tree_state._streaming_sessions)
-
-                results["success"] = True
-                self.set_timer(0.3, lambda: self.exit(0))
-
-            except Exception as e:
-                results["error"] = e
-                import traceback
-                results["traceback"] = traceback.format_exc()
-                self.exit(1)
-
     app = TreeTestApp(session)
-    app.run(headless=True)  # Run without actual terminal
+    async with app.run_test() as pilot:
+        # Load sessions
+        context_tree = app.query_one(ContextTreeView)
+        await context_tree.load_all_sessions(session)
 
-    print("\n=== Textual App Test ===")
-    if results["success"]:
-        print(f"Sessions loaded: {results['info']['session_count']}")
-        print(f"Current session: {results['info']['current_session']}")
-        print("=== Textual test PASSED ===")
-    else:
-        print(f"ERROR: {results['error']}")
-        if results.get("traceback"):
-            print(results["traceback"])
-        return False
+        # Verify
+        app.test_results["session_count"] = len(app._tree_state._sessions)
+        app.test_results["current_session"] = app._tree_state._current_session_id
 
-    return True
+    # Assertions
+    assert app.test_results["session_count"] >= 1
+    assert app.test_results["current_session"] == session.id
 
 
 def main():

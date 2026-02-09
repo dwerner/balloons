@@ -504,11 +504,9 @@ class ForkManager:
                 error="Not in a fork - use :new for blank session",
             )
 
-        if fork_session.is_merged():
-            return MergeResult(
-                success=False,
-                error="This fork is already merged",
-            )
+        # Note: We allow re-merging a fork multiple times. Each merge creates
+        # a new merge marker in both the fork and parent, capturing any new
+        # work done since the last merge.
 
         parent = await fork_session.get_parent_async()
         if not parent:

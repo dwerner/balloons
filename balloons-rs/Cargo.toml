@@ -12,6 +12,9 @@ repository = "https://github.com/dwerner/balloons"
 # Async runtime
 core-executor = { git = "https://github.com/dwerner/core-executor" }
 
+# Process management
+procstream = { git = "https://github.com/dwerner/procstream", features = ["macros"] }
+
 # Storage
 heed = "0.21"
 postcard = { version = "1", features = ["alloc"] }
@@ -22,13 +25,21 @@ serde_json = "1"
 
 # Async
 async-trait = "0.1"
-futures-lite = "2"
+futures-lite = { version = "2", features = ["race"] }
+async-lock = "3"
+async-channel = "2"
 
 # Error handling
 thiserror = "2"
 
 # Time handling
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Unique IDs
+uuid = { version = "1", features = ["v4"] }
+
+# Logging
+tracing = "0.1"
 
 # Testing
 tempfile = "3"
@@ -38,3 +49,4 @@ pyo3 = { version = "0.25", features = ["extension-module"] }
 
 # Internal crates
 balloons-core = { path = "crates/balloons-core" }
+balloons-supervisor = { path = "crates/balloons-supervisor" }

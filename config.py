@@ -124,6 +124,7 @@ class Config:
     last_view_turn_index: Optional[int] = None  # Last viewed turn index (0-based)
     tts: TTSConfig = field(default_factory=TTSConfig)  # TTS configuration
     sounds: SoundsConfig = field(default_factory=SoundsConfig)  # Sound notifications
+    review_backend: Optional[str] = None  # Backend for session quality reviews (defaults to default_backend)
     _config_path: Optional[Path] = field(default=None, repr=False)  # Where config was loaded from
 
     def get_editor(self) -> str:
@@ -229,6 +230,7 @@ class Config:
             last_view_turn_index=last_view.get("turn_index") if last_view else None,
             tts=tts_config,
             sounds=sounds_config,
+            review_backend=data.get("review_backend"),
             _config_path=path,
         )
 
@@ -253,6 +255,14 @@ class Config:
         if backend_name not in self.backends:
             raise ValueError(f"Unknown backend: {backend_name}. Available: {list(self.backends.keys())}")
         return self.backends[backend_name]
+
+    def get_review_backend(self) -> BackendConfig:
+        """Get the backend configuration for session quality reviews.
+
+        Falls back to default_backend if review_backend is not configured.
+        """
+        backend_name = self.review_backend or self.default_backend
+        return self.get_backend(backend_name)
 
     def get_env_for_backend(self, name: Optional[str] = None) -> dict[str, str]:
         """Get environment variables to set for a backend."""

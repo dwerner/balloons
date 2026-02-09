@@ -165,6 +165,12 @@ Without name: shows picker. With name: switches to that fork.
 | `:suspend <cmd>` | Suspend TUI, run interactive shell command |
 | `:!<cmd>` | Run shell command, send output to Claude |
 | `:reload` | Hot reload the app |
+| `:sup-start <cmd>` | Start supervised background process |
+| `:sup-start=name <cmd>` | Start with friendly name |
+| `:sup-list` | List processes (current session) |
+| `:sup-list --all` | List all processes |
+| `:sup-logs <id> [limit]` | Get process output |
+| `:sup-stop <id>` | Stop a process |
 
 ### Legacy Commands (Backwards Compatible)
 
@@ -313,6 +319,86 @@ Forks with `--bg` flag run in background:
 
 ---
 
+## Process Supervisor
+
+The Process Supervisor manages long-running background processes (dev servers, watchers, builds) with streaming output capture. It allows the LLM to start processes and check on them later without blocking.
+
+### Architecture
+
+The supervisor is implemented in Rust (`balloons-supervisor` crate) using:
+- **procstream** for async process execution with event streaming
+- **async-lock** and **async-channel** for concurrency primitives
+- **core-executor** for CPU-affine async execution
+- **PyO3** bindings exposed to Python
+
+### LLM Tools
+
+The following tools are available for the LLM to manage processes:
+
+| Tool | Description |
+|------|-------------|
+| `supervisor_start` | Start a background process |
+| `supervisor_list` | List processes (current session by default) |
+| `supervisor_output` | Get captured output from a process |
+| `supervisor_stop` | Stop a running process |
+
+**supervisor_start** parameters:
+- `command` (required): Shell command to execute
+- `name`: Optional friendly name (e.g., "dev-server")
+- `working_dir`: Working directory (defaults to session's)
+- `env`: Additional environment variables
+
+**supervisor_output** parameters:
+- `process_id` (required): UUID of the process
+- `limit`: Max log entries to return (default 50)
+
+### CLI Commands
+
+Users can manage processes directly via commands:
+
+| Command | Description |
+|---------|-------------|
+| `:sup-start <cmd>` | Start a supervised process |
+| `:sup-start=name <cmd>` | Start with a friendly name |
+| `:sup-list` | List processes for current session |
+| `:sup-list --all` | List processes from all sessions |
+| `:sup-logs <id> [limit]` | Get output from a process |
+| `:sup-stop <id>` | Stop a process |
+
+### Process Lifecycle
+
+1. **Start**: Process is spawned via shell, assigned a UUID
+2. **Running**: stdout/stderr captured as `LogEntry` objects
+3. **Tracking**: Up to 10,000 log entries kept per process
+4. **Completion**: Exit code/signal captured, status updated
+5. **Session cleanup**: All session processes can be stopped on close
+
+### Process Status
+
+Processes have one of three states:
+
+```json
+{"state": "running", "pid": 12345}
+{"state": "exited", "code": 0, "signal": null}
+{"state": "failed", "error": "message"}
+```
+
+### Log Entries
+
+Each log entry contains:
+- `timestamp`: ISO datetime
+- `source`: "stdout", "stderr", or "system"
+- `content`: The log line text
+
+### Use Cases
+
+- **Dev servers**: Start `npm run dev` and check its output later
+- **Watchers**: Run `cargo watch -x test` in background
+- **Builds**: Start long builds and monitor progress
+- **Databases**: Start `docker-compose up` and verify it's running
+
+---
+
 ## Debug & Observability
 
 ### Debug Pane
@@ -380,7 +466,13 @@ balloons/
 │   ├── runner.py       # SessionRunner (async streaming)
 │   ├── manager.py      # SessionManager (multi-session)
 │   ├── formatter.py    # Output formatting
-│   └── debug_log.py    # Debug logging
+│   ├── debug_log.py    # Debug logging
+│   └── supervisor_tools.py  # Process supervisor tools
+├── balloons-rs/            # Rust backend (LMDB storage + process supervisor)
+│   └── crates/
+│       ├── balloons-core/      # Storage engine
+│       ├── balloons-supervisor/ # Process management
+│       └── balloons-py/        # PyO3 bindings
 └── widgets/
     ├── chat_log.py     # Chat display
     ├── context_tree.py # Session/turn tree

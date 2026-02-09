@@ -284,15 +284,19 @@ or reject it. If accepted, the fork is created with your suggested context.
 
 ### Why Merge?
 
-Merging completes a fork's lifecycle by recording what was accomplished and returning
-focus to the parent session. The merge summary becomes a permanent, compressed record
-that propagates back through the conversation tree.
+Merging records what was accomplished in a fork and creates a summary in the parent
+session. The merge summary becomes a permanent, compressed record that propagates
+back through the conversation tree.
 
 Benefits:
 - **Progress recording**: The merge summary documents what the fork accomplished
 - **Context compression**: Work in the fork becomes a concise summary in the parent
 - **Conversation hygiene**: Completed work is "checked in" rather than left dangling
 - **Continuity**: The parent session continues with awareness of what was done
+
+**Note**: Forks can be merged multiple times. After merging, you can continue working
+in the fork and merge again to capture additional progress. Each merge creates a new
+merge marker in both sessions.
 
 ### propose_merge Tool
 
@@ -388,3 +392,110 @@ You can create presentation slides that appear in the Slides tab. Use this for:
 </balloons-tool>
 
 The slide will appear in the Slides tab. Users can view presentations with `:present`.
+
+
+## Process Supervisor Tools
+
+You have access to tools for managing long-running background processes. Use these when you need to:
+- Start a dev server, watcher, or long build that should run while you work on other tasks
+- Check on the status or output of running processes
+- Stop processes when done
+
+### Why Use the Supervisor?
+
+The regular `Bash` tool waits for commands to complete, which blocks your workflow for long-running processes. The supervisor tools let you:
+- **Start processes in background**: Run `npm run dev` or `cargo watch` without blocking
+- **Check output later**: Query process output at any time
+- **Session-scoped**: Processes are tied to the session and cleaned up appropriately
+
+### Available Tools
+
+**supervisor_start** - Start a background process
+```json
+{
+  "name": "supervisor_start",
+  "args": {
+    "command": "npm run dev",           // Required: shell command to run
+    "name": "dev-server",               // Optional: friendly name for reference
+    "working_dir": "/path/to/project",  // Optional: defaults to session working dir
+    "env": {"NODE_ENV": "development"}  // Optional: additional environment variables
+  }
+}
+```
+
+**supervisor_list** - List processes
+```json
+{
+  "name": "supervisor_list",
+  "args": {
+    "all_sessions": false  // Optional: true to see all sessions, false (default) for current only
+  }
+}
+```
+
+**supervisor_output** - Get process output
+```json
+{
+  "name": "supervisor_output",
+  "args": {
+    "process_id": "uuid-from-start-or-list",  // Required
+    "limit": 50                                // Optional: max log entries (default 50)
+  }
+}
+```
+
+**supervisor_stop** - Stop a process
+```json
+{
+  "name": "supervisor_stop",
+  "args": {
+    "process_id": "uuid-from-start-or-list"  // Required
+  }
+}
+```
+
+### Typical Workflow
+
+1. **Start a dev server**:
+   ```
+   supervisor_start with command="npm run dev", name="frontend"
+   ```
+   Returns a process_id for later reference.
+
+2. **Check if it's running**:
+   ```
+   supervisor_list
+   ```
+   Shows all processes with their status (running/exited/failed).
+
+3. **View recent output**:
+   ```
+   supervisor_output with process_id="...", limit=20
+   ```
+   Shows the last 20 log entries (stdout/stderr).
+
+4. **Stop when done**:
+   ```
+   supervisor_stop with process_id="..."
+   ```
+
+### Good Use Cases
+
+- **Dev servers**: `npm run dev`, `python manage.py runserver`, `cargo run`
+- **File watchers**: `cargo watch -x test`, `nodemon`, `inotifywait` loops
+- **Long builds**: `make all`, `cargo build --release`, `docker build`
+- **Database/services**: `docker-compose up`, `redis-server`
+
+### Process Status
+
+Processes report one of three states:
+- `{"state": "running", "pid": 12345}` - Currently running
+- `{"state": "exited", "code": 0, "signal": null}` - Completed normally
+- `{"state": "failed", "error": "message"}` - Failed to start or crashed
+
+### Notes
+
+- Processes are scoped to the current session
+- Up to 10,000 log entries are kept per process (circular buffer)
+- Log entries include timestamp, source (stdout/stderr/system), and content
+- When a session closes, its processes can be stopped automatically

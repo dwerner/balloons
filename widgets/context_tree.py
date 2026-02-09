@@ -188,6 +188,8 @@ class SelectableTreeWidget(Tree):
         if event.ctrl:
             if node_type in ("session", "fork", "merge"):
                 session_id = node.data.get("session_id")
+                debug_log.info(f"LINK DEBUG: ctrl+click on node_type={node_type}, session_id='{session_id}' (len={len(session_id) if session_id else 0})", category="link")
+                debug_log.info(f"LINK DEBUG: full node.data = {node.data}", category="link")
                 if session_id:
                     self.post_message(self.LinkRequested(session_id))
                     event.stop()

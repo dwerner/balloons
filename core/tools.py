@@ -9,6 +9,7 @@ All tools are organized into categories:
   - Workflow tools (propose_fork, propose_merge, create_slide)
   - Session/link tools (list_links, follow_link, search_linked_session, session_info)
   - UI tools (balloon)
+- SUPERVISOR_TOOLS: Process supervisor tools for managing long-running commands
 """
 
 # Standard file/shell tools in OpenAI function format
@@ -437,21 +438,217 @@ BALLOON_TOOL_NAMES = {
     "speak",
 }
 
+# Process supervisor tools for managing long-running background processes
+SUPERVISOR_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "supervisor_start",
+            "description": """Start a new supervised background process.
+
+Use this tool to run long-running commands (servers, watchers, builds, etc.) that
+should continue running while you work on other tasks. The process output is captured
+and can be queried later with supervisor_output.
+
+Examples of good use cases:
+- Starting a development server: `npm run dev`
+- Running a file watcher: `cargo watch -x test`
+- Long builds: `make all`
+- Database processes: `docker-compose up`
+
+The process is scoped to the current session and will be tracked until stopped
+or the session is closed.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The shell command to execute"
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Optional friendly name for the process (e.g., 'dev-server', 'test-watcher')"
+                    },
+                    "working_dir": {
+                        "type": "string",
+                        "description": "Working directory for the process. Defaults to session working directory."
+                    },
+                    "env": {
+                        "type": "object",
+                        "description": "Optional environment variables to set (in addition to inherited env)",
+                        "additionalProperties": {"type": "string"}
+                    }
+                },
+                "required": ["command"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "supervisor_list",
+            "description": """List all supervised processes.
+
+Shows all processes managed by the supervisor, including their status (running/exited),
+command, and basic info. By default only shows processes for the current session.
+
+Use this to check what background processes are running before starting new ones,
+or to get process IDs for supervisor_output or supervisor_stop.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "all_sessions": {
+                        "type": "boolean",
+                        "description": "If true, list processes from all sessions. Default: only current session."
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "supervisor_output",
+            "description": """Get output from a supervised process.
+
+Returns recent log entries (stdout, stderr, system messages) from a process.
+Use this to check on the status of a background process, see build output,
+or diagnose issues.
+
+The output includes timestamps and source (stdout/stderr/system) for each entry.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "process_id": {
+                        "type": "string",
+                        "description": "The process ID (from supervisor_start or supervisor_list)"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of log entries to return. Default: 50"
+                    }
+                },
+                "required": ["process_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "supervisor_stop",
+            "description": """Stop a supervised process.
+
+Sends SIGTERM to stop a running process. Use this when you're done with a
+background process (e.g., shutting down a dev server, stopping a watcher).
+
+The process and its logs are retained after stopping, so you can still
+query its output with supervisor_output.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "process_id": {
+                        "type": "string",
+                        "description": "The process ID to stop"
+                    }
+                },
+                "required": ["process_id"]
+            }
+        }
+    },
+]
+
+# Names of supervisor tools
+SUPERVISOR_TOOL_NAMES = {
+    "supervisor_start", "supervisor_list", "supervisor_output", "supervisor_stop",
+}
+
+# Session review tools for quality evaluation
+REVIEW_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "save_review",
+            "description": """Save a completed session quality review.
+
+Call this tool after collecting all review data from the user:
+- Rubric scores (1-5) for each dimension
+- User's summary of their experience
+- Your task classification and analysis
+
+This saves the review data persistently for later analysis and reporting.
+The review will be associated with the session being reviewed.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "ID of the session being reviewed (from the context provided)"
+                    },
+                    "model_under_review": {
+                        "type": "string",
+                        "description": "Backend/model name that was used in the session being reviewed"
+                    },
+                    "scores": {
+                        "type": "object",
+                        "description": "Rubric scores (1-5 each, or 0 if skipped)",
+                        "properties": {
+                            "correctness": {"type": "integer", "minimum": 0, "maximum": 5},
+                            "efficiency": {"type": "integer", "minimum": 0, "maximum": 5},
+                            "instruction_following": {"type": "integer", "minimum": 0, "maximum": 5},
+                            "recovery": {"type": "integer", "minimum": 0, "maximum": 5},
+                            "autonomy": {"type": "integer", "minimum": 0, "maximum": 5},
+                            "judgment": {"type": "integer", "minimum": 0, "maximum": 5},
+                            "communication": {"type": "integer", "minimum": 0, "maximum": 5}
+                        },
+                        "required": ["correctness", "efficiency", "instruction_following", "recovery", "autonomy", "judgment", "communication"]
+                    },
+                    "task_category": {
+                        "type": "string",
+                        "enum": ["debugging", "feature", "refactor", "exploration", "documentation", "review", "learning", "ops", "other"],
+                        "description": "Category of the task performed in the session"
+                    },
+                    "task_description": {
+                        "type": "string",
+                        "description": "One sentence description of what the session was about"
+                    },
+                    "user_summary": {
+                        "type": "string",
+                        "description": "User's freeform comments about the session"
+                    },
+                    "llm_commentary": {
+                        "type": "string",
+                        "description": "Your analysis of the session including patterns from sentiment markers and suggestions"
+                    }
+                },
+                "required": ["session_id", "model_under_review", "scores", "task_category", "task_description", "user_summary", "llm_commentary"]
+            }
+        }
+    },
+]
+
+# Names of review tools
+REVIEW_TOOL_NAMES = {"save_review"}
+
 
 def get_tools_for_request(
     allowed_tools: list[str] | None = None,
     disable_tools: bool = False,
     include_balloon_tools: bool = True,
+    include_supervisor_tools: bool = True,
+    include_review_tools: bool = False,
 ) -> list[dict] | None:
     """Get the list of tools to include in an API request.
 
     Includes standard file/shell tools and optionally Balloons-specific tools
-    (workflow, UI, session/link navigation).
+    (workflow, UI, session/link navigation), supervisor tools, and review tools.
 
     Args:
         allowed_tools: List of tool names to allow, or None for all
         disable_tools: If True, return None (no tools)
         include_balloon_tools: If True, include balloon-specific tools
+        include_supervisor_tools: If True, include process supervisor tools
+        include_review_tools: If True, include session review tools (save_review)
 
     Returns:
         List of tool definitions, or None if tools disabled
@@ -463,6 +660,10 @@ def get_tools_for_request(
     all_tools = TOOLS
     if include_balloon_tools:
         all_tools = all_tools + BALLOON_TOOLS
+    if include_supervisor_tools:
+        all_tools = all_tools + SUPERVISOR_TOOLS
+    if include_review_tools:
+        all_tools = all_tools + REVIEW_TOOLS
 
     if allowed_tools is None:
         return all_tools

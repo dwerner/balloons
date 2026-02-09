@@ -72,13 +72,8 @@ class Breadcrumb(Static):
         """Update the breadcrumb to show the path to the given session."""
         self._session = session
         self._path = await self._build_path(session)
+        self.remove_class("hidden")
         self.refresh()
-
-        # Show/hide based on whether we're in a fork
-        if len(self._path) <= 1:
-            self.add_class("hidden")
-        else:
-            self.remove_class("hidden")
 
     async def _build_path(self, session: Session) -> list[dict]:
         """Build the path from root session to current."""

@@ -15,6 +15,14 @@ default_backend: claude
 # Falls back to $VISUAL, then $EDITOR, then vi
 # editor: nvim
 
+# Sound notifications (files in ~/.balloons/sounds/)
+# Uses sounds from https://github.com/akx/Notifications (CC0/CC-BY-3.0)
+# sounds:
+#   enabled: true
+#   done: Chord.ogg        # Played when streaming completes
+#   error: Glitch.ogg      # Played on errors
+#   notification: Polite.ogg  # Played when input is required
+
 # Available backends
 backends:
   # Direct Claude API (default) - uses claude CLI

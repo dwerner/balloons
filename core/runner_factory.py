@@ -11,8 +11,9 @@ from .base_runner import BaseRunner
 _USER_PROMPTS_DIR = Path.home() / ".balloons" / "prompts"
 _SOURCE_PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
-# Claude-specific balloons tools prompt filename
+# Prompt filenames
 _CLAUDE_BALLOONS_TOOLS_FILENAME = "claude-balloons-tools.md"
+_OPENAI_BALLOONS_TOOLS_FILENAME = "openai-balloons-tools.md"
 
 
 def _get_prompt_path(filename: str) -> Path | None:
@@ -46,7 +47,7 @@ def ensure_prompts_installed() -> None:
     _USER_PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
 
     # List of prompts to install
-    prompts = [_CLAUDE_BALLOONS_TOOLS_FILENAME]
+    prompts = [_CLAUDE_BALLOONS_TOOLS_FILENAME, _OPENAI_BALLOONS_TOOLS_FILENAME]
 
     for filename in prompts:
         user_path = _USER_PROMPTS_DIR / filename
@@ -56,22 +57,42 @@ def ensure_prompts_installed() -> None:
                 user_path.write_text(source_path.read_text())
 
 
-def _load_claude_balloons_tools_prompt() -> str:
-    """Load the Claude-specific balloons tools prompt from file.
-
-    This prompt instructs Claude to use XML-style <balloons-tool> tags for
-    workflow and link navigation tools. It's only used for Claude backends.
-    OpenAI-compatible backends use native function calling via tools.py instead.
+def _load_prompt_file(filename: str) -> str:
+    """Load a prompt file from user or source directory.
 
     Looks in ~/.balloons/prompts/ first, then falls back to source directory.
+
+    Args:
+        filename: Name of the prompt file to load
+
+    Returns:
+        File contents, or empty string if not found
     """
-    path = _get_prompt_path(_CLAUDE_BALLOONS_TOOLS_FILENAME)
+    path = _get_prompt_path(filename)
     if path:
         try:
             return path.read_text()
         except Exception:
             pass
     return ""
+
+
+def _load_claude_balloons_tools_prompt() -> str:
+    """Load the Claude-specific balloons tools prompt from file.
+
+    This prompt instructs Claude to use XML-style <balloons-tool> tags for
+    workflow and link navigation tools.
+    """
+    return _load_prompt_file(_CLAUDE_BALLOONS_TOOLS_FILENAME)
+
+
+def _load_openai_balloons_tools_prompt() -> str:
+    """Load the OpenAI-specific balloons tools prompt from file.
+
+    This prompt documents the supervisor and other Balloons tools
+    for OpenAI-compatible backends that use native function calling.
+    """
+    return _load_prompt_file(_OPENAI_BALLOONS_TOOLS_FILENAME)
 
 
 def validate_backend_config(backend: BackendConfig) -> str | None:
@@ -141,7 +162,7 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
 
     if backend_type == "openai":
         # OpenAI-compatible backend (OpenRouter, llamacpp, etc.)
-        # Uses native function calling - no XML tool prompt needed
+        # Uses native function calling for tools - add documentation prompt
         from .openai_runner import OpenAICompatibleRunner
 
         if not backend.base_url:
@@ -151,6 +172,11 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
 
         # Model defaults to "default" for local servers like llama.cpp that ignore this field
         model = backend.model or "default"
+
+        # Add OpenAI-specific tool documentation prompt
+        balloons_prompt = _load_openai_balloons_tools_prompt()
+        if balloons_prompt:
+            parts.append(balloons_prompt)
 
         system_prompt = "\n\n".join(parts) if parts else None
 

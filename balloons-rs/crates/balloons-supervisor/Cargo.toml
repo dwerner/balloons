@@ -10,10 +10,11 @@ description = "Process supervisor for long-running commands with streaming outpu
 procstream.workspace = true
 
 # Async runtime
-tokio.workspace = true
 core-executor.workspace = true
 async-trait.workspace = true
 futures-lite.workspace = true
+async-lock.workspace = true
+async-channel.workspace = true
 
 # Serialization
 serde.workspace = true
@@ -33,4 +34,5 @@ tracing.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-tokio = { workspace = true, features = ["test-util"] }
+smol-potat = "1"
+smol = "2"

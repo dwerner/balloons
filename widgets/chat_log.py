@@ -25,7 +25,7 @@ from .merge_marker import MergeMarker
 from .merged_to_marker import MergedToMarker
 from .link_marker import LinkMarker
 from .archive_marker import ArchiveMarker
-from models import TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock
+from models import TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, Sentiment
 from core.formatter import format_edit_as_diff, guess_language
 from core.json_stream import StreamingJsonParser
 from core.history_loader import (
@@ -470,6 +470,22 @@ class ErrorMarkerWidget(Static):
 class MessageWidget(Static):
     """A single message in the chat log."""
 
+    # Sentiment emoji mapping
+    SENTIMENT_EMOJI = {
+        Sentiment.EXCELLENT: "\u2764\ufe0f",    # ❤️
+        Sentiment.GOOD: "\U0001F44D",          # 👍
+        Sentiment.REVIEW: "\U0001F50D",        # 🔍
+        Sentiment.POOR: "\U0001F44E",          # 👎
+        Sentiment.TERRIBLE: "\u2620\ufe0f",    # ☠️
+    }
+    SENTIMENT_ORDER = [
+        Sentiment.EXCELLENT,
+        Sentiment.GOOD,
+        Sentiment.REVIEW,
+        Sentiment.POOR,
+        Sentiment.TERRIBLE,
+    ]
+
     DEFAULT_CSS = """
     MessageWidget {
         padding: 0 1;
@@ -527,25 +543,79 @@ class MessageWidget(Static):
     MessageWidget.assistant:hover {
         background: #322222;
     }
+
+    /* Sentiment display */
+    MessageWidget.has-sentiment {
+        /* Subtle indicator that sentiment is set */
+    }
     """
 
-    def __init__(self, role: str, content: str = "", streaming: bool = False, turn_id: int = 0, block_idx: int = -1, **kwargs):
+    class SentimentChanged(Message):
+        """Posted when the user changes the sentiment rating."""
+
+        def __init__(self, turn_id: int, sentiment: Sentiment | None) -> None:
+            super().__init__()
+            self.turn_id = turn_id
+            self.sentiment = sentiment
+
+    def __init__(
+        self,
+        role: str,
+        content: str = "",
+        streaming: bool = False,
+        turn_id: int = 0,
+        block_idx: int = -1,
+        sentiment: Sentiment | None = None,
+        **kwargs
+    ):
         super().__init__(**kwargs)
         self.role = role
         self._content = content
         self._streaming = streaming
         self.turn_id = turn_id
         self.block_idx = block_idx  # Index within content_blocks, -1 if not set
+        self._sentiment = sentiment
         self.add_class(role)
+        if sentiment:
+            self.add_class("has-sentiment")
+
+    def _render_sentiment_bar(self, justify: str = "left") -> Text:
+        """Render the sentiment buttons as a Text.
+
+        Args:
+            justify: Text justification ("left" or "right")
+        """
+        text = Text(justify=justify)
+        for i, sentiment in enumerate(self.SENTIMENT_ORDER):
+            emoji = self.SENTIMENT_EMOJI[sentiment]
+            is_active = self._sentiment == sentiment
+            # Tighter spacing: just emoji with minimal padding
+            if is_active:
+                # Subtle highlight: muted background, not too bright
+                text.append(emoji, style="bold on #444444")
+            else:
+                text.append(emoji, style="dim")
+            # Add small space between emojis (except after last)
+            if i < len(self.SENTIMENT_ORDER) - 1:
+                text.append(" ")
+        return text
 
     def render(self) -> RenderableType:
         if self._streaming:
             # Plain text during streaming for performance
             return Text(f"{self._content}▌")
         elif self._content:
-            # Render markdown with syntax highlighting
-            return Markdown(self._content, code_theme="monokai")
+            # For assistant messages, include sentiment bar on the right
+            if self.role == "assistant":
+                sentiment_bar = self._render_sentiment_bar(justify="right")
+                md = Markdown(self._content, code_theme="monokai")
+                return Group(sentiment_bar, md)
+            else:
+                # Render markdown with syntax highlighting
+                return Markdown(self._content, code_theme="monokai")
         else:
+            if self.role == "assistant":
+                return self._render_sentiment_bar(justify="right")
             return Text("")
 
     def append_text(self, text: str, refresh: bool = True) -> None:
@@ -571,14 +641,71 @@ class MessageWidget(Static):
         self._content = content
         self.refresh()
 
-    def on_click(self) -> None:
-        """Highlight the corresponding tree node when clicked."""
+    def on_click(self, event: Click) -> None:
+        """Handle click - check if sentiment bar was clicked, otherwise highlight tree node."""
+        # Check if click is in the sentiment bar area (first content line, for assistant messages)
+        # Note: assistant messages have padding: 1 2 0 2 (top=1, right=2, bottom=0, left=2)
+        # So the first content line is at y=1 (after top padding)
+        # And the right side has 2 chars of padding
+        if self.role == "assistant" and not self._streaming and event.y == 1:
+            # Sentiment bar is right-justified on the first content line
+            # Layout: "emoji space emoji space emoji space emoji space emoji"
+            # Each emoji is ~2 chars, space is 1 char = 3 chars per button (except last = 2)
+            # Total width: 5 emojis * 2 + 4 spaces = 14 chars
+            sentiment_bar_width = 14
+            # Account for right padding (2 chars) when calculating content width
+            content_width = self.size.width - 2 - 2  # subtract left and right padding
+
+            # Check if click is in the right-side sentiment area (within content area)
+            # Adjust event.x for left padding
+            content_x = event.x - 2  # subtract left padding
+            sentiment_start_x = content_width - sentiment_bar_width
+            if content_x >= sentiment_start_x and content_x < content_width:
+                # Calculate which button was clicked
+                # Shift by 3 to align click area with visual position (emoji width variation)
+                relative_x = content_x - sentiment_start_x - 3
+                # Each button takes 3 chars (emoji=2 + space=1), except last (emoji=2)
+                button_width = 3
+                button_index = max(0, relative_x // button_width)
+                # Clamp to valid range
+                button_index = min(button_index, len(self.SENTIMENT_ORDER) - 1)
+
+                if 0 <= button_index < len(self.SENTIMENT_ORDER):
+                    clicked_sentiment = self.SENTIMENT_ORDER[button_index]
+
+                    # Toggle behavior: clicking same button clears it
+                    if self._sentiment == clicked_sentiment:
+                        self._sentiment = None
+                        self.remove_class("has-sentiment")
+                    else:
+                        self._sentiment = clicked_sentiment
+                        self.add_class("has-sentiment")
+
+                    self.refresh()
+                    self.post_message(self.SentimentChanged(self.turn_id, self._sentiment))
+                    return
+
+        # Regular click behavior - highlight tree node
         if self.turn_id > 0:
             # Find the ChatLog parent and post the click message
             for ancestor in self.ancestors_with_self:
                 if isinstance(ancestor, ChatLogView):
                     ancestor.post_message(ChatLogView.TurnClicked(self.turn_id))
                     break
+
+    def set_sentiment(self, sentiment: Sentiment | None) -> None:
+        """Set the sentiment (for external updates)."""
+        self._sentiment = sentiment
+        if sentiment:
+            self.add_class("has-sentiment")
+        else:
+            self.remove_class("has-sentiment")
+        self.refresh()
+
+    @property
+    def sentiment(self) -> Sentiment | None:
+        """Get the current sentiment."""
+        return self._sentiment
 
     @property
     def content(self) -> str:
@@ -729,6 +856,13 @@ class ChatLogView(VerticalScroll):
             super().__init__()
             self.turn_id = turn_id
 
+    class SentimentChanged(Message):
+        """Posted when a user changes the sentiment rating on a turn."""
+        def __init__(self, turn_id: int, sentiment: Sentiment | None) -> None:
+            super().__init__()
+            self.turn_id = turn_id
+            self.sentiment = sentiment
+
     following: reactive[bool] = reactive(True)  # True when auto-scrolling to new content
 
     DEFAULT_CSS = """
@@ -825,6 +959,11 @@ class ChatLogView(VerticalScroll):
         """Set up the custom scrollbar renderer when mounted."""
         # Use the marked scrollbar renderer for the vertical scrollbar
         self.vertical_scrollbar.renderer = MarkedScrollBarRender
+
+    def on_message_widget_sentiment_changed(self, event: MessageWidget.SentimentChanged) -> None:
+        """Handle sentiment changes from MessageWidget and bubble up as ChatLogView message."""
+        # Re-post as a ChatLogView message so the app can handle it
+        self.post_message(self.SentimentChanged(event.turn_id, event.sentiment))
 
     def set_unviewed_markers(self, unviewed_turn_ids: list[int]) -> None:
         """Update the scrollbar markers to show unviewed turn positions.
@@ -1372,7 +1511,8 @@ class ChatLogView(VerticalScroll):
         """
         if isinstance(instr, RenderMessage):
             return MessageWidget(
-                instr.role, instr.text, turn_id=instr.turn_id, block_idx=instr.block_idx
+                instr.role, instr.text, turn_id=instr.turn_id, block_idx=instr.block_idx,
+                sentiment=instr.sentiment
             )
 
         elif isinstance(instr, RenderToolUse):

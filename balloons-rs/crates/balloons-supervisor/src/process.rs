@@ -3,10 +3,11 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use async_channel::{Receiver, Sender};
+use async_lock::RwLock;
 use chrono::{DateTime, Utc};
-use futures_lite::StreamExt;
+use futures_lite::{future, StreamExt};
 use procstream::{ProcessEvent, ProcessEventType};
-use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, info};
 
 use crate::error::{Error, Result};
@@ -36,7 +37,7 @@ pub struct SupervisedProcess {
     /// Captured log entries (circular buffer).
     logs: RwLock<VecDeque<LogEntry>>,
     /// Channel to send stop signal.
-    stop_tx: Option<mpsc::Sender<()>>,
+    stop_tx: Option<Sender<()>>,
 }
 
 impl SupervisedProcess {
@@ -48,7 +49,7 @@ impl SupervisedProcess {
         working_dir: String,
         session_id: String,
         pid: u32,
-        stop_tx: mpsc::Sender<()>,
+        stop_tx: Sender<()>,
     ) -> Self {
         Self {
             id,
@@ -203,70 +204,78 @@ impl SupervisedProcess {
     }
 }
 
+/// Result of racing stop signal vs process events.
+enum EventLoopAction {
+    Stop,
+    Event(Option<ProcessEvent>),
+}
+
 /// Handle procstream events and update the supervised process.
 pub async fn handle_process_events(
     process: Arc<SupervisedProcess>,
     mut events: impl StreamExt<Item = ProcessEvent> + Unpin,
-    mut stop_rx: mpsc::Receiver<()>,
+    stop_rx: Receiver<()>,
 ) {
     debug!(process_id = %process.id, "Starting event handler");
 
     loop {
-        tokio::select! {
-            // Check for stop signal
-            _ = stop_rx.recv() => {
+        // Race the stop signal against the next event
+        let action = future::or(
+            async {
+                let _ = stop_rx.recv().await;
+                EventLoopAction::Stop
+            },
+            async { EventLoopAction::Event(events.next().await) },
+        )
+        .await;
+
+        match action {
+            EventLoopAction::Stop => {
                 info!(process_id = %process.id, "Received stop signal");
                 // TODO: Actually kill the process via procstream
                 break;
             }
-
-            // Process events from procstream
-            event = events.next() => {
-                match event {
-                    Some(event) => {
-                        let entry = match &event.event_type {
-                            ProcessEventType::Started { pid } => {
-                                debug!(process_id = %process.id, pid = pid, "Process started");
-                                LogEntry::system(format!("Process started (PID {})", pid))
-                            }
-                            ProcessEventType::Stdout => {
-                                let content = event.data.clone().unwrap_or_default();
-                                LogEntry::stdout(content)
-                            }
-                            ProcessEventType::Stderr => {
-                                let content = event.data.clone().unwrap_or_default();
-                                LogEntry::stderr(content)
-                            }
-                            ProcessEventType::Exited { code, signal } => {
-                                info!(
-                                    process_id = %process.id,
-                                    code = ?code,
-                                    signal = ?signal,
-                                    "Process exited"
-                                );
-                                // The status update happens separately
-                                let msg = match (code, signal) {
-                                    (Some(c), _) => format!("Process exited with code {}", c),
-                                    (_, Some(s)) => format!("Process killed by signal {}", s),
-                                    (None, None) => "Process exited".to_string(),
-                                };
-                                LogEntry::system(msg)
-                            }
+            EventLoopAction::Event(Some(event)) => {
+                let entry = match &event.event_type {
+                    ProcessEventType::Started { pid } => {
+                        debug!(process_id = %process.id, pid = pid, "Process started");
+                        LogEntry::system(format!("Process started (PID {})", pid))
+                    }
+                    ProcessEventType::Stdout => {
+                        let content = event.data.clone().unwrap_or_default();
+                        LogEntry::stdout(content)
+                    }
+                    ProcessEventType::Stderr => {
+                        let content = event.data.clone().unwrap_or_default();
+                        LogEntry::stderr(content)
+                    }
+                    ProcessEventType::Exited { code, signal } => {
+                        info!(
+                            process_id = %process.id,
+                            code = ?code,
+                            signal = ?signal,
+                            "Process exited"
+                        );
+                        let msg = match (code, signal) {
+                            (Some(c), _) => format!("Process exited with code {}", c),
+                            (_, Some(s)) => format!("Process killed by signal {}", s),
+                            (None, None) => "Process exited".to_string(),
                         };
-
-                        process.add_log(entry).await;
-
-                        // If process exited, we're done
-                        if matches!(event.event_type, ProcessEventType::Exited { .. }) {
-                            break;
-                        }
+                        LogEntry::system(msg)
                     }
-                    None => {
-                        // Stream ended
-                        debug!(process_id = %process.id, "Event stream ended");
-                        break;
-                    }
+                };
+
+                process.add_log(entry).await;
+
+                // If process exited, we're done
+                if matches!(event.event_type, ProcessEventType::Exited { .. }) {
+                    break;
                 }
+            }
+            EventLoopAction::Event(None) => {
+                // Stream ended
+                debug!(process_id = %process.id, "Event stream ended");
+                break;
             }
         }
     }

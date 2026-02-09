@@ -86,6 +86,7 @@ from core import (
     PresentCommand,
     SlidesCommand,
     ChatCommand,
+    ReviewCommand,
     debug_log,
     create_runner,
     ensure_prompts_installed,
@@ -345,25 +346,93 @@ class BalloonsApp(App):
                 )
         return self._backend_config
 
-    def _create_session_runner(self, session: Session) -> SessionRunner:
+    def _create_session_runner(
+        self,
+        session: Session,
+        backend_config: BackendConfig = None,
+        system_prompt: str = None,
+    ) -> SessionRunner:
         """Create a runner for a session, respecting session's backend preference.
 
         If the session specifies a backend that no longer exists, falls back to the
         default backend and clears the invalid backend_name from the session.
+
+        Args:
+            session: The session to create a runner for
+            backend_config: Optional backend config override (e.g., for review sessions)
+            system_prompt: Optional system prompt override (e.g., for review agent)
         """
-        try:
-            backend = self._get_backend_for_session(session)
-        except BackendNotFoundError as e:
-            debug_log.info(
-                f"Session backend '{e.backend_name}' not found, using default for runner",
-                category="session",
-                session_id=session.id,
+        if backend_config:
+            backend = backend_config
+        else:
+            try:
+                backend = self._get_backend_for_session(session)
+            except BackendNotFoundError as e:
+                debug_log.info(
+                    f"Session backend '{e.backend_name}' not found, using default for runner",
+                    category="session",
+                    session_id=session.id,
+                )
+                # Clear invalid backend and use default
+                session.backend_name = ""
+                asyncio.create_task(session.save_async())
+                backend = self._backend_config
+
+        if system_prompt:
+            # Create runner with custom system prompt
+            runner = self._create_runner_with_system_prompt(backend, system_prompt)
+        else:
+            runner = create_runner(backend)
+
+        return SessionRunner(session, runner=runner)
+
+    def _create_runner_with_system_prompt(self, backend: BackendConfig, system_prompt: str):
+        """Create a runner with a custom system prompt.
+
+        Used for special runners like the review agent that need their own prompt.
+        """
+        from core.runner_factory import resolve_env_var
+
+        backend_type = backend.type or "claude"
+
+        if backend_type == "openai":
+            from core.openai_runner import OpenAICompatibleRunner
+
+            api_key = resolve_env_var(backend.api_key or "")
+            model = backend.model or "default"
+
+            return OpenAICompatibleRunner(
+                base_url=backend.base_url,
+                api_key=api_key,
+                model=model,
+                system_prompt=system_prompt,
+                context_window=backend.context_window,
             )
-            # Clear invalid backend and use default
-            session.backend_name = ""
-            asyncio.create_task(session.save_async())
-            backend = self._backend_config
-        return SessionRunner(session, runner=create_runner(backend))
+        else:  # claude
+            from claude_runner import ClaudeRunner
+
+            # Load Claude-specific tool prompts for XML-style <balloons-tool> calls
+            balloons_prompt = ""
+            balloons_prompt_path = Path(__file__).parent / "prompts" / "claude-balloons-tools.md"
+            if balloons_prompt_path.exists():
+                try:
+                    balloons_prompt = balloons_prompt_path.read_text()
+                except Exception:
+                    pass
+
+            full_prompt = f"{system_prompt}\n\n{balloons_prompt}" if balloons_prompt else system_prompt
+
+            env = {}
+            if backend.base_url:
+                env["ANTHROPIC_BASE_URL"] = backend.base_url
+            if backend.api_key:
+                env["ANTHROPIC_API_KEY"] = resolve_env_var(backend.api_key)
+
+            return ClaudeRunner(
+                backend_env=env if env else None,
+                system_prompt=full_prompt,
+                context_window=backend.context_window,
+            )
 
     def _update_base_context_tokens(self, use_cache: bool = False) -> None:
         """Calculate and store base context tokens in TreeState.
@@ -2104,6 +2173,8 @@ class BalloonsApp(App):
             self._switch_to_slides_tab()
         elif isinstance(cmd, ChatCommand):
             self._switch_to_chat_tab()
+        elif isinstance(cmd, ReviewCommand):
+            await self._handle_review_command()
 
     def _format_tool_use(
         self, event: ToolUseEvent
@@ -4552,6 +4623,134 @@ class BalloonsApp(App):
         # Reload tree with new data
         await context_tree.load_all_sessions(self.session)
 
+    async def _handle_review_command(self) -> None:
+        """Start a quality review of the current session.
+
+        Creates a review fork with:
+        - Full session conversation (actual messages, not a summary)
+        - Review agent system prompt
+        - Switches to review_backend (or default_backend)
+
+        The review LLM sees the full conversation and can intelligently decide
+        what to focus on, summarizing tool outputs if context is limited.
+        """
+        from pathlib import Path
+        from models import Sentiment
+
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
+
+        # Validate session has content to review
+        if not self.session.turns:
+            self.notify("No turns to review in this session", severity="warning")
+            return
+
+        # Get review backend config
+        config = get_config()
+        try:
+            review_backend_config = config.get_review_backend()
+        except ValueError as e:
+            self.notify(str(e), severity="error")
+            return
+
+        # Load the review agent system prompt
+        prompt_path = Path(__file__).parent / "prompts" / "review-agent.md"
+        if not prompt_path.exists():
+            self.notify("Review agent prompt not found", severity="error")
+            return
+
+        review_system_prompt = prompt_path.read_text()
+
+        # Build metadata header for the review
+        sentiment_counts = {}
+        for turn in self.session.turns:
+            if turn.sentiment:
+                sentiment_counts[turn.sentiment.value] = sentiment_counts.get(turn.sentiment.value, 0) + 1
+
+        metadata_parts = [
+            "# Session Under Review",
+            f"- Session ID: {self.session.id[:8]}",
+            f"- Title: {self.session.title or '(untitled)'}",
+            f"- Model: {self.session.backend_name or config.default_backend}",
+            f"- Turn count: {len(self.session.turns)}",
+        ]
+
+        if sentiment_counts:
+            metadata_parts.append("")
+            metadata_parts.append("## Sentiment Summary")
+            sentiment_emojis = {
+                "excellent": "❤️",
+                "good": "👍",
+                "review": "🔍",
+                "poor": "👎",
+                "terrible": "☠️",
+            }
+            for sentiment, count in sorted(sentiment_counts.items()):
+                emoji = sentiment_emojis.get(sentiment, "")
+                metadata_parts.append(f"- {emoji} {sentiment}: {count}")
+
+        metadata_parts.append("")
+        metadata_parts.append("The full conversation follows. Please review it and help me evaluate its quality.")
+        session_metadata = "\n".join(metadata_parts)
+
+        # Create the review fork with descriptive title
+        reviewed_session_name = self.session.title or self.session.fork_name or "(untitled)"
+        reviewed_session_short_id = self.session.id[:8]
+
+        review_session = Session()
+        review_session.parent_id = self.session.id
+        review_session.fork_name = f"Review: {reviewed_session_short_id} ({reviewed_session_name})"
+        review_session.fork_status = "active"
+        review_session.fork_point_turn = len(self.session.turns)
+        review_session.backend_name = review_backend_config.name
+
+        # Copy all turns from the original session to the review session
+        # This gives the review LLM the full conversation context
+        for turn in self.session.turns:
+            review_session.add_turn(
+                role=turn.role,
+                content_block=turn.content_block,
+                tokens=turn.tokens,
+                exchange_id=turn.exchange_id,
+                timestamp=turn.timestamp,
+                context_mode=turn.context_mode,
+            )
+
+        await review_session.save_async()
+
+        # Register child in parent
+        self.session.add_child(
+            review_session.id,
+            "Quality review",
+            name="review",
+            fork_point=len(self.session.turns),
+        )
+        await self.session.save_async()
+
+        # Register review session with manager
+        self._manager._sessions[review_session.id] = review_session
+        # Create runner with review backend and custom system prompt
+        self._manager._runners[review_session.id] = self._create_session_runner(
+            review_session,
+            backend_config=review_backend_config,
+            system_prompt=review_system_prompt,
+        )
+
+        # Switch to review session
+        await self._manager.set_active(review_session.id)
+        chat_log.clear()
+        chat_log.load_history(review_session.turns, session=review_session)
+        await context_tree.load_all_sessions(review_session)
+        await breadcrumb.set_session(review_session)
+
+        # Start the review with metadata context
+        # The LLM will see the full conversation history plus this prompt
+        initial_prompt = f"{session_metadata}\n\nPlease help me review this session. Start by asking for my rubric scores."
+        self._start_streaming(initial_prompt)
+
+        self.notify(f"Started review session with {review_backend_config.name}")
+
     def _handle_clear_all_sessions_command(self) -> None:
         """Delete all sessions after confirmation."""
         asyncio.create_task(self._handle_clear_all_sessions_async())
@@ -4892,13 +5091,24 @@ class BalloonsApp(App):
             self._backend_config = config.get_backend(event.backend_name)
 
     def _get_enabled_tools(self) -> list[str]:
-        """Get enabled tools for the current backend."""
+        """Get enabled tools for the current backend.
+
+        For review sessions (fork_name == "review"), includes the save_review tool.
+        """
         backend_name = self._backend_config.name
         if self.session and self.session.backend_name:
             backend_name = self.session.backend_name
         if backend_name in self._tool_preferences:
-            return list(self._tool_preferences[backend_name].enabled_tools)
-        return list(DEFAULT_TOOLS)
+            tools = list(self._tool_preferences[backend_name].enabled_tools)
+        else:
+            tools = list(DEFAULT_TOOLS)
+
+        # Add review tools for review sessions
+        if self.session and self.session.fork_name == "review":
+            from core.tools import REVIEW_TOOL_NAMES
+            tools = list(set(tools) | REVIEW_TOOL_NAMES)
+
+        return tools
 
     def action_resize_tree(self, delta: int) -> None:
         """Resize the active tree by delta columns."""
@@ -4947,6 +5157,24 @@ class BalloonsApp(App):
             # Convert 1-indexed turn_id to 0-indexed turn_idx
             turn_idx = event.turn_id - 1
             self._tree_state.mark_turn_viewed(self.session.id, turn_idx)
+
+    async def on_chat_log_view_sentiment_changed(self, event: ChatLogView.SentimentChanged) -> None:
+        """Handle user changing sentiment rating on a turn."""
+        # Capture session reference before await to avoid race conditions
+        session = self.session
+        if session:
+            # Convert 1-indexed turn_id to 0-indexed turn_idx
+            turn_idx = event.turn_id - 1
+            if 0 <= turn_idx < len(session.turns):
+                turn = session.turns[turn_idx]
+                turn.sentiment = event.sentiment
+                # Save the session to persist the change
+                await session.save_async()
+                from core.debug_log import debug_log
+                debug_log.info(
+                    f"Sentiment updated: session={session.id[:8]}, turn_idx={turn_idx}, sentiment={event.sentiment}",
+                    category="sentiment"
+                )
 
     def on_status_bar_follow_clicked(self, event: StatusBar.FollowClicked) -> None:
         """Handle click on Follow indicator - scroll to bottom."""

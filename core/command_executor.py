@@ -299,8 +299,15 @@ class CommandExecutor:
         resolved: list[LinkTarget] = []
         needs_summary: list[Session] = []
 
+        debug_log.info(f"LINK DEBUG: resolve_link_targets called with prefixes={target_prefixes}", category="link")
+        debug_log.info(f"LINK DEBUG: all_sessions has {len(all_sessions)} sessions", category="link")
+        for s in all_sessions[:10]:  # Log first 10 session IDs
+            debug_log.info(f"LINK DEBUG:   session id='{s['id']}' (len={len(s['id'])})", category="link")
+
         for prefix in target_prefixes:
+            debug_log.info(f"LINK DEBUG: looking for prefix='{prefix}' (len={len(prefix)})", category="link")
             matches = [s for s in all_sessions if s["id"].startswith(prefix)]
+            debug_log.info(f"LINK DEBUG: found {len(matches)} matches", category="link")
 
             if not matches:
                 return LinkResult(success=False, error=f"No session found matching '{prefix}'")

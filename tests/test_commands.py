@@ -21,6 +21,7 @@ from core.commands import (
     PresentCommand,
     SlidesCommand,
     ChatCommand,
+    ReviewCommand,
 )
 
 
@@ -226,3 +227,10 @@ class TestSlideCommands:
     def test_chat(self, parser):
         cmd = parser.parse(":chat")
         assert isinstance(cmd, ChatCommand)
+
+
+class TestReviewCommand:
+    def test_review(self, parser):
+        """':review' starts a session quality review."""
+        cmd = parser.parse(":review")
+        assert isinstance(cmd, ReviewCommand)

@@ -2,7 +2,7 @@
 //!
 //! Generated from Python domain entities marked with @rust_schema.
 //! Source: models.py and other domain modules
-//! Generated: 2026-02-08T13:35:52.802020
+//! Generated: 2026-02-09T10:54:03.017869
 //!
 //! To regenerate:
 //!     python -m codegen.generate_rust
@@ -22,6 +22,7 @@ pub struct TurnData {
     pub context_mode: String,
     pub summary: String,
     pub exchange_id: Option<String>,
+    pub sentiment: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,4 +65,28 @@ pub struct SessionMetadata {
     pub created_at: i64,
     pub updated_at: i64,
     pub turn_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewData {
+    pub id: String,
+    pub session_id: String,
+    pub reviewed_at: String,
+    pub model_under_review: String,
+    pub review_backend: String,
+    pub score_correctness: i64,
+    pub score_efficiency: i64,
+    pub score_instruction_following: i64,
+    pub score_recovery: i64,
+    pub score_autonomy: i64,
+    pub score_judgment: i64,
+    pub score_communication: i64,
+    pub task_category: String,
+    pub task_description: String,
+    pub user_summary: String,
+    pub llm_commentary: String,
+    pub spec_version: String,
+    pub session_duration_minutes: Option<i64>,
+    pub turn_count: i64,
+    pub sentiment_counts: serde_json::Value,
 }

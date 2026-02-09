@@ -6,6 +6,7 @@ to handle function calls from the model.
 
 import asyncio
 import glob as glob_module
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -15,8 +16,9 @@ from typing import TYPE_CHECKING
 import aiofiles
 
 from .debug_log import debug_log
-from .tools import BALLOON_TOOL_NAMES
+from .tools import BALLOON_TOOL_NAMES, SUPERVISOR_TOOL_NAMES, REVIEW_TOOL_NAMES
 from .link_tools import LINK_TOOL_NAMES, execute_link_tool
+from .supervisor_tools import SUPERVISOR_TOOL_NAMES as SUP_TOOL_NAMES, execute_supervisor_tool
 from .fork import ForkProposal, ContextAssignment, MergeProposal
 from .tts import get_tts_runner, TTSConfig
 
@@ -67,11 +69,11 @@ async def execute_tool(
     """Execute a tool and return the result.
 
     Args:
-        name: Tool name (Read, Write, Bash, list_links, etc.)
+        name: Tool name (Read, Write, Bash, list_links, supervisor_start, etc.)
         args: Tool arguments from the model
         working_dir: Working directory for file operations
         run_id: Run ID for debug logging
-        session: Session for link tools (required for list_links, follow_link, search_linked_session)
+        session: Session for link/supervisor tools
 
     Returns:
         Tuple of (result_string, is_error)
@@ -89,6 +91,18 @@ async def execute_tool(
             if session is None:
                 return "Error: Link tools require a session context", True
             return await execute_link_tool(name, args, session)
+
+        # Process supervisor tools
+        if name in SUP_TOOL_NAMES:
+            if session is None:
+                return "Error: Supervisor tools require a session context", True
+            return await execute_supervisor_tool(name, args, session, working_dir)
+
+        # Review tools
+        if name in REVIEW_TOOL_NAMES:
+            if session is None:
+                return "Error: Review tools require a session context", True
+            return await execute_review_tool(name, args, session)
 
         # Standard file/shell tools
         if name == "Read":
@@ -713,3 +727,130 @@ async def execute_speak(args: dict) -> tuple[str, bool]:
     except Exception as e:
         debug_log.error(f"Speak tool error: {e}", category="tts")
         return f"Error speaking: {e}", True
+
+
+async def execute_review_tool(name: str, args: dict, session: "Session") -> tuple[str, bool]:
+    """Execute a review tool.
+
+    Args:
+        name: Tool name (save_review)
+        args: Tool arguments
+        session: The review session (fork)
+
+    Returns:
+        Tuple of (result_string, is_error)
+    """
+    if name == "save_review":
+        return await execute_save_review(args, session)
+    return f"Unknown review tool: {name}", True
+
+
+async def execute_save_review(args: dict, session: "Session") -> tuple[str, bool]:
+    """Save a session quality review.
+
+    Args:
+        args: Tool arguments containing review data
+        session: The review session (fork of the session being reviewed)
+
+    Returns:
+        Tuple of (result_string, is_error)
+    """
+    import uuid
+    from datetime import datetime
+    from storage_schema import ReviewData
+    from .async_storage import get_default_storage
+
+    # Extract and validate arguments
+    reviewed_session_id = args.get("session_id")
+    if not reviewed_session_id:
+        return "Error: session_id is required", True
+
+    model_under_review = args.get("model_under_review", "")
+    if not model_under_review:
+        return "Error: model_under_review is required", True
+
+    scores = args.get("scores", {})
+    required_scores = ["correctness", "efficiency", "instruction_following", "recovery", "autonomy", "judgment", "communication"]
+    for score_name in required_scores:
+        if score_name not in scores:
+            return f"Error: scores.{score_name} is required", True
+        score_val = scores[score_name]
+        if not isinstance(score_val, int) or score_val < 0 or score_val > 5:
+            return f"Error: scores.{score_name} must be an integer 0-5", True
+
+    task_category = args.get("task_category", "")
+    valid_categories = ["debugging", "feature", "refactor", "exploration", "documentation", "review", "learning", "ops", "other"]
+    if task_category not in valid_categories:
+        return f"Error: task_category must be one of {valid_categories}", True
+
+    task_description = args.get("task_description", "")
+    if not task_description:
+        return "Error: task_description is required", True
+
+    user_summary = args.get("user_summary", "")
+    llm_commentary = args.get("llm_commentary", "")
+
+    # Get the reviewed session to count sentiment markers
+    from session import Session as SessionClass
+    reviewed_session = await SessionClass.load_async(reviewed_session_id)
+    sentiment_counts = {}
+    turn_count = 0
+    if reviewed_session:
+        turn_count = len(reviewed_session.turns)
+        for turn in reviewed_session.turns:
+            if turn.sentiment:
+                sentiment_counts[turn.sentiment.value] = sentiment_counts.get(turn.sentiment.value, 0) + 1
+
+    # Get the review backend name
+    review_backend = session.backend_name or "default"
+
+    # Create the review record
+    review_data = ReviewData(
+        id=str(uuid.uuid4()),
+        session_id=reviewed_session_id,
+        reviewed_at=datetime.now().isoformat(),
+        model_under_review=model_under_review,
+        review_backend=review_backend,
+        score_correctness=scores["correctness"],
+        score_efficiency=scores["efficiency"],
+        score_instruction_following=scores["instruction_following"],
+        score_recovery=scores["recovery"],
+        score_autonomy=scores["autonomy"],
+        score_judgment=scores["judgment"],
+        score_communication=scores["communication"],
+        task_category=task_category,
+        task_description=task_description,
+        user_summary=user_summary,
+        llm_commentary=llm_commentary,
+        spec_version="0.1.0",
+        session_duration_minutes=None,  # Could calculate from timestamps
+        turn_count=turn_count,
+        sentiment_counts=sentiment_counts,
+    )
+
+    # Save to file-based storage (doesn't require Rust)
+    try:
+        import aiofiles
+        from dataclasses import asdict
+
+        reviews_dir = Path.home() / ".balloons" / "reviews"
+        reviews_dir.mkdir(parents=True, exist_ok=True)
+
+        review_path = reviews_dir / f"{review_data.id}.json"
+        review_dict = asdict(review_data)
+        review_json = json.dumps(review_dict, indent=2)
+
+        async with aiofiles.open(review_path, "w", encoding="utf-8") as f:
+            await f.write(review_json)
+
+        debug_log.info(
+            f"Review saved: {review_data.id[:8]} for session {reviewed_session_id[:8]}",
+            category="review",
+            details={"scores": scores, "category": task_category},
+        )
+
+        return f"Review saved successfully! ID: {review_data.id[:8]}", False
+
+    except Exception as e:
+        debug_log.error(f"Failed to save review: {e}", category="review")
+        return f"Error saving review: {e}", True

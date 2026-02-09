@@ -214,9 +214,9 @@ class Session:
     def is_read_only(self) -> bool:
         """Check if this session is read-only.
 
-        Previously, merged forks were read-only. Now they can continue
-        to be edited - the merge marker is just another turn that can
-        be deleted, and re-merging is allowed if context advances.
+        Merged forks are NOT read-only. They can continue to be edited
+        and re-merged any number of times. Each merge creates a new
+        merge marker capturing work done since the last merge.
         """
         return False
 

@@ -115,6 +115,15 @@ class AsyncStorage:
         turns_data = [self._turn_to_wire(turn) for turn in session.turns]
         turns_json = json.dumps(turns_data)
 
+        # Debug: check if any turns have sentiment
+        turns_with_sentiment = [(i, t.get('sentiment')) for i, t in enumerate(turns_data) if t.get('sentiment')]
+        if turns_with_sentiment:
+            from core.debug_log import debug_log
+            debug_log.info(
+                f"Saving session {session.id[:8]} with {len(turns_with_sentiment)} turns having sentiment: {turns_with_sentiment[:5]}",
+                category="storage"
+            )
+
         # Save session metadata first (required for replace_session_turns)
         await self._run_sync(self._storage.save_session, session.id, session_json)
 
@@ -170,6 +179,95 @@ class AsyncStorage:
         """
         json_data = await self._run_sync(self._storage.list_sessions)
         return json.loads(json_data)
+
+    # =========================================================================
+    # Review Operations (file-based for now, pending Rust integration)
+    # =========================================================================
+
+    async def save_review(self, review: "ReviewData") -> None:
+        """Save a session quality review to storage.
+
+        Uses file-based storage under ~/.balloons/reviews/ for now.
+        Will migrate to Rust storage in a future version.
+
+        Args:
+            review: The ReviewData object to save
+        """
+        from storage_schema import ReviewData
+        from dataclasses import asdict
+        import aiofiles
+
+        reviews_dir = Path.home() / ".balloons" / "reviews"
+        reviews_dir.mkdir(parents=True, exist_ok=True)
+
+        review_path = reviews_dir / f"{review.id}.json"
+        review_data = asdict(review)
+        review_json = json.dumps(review_data, indent=2)
+
+        async with aiofiles.open(review_path, "w", encoding="utf-8") as f:
+            await f.write(review_json)
+
+    async def load_review(self, review_id: str) -> Optional["ReviewData"]:
+        """Load a review from storage.
+
+        Args:
+            review_id: The review ID to load
+
+        Returns:
+            The ReviewData object, or None if not found
+        """
+        from storage_schema import ReviewData
+        import aiofiles
+
+        reviews_dir = Path.home() / ".balloons" / "reviews"
+        review_path = reviews_dir / f"{review_id}.json"
+
+        if not review_path.exists():
+            return None
+
+        try:
+            async with aiofiles.open(review_path, "r", encoding="utf-8") as f:
+                review_json = await f.read()
+            data = json.loads(review_json)
+            return ReviewData(**data)
+        except Exception:
+            return None
+
+    async def list_reviews(self, session_id: str | None = None) -> list[dict]:
+        """List reviews, optionally filtered by session.
+
+        Args:
+            session_id: Optional session ID to filter by
+
+        Returns:
+            List of review metadata dicts
+        """
+        import aiofiles
+
+        reviews_dir = Path.home() / ".balloons" / "reviews"
+        if not reviews_dir.exists():
+            return []
+
+        reviews = []
+        for review_file in reviews_dir.glob("*.json"):
+            try:
+                async with aiofiles.open(review_file, "r", encoding="utf-8") as f:
+                    review_json = await f.read()
+                data = json.loads(review_json)
+                if session_id is None or data.get("session_id") == session_id:
+                    reviews.append({
+                        "id": data.get("id"),
+                        "session_id": data.get("session_id"),
+                        "reviewed_at": data.get("reviewed_at"),
+                        "model_under_review": data.get("model_under_review"),
+                        "task_category": data.get("task_category"),
+                    })
+            except Exception:
+                continue
+
+        # Sort by reviewed_at, most recent first
+        reviews.sort(key=lambda r: r.get("reviewed_at", ""), reverse=True)
+        return reviews
 
     # =========================================================================
     # Turn Operations (for future separate turn storage)
@@ -279,6 +377,7 @@ class AsyncStorage:
             "context_mode": turn.context_mode.value,
             "summary": turn.summary,
             "exchange_id": turn.exchange_id,
+            "sentiment": turn.sentiment.value if turn.sentiment else None,
         }
 
     def _serialize_content_block(self, block: ContentBlock) -> dict:
@@ -417,7 +516,7 @@ class AsyncStorage:
 
     def _wire_to_turn(self, data: dict) -> Turn:
         """Convert wire format turn data to a Turn object."""
-        from models import Turn, ContextMode
+        from models import Turn, ContextMode, Sentiment
 
         content_block = self._deserialize_content_block(data.get("content_block", {"type": "text", "text": ""}))
 
@@ -427,6 +526,15 @@ class AsyncStorage:
         except ValueError:
             context_mode = ContextMode.COMPRESS
 
+        # Parse sentiment if present
+        sentiment = None
+        sentiment_str = data.get("sentiment")
+        if sentiment_str:
+            try:
+                sentiment = Sentiment(sentiment_str)
+            except ValueError:
+                pass  # Invalid sentiment value, leave as None
+
         return Turn(
             role=data["role"],
             content_block=content_block,
@@ -435,6 +543,7 @@ class AsyncStorage:
             context_mode=context_mode,
             summary=data.get("summary", ""),
             exchange_id=data.get("exchange_id"),
+            sentiment=sentiment,
         )
 
     def _deserialize_content_block(self, data: dict) -> ContentBlock:

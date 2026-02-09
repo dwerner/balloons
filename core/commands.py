@@ -315,6 +315,61 @@ class ChatCommand(Command):
     is_global: bool = True  # UI tab switch
 
 
+# =============================================================================
+# Process Supervisor Commands
+# =============================================================================
+
+@dataclass
+class SupervisorStartCommand(Command):
+    """Start a supervised background process.
+
+    The process runs in the background with output captured.
+    Use :sup-logs to view output, :sup-stop to stop.
+    """
+    command: str = ""  # Shell command to run
+    name: str = ""     # Optional friendly name
+
+
+@dataclass
+class SupervisorListCommand(Command):
+    """List all supervised processes."""
+    is_global: bool = True  # UI-only, no session interaction
+    all_sessions: bool = False  # If True, show processes from all sessions
+
+
+@dataclass
+class SupervisorLogsCommand(Command):
+    """View logs from a supervised process."""
+    is_global: bool = True  # UI-only
+    process_id: str = ""   # Process ID (or prefix)
+    limit: int = 50        # Number of log entries
+
+
+@dataclass
+class SupervisorStopCommand(Command):
+    """Stop a supervised process."""
+    process_id: str = ""   # Process ID (or prefix) to stop
+
+
+# =============================================================================
+# Session Review Commands
+# =============================================================================
+
+@dataclass
+class ReviewCommand(Command):
+    """Start a quality review of the current session.
+
+    Creates a review fork with:
+    - Full session context (turns with sentiment markers)
+    - Review agent system prompt
+    - Switches to review_backend (or default_backend)
+
+    The review agent guides the user through scoring the rubric dimensions
+    and saves the structured review via the save_review tool.
+    """
+    pass
+
+
 # Command documentation for help display
 COMMAND_DOCS = [
     # Session management
@@ -359,6 +414,13 @@ COMMAND_DOCS = [
     (":slides", "Switch to Slides tab view"),
     (":chat", "Switch to Chat tab view"),
     (":present", "Enter fullscreen presentation mode (Esc to exit)"),
+    # Process Supervisor
+    (":sup-start[=name] <cmd>", "Start supervised background process"),
+    (":sup-list [--all]", "List supervised processes (--all for all sessions)"),
+    (":sup-logs <id> [limit]", "View process logs (default 50 entries)"),
+    (":sup-stop <id>", "Stop a supervised process"),
+    # Session Review
+    (":review", "Start quality review of current session"),
     (":help", "Show this help"),
 ]
 
@@ -564,6 +626,30 @@ class CommandParser:
         if text == ":chat":
             return ChatCommand()
 
+        # Handle :sup-start[=name] <cmd>
+        if text.startswith(":sup-start"):
+            return self._parse_sup_start(text)
+
+        # Handle :sup-list [--all]
+        if text == ":sup-list" or text.startswith(":sup-list "):
+            all_sessions = "--all" in text
+            return SupervisorListCommand(all_sessions=all_sessions)
+
+        # Handle :sup-logs <id> [limit]
+        if text.startswith(":sup-logs"):
+            return self._parse_sup_logs(text)
+
+        # Handle :sup-stop <id>
+        if text.startswith(":sup-stop"):
+            remaining = text[9:].strip()
+            if not remaining:
+                raise ValueError(":sup-stop requires a process ID")
+            return SupervisorStopCommand(process_id=remaining)
+
+        # Handle :review
+        if text == ":review":
+            return ReviewCommand()
+
         # Unknown command
         cmd_name = text.split()[0]
         raise ValueError(f"Unknown command: {cmd_name}")
@@ -638,3 +724,44 @@ class CommandParser:
             raise ValueError(":link requires at least one session hash prefix")
 
         return LinkCommand(target_session_prefixes=target_prefixes)
+
+    def _parse_sup_start(self, text: str) -> SupervisorStartCommand:
+        """Parse :sup-start[=name] <cmd> command."""
+        name = ""
+        remaining = text[10:]  # Remove ":sup-start"
+
+        if remaining.startswith("="):
+            # Extract name until space: :sup-start=dev-server npm run dev
+            eq_part = remaining[1:]  # Remove "="
+            if " " in eq_part:
+                name, remaining = eq_part.split(" ", 1)
+            else:
+                name = eq_part
+                remaining = ""
+        else:
+            remaining = remaining.strip()
+
+        command = remaining.strip()
+        if not command:
+            raise ValueError(":sup-start requires a command")
+
+        return SupervisorStartCommand(command=command, name=name)
+
+    def _parse_sup_logs(self, text: str) -> SupervisorLogsCommand:
+        """Parse :sup-logs <id> [limit] command."""
+        remaining = text[9:].strip()  # Remove ":sup-logs"
+
+        if not remaining:
+            raise ValueError(":sup-logs requires a process ID")
+
+        parts = remaining.split()
+        process_id = parts[0]
+        limit = 50
+
+        if len(parts) > 1:
+            try:
+                limit = int(parts[1])
+            except ValueError:
+                raise ValueError(f"Invalid limit: {parts[1]} (must be a number)")
+
+        return SupervisorLogsCommand(process_id=process_id, limit=limit)

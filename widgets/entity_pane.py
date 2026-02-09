@@ -92,6 +92,8 @@ class EntityPane(Vertical):
         self._storage: AsyncStorage | None = None
         self._sessions_data: list[dict] = []
         self._turns_cache: dict[str, list[dict]] = {}  # session_id -> turns
+        self._reviews_data: list[dict] = []  # list of review metadata
+        self._reviews_cache: dict[str, dict] = {}  # review_id -> full review data
 
     def compose(self):
         with Horizontal(id="entity-header"):
@@ -123,7 +125,7 @@ class EntityPane(Vertical):
                 self._show_error(f"Failed to open storage: {e}")
 
     async def _refresh_data(self) -> None:
-        """Reload all sessions from storage."""
+        """Reload all sessions and reviews from storage."""
         if not self._storage:
             return
 
@@ -131,10 +133,15 @@ class EntityPane(Vertical):
             # Get session list
             self._sessions_data = await self._storage.list_sessions()
             self._turns_cache.clear()
+
+            # Get reviews list
+            self._reviews_data = await self._storage.list_reviews()
+            self._reviews_cache.clear()
+
             self._rebuild_tree()
             self._loaded = True
         except Exception as e:
-            self._show_error(f"Failed to load sessions: {e}")
+            self._show_error(f"Failed to load data: {e}")
 
     def _rebuild_tree(self) -> None:
         """Rebuild the tree from cached data."""
@@ -145,11 +152,18 @@ class EntityPane(Vertical):
 
         tree.root.remove_children()
 
-        # Update root label with count
-        count = len(self._sessions_data)
-        tree.root.set_label(f"[bold]Sessions[/] [dim]({count})[/]")
+        # Update root label
+        tree.root.set_label("[bold]Entities[/]")
 
-        # Sort by updated_at descending (most recent first)
+        # Add Sessions section
+        session_count = len(self._sessions_data)
+        sessions_label = Text()
+        sessions_label.append("📁 ", style="")
+        sessions_label.append("Sessions", style="bold")
+        sessions_label.append(f" ({session_count})", style="dim")
+        sessions_node = tree.root.add(sessions_label, data={"type": "section", "name": "sessions"}, expand=False)
+
+        # Sort sessions by updated_at descending (most recent first)
         sorted_sessions = sorted(
             self._sessions_data,
             key=lambda s: s.get("updated_at", 0),
@@ -163,11 +177,10 @@ class EntityPane(Vertical):
 
             # Format the label
             label = Text()
-            label.append("📁 ", style="")
             label.append(name, style="bold")
             label.append(f" ({turn_count} turns)", style="dim")
 
-            node = tree.root.add(
+            node = sessions_node.add(
                 label,
                 data={"type": "session", "id": session_id, "data": session},
                 expand=False
@@ -176,6 +189,38 @@ class EntityPane(Vertical):
             # Add placeholder for turns (loaded on expand)
             if turn_count > 0:
                 node.add_leaf("[dim]Loading turns...[/]", data={"type": "placeholder"})
+
+        # Add Reviews section
+        review_count = len(self._reviews_data)
+        reviews_label = Text()
+        reviews_label.append("📊 ", style="")
+        reviews_label.append("Reviews", style="bold")
+        reviews_label.append(f" ({review_count})", style="dim")
+        reviews_node = tree.root.add(reviews_label, data={"type": "section", "name": "reviews"}, expand=False)
+
+        # Sort reviews by reviewed_at descending (most recent first)
+        sorted_reviews = sorted(
+            self._reviews_data,
+            key=lambda r: r.get("reviewed_at", ""),
+            reverse=True
+        )
+
+        for review in sorted_reviews:
+            review_id = review.get("id", "unknown")
+            model = review.get("model_under_review", "unknown")
+            category = review.get("task_category", "unknown")
+            session_id = review.get("session_id", "")[:8]
+
+            # Format the label with score indicator
+            label = Text()
+            label.append(f"{category}", style="cyan")
+            label.append(f" - {model}", style="")
+            label.append(f" [{session_id}]", style="dim")
+
+            reviews_node.add_leaf(
+                label,
+                data={"type": "review", "id": review_id, "data": review}
+            )
 
         tree.root.expand()
 
@@ -226,6 +271,22 @@ class EntityPane(Vertical):
                 label,
                 data={"type": "turn", "id": turn_id, "session_id": session_id, "data": turn}
             )
+
+    async def _load_review_detail(self, review_id: str, node_data: dict) -> None:
+        """Load full review data and show details."""
+        if not self._storage:
+            return
+
+        try:
+            review = await self._storage.load_review(review_id)
+            if review:
+                from dataclasses import asdict
+                self._reviews_cache[review_id] = asdict(review)
+                # Update node_data with full data
+                node_data["data"] = self._reviews_cache[review_id]
+            self._show_detail(node_data)
+        except Exception as e:
+            self._show_error(f"Failed to load review: {e}")
 
     def _get_content_preview(self, content_block: dict) -> str:
         """Get a short preview of content block."""
@@ -285,6 +346,16 @@ class EntityPane(Vertical):
         node_type = node_data.get("type")
         if node_type in ("session", "turn"):
             self._show_detail(node_data)
+        elif node_type == "review":
+            # Load full review data if not cached
+            review_id = node_data.get("id")
+            if review_id and review_id not in self._reviews_cache:
+                self.run_worker(
+                    self._load_review_detail(review_id, node_data),
+                    name=f"load-review-{review_id}"
+                )
+            else:
+                self._show_detail(node_data)
 
     def _show_detail(self, node_data: dict) -> None:
         """Show detailed view of selected item."""
@@ -415,6 +486,92 @@ class EntityPane(Vertical):
                 lines.append(Text(""))
                 lines.append(Text("Summary:", style="bold underline"))
                 lines.append(Text(summary, style="italic"))
+
+        elif node_type == "review":
+            lines.append(Text("Review Details", style="bold underline cyan"))
+            lines.append(Text(""))
+
+            # Basic info
+            lines.append(Text("ID: ", style="dim").append(data.get("id", "unknown")))
+            lines.append(Text("Session ID: ", style="dim").append(data.get("session_id", "unknown")))
+            lines.append(Text("Reviewed At: ", style="dim").append(data.get("reviewed_at", "unknown")))
+            lines.append(Text(""))
+
+            # Models
+            lines.append(Text("Model Under Review: ", style="dim").append(data.get("model_under_review", "unknown"), style="yellow"))
+            lines.append(Text("Review Backend: ", style="dim").append(data.get("review_backend", "unknown")))
+            lines.append(Text(""))
+
+            # Task info
+            lines.append(Text("Task Category: ", style="dim").append(data.get("task_category", "unknown"), style="cyan"))
+            task_desc = data.get("task_description", "")
+            if task_desc:
+                lines.append(Text("Task Description: ", style="dim").append(task_desc))
+            lines.append(Text(""))
+
+            # Scores (1-5 scale)
+            lines.append(Text("Rubric Scores (1-5)", style="bold underline"))
+            score_fields = [
+                ("score_correctness", "Correctness"),
+                ("score_efficiency", "Efficiency"),
+                ("score_instruction_following", "Instruction Following"),
+                ("score_recovery", "Recovery"),
+                ("score_autonomy", "Autonomy"),
+                ("score_judgment", "Judgment"),
+                ("score_communication", "Communication"),
+            ]
+
+            for field, label in score_fields:
+                score = data.get(field)
+                if score is not None:
+                    # Color code the score
+                    if score >= 4:
+                        score_style = "green"
+                    elif score >= 3:
+                        score_style = "yellow"
+                    else:
+                        score_style = "red"
+                    lines.append(Text(f"  {label}: ", style="dim").append(str(score), style=score_style))
+
+            # Calculate average
+            scores = [data.get(f) for f, _ in score_fields if data.get(f) is not None]
+            if scores:
+                avg = sum(scores) / len(scores)
+                avg_style = "green" if avg >= 4 else ("yellow" if avg >= 3 else "red")
+                lines.append(Text(""))
+                lines.append(Text("  Average: ", style="dim bold").append(f"{avg:.1f}", style=avg_style))
+
+            lines.append(Text(""))
+
+            # Summaries
+            user_summary = data.get("user_summary", "")
+            if user_summary:
+                lines.append(Text("User Summary", style="bold underline"))
+                lines.append(Text(user_summary, style="italic"))
+                lines.append(Text(""))
+
+            llm_commentary = data.get("llm_commentary", "")
+            if llm_commentary:
+                lines.append(Text("LLM Commentary", style="bold underline"))
+                # Truncate if too long
+                if len(llm_commentary) > 800:
+                    llm_commentary = llm_commentary[:800] + "\n... (truncated)"
+                lines.append(Text(llm_commentary, style="dim"))
+                lines.append(Text(""))
+
+            # Metadata
+            turn_count = data.get("turn_count", 0)
+            duration = data.get("session_duration_minutes")
+            sentiment_counts = data.get("sentiment_counts", {})
+
+            if turn_count or duration or sentiment_counts:
+                lines.append(Text("Session Metadata", style="bold underline"))
+                if turn_count:
+                    lines.append(Text("  Turn Count: ", style="dim").append(str(turn_count)))
+                if duration:
+                    lines.append(Text("  Duration: ", style="dim").append(f"{duration} minutes"))
+                if sentiment_counts:
+                    lines.append(Text("  Sentiments: ", style="dim").append(str(sentiment_counts)))
 
         # Combine all lines
         output = Text()

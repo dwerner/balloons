@@ -24,6 +24,7 @@ from datetime import datetime
 from session import Session
 from models import ContextMode, TextBlock, ToolUseBlock, ToolResultBlock, ErrorBlock, ArchiveBlock, ForkBlock, MergeBlock, MergedToBlock, LinkBlock, InterruptionBlock
 from core.tree_state import TreeState, TreeEvent, SessionData, TurnData
+from core.debug_log import debug_log
 
 if TYPE_CHECKING:
     pass
@@ -163,6 +164,8 @@ class NestedTreeWidget(Tree):
                     node_type = node.data.get("type")
                     if node_type == "session":
                         session_id = node.data.get("session_id")
+                        debug_log.info(f"LINK DEBUG (nested): ctrl+click on node_type={node_type}, session_id='{session_id}' (len={len(session_id) if session_id else 0})", category="link")
+                        debug_log.info(f"LINK DEBUG (nested): full node.data = {node.data}", category="link")
                         if session_id:
                             self.post_message(self.LinkRequested(session_id))
                             event.stop()

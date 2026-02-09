@@ -21,6 +21,7 @@ from core.exceptions import RateLimitError, StreamTimeoutError
 STREAM_READLINE_TIMEOUT = 180.0
 from core.tool_executor import execute_tool
 from core.link_tools import LINK_TOOL_NAMES
+from core.tools import REVIEW_TOOL_NAMES
 
 # Regex to match <balloons-tool>...</balloons-tool> blocks
 # Use greedy match for JSON content since {.*?} cuts off at first } which breaks nested objects
@@ -585,11 +586,12 @@ class ClaudeRunner(BaseRunner):
             if msg_type == "result":
                 usage = data.get("usage", {})
 
-                # Only execute custom tools (link tools) that CLI doesn't know about
+                # Only execute custom tools (link/review tools) that CLI doesn't know about
                 # Standard tools (Read, Bash, etc.) are handled by CLI
+                custom_tool_names = LINK_TOOL_NAMES | REVIEW_TOOL_NAMES
                 custom_tool_calls = [
                     tc for tc in pending_tool_calls
-                    if tc["name"] in LINK_TOOL_NAMES
+                    if tc["name"] in custom_tool_names
                 ]
 
                 if custom_tool_calls:

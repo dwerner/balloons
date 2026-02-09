@@ -14,9 +14,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from models import (
-    Message, TextBlock, ToolUseBlock, ToolResultBlock,
+    Message, Turn, TextBlock, ToolUseBlock, ToolResultBlock,
     InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock,
-    MergeBlock, MergedToBlock, ArchiveBlock
+    MergeBlock, MergedToBlock, ArchiveBlock, Sentiment
 )
 from session import Session
 
@@ -37,6 +37,7 @@ class RenderMessage(RenderInstruction):
     role: str = ""  # "user" or "assistant"
     text: str = ""
     block_idx: int = 0
+    sentiment: Sentiment | None = None  # User sentiment rating (assistant turns only)
 
 
 @dataclass
@@ -151,14 +152,14 @@ class HistoryLoader:
 
     def load(
         self,
-        messages: list[Message],
+        messages: list[Message | Turn],
         session: Session | None = None,
         start_turn_id: int = 0
     ) -> HistoryLoadResult:
-        """Transform messages into render instructions.
+        """Transform messages/turns into render instructions.
 
         Args:
-            messages: List of Message objects to transform
+            messages: List of Message or Turn objects to transform
             session: Optional session (unused, kept for API compatibility)
             start_turn_id: Starting turn counter (for appending to existing history)
 
@@ -172,11 +173,14 @@ class HistoryLoader:
             turn_counter += 1
             turn_id = turn_counter
 
+            # Extract sentiment if this is a Turn object
+            sentiment = getattr(msg, 'sentiment', None)
+
             # Process message content blocks
             if msg.content_blocks:
                 for block_idx, block in enumerate(msg.content_blocks):
                     instr = self._process_block(
-                        block, msg.role, turn_id, block_idx, turn_idx
+                        block, msg.role, turn_id, block_idx, turn_idx, sentiment
                     )
                     if instr:
                         instructions.append(instr)
@@ -187,7 +191,8 @@ class HistoryLoader:
                         turn_id=turn_id,
                         role=msg.role,
                         text=msg.content,
-                        block_idx=0
+                        block_idx=0,
+                        sentiment=sentiment if msg.role == "assistant" else None
                     ))
 
         return HistoryLoadResult(
@@ -201,7 +206,8 @@ class HistoryLoader:
         role: str,
         turn_id: int,
         block_idx: int,
-        turn_idx: int
+        turn_idx: int,
+        sentiment: Sentiment | None = None
     ) -> RenderInstruction | None:
         """Process a single content block into a render instruction."""
 
@@ -211,7 +217,8 @@ class HistoryLoader:
                     turn_id=turn_id,
                     role=role,
                     text=block.text,
-                    block_idx=block_idx
+                    block_idx=block_idx,
+                    sentiment=sentiment if role == "assistant" else None
                 )
 
         elif isinstance(block, ToolUseBlock):

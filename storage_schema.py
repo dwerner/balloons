@@ -29,6 +29,7 @@ class TurnData:
     context_mode: str  # "copy", "compress", "drop"
     summary: str  # Cached summary for compress mode
     exchange_id: Optional[str] = None  # Groups turns in an agentic loop
+    sentiment: Optional[str] = None  # "excellent", "good", "review", "poor", "terrible"
 
 
 @rust_schema
@@ -101,3 +102,43 @@ class SessionMetadata:
     created_at: int  # Unix timestamp
     updated_at: int  # Unix timestamp
     turn_count: int
+
+
+@rust_schema
+@dataclass
+class ReviewData:
+    """Quality review of a session.
+
+    Created by the :review command when evaluating LLM performance.
+    Stored in REVIEWS table keyed by id.
+    """
+    id: str  # UUID
+    session_id: str  # Session being reviewed
+    reviewed_at: str  # ISO 8601 timestamp
+
+    # What was being evaluated
+    model_under_review: str  # Backend name active during session
+    review_backend: str  # Backend that performed the analysis
+
+    # User-provided rubric scores (1-5)
+    score_correctness: int
+    score_efficiency: int
+    score_instruction_following: int
+    score_recovery: int
+    score_autonomy: int
+    score_judgment: int
+    score_communication: int
+
+    # Task categorization
+    task_category: str  # enum value: debugging, feature, refactor, exploration, documentation, review, learning, ops, other
+    task_description: str  # freeform 1-sentence
+
+    # Summaries
+    user_summary: str  # User's freeform comments
+    llm_commentary: str  # Analysis LLM's commentary
+
+    # Metadata
+    spec_version: str = "0.1.0"  # Version of this spec used
+    session_duration_minutes: Optional[int] = None  # Optional
+    turn_count: int = 0  # Number of turns in session
+    sentiment_counts: dict = field(default_factory=dict)  # {"excellent": 2, "poor": 1, ...}

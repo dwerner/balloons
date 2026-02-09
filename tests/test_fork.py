@@ -118,17 +118,25 @@ class TestForkManager:
         assert "not in a fork" in result.error.lower()
 
     @pytest.mark.asyncio
-    async def test_prepare_merge_already_merged(self):
-        """Merge from already-merged fork should fail."""
+    async def test_prepare_merge_already_merged_allowed(self):
+        """Merge from already-merged fork should succeed (re-merging is allowed)."""
         context_builder = self.create_mock_context_builder()
         manager = ForkManager(context_builder)
 
-        session = self.create_mock_session(is_fork=True, is_merged=True)
+        parent = self.create_mock_session(id="parent-123")
+        session = self.create_mock_session(
+            is_fork=True,
+            is_merged=True,
+            parent=parent,
+            fork_name="feature-x",
+        )
 
         result = await manager.prepare_merge(session)
 
-        assert not result.success
-        assert "already merged" in result.error.lower()
+        # Re-merging should be allowed - forks can be merged multiple times
+        assert result.success
+        assert result.fork_session == session
+        assert result.parent_session == parent
 
     @pytest.mark.asyncio
     async def test_prepare_merge_no_parent(self):

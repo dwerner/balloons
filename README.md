@@ -11,6 +11,7 @@ Built with [Textual](https://github.com/Textualize/textual).
 - **Fork & Merge** - Git-like branching for parallel exploration without losing context
 - **Multi-Backend** - Support for Claude API and OpenAI-compatible endpoints (OpenRouter, llama.cpp)
 - **Background Streaming** - Multiple sessions can stream simultaneously
+- **Process Supervisor** - Manage long-running background processes (dev servers, builds) with streaming output capture
 
 ## Quick Start
 
@@ -60,6 +61,10 @@ Commands start with `:` and provide control over sessions and context:
 | `:merge [summary]` | Merge fork back to parent |
 | `:switch [name]` | Switch between sessions/forks |
 | `:title <title>` | Set session title |
+| `:sup-start <cmd>` | Start a supervised background process |
+| `:sup-list` | List running processes |
+| `:sup-logs <id>` | Get process output |
+| `:sup-stop <id>` | Stop a process |
 
 ### Keyboard Shortcuts
 

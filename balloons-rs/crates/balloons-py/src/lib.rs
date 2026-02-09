@@ -1,4 +1,4 @@
-//! PyO3 bindings for balloons-core storage.
+//! PyO3 bindings for balloons-core storage and balloons-supervisor.
 //!
 //! Uses core-executor's ThreadPoolExecutor for CPU-affine async execution.
 
@@ -6,9 +6,17 @@ use core_executor::ThreadPoolExecutor;
 use futures_lite::future;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use balloons_core::{LmdbEngine, SessionData, StorageClient};
+use balloons_supervisor::{ProcessSupervisor, StartRequest};
+
+// Global executor for supervisor operations
+static SUPERVISOR_EXECUTOR: OnceLock<Mutex<ThreadPoolExecutor>> = OnceLock::new();
+
+fn get_supervisor_executor() -> &'static Mutex<ThreadPoolExecutor> {
+    SUPERVISOR_EXECUTOR.get_or_init(|| Mutex::new(ThreadPoolExecutor::new(1)))
+}
 
 /// Python-facing storage handle
 ///
@@ -239,9 +247,217 @@ impl Storage {
     }
 }
 
+// =============================================================================
+// Process Supervisor bindings
+// =============================================================================
+
+/// Python-facing process supervisor
+///
+/// Manages long-running background processes with streaming output capture.
+/// Uses core-executor for async operations.
+#[pyclass]
+struct Supervisor {
+    inner: Arc<ProcessSupervisor>,
+}
+
+#[pymethods]
+impl Supervisor {
+    /// Create a new process supervisor
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(ProcessSupervisor::new()),
+        }
+    }
+
+    /// Start a new supervised process.
+    ///
+    /// Args:
+    ///     command: Shell command to execute
+    ///     session_id: Session this process belongs to
+    ///     working_dir: Optional working directory
+    ///     name: Optional friendly name for the process
+    ///     env_json: Optional JSON object of environment variables
+    ///
+    /// Returns:
+    ///     Process ID (UUID string)
+    #[pyo3(signature = (command, session_id, working_dir=None, name=None, env_json=None))]
+    fn start(
+        &self,
+        py: Python<'_>,
+        command: &str,
+        session_id: &str,
+        working_dir: Option<&str>,
+        name: Option<&str>,
+        env_json: Option<&str>,
+    ) -> PyResult<String> {
+        let env: Vec<(String, String)> = if let Some(json) = env_json {
+            let map: std::collections::HashMap<String, String> =
+                serde_json::from_str(json).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+            map.into_iter().collect()
+        } else {
+            vec![]
+        };
+
+        let request = StartRequest {
+            command: command.to_string(),
+            working_dir: working_dir.map(|s| s.to_string()),
+            session_id: session_id.to_string(),
+            name: name.map(|s| s.to_string()),
+            env,
+        };
+
+        let supervisor = Arc::clone(&self.inner);
+
+        py.allow_threads(|| {
+            let mut executor = get_supervisor_executor().lock().unwrap();
+            let task = executor.spawn_on_any(async move { supervisor.start(request).await });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Get information about a process.
+    ///
+    /// Args:
+    ///     process_id: The process ID
+    ///
+    /// Returns:
+    ///     JSON string with process info
+    fn get_process(&self, py: Python<'_>, process_id: &str) -> PyResult<String> {
+        let supervisor = Arc::clone(&self.inner);
+        let process_id = process_id.to_string();
+
+        py.allow_threads(|| {
+            let mut executor = get_supervisor_executor().lock().unwrap();
+            let task =
+                executor.spawn_on_any(async move { supervisor.get_process(&process_id).await });
+            let info = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+            serde_json::to_string(&info).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// List all processes, optionally filtered by session.
+    ///
+    /// Args:
+    ///     session_id: Optional session ID to filter by
+    ///
+    /// Returns:
+    ///     JSON array of process info objects
+    #[pyo3(signature = (session_id=None))]
+    fn list_processes(&self, py: Python<'_>, session_id: Option<&str>) -> PyResult<String> {
+        let supervisor = Arc::clone(&self.inner);
+        let session_id = session_id.map(|s| s.to_string());
+
+        py.allow_threads(|| {
+            let mut executor = get_supervisor_executor().lock().unwrap();
+            let task = executor.spawn_on_any(async move {
+                supervisor.list_processes(session_id.as_deref()).await
+            });
+            let infos = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?;
+
+            serde_json::to_string(&infos).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Get output from a process.
+    ///
+    /// Args:
+    ///     process_id: The process ID
+    ///     limit: Maximum number of log entries to return (default 50)
+    ///
+    /// Returns:
+    ///     JSON array of log entries
+    #[pyo3(signature = (process_id, limit=50))]
+    fn get_output(&self, py: Python<'_>, process_id: &str, limit: usize) -> PyResult<String> {
+        let supervisor = Arc::clone(&self.inner);
+        let process_id = process_id.to_string();
+
+        py.allow_threads(|| {
+            let mut executor = get_supervisor_executor().lock().unwrap();
+            let task = executor
+                .spawn_on_any(async move { supervisor.get_output(&process_id, limit).await });
+            let logs = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+            serde_json::to_string(&logs).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Stop a running process.
+    ///
+    /// Args:
+    ///     process_id: The process ID to stop
+    fn stop_process(&self, py: Python<'_>, process_id: &str) -> PyResult<()> {
+        let supervisor = Arc::clone(&self.inner);
+        let process_id = process_id.to_string();
+
+        py.allow_threads(|| {
+            let mut executor = get_supervisor_executor().lock().unwrap();
+            let task =
+                executor.spawn_on_any(async move { supervisor.stop_process(&process_id).await });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Stop all processes for a session.
+    ///
+    /// Args:
+    ///     session_id: The session ID
+    ///
+    /// Returns:
+    ///     Number of processes stopped
+    fn stop_session_processes(&self, py: Python<'_>, session_id: &str) -> PyResult<usize> {
+        let supervisor = Arc::clone(&self.inner);
+        let session_id = session_id.to_string();
+
+        py.allow_threads(|| {
+            let mut executor = get_supervisor_executor().lock().unwrap();
+            let task = executor
+                .spawn_on_any(async move { supervisor.stop_session_processes(&session_id).await });
+            let results = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?;
+            Ok(results.into_iter().filter(|r| r.is_ok()).count())
+        })
+    }
+
+    /// Get the count of running processes.
+    fn running_count(&self, py: Python<'_>) -> PyResult<usize> {
+        let supervisor = Arc::clone(&self.inner);
+
+        py.allow_threads(|| {
+            let mut executor = get_supervisor_executor().lock().unwrap();
+            let task = executor.spawn_on_any(async move { supervisor.running_count().await });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))
+        })
+    }
+
+    /// Get the total count of all processes (running and completed).
+    fn total_count(&self, py: Python<'_>) -> PyResult<usize> {
+        let supervisor = Arc::clone(&self.inner);
+
+        py.allow_threads(|| {
+            let mut executor = get_supervisor_executor().lock().unwrap();
+            let task = executor.spawn_on_any(async move { supervisor.total_count().await });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))
+        })
+    }
+}
+
 /// Python module definition
 #[pymodule]
 fn balloons_storage(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Storage>()?;
+    m.add_class::<Supervisor>()?;
     Ok(())
 }

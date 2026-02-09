@@ -18,6 +18,19 @@ class ContextMode(Enum):
     DROP = "drop"
 
 
+class Sentiment(Enum):
+    """User sentiment rating for an assistant turn.
+
+    Used for quick quality feedback during a session. Applied only to
+    assistant text responses, not tool calls or user inputs.
+    """
+    EXCELLENT = "excellent"  # ❤️ Notably good
+    GOOD = "good"            # 👍 Worked as expected
+    REVIEW = "review"        # 🔍 Mark for review (no judgment)
+    POOR = "poor"            # 👎 Didn't work well
+    TERRIBLE = "terrible"    # ☠️ Actively harmful/wrong
+
+
 @dataclass
 class TextBlock:
     """Plain text content."""
@@ -421,6 +434,7 @@ class Turn:
     context_mode: ContextMode = ContextMode.COMPRESS
     summary: str = ""  # Cached summary for SUMMARIZE mode
     exchange_id: Optional[str] = None  # Groups turns in an agentic loop
+    sentiment: Optional[Sentiment] = None  # User sentiment rating (assistant turns only)
 
     @property
     def content(self) -> str:

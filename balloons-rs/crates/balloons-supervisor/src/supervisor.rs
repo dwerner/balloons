@@ -1,16 +1,26 @@
 //! Process Supervisor - manages multiple supervised processes.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
+use async_channel;
+use async_lock::RwLock;
+use core_executor::ThreadPoolExecutor;
 use procstream::{Command, Executor, ManagedProcess, ProcessHandle, Target};
-use tokio::sync::{mpsc, RwLock};
 use tracing::info;
 use uuid::Uuid;
 
 use crate::error::{Error, Result};
 use crate::process::{handle_process_events, SupervisedProcess};
 use crate::types::{LogEntry, OutputQuery, ProcessId, ProcessInfo, StartRequest};
+
+/// Global executor for spawning background event handler tasks.
+/// Single-threaded since event handlers are I/O-bound.
+static EXECUTOR: OnceLock<Mutex<ThreadPoolExecutor>> = OnceLock::new();
+
+fn get_executor() -> &'static Mutex<ThreadPoolExecutor> {
+    EXECUTOR.get_or_init(|| Mutex::new(ThreadPoolExecutor::new(1)))
+}
 
 /// The main process supervisor.
 ///
@@ -86,8 +96,8 @@ impl ProcessSupervisor {
         // Get the PID
         let pid = handle.pid().unwrap_or(0);
 
-        // Create stop channel
-        let (stop_tx, stop_rx) = mpsc::channel(1);
+        // Create stop channel (bounded(1) similar to mpsc::channel(1))
+        let (stop_tx, stop_rx) = async_channel::bounded(1);
 
         // Create the supervised process
         let supervised = Arc::new(SupervisedProcess::new(
@@ -114,11 +124,14 @@ impl ProcessSupervisor {
             processes.insert(process_id.clone(), Arc::clone(&supervised));
         }
 
-        // Spawn task to handle events
+        // Spawn task to handle events (fire-and-forget)
         let process_clone = Arc::clone(&supervised);
-        tokio::spawn(async move {
-            handle_process_events(process_clone, events, stop_rx).await;
-        });
+        {
+            let mut executor = get_executor().lock().unwrap();
+            executor.spawn_on_any(async move {
+                handle_process_events(process_clone, events, stop_rx).await;
+            });
+        }
 
         Ok(process_id)
     }
@@ -239,14 +252,15 @@ impl ProcessSupervisor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
-    #[tokio::test]
+    #[smol_potat::test]
     async fn test_supervisor_new() {
         let supervisor = ProcessSupervisor::new();
         assert_eq!(supervisor.total_count().await, 0);
     }
 
-    #[tokio::test]
+    #[smol_potat::test]
     async fn test_start_simple_command() {
         let supervisor = ProcessSupervisor::new();
 
@@ -263,7 +277,7 @@ mod tests {
         assert_eq!(supervisor.total_count().await, 1);
 
         // Give the process time to run
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        smol::Timer::after(Duration::from_millis(500)).await;
 
         // Check we can get the process info
         let info = supervisor.get_process(&process_id).await.expect("should get info");
@@ -277,7 +291,7 @@ mod tests {
         assert!(!output.is_empty());
     }
 
-    #[tokio::test]
+    #[smol_potat::test]
     async fn test_list_processes_by_session() {
         let supervisor = ProcessSupervisor::new();
 
@@ -319,7 +333,7 @@ mod tests {
         assert_eq!(none.len(), 0);
     }
 
-    #[tokio::test]
+    #[smol_potat::test]
     async fn test_invalid_command() {
         let supervisor = ProcessSupervisor::new();
 
@@ -335,7 +349,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[tokio::test]
+    #[smol_potat::test]
     async fn test_process_not_found() {
         let supervisor = ProcessSupervisor::new();
 
