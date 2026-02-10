@@ -6,6 +6,7 @@ the system tracks its own development.
 
 Tool Names:
 - create_goal: Create a new goal with acceptance criteria
+- update_goal: Update an existing goal (rename, change weight, etc.)
 - create_plan: Create a plan for achieving a goal
 - create_todo: Create a todo and link it to a plan
 - list_goals: List all goals with their status
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
 # Tool names for registration
 GOAL_TOOL_NAMES = {
     "create_goal",
+    "update_goal",
     "create_plan",
     "create_todo",
     "list_goals",
@@ -82,6 +84,56 @@ The goal will be created with 'active' status.""",
                     }
                 },
                 "required": ["title", "description", "acceptance_criteria"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_goal",
+            "description": """Update an existing goal's fields.
+
+Allows modifying a goal's title, description, weight, acceptance criteria, or status.
+Only the fields provided will be updated; others remain unchanged.
+
+Use this when:
+- Renaming a goal (updating title)
+- Refining a goal's description or acceptance criteria
+- Adjusting priority (weight)
+- Changing status (active/completed/abandoned)""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal_id": {
+                        "type": "string",
+                        "description": "ID of the goal to update (can be prefix)"
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "New title for the goal (max 80 chars)"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "New description"
+                    },
+                    "weight": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "New priority weight (1=low, 10=critical)"
+                    },
+                    "acceptance_criteria": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "New list of acceptance criteria (replaces existing)"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["active", "completed", "abandoned"],
+                        "description": "New status"
+                    }
+                },
+                "required": ["goal_id"]
             }
         }
     },
@@ -326,6 +378,8 @@ async def execute_goal_tool(
 
     if name == "create_goal":
         return await _create_goal(args, storage)
+    elif name == "update_goal":
+        return await _update_goal(args, storage)
     elif name == "create_plan":
         return await _create_plan(args, storage)
     elif name == "create_todo":
@@ -382,6 +436,80 @@ async def _create_goal(args: dict, storage) -> tuple[str, bool]:
         f"ID: {goal.id}\n"
         f"Weight: {goal.weight}/10\n"
         f"Acceptance Criteria:\n{criteria_str}"
+    ), False
+
+
+async def _update_goal(args: dict, storage) -> tuple[str, bool]:
+    """Update an existing goal."""
+    goal_id_prefix = args.get("goal_id", "").strip()
+    if not goal_id_prefix:
+        return "Error: goal_id is required", True
+
+    # Find goal by prefix
+    goals = await storage.list_goals()
+    goal = None
+    for g in goals:
+        if g.id.startswith(goal_id_prefix):
+            goal = g
+            break
+
+    if not goal:
+        return f"Error: Goal not found: {goal_id_prefix}", True
+
+    # Track what we're updating for the response
+    updates = []
+
+    # Update title if provided
+    if "title" in args:
+        new_title = args["title"].strip()
+        if new_title:
+            old_title = goal.title
+            goal.title = new_title[:80]
+            updates.append(f"title: '{old_title}' → '{goal.title}'")
+
+    # Update description if provided
+    if "description" in args:
+        new_desc = args["description"].strip()
+        if new_desc:
+            goal.description = new_desc
+            updates.append("description updated")
+
+    # Update weight if provided
+    if "weight" in args:
+        new_weight = args["weight"]
+        if isinstance(new_weight, int) and 1 <= new_weight <= 10:
+            old_weight = goal.weight
+            goal.weight = new_weight
+            updates.append(f"weight: {old_weight} → {new_weight}")
+
+    # Update acceptance_criteria if provided
+    if "acceptance_criteria" in args:
+        new_criteria = args["acceptance_criteria"]
+        if isinstance(new_criteria, list) and new_criteria:
+            goal.acceptance_criteria = new_criteria
+            updates.append(f"acceptance criteria updated ({len(new_criteria)} items)")
+
+    # Update status if provided
+    if "status" in args:
+        new_status = args["status"]
+        if new_status in ("active", "completed", "abandoned"):
+            old_status = goal.status
+            goal.status = new_status
+            updates.append(f"status: {old_status} → {new_status}")
+
+    if not updates:
+        return "No valid updates provided", True
+
+    # Update the timestamp
+    goal.updated_at = datetime.now().isoformat()
+
+    # Save the updated goal
+    await storage.save_goal(goal)
+
+    return (
+        f"Updated goal: {goal.title}\n"
+        f"ID: {goal.id}\n"
+        f"Changes:\n" + "\n".join(f"  - {u}" for u in updates)
     ), False
 
 

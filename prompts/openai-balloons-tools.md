@@ -164,6 +164,9 @@ Track goals, plans, and todos across sessions.
 **create_goal** - Create a new goal with acceptance criteria
 - `title`, `description`, `weight` (1-10), `acceptance_criteria` (array)
 
+**update_goal** - Update an existing goal (rename, change weight, etc.)
+- `goal_id` (required), `title`, `description`, `weight`, `acceptance_criteria`, `status`
+
 **create_plan** - Create a plan for a goal
 - `goal_id`, `title`, `description`, `status` ("draft" or "active")
 

@@ -532,6 +532,22 @@ Goal tracking helps maintain focus across long conversations and multiple sessio
 }
 ```
 
+**update_goal** - Update an existing goal (rename, change weight, etc.)
+```json
+{
+  "name": "update_goal",
+  "args": {
+    "goal_id": "abc123",  // Can be prefix
+    "title": "New title",  // Optional
+    "description": "New description",  // Optional
+    "weight": 9,  // Optional: 1-10
+    "acceptance_criteria": ["New criteria"],  // Optional: replaces existing
+    "status": "completed"  // Optional: "active", "completed", "abandoned"
+  }
+}
+```
+Only `goal_id` is required; other fields are optional and only update if provided.
+
 **create_plan** - Create a plan for achieving a goal
 ```json
 {
