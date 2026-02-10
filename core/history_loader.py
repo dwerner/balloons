@@ -182,9 +182,9 @@ class HistoryLoader:
 
         Args:
             session_loader: Optional async callable to load sessions by ID.
-                           Defaults to Session.load_async. Can be replaced for testing.
+                           Defaults to Session.load. Can be replaced for testing.
         """
-        self._session_loader = session_loader or Session.load_async
+        self._session_loader = session_loader or Session.load
 
     async def load(
         self,

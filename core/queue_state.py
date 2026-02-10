@@ -240,15 +240,10 @@ class QueueState:
         snapshot = self.get_snapshot(session_id)
         data = extra_data or {}
 
-        try:
-            loop = asyncio.get_running_loop()
-            for callback in self._observers:
-                asyncio.ensure_future(
-                    self._call_observer(callback, event, snapshot, data)
-                )
-        except RuntimeError:
-            # No running event loop - skip notifications
-            pass
+        for callback in self._observers:
+            asyncio.ensure_future(
+                self._call_observer(callback, event, snapshot, data)
+            )
 
     async def _call_observer(
         self,

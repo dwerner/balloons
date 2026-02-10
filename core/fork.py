@@ -396,7 +396,7 @@ class ForkManager:
             for msg, _ in sorted(groups.copy_items, key=lambda x: x[1]):
                 child_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
-            await child_session.save_async()
+            await child_session.save()
 
             # Inherit bindings from parent
             await copy_session_bindings(current_session.id, child_session.id)
@@ -417,7 +417,7 @@ class ForkManager:
                 prompt=prompt,
                 exchange_id=current_session.get_last_exchange_id(),
             )
-            await current_session.save_async()
+            await current_session.save()
 
             return ForkResult(
                 success=True,
@@ -512,7 +512,7 @@ class ForkManager:
         for msg, _, _ in all_items:
             child_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
-        await child_session.save_async()
+        await child_session.save()
 
         # Inherit bindings from parent
         await copy_session_bindings(parent_session.id, child_session.id)
@@ -533,7 +533,7 @@ class ForkManager:
             prompt=prompt,
             exchange_id=parent_session.get_last_exchange_id(),
         )
-        await parent_session.save_async()
+        await parent_session.save()
 
         return ForkResult(
             success=True,
@@ -630,7 +630,7 @@ class ForkManager:
             reason=reason,
             exchange_id=fork_exchange_id,
         )
-        await fork_session.save_async()
+        await fork_session.save()
 
         # Update parent's child record
         parent_session.mark_child_merged(fork_session.id, merge_point)
@@ -649,7 +649,7 @@ class ForkManager:
             reason=reason,
             exchange_id=parent_exchange_id,
         )
-        await parent_session.save_async()
+        await parent_session.save()
 
         return MergeResult(
             success=True,
@@ -688,7 +688,7 @@ class ForkManager:
             for msg, _ in sorted(groups.copy_items, key=lambda x: x[1]):
                 new_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
-            await new_session.save_async()
+            await new_session.save()
 
             return DeriveResult(
                 success=True,
@@ -761,7 +761,7 @@ class ForkManager:
         for msg, _, _ in all_items:
             new_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
-        await new_session.save_async()
+        await new_session.save()
 
         return DeriveResult(
             success=True,
@@ -802,7 +802,7 @@ class ForkManager:
             fork_name = fork.get("name", "")
             fork_id = fork.get("session_id", "")
             if fork_name == name or fork_id.startswith(name):
-                target_session = await Session.load_async(fork_id)
+                target_session = await Session.load(fork_id)
                 break
 
         # If not found and in a fork, check parent's forks
@@ -813,7 +813,7 @@ class ForkManager:
                     fork_name = fork.get("name", "")
                     fork_id = fork.get("session_id", "")
                     if fork_name == name or fork_id.startswith(name):
-                        target_session = await Session.load_async(fork_id)
+                        target_session = await Session.load(fork_id)
                         break
 
         # Check for parent request

@@ -38,7 +38,7 @@ class TestForkManager:
         session.add_child = MagicMock()
         session.add_message = MagicMock()
         session.save = MagicMock()
-        session.save_async = AsyncMock()
+        session.save = AsyncMock()
         session.mark_merged = MagicMock()
         session.mark_child_merged = MagicMock()
         return session
@@ -100,8 +100,8 @@ class TestForkManager:
         assert result.name == "my-fork"
 
         # Verify child was saved (async)
-        child.save_async.assert_called()
-        parent.save_async.assert_called()
+        child.save.assert_called()
+        parent.save.assert_called()
         parent.add_child.assert_called_once()
 
     @pytest.mark.asyncio
@@ -192,9 +192,9 @@ class TestForkManager:
         assert result.merge_message == "Completed feature X"
 
         fork.mark_merged.assert_called_once()
-        fork.save_async.assert_called()
+        fork.save.assert_called()
         parent.mark_child_merged.assert_called_once()
-        parent.save_async.assert_called()
+        parent.save.assert_called()
 
     @pytest.mark.asyncio
     @patch("core.fork.Session")
@@ -219,7 +219,7 @@ class TestForkManager:
         assert result.new_session == new_session
         assert result.prompt == "Start fresh"
 
-        new_session.save_async.assert_called()
+        new_session.save.assert_called()
 
     @pytest.mark.asyncio
     async def test_find_switch_target_empty_name(self):
@@ -246,7 +246,7 @@ class TestForkManager:
         manager = ForkManager(context_builder)
 
         target = self.create_mock_session(id="id-a")
-        mock_session_class.load_async = AsyncMock(return_value=target)
+        mock_session_class.load = AsyncMock(return_value=target)
 
         forks = [
             {"name": "fork-a", "session_id": "id-a"},
@@ -258,7 +258,7 @@ class TestForkManager:
 
         assert result.success
         assert result.target_session == target
-        mock_session_class.load_async.assert_called_with("id-a")
+        mock_session_class.load.assert_called_with("id-a")
 
     @pytest.mark.asyncio
     @patch("core.fork.Session")
@@ -268,7 +268,7 @@ class TestForkManager:
         manager = ForkManager(context_builder)
 
         target = self.create_mock_session(id="id-abc123")
-        mock_session_class.load_async = AsyncMock(return_value=target)
+        mock_session_class.load = AsyncMock(return_value=target)
 
         forks = [{"name": "", "session_id": "id-abc123"}]
         session = self.create_mock_session(forks=forks)

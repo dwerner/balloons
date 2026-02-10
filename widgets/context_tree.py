@@ -839,7 +839,7 @@ class ContextTreeView(Vertical):
         """
         # Get all session metadata (lightweight - no message content)
         all_session_metadata = []
-        async for metadata in Session.list_sessions_async():
+        for metadata in await Session.list_sessions():
             all_session_metadata.append(metadata)
 
         # Clear TreeState - this fires FULL_REBUILD which clears and rebuilds the tree
@@ -906,7 +906,7 @@ class ContextTreeView(Vertical):
 
         try:
             count = 0
-            async for metadata in Session.list_sessions_async():
+            for metadata in await Session.list_sessions():
                 # Skip the current session (already loaded)
                 if metadata["id"] == current_session_id:
                     continue
@@ -1071,7 +1071,7 @@ class ContextTreeView(Vertical):
             return True  # Already loaded
 
         if session is None:
-            session = await Session.load_async(session_id)
+            session = await Session.load(session_id)
             if not session:
                 return False
 

@@ -506,13 +506,7 @@ class SessionRunner:
 
         # Only schedule new task if one isn't already pending
         if self._save_task is None or self._save_task.done():
-            try:
-                asyncio.get_running_loop()
-                self._save_task = asyncio.create_task(self._debounced_save())
-            except RuntimeError:
-                # No running event loop (e.g., in tests). Do a sync save instead.
-                self._save_pending = False
-                self.session.save()
+            self._save_task = asyncio.create_task(self._debounced_save())
 
     async def _debounced_save(self) -> None:
         """Wait for debounce interval then save if still pending."""
@@ -525,7 +519,7 @@ class SessionRunner:
     async def _async_save_session(self) -> None:
         """Save session asynchronously without blocking the event loop."""
         try:
-            await self.session.save_async()
+            await self.session.save()
             debug_log.debug(
                 f"Session saved incrementally ({len(self.session.turns)} turns)",
                 session_id=self.session.id,

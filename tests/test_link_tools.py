@@ -109,7 +109,7 @@ class TestExecuteLinkTool:
         linked_session.fork_name = None
         linked_session.turns = [Mock(), Mock()]
 
-        with patch.object(Session, 'load_async', return_value=linked_session):
+        with patch.object(Session, 'load', return_value=linked_session):
             result, is_error = await execute_link_tool("list_links", {}, session)
 
         assert not is_error
@@ -215,7 +215,7 @@ class TestExecuteLinkTool:
         parent_session.fork_name = ""
         parent_session.parent_id = None  # Root parent
 
-        with patch.object(Session, 'load_async', return_value=parent_session):
+        with patch.object(Session, 'load', return_value=parent_session):
             result, is_error = await execute_link_tool("session_info", {}, session)
 
         assert not is_error
@@ -312,7 +312,7 @@ class TestExecuteLinkTool:
         parent_session.fork_name = ""
         parent_session.parent_id = None
 
-        with patch.object(Session, 'load_async', return_value=parent_session):
+        with patch.object(Session, 'load', return_value=parent_session):
             result, is_error = await execute_link_tool("session_info", {}, session)
 
         assert not is_error
@@ -339,7 +339,7 @@ class TestExecuteLinkTool:
         target_session.last_modified = "2024-01-02T00:00:00"
         target_session.turns = []
 
-        with patch.object(Session, 'load_async', return_value=target_session):
+        with patch.object(Session, 'load', return_value=target_session):
             result, is_error = await execute_link_tool(
                 "follow_link",
                 {"session_id": "target-session-123"},
@@ -358,7 +358,7 @@ class TestExecuteLinkTool:
         """Test follow_link returns error when session_id doesn't exist."""
         current_session = Mock(spec=Session)
 
-        with patch.object(Session, 'load_async', return_value=None):
+        with patch.object(Session, 'load', return_value=None):
             result, is_error = await execute_link_tool(
                 "follow_link",
                 {"session_id": "nonexistent-123"},

@@ -260,14 +260,9 @@ class TaskState:
         if not self._observers:
             return
 
-        try:
-            loop = asyncio.get_running_loop()
-            for callback in self._observers:
-                # Create a task for each observer
-                asyncio.ensure_future(self._call_observer(callback, event, task))
-        except RuntimeError:
-            # No running event loop - skip notifications
-            pass
+        for callback in self._observers:
+            # Create a task for each observer
+            asyncio.ensure_future(self._call_observer(callback, event, task))
 
     async def _call_observer(self, callback: AsyncObserver, event: TaskEvent, task: Task) -> None:
         """Safely call an async observer."""

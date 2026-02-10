@@ -235,13 +235,10 @@ class TestCommandExecutorLink:
         assert "No target sessions" in result.error
 
     @pytest.mark.asyncio
-    @patch('core.command_executor.Session.list_sessions_async')
+    @patch('core.command_executor.Session.list_sessions')
     async def test_resolve_no_match(self, mock_list, executor, sample_session):
         """Test link resolution fails if no session matches."""
-        async def async_iter():
-            for item in []:
-                yield item
-        mock_list.return_value = async_iter()
+        mock_list.return_value = []
 
         result = await executor.resolve_link_targets(
             current_session=sample_session,
@@ -252,13 +249,10 @@ class TestCommandExecutorLink:
         assert "No session found" in result.error
 
     @pytest.mark.asyncio
-    @patch('core.command_executor.Session.list_sessions_async')
+    @patch('core.command_executor.Session.list_sessions')
     async def test_resolve_multiple_matches(self, mock_list, executor, sample_session):
         """Test link resolution fails with ambiguous prefix."""
-        async def async_iter():
-            for item in [{"id": "abc12345-1"}, {"id": "abc12345-2"}]:
-                yield item
-        mock_list.return_value = async_iter()
+        mock_list.return_value = [{"id": "abc12345-1"}, {"id": "abc12345-2"}]
 
         result = await executor.resolve_link_targets(
             current_session=sample_session,
@@ -269,13 +263,10 @@ class TestCommandExecutorLink:
         assert "Multiple sessions match" in result.error
 
     @pytest.mark.asyncio
-    @patch('core.command_executor.Session.list_sessions_async')
+    @patch('core.command_executor.Session.list_sessions')
     async def test_resolve_self_link(self, mock_list, executor, sample_session):
         """Test link resolution fails when linking to self."""
-        async def async_iter():
-            for item in [{"id": sample_session.id}]:
-                yield item
-        mock_list.return_value = async_iter()
+        mock_list.return_value = [{"id": sample_session.id}]
 
         result = await executor.resolve_link_targets(
             current_session=sample_session,

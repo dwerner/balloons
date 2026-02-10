@@ -94,7 +94,7 @@ class TestCreateSlideTool:
         from core.tool_executor import execute_create_slide
 
         session = Session()
-        with patch.object(session, 'save_async', new_callable=AsyncMock):
+        with patch.object(session, 'save', new_callable=AsyncMock):
             result, is_error = await execute_create_slide(
                 {"title": "Test Slide", "content": "Test Content", "notes": "Notes"},
                 session=session,

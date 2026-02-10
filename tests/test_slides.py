@@ -276,10 +276,10 @@ class TestSlideSaveLoad:
             notes="",
         )
         session.add_message("assistant", "I created the slides")
-        await session.save_async()
+        await session.save()
 
         # Load fresh
-        loaded = await Session.load_async(session.id)
+        loaded = await Session.load(session.id)
 
         assert len(loaded.turns) == 4
         assert loaded.get_slide_count() == 2
@@ -296,9 +296,9 @@ class TestSlideSaveLoad:
         """Slide turns should have role='slide'."""
         session = Session()
         session.add_slide_turn("Slide", "Content")
-        await session.save_async()
+        await session.save()
 
-        loaded = await Session.load_async(session.id)
+        loaded = await Session.load(session.id)
 
         assert loaded.turns[0].role == "slide"
 
@@ -309,9 +309,9 @@ class TestSlideSaveLoad:
         session.add_slide_turn("Slide 1", "Content 1")
         session.add_message("assistant", "Done")
         session.add_slide_turn("Slide 2", "Content 2")
-        await session.save_async()
+        await session.save()
 
-        loaded = await Session.load_async(session.id)
+        loaded = await Session.load(session.id)
 
         assert len(loaded.turns) == 4
         assert loaded.turns[0].role == "user"

@@ -79,16 +79,9 @@ class MessageStash:
             await f.write(content)
 
     def _schedule_save(self) -> None:
-        """Schedule an async save (fire-and-forget)."""
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(self._save_async())
-        except RuntimeError:
-            # No event loop - fall back to sync save
-            self._stash_file.parent.mkdir(parents=True, exist_ok=True)
-            data = {"messages": [m.to_dict() for m in self._messages]}
-            with open(self._stash_file, "w") as f:
-                yaml.safe_dump(data, f, default_flow_style=False)
+        """Schedule an async save (fire-and-forget). Must be called from async context."""
+        loop = asyncio.get_running_loop()
+        loop.create_task(self._save_async())
 
     def add(self, content: str, name: Optional[str] = None) -> StashedMessage:
         """Add a message to the stash."""

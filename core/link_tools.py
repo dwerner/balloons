@@ -87,7 +87,7 @@ async def _execute_list_links(session: Session) -> tuple[str, bool]:
         summary = link.get("summary", "")
 
         # Load the linked session to get its name
-        linked_session = await Session.load_async(linked_session_id)
+        linked_session = await Session.load(linked_session_id)
         if linked_session:
             name = linked_session.title or linked_session.fork_name or linked_session_id[:8]
             message_count = len(linked_session.turns)
@@ -128,7 +128,7 @@ async def _execute_follow_link(args: dict[str, Any], current_session: Session) -
 
     # Direct session access (for fork/merge traversal)
     if session_id:
-        linked_session = await Session.load_async(session_id)
+        linked_session = await Session.load(session_id)
         if not linked_session:
             return f"Error: Session not found: {session_id}", True
     else:
@@ -140,7 +140,7 @@ async def _execute_follow_link(args: dict[str, Any], current_session: Session) -
             return f"Error: Link not found: {link_id}", True
 
         linked_session_id = link.get("linked_session_id", "")
-        linked_session = await Session.load_async(linked_session_id)
+        linked_session = await Session.load(linked_session_id)
 
         if not linked_session:
             return f"Error: Linked session not found or deleted: {linked_session_id}", True
@@ -224,7 +224,7 @@ async def _execute_search_linked(args: dict[str, Any], current_session: Session)
         return f"Error: Link not found: {link_id}", True
 
     linked_session_id = link.get("linked_session_id", "")
-    linked_session = await Session.load_async(linked_session_id)
+    linked_session = await Session.load(linked_session_id)
 
     if not linked_session:
         return f"Error: Linked session not found or deleted: {linked_session_id}", True
@@ -358,11 +358,11 @@ async def _build_parents(session: Session) -> list[str]:
     Empty list means this is a root session.
     """
     parents = []
-    current = await Session.load_async(session.parent_id) if session.parent_id else None
+    current = await Session.load(session.parent_id) if session.parent_id else None
 
     while current:
         name = current.fork_name or current.title or current.id[:8]
         parents.append(f"{current.id[:8]}:{name}")
-        current = await Session.load_async(current.parent_id) if current.parent_id else None
+        current = await Session.load(current.parent_id) if current.parent_id else None
 
     return parents

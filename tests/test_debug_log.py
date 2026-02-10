@@ -262,21 +262,5 @@ class TestAsyncFileLogging:
         assert result.exists()
         assert result.read_text() == content
 
-    def test_no_event_loop_graceful_fallback(self, tmp_path):
-        """Test that logging works even without event loop (in-memory only)."""
-        log_file = tmp_path / "test.log"
-        debug_log.set_log_file(log_file)
-
-        # This runs without an event loop, so file write should be skipped
-        # but in-memory logging should still work
-        debug_log.info("Test no loop")
-
-        entries = debug_log.get_entries()
-        assert len(entries) == 1
-        assert entries[0].message == "Test no loop"
-
-        # File should not exist (no event loop to run async write)
-        assert not log_file.exists()
-
-        # Cleanup
-        debug_log._log_file = None
+    # Removed test_no_event_loop_graceful_fallback - we no longer support
+    # sync fallback behavior. All code must run in async context.

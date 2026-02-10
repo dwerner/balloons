@@ -43,7 +43,7 @@ async def test_headless(session: Session, temp_storage):
 
     # Load all session metadata
     all_metadata = []
-    async for meta in Session.list_sessions_async():
+    async for meta in Session.list_sessions():
         all_metadata.append(meta)
     for meta in all_metadata:
         if meta["id"] != session.id:
@@ -147,7 +147,7 @@ def main():
 
     # Load or create session
     if args.session:
-        session = asyncio.run(Session.load_async(args.session))
+        session = asyncio.run(Session.load(args.session))
         if session is None:
             print(f"Error: Session '{args.session}' not found.", file=sys.stderr)
             sys.exit(1)

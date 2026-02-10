@@ -94,7 +94,7 @@ class SessionManager:
         session = Session()
         # Default to current working directory if not specified
         session.set_working_directory(working_directory or os.getcwd())
-        await session.save_async()
+        await session.save()
 
         self._sessions[session.id] = session
         self._runners[session.id] = self._create_runner(session)
@@ -119,7 +119,7 @@ class SessionManager:
         if session_id in self._sessions:
             return self._sessions[session_id]
 
-        session = await Session.load_async(session_id)
+        session = await Session.load(session_id)
         if session:
             self._sessions[session.id] = session
             self._runners[session.id] = self._create_runner(session)
@@ -197,11 +197,11 @@ class SessionManager:
         for msg in messages:
             child.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
-        await child.save_async()
+        await child.save()
 
         # Register child with parent
         parent.add_child(child.id, prompt, return_condition)
-        await parent.save_async()
+        await parent.save()
 
         # Track in manager
         self._sessions[child.id] = child
@@ -233,11 +233,11 @@ class SessionManager:
 
         # Mark child as returned
         child.returned = True
-        await child.save_async()
+        await child.save()
 
         # Update parent
         parent.mark_child_returned(child_id)
-        await parent.save_async()
+        await parent.save()
 
         return parent
 
@@ -250,14 +250,14 @@ class SessionManager:
         infos = []
 
         # Get sessions from disk
-        async for session_metadata in Session.list_sessions_async():
+        for session_metadata in await Session.list_sessions():
             session_id = session_metadata["id"]
             # Handle Rust storage field names: name vs title
             title = session_metadata.get("title") or session_metadata.get("name", "")
             # Load to get more info if not already loaded
             session = self._sessions.get(session_id)
             if not session:
-                session = await Session.load_async(session_id)
+                session = await Session.load(session_id)
             if session:
                 runner = self._runners.get(session_id)
                 status = runner.status if runner else RunnerStatus.IDLE

@@ -103,7 +103,7 @@ class Breadcrumb(Static):
                 "is_merged": current.is_merged(),
             })
             if current.parent_id:
-                current = await Session.load_async(current.parent_id)
+                current = await Session.load(current.parent_id)
             else:
                 current = None
 

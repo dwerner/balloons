@@ -118,12 +118,12 @@ class TestSaveReviewTool:
         # Redirect home directory to tmp_path for file-based storage
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        # Mock Session.load_async to avoid needing real storage
-        async def mock_load_async(session_id):
+        # Mock Session.load to avoid needing real storage
+        async def mock_load(session_id):
             return None  # Session doesn't exist, but that's ok
 
         from session import Session
-        monkeypatch.setattr(Session, "load_async", staticmethod(mock_load_async))
+        monkeypatch.setattr(Session, "load", staticmethod(mock_load))
 
         reviews_dir = tmp_path / ".balloons" / "reviews"
 

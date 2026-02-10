@@ -4,7 +4,6 @@ Plays audio notifications for events like streaming completion or errors.
 """
 
 import asyncio
-import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -91,8 +90,7 @@ async def play_sound_async(sound_name: str) -> None:
 def play_sound(sound_name: str) -> None:
     """Play a sound file (fire-and-forget).
 
-    Schedules async playback if event loop is running,
-    otherwise runs synchronously.
+    Schedules async playback. Must be called from async context.
 
     Args:
         sound_name: Name of sound file in ~/.balloons/sounds/
@@ -100,29 +98,8 @@ def play_sound(sound_name: str) -> None:
     if not _is_enabled():
         return
 
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(play_sound_async(sound_name))
-    except RuntimeError:
-        # No event loop - run synchronously in background
-        sound_path = SOUNDS_DIR / sound_name
-        if not sound_path.exists():
-            return
-
-        player = _find_player()
-        if not player:
-            return
-
-        args = _get_player_args(player, sound_path)
-
-        try:
-            subprocess.Popen(
-                args,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except Exception:
-            pass
+    loop = asyncio.get_running_loop()
+    loop.create_task(play_sound_async(sound_name))
 
 
 def play_error_sound() -> None:

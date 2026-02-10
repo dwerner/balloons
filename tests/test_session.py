@@ -401,10 +401,10 @@ class TestAsyncSessionIO:
         session = Session()
         session.add_message("user", "Hello async")
         session.add_message("assistant", "Hi there")
-        await session.save_async()
+        await session.save()
 
         # Verify session can be loaded
-        loaded = await Session.load_async(session.id)
+        loaded = await Session.load(session.id)
         assert loaded is not None
         assert len(loaded.turns) == 2
 
@@ -413,10 +413,10 @@ class TestAsyncSessionIO:
         """Test async session load."""
         session = Session()
         session.add_message("user", "Test message")
-        await session.save_async()
+        await session.save()
 
         # Load with async
-        loaded = await Session.load_async(session.id)
+        loaded = await Session.load(session.id)
         assert loaded is not None
         assert len(loaded.turns) == 1
         assert loaded.turns[0].content == "Test message"
@@ -424,7 +424,7 @@ class TestAsyncSessionIO:
     @pytest.mark.asyncio
     async def test_load_async_nonexistent(self, temp_storage):
         """Test async load of nonexistent session returns None."""
-        loaded = await Session.load_async("nonexistent-id")
+        loaded = await Session.load("nonexistent-id")
         assert loaded is None
 
     @pytest.mark.asyncio
@@ -434,41 +434,41 @@ class TestAsyncSessionIO:
         session.add_message("user", "Question")
         session.add_message("assistant", "Answer")
         session.update_usage(input_tokens=100, output_tokens=50, cost=0.001)
-        await session.save_async()
+        await session.save()
 
-        loaded = await Session.load_async(session.id)
+        loaded = await Session.load(session.id)
         assert loaded is not None
         assert len(loaded.turns) == 2
         assert loaded.total_input_tokens == 100
         assert loaded.total_output_tokens == 50
 
     @pytest.mark.asyncio
-    async def test_list_sessions_async(self, temp_storage):
+    async def test_list_sessions(self, temp_storage):
         """Test async session listing."""
         # Create a few sessions
         for i in range(3):
             session = Session()
             session.add_message("user", f"Session {i}")
-            await session.save_async()
+            await session.save()
 
         # List sessions
         sessions = []
-        async for metadata in Session.list_sessions_async():
+        async for metadata in Session.list_sessions():
             sessions.append(metadata)
 
         assert len(sessions) == 3
 
     @pytest.mark.asyncio
     async def test_session_appears_in_list_after_save(self, temp_storage):
-        """Test that saved sessions appear in list_sessions_async."""
+        """Test that saved sessions appear in list_sessions."""
         # Create a session
         session = Session()
         session.add_message("user", "Test")
-        await session.save_async()
+        await session.save()
 
         # Verify session appears in list
         found = False
-        async for metadata in Session.list_sessions_async():
+        async for metadata in Session.list_sessions():
             if metadata["id"] == session.id:
                 found = True
                 assert metadata["turn_count"] == 1
@@ -483,11 +483,11 @@ class TestAsyncSessionIO:
             session.add_message("user", f"Message {i}")
 
         # Save all concurrently
-        await asyncio.gather(*[s.save_async() for s in sessions])
+        await asyncio.gather(*[s.save() for s in sessions])
 
         # Verify all were saved
         for session in sessions:
-            loaded = await Session.load_async(session.id)
+            loaded = await Session.load(session.id)
             assert loaded is not None
 
 

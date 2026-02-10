@@ -668,7 +668,7 @@ async def execute_create_slide(args: dict, session: "Session | None" = None) -> 
         content=content,
         notes=notes,
     )
-    await session.save_async()
+    await session.save()
 
     debug_log.info(f"Slide created in session {session.id[:8]}: '{title}' - session now has {session.get_slide_count()} slides", category="slides")
 
@@ -813,7 +813,7 @@ async def execute_save_review(args: dict, session: "Session") -> tuple[str, bool
 
     # Get the reviewed session to count sentiment markers
     from session import Session as SessionClass
-    reviewed_session = await SessionClass.load_async(reviewed_session_id)
+    reviewed_session = await SessionClass.load(reviewed_session_id)
     sentiment_counts = {}
     turn_count = 0
     if reviewed_session:

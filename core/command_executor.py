@@ -137,7 +137,7 @@ class CommandExecutor:
         )
         if result.success:
             session.turns = result.new_turns
-            await session.save_async()
+            await session.save()
             # Update UI with result.archive_block
 
         # Link command
@@ -150,7 +150,7 @@ class CommandExecutor:
             pass
         if result.success:
             for session in result.sessions_to_save:
-                await session.save_async()
+                await session.save()
     """
 
     def __init__(self):
@@ -293,9 +293,7 @@ class CommandExecutor:
         if not target_prefixes:
             return LinkResult(success=False, error="No target sessions specified")
 
-        all_sessions = []
-        async for s in Session.list_sessions_async():
-            all_sessions.append(s)
+        all_sessions = await Session.list_sessions()
         resolved: list[LinkTarget] = []
         needs_summary: list[Session] = []
 
@@ -326,7 +324,7 @@ class CommandExecutor:
                 return LinkResult(success=False, error="Cannot link session to itself")
 
             # Load target session
-            target_session = await Session.load_async(target_id)
+            target_session = await Session.load(target_id)
             if not target_session:
                 return LinkResult(success=False, error=f"Failed to load session {prefix}")
 

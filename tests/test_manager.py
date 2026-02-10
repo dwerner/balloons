@@ -12,7 +12,7 @@ class TestPollAll:
     """Tests for poll_all() behavior - the critical event polling."""
 
     @pytest.mark.asyncio
-    @patch.object(Session, 'save_async', new_callable=AsyncMock)  # Don't write to disk
+    @patch.object(Session, 'save', new_callable=AsyncMock)  # Don't write to disk
     async def test_poll_all_returns_events_from_streaming_runner(self, mock_save):
         """Events from actively streaming runners are returned."""
         manager = SessionManager()
@@ -34,7 +34,7 @@ class TestPollAll:
         assert events[1].data == " world"
 
     @pytest.mark.asyncio
-    @patch.object(Session, 'save_async', new_callable=AsyncMock)
+    @patch.object(Session, 'save', new_callable=AsyncMock)
     async def test_poll_all_returns_events_from_idle_runner_regression(self, mock_save):
         """REGRESSION TEST: Events from finished (IDLE) runners MUST be returned.
 
@@ -68,7 +68,7 @@ class TestPollAll:
         assert events[0].event_type == "done"
 
     @pytest.mark.asyncio
-    @patch.object(Session, 'save_async', new_callable=AsyncMock)
+    @patch.object(Session, 'save', new_callable=AsyncMock)
     async def test_poll_all_returns_events_from_error_runner(self, mock_save):
         """Events from errored runners must still be returned."""
         manager = SessionManager()
@@ -86,7 +86,7 @@ class TestPollAll:
         assert events[0].event_type == "error"
 
     @pytest.mark.asyncio
-    @patch.object(Session, 'save_async', new_callable=AsyncMock)
+    @patch.object(Session, 'save', new_callable=AsyncMock)
     async def test_poll_all_empty_when_no_events(self, mock_save):
         """No results when runners have no queued events."""
         manager = SessionManager()
@@ -97,7 +97,7 @@ class TestPollAll:
         assert len(results) == 0
 
     @pytest.mark.asyncio
-    @patch.object(Session, 'save_async', new_callable=AsyncMock)
+    @patch.object(Session, 'save', new_callable=AsyncMock)
     async def test_poll_all_multiple_sessions(self, mock_save):
         """Events from multiple sessions are all returned."""
         manager = SessionManager()
@@ -122,7 +122,7 @@ class TestStreamingLifecycle:
     """Tests for the full streaming lifecycle."""
 
     @pytest.mark.asyncio
-    @patch.object(Session, 'save_async', new_callable=AsyncMock)
+    @patch.object(Session, 'save', new_callable=AsyncMock)
     async def test_events_drained_completely(self, mock_save):
         """After draining events, queue should be empty."""
         manager = SessionManager()
@@ -147,7 +147,7 @@ class TestStreamingLifecycle:
         assert len(results) == 0
 
     @pytest.mark.asyncio
-    @patch.object(Session, 'save_async', new_callable=AsyncMock)
+    @patch.object(Session, 'save', new_callable=AsyncMock)
     async def test_runner_status_transitions(self, mock_save):
         """Runner status transitions correctly through lifecycle."""
         manager = SessionManager()

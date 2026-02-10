@@ -105,7 +105,7 @@ class TestStreamProcessing:
         # Text should be flushed to content block by ToolUseStartEvent
         assert len(runner._content_blocks) == 2  # TextBlock + ToolUseBlock
 
-    def test_process_tool_result_event(self, runner):
+    async def test_process_tool_result_event(self, runner):
         """ToolResultEvent creates content block."""
         event = ToolResultEvent(tool_use_id="123", result="file contents")
         results = runner._process_event(event)

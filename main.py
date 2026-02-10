@@ -71,7 +71,7 @@ def main():
     if args.list:
         async def list_sessions():
             sessions = []
-            async for metadata in Session.list_sessions_async():
+            for metadata in await Session.list_sessions():
                 sessions.append(metadata)
             return sessions
         sessions = asyncio.run(list_sessions())
@@ -99,7 +99,7 @@ def main():
     session = None
 
     if args.resume:
-        session = asyncio.run(Session.load_async(args.resume))
+        session = asyncio.run(Session.load(args.resume))
         if session is None:
             print(f"Error: Session '{args.resume}' not found.", file=sys.stderr)
             sys.exit(1)

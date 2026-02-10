@@ -89,12 +89,8 @@ class DebugLog:
         """Write entry to log file if configured (fire-and-forget async)."""
         if self._log_file is None:
             return
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(self._write_to_file_async(entry))
-        except RuntimeError:
-            # No event loop running - skip file write (in-memory log still works)
-            pass
+        loop = asyncio.get_running_loop()
+        loop.create_task(self._write_to_file_async(entry))
 
     async def _write_to_file_async(self, entry: LogEntry) -> None:
         """Async file write for log entry."""
@@ -275,13 +271,9 @@ def dump_failed_json(content: str, context: str = "json_error") -> Path | None:
         filepath = debug_dir / filename
 
         # Fire-and-forget async write
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(_dump_failed_json_async(filepath, content))
-            return filepath
-        except RuntimeError:
-            # No event loop running - skip file write
-            return None
+        loop = asyncio.get_running_loop()
+        loop.create_task(_dump_failed_json_async(filepath, content))
+        return filepath
     except Exception:
         return None
 

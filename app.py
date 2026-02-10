@@ -282,11 +282,10 @@ class BalloonsApp(App):
 
     def __init__(self, session: Session = None, backend_config: BackendConfig | None = None):
         super().__init__()
-        # Enable file logging if configured
+        # Enable file logging if configured (log message deferred to on_mount when event loop is running)
         config = get_config()
         if config.debug_log_file:
             debug_log.set_log_file(config.debug_log_file)
-            debug_log.info("Debug logging to file enabled", category="startup")
         self._initial_session = session  # Will be loaded into manager
         self.streaming = False  # True if active session is streaming
         self._tree_width = 50
@@ -404,7 +403,7 @@ class BalloonsApp(App):
                 )
                 # Clear invalid backend and use default
                 session.backend_name = ""
-                asyncio.create_task(session.save_async())
+                asyncio.create_task(session.save())
                 backend = self._backend_config
 
         if system_prompt:
@@ -593,6 +592,9 @@ class BalloonsApp(App):
 
     async def on_mount(self) -> None:
         """Initialize the app after mounting."""
+        # Log deferred startup message now that event loop is running
+        if debug_log._log_file:
+            debug_log.info("Debug logging to file enabled", category="startup")
         # Ensure default prompts are installed to ~/.balloons/prompts/
         ensure_prompts_installed()
         # Subscribe to TreeState for context mode changes
@@ -1273,7 +1275,7 @@ class BalloonsApp(App):
         for msg in context_messages:
             child_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
-        asyncio.create_task(child_session.save_async())
+        asyncio.create_task(child_session.save())
 
         # Register child in parent and add fork turn marker
         parent_session = fork_data.parent_session
@@ -1292,7 +1294,7 @@ class BalloonsApp(App):
             prompt=prompt,
             exchange_id=parent_session.get_last_exchange_id(),
         )
-        asyncio.create_task(parent_session.save_async())
+        asyncio.create_task(parent_session.save())
 
         # Add fork marker to parent's chat log
         chat_log.add_fork_marker(
@@ -1340,7 +1342,7 @@ class BalloonsApp(App):
             # This ensures it's persisted even if we crash mid-exchange
             user_blocks = [TextBlock(text=prompt)]
             child_session.add_message("user", prompt, content_blocks=user_blocks, exchange_id=exchange_id)
-            asyncio.create_task(child_session.save_async())
+            asyncio.create_task(child_session.save())
 
             # Start background streaming
             child_runner = self._manager._runners[child_session.id]
@@ -1409,7 +1411,7 @@ class BalloonsApp(App):
         for msg in context_messages:
             new_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
-        asyncio.create_task(new_session.save_async())
+        asyncio.create_task(new_session.save())
 
         # Register and switch to new session
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
@@ -1481,7 +1483,7 @@ class BalloonsApp(App):
 
         # Update session state
         session.turns = result.new_turns
-        await session.save_async()
+        await session.save()
 
         # Reload the UI first so TreeState has updated turns
         chat_log.clear()
@@ -1648,7 +1650,7 @@ class BalloonsApp(App):
 
         # If parent not in manager, try to load it
         if not parent_session:
-            parent_session = await Session.load_async(return_data.parent_session_id)
+            parent_session = await Session.load(return_data.parent_session_id)
 
         if not child_session or not parent_session:
             debug_log.error("Session not found for return", category="return")
@@ -1659,11 +1661,11 @@ class BalloonsApp(App):
 
         # Mark child as returned
         child_session.returned = True
-        await child_session.save_async()
+        await child_session.save()
 
         # Update parent
         parent_session.mark_child_returned(child_session.id)
-        await parent_session.save_async()
+        await parent_session.save()
 
         child_id = child_session.id
 
@@ -1782,7 +1784,7 @@ class BalloonsApp(App):
                     session.add_message("assistant", content, content_blocks=assistant_blocks, exchange_id=exchange_id)
 
                 # Final save to ensure all state is persisted
-                asyncio.create_task(session.save_async())
+                asyncio.create_task(session.save())
 
             if ctx.is_active:
                 # Exit streaming mode (re-enable normal input)
@@ -1892,7 +1894,7 @@ class BalloonsApp(App):
 
         # Fall back to most recently modified session
         session_id = None
-        async for metadata in Session.list_sessions_async():
+        for metadata in await Session.list_sessions():
             session_id = metadata["id"]
             break  # Just need the first one (most recent)
 
@@ -2084,7 +2086,7 @@ class BalloonsApp(App):
         # This ensures the user prompt is persisted even if we crash mid-exchange
         user_blocks = [TextBlock(text=prompt)]
         self.session.add_message("user", prompt, content_blocks=user_blocks, exchange_id=exchange_id)
-        asyncio.create_task(self.session.save_async())
+        asyncio.create_task(self.session.save())
 
         # Start the assistant turn in tree (with same exchange_id)
         assistant_turn_idx = turn_idx + 1
@@ -2361,7 +2363,7 @@ class BalloonsApp(App):
 
             # Set the working directory (resolves to canonical absolute path)
             self.session.set_working_directory(str(target_path))
-            asyncio.create_task(self.session.save_async())
+            asyncio.create_task(self.session.save())
             status_bar.update_working_directory(self.session.working_directory)
             self.notify(f"Changed to: {target_path}")
 
@@ -2370,7 +2372,7 @@ class BalloonsApp(App):
 
     def _handle_reload(self) -> None:
         """Reload the app by re-executing the process."""
-        asyncio.create_task(self.session.save_async())
+        asyncio.create_task(self.session.save())
         # Save current view position so we return here after reload
         turn_index = len(self.session.turns) - 1 if self.session.turns else None
         save_last_view(self.session.id, turn_index)
@@ -2379,7 +2381,7 @@ class BalloonsApp(App):
     async def _handle_title_command(self, title: str) -> None:
         """Set the session title."""
         self.session.title = title
-        await self.session.save_async()
+        await self.session.save()
 
         # Update UI with new title
         chat_log = self.query_one("#chat-log", ChatLogView)
@@ -2414,7 +2416,7 @@ class BalloonsApp(App):
             return
 
         # Save session and recreate runner
-        asyncio.create_task(self.session.save_async())
+        asyncio.create_task(self.session.save())
 
         backend_config = config.get_backend(result.new_backend)
         self._manager._runners[self.session.id] = SessionRunner(
@@ -2630,7 +2632,7 @@ class BalloonsApp(App):
 
         # Save all modified sessions
         for session in link_result.sessions_to_save:
-            asyncio.create_task(session.save_async())
+            asyncio.create_task(session.save())
 
         # Update UI for each link
         linked_names = []
@@ -2861,7 +2863,7 @@ class BalloonsApp(App):
 
         # Update session state
         self.session.turns = result.new_turns
-        asyncio.create_task(self.session.save_async())
+        asyncio.create_task(self.session.save())
 
         # Reload the UI first so TreeState has updated turns
         chat_log.clear()
@@ -2999,7 +3001,7 @@ class BalloonsApp(App):
         new_session = Session()
         for msg in selected_messages:
             new_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
-        asyncio.create_task(new_session.save_async())
+        asyncio.create_task(new_session.save())
 
         # Switch to new session through manager
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
@@ -3246,7 +3248,7 @@ class BalloonsApp(App):
         chat_log.scroll_end(animate=False)
 
         # Save the session
-        asyncio.create_task(session.save_async())
+        asyncio.create_task(session.save())
 
         debug_log.info(
             f"Fork proposal turn created",
@@ -3456,7 +3458,7 @@ class BalloonsApp(App):
         chat_log.scroll_end(animate=False)
 
         # Save the session
-        asyncio.create_task(self.session.save_async())
+        asyncio.create_task(self.session.save())
 
         debug_log.info(
             f"Merge proposal turn created",
@@ -3666,7 +3668,7 @@ class BalloonsApp(App):
             # This ensures it's persisted even if we crash mid-exchange
             user_blocks = [TextBlock(text=result.prompt)]
             child_session.add_message("user", result.prompt, content_blocks=user_blocks, exchange_id=exchange_id)
-            asyncio.create_task(child_session.save_async())
+            asyncio.create_task(child_session.save())
 
             child_runner = self._manager._runners[child_session.id]
             child_runner.start_background(
@@ -3677,7 +3679,7 @@ class BalloonsApp(App):
             self.notify(f"Fork '{result.name or child_session.id[:8]}' started in background")
         else:
             # Foreground mode - switch to child
-            asyncio.create_task(child_session.save_async())  # Ensure recent timestamp
+            asyncio.create_task(child_session.save())  # Ensure recent timestamp
 
             # Apply pending binding if any
             await self._apply_pending_fork_binding(result.name, child_session, parent_session)
@@ -4019,38 +4021,38 @@ class BalloonsApp(App):
 
     async def on_with_widget_child_clicked(self, event: WithWidget.ChildClicked) -> None:
         """Handle clicking on WithWidget to navigate to child session."""
-        child_session = await Session.load_async(event.child_session_id)
+        child_session = await Session.load(event.child_session_id)
         if child_session:
             await self._switch_to_session(child_session)
 
     async def on_with_result_widget_child_clicked(self, event: WithResultWidget.ChildClicked) -> None:
         """Handle clicking on WithResultWidget to navigate to child session."""
-        child_session = await Session.load_async(event.child_session_id)
+        child_session = await Session.load(event.child_session_id)
         if child_session:
             await self._switch_to_session(child_session)
 
     async def on_fork_marker_child_clicked(self, event: ForkMarker.ChildClicked) -> None:
         """Handle clicking on ForkMarker to navigate to the fork."""
-        child_session = await Session.load_async(event.child_session_id)
+        child_session = await Session.load(event.child_session_id)
         if child_session:
             await self._switch_to_session(child_session)
 
     async def on_link_marker_linked_session_clicked(self, event: LinkMarker.LinkedSessionClicked) -> None:
         """Handle clicking on LinkMarker to navigate to the linked session."""
-        linked_session = await Session.load_async(event.linked_session_id)
+        linked_session = await Session.load(event.linked_session_id)
         if linked_session:
             await self._switch_to_session(linked_session)
             # TODO: Could scroll to the link_point turn in the target session
 
     async def on_merge_marker_child_clicked(self, event: MergeMarker.ChildClicked) -> None:
         """Handle clicking on MergeMarker to navigate to the (read-only) fork."""
-        child_session = await Session.load_async(event.child_session_id)
+        child_session = await Session.load(event.child_session_id)
         if child_session:
             await self._switch_to_session(child_session)
 
     async def on_review_marker_child_clicked(self, event: ReviewMarker.ChildClicked) -> None:
         """Handle clicking on ReviewMarker to navigate to the review session."""
-        child_session = await Session.load_async(event.child_session_id)
+        child_session = await Session.load(event.child_session_id)
         if child_session:
             await self._switch_to_session(child_session)
 
@@ -4117,7 +4119,7 @@ class BalloonsApp(App):
         session = self._manager._sessions.get(session_id)
         if session:
             session.update_fork_proposal_status(event.proposal_id, "accepted")
-            await session.save_async()
+            await session.save()
 
         # Execute the fork
         try:
@@ -4145,7 +4147,7 @@ class BalloonsApp(App):
         # Update the proposal status in the session
         if self.session:
             self.session.update_fork_proposal_status(event.proposal_id, "rejected")
-            await self.session.save_async()
+            await self.session.save()
 
         # Notify the user
         self.notify("Fork proposal rejected")
@@ -4168,7 +4170,7 @@ class BalloonsApp(App):
         # Update the proposal status in the session
         if self.session:
             self.session.update_merge_proposal_status(event.proposal_id, "accepted")
-            await self.session.save_async()
+            await self.session.save()
 
         # Execute the merge
         try:
@@ -4201,7 +4203,7 @@ class BalloonsApp(App):
         # Update the proposal status in the session
         if self.session:
             self.session.update_merge_proposal_status(event.proposal_id, "rejected")
-            await self.session.save_async()
+            await self.session.save()
 
         # Notify the user
         self.notify("Merge proposal rejected")
@@ -4225,7 +4227,7 @@ class BalloonsApp(App):
             # Rehydrate the archive
             new_turns = archiver.rehydrate(self.session.turns, event.turn_index)
             self.session.turns = new_turns
-            await self.session.save_async()
+            await self.session.save()
 
             debug_log.info(
                 f"Rehydrated archive from {event.file_path}",
@@ -4278,7 +4280,7 @@ class BalloonsApp(App):
         if old_session:
             self._queue_state.sync_to_message_queue(old_session_id, old_session.message_queue)
             # Save async to persist the queue (safe even while streaming - only saving queue)
-            asyncio.create_task(old_session.save_async())
+            asyncio.create_task(old_session.save())
 
     async def _switch_to_session(self, session: Session, target_turn_index: int | None = None) -> None:
         """Switch to a different session.
@@ -4389,7 +4391,7 @@ class BalloonsApp(App):
             )
             # Clear the invalid backend from the session
             session.backend_name = ""
-            asyncio.create_task(session.save_async())
+            asyncio.create_task(session.save())
             session_backend = self._backend_config
 
         status_bar.update_stats(
@@ -4492,7 +4494,7 @@ class BalloonsApp(App):
         # Persist to session turn and save
         if turn_idx < len(self.session.turns):
             self.session.turns[turn_idx].context_mode = new_mode
-            asyncio.create_task(self.session.save_async())
+            asyncio.create_task(self.session.save())
 
         # Update tree label - root label and token count updated via TreeState observer
         context_tree._update_turn_label(self.session.id, turn_idx)
@@ -4517,11 +4519,11 @@ class BalloonsApp(App):
         if self.session and self.session.id == event.session_id:
             session = self.session
         else:
-            session = await Session.load_async(event.session_id)
+            session = await Session.load(event.session_id)
 
         if session and event.turn_idx < len(session.turns):
             session.turns[event.turn_idx].context_mode = event.new_mode
-            asyncio.create_task(session.save_async())
+            asyncio.create_task(session.save())
 
     async def on_context_tree_view_turn_delete_requested(self, event: ContextTreeView.TurnDeleteRequested) -> None:
         """Handle turn delete request - show confirmation dialog."""
@@ -4531,7 +4533,7 @@ class BalloonsApp(App):
         if self.session and self.session.id == event.session_id:
             session = self.session
         else:
-            session = await Session.load_async(event.session_id)
+            session = await Session.load(event.session_id)
 
         if not session:
             self.notify("Session not found", severity="error")
@@ -4573,7 +4575,7 @@ class BalloonsApp(App):
                 category="event",
                 details={"turn_index": turn_index},
             )
-            asyncio.create_task(session.save_async())
+            asyncio.create_task(session.save())
 
             # Efficiently update the tree without reloading everything
             context_tree.remove_turn(session_id, turn_index, updated_session=session)
@@ -4591,7 +4593,7 @@ class BalloonsApp(App):
     async def on_context_tree_view_session_delete_requested(self, event: ContextTreeView.SessionDeleteRequested) -> None:
         """Handle session delete request - show confirmation dialog."""
         # Load the session to get info for confirmation
-        session = await Session.load_async(event.session_id)
+        session = await Session.load(event.session_id)
         if not session:
             self.notify("Session not found", severity="error")
             return
@@ -4624,13 +4626,13 @@ class BalloonsApp(App):
         # Mark links as orphaned in linked sessions before deletion
         # Check both legacy links and turn-based LinkBlocks
         for link in session.get_all_active_links():
-            linked_session = await Session.load_async(link.get("linked_session_id", ""))
+            linked_session = await Session.load(link.get("linked_session_id", ""))
             if linked_session:
                 linked_session.mark_link_orphaned(link.get("link_id", ""))
-                await linked_session.save_async()
+                await linked_session.save()
 
         # Execute async delete and handle result
-        await self._complete_session_delete(session_id, session, was_active, session.delete_async())
+        await self._complete_session_delete(session_id, session, was_active, session.delete())
 
     async def _complete_session_delete(self, session_id: str, session: Session, was_active: bool, delete_coro) -> None:
         """Complete session deletion after async delete."""
@@ -4650,13 +4652,13 @@ class BalloonsApp(App):
             if was_active:
                 # Find another session to switch to - get just the first one
                 first_session = None
-                async for session_info in Session.list_sessions_async():
+                for session_info in await Session.list_sessions():
                     first_session = session_info
                     break
 
                 if first_session:
                     # Switch to the first remaining session
-                    next_session = await Session.load_async(first_session["id"])
+                    next_session = await Session.load(first_session["id"])
                     if next_session:
                         await self._switch_to_session(next_session)
                 else:
@@ -4671,7 +4673,7 @@ class BalloonsApp(App):
     async def on_context_tree_view_exchange_delete_requested(self, event: ContextTreeView.ExchangeDeleteRequested) -> None:
         """Handle exchange group delete request - show confirmation dialog."""
         # Load the session
-        session = await Session.load_async(event.session_id)
+        session = await Session.load(event.session_id)
         if not session:
             self.notify("Session not found", severity="error")
             return
@@ -4705,7 +4707,7 @@ class BalloonsApp(App):
                 category="event",
                 details={"turn_indices": turn_indices, "deleted_count": deleted_count},
             )
-            await session.save_async()
+            await session.save()
 
             # Reload the tree for this session (easier than updating multiple turns)
             await context_tree.load_all_sessions(session)
@@ -4783,7 +4785,7 @@ class BalloonsApp(App):
         chat_log = self.query_one("#chat-log", ChatLogView)
         # Check if we need to switch sessions
         if self.session and event.session_id != self.session.id:
-            target_session = await Session.load_async(event.session_id)
+            target_session = await Session.load(event.session_id)
             if target_session:
                 await self._switch_to_session(target_session, target_turn_index=event.last_turn_idx)
                 return
@@ -4815,7 +4817,7 @@ class BalloonsApp(App):
         if turn_session_id and turn_session_id != self.session.id:
             # Switch to the turn's session first - it handles scrolling
             debug_log.info(f"Switching to different session: {turn_session_id[:8]}...", category="tree")
-            target_session = await Session.load_async(turn_session_id)
+            target_session = await Session.load(turn_session_id)
             if target_session:
                 debug_log.info(f"Loaded target session, calling _switch_to_session with turn_idx={turn_idx}", category="tree")
                 await self._switch_to_session(target_session, target_turn_index=turn_idx)
@@ -4935,11 +4937,11 @@ class BalloonsApp(App):
         if self.session and self.session.id == event.session_id:
             session = self.session
         else:
-            session = await Session.load_async(event.session_id)
+            session = await Session.load(event.session_id)
 
         if session and event.turn_idx < len(session.turns):
             session.turns[event.turn_idx].context_mode = event.new_mode
-            asyncio.create_task(session.save_async())
+            asyncio.create_task(session.save())
 
     async def on_nested_tree_view_session_activated(self, event: NestedTreeView.SessionActivated) -> None:
         """Handle clicking on a session in nested tree - switch to it."""
@@ -4955,7 +4957,7 @@ class BalloonsApp(App):
         # Check if we need to switch sessions
         turn_session_id = event.session_id
         if turn_session_id and self.session and turn_session_id != self.session.id:
-            target_session = await Session.load_async(turn_session_id)
+            target_session = await Session.load(turn_session_id)
             if target_session:
                 await self._switch_to_session(target_session, target_turn_index=turn_idx)
                 chat_log.clear_highlights()
@@ -5006,7 +5008,7 @@ class BalloonsApp(App):
 
     async def on_nested_tree_view_session_load_requested(self, event: NestedTreeView.SessionLoadRequested) -> None:
         """Handle request to load a session's data for display in nested tree."""
-        session = await Session.load_async(event.session_id)
+        session = await Session.load(event.session_id)
         if session:
             # Load the session into TreeState
             self._tree_state.load_session(event.session_id, session)
@@ -5023,7 +5025,7 @@ class BalloonsApp(App):
         chat_log = self.query_one("#chat-log", ChatLogView)
         # Check if we need to switch sessions
         if self.session and event.session_id != self.session.id:
-            target_session = await Session.load_async(event.session_id)
+            target_session = await Session.load(event.session_id)
             if target_session:
                 await self._switch_to_session(target_session, target_turn_index=event.last_turn_idx)
                 return
@@ -5040,7 +5042,7 @@ class BalloonsApp(App):
 
     async def on_goal_tree_view_session_activated(self, event: GoalTreeView.SessionActivated) -> None:
         """Handle clicking on a session in goal tree - switch to it."""
-        session = await Session.load_async(event.session_id)
+        session = await Session.load(event.session_id)
         if session:
             await self._switch_to_session(session)
 
@@ -5125,7 +5127,7 @@ class BalloonsApp(App):
 
     async def on_breadcrumb_segment_clicked(self, event: Breadcrumb.SegmentClicked) -> None:
         """Handle clicking a breadcrumb segment to navigate up."""
-        target_session = await Session.load_async(event.session_id)
+        target_session = await Session.load(event.session_id)
         if target_session:
             await self._switch_to_session(target_session)
 
@@ -5145,7 +5147,7 @@ class BalloonsApp(App):
         # Set title if provided
         if result.title:
             self.session.title = result.title
-            asyncio.create_task(self.session.save_async())
+            asyncio.create_task(self.session.save())
             # Update UI
             context_tree = self.query_one("#context-tree", ContextTreeView)
             await context_tree.load_all_sessions(self.session)
@@ -5268,7 +5270,7 @@ class BalloonsApp(App):
 
         self.notify("Refreshing session list...")
         session_count = 0
-        async for _ in Session.list_sessions_async():
+        for _ in await Session.list_sessions():
             session_count += 1
         self.notify(f"Found {session_count} sessions")
 
@@ -5369,7 +5371,7 @@ class BalloonsApp(App):
                 context_mode=turn.context_mode,
             )
 
-        await review_session.save_async()
+        await review_session.save()
 
         # Register child in parent
         self.session.add_child(
@@ -5378,7 +5380,7 @@ class BalloonsApp(App):
             name="review",
             fork_point=len(self.session.turns),
         )
-        await self.session.save_async()
+        await self.session.save()
 
         # Register review session with manager
         self._manager._sessions[review_session.id] = review_session
@@ -5634,7 +5636,7 @@ class BalloonsApp(App):
 
         # Count sessions first (from Rust if available, else JSON index)
         session_count = 0
-        async for _ in Session.list_sessions_async():
+        for _ in await Session.list_sessions():
             session_count += 1
 
         if session_count == 0:
@@ -5812,7 +5814,7 @@ class BalloonsApp(App):
             content="",
             notes="",
         )
-        asyncio.create_task(self.session.save_async())
+        asyncio.create_task(self.session.save())
 
         # Refresh UI
         self._refresh_slides_pane()
@@ -6044,7 +6046,7 @@ class BalloonsApp(App):
                 turn = session.turns[turn_idx]
                 turn.sentiment = event.sentiment
                 # Save the session to persist the change
-                await session.save_async()
+                await session.save()
                 from core.debug_log import debug_log
                 debug_log.info(
                     f"Sentiment updated: session={session.id[:8]}, turn_idx={turn_idx}, sentiment={event.sentiment}",
@@ -6183,7 +6185,7 @@ class BalloonsApp(App):
         self._queue_state.sync_to_message_queue(self.session.id, self.session.message_queue)
         # Only save if not streaming (avoid race with turn modifications)
         if not self.streaming:
-            asyncio.create_task(self.session.save_async())
+            asyncio.create_task(self.session.save())
 
     def on_message_queue_popup_message_removed(self, event: MessageQueuePopup.MessageRemoved) -> None:
         """Handle removing a queued message."""

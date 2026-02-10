@@ -197,7 +197,7 @@ class Session:
         """Load and return the parent session if this is a child (async version)."""
         if not self.parent_id:
             return None
-        return await Session.load_async(self.parent_id)
+        return await Session.load(self.parent_id)
 
     def is_child_session(self) -> bool:
         """Check if this session is a child of another session."""
@@ -321,24 +321,7 @@ class Session:
                 deleted_count += 1
         return deleted_count
 
-    def delete(self) -> bool:
-        """Delete this session from storage (sync version).
-
-        Returns True if deleted, False if not found.
-        Note: Prefer delete_async() to avoid blocking the UI.
-        """
-        try:
-            asyncio.get_running_loop()
-            raise RuntimeError(
-                "Session.delete() called from async context. "
-                "Use 'await session.delete_async()' instead."
-            )
-        except RuntimeError as e:
-            if "no running event loop" not in str(e).lower():
-                raise
-            return asyncio.run(self.delete_async())
-
-    async def delete_async(self) -> bool:
+    async def delete(self) -> bool:
         """Delete this session from storage.
 
         Returns True if deleted, False if not found.
@@ -1044,23 +1027,7 @@ class Session:
             "message_queue": self.message_queue.to_dict() if self.message_queue else {},
         }
 
-    def save(self):
-        """Save session to storage (sync version).
-
-        For async code, prefer save_async() to avoid blocking.
-        """
-        try:
-            asyncio.get_running_loop()
-            raise RuntimeError(
-                "Session.save() called from async context. "
-                "Use 'await session.save_async()' instead."
-            )
-        except RuntimeError as e:
-            if "no running event loop" not in str(e).lower():
-                raise
-            asyncio.run(self.save_async())
-
-    async def save_async(self):
+    async def save(self):
         """Save session to storage."""
         storage = _get_storage()
         await storage.save_session(self)
@@ -1275,76 +1242,28 @@ class Session:
         return session
 
     @classmethod
-    def load(cls, session_id: str) -> Optional["Session"]:
-        """Load a session by ID (sync version).
-
-        For async code, prefer load_async() to avoid blocking.
-        """
-        try:
-            asyncio.get_running_loop()
-            raise RuntimeError(
-                "Session.load() called from async context. "
-                "Use 'await Session.load_async()' instead."
-            )
-        except RuntimeError as e:
-            if "no running event loop" not in str(e).lower():
-                raise
-            return asyncio.run(cls.load_async(session_id))
-
-    @classmethod
-    async def load_async(cls, session_id: str) -> Optional["Session"]:
+    async def load(cls, session_id: str) -> Optional["Session"]:
         """Load a session by ID."""
         storage = _get_storage()
         return await storage.load_session(session_id)
 
     @classmethod
-    def list_sessions(cls) -> list[dict]:
-        """Return list of session metadata dicts (sync version).
+    async def list_sessions(cls) -> list[dict]:
+        """Return list of session metadata dicts.
 
-        For async code, prefer list_sessions_async().
+        Sessions are returned in order of last_modified (most recent first).
         Returns list of dicts with keys: id, name, created_at, updated_at, turn_count.
         """
-        try:
-            asyncio.get_running_loop()
-            raise RuntimeError(
-                "Session.list_sessions() called from async context. "
-                "Use 'async for s in Session.list_sessions_async()' instead."
-            )
-        except RuntimeError as e:
-            if "no running event loop" not in str(e).lower():
-                raise
-            storage = _get_storage()
-            return asyncio.run(storage.list_sessions())
-
-    @classmethod
-    async def list_sessions_async(cls) -> AsyncIterator[dict]:
-        """Async generator that yields session metadata dicts one at a time.
-
-        Sessions are yielded in order of last_modified (most recent first).
-        Yields dicts with keys: id, name, created_at, updated_at, turn_count.
-        """
         storage = _get_storage()
-        sessions = await storage.list_sessions()
-        for metadata in sessions:
-            yield metadata
+        return await storage.list_sessions()
 
     @classmethod
-    def get_most_recent_session_id(cls) -> Optional[str]:
-        """Get the ID of the most recently modified session (sync version).
+    async def get_most_recent_session_id(cls) -> Optional[str]:
+        """Get the ID of the most recently modified session.
 
         Returns None if no sessions exist.
         """
-        try:
-            asyncio.get_running_loop()
-            raise RuntimeError(
-                "Session.get_most_recent_session_id() called from async context. "
-                "Use 'async for s in Session.list_sessions_async()' instead."
-            )
-        except RuntimeError as e:
-            if "no running event loop" not in str(e).lower():
-                raise
-            storage = _get_storage()
-            sessions = asyncio.run(storage.list_sessions())
+        sessions = await cls.list_sessions()
         if sessions:
             return sessions[0]["id"]  # Already sorted by last_modified desc
         return None
