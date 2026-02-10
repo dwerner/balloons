@@ -1,0 +1,565 @@
+"""LLM-invocable tools for goal-oriented task management.
+
+These tools allow Claude to create and manage goals, plans, and todos
+directly during conversation, enabling self-hosting workflows where
+the system tracks its own development.
+
+Tool Names:
+- create_goal: Create a new goal with acceptance criteria
+- create_plan: Create a plan for achieving a goal
+- create_todo: Create a todo and link it to a plan
+- list_goals: List all goals with their status
+- list_todos: List priority-ranked available todos
+- mark_todo_done: Mark a todo as complete
+- bind_session: Bind current session to a goal/plan/todo
+"""
+
+import uuid
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+from core.async_storage import get_goal_storage
+from core.goal_commands import GoalCommandExecutor
+from core.lifecycle_hooks import LifecycleHooks
+from storage_schema import GoalData, PlanData, TodoData, TodoPlanLink, TodoDependency
+
+if TYPE_CHECKING:
+    from session import Session
+
+
+# Tool names for registration
+GOAL_TOOL_NAMES = {
+    "create_goal",
+    "create_plan",
+    "create_todo",
+    "list_goals",
+    "list_todos",
+    "mark_todo_done",
+    "bind_session",
+}
+
+
+# Tool definitions in OpenAI function format
+GOAL_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "create_goal",
+            "description": """Create a new goal for tracking work.
+
+Goals are high-level objectives with acceptance criteria that define completion.
+Each goal has a weight (1-10) indicating priority.
+
+Use this when:
+- Starting a new project or feature
+- Breaking down a large initiative
+- The user describes something they want to accomplish
+
+The goal will be created with 'active' status.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Short title for the goal (max 80 chars)"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Detailed description of what the goal aims to achieve"
+                    },
+                    "weight": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "Priority weight (1=low, 10=critical). Default: 5"
+                    },
+                    "acceptance_criteria": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of conditions that must be met to consider the goal complete"
+                    }
+                },
+                "required": ["title", "description", "acceptance_criteria"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_plan",
+            "description": """Create a plan for achieving a goal.
+
+Plans break down goals into actionable strategies. A goal may have multiple
+plans (different approaches), but typically one active plan at a time.
+
+Use this when:
+- You've identified an approach to achieve a goal
+- Breaking down a goal into phases
+- Proposing a strategy for the user to approve""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal_id": {
+                        "type": "string",
+                        "description": "ID of the parent goal (can be prefix, e.g., first 8 chars)"
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Short title for the plan (max 80 chars)"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Description of the approach/strategy"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["draft", "active"],
+                        "description": "Initial status. Default: 'active'"
+                    }
+                },
+                "required": ["goal_id", "title", "description"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_todo",
+            "description": """Create a todo task linked to a plan.
+
+Todos are concrete tasks that can be completed. They can be regular tasks
+or "spikes" (timeboxed exploration). Todos can have dependencies on other todos.
+
+Use this when:
+- Breaking down a plan into specific tasks
+- Identifying work items
+- Creating exploration spikes for uncertain areas""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plan_id": {
+                        "type": "string",
+                        "description": "ID of the parent plan (can be prefix)"
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Short title for the todo (max 80 chars)"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Details about what needs to be done"
+                    },
+                    "is_spike": {
+                        "type": "boolean",
+                        "description": "If true, this is timeboxed exploration. Default: false"
+                    },
+                    "timebox_minutes": {
+                        "type": "integer",
+                        "description": "For spikes: maximum time to spend (minutes)"
+                    },
+                    "depends_on": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of todo IDs this task depends on (can be prefixes)"
+                    }
+                },
+                "required": ["plan_id", "title"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_goals",
+            "description": """List all goals with their status and progress.
+
+Returns formatted list of goals sorted by weight, showing:
+- Status (active/completed/abandoned)
+- Weight
+- Title and description
+- ID (for reference in other commands)
+
+Use this to see what goals exist and their current state.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "include_completed": {
+                        "type": "boolean",
+                        "description": "Include completed/abandoned goals. Default: false"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_todos",
+            "description": """List priority-ranked todos that are available to work on.
+
+Returns todos sorted by priority (goal_weight × completion_factor).
+Only shows available todos (dependencies complete, not blocked).
+Excludes spikes from priority ranking.
+
+Use this to see what should be worked on next.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plan_id": {
+                        "type": "string",
+                        "description": "Optional: filter to todos for a specific plan (can be prefix)"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mark_todo_done",
+            "description": """Mark a todo as complete.
+
+Triggers lifecycle hooks:
+- If all plan todos are done, prompts for postmortem
+- If this is a spike, prompts for promote/spawn/discard decision
+
+Use this when a task is finished.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "todo_id": {
+                        "type": "string",
+                        "description": "ID of the todo to complete (can be prefix)"
+                    }
+                },
+                "required": ["todo_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "bind_session",
+            "description": """Bind the current session to a goal, plan, or todo.
+
+Session binding injects context about the bound entity into the system prompt,
+helping keep focus aligned with the intended work.
+
+Roles:
+- interview: Gathering requirements, defining acceptance criteria
+- planning: Breaking down work, creating plans
+- implementation: Writing code, completing todos
+- postmortem: Evaluating completed work against criteria
+- exploration: Open-ended investigation""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity_type": {
+                        "type": "string",
+                        "enum": ["goal", "plan", "todo"],
+                        "description": "Type of entity to bind to"
+                    },
+                    "entity_id": {
+                        "type": "string",
+                        "description": "ID of the entity (can be prefix)"
+                    },
+                    "role": {
+                        "type": "string",
+                        "enum": ["interview", "planning", "implementation", "postmortem", "exploration"],
+                        "description": "Role for this session. Default: 'implementation'"
+                    }
+                },
+                "required": ["entity_type", "entity_id"]
+            }
+        }
+    },
+]
+
+
+async def execute_goal_tool(
+    name: str,
+    args: dict,
+    session: "Session",
+) -> tuple[str, bool]:
+    """Execute a goal management tool.
+
+    Args:
+        name: Tool name
+        args: Tool arguments from the model
+        session: Current session (for binding)
+
+    Returns:
+        Tuple of (result_string, is_error)
+    """
+    storage = await get_goal_storage()
+
+    if name == "create_goal":
+        return await _create_goal(args, storage)
+    elif name == "create_plan":
+        return await _create_plan(args, storage)
+    elif name == "create_todo":
+        return await _create_todo(args, storage)
+    elif name == "list_goals":
+        return await _list_goals(args, storage)
+    elif name == "list_todos":
+        return await _list_todos(args, storage)
+    elif name == "mark_todo_done":
+        return await _mark_todo_done(args, storage, session)
+    elif name == "bind_session":
+        return await _bind_session(args, storage, session)
+    else:
+        return f"Unknown goal tool: {name}", True
+
+
+async def _create_goal(args: dict, storage) -> tuple[str, bool]:
+    """Create a new goal."""
+    title = args.get("title", "").strip()
+    if not title:
+        return "Error: title is required", True
+
+    description = args.get("description", "").strip()
+    if not description:
+        return "Error: description is required", True
+
+    acceptance_criteria = args.get("acceptance_criteria", [])
+    if not acceptance_criteria:
+        return "Error: acceptance_criteria is required (list of strings)", True
+
+    weight = args.get("weight", 5)
+    if not 1 <= weight <= 10:
+        weight = max(1, min(10, weight))
+
+    now = datetime.now().isoformat()
+    goal = GoalData(
+        id=str(uuid.uuid4()),
+        title=title[:80],
+        description=description,
+        weight=weight,
+        status="active",
+        acceptance_criteria=acceptance_criteria,
+        created_at=now,
+        updated_at=now,
+    )
+
+    await storage.save_goal(goal)
+
+    criteria_str = "\n".join(f"  - {c}" for c in acceptance_criteria)
+    return (
+        f"Created goal: {goal.title}\n"
+        f"ID: {goal.id}\n"
+        f"Weight: {goal.weight}/10\n"
+        f"Acceptance Criteria:\n{criteria_str}"
+    ), False
+
+
+async def _create_plan(args: dict, storage) -> tuple[str, bool]:
+    """Create a plan for a goal."""
+    goal_id_prefix = args.get("goal_id", "").strip()
+    if not goal_id_prefix:
+        return "Error: goal_id is required", True
+
+    # Find goal by prefix
+    goals = await storage.list_goals()
+    goal = None
+    for g in goals:
+        if g.id.startswith(goal_id_prefix):
+            goal = g
+            break
+
+    if not goal:
+        return f"Error: Goal not found: {goal_id_prefix}", True
+
+    title = args.get("title", "").strip()
+    if not title:
+        return "Error: title is required", True
+
+    description = args.get("description", "").strip()
+    status = args.get("status", "active")
+    if status not in ("draft", "active"):
+        status = "active"
+
+    now = datetime.now().isoformat()
+    plan = PlanData(
+        id=str(uuid.uuid4()),
+        goal_id=goal.id,
+        title=title[:80],
+        description=description,
+        status=status,
+        created_at=now,
+        updated_at=now,
+    )
+
+    await storage.save_plan(plan)
+
+    return (
+        f"Created plan: {plan.title}\n"
+        f"ID: {plan.id}\n"
+        f"Status: {plan.status}\n"
+        f"Goal: {goal.title}"
+    ), False
+
+
+async def _create_todo(args: dict, storage) -> tuple[str, bool]:
+    """Create a todo linked to a plan."""
+    plan_id_prefix = args.get("plan_id", "").strip()
+    if not plan_id_prefix:
+        return "Error: plan_id is required", True
+
+    # Find plan by prefix
+    plans = await storage.list_plans()
+    plan = None
+    for p in plans:
+        if p.id.startswith(plan_id_prefix):
+            plan = p
+            break
+
+    if not plan:
+        return f"Error: Plan not found: {plan_id_prefix}", True
+
+    title = args.get("title", "").strip()
+    if not title:
+        return "Error: title is required", True
+
+    description = args.get("description", "").strip()
+    is_spike = args.get("is_spike", False)
+    timebox_minutes = args.get("timebox_minutes")
+
+    now = datetime.now().isoformat()
+    todo = TodoData(
+        id=str(uuid.uuid4()),
+        title=title[:80],
+        description=description,
+        status="pending",
+        is_spike=is_spike,
+        timebox_minutes=timebox_minutes if is_spike else None,
+        created_at=now,
+        updated_at=now,
+    )
+
+    await storage.save_todo(todo)
+
+    # Link to plan
+    link = TodoPlanLink(
+        todo_id=todo.id,
+        plan_id=plan.id,
+        created_at=now,
+    )
+    await storage.save_todo_plan_link(link)
+
+    # Handle dependencies
+    depends_on = args.get("depends_on", [])
+    all_todos = await storage.list_todos(include_spikes=True)
+    deps_added = []
+
+    for dep_prefix in depends_on:
+        for t in all_todos:
+            if t.id.startswith(dep_prefix):
+                dep = TodoDependency(
+                    todo_id=todo.id,
+                    depends_on_id=t.id,
+                    created_at=now,
+                )
+                await storage.save_todo_dependency(dep)
+                deps_added.append(t.title)
+                break
+
+    result = f"Created todo: {todo.title}\nID: {todo.id}\nPlan: {plan.title}"
+    if is_spike:
+        result += f"\nType: Spike"
+        if timebox_minutes:
+            result += f" ({timebox_minutes} min)"
+    if deps_added:
+        result += f"\nDepends on: {', '.join(deps_added)}"
+
+    return result, False
+
+
+async def _list_goals(args: dict, storage) -> tuple[str, bool]:
+    """List goals."""
+    include_completed = args.get("include_completed", False)
+    executor = GoalCommandExecutor(storage)
+    result = await executor.list_goals(include_completed)
+
+    if result.success:
+        # Strip Rich markup for tool output
+        formatted = result.formatted
+        formatted = formatted.replace("[bold cyan]", "").replace("[/bold cyan]", "")
+        formatted = formatted.replace("[bold]", "").replace("[/bold]", "")
+        formatted = formatted.replace("[dim]", "").replace("[/dim]", "")
+        formatted = formatted.replace("[green]●[/green]", "●")
+        formatted = formatted.replace("[blue]✓[/blue]", "✓")
+        formatted = formatted.replace("[yellow]→[/yellow]", "→")
+        formatted = formatted.replace("[red]✗[/red]", "✗")
+        return formatted, False
+    else:
+        return f"Error: {result.error}", True
+
+
+async def _list_todos(args: dict, storage) -> tuple[str, bool]:
+    """List priority-ranked todos."""
+    plan_id = args.get("plan_id", "")
+    executor = GoalCommandExecutor(storage)
+    result = await executor.list_todos(plan_id)
+
+    if result.success:
+        # Strip Rich markup for tool output
+        formatted = result.formatted
+        formatted = formatted.replace("[bold cyan]", "").replace("[/bold cyan]", "")
+        formatted = formatted.replace("[bold]", "").replace("[/bold]", "")
+        formatted = formatted.replace("[dim]", "").replace("[/dim]", "")
+        formatted = formatted.replace("[yellow]○[/yellow]", "○")
+        formatted = formatted.replace("[cyan]◐[/cyan]", "◐")
+        formatted = formatted.replace("[green]✓[/green]", "✓")
+        formatted = formatted.replace("[red]⊘[/red]", "⊘")
+        formatted = formatted.replace("[yellow]", "").replace("[/yellow]", "")
+        formatted = formatted.replace("[magenta]", "").replace("[/magenta]", "")
+        return formatted, False
+    else:
+        return f"Error: {result.error}", True
+
+
+async def _mark_todo_done(args: dict, storage, session) -> tuple[str, bool]:
+    """Mark a todo as complete."""
+    todo_id = args.get("todo_id", "").strip()
+    if not todo_id:
+        return "Error: todo_id is required", True
+
+    executor = GoalCommandExecutor(storage)
+    result = await executor.mark_todo_done(todo_id, session.id)
+
+    if result.success:
+        response = f"Marked complete: {result.todo.title}"
+        if result.lifecycle_prompt:
+            response += f"\n\nLifecycle prompt: {result.lifecycle_prompt.prompt_type}"
+            response += f"\n{result.lifecycle_prompt.message}"
+            if result.lifecycle_prompt.choices:
+                response += f"\nOptions: {', '.join(result.lifecycle_prompt.choices)}"
+        return response, False
+    else:
+        return f"Error: {result.error}", True
+
+
+async def _bind_session(args: dict, storage, session) -> tuple[str, bool]:
+    """Bind session to an entity."""
+    entity_type = args.get("entity_type", "").strip()
+    if entity_type not in ("goal", "plan", "todo"):
+        return "Error: entity_type must be 'goal', 'plan', or 'todo'", True
+
+    entity_id = args.get("entity_id", "").strip()
+    if not entity_id:
+        return "Error: entity_id is required", True
+
+    role = args.get("role", "implementation")
+    valid_roles = ("interview", "planning", "implementation", "postmortem", "exploration")
+    if role not in valid_roles:
+        role = "implementation"
+
+    executor = GoalCommandExecutor(storage)
+    result = await executor.bind_session(session.id, entity_type, entity_id, role)
+
+    if result.success:
+        return f"Session bound to {entity_type} with role: {role}", False
+    else:
+        return f"Error: {result.error}", True

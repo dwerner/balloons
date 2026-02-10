@@ -630,6 +630,9 @@ The review will be associated with the session being reviewed.""",
 # Names of review tools
 REVIEW_TOOL_NAMES = {"save_review"}
 
+# Import goal tools
+from .goal_tools import GOAL_TOOLS, GOAL_TOOL_NAMES
+
 
 def get_tools_for_request(
     allowed_tools: list[str] | None = None,
@@ -637,11 +640,13 @@ def get_tools_for_request(
     include_balloon_tools: bool = True,
     include_supervisor_tools: bool = True,
     include_review_tools: bool = False,
+    include_goal_tools: bool = True,
 ) -> list[dict] | None:
     """Get the list of tools to include in an API request.
 
     Includes standard file/shell tools and optionally Balloons-specific tools
-    (workflow, UI, session/link navigation), supervisor tools, and review tools.
+    (workflow, UI, session/link navigation), supervisor tools, review tools,
+    and goal management tools.
 
     Args:
         allowed_tools: List of tool names to allow, or None for all
@@ -649,6 +654,7 @@ def get_tools_for_request(
         include_balloon_tools: If True, include balloon-specific tools
         include_supervisor_tools: If True, include process supervisor tools
         include_review_tools: If True, include session review tools (save_review)
+        include_goal_tools: If True, include goal management tools (create_goal, etc.)
 
     Returns:
         List of tool definitions, or None if tools disabled
@@ -664,6 +670,8 @@ def get_tools_for_request(
         all_tools = all_tools + SUPERVISOR_TOOLS
     if include_review_tools:
         all_tools = all_tools + REVIEW_TOOLS
+    if include_goal_tools:
+        all_tools = all_tools + GOAL_TOOLS
 
     if allowed_tools is None:
         return all_tools

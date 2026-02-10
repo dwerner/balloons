@@ -468,6 +468,55 @@ class ErrorMarkerWidget(Static):
         return Text(msg, style="italic dim")
 
 
+class InfoWidget(Static):
+    """An informational message in the chat log (for command output like :goals, :todos).
+
+    Unlike MessageWidget, this is not a conversation turn - it's ephemeral info
+    that doesn't get saved to the session. Uses Rich markup for formatting.
+    """
+
+    DEFAULT_CSS = """
+    InfoWidget {
+        padding: 1 2;
+        margin: 0 0 1 2;
+        background: #1a2a1a;
+        border-left: thick #22d422;
+        color: $text;
+    }
+
+    InfoWidget.hidden {
+        display: none;
+    }
+    """
+
+    def __init__(
+        self,
+        content: str,
+        title: str = "",
+        turn_id: int = 0,
+        **kwargs
+    ):
+        super().__init__(**kwargs)
+        self._content = content
+        self._title = title
+        self.turn_id = turn_id
+
+    def render(self) -> RenderableType:
+        from rich.console import Group
+        from rich.text import Text
+        from rich.markdown import Markdown
+
+        parts = []
+        if self._title:
+            parts.append(Text(f"📋 {self._title}", style="bold cyan"))
+            parts.append(Text(""))
+
+        # Parse Rich markup
+        parts.append(Text.from_markup(self._content))
+
+        return Group(*parts)
+
+
 class MessageWidget(Static):
     """A single message in the chat log."""
 
@@ -1109,6 +1158,25 @@ class ChatLogView(VerticalScroll):
         widget = MessageWidget("user", content, turn_id=self._turn_counter)
         self.mount(widget)
         self.scroll_end(animate=False)
+        return widget
+
+    def add_info_message(self, content: str, title: str = "") -> InfoWidget:
+        """Add an informational message to the log (for command output).
+
+        Unlike user/assistant messages, info messages are not saved to the session.
+        They're ephemeral displays for command output like :goals, :todos, etc.
+
+        Args:
+            content: Rich markup content to display
+            title: Optional title for the info panel
+
+        Returns:
+            The InfoWidget that was added
+        """
+        self._turn_counter += 1
+        widget = InfoWidget(content, title=title, turn_id=self._turn_counter)
+        self.mount(widget)
+        self._smart_scroll()
         return widget
 
     def add_assistant_message(self, content: str = "") -> MessageWidget:

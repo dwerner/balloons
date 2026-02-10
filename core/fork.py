@@ -12,10 +12,12 @@ Terminology:
 
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional, Any
 
 from models import Message, TextBlock, ContextMode
 from session import Session
+from storage_schema import SessionBinding
 from .context_grouper import group_messages_by_context_mode, ContextGroups
 
 
@@ -259,6 +261,47 @@ class SwitchResult:
 
 
 # =============================================================================
+# Binding Inheritance Helper
+# =============================================================================
+
+
+async def copy_session_bindings(parent_session_id: str, child_session_id: str) -> int:
+    """Copy active bindings from parent to child session.
+
+    When a session is forked, its active bindings should be inherited by
+    the child session so the LLM continues working toward the same goals.
+
+    Args:
+        parent_session_id: The parent session to copy bindings from
+        child_session_id: The child session to copy bindings to
+
+    Returns:
+        Number of bindings copied
+    """
+    from .async_storage import get_goal_storage
+
+    storage = await get_goal_storage()
+    parent_bindings = await storage.get_bindings_for_session(parent_session_id, active_only=True)
+
+    copied = 0
+    for binding in parent_bindings:
+        # Create a new binding for the child with same entity and role
+        child_binding = SessionBinding(
+            id=str(uuid.uuid4()),
+            session_id=child_session_id,
+            entity_type=binding.entity_type,
+            entity_id=binding.entity_id,
+            role=binding.role,
+            created_at=datetime.now().isoformat(),
+            released_at=None,
+        )
+        await storage.save_session_binding(child_binding)
+        copied += 1
+
+    return copied
+
+
+# =============================================================================
 # ForkManager - Handles fork/merge/derive business logic
 # =============================================================================
 
@@ -342,6 +385,9 @@ class ForkManager:
                 child_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
             await child_session.save_async()
+
+            # Inherit bindings from parent
+            await copy_session_bindings(current_session.id, child_session.id)
 
             # Register child in parent
             current_session.add_child(
@@ -455,6 +501,9 @@ class ForkManager:
             child_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
         await child_session.save_async()
+
+        # Inherit bindings from parent
+        await copy_session_bindings(parent_session.id, child_session.id)
 
         # Register child in parent
         parent_session.add_child(

@@ -87,6 +87,13 @@ from core import (
     SlidesCommand,
     ChatCommand,
     ReviewCommand,
+    # Goal-oriented task management commands
+    GoalsCommand,
+    PlansCommand,
+    TodosCommand,
+    TodoDoneCommand,
+    BindCommand,
+    UnbindCommand,
     debug_log,
     create_runner,
     ensure_prompts_installed,
@@ -122,6 +129,7 @@ from core.exceptions import BackendNotFoundError
 from core.context_grouper import group_messages_by_context_mode, build_context_messages
 from core.fork import ForkManager, ForkResult, MergeResult, DeriveResult, SwitchResult, ForkProposal, MergeProposal, ForkData, DeriveData
 from core.command_executor import CommandExecutor, ArchiveResult, RehydrateResult, LinkResult, BackendResult, ShellResult
+from core.goal_commands import GoalCommandExecutor, check_priority_divergence, get_session_binding_indicator
 from core.tool_executor import parse_fork_proposal, parse_merge_proposal
 from core.tree_state import TreeState, TreeEvent
 from core.task_state import get_task_state, TaskStatus
@@ -2175,6 +2183,19 @@ class BalloonsApp(App):
             self._switch_to_chat_tab()
         elif isinstance(cmd, ReviewCommand):
             await self._handle_review_command()
+        # Goal-oriented task management commands
+        elif isinstance(cmd, GoalsCommand):
+            await self._handle_goals_command(cmd.include_completed)
+        elif isinstance(cmd, PlansCommand):
+            await self._handle_plans_command(cmd.goal_id)
+        elif isinstance(cmd, TodosCommand):
+            await self._handle_todos_command(cmd.plan_id)
+        elif isinstance(cmd, TodoDoneCommand):
+            await self._handle_todo_done_command(cmd.todo_id)
+        elif isinstance(cmd, BindCommand):
+            await self._handle_bind_command(cmd.entity_type, cmd.entity_id, cmd.role)
+        elif isinstance(cmd, UnbindCommand):
+            await self._handle_unbind_command(cmd.entity_id)
 
     def _format_tool_use(
         self, event: ToolUseEvent
@@ -3934,6 +3955,27 @@ class BalloonsApp(App):
         # Update queue popup for the new session
         self._update_queue_indicator()
 
+        # Check priority divergence and update binding indicator for the new session
+        asyncio.create_task(self._update_priority_divergence(session.id))
+        asyncio.create_task(self._update_session_binding_indicator(session.id))
+
+    async def _update_priority_divergence(self, session_id: str) -> None:
+        """Check if session is working on a non-highest-priority todo.
+
+        Updates the status bar with a warning if there's a higher priority
+        todo that should be worked on instead.
+        """
+        try:
+            info = await check_priority_divergence(session_id)
+            status_bar = self.query_one("#status-bar", StatusBar)
+            if info.is_diverged:
+                status_bar.set_priority_divergence(info.message)
+            else:
+                status_bar.set_priority_divergence("")
+        except Exception:
+            # Don't let priority check errors break session switching
+            pass
+
     def on_context_tree_view_selection_changed(self, event: ContextTreeView.SelectionChanged) -> None:
         """Handle tree selection changes - apply visual context mode indicators."""
         chat_log = self.query_one("#chat-log", ChatLogView)
@@ -4756,6 +4798,152 @@ class BalloonsApp(App):
         self._start_streaming(initial_prompt)
 
         self.notify(f"Started review session with {review_backend_config.name}")
+
+    # =========================================================================
+    # Goal-Oriented Task Management Command Handlers
+    # =========================================================================
+
+    async def _handle_goals_command(self, include_completed: bool = False) -> None:
+        """Handle :goals command - list all goals."""
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        executor = GoalCommandExecutor()
+        result = await executor.list_goals(include_completed)
+
+        if result.success:
+            chat_log.add_info_message(result.formatted, title="Goals")
+        else:
+            self.notify(f"Error: {result.error}", severity="error")
+
+    async def _handle_plans_command(self, goal_id: str = "") -> None:
+        """Handle :plans command - list plans for a goal."""
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        executor = GoalCommandExecutor()
+        result = await executor.list_plans(goal_id)
+
+        if result.success:
+            chat_log.add_info_message(result.formatted, title="Plans")
+        else:
+            self.notify(f"Error: {result.error}", severity="error")
+
+    async def _handle_todos_command(self, plan_id: str = "") -> None:
+        """Handle :todos command - list priority-ranked todos."""
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        executor = GoalCommandExecutor()
+        result = await executor.list_todos(plan_id)
+
+        if result.success:
+            chat_log.add_info_message(result.formatted, title="Todos")
+        else:
+            self.notify(f"Error: {result.error}", severity="error")
+
+    async def _handle_todo_done_command(self, todo_id: str) -> None:
+        """Handle :todo-done command - mark todo complete.
+
+        If no todo_id provided, marks the currently bound todo as done.
+        """
+        # If no todo_id, try to get from session binding
+        if not todo_id:
+            from core.async_storage import get_goal_storage
+            from widgets.todo_picker import TodoPickerModal
+
+            storage = await get_goal_storage()
+            bindings = await storage.get_bindings_for_session(self.session.id, active_only=True)
+            todo_bindings = [b for b in bindings if b.entity_type == "todo"]
+
+            if not todo_bindings:
+                self.notify("No todo bound to this session. Use :todo-done <id>", severity="warning")
+                return
+
+            # Load the todos for display
+            todos = []
+            for binding in todo_bindings:
+                todo = await storage.load_todo(binding.entity_id)
+                if todo and todo.status != "completed":
+                    todos.append(todo)
+
+            if not todos:
+                self.notify("All bound todos are already complete.", severity="warning")
+                return
+
+            if len(todos) == 1:
+                # Only one pending todo - use it directly
+                todo_id = todos[0].id
+            else:
+                # Multiple pending todos - show picker
+                selected_id = await self.push_screen_wait(TodoPickerModal(todos))
+                if not selected_id:
+                    return  # User cancelled
+                todo_id = selected_id
+
+        executor = GoalCommandExecutor()
+        result = await executor.mark_todo_done(todo_id, self.session.id)
+
+        if result.success:
+            self.notify(result.formatted, timeout=5)
+
+            # Handle lifecycle prompt if returned
+            if result.lifecycle_prompt:
+                # Show follow-up prompt (e.g., plan complete, spike complete)
+                await self._handle_lifecycle_prompt(result.lifecycle_prompt)
+        else:
+            self.notify(f"Error: {result.error}", severity="error")
+
+    async def _handle_bind_command(
+        self, entity_type: str, entity_id: str, role: str
+    ) -> None:
+        """Handle :bind command - bind session to goal/plan/todo."""
+        executor = GoalCommandExecutor()
+        result = await executor.bind_session(
+            self.session.id, entity_type, entity_id, role
+        )
+
+        if result.success:
+            self.notify(result.formatted, timeout=5)
+            # Update binding indicator in session label
+            await self._update_session_binding_indicator(self.session.id)
+        else:
+            self.notify(f"Error: {result.error}", severity="error")
+
+    async def _handle_unbind_command(self, entity_id: str = "") -> None:
+        """Handle :unbind command - release session bindings."""
+        executor = GoalCommandExecutor()
+        result = await executor.unbind_session(self.session.id, entity_id)
+
+        if result.success:
+            self.notify(result.formatted, timeout=5)
+            # Update binding indicator in session label
+            await self._update_session_binding_indicator(self.session.id)
+        else:
+            self.notify(f"Error: {result.error}", severity="error")
+
+    async def _update_session_binding_indicator(self, session_id: str) -> None:
+        """Update the binding indicator for a session in the tree state."""
+        indicator = await get_session_binding_indicator(session_id)
+        self._tree_state.update_session_binding_indicator(session_id, indicator)
+
+    async def _handle_lifecycle_prompt(self, prompt) -> None:
+        """Handle a lifecycle prompt from todo/plan completion.
+
+        Shows appropriate UI for postmortem, spike completion, etc.
+        """
+        from core.lifecycle_hooks import LifecyclePrompt
+
+        if not isinstance(prompt, LifecyclePrompt):
+            return
+
+        chat_log = self.query_one("#chat-log", ChatLogView)
+
+        # Build formatted message
+        title = prompt.prompt_type.replace('_', ' ').title()
+        content = prompt.message
+
+        if prompt.choices:
+            content += "\n\n[bold]Options:[/bold]"
+            for choice in prompt.choices:
+                content += f"\n  • {choice}"
+
+        # Show in chat log as info message (persistent, scrollable)
+        chat_log.add_info_message(content, title=title)
 
     def _handle_clear_all_sessions_command(self) -> None:
         """Delete all sessions after confirmation."""

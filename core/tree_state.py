@@ -111,6 +111,10 @@ class SessionData:
     turns: list[TurnData] | None = None
     session_ref: Any = None  # Reference to original Session object
 
+    # Goal-oriented binding indicator
+    # Format: "[role: entity-title]" e.g. "[impl: Add caching]"
+    binding_indicator: str = ""
+
 
 # Event types for observer notifications
 class TreeEvent(Enum):
@@ -869,6 +873,20 @@ class TreeState:
         """
         if session_id in self._sessions:
             self._sessions[session_id].cached_context_tokens = cached_tokens
+            self._notify(TreeEvent.SESSION_UPDATED, {"session_id": session_id})
+
+    def update_session_binding_indicator(self, session_id: str, indicator: str) -> None:
+        """Update a session's binding indicator (goal/plan/todo binding display).
+
+        Called by app when bindings change via :bind or :unbind commands.
+        The indicator is displayed in session labels, e.g. "[impl: Add caching]"
+
+        Args:
+            session_id: The session to update
+            indicator: The binding indicator text (empty string to clear)
+        """
+        if session_id in self._sessions:
+            self._sessions[session_id].binding_indicator = indicator
             self._notify(TreeEvent.SESSION_UPDATED, {"session_id": session_id})
 
     # --- Streaming State ---

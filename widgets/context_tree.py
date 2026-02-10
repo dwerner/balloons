@@ -997,10 +997,15 @@ class ContextTreeView(Vertical):
         # Format token count
         token_str = format_kt(session_tokens)
 
+        # Binding indicator (e.g. "[impl: Add caching]")
+        binding_indicator = ""
+        if session_data.binding_indicator:
+            binding_indicator = f" [magenta]{escape_markup(session_data.binding_indicator)}[/]"
+
         if name_part:
-            label = f"{model_indicator}{id_prefix}{name_part} [dim]({msg_count}msg {token_str})[/]{unviewed_indicator} {status}"
+            label = f"{model_indicator}{id_prefix}{name_part}{binding_indicator} [dim]({msg_count}msg {token_str})[/]{unviewed_indicator} {status}"
         else:
-            label = f"{model_indicator}{id_prefix}{date_str} [dim]({msg_count}msg {token_str})[/]{unviewed_indicator} {status}"
+            label = f"{model_indicator}{id_prefix}{date_str}{binding_indicator} [dim]({msg_count}msg {token_str})[/]{unviewed_indicator} {status}"
 
         # Highlight active session
         if is_active:

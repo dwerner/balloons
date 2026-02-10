@@ -142,3 +142,109 @@ class ReviewData:
     session_duration_minutes: Optional[int] = None  # Optional
     turn_count: int = 0  # Number of turns in session
     sentiment_counts: dict = field(default_factory=dict)  # {"excellent": 2, "poor": 1, ...}
+
+
+# =============================================================================
+# Goal-Oriented Task Management Entities
+# =============================================================================
+
+
+@rust_schema
+@dataclass
+class GoalData:
+    """A high-level goal that guides work across sessions.
+
+    Goals have weight (1-10) indicating priority, acceptance criteria for
+    completion, and can supersede other goals when priorities change.
+    """
+    id: str  # UUID
+    title: str
+    description: str
+    weight: int  # 1-10, higher = more important
+    status: str  # "active", "completed", "superseded", "abandoned"
+    acceptance_criteria: list[str]  # Conditions that define completion
+    created_at: str  # ISO 8601
+    updated_at: str  # ISO 8601
+    completed_at: Optional[str] = None  # ISO 8601, when status became completed
+    supersedes_id: Optional[str] = None  # Goal this one replaces
+
+
+@rust_schema
+@dataclass
+class PlanData:
+    """A plan for achieving a goal.
+
+    Plans break goals into actionable strategies. A goal may have multiple
+    plans (different approaches), but typically one active plan at a time.
+    """
+    id: str  # UUID
+    goal_id: str  # Parent goal
+    title: str
+    description: str
+    status: str  # "draft", "active", "completed", "abandoned"
+    created_at: str  # ISO 8601
+    updated_at: str  # ISO 8601
+    completed_at: Optional[str] = None  # ISO 8601
+    postmortem: Optional[str] = None  # Retrospective notes when plan completes
+
+
+@rust_schema
+@dataclass
+class TodoData:
+    """A concrete task to be completed.
+
+    Todos are linked to plans via TodoPlanLink (many-to-many). Spikes are
+    timeboxed exploration tasks exempt from priority computation.
+    """
+    id: str  # UUID
+    title: str
+    description: str
+    status: str  # "pending", "in_progress", "completed", "blocked", "abandoned"
+    is_spike: bool  # Timeboxed exploration, exempt from priority
+    created_at: str  # ISO 8601
+    updated_at: str  # ISO 8601
+    completed_at: Optional[str] = None  # ISO 8601
+    timebox_minutes: Optional[int] = None  # For spikes: max time to spend
+
+
+@rust_schema
+@dataclass
+class TodoPlanLink:
+    """Links todos to plans (many-to-many relationship).
+
+    A todo can contribute to multiple plans, and completing it once
+    satisfies all linked plans.
+    """
+    todo_id: str
+    plan_id: str
+    created_at: str  # ISO 8601
+
+
+@rust_schema
+@dataclass
+class TodoDependency:
+    """Dependency edge in the todo graph.
+
+    todo_id cannot be started until depends_on_id is completed.
+    Dependencies affect availability, not priority ranking.
+    """
+    todo_id: str  # The dependent todo
+    depends_on_id: str  # The todo that must complete first
+    created_at: str  # ISO 8601
+
+
+@rust_schema
+@dataclass
+class SessionBinding:
+    """Binds a session to goal-oriented entities.
+
+    Tracks which goals, plans, and todos a session is working on,
+    and what role the session plays in that work.
+    """
+    id: str  # UUID
+    session_id: str
+    entity_type: str  # "goal", "plan", "todo"
+    entity_id: str  # ID of the bound entity
+    role: str  # "interview", "planning", "implementation", "postmortem", "exploration"
+    created_at: str  # ISO 8601
+    released_at: Optional[str] = None  # ISO 8601, when binding ended

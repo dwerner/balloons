@@ -2,7 +2,7 @@
 //!
 //! Generated from Python domain entities marked with @rust_schema.
 //! Source: models.py and other domain modules
-//! Generated: 2026-02-09T10:54:03.017869
+//! Generated: 2026-02-09T16:28:18.022613
 //!
 //! To regenerate:
 //!     python -m codegen.generate_rust
@@ -89,4 +89,69 @@ pub struct ReviewData {
     pub session_duration_minutes: Option<i64>,
     pub turn_count: i64,
     pub sentiment_counts: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoalData {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub weight: i64,
+    pub status: String,
+    pub acceptance_criteria: Vec<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub completed_at: Option<String>,
+    pub supersedes_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanData {
+    pub id: String,
+    pub goal_id: String,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub completed_at: Option<String>,
+    pub postmortem: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TodoData {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub is_spike: bool,
+    pub created_at: String,
+    pub updated_at: String,
+    pub completed_at: Option<String>,
+    pub timebox_minutes: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TodoPlanLink {
+    pub todo_id: String,
+    pub plan_id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TodoDependency {
+    pub todo_id: String,
+    pub depends_on_id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionBinding {
+    pub id: String,
+    pub session_id: String,
+    pub entity_type: String,
+    pub entity_id: String,
+    pub role: String,
+    pub created_at: String,
+    pub released_at: Option<String>,
 }

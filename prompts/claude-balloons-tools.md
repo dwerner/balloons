@@ -499,3 +499,134 @@ Processes report one of three states:
 - Up to 10,000 log entries are kept per process (circular buffer)
 - Log entries include timestamp, source (stdout/stderr/system), and content
 - When a session closes, its processes can be stopped automatically
+
+
+## Goal Management Tools
+
+You have access to tools for tracking goals, plans, and todos. Use these to maintain
+alignment between sessions and high-level objectives.
+
+### Why Use Goal Tracking?
+
+Goal tracking helps maintain focus across long conversations and multiple sessions:
+- **Persistent objectives**: Goals survive across sessions and forks
+- **Priority ranking**: Todos are ranked by goal weight × completion progress
+- **Session binding**: Bind a session to a specific task to maintain focus
+- **Lifecycle hooks**: Completing todos triggers prompts for plan evaluation
+
+### Available Tools
+
+**create_goal** - Create a new goal with acceptance criteria
+```json
+{
+  "name": "create_goal",
+  "args": {
+    "title": "Build authentication system",
+    "description": "Implement user auth with OAuth support",
+    "weight": 8,  // 1-10, higher = more important
+    "acceptance_criteria": [
+      "Users can sign up and log in",
+      "OAuth providers (Google, GitHub) work",
+      "Session tokens are secure"
+    ]
+  }
+}
+```
+
+**create_plan** - Create a plan for achieving a goal
+```json
+{
+  "name": "create_plan",
+  "args": {
+    "goal_id": "abc123",  // Can be prefix
+    "title": "Phase 1: Core Auth",
+    "description": "Implement basic username/password auth first",
+    "status": "active"  // "draft" or "active"
+  }
+}
+```
+
+**create_todo** - Create a todo linked to a plan
+```json
+{
+  "name": "create_todo",
+  "args": {
+    "plan_id": "def456",  // Can be prefix
+    "title": "Add password hashing",
+    "description": "Use bcrypt for password storage",
+    "is_spike": false,  // true for timeboxed exploration
+    "timebox_minutes": 30,  // For spikes only
+    "depends_on": ["ghi789"]  // Optional: todo IDs this depends on
+  }
+}
+```
+
+**list_goals** - List all goals
+```json
+{
+  "name": "list_goals",
+  "args": {
+    "include_completed": false  // true to include completed/abandoned
+  }
+}
+```
+
+**list_todos** - List priority-ranked available todos
+```json
+{
+  "name": "list_todos",
+  "args": {
+    "plan_id": "def456"  // Optional: filter to specific plan
+  }
+}
+```
+
+**mark_todo_done** - Mark a todo as complete
+```json
+{
+  "name": "mark_todo_done",
+  "args": {
+    "todo_id": "jkl012"  // Can be prefix
+  }
+}
+```
+Triggers lifecycle hooks:
+- If all plan todos done → prompts for postmortem evaluation
+- If spike → prompts for promote/spawn/discard decision
+
+**bind_session** - Bind current session to an entity
+```json
+{
+  "name": "bind_session",
+  "args": {
+    "entity_type": "todo",  // "goal", "plan", or "todo"
+    "entity_id": "jkl012",
+    "role": "implementation"  // "interview", "planning", "implementation", "postmortem", "exploration"
+  }
+}
+```
+Binding injects context about the entity into the system prompt.
+
+### Typical Workflow
+
+1. **Create a goal** when starting a new initiative
+2. **Create a plan** breaking down the approach
+3. **Create todos** for concrete tasks
+4. **Bind session** to the todo you're working on
+5. **Mark done** when complete - lifecycle hooks guide next steps
+
+### Priority Ranking
+
+Todos are ranked by: `priority = goal_weight × completion_factor`
+
+- `goal_weight`: 1-10 from the parent goal
+- `completion_factor`: Progress on the plan (completed/total todos)
+
+This means todos on goals with more progress get higher priority (momentum effect).
+
+### Spikes
+
+Spikes are timeboxed exploration tasks:
+- Exempt from priority ranking
+- Don't block plan completion
+- On completion, prompt to: promote to todo, spawn new goal, or discard

@@ -19,6 +19,7 @@ from .debug_log import debug_log
 from .tools import BALLOON_TOOL_NAMES, SUPERVISOR_TOOL_NAMES, REVIEW_TOOL_NAMES
 from .link_tools import LINK_TOOL_NAMES, execute_link_tool
 from .supervisor_tools import SUPERVISOR_TOOL_NAMES as SUP_TOOL_NAMES, execute_supervisor_tool
+from .goal_tools import GOAL_TOOL_NAMES, execute_goal_tool
 from .fork import ForkProposal, ContextAssignment, MergeProposal
 from .tts import get_tts_runner, TTSConfig
 
@@ -103,6 +104,12 @@ async def execute_tool(
             if session is None:
                 return "Error: Review tools require a session context", True
             return await execute_review_tool(name, args, session)
+
+        # Goal management tools
+        if name in GOAL_TOOL_NAMES:
+            if session is None:
+                return "Error: Goal tools require a session context", True
+            return await execute_goal_tool(name, args, session)
 
         # Standard file/shell tools
         if name == "Read":

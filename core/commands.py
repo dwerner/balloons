@@ -370,6 +370,76 @@ class ReviewCommand(Command):
     pass
 
 
+# =============================================================================
+# Goal-Oriented Task Management Commands
+# =============================================================================
+
+@dataclass
+class GoalsCommand(Command):
+    """List all goals with status and weight.
+
+    Shows goals sorted by weight (highest first), with status indicators.
+    """
+    is_global: bool = True  # UI-only, no session interaction
+    include_completed: bool = False  # If True, show completed/abandoned goals too
+
+
+@dataclass
+class PlansCommand(Command):
+    """List plans for a goal.
+
+    Without goal_id: shows all active plans across goals
+    With goal_id: shows plans for that specific goal
+    """
+    is_global: bool = True  # UI-only
+    goal_id: str = ""  # Optional: filter to specific goal
+
+
+@dataclass
+class TodosCommand(Command):
+    """List todos, optionally filtered by plan.
+
+    Without plan_id: shows priority-ranked available todos
+    With plan_id: shows all todos for that plan
+    """
+    is_global: bool = True  # UI-only
+    plan_id: str = ""  # Optional: filter to specific plan
+
+
+@dataclass
+class TodoDoneCommand(Command):
+    """Mark a todo as complete.
+
+    Triggers lifecycle hooks:
+    - For spikes: prompts for promote/spawn/discard
+    - For regular todos: checks if plan is complete
+    - For completed plans: triggers postmortem workflow
+    """
+    todo_id: str = ""  # Required: the todo to mark complete
+
+
+@dataclass
+class BindCommand(Command):
+    """Bind this session to a goal, plan, or todo.
+
+    Creates a SessionBinding that tracks what work this session is doing.
+    The binding context is injected into the system prompt.
+    """
+    entity_type: str = ""  # "goal", "plan", or "todo"
+    entity_id: str = ""  # ID of the entity to bind to
+    role: str = "implementation"  # interview, planning, implementation, postmortem, exploration
+
+
+@dataclass
+class UnbindCommand(Command):
+    """Release session bindings.
+
+    Without arguments: releases all bindings
+    With entity_id: releases binding to that specific entity
+    """
+    entity_id: str = ""  # Optional: specific binding to release
+
+
 # Command documentation for help display
 COMMAND_DOCS = [
     # Session management
@@ -421,6 +491,11 @@ COMMAND_DOCS = [
     (":sup-stop <id>", "Stop a supervised process"),
     # Session Review
     (":review", "Start quality review of current session"),
+    # Goal-Oriented Task Management
+    (":goals [--all]", "List active goals (--all includes completed)"),
+    (":plans [goal_id]", "List plans (for specific goal if provided)"),
+    (":todos [plan_id]", "List priority-ranked todos (for specific plan if provided)"),
+    (":todo-done [todo_id]", "Mark bound todo complete (or specify ID)"),
     (":help", "Show this help"),
 ]
 
@@ -650,6 +725,35 @@ class CommandParser:
         if text == ":review":
             return ReviewCommand()
 
+        # Handle :goals [--all]
+        if text == ":goals" or text.startswith(":goals "):
+            include_completed = "--all" in text
+            return GoalsCommand(include_completed=include_completed)
+
+        # Handle :plans [goal_id]
+        if text == ":plans" or text.startswith(":plans "):
+            goal_id = text[6:].strip() if len(text) > 6 else ""
+            return PlansCommand(goal_id=goal_id)
+
+        # Handle :todos [plan_id]
+        if text == ":todos" or text.startswith(":todos "):
+            plan_id = text[6:].strip() if len(text) > 6 else ""
+            return TodosCommand(plan_id=plan_id)
+
+        # Handle :todo-done [todo_id] - if no ID, marks bound todo as done
+        if text == ":todo-done" or text.startswith(":todo-done "):
+            todo_id = text[10:].strip() if len(text) > 10 else ""
+            return TodoDoneCommand(todo_id=todo_id)
+
+        # Handle :bind <type>=<id> [role]
+        if text.startswith(":bind"):
+            return self._parse_bind(text)
+
+        # Handle :unbind [entity_id]
+        if text == ":unbind" or text.startswith(":unbind "):
+            entity_id = text[7:].strip() if len(text) > 7 else ""
+            return UnbindCommand(entity_id=entity_id)
+
         # Unknown command
         cmd_name = text.split()[0]
         raise ValueError(f"Unknown command: {cmd_name}")
@@ -765,3 +869,38 @@ class CommandParser:
                 raise ValueError(f"Invalid limit: {parts[1]} (must be a number)")
 
         return SupervisorLogsCommand(process_id=process_id, limit=limit)
+
+    def _parse_bind(self, text: str) -> BindCommand:
+        """Parse :bind <type>=<id> [role] command.
+
+        Examples:
+            :bind goal=abc123
+            :bind todo=def456 implementation
+            :bind plan=ghi789 planning
+        """
+        remaining = text[5:].strip()  # Remove ":bind"
+
+        if not remaining:
+            raise ValueError(":bind requires <type>=<id> (e.g., :bind todo=abc123)")
+
+        parts = remaining.split()
+        type_id_part = parts[0]
+        role = parts[1] if len(parts) > 1 else "implementation"
+
+        if "=" not in type_id_part:
+            raise ValueError(":bind requires <type>=<id> format (e.g., :bind todo=abc123)")
+
+        entity_type, entity_id = type_id_part.split("=", 1)
+        entity_type = entity_type.lower()
+
+        if entity_type not in ("goal", "plan", "todo"):
+            raise ValueError(f"Unknown entity type: {entity_type} (must be goal, plan, or todo)")
+
+        if not entity_id:
+            raise ValueError(":bind requires an entity ID")
+
+        valid_roles = ("interview", "planning", "implementation", "postmortem", "exploration")
+        if role not in valid_roles:
+            raise ValueError(f"Unknown role: {role} (must be one of {', '.join(valid_roles)})")
+
+        return BindCommand(entity_type=entity_type, entity_id=entity_id, role=role)

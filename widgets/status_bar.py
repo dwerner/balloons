@@ -24,6 +24,7 @@ class StatusBar(Static):
     error: reactive[str] = reactive("")
     working_directory: reactive[str] = reactive("")
     following: reactive[bool] = reactive(True)  # Whether chat is following new content
+    priority_divergence: reactive[str] = reactive("")  # Priority divergence warning
     _spinner_frame: reactive[int] = reactive(0)
     _spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     _spinner_timer: Timer | None = None
@@ -100,6 +101,9 @@ class StatusBar(Static):
         # Show follow indicator when not following (clickable to jump to bottom)
         follow_indicator = "" if self.following else " [bold yellow]↓ Follow[/]"
 
+        # Show priority divergence warning if working on non-highest-priority todo
+        priority_indicator = f" [bold orange1]⚠ {self.priority_divergence}[/]" if self.priority_divergence else ""
+
         # Format tokens with 'k' suffix for readability
         def fmt_k(n: int) -> str:
             if n >= 1000:
@@ -115,6 +119,7 @@ class StatusBar(Static):
             f"ctx: {overhead_str} + {context_str} / {window_str} ({percent:.1f}%) | "
             f"${self.cost:.4f}"
             f"{wd_display}"
+            f"{priority_indicator}"
             f"{follow_indicator}"
             f"{bg_indicator}"
             f"{status_indicator}"
@@ -207,6 +212,15 @@ class StatusBar(Static):
     def update_working_directory(self, path: str) -> None:
         """Update the displayed working directory."""
         self.working_directory = path
+
+    def set_priority_divergence(self, message: str = "") -> None:
+        """Set or clear the priority divergence warning.
+
+        Args:
+            message: Warning message (e.g., "Higher priority: fix-auth-bug")
+                    Pass empty string to clear.
+        """
+        self.priority_divergence = message
 
     def on_click(self) -> None:
         """Handle click - if not following, post message to follow."""

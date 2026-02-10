@@ -17,6 +17,7 @@ from models import (
     TextBlock, ToolUseBlock, ToolResultBlock, ErrorBlock,
 )
 from .exceptions import RateLimitError, InputRequiredError, StreamTimeoutError
+from .binding_context import build_binding_context_for_session
 from session import Session, Turn
 from .debug_log import debug_log
 from .base_runner import BaseRunner
@@ -150,6 +151,36 @@ class SessionRunner:
         """Create an event tagged with this session's ID."""
         return StreamEvent(event_type, data, session_id=self.session.id)
 
+    async def _build_prompt_with_bindings(self, prompt: str) -> str:
+        """Build prompt with binding context prepended.
+
+        If the session has active bindings to goals/plans/todos, their
+        context is prepended to the prompt so the LLM stays aligned.
+
+        Args:
+            prompt: The user's prompt
+
+        Returns:
+            Prompt with binding context prepended, or original prompt if no bindings
+        """
+        try:
+            binding_context = await build_binding_context_for_session(self.session.id)
+            if binding_context:
+                debug_log.info(
+                    f"Prepending binding context ({len(binding_context)} chars)",
+                    session_id=self.session.id,
+                    category="binding",
+                )
+                return f"{binding_context}\n\n---\n\n{prompt}"
+            return prompt
+        except Exception as e:
+            debug_log.warning(
+                f"Failed to load binding context: {e}",
+                session_id=self.session.id,
+                category="binding",
+            )
+            return prompt
+
     async def stream(
         self,
         prompt: str,
@@ -175,16 +206,19 @@ class SessionRunner:
         self._status = RunnerStatus.STREAMING
         self._turn_index = len(self.session.turns)  # Next turn index
 
+        # Add binding context to prompt if session has active bindings
+        effective_prompt = await self._build_prompt_with_bindings(prompt)
+
         # Emit turn_started event
         yield self._make_event("turn_started", {
             "turn_index": self._turn_index,
-            "prompt": prompt,
+            "prompt": prompt,  # Original prompt for display
             "exchange_id": self._exchange_id,
         })
 
         try:
             async for event in self._runner.stream_response(
-                messages, prompt, allowed_tools,
+                messages, effective_prompt, allowed_tools,
                 working_dir=self.session.working_directory
             ):
                 for stream_event in self._process_event(event):
@@ -283,16 +317,19 @@ class SessionRunner:
         allowed_tools: list[str] | None,
     ) -> None:
         """Internal: background streaming task."""
+        # Add binding context to prompt if session has active bindings
+        effective_prompt = await self._build_prompt_with_bindings(prompt)
+
         # Emit turn_started event
         await self._event_queue.put(self._make_event("turn_started", {
             "turn_index": self._turn_index,
-            "prompt": prompt,
+            "prompt": prompt,  # Original prompt for display
             "exchange_id": self._exchange_id,
         }))
 
         try:
             async for event in self._runner.stream_response(
-                messages, prompt, allowed_tools,
+                messages, effective_prompt, allowed_tools,
                 working_dir=self.session.working_directory
             ):
                 for stream_event in self._process_event(event):

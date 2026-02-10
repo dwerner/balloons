@@ -43,6 +43,13 @@ from .commands import (
     SupervisorLogsCommand,
     SupervisorStopCommand,
     ReviewCommand,
+    # Goal-oriented task management commands
+    GoalsCommand,
+    PlansCommand,
+    TodosCommand,
+    TodoDoneCommand,
+    BindCommand,
+    UnbindCommand,
     COMMAND_DOCS,
 )
 from .context import ContextBuilder
@@ -55,7 +62,8 @@ from .exceptions import RateLimitError, InputRequiredError, BackendNotFoundError
 from .link_tools import LINK_TOOL_NAMES, execute_link_tool, register_app_tool_handler, unregister_app_tool_handler
 from .openai_runner import OpenAICompatibleRunner
 from .runner_factory import create_runner, resolve_env_var, validate_backend_config, ensure_prompts_installed
-from .tools import TOOLS, BALLOON_TOOLS, BALLOON_TOOL_NAMES, SUPERVISOR_TOOLS, SUPERVISOR_TOOL_NAMES, REVIEW_TOOLS, REVIEW_TOOL_NAMES, get_tools_for_request
+from .tools import TOOLS, BALLOON_TOOLS, BALLOON_TOOL_NAMES, SUPERVISOR_TOOLS, SUPERVISOR_TOOL_NAMES, REVIEW_TOOLS, REVIEW_TOOL_NAMES, GOAL_TOOLS, GOAL_TOOL_NAMES, get_tools_for_request
+from .goal_tools import execute_goal_tool
 from .tool_executor import execute_tool, parse_fork_proposal, parse_create_slide, SlideData
 from .summarizer import Summarizer
 from .context_grouper import (
@@ -138,7 +146,40 @@ from .tts import (
 )
 from .stash import StashedMessage, MessageStash
 from .preferences import DEFAULT_TOOLS, ToolPreferences
-from .async_storage import AsyncStorage, is_rust_storage_available, DEFAULT_DB_PATH
+from .async_storage import AsyncStorage, is_rust_storage_available, DEFAULT_DB_PATH, GoalStorage, get_goal_storage
+from .binding_context import BindingContextBuilder, build_binding_context_for_session
+from .lifecycle_hooks import (
+    LifecycleHooks,
+    LifecyclePrompt,
+    PostmortemOutcome,
+    SpikeOutcome,
+    on_todo_complete,
+    on_plan_complete,
+    execute_postmortem,
+    execute_spike_outcome,
+)
+from .priority_engine import (
+    PriorityEngine,
+    TodoWithContext,
+    get_priority_ranked_todos,
+    get_next_todo,
+    is_todo_available,
+)
+from .goal_commands import (
+    GoalCommandExecutor,
+    GoalListResult,
+    PlanListResult,
+    TodoListResult,
+    TodoDoneResult,
+    BindResult,
+    UnbindResult,
+    PriorityDivergenceInfo,
+    check_priority_divergence,
+    list_goals,
+    list_plans,
+    list_todos,
+    mark_todo_done,
+)
 from .supervisor_tools import (
     SUPERVISOR_TOOL_NAMES as SUP_TOOL_NAMES,
     set_supervisor,
@@ -192,6 +233,13 @@ __all__ = [
     "SupervisorLogsCommand",
     "SupervisorStopCommand",
     "ReviewCommand",
+    # Goal-oriented task management commands
+    "GoalsCommand",
+    "PlansCommand",
+    "TodosCommand",
+    "TodoDoneCommand",
+    "BindCommand",
+    "UnbindCommand",
     "COMMAND_DOCS",
     # Context
     "ContextBuilder",
@@ -231,6 +279,9 @@ __all__ = [
     "SUPERVISOR_TOOL_NAMES",
     "REVIEW_TOOLS",
     "REVIEW_TOOL_NAMES",
+    "GOAL_TOOLS",
+    "GOAL_TOOL_NAMES",
+    "execute_goal_tool",
     "LINK_TOOL_NAMES",
     "get_tools_for_request",
     "execute_tool",
@@ -338,4 +389,38 @@ __all__ = [
     "AsyncStorage",
     "is_rust_storage_available",
     "DEFAULT_DB_PATH",
+    "GoalStorage",
+    "get_goal_storage",
+    # Goal binding context
+    "BindingContextBuilder",
+    "build_binding_context_for_session",
+    # Lifecycle hooks
+    "LifecycleHooks",
+    "LifecyclePrompt",
+    "PostmortemOutcome",
+    "SpikeOutcome",
+    "on_todo_complete",
+    "on_plan_complete",
+    "execute_postmortem",
+    "execute_spike_outcome",
+    # Priority engine
+    "PriorityEngine",
+    "TodoWithContext",
+    "get_priority_ranked_todos",
+    "get_next_todo",
+    "is_todo_available",
+    # Goal commands
+    "GoalCommandExecutor",
+    "GoalListResult",
+    "PlanListResult",
+    "TodoListResult",
+    "TodoDoneResult",
+    "BindResult",
+    "UnbindResult",
+    "PriorityDivergenceInfo",
+    "check_priority_divergence",
+    "list_goals",
+    "list_plans",
+    "list_todos",
+    "mark_todo_done",
 ]

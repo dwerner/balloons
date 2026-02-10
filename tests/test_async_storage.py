@@ -392,3 +392,6 @@ async def test_session_metadata_update_preserves_turns(temp_db, sample_session):
     assert loaded.title == "Updated Title"
     assert loaded.total_input_tokens == 999
     assert len(loaded.turns) == original_turn_count
+
+
+# GoalStorage tests are in test_goal_storage.py (file-based, no Rust required)

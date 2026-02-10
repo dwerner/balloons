@@ -682,3 +682,384 @@ async def get_default_storage() -> AsyncStorage:
     Uses the default database path (~/.balloons/sessions.db).
     """
     return AsyncStorage(DEFAULT_DB_PATH)
+
+
+# =============================================================================
+# Goal-Oriented Task Management Storage
+# =============================================================================
+
+
+class GoalStorage:
+    """File-based storage for goal-oriented task management entities.
+
+    Stores Goals, Plans, Todos, and their relationships in ~/.balloons/goals/
+    Will migrate to Rust storage in a future version.
+    """
+
+    def __init__(self, base_path: Path | None = None):
+        self._base_path = base_path or (Path.home() / ".balloons" / "goals")
+        self._base_path.mkdir(parents=True, exist_ok=True)
+
+        # Subdirectories for each entity type
+        self._goals_dir = self._base_path / "goals"
+        self._plans_dir = self._base_path / "plans"
+        self._todos_dir = self._base_path / "todos"
+        self._links_dir = self._base_path / "links"
+        self._deps_dir = self._base_path / "dependencies"
+        self._bindings_dir = self._base_path / "bindings"
+
+        for d in [self._goals_dir, self._plans_dir, self._todos_dir,
+                  self._links_dir, self._deps_dir, self._bindings_dir]:
+            d.mkdir(exist_ok=True)
+
+    # =========================================================================
+    # Goals CRUD
+    # =========================================================================
+
+    async def save_goal(self, goal: "GoalData") -> None:
+        """Save a goal to storage."""
+        import aiofiles
+        from dataclasses import asdict
+
+        goal_path = self._goals_dir / f"{goal.id}.json"
+        goal_json = json.dumps(asdict(goal), indent=2)
+
+        async with aiofiles.open(goal_path, "w", encoding="utf-8") as f:
+            await f.write(goal_json)
+
+    async def load_goal(self, goal_id: str) -> Optional["GoalData"]:
+        """Load a goal from storage."""
+        import aiofiles
+        from storage_schema import GoalData
+
+        goal_path = self._goals_dir / f"{goal_id}.json"
+        if not goal_path.exists():
+            return None
+
+        try:
+            async with aiofiles.open(goal_path, "r", encoding="utf-8") as f:
+                data = json.loads(await f.read())
+            return GoalData(**data)
+        except Exception:
+            return None
+
+    async def delete_goal(self, goal_id: str) -> None:
+        """Delete a goal from storage."""
+        goal_path = self._goals_dir / f"{goal_id}.json"
+        if goal_path.exists():
+            goal_path.unlink()
+
+    async def list_goals(self, status: str | None = None) -> list["GoalData"]:
+        """List all goals, optionally filtered by status."""
+        import aiofiles
+        from storage_schema import GoalData
+
+        goals = []
+        for goal_file in self._goals_dir.glob("*.json"):
+            try:
+                async with aiofiles.open(goal_file, "r", encoding="utf-8") as f:
+                    data = json.loads(await f.read())
+                goal = GoalData(**data)
+                if status is None or goal.status == status:
+                    goals.append(goal)
+            except Exception:
+                continue
+
+        # Sort by weight (descending) then created_at
+        goals.sort(key=lambda g: (-g.weight, g.created_at))
+        return goals
+
+    # =========================================================================
+    # Plans CRUD
+    # =========================================================================
+
+    async def save_plan(self, plan: "PlanData") -> None:
+        """Save a plan to storage."""
+        import aiofiles
+        from dataclasses import asdict
+
+        plan_path = self._plans_dir / f"{plan.id}.json"
+        plan_json = json.dumps(asdict(plan), indent=2)
+
+        async with aiofiles.open(plan_path, "w", encoding="utf-8") as f:
+            await f.write(plan_json)
+
+    async def load_plan(self, plan_id: str) -> Optional["PlanData"]:
+        """Load a plan from storage."""
+        import aiofiles
+        from storage_schema import PlanData
+
+        plan_path = self._plans_dir / f"{plan_id}.json"
+        if not plan_path.exists():
+            return None
+
+        try:
+            async with aiofiles.open(plan_path, "r", encoding="utf-8") as f:
+                data = json.loads(await f.read())
+            return PlanData(**data)
+        except Exception:
+            return None
+
+    async def delete_plan(self, plan_id: str) -> None:
+        """Delete a plan from storage."""
+        plan_path = self._plans_dir / f"{plan_id}.json"
+        if plan_path.exists():
+            plan_path.unlink()
+
+    async def list_plans(self, goal_id: str | None = None, status: str | None = None) -> list["PlanData"]:
+        """List plans, optionally filtered by goal and/or status."""
+        import aiofiles
+        from storage_schema import PlanData
+
+        plans = []
+        for plan_file in self._plans_dir.glob("*.json"):
+            try:
+                async with aiofiles.open(plan_file, "r", encoding="utf-8") as f:
+                    data = json.loads(await f.read())
+                plan = PlanData(**data)
+                if (goal_id is None or plan.goal_id == goal_id) and \
+                   (status is None or plan.status == status):
+                    plans.append(plan)
+            except Exception:
+                continue
+
+        plans.sort(key=lambda p: p.created_at)
+        return plans
+
+    # =========================================================================
+    # Todos CRUD
+    # =========================================================================
+
+    async def save_todo(self, todo: "TodoData") -> None:
+        """Save a todo to storage."""
+        import aiofiles
+        from dataclasses import asdict
+
+        todo_path = self._todos_dir / f"{todo.id}.json"
+        todo_json = json.dumps(asdict(todo), indent=2)
+
+        async with aiofiles.open(todo_path, "w", encoding="utf-8") as f:
+            await f.write(todo_json)
+
+    async def load_todo(self, todo_id: str) -> Optional["TodoData"]:
+        """Load a todo from storage."""
+        import aiofiles
+        from storage_schema import TodoData
+
+        todo_path = self._todos_dir / f"{todo_id}.json"
+        if not todo_path.exists():
+            return None
+
+        try:
+            async with aiofiles.open(todo_path, "r", encoding="utf-8") as f:
+                data = json.loads(await f.read())
+            return TodoData(**data)
+        except Exception:
+            return None
+
+    async def delete_todo(self, todo_id: str) -> None:
+        """Delete a todo from storage."""
+        todo_path = self._todos_dir / f"{todo_id}.json"
+        if todo_path.exists():
+            todo_path.unlink()
+
+    async def list_todos(self, status: str | None = None, include_spikes: bool = True) -> list["TodoData"]:
+        """List all todos, optionally filtered by status."""
+        import aiofiles
+        from storage_schema import TodoData
+
+        todos = []
+        for todo_file in self._todos_dir.glob("*.json"):
+            try:
+                async with aiofiles.open(todo_file, "r", encoding="utf-8") as f:
+                    data = json.loads(await f.read())
+                todo = TodoData(**data)
+                if (status is None or todo.status == status) and \
+                   (include_spikes or not todo.is_spike):
+                    todos.append(todo)
+            except Exception:
+                continue
+
+        todos.sort(key=lambda t: t.created_at)
+        return todos
+
+    # =========================================================================
+    # Todo-Plan Links
+    # =========================================================================
+
+    async def save_todo_plan_link(self, link: "TodoPlanLink") -> None:
+        """Save a todo-plan link."""
+        import aiofiles
+        from dataclasses import asdict
+
+        # Use composite key for file name
+        link_path = self._links_dir / f"{link.todo_id}_{link.plan_id}.json"
+        link_json = json.dumps(asdict(link), indent=2)
+
+        async with aiofiles.open(link_path, "w", encoding="utf-8") as f:
+            await f.write(link_json)
+
+    async def delete_todo_plan_link(self, todo_id: str, plan_id: str) -> None:
+        """Delete a todo-plan link."""
+        link_path = self._links_dir / f"{todo_id}_{plan_id}.json"
+        if link_path.exists():
+            link_path.unlink()
+
+    async def get_plans_for_todo(self, todo_id: str) -> list[str]:
+        """Get all plan IDs linked to a todo."""
+        import aiofiles
+
+        plan_ids = []
+        for link_file in self._links_dir.glob(f"{todo_id}_*.json"):
+            try:
+                async with aiofiles.open(link_file, "r", encoding="utf-8") as f:
+                    data = json.loads(await f.read())
+                plan_ids.append(data["plan_id"])
+            except Exception:
+                continue
+        return plan_ids
+
+    async def get_todos_for_plan(self, plan_id: str) -> list[str]:
+        """Get all todo IDs linked to a plan."""
+        import aiofiles
+
+        todo_ids = []
+        for link_file in self._links_dir.glob(f"*_{plan_id}.json"):
+            try:
+                async with aiofiles.open(link_file, "r", encoding="utf-8") as f:
+                    data = json.loads(await f.read())
+                todo_ids.append(data["todo_id"])
+            except Exception:
+                continue
+        return todo_ids
+
+    # =========================================================================
+    # Todo Dependencies
+    # =========================================================================
+
+    async def save_todo_dependency(self, dep: "TodoDependency") -> None:
+        """Save a todo dependency."""
+        import aiofiles
+        from dataclasses import asdict
+
+        dep_path = self._deps_dir / f"{dep.todo_id}_{dep.depends_on_id}.json"
+        dep_json = json.dumps(asdict(dep), indent=2)
+
+        async with aiofiles.open(dep_path, "w", encoding="utf-8") as f:
+            await f.write(dep_json)
+
+    async def delete_todo_dependency(self, todo_id: str, depends_on_id: str) -> None:
+        """Delete a todo dependency."""
+        dep_path = self._deps_dir / f"{todo_id}_{depends_on_id}.json"
+        if dep_path.exists():
+            dep_path.unlink()
+
+    async def get_dependencies(self, todo_id: str) -> list[str]:
+        """Get all todo IDs that a todo depends on."""
+        import aiofiles
+
+        deps = []
+        for dep_file in self._deps_dir.glob(f"{todo_id}_*.json"):
+            try:
+                async with aiofiles.open(dep_file, "r", encoding="utf-8") as f:
+                    data = json.loads(await f.read())
+                deps.append(data["depends_on_id"])
+            except Exception:
+                continue
+        return deps
+
+    async def get_dependents(self, todo_id: str) -> list[str]:
+        """Get all todo IDs that depend on a todo."""
+        import aiofiles
+
+        dependents = []
+        for dep_file in self._deps_dir.glob(f"*_{todo_id}.json"):
+            try:
+                async with aiofiles.open(dep_file, "r", encoding="utf-8") as f:
+                    data = json.loads(await f.read())
+                dependents.append(data["todo_id"])
+            except Exception:
+                continue
+        return dependents
+
+    # =========================================================================
+    # Session Bindings
+    # =========================================================================
+
+    async def save_session_binding(self, binding: "SessionBinding") -> None:
+        """Save a session binding."""
+        import aiofiles
+        from dataclasses import asdict
+
+        binding_path = self._bindings_dir / f"{binding.id}.json"
+        binding_json = json.dumps(asdict(binding), indent=2)
+
+        async with aiofiles.open(binding_path, "w", encoding="utf-8") as f:
+            await f.write(binding_json)
+
+    async def load_session_binding(self, binding_id: str) -> Optional["SessionBinding"]:
+        """Load a session binding."""
+        import aiofiles
+        from storage_schema import SessionBinding
+
+        binding_path = self._bindings_dir / f"{binding_id}.json"
+        if not binding_path.exists():
+            return None
+
+        try:
+            async with aiofiles.open(binding_path, "r", encoding="utf-8") as f:
+                data = json.loads(await f.read())
+            return SessionBinding(**data)
+        except Exception:
+            return None
+
+    async def delete_session_binding(self, binding_id: str) -> None:
+        """Delete a session binding."""
+        binding_path = self._bindings_dir / f"{binding_id}.json"
+        if binding_path.exists():
+            binding_path.unlink()
+
+    async def get_bindings_for_session(self, session_id: str, active_only: bool = True) -> list["SessionBinding"]:
+        """Get all bindings for a session."""
+        import aiofiles
+        from storage_schema import SessionBinding
+
+        bindings = []
+        for binding_file in self._bindings_dir.glob("*.json"):
+            try:
+                async with aiofiles.open(binding_file, "r", encoding="utf-8") as f:
+                    data = json.loads(await f.read())
+                if data["session_id"] == session_id:
+                    binding = SessionBinding(**data)
+                    if not active_only or binding.released_at is None:
+                        bindings.append(binding)
+            except Exception:
+                continue
+
+        bindings.sort(key=lambda b: b.created_at)
+        return bindings
+
+    async def get_bindings_for_entity(self, entity_type: str, entity_id: str, active_only: bool = True) -> list["SessionBinding"]:
+        """Get all bindings for an entity."""
+        import aiofiles
+        from storage_schema import SessionBinding
+
+        bindings = []
+        for binding_file in self._bindings_dir.glob("*.json"):
+            try:
+                async with aiofiles.open(binding_file, "r", encoding="utf-8") as f:
+                    data = json.loads(await f.read())
+                if data["entity_type"] == entity_type and data["entity_id"] == entity_id:
+                    binding = SessionBinding(**data)
+                    if not active_only or binding.released_at is None:
+                        bindings.append(binding)
+            except Exception:
+                continue
+
+        bindings.sort(key=lambda b: b.created_at)
+        return bindings
+
+
+async def get_goal_storage() -> GoalStorage:
+    """Get the default GoalStorage instance."""
+    return GoalStorage()
