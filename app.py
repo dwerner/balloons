@@ -32,7 +32,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, GoalTreeView, VerticalSplitter, HorizontalSplitter, TaskPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, ReviewMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, MessageStash, StashPopup, SlidesPane, PresentationScreen, MessageQueuePopup, EntityPane, ActionableToastRack, ActionableNotification, ActionableToast
+from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, GoalTreeView, VerticalSplitter, HorizontalSplitter, TaskPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, ReviewMarker, ForkProposalMarker, MergeProposalMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, MessageStash, StashPopup, SlidesPane, PresentationScreen, MessageQueuePopup, EntityPane, ActionableToastRack, ActionableNotification, ActionableToast
 from widgets.input_box import CompletionPopup
 from widgets.archive_marker import ArchiveMarker
 from claude_runner import ClaudeRunner
@@ -41,7 +41,7 @@ from config import get_config, BackendConfig, save_last_view
 from models import (
     TextDelta, ToolUseEvent, ToolResultEvent,
     TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, Message, ContextMode,
-    ArchiveBlock,
+    ArchiveBlock, ContextAssignmentData, ForkBindingData,
 )
 from core import (
     CommandParser,
@@ -341,6 +341,11 @@ class BalloonsApp(App):
         # Pending fork bindings (fork_name -> ForkBindingSpec or "inherit")
         # Applied when fork creation completes
         self._pending_fork_bindings: dict[str, Any] = {}
+        # Pending fork proposals (proposal_id -> proposal data dict)
+        # Used to execute proposals when accepted
+        self._pending_fork_proposals: dict[str, dict] = {}
+        # Pending merge proposals (proposal_id -> proposal data dict)
+        self._pending_merge_proposals: dict[str, dict] = {}
         # Suppress context token updates during batch context mode changes
         self._batch_context_mode_changes = False
 
@@ -1351,7 +1356,7 @@ class BalloonsApp(App):
             breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
             await self._manager.set_active(child_session.id)
             chat_log.clear()
-            chat_log.load_history(child_session.turns, session=child_session)
+            await chat_log.load_history(child_session.turns, session=child_session)
             await context_tree.load_all_sessions(child_session)
             await breadcrumb.set_session(child_session)
 
@@ -1413,7 +1418,7 @@ class BalloonsApp(App):
         await self._manager.set_active(new_session.id)
 
         chat_log.clear()
-        chat_log.load_history(new_session.turns, session=new_session)
+        await chat_log.load_history(new_session.turns, session=new_session)
         await context_tree.load_all_sessions(new_session)
         await breadcrumb.set_session(new_session)
 
@@ -1480,7 +1485,7 @@ class BalloonsApp(App):
 
         # Reload the UI first so TreeState has updated turns
         chat_log.clear()
-        chat_log.load_history(session.turns, session)
+        await chat_log.load_history(session.turns, session)
         await context_tree.load_all_sessions(session)
 
         # Recalculate token count after archiving (turns removed)
@@ -1547,7 +1552,7 @@ class BalloonsApp(App):
         self._manager._runners[result.parent_session.id] = self._create_session_runner(result.parent_session)
         await self._manager.set_active(result.parent_session.id)
         chat_log.clear()
-        chat_log.load_history(result.parent_session.turns, session=result.parent_session)
+        await chat_log.load_history(result.parent_session.turns, session=result.parent_session)
         await context_tree.load_all_sessions(result.parent_session)
         await breadcrumb.set_session(result.parent_session)
 
@@ -1667,7 +1672,7 @@ class BalloonsApp(App):
         self._manager._runners[parent_session.id] = self._create_session_runner(parent_session)
         await self._manager.set_active(parent_session.id)
         chat_log.clear()
-        chat_log.load_history(parent_session.turns, session=parent_session)
+        await chat_log.load_history(parent_session.turns, session=parent_session)
         await context_tree.load_all_sessions(parent_session)
         await breadcrumb.set_session(parent_session)
 
@@ -1932,7 +1937,7 @@ class BalloonsApp(App):
 
         # Load current session's messages into chat view
         if self.session.turns:
-            chat_log.load_history(self.session.turns, session=self.session)
+            await chat_log.load_history(self.session.turns, session=self.session)
 
         # Set session title in chat header
         if self.session.title:
@@ -2860,7 +2865,7 @@ class BalloonsApp(App):
 
         # Reload the UI first so TreeState has updated turns
         chat_log.clear()
-        chat_log.load_history(self.session.turns, self.session)
+        await chat_log.load_history(self.session.turns, self.session)
         await context_tree.load_all_sessions(self.session)
 
         # Recalculate token count after rehydration (turns restored)
@@ -3003,7 +3008,7 @@ class BalloonsApp(App):
         self._manager._runners[new_session.id] = self._create_session_runner(new_session)
         await self._manager.set_active(new_session.id)
         await context_tree.load_all_sessions(new_session)
-        chat_log.load_history(new_session.turns, session=new_session)
+        await chat_log.load_history(new_session.turns, session=new_session)
         await breadcrumb.set_session(new_session)
 
     async def _handle_query_with(self, prompt: str) -> None:
@@ -3154,76 +3159,99 @@ class BalloonsApp(App):
         session_id: str,
         ctx: StreamingContext,
     ) -> None:
-        """Handle a propose_fork tool call by showing the modal.
+        """Handle a propose_fork tool call by creating an inline proposal turn.
 
-        When the LLM calls propose_fork, we show a modal for the user to
-        accept, modify, or reject the proposal.
+        When the LLM calls propose_fork, we create a proposal turn in the
+        conversation that the user can accept or reject inline via buttons.
+        This replaces the modal dialog approach.
         """
-        from widgets.fork_proposal_modal import ResolvedBinding
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
 
-        status_bar = self.query_one("#status-bar", StatusBar)
-
-        # Generate exchange summaries for the modal
-        exchange_summaries = self._get_exchange_summaries(session_id)
-
-        # Resolve binding info for display (without async title lookup for now)
-        resolved_binding = None
-        if proposal.bind_to:
-            if proposal.bind_to == "inherit":
-                resolved_binding = ResolvedBinding(
-                    entity_type="",
-                    entity_id="",
-                    role="",
-                    inherit=True,
-                )
-            elif isinstance(proposal.bind_to, ForkBindingSpec):
-                resolved_binding = ResolvedBinding(
-                    entity_type=proposal.bind_to.entity_type,
-                    entity_id=proposal.bind_to.entity_id,
-                    role=proposal.bind_to.role,
-                )
-
-        def on_result(result: ForkProposalResult | None) -> None:
-            debug_log.info(
-                f"Fork proposal modal on_result called",
-                category="fork",
-                details={"accepted": result.accepted if result else None, "proposal_name": result.proposal.name if result else None},
+        # Convert ForkProposal to persistable format
+        context_plan_data = [
+            ContextAssignmentData(
+                exchange_range=a.exchange_range,
+                mode=a.mode,
+                reason=a.reason,
             )
-            if result is None or not result.accepted:
-                # User rejected - send rejection back to Claude via chat
-                self.notify("Fork proposal rejected")
-                chat_log = self.query_one("#chat-log", ChatLogView)
-                chat_log.add_user_message("[Fork proposal rejected by user]")
-                return
+            for a in (proposal.context_plan or [])
+        ]
 
-            # User accepted - apply context modes and create fork
-            debug_log.info(
-                f"Fork proposal accepted, creating task",
-                category="fork",
-                details={"proposal_name": result.proposal.name},
+        bind_to_data = None
+        bind_to_inherit = False
+        if proposal.bind_to == "inherit":
+            bind_to_inherit = True
+        elif isinstance(proposal.bind_to, ForkBindingSpec):
+            bind_to_data = ForkBindingData(
+                entity_type=proposal.bind_to.entity_type,
+                entity_id=proposal.bind_to.entity_id,
+                role=proposal.bind_to.role,
             )
 
-            async def execute_with_error_handling():
-                try:
-                    await self._execute_fork_proposal(
-                        result.proposal,
-                        session_id,
-                        ctx,
-                    )
-                except Exception as e:
-                    import traceback
-                    debug_log.error(
-                        f"_execute_fork_proposal failed: {e}",
-                        category="fork",
-                        details={"traceback": traceback.format_exc()},
-                    )
-                    self.notify(f"Fork creation failed: {e}", severity="error")
+        # Generate a unique proposal ID
+        proposal_id = str(uuid.uuid4())
 
-            asyncio.create_task(execute_with_error_handling())
+        # Get the current session (need full Session object with methods, not SessionData)
+        session = self._manager._sessions.get(session_id)
+        if not session:
+            self.notify("Session not found for proposal", severity="error")
+            return
 
-        self.push_screen(
-            ForkProposalModal(proposal, exchange_summaries, resolved_binding=resolved_binding),
-            on_result,
+        # Add the proposal as a turn in the session
+        exchange_id = ctx.exchange_id if ctx else None
+        turn = session.add_fork_proposal_turn(
+            proposal_id=proposal_id,
+            name=proposal.name,
+            description=proposal.description,
+            context_plan=context_plan_data,
+            initial_prompt=proposal.initial_prompt or "",
+            bind_to=bind_to_data,
+            bind_to_inherit=bind_to_inherit,
+            status="pending",
+            exchange_id=exchange_id,
+        )
+
+        # Get the turn index for later reference
+        turn_idx = len(session.turns) - 1
+
+        # Update context tree using the same pattern as streaming:
+        # start_turn creates the node, finish_turn updates with final content
+        context_tree.start_turn(session_id, turn_idx, "system", exchange_id=exchange_id)
+        context_tree.finish_turn(
+            session_id, turn_idx, "[Fork proposal]", turn.content_block, []
+        )
+
+        # Store metadata for later use when accepting the proposal
+        self._pending_fork_proposals[proposal_id] = {
+            "proposal": proposal,
+            "session_id": session_id,
+            "ctx": ctx,
+            "turn_idx": turn_idx,
+        }
+
+        # Add the proposal widget to the chat log
+        widget = ForkProposalMarker(
+            proposal_id=proposal_id,
+            name=proposal.name,
+            description=proposal.description,
+            context_plan=context_plan_data,
+            initial_prompt=proposal.initial_prompt or "",
+            bind_to=bind_to_data,
+            bind_to_inherit=bind_to_inherit,
+            status="pending",
+            turn_id=turn_idx,
+        )
+        chat_log.mount(widget)
+        chat_log.scroll_end(animate=False)
+
+        # Save the session
+        asyncio.create_task(session.save_async())
+
+        debug_log.info(
+            f"Fork proposal turn created",
+            category="fork",
+            details={"proposal_id": proposal_id, "name": proposal.name},
         )
 
     def _get_exchange_summaries(self, session_id: str, exclude_current: bool = True) -> list[str]:
@@ -3366,43 +3394,74 @@ class BalloonsApp(App):
         session_id: str,
         ctx: StreamingContext,
     ) -> None:
-        """Handle a propose_merge tool call by showing the modal.
+        """Handle a propose_merge tool call by creating an inline proposal turn.
 
-        When the LLM calls propose_merge, we show a modal for the user to
-        accept, edit the summary, or reject the merge.
+        When the LLM calls propose_merge, we create a proposal turn in the
+        conversation that the user can accept or reject inline via buttons.
+        This replaces the modal dialog approach.
         """
         chat_log = self.query_one("#chat-log", ChatLogView)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
 
         # Validate that we're in a fork
         if not self.session.is_fork():
             self.notify("Cannot merge: not in a fork", severity="error")
             return
 
-        if self.session.is_merged():
-            self.notify("Cannot merge: fork already merged", severity="error")
-            return
+        # Allow re-merging (updated fork status after each merge)
+        # No longer block on is_merged()
 
-        fork_name = self.session.get_fork_display_name()
+        # Generate a unique proposal ID
+        proposal_id = str(uuid.uuid4())
 
-        def on_result(result: MergeProposalResult | None) -> None:
-            if result is None or not result.accepted:
-                # User rejected - inform Claude via chat
-                self.notify("Merge proposal rejected")
-                chat_log.add_user_message("[Merge proposal rejected by user]")
-                return
+        # Add the proposal as a turn in the session
+        exchange_id = ctx.exchange_id if ctx else None
+        turn = self.session.add_merge_proposal_turn(
+            proposal_id=proposal_id,
+            summary=proposal.summary,
+            reason=proposal.reason,
+            files_changed=proposal.files_changed,
+            key_accomplishments=proposal.key_accomplishments,
+            status="pending",
+            exchange_id=exchange_id,
+        )
 
-            # User accepted - execute the merge with the (potentially edited) summary
-            summary = result.edited_summary or result.proposal.summary
-            asyncio.create_task(self._execute_merge_proposal(
-                summary,
-                files_changed=result.proposal.files_changed,
-                key_accomplishments=result.proposal.key_accomplishments,
-                reason=result.proposal.reason,
-            ))
+        # Update context tree using the same pattern as streaming:
+        # start_turn creates the node, finish_turn updates with final content
+        turn_idx = len(self.session.turns) - 1
+        context_tree.start_turn(session_id, turn_idx, "system", exchange_id=exchange_id)
+        context_tree.finish_turn(
+            session_id, turn_idx, "[Merge proposal]", turn.content_block, []
+        )
 
-        self.push_screen(
-            MergeProposalModal(proposal, fork_name=fork_name),
-            on_result,
+        # Store metadata for later use when accepting the proposal
+        self._pending_merge_proposals[proposal_id] = {
+            "proposal": proposal,
+            "session_id": session_id,
+            "ctx": ctx,
+            "turn_idx": turn_idx,
+        }
+
+        # Add the proposal widget to the chat log
+        widget = MergeProposalMarker(
+            proposal_id=proposal_id,
+            summary=proposal.summary,
+            reason=proposal.reason,
+            files_changed=proposal.files_changed,
+            key_accomplishments=proposal.key_accomplishments,
+            status="pending",
+            turn_id=turn_idx,
+        )
+        chat_log.mount(widget)
+        chat_log.scroll_end(animate=False)
+
+        # Save the session
+        asyncio.create_task(self.session.save_async())
+
+        debug_log.info(
+            f"Merge proposal turn created",
+            category="merge",
+            details={"proposal_id": proposal_id},
         )
 
     async def _execute_merge_proposal(
@@ -3439,7 +3498,7 @@ class BalloonsApp(App):
         self._manager._runners[result.parent_session.id] = self._create_session_runner(result.parent_session)
         await self._manager.set_active(result.parent_session.id)
         chat_log.clear()
-        chat_log.load_history(result.parent_session.turns, session=result.parent_session)
+        await chat_log.load_history(result.parent_session.turns, session=result.parent_session)
         await context_tree.load_all_sessions(result.parent_session)
         await breadcrumb.set_session(result.parent_session)
 
@@ -3626,7 +3685,7 @@ class BalloonsApp(App):
             breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
             await self._manager.set_active(child_session.id)
             chat_log.clear()
-            chat_log.load_history(child_session.turns, session=child_session)
+            await chat_log.load_history(child_session.turns, session=child_session)
             await context_tree.load_all_sessions(child_session)
             await breadcrumb.set_session(child_session)
 
@@ -3854,7 +3913,7 @@ class BalloonsApp(App):
         await self._manager.set_active(new_session.id)
 
         chat_log.clear()
-        chat_log.load_history(new_session.turns, session=new_session)
+        await chat_log.load_history(new_session.turns, session=new_session)
         await context_tree.load_all_sessions(new_session)
         await breadcrumb.set_session(new_session)
 
@@ -3995,6 +4054,162 @@ class BalloonsApp(App):
         if child_session:
             await self._switch_to_session(child_session)
 
+    async def on_fork_proposal_marker_accepted(self, event: ForkProposalMarker.Accepted) -> None:
+        """Handle accepting a fork proposal."""
+        debug_log.info(
+            f"Fork proposal accepted",
+            category="fork",
+            details={"proposal_id": event.proposal_id, "name": event.name},
+        )
+
+        # Look up the pending proposal data
+        proposal_data = self._pending_fork_proposals.pop(event.proposal_id, None)
+        if not proposal_data:
+            # Proposal not found in pending - might be from a reloaded session
+            # Try to reconstruct from the event data
+            self.notify(f"Creating fork: {event.name}")
+
+            # Need to get the original ForkProposal and ctx
+            # For now, we'll create a minimal one from the event data
+            from core.fork import ForkProposal, ContextAssignment
+
+            # Convert back to ForkProposal format
+            context_plan = [
+                ContextAssignment(
+                    exchange_range=a.exchange_range,
+                    mode=a.mode,
+                    reason=a.reason,
+                )
+                for a in event.context_plan
+            ]
+
+            # Convert binding data back to ForkBindingSpec or "inherit"
+            bind_to = None
+            if event.bind_to_inherit:
+                bind_to = "inherit"
+            elif event.bind_to:
+                bind_to = ForkBindingSpec(
+                    entity_type=event.bind_to.entity_type,
+                    entity_id=event.bind_to.entity_id,
+                    role=event.bind_to.role,
+                )
+
+            proposal = ForkProposal(
+                name=event.name,
+                description=event.description,
+                context_plan=context_plan,
+                initial_prompt=event.initial_prompt,
+                bind_to=bind_to,
+            )
+
+            session_id = self.session.id if self.session else None
+            if not session_id:
+                self.notify("No active session", severity="error")
+                return
+
+            ctx = None  # No streaming context available for reloaded proposals
+        else:
+            proposal = proposal_data["proposal"]
+            session_id = proposal_data["session_id"]
+            ctx = proposal_data.get("ctx")
+
+        # Update the proposal status in the session (need full Session object with methods)
+        session = self._manager._sessions.get(session_id)
+        if session:
+            session.update_fork_proposal_status(event.proposal_id, "accepted")
+            await session.save_async()
+
+        # Execute the fork
+        try:
+            await self._execute_fork_proposal(proposal, session_id, ctx)
+        except Exception as e:
+            import traceback
+            debug_log.error(
+                f"_execute_fork_proposal failed: {e}",
+                category="fork",
+                details={"traceback": traceback.format_exc()},
+            )
+            self.notify(f"Fork creation failed: {e}", severity="error")
+
+    async def on_fork_proposal_marker_rejected(self, event: ForkProposalMarker.Rejected) -> None:
+        """Handle rejecting a fork proposal."""
+        debug_log.info(
+            f"Fork proposal rejected",
+            category="fork",
+            details={"proposal_id": event.proposal_id},
+        )
+
+        # Remove from pending
+        self._pending_fork_proposals.pop(event.proposal_id, None)
+
+        # Update the proposal status in the session
+        if self.session:
+            self.session.update_fork_proposal_status(event.proposal_id, "rejected")
+            await self.session.save_async()
+
+        # Notify the user
+        self.notify("Fork proposal rejected")
+
+        # Add rejection message to chat so Claude knows
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        chat_log.add_user_message("[Fork proposal rejected by user]")
+
+    async def on_merge_proposal_marker_accepted(self, event: MergeProposalMarker.Accepted) -> None:
+        """Handle accepting a merge proposal."""
+        debug_log.info(
+            f"Merge proposal accepted",
+            category="merge",
+            details={"proposal_id": event.proposal_id, "summary_length": len(event.summary)},
+        )
+
+        # Remove from pending
+        self._pending_merge_proposals.pop(event.proposal_id, None)
+
+        # Update the proposal status in the session
+        if self.session:
+            self.session.update_merge_proposal_status(event.proposal_id, "accepted")
+            await self.session.save_async()
+
+        # Execute the merge
+        try:
+            await self._execute_merge_proposal(
+                summary=event.summary,
+                files_changed=event.files_changed,
+                key_accomplishments=event.key_accomplishments,
+                reason=event.reason,
+            )
+        except Exception as e:
+            import traceback
+            debug_log.error(
+                f"_execute_merge_proposal failed: {e}",
+                category="merge",
+                details={"traceback": traceback.format_exc()},
+            )
+            self.notify(f"Merge failed: {e}", severity="error")
+
+    async def on_merge_proposal_marker_rejected(self, event: MergeProposalMarker.Rejected) -> None:
+        """Handle rejecting a merge proposal."""
+        debug_log.info(
+            f"Merge proposal rejected",
+            category="merge",
+            details={"proposal_id": event.proposal_id},
+        )
+
+        # Remove from pending
+        self._pending_merge_proposals.pop(event.proposal_id, None)
+
+        # Update the proposal status in the session
+        if self.session:
+            self.session.update_merge_proposal_status(event.proposal_id, "rejected")
+            await self.session.save_async()
+
+        # Notify the user
+        self.notify("Merge proposal rejected")
+
+        # Add rejection message to chat so Claude knows
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        chat_log.add_user_message("[Merge proposal rejected by user]")
+
     async def on_archive_marker_rehydrate_requested(self, event: ArchiveMarker.RehydrateRequested) -> None:
         """Handle ctrl+shift+click on ArchiveMarker to rehydrate archived turns."""
         from core.archiver import Archiver, ArchiveError
@@ -4021,7 +4236,7 @@ class BalloonsApp(App):
             # Reload the UI first so TreeState has updated turns
             chat_log = self.query_one("#chat-log", ChatLogView)
             chat_log.clear()
-            chat_log.load_history(self.session.turns, self.session)
+            await chat_log.load_history(self.session.turns, self.session)
 
             # Update context tree
             context_tree = self.query_one("#context-tree", ContextTreeView)
@@ -4124,7 +4339,7 @@ class BalloonsApp(App):
         await breadcrumb.set_session(session)
 
         # Load session turns (this also hides the loading indicator)
-        chat_log.load_history(session.turns, session=session)
+        await chat_log.load_history(session.turns, session=session)
 
         # Update scrollbar markers for unviewed turns
         self._update_unviewed_markers()
@@ -4340,14 +4555,14 @@ class BalloonsApp(App):
         # Show confirmation dialog
         def on_confirm(confirmed: bool) -> None:
             if confirmed:
-                self._execute_turn_delete(event.session_id, event.turn_index, session)
+                asyncio.create_task(self._execute_turn_delete(event.session_id, event.turn_index, session))
 
         self.push_screen(
             ConfirmDialog("Delete Turn?", message),
             on_confirm,
         )
 
-    def _execute_turn_delete(self, session_id: str, turn_index: int, session: Session) -> None:
+    async def _execute_turn_delete(self, session_id: str, turn_index: int, session: Session) -> None:
         """Execute the turn deletion after confirmation."""
         context_tree = self.query_one("#context-tree", ContextTreeView)
 
@@ -4367,7 +4582,7 @@ class BalloonsApp(App):
             if self.session and self.session.id == session_id:
                 chat_log = self.query_one("#chat-log", ChatLogView)
                 chat_log.clear()
-                chat_log.load_history(session.turns, session=session)
+                await chat_log.load_history(session.turns, session=session)
 
             self.notify(f"Deleted turn {turn_index + 1}")
         else:
@@ -4499,7 +4714,7 @@ class BalloonsApp(App):
             if self.session and self.session.id == session_id:
                 chat_log = self.query_one("#chat-log", ChatLogView)
                 chat_log.clear()
-                chat_log.load_history(session.turns, session=session)
+                await chat_log.load_history(session.turns, session=session)
 
             self.notify(f"Deleted {deleted_count} turns")
         else:
@@ -5177,7 +5392,7 @@ class BalloonsApp(App):
         # Switch to review session
         await self._manager.set_active(review_session.id)
         chat_log.clear()
-        chat_log.load_history(review_session.turns, session=review_session)
+        await chat_log.load_history(review_session.turns, session=review_session)
         await context_tree.load_all_sessions(review_session)
         await breadcrumb.set_session(review_session)
 

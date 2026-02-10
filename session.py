@@ -10,7 +10,7 @@ from typing import Optional, AsyncIterator
 
 import aiofiles
 
-from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, ArchiveSummary, SlideBlock, ReviewBlock, ContentBlock, ContextMode, QueuedMessage, MessageQueue, Turn
+from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, ArchiveSummary, SlideBlock, ReviewBlock, ContentBlock, ContextMode, QueuedMessage, MessageQueue, Turn, ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData
 
 # Rust storage availability (checked lazily to avoid circular imports)
 _rust_storage_checked = False
@@ -575,6 +575,126 @@ class Session:
                 turn.content_block.status = status
                 return True
         return False
+
+    def add_fork_proposal_turn(
+        self,
+        proposal_id: str,
+        name: str,
+        description: str,
+        context_plan: list[ContextAssignmentData],
+        initial_prompt: str = "",
+        bind_to: ForkBindingData | None = None,
+        bind_to_inherit: bool = False,
+        status: str = "pending",
+        exchange_id: str | None = None,
+    ) -> Turn:
+        """Add a fork proposal as a turn in the conversation.
+
+        This allows proposals to be persisted and acted upon inline,
+        rather than requiring a modal dialog.
+
+        Args:
+            proposal_id: UUID for this proposal
+            name: Short fork name (e.g., "implement-cache-layer")
+            description: What this fork will accomplish
+            context_plan: List of context assignments
+            initial_prompt: Optional starting prompt
+            bind_to: Explicit binding spec
+            bind_to_inherit: True if bind_to was "inherit"
+            status: "pending", "accepted", or "rejected"
+            exchange_id: If provided, groups this with the current exchange
+        """
+        proposal_block = ForkProposalBlock(
+            proposal_id=proposal_id,
+            name=name,
+            description=description,
+            context_plan=context_plan,
+            initial_prompt=initial_prompt,
+            bind_to=bind_to,
+            bind_to_inherit=bind_to_inherit,
+            status=status,
+        )
+        return self.add_turn(role="system", content_block=proposal_block, exchange_id=exchange_id)
+
+    def add_merge_proposal_turn(
+        self,
+        proposal_id: str,
+        summary: str,
+        reason: str = "",
+        files_changed: list[str] | None = None,
+        key_accomplishments: list[str] | None = None,
+        status: str = "pending",
+        exchange_id: str | None = None,
+    ) -> Turn:
+        """Add a merge proposal as a turn in the conversation.
+
+        This allows proposals to be persisted and acted upon inline,
+        rather than requiring a modal dialog.
+
+        Args:
+            proposal_id: UUID for this proposal
+            summary: Preview of the merge summary
+            reason: Why the LLM thinks merge is appropriate now
+            files_changed: Key files modified
+            key_accomplishments: What was done
+            status: "pending", "accepted", or "rejected"
+            exchange_id: If provided, groups this with the current exchange
+        """
+        proposal_block = MergeProposalBlock(
+            proposal_id=proposal_id,
+            summary=summary,
+            reason=reason,
+            files_changed=files_changed or [],
+            key_accomplishments=key_accomplishments or [],
+            status=status,
+        )
+        return self.add_turn(role="system", content_block=proposal_block, exchange_id=exchange_id)
+
+    def update_fork_proposal_status(self, proposal_id: str, status: str) -> bool:
+        """Update the status of a fork proposal block.
+
+        Returns True if found and updated, False if not found.
+        """
+        for turn in self.turns:
+            if isinstance(turn.content_block, ForkProposalBlock) and turn.content_block.proposal_id == proposal_id:
+                turn.content_block.status = status
+                return True
+        return False
+
+    def update_merge_proposal_status(self, proposal_id: str, status: str) -> bool:
+        """Update the status of a merge proposal block.
+
+        Returns True if found and updated, False if not found.
+        """
+        for turn in self.turns:
+            if isinstance(turn.content_block, MergeProposalBlock) and turn.content_block.proposal_id == proposal_id:
+                turn.content_block.status = status
+                return True
+        return False
+
+    def get_pending_fork_proposal(self) -> tuple[int, ForkProposalBlock] | None:
+        """Get the most recent pending fork proposal.
+
+        Returns:
+            Tuple of (turn_index, ForkProposalBlock) if found, None otherwise
+        """
+        for i in range(len(self.turns) - 1, -1, -1):
+            turn = self.turns[i]
+            if isinstance(turn.content_block, ForkProposalBlock) and turn.content_block.status == "pending":
+                return (i, turn.content_block)
+        return None
+
+    def get_pending_merge_proposal(self) -> tuple[int, MergeProposalBlock] | None:
+        """Get the most recent pending merge proposal.
+
+        Returns:
+            Tuple of (turn_index, MergeProposalBlock) if found, None otherwise
+        """
+        for i in range(len(self.turns) - 1, -1, -1):
+            turn = self.turns[i]
+            if isinstance(turn.content_block, MergeProposalBlock) and turn.content_block.status == "pending":
+                return (i, turn.content_block)
+        return None
 
     def get_all_link_ids(self) -> list[str]:
         """Get all link IDs from LinkBlock turns."""

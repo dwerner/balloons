@@ -26,6 +26,8 @@ from .merged_to_marker import MergedToMarker
 from .link_marker import LinkMarker
 from .archive_marker import ArchiveMarker
 from .review_marker import ReviewMarker
+from .fork_proposal_marker import ForkProposalMarker
+from .merge_proposal_marker import MergeProposalMarker
 from models import TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, Sentiment
 from core.formatter import format_edit_as_diff, guess_language
 from core.json_stream import StreamingJsonParser
@@ -33,7 +35,8 @@ from core.history_loader import (
     HistoryLoader,
     RenderMessage, RenderToolUse, RenderToolResult,
     RenderInterruption, RenderError, RenderLink, RenderArchive,
-    RenderFork, RenderMerge, RenderMergedTo, RenderReview
+    RenderFork, RenderMerge, RenderMergedTo, RenderReview,
+    RenderForkProposal, RenderMergeProposal
 )
 from .scroll_controller import ScrollController, WidgetRegion
 from .widget_registry import WidgetRegistry
@@ -1550,7 +1553,7 @@ class ChatLogView(VerticalScroll):
         formatter = Formatter()
         return formatter.format_tool_result_block(block)
 
-    def load_history(self, messages: list, session: Session | None = None) -> None:
+    async def load_history(self, messages: list, session: Session | None = None) -> None:
         """Load message history from a list of Message objects.
 
         If session is provided, also reconstructs fork, merge, and link markers from
@@ -1563,7 +1566,7 @@ class ChatLogView(VerticalScroll):
         self.hide_loading()
 
         loader = HistoryLoader()
-        result = loader.load(messages, session=session, start_turn_id=self._turn_counter)
+        result = await loader.load(messages, session=session, start_turn_id=self._turn_counter)
 
         for instr in result.instructions:
             widget = self._instruction_to_widget(instr)
@@ -1686,6 +1689,30 @@ class ChatLogView(VerticalScroll):
                 overall_score=instr.overall_score,
                 task_category=instr.task_category,
                 task_description=instr.task_description,
+                turn_id=instr.turn_id,
+            )
+
+        elif isinstance(instr, RenderForkProposal):
+            return ForkProposalMarker(
+                proposal_id=instr.proposal_id,
+                name=instr.name,
+                description=instr.description,
+                context_plan=instr.context_plan,
+                initial_prompt=instr.initial_prompt,
+                bind_to=instr.bind_to,
+                bind_to_inherit=instr.bind_to_inherit,
+                status=instr.status,
+                turn_id=instr.turn_id,
+            )
+
+        elif isinstance(instr, RenderMergeProposal):
+            return MergeProposalMarker(
+                proposal_id=instr.proposal_id,
+                summary=instr.summary,
+                reason=instr.reason,
+                files_changed=instr.files_changed,
+                key_accomplishments=instr.key_accomplishments,
+                status=instr.status,
                 turn_id=instr.turn_id,
             )
 

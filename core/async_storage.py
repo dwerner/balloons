@@ -562,7 +562,8 @@ class AsyncStorage:
         from models import (
             TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock,
             ErrorBlock, LinkBlock, ForkBlock, MergeBlock, ArchiveBlock, SlideBlock,
-            ReviewBlock, ArchiveSummary
+            ReviewBlock, ArchiveSummary, ForkProposalBlock, MergeProposalBlock,
+            ContextAssignmentData, ForkBindingData
         )
 
         block_type = data.get("type", "text")
@@ -661,6 +662,43 @@ class AsyncStorage:
                 overall_score=data.get("overall_score", 0.0),
                 task_category=data.get("task_category", ""),
                 task_description=data.get("task_description", ""),
+            )
+        elif block_type == "fork_proposal":
+            # Deserialize context_plan
+            context_plan = []
+            for cp in data.get("context_plan", []):
+                context_plan.append(ContextAssignmentData(
+                    exchange_range=cp.get("exchange_range", ""),
+                    mode=cp.get("mode", "copy"),
+                    reason=cp.get("reason", ""),
+                ))
+            # Deserialize bind_to
+            bind_to = None
+            if data.get("bind_to"):
+                bt = data["bind_to"]
+                bind_to = ForkBindingData(
+                    entity_type=bt.get("entity_type", ""),
+                    entity_id=bt.get("entity_id", ""),
+                    role=bt.get("role", ""),
+                )
+            return ForkProposalBlock(
+                proposal_id=data.get("proposal_id", ""),
+                name=data.get("name", ""),
+                description=data.get("description", ""),
+                context_plan=context_plan,
+                initial_prompt=data.get("initial_prompt", ""),
+                bind_to=bind_to,
+                bind_to_inherit=data.get("bind_to_inherit", False),
+                status=data.get("status", "pending"),
+            )
+        elif block_type == "merge_proposal":
+            return MergeProposalBlock(
+                proposal_id=data.get("proposal_id", ""),
+                summary=data.get("summary", ""),
+                reason=data.get("reason", ""),
+                files_changed=data.get("files_changed", []),
+                key_accomplishments=data.get("key_accomplishments", []),
+                status=data.get("status", "pending"),
             )
         # Fallback to text
         return TextBlock(text=str(data))

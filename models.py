@@ -147,6 +147,7 @@ class SlideBlock:
     type: str = "slide"
     title: str = ""  # Slide title, max ~50 chars for 1080p
     content: str = ""  # Markdown body, max ~10 lines for 1080p
+    notes: str = ""  # Speaker notes (not shown in presentation)
 
 
 @dataclass
@@ -167,6 +168,63 @@ class ReviewBlock:
     task_category: str = ""  # debugging, feature, refactor, etc.
     task_description: str = ""  # 1-sentence description
     notes: str = ""  # Speaker notes (not shown in presentation)
+
+
+@dataclass
+class ContextAssignmentData:
+    """A context mode assignment for a range of exchanges (stored form).
+
+    This is the persistable version of core.fork.ContextAssignment.
+    """
+    exchange_range: str = ""  # e.g., "0-2", "5", "last", "all"
+    mode: str = ""  # "copy", "compress", "drop"
+    reason: str = ""  # Why this mode for these exchanges
+
+
+@dataclass
+class ForkBindingData:
+    """Binding specification for a fork (stored form).
+
+    This is the persistable version of core.fork.ForkBindingSpec.
+    """
+    entity_type: str = ""  # "goal", "plan", or "todo"
+    entity_id: str = ""  # ID of the entity (can be prefix)
+    role: str = ""  # "interview", "planning", "implementation", "postmortem", "exploration"
+
+
+@dataclass
+class ForkProposalBlock:
+    """An inline fork proposal from the LLM.
+
+    Stored as a turn in the session's history. The user can accept or reject
+    the proposal inline, rather than via a modal dialog. This ensures proposals
+    persist even if the user switches sessions.
+    """
+    type: str = "fork_proposal"
+    proposal_id: str = ""  # UUID for this proposal
+    name: str = ""  # Short fork name (e.g., "implement-cache-layer")
+    description: str = ""  # What this fork will accomplish
+    context_plan: list[ContextAssignmentData] = field(default_factory=list)
+    initial_prompt: str = ""  # Optional starting prompt
+    bind_to: Optional[ForkBindingData] = None  # Explicit binding spec
+    bind_to_inherit: bool = False  # True if bind_to was "inherit"
+    status: str = "pending"  # "pending", "accepted", "rejected"
+
+
+@dataclass
+class MergeProposalBlock:
+    """An inline merge proposal from the LLM.
+
+    Stored as a turn in the session's history. The user can accept (with optional
+    edits to the summary) or reject the proposal inline.
+    """
+    type: str = "merge_proposal"
+    proposal_id: str = ""  # UUID for this proposal
+    summary: str = ""  # Preview of the merge summary
+    reason: str = ""  # Why the LLM thinks merge is appropriate now
+    files_changed: list[str] = field(default_factory=list)  # Key files modified
+    key_accomplishments: list[str] = field(default_factory=list)  # What was done
+    status: str = "pending"  # "pending", "accepted", "rejected"
 
 
 @dataclass
@@ -216,7 +274,7 @@ class ArchiveBlock:
 
 
 # Union type for all content block types
-ContentBlock = Union[TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, SlideBlock, ReviewBlock]
+ContentBlock = Union[TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, SlideBlock, ReviewBlock, ForkProposalBlock, MergeProposalBlock]
 
 
 @dataclass

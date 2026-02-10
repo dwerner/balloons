@@ -16,7 +16,8 @@ from typing import Any
 from models import (
     Message, Turn, TextBlock, ToolUseBlock, ToolResultBlock,
     InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock,
-    MergeBlock, MergedToBlock, ArchiveBlock, ReviewBlock, Sentiment
+    MergeBlock, MergedToBlock, ArchiveBlock, ReviewBlock, Sentiment,
+    ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData
 )
 from session import Session
 
@@ -133,6 +134,30 @@ class RenderReview(RenderInstruction):
     task_description: str = ""
 
 
+@dataclass
+class RenderForkProposal(RenderInstruction):
+    """Instruction to render a fork proposal with Accept/Reject buttons."""
+    proposal_id: str = ""
+    name: str = ""
+    description: str = ""
+    context_plan: list[ContextAssignmentData] = field(default_factory=list)
+    initial_prompt: str = ""
+    bind_to: ForkBindingData | None = None
+    bind_to_inherit: bool = False
+    status: str = "pending"  # "pending", "accepted", "rejected"
+
+
+@dataclass
+class RenderMergeProposal(RenderInstruction):
+    """Instruction to render a merge proposal with Accept/Reject buttons."""
+    proposal_id: str = ""
+    summary: str = ""
+    reason: str = ""
+    files_changed: list[str] = field(default_factory=list)
+    key_accomplishments: list[str] = field(default_factory=list)
+    status: str = "pending"  # "pending", "accepted", "rejected"
+
+
 # =============================================================================
 # History Loader
 # =============================================================================
@@ -156,12 +181,12 @@ class HistoryLoader:
         """Initialize the history loader.
 
         Args:
-            session_loader: Optional callable to load sessions by ID.
-                           Defaults to Session.load. Can be replaced for testing.
+            session_loader: Optional async callable to load sessions by ID.
+                           Defaults to Session.load_async. Can be replaced for testing.
         """
-        self._session_loader = session_loader or Session.load
+        self._session_loader = session_loader or Session.load_async
 
-    def load(
+    async def load(
         self,
         messages: list[Message | Turn],
         session: Session | None = None,
@@ -190,7 +215,7 @@ class HistoryLoader:
             # Process message content blocks
             if msg.content_blocks:
                 for block_idx, block in enumerate(msg.content_blocks):
-                    instr = self._process_block(
+                    instr = await self._process_block(
                         block, msg.role, turn_id, block_idx, turn_idx, sentiment
                     )
                     if instr:
@@ -211,7 +236,7 @@ class HistoryLoader:
             final_turn_id=turn_counter
         )
 
-    def _process_block(
+    async def _process_block(
         self,
         block: Any,
         role: str,
@@ -265,7 +290,7 @@ class HistoryLoader:
 
         elif isinstance(block, LinkBlock):
             # Look up linked session for display name
-            linked_session = self._session_loader(block.linked_session_id)
+            linked_session = await self._session_loader(block.linked_session_id)
             is_orphaned = block.is_orphaned
 
             if linked_session:
@@ -341,6 +366,30 @@ class HistoryLoader:
                 overall_score=block.overall_score,
                 task_category=block.task_category,
                 task_description=block.task_description,
+            )
+
+        elif isinstance(block, ForkProposalBlock):
+            return RenderForkProposal(
+                turn_id=turn_id,
+                proposal_id=block.proposal_id,
+                name=block.name,
+                description=block.description,
+                context_plan=block.context_plan,
+                initial_prompt=block.initial_prompt,
+                bind_to=block.bind_to,
+                bind_to_inherit=block.bind_to_inherit,
+                status=block.status,
+            )
+
+        elif isinstance(block, MergeProposalBlock):
+            return RenderMergeProposal(
+                turn_id=turn_id,
+                proposal_id=block.proposal_id,
+                summary=block.summary,
+                reason=block.reason,
+                files_changed=block.files_changed,
+                key_accomplishments=block.key_accomplishments,
+                status=block.status,
             )
 
         return None

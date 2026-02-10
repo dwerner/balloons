@@ -30,15 +30,17 @@ class MockSession:
 class TestHistoryLoaderBasics:
     """Test basic message transformation."""
 
-    def test_empty_messages(self):
+    @pytest.mark.asyncio
+    async def test_empty_messages(self):
         """Empty message list returns empty instructions."""
         loader = HistoryLoader()
-        result = loader.load([])
+        result = await loader.load([])
 
         assert result.instructions == []
         assert result.final_turn_id == 0
 
-    def test_simple_text_message(self):
+    @pytest.mark.asyncio
+    async def test_simple_text_message(self):
         """Single text message produces RenderMessage."""
         loader = HistoryLoader()
         msg = Message(
@@ -46,7 +48,7 @@ class TestHistoryLoaderBasics:
             content="Hello world",
             content_blocks=[TextBlock(text="Hello world")]
         )
-        result = loader.load([msg])
+        result = await loader.load([msg])
 
         assert len(result.instructions) == 1
         instr = result.instructions[0]
@@ -56,18 +58,20 @@ class TestHistoryLoaderBasics:
         assert instr.turn_id == 1
         assert instr.block_idx == 0
 
-    def test_fallback_to_content_field(self):
+    @pytest.mark.asyncio
+    async def test_fallback_to_content_field(self):
         """Message without content_blocks uses content field."""
         loader = HistoryLoader()
         msg = Message(role="assistant", content="Fallback text", content_blocks=[])
-        result = loader.load([msg])
+        result = await loader.load([msg])
 
         assert len(result.instructions) == 1
         instr = result.instructions[0]
         assert isinstance(instr, RenderMessage)
         assert instr.text == "Fallback text"
 
-    def test_empty_text_skipped(self):
+    @pytest.mark.asyncio
+    async def test_empty_text_skipped(self):
         """Empty or whitespace-only text blocks are skipped."""
         loader = HistoryLoader()
         msg = Message(
@@ -75,11 +79,12 @@ class TestHistoryLoaderBasics:
             content="",
             content_blocks=[TextBlock(text=""), TextBlock(text="   ")]
         )
-        result = loader.load([msg])
+        result = await loader.load([msg])
 
         assert len(result.instructions) == 0
 
-    def test_multiple_messages_increment_turn_id(self):
+    @pytest.mark.asyncio
+    async def test_multiple_messages_increment_turn_id(self):
         """Each message gets a unique incrementing turn_id."""
         loader = HistoryLoader()
         messages = [
@@ -87,7 +92,7 @@ class TestHistoryLoaderBasics:
             Message(role="assistant", content="Second", content_blocks=[TextBlock(text="Second")]),
             Message(role="user", content="Third", content_blocks=[TextBlock(text="Third")]),
         ]
-        result = loader.load(messages)
+        result = await loader.load(messages)
 
         assert len(result.instructions) == 3
         assert result.instructions[0].turn_id == 1
@@ -99,7 +104,8 @@ class TestHistoryLoaderBasics:
 class TestToolBlocks:
     """Test tool use and result blocks."""
 
-    def test_tool_use_block(self):
+    @pytest.mark.asyncio
+    async def test_tool_use_block(self):
         """ToolUseBlock produces RenderToolUse."""
         loader = HistoryLoader()
         msg = Message(
@@ -109,7 +115,7 @@ class TestToolBlocks:
                 ToolUseBlock(id="tool-123", name="read_file", input={"path": "/foo"})
             ]
         )
-        result = loader.load([msg])
+        result = await loader.load([msg])
 
         assert len(result.instructions) == 1
         instr = result.instructions[0]
@@ -118,7 +124,8 @@ class TestToolBlocks:
         assert instr.tool_use_id == "tool-123"
         assert instr.tool_input == {"path": "/foo"}
 
-    def test_tool_result_block(self):
+    @pytest.mark.asyncio
+    async def test_tool_result_block(self):
         """ToolResultBlock produces RenderToolResult."""
         loader = HistoryLoader()
         msg = Message(
@@ -128,7 +135,7 @@ class TestToolBlocks:
                 ToolResultBlock(tool_use_id="tool-123", content="file contents", is_error=False)
             ]
         )
-        result = loader.load([msg])
+        result = await loader.load([msg])
 
         assert len(result.instructions) == 1
         instr = result.instructions[0]
@@ -137,7 +144,8 @@ class TestToolBlocks:
         assert instr.content == "file contents"
         assert instr.is_error is False
 
-    def test_tool_result_error(self):
+    @pytest.mark.asyncio
+    async def test_tool_result_error(self):
         """Tool result with error flag is preserved."""
         loader = HistoryLoader()
         msg = Message(
@@ -147,7 +155,7 @@ class TestToolBlocks:
                 ToolResultBlock(tool_use_id="tool-456", content="Error: not found", is_error=True)
             ]
         )
-        result = loader.load([msg])
+        result = await loader.load([msg])
 
         instr = result.instructions[0]
         assert instr.is_error is True
@@ -156,7 +164,8 @@ class TestToolBlocks:
 class TestSpecialBlocks:
     """Test special marker blocks."""
 
-    def test_interruption_block(self):
+    @pytest.mark.asyncio
+    async def test_interruption_block(self):
         """InterruptionBlock produces RenderInterruption."""
         loader = HistoryLoader()
         msg = Message(
@@ -164,13 +173,14 @@ class TestSpecialBlocks:
             content="",
             content_blocks=[InterruptionBlock(reason="user_cancelled")]
         )
-        result = loader.load([msg])
+        result = await loader.load([msg])
 
         instr = result.instructions[0]
         assert isinstance(instr, RenderInterruption)
         assert instr.reason == "user_cancelled"
 
-    def test_error_block(self):
+    @pytest.mark.asyncio
+    async def test_error_block(self):
         """ErrorBlock produces RenderError with all fields."""
         loader = HistoryLoader()
         msg = Message(
@@ -185,7 +195,7 @@ class TestSpecialBlocks:
                 )
             ]
         )
-        result = loader.load([msg])
+        result = await loader.load([msg])
 
         instr = result.instructions[0]
         assert isinstance(instr, RenderError)
@@ -194,7 +204,8 @@ class TestSpecialBlocks:
         assert instr.details == "Stream ended unexpectedly"
         assert instr.dump_file == "/tmp/dump.json"
 
-    def test_archive_block(self):
+    @pytest.mark.asyncio
+    async def test_archive_block(self):
         """ArchiveBlock produces RenderArchive."""
         loader = HistoryLoader()
         archive = ArchiveBlock(
@@ -206,7 +217,7 @@ class TestSpecialBlocks:
             message_count=5
         )
         msg = Message(role="user", content="", content_blocks=[archive])
-        result = loader.load([msg])
+        result = await loader.load([msg])
 
         instr = result.instructions[0]
         assert isinstance(instr, RenderArchive)
@@ -217,7 +228,8 @@ class TestSpecialBlocks:
 class TestLinkBlock:
     """Test link block with session lookup."""
 
-    def test_link_block_with_session(self):
+    @pytest.mark.asyncio
+    async def test_link_block_with_session(self):
         """LinkBlock looks up linked session for name."""
         sessions = {
             "linked-sess-123": MockSession(
@@ -226,7 +238,11 @@ class TestLinkBlock:
                 fork_name=""
             )
         }
-        loader = HistoryLoader(session_loader=lambda id: sessions.get(id))
+
+        async def mock_session_loader(id):
+            return sessions.get(id)
+
+        loader = HistoryLoader(session_loader=mock_session_loader)
 
         msg = Message(
             role="user",
@@ -239,7 +255,7 @@ class TestLinkBlock:
                 )
             ]
         )
-        result = loader.load([msg])
+        result = await loader.load([msg])
 
         instr = result.instructions[0]
         assert isinstance(instr, RenderLink)
@@ -248,9 +264,13 @@ class TestLinkBlock:
         assert instr.summary == "Related discussion"
         assert instr.is_orphaned is False
 
-    def test_link_block_orphaned(self):
+    @pytest.mark.asyncio
+    async def test_link_block_orphaned(self):
         """LinkBlock with missing session becomes orphaned."""
-        loader = HistoryLoader(session_loader=lambda id: None)
+        async def mock_session_loader(id):
+            return None
+
+        loader = HistoryLoader(session_loader=mock_session_loader)
 
         msg = Message(
             role="user",
@@ -263,7 +283,7 @@ class TestLinkBlock:
                 )
             ]
         )
-        result = loader.load([msg])
+        result = await loader.load([msg])
 
         instr = result.instructions[0]
         assert instr.is_orphaned is True
@@ -273,7 +293,8 @@ class TestLinkBlock:
 class TestForkMergeBlocks:
     """Test fork and merge blocks (from content blocks)."""
 
-    def test_fork_block_in_content(self):
+    @pytest.mark.asyncio
+    async def test_fork_block_in_content(self):
         """ForkBlock in content produces RenderFork."""
         loader = HistoryLoader()
         msg = Message(
@@ -289,7 +310,7 @@ class TestForkMergeBlocks:
                 )
             ]
         )
-        result = loader.load([msg])
+        result = await loader.load([msg])
 
         instr = result.instructions[0]
         assert isinstance(instr, RenderFork)
@@ -298,7 +319,8 @@ class TestForkMergeBlocks:
         assert instr.prompt == "Let's refactor this"
         assert instr.status == "active"
 
-    def test_merge_block_in_content(self):
+    @pytest.mark.asyncio
+    async def test_merge_block_in_content(self):
         """MergeBlock in content produces RenderMerge."""
         loader = HistoryLoader()
         msg = Message(
@@ -313,7 +335,7 @@ class TestForkMergeBlocks:
                 )
             ]
         )
-        result = loader.load([msg])
+        result = await loader.load([msg])
 
         instr = result.instructions[0]
         assert isinstance(instr, RenderMerge)
@@ -321,7 +343,8 @@ class TestForkMergeBlocks:
         assert instr.fork_name == "refactor-branch"
         assert instr.message == "Refactoring complete"
 
-    def test_review_block_in_content(self):
+    @pytest.mark.asyncio
+    async def test_review_block_in_content(self):
         """ReviewBlock in content produces RenderReview."""
         loader = HistoryLoader()
         msg = Message(
@@ -339,7 +362,7 @@ class TestForkMergeBlocks:
                 )
             ]
         )
-        result = loader.load([msg])
+        result = await loader.load([msg])
 
         instr = result.instructions[0]
         assert isinstance(instr, RenderReview)
@@ -354,7 +377,8 @@ class TestForkMergeBlocks:
 class TestMixedContent:
     """Test messages with multiple content blocks."""
 
-    def test_multiple_blocks_in_message(self):
+    @pytest.mark.asyncio
+    async def test_multiple_blocks_in_message(self):
         """Message with multiple blocks produces multiple instructions."""
         loader = HistoryLoader()
         msg = Message(
@@ -365,7 +389,7 @@ class TestMixedContent:
                 ToolUseBlock(id="t1", name="read_file", input={"path": "/foo"}),
             ]
         )
-        result = loader.load([msg])
+        result = await loader.load([msg])
 
         assert len(result.instructions) == 2
         assert isinstance(result.instructions[0], RenderMessage)
@@ -373,7 +397,8 @@ class TestMixedContent:
         # Both have same turn_id
         assert result.instructions[0].turn_id == result.instructions[1].turn_id
 
-    def test_block_idx_increments(self):
+    @pytest.mark.asyncio
+    async def test_block_idx_increments(self):
         """block_idx increments for text blocks within a message."""
         loader = HistoryLoader()
         msg = Message(
@@ -384,7 +409,7 @@ class TestMixedContent:
                 TextBlock(text="Second paragraph"),
             ]
         )
-        result = loader.load([msg])
+        result = await loader.load([msg])
 
         assert result.instructions[0].block_idx == 0
         assert result.instructions[1].block_idx == 1
@@ -393,13 +418,14 @@ class TestMixedContent:
 class TestStartTurnId:
     """Test starting from non-zero turn_id."""
 
-    def test_start_turn_id(self):
+    @pytest.mark.asyncio
+    async def test_start_turn_id(self):
         """Can start from a specific turn_id for appending."""
         loader = HistoryLoader()
         messages = [
             Message(role="user", content="New message", content_blocks=[TextBlock(text="New message")]),
         ]
-        result = loader.load(messages, start_turn_id=10)
+        result = await loader.load(messages, start_turn_id=10)
 
         assert result.instructions[0].turn_id == 11
         assert result.final_turn_id == 11
