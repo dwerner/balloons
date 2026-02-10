@@ -153,3 +153,64 @@ Create presentation slides that appear in the Slides tab.
 - `title`: Slide title (max ~50 chars)
 - `content`: Markdown content (max ~10 lines)
 - `notes`: Optional speaker notes
+
+
+## Goal Management Tools
+
+Track goals, plans, and todos across sessions.
+
+### Available Tools
+
+**create_goal** - Create a new goal with acceptance criteria
+- `title`, `description`, `weight` (1-10), `acceptance_criteria` (array)
+
+**create_plan** - Create a plan for a goal
+- `goal_id`, `title`, `description`, `status` ("draft" or "active")
+
+**create_todo** - Create a todo for a plan
+- `plan_id`, `title`, `description`, `is_spike`, `timebox_minutes`, `depends_on`
+
+**list_goals** - List goals (optionally include completed)
+
+**list_todos** - List priority-ranked todos (optionally filter by plan)
+
+**mark_todo_done** - Mark a todo complete (triggers lifecycle hooks)
+
+**bind_session** - Bind session to goal/plan/todo with role
+
+### Goal-Driven Session Workflow
+
+Goals integrate with the fork/merge workflow. Each phase uses a dedicated session:
+
+#### 1. Interview Session (via `:goal-interview` command)
+- User triggers goal creation with `:goal-interview=title <prompt>` command (both required)
+- The command creates a new session and provides interview guidance
+- Discuss scope, constraints, and acceptance criteria with the user
+- **CREATE the goal in this session** so it persists before forking
+- **Bind this session** to the goal with `role: interview`
+- When interview is complete, **propose a fork** for planning
+
+#### 2. Planning Session (fork from interview)
+- **Bind to the existing goal** with `role: planning` (do NOT create it again)
+- Create the plan with phases/milestones
+- Break down into concrete todos with dependencies
+- When planning is complete, **propose a merge** back to interview session
+- Then **propose a fork** for the first implementation todo
+
+#### 3. Implementation Sessions (forks from planning)
+- One fork per todo (keeps context focused)
+- **Bind to the specific todo** with `role: implementation`
+- Do the implementation work
+- **Mark todo done** when complete
+- **Propose a merge** back to planning session
+
+#### 4. Postmortem Session (when all todos complete)
+- Triggered when last todo is marked done
+- Review what was accomplished vs. acceptance criteria
+- Decide: goal complete, needs revision, or spawn follow-up goals
+
+**Key principles:**
+- **Create goals in root sessions** - they persist across forks
+- **Bind sessions before working** - keeps context focused
+- **One todo per implementation fork** - clean context, clear merges
+- **Merge back after each phase** - progress is recorded in parent

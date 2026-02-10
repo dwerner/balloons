@@ -44,6 +44,7 @@ from .commands import (
     SupervisorStopCommand,
     ReviewCommand,
     # Goal-oriented task management commands
+    GoalInterviewCommand,
     GoalsCommand,
     PlansCommand,
     TodosCommand,
@@ -234,6 +235,7 @@ __all__ = [
     "SupervisorStopCommand",
     "ReviewCommand",
     # Goal-oriented task management commands
+    "GoalInterviewCommand",
     "GoalsCommand",
     "PlansCommand",
     "TodosCommand",

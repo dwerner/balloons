@@ -7,7 +7,7 @@ from datetime import datetime
 import pytest
 
 from core.async_storage import GoalStorage
-from core.binding_context import BindingContextBuilder, build_binding_context_for_session
+from core.binding_context import BindingContextBuilder, build_binding_context_for_session, _load_role_guidance
 from storage_schema import GoalData, PlanData, TodoData, SessionBinding
 
 
@@ -330,3 +330,218 @@ async def test_convenience_function(goal_storage, sample_goal, monkeypatch):
 
     context = await build_binding_context_for_session("session-8")
     assert "Build goal tracking system" in context
+
+
+# =============================================================================
+# Role Guidance Tests
+# =============================================================================
+
+
+class TestRoleGuidance:
+    """Tests for role-specific guidance injection."""
+
+    @pytest.mark.asyncio
+    async def test_planning_role_includes_fork_guidance(self, goal_storage, sample_goal):
+        """Test that planning role includes guidance to fork for implementation."""
+        await goal_storage.save_goal(sample_goal)
+
+        now = datetime.now().isoformat()
+        binding = SessionBinding(
+            id="b-plan-1",
+            session_id="session-planning",
+            entity_type="goal",
+            entity_id=sample_goal.id,
+            role="planning",
+            created_at=now,
+        )
+        await goal_storage.save_session_binding(binding)
+
+        builder = BindingContextBuilder(goal_storage)
+        context = await builder.build_binding_context("session-planning")
+
+        # Planning guidance should include fork instructions (from prompts/shared/roles/planning.md)
+        assert "Planning Role" in context
+        assert "propose_fork" in context
+        assert "Do NOT implement code" in context
+
+    @pytest.mark.asyncio
+    async def test_implementation_role_includes_merge_guidance(self, goal_storage, sample_todo):
+        """Test that implementation role includes guidance to merge when done."""
+        await goal_storage.save_todo(sample_todo)
+
+        now = datetime.now().isoformat()
+        binding = SessionBinding(
+            id="b-impl-1",
+            session_id="session-impl",
+            entity_type="todo",
+            entity_id=sample_todo.id,
+            role="implementation",
+            created_at=now,
+        )
+        await goal_storage.save_session_binding(binding)
+
+        builder = BindingContextBuilder(goal_storage)
+        context = await builder.build_binding_context("session-impl")
+
+        # Implementation guidance should include merge instructions (from prompts/shared/roles/implementation.md)
+        assert "Implementation Role" in context
+        assert "propose_merge" in context or "Propose a merge" in context
+        assert "Stay focused" in context
+
+    @pytest.mark.asyncio
+    async def test_interview_role_includes_discovery_guidance(self, goal_storage, sample_goal):
+        """Test that interview role includes guidance to stay in discovery mode."""
+        await goal_storage.save_goal(sample_goal)
+
+        now = datetime.now().isoformat()
+        binding = SessionBinding(
+            id="b-int-1",
+            session_id="session-interview",
+            entity_type="goal",
+            entity_id=sample_goal.id,
+            role="interview",
+            created_at=now,
+        )
+        await goal_storage.save_session_binding(binding)
+
+        builder = BindingContextBuilder(goal_storage)
+        context = await builder.build_binding_context("session-interview")
+
+        # Interview guidance should focus on goal discovery (from prompts/shared/roles/interview.md)
+        assert "Interview Role" in context
+        assert "goal discovery mode" in context
+        assert "Do NOT start coding" in context
+
+    @pytest.mark.asyncio
+    async def test_exploration_role_includes_timebox_guidance(self, goal_storage, sample_spike):
+        """Test that exploration role includes timebox guidance."""
+        await goal_storage.save_todo(sample_spike)
+
+        now = datetime.now().isoformat()
+        binding = SessionBinding(
+            id="b-exp-1",
+            session_id="session-explore",
+            entity_type="todo",
+            entity_id=sample_spike.id,
+            role="exploration",
+            created_at=now,
+        )
+        await goal_storage.save_session_binding(binding)
+
+        builder = BindingContextBuilder(goal_storage)
+        context = await builder.build_binding_context("session-explore")
+
+        # Exploration guidance should mention timebox (from prompts/shared/roles/exploration.md)
+        assert "Exploration Role" in context
+        assert "timebox" in context.lower()
+        assert "Document findings" in context
+
+    @pytest.mark.asyncio
+    async def test_postmortem_role_includes_retrospective_guidance(self, goal_storage, sample_plan):
+        """Test that postmortem role includes retrospective guidance."""
+        await goal_storage.save_plan(sample_plan)
+
+        now = datetime.now().isoformat()
+        binding = SessionBinding(
+            id="b-post-1",
+            session_id="session-postmortem",
+            entity_type="plan",
+            entity_id=sample_plan.id,
+            role="postmortem",
+            created_at=now,
+        )
+        await goal_storage.save_session_binding(binding)
+
+        builder = BindingContextBuilder(goal_storage)
+        context = await builder.build_binding_context("session-postmortem")
+
+        # Postmortem guidance should focus on reflection (from prompts/shared/roles/postmortem.md)
+        assert "Postmortem Role" in context
+        assert "retrospective" in context.lower()
+        assert "what went well" in context.lower() or "what worked well" in context.lower()
+
+    @pytest.mark.asyncio
+    async def test_multiple_bindings_same_role_guidance_once(self, goal_storage, sample_goal, sample_plan):
+        """Test that role guidance appears only once even with multiple bindings of same role."""
+        await goal_storage.save_goal(sample_goal)
+        await goal_storage.save_plan(sample_plan)
+
+        now = datetime.now().isoformat()
+        # Two bindings with planning role
+        bindings = [
+            SessionBinding(
+                id="b-multi-1",
+                session_id="session-multi",
+                entity_type="goal",
+                entity_id=sample_goal.id,
+                role="planning",
+                created_at=now,
+            ),
+            SessionBinding(
+                id="b-multi-2",
+                session_id="session-multi",
+                entity_type="plan",
+                entity_id=sample_plan.id,
+                role="planning",
+                created_at=now,
+            ),
+        ]
+
+        for binding in bindings:
+            await goal_storage.save_session_binding(binding)
+
+        builder = BindingContextBuilder(goal_storage)
+        context = await builder.build_binding_context("session-multi")
+
+        # Planning guidance should appear exactly once
+        assert context.count("## Planning Role") == 1
+
+    @pytest.mark.asyncio
+    async def test_multiple_different_roles_get_all_guidance(self, goal_storage, sample_goal, sample_todo):
+        """Test that multiple different roles each get their guidance."""
+        await goal_storage.save_goal(sample_goal)
+        await goal_storage.save_todo(sample_todo)
+
+        now = datetime.now().isoformat()
+        # One binding with planning, one with implementation
+        bindings = [
+            SessionBinding(
+                id="b-mixed-1",
+                session_id="session-mixed",
+                entity_type="goal",
+                entity_id=sample_goal.id,
+                role="planning",
+                created_at=now,
+            ),
+            SessionBinding(
+                id="b-mixed-2",
+                session_id="session-mixed",
+                entity_type="todo",
+                entity_id=sample_todo.id,
+                role="implementation",
+                created_at=now,
+            ),
+        ]
+
+        for binding in bindings:
+            await goal_storage.save_session_binding(binding)
+
+        builder = BindingContextBuilder(goal_storage)
+        context = await builder.build_binding_context("session-mixed")
+
+        # Both role guidances should be present
+        assert "## Planning Role" in context
+        assert "## Implementation Role" in context
+
+    def test_all_roles_have_guidance_files(self):
+        """Test that all expected roles have guidance files."""
+        expected_roles = ["interview", "planning", "implementation", "postmortem", "exploration"]
+        for role in expected_roles:
+            guidance = _load_role_guidance(role)
+            assert guidance, f"Role '{role}' guidance file missing or empty"
+            assert len(guidance) > 50, f"Role '{role}' guidance too short"
+
+    def test_unknown_role_returns_empty_guidance(self):
+        """Test that unknown roles return empty guidance."""
+        guidance = _load_role_guidance("unknown_role")
+        assert guidance == ""

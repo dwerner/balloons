@@ -22,6 +22,7 @@ from core.commands import (
     SlidesCommand,
     ChatCommand,
     ReviewCommand,
+    GoalInterviewCommand,
 )
 
 
@@ -234,3 +235,33 @@ class TestReviewCommand:
         """':review' starts a session quality review."""
         cmd = parser.parse(":review")
         assert isinstance(cmd, ReviewCommand)
+
+
+class TestGoalInterviewCommand:
+    def test_goal_interview_no_args(self, parser):
+        """':goal-interview' with no arguments should error."""
+        with pytest.raises(ValueError, match="Missing title"):
+            parser.parse(":goal-interview")
+
+    def test_goal_interview_with_name_only(self, parser):
+        """':goal-interview=name' with just a name should error."""
+        with pytest.raises(ValueError, match="Missing prompt"):
+            parser.parse(":goal-interview=web-frontend")
+
+    def test_goal_interview_with_prompt_only(self, parser):
+        """':goal-interview prompt' with just a prompt should error."""
+        with pytest.raises(ValueError, match="Missing title"):
+            parser.parse(":goal-interview I want to build a web UI")
+
+    def test_goal_interview_with_name_and_prompt(self, parser):
+        """':goal-interview=name prompt' with both name and prompt."""
+        cmd = parser.parse(":goal-interview=web-frontend I want to build a web UI for balloons")
+        assert isinstance(cmd, GoalInterviewCommand)
+        assert cmd.name == "web-frontend"
+        assert cmd.prompt == "I want to build a web UI for balloons"
+        assert cmd.is_global is True
+
+    def test_goal_interview_empty_title(self, parser):
+        """':goal-interview= prompt' with empty title should error."""
+        with pytest.raises(ValueError, match="Missing title"):
+            parser.parse(":goal-interview= I want to build a web UI")

@@ -133,8 +133,7 @@ After you output a tool call, the system will execute it and provide the result.
 You can then use that information in your response.
 
 ### Important Notes
-- Only call one tool at a time
-- Wait for the tool result before making another tool call
+- **CRITICAL: Only call ONE balloons-tool per message.** Do not combine session_info with propose_fork or propose_merge in the same response. Wait for the tool result before making another call.
 - Tool results will appear in a <balloons-tool-result> block
 
 ### Fork Tree Navigation
@@ -607,13 +606,65 @@ Triggers lifecycle hooks:
 ```
 Binding injects context about the entity into the system prompt.
 
-### Typical Workflow
+### Goal-Driven Session Workflow
 
-1. **Create a goal** when starting a new initiative
-2. **Create a plan** breaking down the approach
-3. **Create todos** for concrete tasks
-4. **Bind session** to the todo you're working on
-5. **Mark done** when complete - lifecycle hooks guide next steps
+Goals integrate with the fork/merge workflow. Each phase uses a dedicated session:
+
+#### 1. Interview Session (via `:goal-interview` command)
+- User triggers goal creation with `:goal-interview=title <prompt>` command (both required)
+- The command creates a new session and provides interview guidance
+- Discuss scope, constraints, and acceptance criteria with the user
+- **CREATE the goal in this session** so it persists before forking
+- **Bind this session** to the goal with `role: interview`
+- When interview is complete, **propose a fork** for planning
+
+```
+User: ":goal-interview=web-frontend I want to build a web UI"
+→ Interview discussion to refine scope
+→ create_goal(title="Web Frontend", ...)
+→ bind_session(entity_type="goal", entity_id="...", role="interview")
+→ propose_fork(name="plan-web-frontend", ...)
+```
+
+#### 2. Planning Session (fork from interview)
+- **Bind to the existing goal** with `role: planning` (do NOT create it again)
+- Create the plan with phases/milestones
+- Break down into concrete todos with dependencies
+- When planning is complete, **propose a merge** back to interview session
+- Then **propose a fork** for the first implementation todo
+
+```
+→ bind_session(entity_type="goal", entity_id="...", role="planning")
+→ create_plan(goal_id="...", title="Phase 1", ...)
+→ create_todo(plan_id="...", title="Extract services", ...)
+→ create_todo(plan_id="...", title="Add WebSocket API", ...)
+→ propose_merge(summary="Created plan with N todos")
+```
+
+#### 3. Implementation Sessions (forks from planning)
+- One fork per todo (keeps context focused)
+- **Bind to the specific todo** with `role: implementation`
+- Do the implementation work
+- **Mark todo done** when complete
+- **Propose a merge** back to planning session
+
+```
+→ bind_session(entity_type="todo", entity_id="...", role="implementation")
+→ [implementation work]
+→ mark_todo_done(todo_id="...")
+→ propose_merge(summary="Implemented X feature")
+```
+
+#### 4. Postmortem Session (when all todos complete)
+- Triggered when last todo is marked done
+- Review what was accomplished vs. acceptance criteria
+- Decide: goal complete, needs revision, or spawn follow-up goals
+
+**Key principles:**
+- **Create goals in root sessions** - they persist across forks
+- **Bind sessions before working** - keeps context focused
+- **One todo per implementation fork** - clean context, clear merges
+- **Merge back after each phase** - progress is recorded in parent
 
 ### Priority Ranking
 

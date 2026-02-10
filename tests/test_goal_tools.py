@@ -419,6 +419,144 @@ class TestListTodos:
         assert "No available todos" in result
 
 
+class TestGetTodo:
+    """Tests for get_todo tool."""
+
+    @pytest.mark.asyncio
+    async def test_get_todo_success(self, goal_storage, mock_session, monkeypatch):
+        """Test getting a single todo's details."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        goal = GoalData(
+            id="goal-1", title="Test Goal", description="", weight=7, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal)
+
+        plan = PlanData(
+            id="plan-1", goal_id="goal-1", title="Test Plan", description="",
+            status="active", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan)
+
+        todo = TodoData(
+            id="todo-abc123", title="Write unit tests", description="Cover edge cases",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+        await goal_storage.save_todo_plan_link(TodoPlanLink(
+            todo_id="todo-abc123", plan_id="plan-1", created_at=now,
+        ))
+
+        result, is_error = await execute_goal_tool(
+            "get_todo",
+            {"todo_id": "todo-abc123"},
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Write unit tests" in result
+        assert "todo-abc123" in result
+        assert "pending" in result
+        assert "Cover edge cases" in result
+        assert "Test Plan" in result
+        assert "Test Goal" in result
+        assert "7/10" in result
+
+    @pytest.mark.asyncio
+    async def test_get_todo_with_prefix(self, goal_storage, mock_session, monkeypatch):
+        """Test getting todo by ID prefix."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo = TodoData(
+            id="abcdef12-3456-7890-abcd-ef1234567890", title="Task", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "get_todo",
+            {"todo_id": "abcdef12"},  # Just prefix
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Task" in result
+        assert "abcdef12-3456-7890-abcd-ef1234567890" in result
+
+    @pytest.mark.asyncio
+    async def test_get_todo_not_found(self, goal_storage, mock_session, monkeypatch):
+        """Test error when todo doesn't exist."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "get_todo",
+            {"todo_id": "nonexistent"},
+            mock_session,
+        )
+
+        assert is_error
+        assert "not found" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_get_spike_todo(self, goal_storage, mock_session, monkeypatch):
+        """Test getting a spike todo with timebox."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo = TodoData(
+            id="spike-1", title="Investigate caching", description="",
+            status="pending", is_spike=True, timebox_minutes=30,
+            created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "get_todo",
+            {"todo_id": "spike-1"},
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Spike" in result
+        assert "30 min" in result
+
+    @pytest.mark.asyncio
+    async def test_get_todo_with_dependencies(self, goal_storage, mock_session, monkeypatch):
+        """Test getting a todo that has dependencies."""
+        from storage_schema import TodoDependency
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        dep_todo = TodoData(
+            id="dep-todo-1", title="First task", description="",
+            status="done", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(dep_todo)
+
+        main_todo = TodoData(
+            id="main-todo-1", title="Second task", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(main_todo)
+        await goal_storage.save_todo_dependency(TodoDependency(
+            todo_id="main-todo-1", depends_on_id="dep-todo-1", created_at=now,
+        ))
+
+        result, is_error = await execute_goal_tool(
+            "get_todo",
+            {"todo_id": "main-todo-1"},
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Dependencies" in result
+        assert "First task" in result
+        assert "✓" in result  # Done status icon
+
+
 class TestMarkTodoDone:
     """Tests for mark_todo_done tool."""
 

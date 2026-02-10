@@ -10,6 +10,7 @@ Tool Names:
 - create_todo: Create a todo and link it to a plan
 - list_goals: List all goals with their status
 - list_todos: List priority-ranked available todos
+- get_todo: Get details of a single todo by ID
 - mark_todo_done: Mark a todo as complete
 - bind_session: Bind current session to a goal/plan/todo
 """
@@ -34,6 +35,7 @@ GOAL_TOOL_NAMES = {
     "create_todo",
     "list_goals",
     "list_todos",
+    "get_todo",
     "mark_todo_done",
     "bind_session",
 }
@@ -218,6 +220,33 @@ Use this to see what should be worked on next.""",
     {
         "type": "function",
         "function": {
+            "name": "get_todo",
+            "description": """Get detailed information about a single todo.
+
+Returns the todo's full details including:
+- Title and description
+- Status (pending/in_progress/done/abandoned)
+- Whether it's a spike (and timebox if set)
+- Dependencies (what it depends on)
+- Parent plan and goal information
+
+Use this when you need to see the full context of a specific todo,
+such as when starting work on it or checking its details.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "todo_id": {
+                        "type": "string",
+                        "description": "ID of the todo to retrieve (can be prefix)"
+                    }
+                },
+                "required": ["todo_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "mark_todo_done",
             "description": """Mark a todo as complete.
 
@@ -305,6 +334,8 @@ async def execute_goal_tool(
         return await _list_goals(args, storage)
     elif name == "list_todos":
         return await _list_todos(args, storage)
+    elif name == "get_todo":
+        return await _get_todo(args, storage)
     elif name == "mark_todo_done":
         return await _mark_todo_done(args, storage, session)
     elif name == "bind_session":
@@ -518,6 +549,70 @@ async def _list_todos(args: dict, storage) -> tuple[str, bool]:
         return formatted, False
     else:
         return f"Error: {result.error}", True
+
+
+async def _get_todo(args: dict, storage) -> tuple[str, bool]:
+    """Get detailed information about a single todo."""
+    todo_id_prefix = args.get("todo_id", "").strip()
+    if not todo_id_prefix:
+        return "Error: todo_id is required", True
+
+    # Find todo by prefix
+    all_todos = await storage.list_todos(include_spikes=True)
+    todo = None
+    for t in all_todos:
+        if t.id.startswith(todo_id_prefix):
+            todo = t
+            break
+
+    if not todo:
+        return f"Error: Todo not found: {todo_id_prefix}", True
+
+    # Build response
+    lines = [
+        f"Todo: {todo.title}",
+        f"ID: {todo.id}",
+        f"Status: {todo.status}",
+    ]
+
+    if todo.description:
+        lines.append(f"Description: {todo.description}")
+
+    if todo.is_spike:
+        spike_info = "Type: Spike"
+        if todo.timebox_minutes:
+            spike_info += f" ({todo.timebox_minutes} min timebox)"
+        lines.append(spike_info)
+
+    # Get parent plan and goal info
+    plan_ids = await storage.get_plans_for_todo(todo.id)
+    if plan_ids:
+        plan = await storage.load_plan(plan_ids[0])
+        if plan:
+            lines.append(f"Plan: {plan.title} ({plan.id[:8]})")
+            goal = await storage.load_goal(plan.goal_id)
+            if goal:
+                lines.append(f"Goal: {goal.title} (weight: {goal.weight}/10)")
+
+    # Get dependencies
+    dep_ids = await storage.get_dependencies(todo.id)
+    if dep_ids:
+        dep_names = []
+        for dep_id in dep_ids:
+            dep_todo = await storage.load_todo(dep_id)
+            if dep_todo:
+                status_icon = "✓" if dep_todo.status == "done" else "○"
+                dep_names.append(f"{status_icon} {dep_todo.title} ({dep_id[:8]})")
+        if dep_names:
+            lines.append("Dependencies:")
+            for dep in dep_names:
+                lines.append(f"  - {dep}")
+
+    lines.append(f"Created: {todo.created_at}")
+    if todo.updated_at != todo.created_at:
+        lines.append(f"Updated: {todo.updated_at}")
+
+    return "\n".join(lines), False
 
 
 async def _mark_todo_done(args: dict, storage, session) -> tuple[str, bool]:

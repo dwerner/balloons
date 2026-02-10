@@ -43,6 +43,7 @@ class Breadcrumb(Static):
         super().__init__(**kwargs)
         self._session: Session | None = None
         self._path: list[dict] = []  # [{session_id, name, is_merged}]
+        self._binding_indicator: str = ""  # Role/binding for current session
 
     def render(self) -> RenderableType:
         if not self._path:
@@ -60,6 +61,8 @@ class Breadcrumb(Static):
             if is_last:
                 # Current location - bold
                 text.append(name, style="bold cyan")
+                if self._binding_indicator:
+                    text.append(f" {self._binding_indicator}", style="magenta")
                 if is_merged:
                     text.append(" [merged]", style="dim green")
             else:
@@ -68,11 +71,22 @@ class Breadcrumb(Static):
 
         return text
 
-    async def set_session(self, session: Session) -> None:
-        """Update the breadcrumb to show the path to the given session."""
+    async def set_session(self, session: Session, binding_indicator: str = "") -> None:
+        """Update the breadcrumb to show the path to the given session.
+
+        Args:
+            session: The current session
+            binding_indicator: Optional role/binding text like "[impl: Add caching]"
+        """
         self._session = session
+        self._binding_indicator = binding_indicator
         self._path = await self._build_path(session)
         self.remove_class("hidden")
+        self.refresh()
+
+    def update_binding_indicator(self, indicator: str) -> None:
+        """Update just the binding indicator without rebuilding the path."""
+        self._binding_indicator = indicator
         self.refresh()
 
     async def _build_path(self, session: Session) -> list[dict]:
@@ -122,5 +136,6 @@ class Breadcrumb(Static):
         """Clear the breadcrumb."""
         self._session = None
         self._path = []
+        self._binding_indicator = ""
         self.add_class("hidden")
         self.refresh()

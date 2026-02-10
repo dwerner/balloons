@@ -3,12 +3,47 @@
 When a session is bound to goals, plans, or todos, this module builds
 a formatted context string that can be added to the system prompt to
 keep the LLM aligned with the intended work.
+
+Role-specific guidance is loaded from prompts/shared/roles/{role}.md files,
+which are the single source of truth for role behavior.
 """
 
+from pathlib import Path
 from typing import Optional
 
 from core.async_storage import GoalStorage, get_goal_storage
 from storage_schema import GoalData, PlanData, TodoData, SessionBinding
+
+
+# Cache for loaded role guidance files
+_role_guidance_cache: dict[str, str] = {}
+
+
+def _get_prompts_dir() -> Path:
+    """Get the prompts directory path."""
+    # Navigate from core/ to project root, then to prompts/
+    return Path(__file__).parent.parent / "prompts" / "shared" / "roles"
+
+
+def _load_role_guidance(role: str) -> str:
+    """Load role guidance from the corresponding prompt file.
+
+    Args:
+        role: The role name (interview, planning, implementation, etc.)
+
+    Returns:
+        The role guidance content, or empty string if file doesn't exist
+    """
+    if role in _role_guidance_cache:
+        return _role_guidance_cache[role]
+
+    role_file = _get_prompts_dir() / f"{role}.md"
+    if role_file.exists():
+        content = role_file.read_text()
+        _role_guidance_cache[role] = content
+        return content
+
+    return ""
 
 
 class BindingContextBuilder:
@@ -41,7 +76,8 @@ class BindingContextBuilder:
 
         Loads all active (non-released) bindings for the session and
         formats the bound entities into a context block suitable for
-        system prompt injection.
+        system prompt injection. Includes role-specific behavioral guidance
+        for each unique role in the bindings.
 
         Args:
             session_id: The session to build context for
@@ -59,12 +95,43 @@ class BindingContextBuilder:
         parts.append("This session is bound to the following work items. Stay aligned with these goals:")
         parts.append("")
 
+        # Format each binding
         for binding in bindings:
             entity_context = await self._format_binding(binding, storage)
             if entity_context:
                 parts.append(entity_context)
 
+        # Add role-specific guidance (once per unique role)
+        seen_roles: set[str] = set()
+        guidance_parts: list[str] = []
+        for binding in bindings:
+            if binding.role not in seen_roles:
+                seen_roles.add(binding.role)
+                guidance = self._get_role_guidance(binding.role)
+                if guidance:
+                    guidance_parts.append(guidance)
+
+        if guidance_parts:
+            parts.append("---")
+            parts.append("")
+            for guidance in guidance_parts:
+                parts.append(guidance)
+                parts.append("")
+
         return "\n".join(parts)
+
+    def _get_role_guidance(self, role: str) -> str:
+        """Get behavioral guidance for a session role.
+
+        Loads guidance from prompts/shared/roles/{role}.md file.
+
+        Args:
+            role: The binding role (interview, planning, implementation, etc.)
+
+        Returns:
+            Guidance string for the role, or empty string if file doesn't exist
+        """
+        return _load_role_guidance(role)
 
     async def _format_binding(self, binding: SessionBinding, storage: GoalStorage) -> str:
         """Format a single binding for display.

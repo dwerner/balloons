@@ -225,6 +225,37 @@ Use this instead of asking "Would you like me to implement this?" when you have 
                     "initial_prompt": {
                         "type": "string",
                         "description": "Optional starting prompt for the fork (what to do first)"
+                    },
+                    "bind_to": {
+                        "oneOf": [
+                            {
+                                "type": "string",
+                                "enum": ["inherit"],
+                                "description": "Use 'inherit' to carry forward the parent session's binding"
+                            },
+                            {
+                                "type": "object",
+                                "description": "Explicit binding for the new fork",
+                                "properties": {
+                                    "entity_type": {
+                                        "type": "string",
+                                        "enum": ["goal", "plan", "todo"],
+                                        "description": "Type of entity to bind to"
+                                    },
+                                    "entity_id": {
+                                        "type": "string",
+                                        "description": "ID of the entity (can be prefix)"
+                                    },
+                                    "role": {
+                                        "type": "string",
+                                        "enum": ["interview", "planning", "implementation", "postmortem", "exploration"],
+                                        "description": "Role this session plays"
+                                    }
+                                },
+                                "required": ["entity_type", "entity_id", "role"]
+                            }
+                        ],
+                        "description": "Binding for the fork: 'inherit' to copy parent's binding, or explicit {entity_type, entity_id, role}"
                     }
                 },
                 "required": ["name", "description", "context_plan"]

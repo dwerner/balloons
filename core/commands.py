@@ -440,6 +440,24 @@ class UnbindCommand(Command):
     entity_id: str = ""  # Optional: specific binding to release
 
 
+@dataclass
+class GoalInterviewCommand(Command):
+    """Start a goal interview session.
+
+    Creates a new session dedicated to defining a goal through interactive
+    requirements gathering. The session is bound with role: interview.
+
+    The LLM will:
+    1. Gather requirements through interview questions
+    2. Define acceptance criteria
+    3. Create the goal when interview is complete
+    4. Propose a fork for planning phase
+    """
+    is_global: bool = True  # Can start interview during streaming (creates new session)
+    name: str = ""  # Session name (used as title)
+    prompt: str = ""  # Initial prompt describing what user wants to achieve
+
+
 # Command documentation for help display
 COMMAND_DOCS = [
     # Session management
@@ -492,6 +510,7 @@ COMMAND_DOCS = [
     # Session Review
     (":review", "Start quality review of current session"),
     # Goal-Oriented Task Management
+    (":goal-interview=title <prompt>", "Start goal interview session (both required)"),
     (":goals [--all]", "List active goals (--all includes completed)"),
     (":plans [goal_id]", "List plans (for specific goal if provided)"),
     (":todos [plan_id]", "List priority-ranked todos (for specific plan if provided)"),
@@ -725,6 +744,10 @@ class CommandParser:
         if text == ":review":
             return ReviewCommand()
 
+        # Handle :goal-interview[=name] [prompt]
+        if text == ":goal-interview" or text.startswith(":goal-interview ") or text.startswith(":goal-interview="):
+            return self._parse_goal_interview(text)
+
         # Handle :goals [--all]
         if text == ":goals" or text.startswith(":goals "):
             include_completed = "--all" in text
@@ -904,3 +927,34 @@ class CommandParser:
             raise ValueError(f"Unknown role: {role} (must be one of {', '.join(valid_roles)})")
 
         return BindCommand(entity_type=entity_type, entity_id=entity_id, role=role)
+
+    def _parse_goal_interview(self, text: str) -> GoalInterviewCommand:
+        """Parse :goal-interview=title <prompt> command.
+
+        Both title and prompt are required.
+        """
+        # :goal-interview=web-frontend I want to build a web UI
+        remaining = text[15:]  # Remove ":goal-interview"
+
+        if not remaining.startswith("="):
+            raise ValueError("Missing title. Usage: :goal-interview=title <prompt>")
+
+        # Extract title until space: :goal-interview=web-frontend prompt
+        eq_part = remaining[1:]  # Remove "="
+        if not eq_part:
+            raise ValueError("Missing title. Usage: :goal-interview=title <prompt>")
+
+        if " " in eq_part:
+            name, remaining = eq_part.split(" ", 1)
+            prompt = remaining.strip()
+        else:
+            name = eq_part
+            prompt = ""
+
+        if not name:
+            raise ValueError("Missing title. Usage: :goal-interview=title <prompt>")
+
+        if not prompt:
+            raise ValueError("Missing prompt. Usage: :goal-interview=title <prompt>")
+
+        return GoalInterviewCommand(name=name, prompt=prompt)

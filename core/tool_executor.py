@@ -541,11 +541,25 @@ def parse_fork_proposal(args: dict) -> ForkProposal | None:
                 reason=assignment.get("reason", ""),
             ))
 
+        # Parse bind_to
+        bind_to = None
+        bind_to_raw = args.get("bind_to")
+        if bind_to_raw == "inherit":
+            bind_to = "inherit"
+        elif isinstance(bind_to_raw, dict):
+            from core.fork import ForkBindingSpec
+            bind_to = ForkBindingSpec(
+                entity_type=bind_to_raw.get("entity_type", ""),
+                entity_id=bind_to_raw.get("entity_id", ""),
+                role=bind_to_raw.get("role", ""),
+            )
+
         return ForkProposal(
             name=name,
             description=description,
             context_plan=context_plan,
             initial_prompt=initial_prompt,
+            bind_to=bind_to,
         )
     except Exception:
         return None

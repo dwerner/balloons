@@ -10,7 +10,17 @@ from textual.containers import Vertical, Horizontal, ScrollableContainer
 from rich.markup import escape as escape_markup
 
 from models import ContextMode
-from core.fork import ForkProposal, ContextAssignment
+from core.fork import ForkProposal, ContextAssignment, ForkBindingSpec
+
+
+@dataclass
+class ResolvedBinding:
+    """Pre-resolved binding information for display in the modal."""
+    entity_type: str  # "goal", "plan", "todo"
+    entity_id: str  # Full or prefix ID
+    role: str  # "planning", "implementation", etc.
+    title: str | None = None  # Resolved entity title (if looked up)
+    inherit: bool = False  # True if bind_to was "inherit"
 
 
 @dataclass
@@ -143,6 +153,34 @@ class ForkProposalModal(ModalScreen[Optional[ForkProposalResult]]):
     #reject-btn {
         background: $error-darken-1;
     }
+
+    #binding-section {
+        margin-bottom: 1;
+    }
+
+    #binding-info {
+        color: $text;
+        padding-left: 1;
+        border-left: thick $secondary;
+    }
+
+    .binding-label {
+        color: $text-muted;
+    }
+
+    .binding-value {
+        color: $text;
+        text-style: bold;
+    }
+
+    .binding-title {
+        color: $primary;
+    }
+
+    .binding-inherit {
+        color: $warning;
+        text-style: italic;
+    }
     """
 
     BINDINGS = [
@@ -154,6 +192,7 @@ class ForkProposalModal(ModalScreen[Optional[ForkProposalResult]]):
         self,
         proposal: ForkProposal,
         exchange_summaries: list[str] | None = None,
+        resolved_binding: ResolvedBinding | None = None,
         **kwargs
     ):
         """Initialize the modal.
@@ -162,16 +201,22 @@ class ForkProposalModal(ModalScreen[Optional[ForkProposalResult]]):
             proposal: The ForkProposal from the LLM
             exchange_summaries: Optional list of short summaries for each exchange
                               (index i = summary for exchange i)
+            resolved_binding: Pre-resolved binding information to display
         """
         super().__init__(**kwargs)
         self._proposal = proposal
         self._exchange_summaries = exchange_summaries or []
+        self._resolved_binding = resolved_binding
 
     def compose(self):
         with Vertical(id="proposal-dialog"):
             # Compact header: name on same line
             yield Static(f"Fork: {self._proposal.name}", id="proposal-title")
             yield Static(self._proposal.description, id="fork-description")
+
+            # Show binding info if present
+            if self._resolved_binding:
+                yield from self._compose_binding_section()
 
             with ScrollableContainer(id="proposal-content"):
                 # Context plan as collapsible tree - single line per item with reason inline
@@ -195,6 +240,28 @@ class ForkProposalModal(ModalScreen[Optional[ForkProposalResult]]):
             with Horizontal(id="proposal-buttons"):
                 yield Button("Accept", id="accept-btn", variant="success")
                 yield Button("Reject", id="reject-btn", variant="error")
+
+    def _compose_binding_section(self):
+        """Compose the binding info section."""
+        binding = self._resolved_binding
+        if not binding:
+            return
+
+        with Vertical(id="binding-section"):
+            yield Static("Binding", classes="section-title")
+            if binding.inherit:
+                yield Static("[italic]Inherit from parent[/italic]", id="binding-info", classes="binding-inherit")
+            else:
+                # Show entity type, ID (with title if available), and role
+                entity_display = binding.entity_type.capitalize()
+                if binding.title:
+                    id_display = f"{binding.title} ({binding.entity_id[:8]})"
+                else:
+                    id_display = binding.entity_id[:8]
+                role_display = binding.role
+
+                info_text = f"{entity_display}: {escape_markup(id_display)}\nRole: {role_display}"
+                yield Static(info_text, id="binding-info")
 
     def _make_context_item(
         self,
@@ -320,12 +387,13 @@ class ForkProposalModal(ModalScreen[Optional[ForkProposalResult]]):
         prompt_area = self.query_one("#initial-prompt", TextArea)
         edited_prompt = prompt_area.text
 
-        # Create a new proposal with the edited prompt
+        # Create a new proposal with the edited prompt, preserving bind_to
         edited_proposal = ForkProposal(
             name=self._proposal.name,
             description=self._proposal.description,
             context_plan=self._proposal.context_plan,
             initial_prompt=edited_prompt,
+            bind_to=self._proposal.bind_to,
         )
 
         result = ForkProposalResult(

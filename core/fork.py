@@ -73,6 +73,17 @@ class ContextAssignment:
 
 
 @dataclass
+class ForkBindingSpec:
+    """Specification for binding a fork to a goal/plan/todo.
+
+    Used in ForkProposal to atomically create a session with a binding.
+    """
+    entity_type: str  # "goal", "plan", or "todo"
+    entity_id: str  # ID of the entity (can be prefix)
+    role: str  # "interview", "planning", "implementation", "postmortem", "exploration"
+
+
+@dataclass
 class ForkProposal:
     """A proposed fork with curated context, suggested by the LLM.
 
@@ -85,6 +96,7 @@ class ForkProposal:
     description: str  # What this fork will accomplish
     context_plan: list[ContextAssignment] = field(default_factory=list)
     initial_prompt: str = ""  # Optional starting prompt
+    bind_to: ForkBindingSpec | str | None = None  # "inherit" or explicit spec
 
     def resolve_exchange_indices(
         self,

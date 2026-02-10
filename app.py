@@ -88,6 +88,7 @@ from core import (
     ChatCommand,
     ReviewCommand,
     # Goal-oriented task management commands
+    GoalInterviewCommand,
     GoalsCommand,
     PlansCommand,
     TodosCommand,
@@ -127,7 +128,7 @@ from core import (
 from core.summarizer import Summarizer
 from core.exceptions import BackendNotFoundError
 from core.context_grouper import group_messages_by_context_mode, build_context_messages
-from core.fork import ForkManager, ForkResult, MergeResult, DeriveResult, SwitchResult, ForkProposal, MergeProposal, ForkData, DeriveData
+from core.fork import ForkManager, ForkResult, MergeResult, DeriveResult, SwitchResult, ForkProposal, MergeProposal, ForkData, DeriveData, ForkBindingSpec
 from core.command_executor import CommandExecutor, ArchiveResult, RehydrateResult, LinkResult, BackendResult, ShellResult
 from core.goal_commands import GoalCommandExecutor, check_priority_divergence, get_session_binding_indicator
 from core.tool_executor import parse_fork_proposal, parse_merge_proposal
@@ -337,6 +338,9 @@ class BalloonsApp(App):
         self._message_stash = MessageStash()
         # Pending link targets for async link operations
         self._pending_link_targets: list = []
+        # Pending fork bindings (fork_name -> ForkBindingSpec or "inherit")
+        # Applied when fork creation completes
+        self._pending_fork_bindings: dict[str, Any] = {}
 
     @property
     def session(self) -> Session | None:
@@ -2199,6 +2203,8 @@ class BalloonsApp(App):
         elif isinstance(cmd, ReviewCommand):
             await self._handle_review_command()
         # Goal-oriented task management commands
+        elif isinstance(cmd, GoalInterviewCommand):
+            await self._handle_goal_interview_command(cmd.name, cmd.prompt)
         elif isinstance(cmd, GoalsCommand):
             await self._handle_goals_command(cmd.include_completed)
         elif isinstance(cmd, PlansCommand):
@@ -3143,10 +3149,29 @@ class BalloonsApp(App):
         When the LLM calls propose_fork, we show a modal for the user to
         accept, modify, or reject the proposal.
         """
+        from widgets.fork_proposal_modal import ResolvedBinding
+
         status_bar = self.query_one("#status-bar", StatusBar)
 
         # Generate exchange summaries for the modal
         exchange_summaries = self._get_exchange_summaries(session_id)
+
+        # Resolve binding info for display (without async title lookup for now)
+        resolved_binding = None
+        if proposal.bind_to:
+            if proposal.bind_to == "inherit":
+                resolved_binding = ResolvedBinding(
+                    entity_type="",
+                    entity_id="",
+                    role="",
+                    inherit=True,
+                )
+            elif isinstance(proposal.bind_to, ForkBindingSpec):
+                resolved_binding = ResolvedBinding(
+                    entity_type=proposal.bind_to.entity_type,
+                    entity_id=proposal.bind_to.entity_id,
+                    role=proposal.bind_to.role,
+                )
 
         def on_result(result: ForkProposalResult | None) -> None:
             if result is None or not result.accepted:
@@ -3164,7 +3189,7 @@ class BalloonsApp(App):
             ))
 
         self.push_screen(
-            ForkProposalModal(proposal, exchange_summaries),
+            ForkProposalModal(proposal, exchange_summaries, resolved_binding=resolved_binding),
             on_result,
         )
 
@@ -3232,9 +3257,36 @@ class BalloonsApp(App):
         # Show confirmation
         self.notify(f"Creating fork: {proposal.name}")
 
+        # Store pending binding to apply after fork creation
+        if proposal.bind_to:
+            self._pending_fork_bindings[proposal.name] = proposal.bind_to
+
+        # Build session context to inject into the prompt so Claude knows it's in a fork
+        parent_name = self.session.title or self.session.fork_name or self.session.id[:8]
+        session_context_lines = [
+            "[Session Context]",
+            f"You are now in fork: {proposal.name}",
+            f"Parent session: {parent_name}",
+            f"Purpose: {proposal.description}",
+        ]
+
+        # Add binding info if present
+        if proposal.bind_to:
+            from core.fork import ForkBindingSpec
+            if isinstance(proposal.bind_to, ForkBindingSpec):
+                session_context_lines.append(
+                    f"Bound to: {proposal.bind_to.entity_type} {proposal.bind_to.entity_id} (role: {proposal.bind_to.role})"
+                )
+            elif proposal.bind_to == "inherit":
+                session_context_lines.append("Binding: inherited from parent")
+
+        session_context_lines.append("")  # Blank line before user content
+        session_context = "\n".join(session_context_lines)
+
         # Create the fork with the proposal's settings
         # Use initial_prompt if provided, otherwise a default
-        prompt = proposal.initial_prompt or f"Continue with: {proposal.description}"
+        user_prompt = proposal.initial_prompt or f"Continue with: {proposal.description}"
+        prompt = f"{session_context}\n{user_prompt}"
         await self._handle_fork_command(
             prompt=prompt,
             name=proposal.name,
@@ -3465,6 +3517,9 @@ class BalloonsApp(App):
             # Foreground mode - switch to child
             asyncio.create_task(child_session.save_async())  # Ensure recent timestamp
 
+            # Apply pending binding if any
+            await self._apply_pending_fork_binding(result.name, child_session, parent_session)
+
             breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
             await self._manager.set_active(child_session.id)
             chat_log.clear()
@@ -3473,6 +3528,85 @@ class BalloonsApp(App):
             await breadcrumb.set_session(child_session)
 
             self._start_streaming(result.prompt)
+
+    async def _apply_pending_fork_binding(
+        self,
+        fork_name: str,
+        child_session: Session,
+        parent_session: Session,
+    ) -> None:
+        """Apply a pending binding to a newly created fork.
+
+        Called after fork creation to bind the child session to a goal/plan/todo.
+        Supports "inherit" to copy the parent's binding, or explicit binding spec.
+        """
+        bind_to = self._pending_fork_bindings.pop(fork_name, None)
+        if not bind_to:
+            return
+
+        from core.fork import ForkBindingSpec
+        from core.async_storage import get_goal_storage
+        from storage_schema import SessionBinding
+        from datetime import datetime
+        import uuid as uuid_mod
+
+        storage = await get_goal_storage()
+
+        if bind_to == "inherit":
+            # Copy parent's active bindings
+            parent_bindings = await storage.get_bindings_for_session(
+                parent_session.id, active_only=True
+            )
+            for parent_binding in parent_bindings:
+                new_binding = SessionBinding(
+                    id=str(uuid_mod.uuid4()),
+                    session_id=child_session.id,
+                    entity_type=parent_binding.entity_type,
+                    entity_id=parent_binding.entity_id,
+                    role=parent_binding.role,
+                    created_at=datetime.now().isoformat(),
+                )
+                await storage.save_session_binding(new_binding)
+                debug_log.info(
+                    f"Inherited binding to {parent_binding.entity_type} with role {parent_binding.role}",
+                    category="fork",
+                )
+        elif isinstance(bind_to, ForkBindingSpec):
+            # Create explicit binding
+            # Resolve entity ID prefix if needed
+            entity_id = bind_to.entity_id
+            if bind_to.entity_type == "goal":
+                goals = await storage.list_goals()
+                for g in goals:
+                    if g.id.startswith(entity_id):
+                        entity_id = g.id
+                        break
+            elif bind_to.entity_type == "plan":
+                plans = await storage.list_plans()
+                for p in plans:
+                    if p.id.startswith(entity_id):
+                        entity_id = p.id
+                        break
+            elif bind_to.entity_type == "todo":
+                todos = await storage.list_todos()
+                for t in todos:
+                    if t.id.startswith(entity_id):
+                        entity_id = t.id
+                        break
+
+            new_binding = SessionBinding(
+                id=str(uuid_mod.uuid4()),
+                session_id=child_session.id,
+                entity_type=bind_to.entity_type,
+                entity_id=entity_id,
+                role=bind_to.role,
+                created_at=datetime.now().isoformat(),
+            )
+            await storage.save_session_binding(new_binding)
+            debug_log.info(
+                f"Created binding to {bind_to.entity_type} {entity_id} with role {bind_to.role}",
+                category="fork",
+            )
 
     async def _handle_merge_command(self, prompt: str = "") -> None:
         """Merge fork back to parent.
@@ -4938,6 +5072,76 @@ class BalloonsApp(App):
     # Goal-Oriented Task Management Command Handlers
     # =========================================================================
 
+    async def _handle_goal_interview_command(self, name: str, prompt: str) -> None:
+        """Handle :goal-interview=title <prompt> command - start a goal interview session.
+
+        Both title and prompt are required.
+
+        Creates a new session with:
+        1. A title based on the name
+        2. Binding to a pending goal with role: goal-interview
+        3. Guidance prompt for the LLM to conduct requirements gathering
+        """
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
+
+        # Background old session
+        old_session_id = self._manager._active_session_id
+        self._background_old_session(old_session_id)
+
+        # Show loading indicator
+        chat_log.show_loading("Starting goal interview session...")
+
+        # Create new session with title
+        new_session = await self._manager.create_session()
+        new_session.title = name
+        await self._manager.set_active(new_session.id)
+
+        # Reload UI
+        chat_log.hide_loading()
+        await context_tree.load_all_sessions(self.session)
+        await breadcrumb.set_session(self.session)
+        self.notify(f"Goal interview session created: {name}")
+
+        # Update context tokens
+        self._update_base_context_tokens()
+        self._update_context_tokens()
+
+        # Build the interview prompt
+        interview_guidance = """You are starting a goal interview session. Your role is to help the user define a clear, actionable goal through requirements gathering.
+
+## Interview Process
+
+1. **Understand the vision**: Ask clarifying questions about what they want to achieve
+2. **Explore constraints**: Discuss technical constraints, timelines, dependencies
+3. **Define scope**: Help them narrow down to a clear, achievable goal
+4. **Draft acceptance criteria**: Work with them to define how they'll know the goal is complete
+
+## When the goal is clear:
+
+1. **Create the goal** with `create_goal` tool (include title, description, weight, acceptance_criteria)
+2. **Bind this session** with `bind_session(entity_type="goal", entity_id="...", role="interview")`
+3. **Propose a fork** for planning with `propose_fork` to create the plan and todos
+
+## Important guidelines:
+
+- Ask one question at a time
+- Don't assume - ask about anything unclear
+- Help them think through edge cases
+- Suggest acceptance criteria rather than prescribing them
+- Keep the goal focused - one clear objective, not a laundry list
+
+"""
+        # If user provided a prompt, use it as the initial context
+        if prompt:
+            full_prompt = f"{interview_guidance}\nThe user wants to work on:\n\n{prompt}\n\nStart by asking clarifying questions to understand their goal better."
+        else:
+            full_prompt = f"{interview_guidance}\nAsk the user what goal they'd like to work on."
+
+        # Start streaming with the interview prompt
+        self._start_streaming(full_prompt)
+
     async def _handle_goals_command(self, include_completed: bool = False) -> None:
         """Handle :goals command - list all goals."""
         chat_log = self.query_one("#chat-log", ChatLogView)
@@ -5052,9 +5256,14 @@ class BalloonsApp(App):
             self.notify(f"Error: {result.error}", severity="error")
 
     async def _update_session_binding_indicator(self, session_id: str) -> None:
-        """Update the binding indicator for a session in the tree state."""
+        """Update the binding indicator for a session in the tree state and breadcrumb."""
         indicator = await get_session_binding_indicator(session_id)
         self._tree_state.update_session_binding_indicator(session_id, indicator)
+
+        # Also update breadcrumb if this is the current session
+        if session_id == self.session.id:
+            breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
+            breadcrumb.update_binding_indicator(indicator)
 
     async def _handle_lifecycle_prompt(self, prompt) -> None:
         """Handle a lifecycle prompt from todo/plan completion.
