@@ -8,6 +8,7 @@ Tool Names:
 - create_goal: Create a new goal with acceptance criteria
 - update_goal: Update an existing goal (rename, change weight, etc.)
 - create_plan: Create a plan for achieving a goal
+- update_plan: Update an existing plan (rename, change status, reparent)
 - create_todo: Create a todo and link it to a plan
 - list_goals: List all goals with their status
 - list_todos: List priority-ranked available todos
@@ -34,8 +35,10 @@ GOAL_TOOL_NAMES = {
     "create_goal",
     "update_goal",
     "create_plan",
+    "update_plan",
     "create_todo",
     "list_goals",
+    "list_plans",
     "list_todos",
     "get_todo",
     "mark_todo_done",
@@ -172,6 +175,49 @@ Use this when:
                     }
                 },
                 "required": ["goal_id", "title", "description"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_plan",
+            "description": """Update an existing plan's fields.
+
+Allows modifying a plan's title, description, status, or parent goal (reparenting).
+Only the fields provided will be updated; others remain unchanged.
+
+Use this when:
+- Renaming a plan (updating title)
+- Refining a plan's description
+- Changing status (draft/active/completed/abandoned)
+- Moving a plan to a different goal (reparenting)""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plan_id": {
+                        "type": "string",
+                        "description": "ID of the plan to update (can be prefix)"
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "New title for the plan (max 80 chars)"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "New description"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["draft", "active", "completed", "abandoned"],
+                        "description": "New status"
+                    },
+                    "goal_id": {
+                        "type": "string",
+                        "description": "New parent goal ID (can be prefix) - reparents the plan"
+                    }
+                },
+                "required": ["plan_id"]
             }
         }
     },
@@ -382,6 +428,8 @@ async def execute_goal_tool(
         return await _update_goal(args, storage)
     elif name == "create_plan":
         return await _create_plan(args, storage)
+    elif name == "update_plan":
+        return await _update_plan(args, storage)
     elif name == "create_todo":
         return await _create_todo(args, storage)
     elif name == "list_goals":
@@ -557,6 +605,92 @@ async def _create_plan(args: dict, storage) -> tuple[str, bool]:
         f"ID: {plan.id}\n"
         f"Status: {plan.status}\n"
         f"Goal: {goal.title}"
+    ), False
+
+
+async def _update_plan(args: dict, storage) -> tuple[str, bool]:
+    """Update an existing plan."""
+    plan_id_prefix = args.get("plan_id", "").strip()
+    if not plan_id_prefix:
+        return "Error: plan_id is required", True
+
+    # Find plan by prefix
+    plans = await storage.list_plans()
+    plan = None
+    for p in plans:
+        if p.id.startswith(plan_id_prefix):
+            plan = p
+            break
+
+    if not plan:
+        return f"Error: Plan not found: {plan_id_prefix}", True
+
+    # Track what we're updating for the response
+    updates = []
+
+    # Update title if provided
+    if "title" in args:
+        new_title = args["title"].strip()
+        if new_title:
+            old_title = plan.title
+            plan.title = new_title[:80]
+            updates.append(f"title: '{old_title}' → '{plan.title}'")
+
+    # Update description if provided
+    if "description" in args:
+        new_desc = args["description"].strip()
+        if new_desc:
+            plan.description = new_desc
+            updates.append("description updated")
+
+    # Update status if provided
+    if "status" in args:
+        new_status = args["status"]
+        if new_status in ("draft", "active", "completed", "abandoned"):
+            old_status = plan.status
+            plan.status = new_status
+            updates.append(f"status: {old_status} → {new_status}")
+
+    # Reparent to different goal if goal_id provided
+    if "goal_id" in args:
+        new_goal_id_prefix = args["goal_id"].strip()
+        if new_goal_id_prefix:
+            # Find new goal by prefix
+            goals = await storage.list_goals()
+            new_goal = None
+            for g in goals:
+                if g.id.startswith(new_goal_id_prefix):
+                    new_goal = g
+                    break
+
+            if not new_goal:
+                return f"Error: Goal not found for reparenting: {new_goal_id_prefix}", True
+
+            # Get old goal for display
+            old_goal = await storage.load_goal(plan.goal_id)
+            old_goal_title = old_goal.title if old_goal else plan.goal_id[:8]
+
+            plan.goal_id = new_goal.id
+            updates.append(f"goal: '{old_goal_title}' → '{new_goal.title}'")
+
+    if not updates:
+        return "No valid updates provided", True
+
+    # Update the timestamp
+    plan.updated_at = datetime.now().isoformat()
+
+    # Save the updated plan
+    await storage.save_plan(plan)
+
+    # Get current goal for display
+    current_goal = await storage.load_goal(plan.goal_id)
+    goal_title = current_goal.title if current_goal else plan.goal_id[:8]
+
+    return (
+        f"Updated plan: {plan.title}\n"
+        f"ID: {plan.id}\n"
+        f"Goal: {goal_title}\n"
+        f"Changes:\n" + "\n".join(f"  - {u}" for u in updates)
     ), False
 
 

@@ -515,6 +515,367 @@ class TestCreatePlan:
         assert plans[0].goal_id == goal.id
 
 
+class TestUpdatePlan:
+    """Tests for update_plan tool."""
+
+    @pytest.mark.asyncio
+    async def test_update_plan_rename(self, goal_storage, mock_session, monkeypatch):
+        """Test renaming a plan."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        goal = GoalData(
+            id="goal-1", title="Goal", description="", weight=5, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal)
+
+        plan = PlanData(
+            id="plan-123", goal_id="goal-1", title="Original Title",
+            description="Original description", status="active",
+            created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan)
+
+        result, is_error = await execute_goal_tool(
+            "update_plan",
+            {
+                "plan_id": "plan-123",
+                "title": "New Title",
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Updated plan" in result
+        assert "New Title" in result
+        assert "title:" in result
+
+        updated_plan = await goal_storage.load_plan("plan-123")
+        assert updated_plan.title == "New Title"
+        assert updated_plan.description == "Original description"  # Unchanged
+
+    @pytest.mark.asyncio
+    async def test_update_plan_with_prefix(self, goal_storage, mock_session, monkeypatch):
+        """Test updating plan by ID prefix."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        goal = GoalData(
+            id="goal-1", title="Goal", description="", weight=5, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal)
+
+        plan = PlanData(
+            id="abcdef12-3456-7890-abcd-ef1234567890", goal_id="goal-1",
+            title="Plan", description="", status="active",
+            created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan)
+
+        result, is_error = await execute_goal_tool(
+            "update_plan",
+            {
+                "plan_id": "abcdef12",  # Just prefix
+                "title": "Updated Plan",
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        updated_plan = await goal_storage.load_plan("abcdef12-3456-7890-abcd-ef1234567890")
+        assert updated_plan.title == "Updated Plan"
+
+    @pytest.mark.asyncio
+    async def test_update_plan_status(self, goal_storage, mock_session, monkeypatch):
+        """Test updating plan status."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        goal = GoalData(
+            id="goal-1", title="Goal", description="", weight=5, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal)
+
+        plan = PlanData(
+            id="plan-1", goal_id="goal-1", title="Plan", description="",
+            status="draft", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan)
+
+        result, is_error = await execute_goal_tool(
+            "update_plan",
+            {
+                "plan_id": "plan-1",
+                "status": "completed",
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        assert "status: draft → completed" in result
+
+        updated_plan = await goal_storage.load_plan("plan-1")
+        assert updated_plan.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_update_plan_reparent(self, goal_storage, mock_session, monkeypatch):
+        """Test reparenting a plan to a different goal."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        goal1 = GoalData(
+            id="goal-1", title="Original Goal", description="", weight=5, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal1)
+
+        goal2 = GoalData(
+            id="goal-2", title="New Goal", description="", weight=7, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal2)
+
+        plan = PlanData(
+            id="plan-1", goal_id="goal-1", title="Plan", description="",
+            status="active", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan)
+
+        result, is_error = await execute_goal_tool(
+            "update_plan",
+            {
+                "plan_id": "plan-1",
+                "goal_id": "goal-2",  # Reparent to goal-2
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        assert "goal:" in result
+        assert "Original Goal" in result
+        assert "New Goal" in result
+
+        updated_plan = await goal_storage.load_plan("plan-1")
+        assert updated_plan.goal_id == "goal-2"
+
+    @pytest.mark.asyncio
+    async def test_update_plan_reparent_with_prefix(self, goal_storage, mock_session, monkeypatch):
+        """Test reparenting with goal ID prefix."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        goal1 = GoalData(
+            id="goal-aaa111", title="Goal A", description="", weight=5, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal1)
+
+        goal2 = GoalData(
+            id="goal-bbb222", title="Goal B", description="", weight=7, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal2)
+
+        plan = PlanData(
+            id="plan-1", goal_id="goal-aaa111", title="Plan", description="",
+            status="active", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan)
+
+        result, is_error = await execute_goal_tool(
+            "update_plan",
+            {
+                "plan_id": "plan-1",
+                "goal_id": "goal-bbb",  # Prefix
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        updated_plan = await goal_storage.load_plan("plan-1")
+        assert updated_plan.goal_id == "goal-bbb222"
+
+    @pytest.mark.asyncio
+    async def test_update_plan_reparent_goal_not_found(self, goal_storage, mock_session, monkeypatch):
+        """Test error when reparenting to nonexistent goal."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        goal = GoalData(
+            id="goal-1", title="Goal", description="", weight=5, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal)
+
+        plan = PlanData(
+            id="plan-1", goal_id="goal-1", title="Plan", description="",
+            status="active", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan)
+
+        result, is_error = await execute_goal_tool(
+            "update_plan",
+            {
+                "plan_id": "plan-1",
+                "goal_id": "nonexistent",
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "Goal not found for reparenting" in result
+
+    @pytest.mark.asyncio
+    async def test_update_plan_multiple_fields(self, goal_storage, mock_session, monkeypatch):
+        """Test updating multiple fields at once."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        goal1 = GoalData(
+            id="goal-1", title="Goal 1", description="", weight=5, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal1)
+
+        goal2 = GoalData(
+            id="goal-2", title="Goal 2", description="", weight=7, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal2)
+
+        plan = PlanData(
+            id="plan-1", goal_id="goal-1", title="Old Title",
+            description="Old desc", status="draft",
+            created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan)
+
+        result, is_error = await execute_goal_tool(
+            "update_plan",
+            {
+                "plan_id": "plan-1",
+                "title": "New Title",
+                "description": "New description",
+                "status": "active",
+                "goal_id": "goal-2",
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        assert "title:" in result
+        assert "description updated" in result
+        assert "status: draft → active" in result
+        assert "goal:" in result
+
+        updated_plan = await goal_storage.load_plan("plan-1")
+        assert updated_plan.title == "New Title"
+        assert updated_plan.description == "New description"
+        assert updated_plan.status == "active"
+        assert updated_plan.goal_id == "goal-2"
+
+    @pytest.mark.asyncio
+    async def test_update_plan_not_found(self, goal_storage, mock_session, monkeypatch):
+        """Test error when plan doesn't exist."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "update_plan",
+            {
+                "plan_id": "nonexistent",
+                "title": "New Title",
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "Plan not found" in result
+
+    @pytest.mark.asyncio
+    async def test_update_plan_no_updates(self, goal_storage, mock_session, monkeypatch):
+        """Test error when no valid updates provided."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        goal = GoalData(
+            id="goal-1", title="Goal", description="", weight=5, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal)
+
+        plan = PlanData(
+            id="plan-1", goal_id="goal-1", title="Plan", description="",
+            status="active", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan)
+
+        result, is_error = await execute_goal_tool(
+            "update_plan",
+            {
+                "plan_id": "plan-1",
+                # No other fields provided
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "No valid updates" in result
+
+    @pytest.mark.asyncio
+    async def test_update_plan_missing_plan_id(self, goal_storage, mock_session, monkeypatch):
+        """Test error when plan_id is missing."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "update_plan",
+            {
+                "title": "New Title",
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "plan_id is required" in result
+
+    @pytest.mark.asyncio
+    async def test_update_plan_invalid_status(self, goal_storage, mock_session, monkeypatch):
+        """Test that invalid status values are ignored."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        goal = GoalData(
+            id="goal-1", title="Goal", description="", weight=5, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal)
+
+        plan = PlanData(
+            id="plan-1", goal_id="goal-1", title="Plan", description="",
+            status="active", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan)
+
+        result, is_error = await execute_goal_tool(
+            "update_plan",
+            {
+                "plan_id": "plan-1",
+                "status": "invalid_status",
+            },
+            mock_session,
+        )
+
+        # Since status is invalid and no other valid updates, this should error
+        assert is_error
+        assert "No valid updates" in result
+
+        # Verify status unchanged
+        updated_plan = await goal_storage.load_plan("plan-1")
+        assert updated_plan.status == "active"
+
+
 class TestCreateTodo:
     """Tests for create_todo tool."""
 

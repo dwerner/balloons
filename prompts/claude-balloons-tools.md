@@ -250,10 +250,25 @@ propose creating a "fork" - a new conversation branch with curated context.
       {"exchange_range": "1-3", "mode": "compress", "reason": "Background exploration - summarize"},
       {"exchange_range": "last", "mode": "copy", "reason": "Contains the implementation plan"}
     ],
-    "initial_prompt": "Let's start by creating the data model..."
+    "initial_prompt": "Let's start by creating the data model...",
+    "bind_to": {
+      "entity_type": "todo",
+      "entity_id": "abc123",
+      "role": "implementation"
+    }
   }
 }
 ```
+
+**Binding (bind_to):**
+- `"inherit"`: Copy the parent session's binding to the new fork
+- `{entity_type, entity_id, role}`: Explicitly bind to a goal, plan, or todo
+  - `entity_type`: "goal", "plan", or "todo"
+  - `entity_id`: ID of the entity (can be prefix)
+  - `role`: "interview", "planning", "implementation", "postmortem", or "exploration"
+
+Use `bind_to` when forking to work on a specific todo - this ensures the child session
+is properly associated with the work item it's implementing.
 
 **Context modes:**
 - `copy`: Include exchange verbatim (for critical details, code snippets, exact requirements)

@@ -341,6 +341,8 @@ class BalloonsApp(App):
         # Pending fork bindings (fork_name -> ForkBindingSpec or "inherit")
         # Applied when fork creation completes
         self._pending_fork_bindings: dict[str, Any] = {}
+        # Suppress context token updates during batch context mode changes
+        self._batch_context_mode_changes = False
 
     @property
     def session(self) -> Session | None:
@@ -630,6 +632,9 @@ class BalloonsApp(App):
 
         elif event == TreeEvent.CONTEXT_MODE_CHANGED:
             # Context mode changed on a turn - recalculate tokens if it's the current session
+            # Skip if we're in batch mode (bulk context mode changes like fork proposal)
+            if self._batch_context_mode_changes:
+                return
             session_id = data.get("session_id")
             if session_id == self._tree_state.get_current_session_id():
                 self._update_base_context_tokens()
@@ -1218,6 +1223,11 @@ class BalloonsApp(App):
 
         The compression result is in ctx.content, and fork_data has the original params.
         """
+        debug_log.info(
+            f"_complete_fork_after_compression called",
+            category="fork",
+            details={"content_len": len(ctx.content), "has_fork_data": ctx.fork_data is not None},
+        )
         fork_data = ctx.fork_data
         if not fork_data or not isinstance(fork_data, ForkData):
             debug_log.error("No fork_data in context after compression", category="stream")
@@ -3174,6 +3184,11 @@ class BalloonsApp(App):
                 )
 
         def on_result(result: ForkProposalResult | None) -> None:
+            debug_log.info(
+                f"Fork proposal modal on_result called",
+                category="fork",
+                details={"accepted": result.accepted if result else None, "proposal_name": result.proposal.name if result else None},
+            )
             if result is None or not result.accepted:
                 # User rejected - send rejection back to Claude via chat
                 self.notify("Fork proposal rejected")
@@ -3182,11 +3197,29 @@ class BalloonsApp(App):
                 return
 
             # User accepted - apply context modes and create fork
-            asyncio.create_task(self._execute_fork_proposal(
-                result.proposal,
-                session_id,
-                ctx,
-            ))
+            debug_log.info(
+                f"Fork proposal accepted, creating task",
+                category="fork",
+                details={"proposal_name": result.proposal.name},
+            )
+
+            async def execute_with_error_handling():
+                try:
+                    await self._execute_fork_proposal(
+                        result.proposal,
+                        session_id,
+                        ctx,
+                    )
+                except Exception as e:
+                    import traceback
+                    debug_log.error(
+                        f"_execute_fork_proposal failed: {e}",
+                        category="fork",
+                        details={"traceback": traceback.format_exc()},
+                    )
+                    self.notify(f"Fork creation failed: {e}", severity="error")
+
+            asyncio.create_task(execute_with_error_handling())
 
         self.push_screen(
             ForkProposalModal(proposal, exchange_summaries, resolved_binding=resolved_binding),
@@ -3233,26 +3266,42 @@ class BalloonsApp(App):
         ctx: StreamingContext,
     ) -> None:
         """Execute an accepted fork proposal by setting context modes and creating the fork."""
+        debug_log.info(
+            f"_execute_fork_proposal started",
+            category="fork",
+            details={"proposal_name": proposal.name, "session_id": session_id},
+        )
         status_bar = self.query_one("#status-bar", StatusBar)
+        debug_log.info("_execute_fork_proposal: got status_bar", category="fork")
 
         # Get exchange groups to map exchange indices to turn indices
         groups = self._tree_state.get_turns_grouped_by_exchange(session_id)
         total_exchanges = len(groups)
+        debug_log.info(f"_execute_fork_proposal: got {total_exchanges} exchange groups", category="fork")
 
         # Resolve the proposal's context plan to exchange indices.
         # exclude_current=True because the proposal was made during the current
         # exchange, so "last" should refer to the previous exchange (the one
         # before Claude's response containing the proposal).
         exchange_modes = proposal.resolve_exchange_indices(total_exchanges, exclude_current=True)
+        debug_log.info(f"_execute_fork_proposal: resolved {len(exchange_modes)} exchange modes", category="fork")
 
         # Apply context modes to all turns in each exchange
-        # (TreeState fires CONTEXT_MODE_CHANGED events which update the tree)
-        for exchange_idx, mode in exchange_modes.items():
-            if exchange_idx < len(groups):
-                for turn in groups[exchange_idx]:
-                    self._tree_state.set_context_mode(session_id, turn.idx, mode)
+        # Use batch mode to suppress per-turn token recalculation (huge perf win)
+        self._batch_context_mode_changes = True
+        try:
+            for exchange_idx, mode in exchange_modes.items():
+                if exchange_idx < len(groups):
+                    for turn in groups[exchange_idx]:
+                        self._tree_state.set_context_mode(session_id, turn.idx, mode)
+        finally:
+            self._batch_context_mode_changes = False
+        debug_log.info("_execute_fork_proposal: applied context modes", category="fork")
 
+        # Now do one token update for all the changes
+        self._update_base_context_tokens()
         self._update_context_tokens()
+        debug_log.info("_execute_fork_proposal: updated tokens", category="fork")
 
         # Show confirmation
         self.notify(f"Creating fork: {proposal.name}")
@@ -3260,6 +3309,11 @@ class BalloonsApp(App):
         # Store pending binding to apply after fork creation
         if proposal.bind_to:
             self._pending_fork_bindings[proposal.name] = proposal.bind_to
+            debug_log.info(
+                f"Stored pending binding for fork proposal",
+                category="fork",
+                details={"fork_name": proposal.name, "bind_to": str(proposal.bind_to)},
+            )
 
         # Build session context to inject into the prompt so Claude knows it's in a fork
         parent_name = self.session.title or self.session.fork_name or self.session.id[:8]
@@ -3287,10 +3341,20 @@ class BalloonsApp(App):
         # Use initial_prompt if provided, otherwise a default
         user_prompt = proposal.initial_prompt or f"Continue with: {proposal.description}"
         prompt = f"{session_context}\n{user_prompt}"
+        debug_log.info(
+            f"_execute_fork_proposal calling _handle_fork_command",
+            category="fork",
+            details={"proposal_name": proposal.name},
+        )
         await self._handle_fork_command(
             prompt=prompt,
             name=proposal.name,
             background=False,
+        )
+        debug_log.info(
+            f"_execute_fork_proposal completed",
+            category="fork",
+            details={"proposal_name": proposal.name},
         )
 
     # ===== MERGE PROPOSAL HANDLING =====
@@ -3399,6 +3463,11 @@ class BalloonsApp(App):
             name: Optional name for easy reference (e.g., "auth-bug")
             background: If True, run in background and stay in parent
         """
+        debug_log.info(
+            f"_handle_fork_command started",
+            category="fork",
+            details={"name": name, "background": background},
+        )
         chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
         input_box = self.query_one("#input-box", InputBox)
@@ -3408,7 +3477,20 @@ class BalloonsApp(App):
         indexed_messages = context_tree.get_selected_messages_with_indices()
         allowed_tools = self._get_enabled_tools()
 
+        # Count messages by context mode for debugging
+        mode_counts = {"copy": 0, "compress": 0}
+        for msg, _ in indexed_messages:
+            if hasattr(msg, 'context_mode') and msg.context_mode:
+                mode_name = msg.context_mode.name.lower()
+                if mode_name in mode_counts:
+                    mode_counts[mode_name] += 1
+
         # Prepare fork via ForkManager (handles validation and session creation)
+        debug_log.info(
+            f"_handle_fork_command calling prepare_fork",
+            category="fork",
+            details={"name": name, "indexed_messages_count": len(indexed_messages), "mode_counts": mode_counts},
+        )
         result = await self._fork_manager.prepare_fork(
             current_session=self.session,
             indexed_messages=indexed_messages,
@@ -3417,6 +3499,15 @@ class BalloonsApp(App):
             name=name,
             background=background,
         )
+        debug_log.info(
+            f"_handle_fork_command prepare_fork returned",
+            category="fork",
+            details={
+                "success": result.success,
+                "needs_compression": result.needs_compression,
+                "error": result.error,
+            },
+        )
 
         if not result.success:
             self.notify(result.error, severity="error")
@@ -3424,9 +3515,16 @@ class BalloonsApp(App):
 
         if not result.needs_compression:
             # No compression - proceed with UI updates
+            debug_log.info(f"_handle_fork_command calling _complete_fork_ui", category="fork")
             await self._complete_fork_ui(result, chat_log, context_tree, status_bar)
+            debug_log.info(f"_handle_fork_command _complete_fork_ui returned", category="fork")
         else:
             # Compression needed - start helper streaming
+            debug_log.info(
+                f"_handle_fork_command starting compression helper",
+                category="fork",
+                details={"helper_id": result.helper_id},
+            )
             helper_runner = HelperRunner(result.helper_id, runner=create_runner(self._backend_config))
             self._helper_runners[result.helper_id] = helper_runner
 
@@ -3449,6 +3547,11 @@ class BalloonsApp(App):
 
             chat_log.add_user_message("[Compressing context for fork...]")
             chat_log.add_assistant_message()
+            debug_log.info(
+                f"_handle_fork_command compression helper started",
+                category="fork",
+                details={"helper_id": result.helper_id},
+            )
 
             helper_runner.start_background(result.compression_prompt)
 
@@ -3540,9 +3643,26 @@ class BalloonsApp(App):
         Called after fork creation to bind the child session to a goal/plan/todo.
         Supports "inherit" to copy the parent's binding, or explicit binding spec.
         """
+        debug_log.info(
+            f"_apply_pending_fork_binding called",
+            category="fork",
+            fork_name=fork_name,
+            pending_keys=list(self._pending_fork_bindings.keys()),
+        )
         bind_to = self._pending_fork_bindings.pop(fork_name, None)
         if not bind_to:
+            debug_log.info(
+                f"No pending binding found for fork",
+                category="fork",
+                fork_name=fork_name,
+            )
             return
+        debug_log.info(
+            f"Found pending binding for fork",
+            category="fork",
+            fork_name=fork_name,
+            bind_to=str(bind_to),
+        )
 
         from core.fork import ForkBindingSpec
         from core.async_storage import get_goal_storage
