@@ -32,7 +32,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, VerticalSplitter, HorizontalSplitter, TaskPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, ReviewMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, MessageStash, StashPopup, SlidesPane, PresentationScreen, MessageQueuePopup, EntityPane, ActionableToastRack, ActionableNotification, ActionableToast
+from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, GoalTreeView, VerticalSplitter, HorizontalSplitter, TaskPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, ReviewMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, MessageStash, StashPopup, SlidesPane, PresentationScreen, MessageQueuePopup, EntityPane, ActionableToastRack, ActionableNotification, ActionableToast
 from widgets.input_box import CompletionPopup
 from widgets.archive_marker import ArchiveMarker
 from claude_runner import ClaudeRunner
@@ -132,6 +132,8 @@ from core.command_executor import CommandExecutor, ArchiveResult, RehydrateResul
 from core.goal_commands import GoalCommandExecutor, check_priority_divergence, get_session_binding_indicator
 from core.tool_executor import parse_fork_proposal, parse_merge_proposal
 from core.tree_state import TreeState, TreeEvent
+from core.goal_tree_state import GoalTreeState
+from core.goal_tree_sync import GoalTreeSyncManager
 from core.task_state import get_task_state, TaskStatus
 from core.sounds import play_error_sound, play_done_sound, play_notification_sound
 from core.queue_state import get_queue_state, QueueState, QueueEvent, QueueSnapshot
@@ -158,6 +160,11 @@ class BalloonsApp(App):
     }
 
     NestedTreeView {
+        width: 50;
+        display: none;
+    }
+
+    GoalTreeView {
         width: 50;
         display: none;
     }
@@ -289,8 +296,11 @@ class BalloonsApp(App):
         self._command_parser = CommandParser()
         self._formatter = Formatter()
         self._context_builder = ContextBuilder()
-        # Shared tree state - used by ContextTreeView and (future) NestedTreeView
+        # Shared tree state - used by ContextTreeView and NestedTreeView
         self._tree_state = TreeState()
+        # Goal-centric tree state - used by GoalTreeView
+        self._goal_tree_state = GoalTreeState()
+        self._goal_tree_sync: GoalTreeSyncManager | None = None
         # Shared queue state - event-driven message queue management
         self._queue_state = get_queue_state()
         # Session manager handles all sessions and runners
@@ -541,6 +551,11 @@ class BalloonsApp(App):
                 yield NestedTreeView(
                     tree_state=self._tree_state,
                     id="nested-tree"
+                )
+                yield GoalTreeView(
+                    goal_state=self._goal_tree_state,
+                    tree_state=self._tree_state,
+                    id="goal-tree"
                 )
                 yield VerticalSplitter(id="splitter")
                 with Vertical(id="chat-container"):
@@ -4552,6 +4567,93 @@ class BalloonsApp(App):
         # Delegate to async handler
         asyncio.create_task(self._archive_turns_from_tree(event.session_id, event.turn_indices))
 
+    # --- GoalTreeView Event Handlers ---
+
+    async def on_goal_tree_view_session_activated(self, event: GoalTreeView.SessionActivated) -> None:
+        """Handle clicking on a session in goal tree - switch to it."""
+        session = await Session.load_async(event.session_id)
+        if session:
+            await self._switch_to_session(session)
+
+    def on_goal_tree_view_entity_selected(self, event: GoalTreeView.EntitySelected) -> None:
+        """Handle selecting a goal/plan/todo in the tree."""
+        # Could show entity details in a pane, or just notify
+        self.notify(f"Selected {event.entity_type}: {event.entity_id[:8]}")
+
+    def on_goal_tree_view_colon_pressed(self, event: GoalTreeView.ColonPressed) -> None:
+        """Handle : key from goal tree - jump to input box."""
+        input_box = self.query_one("#input-box", InputBox)
+        input_box.focus()
+        if not input_box.text:
+            input_box.insert(":")
+
+    def on_goal_tree_view_search_requested(self, event: GoalTreeView.SearchRequested) -> None:
+        """Handle / key from goal tree - start search."""
+        # Could open a search dialog for goals/todos
+        self.notify("Search in goal tree not yet implemented")
+
+    def on_goal_tree_view_session_delete_requested(self, event: GoalTreeView.SessionDeleteRequested) -> None:
+        """Handle session delete request from goal tree."""
+        # Reuse the ContextTreeView handler logic
+        context_tree_event = ContextTreeView.SessionDeleteRequested(event.session_id)
+        self.on_context_tree_session_delete_requested(context_tree_event)
+
+    def on_goal_tree_view_delete_requested(self, event: GoalTreeView.DeleteRequested) -> None:
+        """Handle entity delete request from goal tree."""
+        # For now just notify - could add confirmation and deletion
+        self.notify(f"Delete {event.entity_type} not yet implemented")
+
+    async def on_goal_tree_view_mark_todo_done_requested(self, event: GoalTreeView.MarkTodoDoneRequested) -> None:
+        """Handle marking a todo as done from the goal tree."""
+        from core.goal_commands import mark_todo_done
+        result = await mark_todo_done(event.todo_id, self.session.id if self.session else "")
+        if result.success:
+            self.notify(f"Marked complete: {result.todo.title}")
+            # Refresh the goal tree
+            if self._goal_tree_sync:
+                await self._goal_tree_sync.initial_load()
+        else:
+            self.notify(f"Error: {result.error}", severity="error")
+
+    async def on_goal_tree_view_bind_session_requested(self, event: GoalTreeView.BindSessionRequested) -> None:
+        """Handle binding current session to an entity."""
+        if not self.session:
+            self.notify("No active session to bind", severity="warning")
+            return
+
+        from core.goal_commands import GoalCommandExecutor
+        from core.async_storage import get_goal_storage
+
+        storage = await get_goal_storage()
+        executor = GoalCommandExecutor(storage)
+        result = await executor.bind_session(
+            self.session.id,
+            event.entity_type,
+            event.entity_id,
+            "implementation"  # Default role
+        )
+
+        if result.success:
+            self.notify(f"Bound session to {event.entity_type}")
+            # Refresh the goal tree
+            if self._goal_tree_sync:
+                await self._goal_tree_sync.initial_load()
+        else:
+            self.notify(f"Error: {result.error}", severity="error")
+
+    async def on_goal_tree_view_context_mode_changed(self, event: GoalTreeView.ContextModeChanged) -> None:
+        """Handle context mode change from goal tree - persist to session."""
+        # Update TreeState - this triggers observer chain for token recalculation
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+        if event.new_mode == ContextMode.DROP:
+            context_tree._state.remove_context_mode(event.session_id, event.turn_idx)
+        else:
+            context_tree._state.set_context_mode(event.session_id, event.turn_idx, event.new_mode)
+
+        # Persist to session if it's the current session
+        if self.session and event.session_id == self.session.id:
+            await self._persist_context_mode(event.turn_idx, event.new_mode)
+
     async def on_breadcrumb_segment_clicked(self, event: Breadcrumb.SegmentClicked) -> None:
         """Handle clicking a breadcrumb segment to navigate up."""
         target_session = await Session.load_async(event.session_id)
@@ -4585,46 +4687,79 @@ class BalloonsApp(App):
         """Toggle the tree sidebar visibility."""
         context_tree = self.query_one("#context-tree", ContextTreeView)
         nested_tree = self.query_one("#nested-tree", NestedTreeView)
+        goal_tree = self.query_one("#goal-tree", GoalTreeView)
         splitter = self.query_one("#splitter", VerticalSplitter)
 
-        # If either tree is visible, hide both; otherwise show the active one
-        either_visible = context_tree.display or nested_tree.display
-        if either_visible:
+        # If any tree is visible, hide all; otherwise show the active one
+        any_visible = context_tree.display or nested_tree.display or goal_tree.display
+        if any_visible:
             context_tree.display = False
             nested_tree.display = False
+            goal_tree.display = False
             splitter.display = False
         else:
             # Show whichever was last active (context_tree by default)
-            if getattr(self, "_nested_tree_active", False):
+            active = getattr(self, "_active_tree_view", "context")
+            if active == "nested":
                 nested_tree.display = True
+            elif active == "goal":
+                goal_tree.display = True
+                asyncio.create_task(self._ensure_goal_tree_loaded())
             else:
                 context_tree.display = True
             splitter.display = True
 
     def action_switch_tree_view(self) -> None:
-        """Switch between flat (ContextTreeView) and nested (NestedTreeView) views."""
+        """Switch between context tree, nested tree, and goal tree views.
+
+        Cycles: Context -> Nested -> Goal -> Context
+        """
         context_tree = self.query_one("#context-tree", ContextTreeView)
         nested_tree = self.query_one("#nested-tree", NestedTreeView)
+        goal_tree = self.query_one("#goal-tree", GoalTreeView)
         status_bar = self.query_one("#status-bar", StatusBar)
 
-        # Toggle which tree is active
+        # Determine current view and cycle to next
         if context_tree.display:
+            # Context -> Nested
             context_tree.display = False
             nested_tree.display = True
-            self._nested_tree_active = True
+            goal_tree.display = False
+            self._active_tree_view = "nested"
         elif nested_tree.display:
+            # Nested -> Goal
+            context_tree.display = False
             nested_tree.display = False
+            goal_tree.display = True
+            self._active_tree_view = "goal"
+            # Load goal tree data if not already loaded
+            asyncio.create_task(self._ensure_goal_tree_loaded())
+        elif goal_tree.display:
+            # Goal -> Context
             context_tree.display = True
-            self._nested_tree_active = False
+            nested_tree.display = False
+            goal_tree.display = False
+            self._active_tree_view = "context"
         else:
-            # Neither visible - show the opposite of what was last active
-            if getattr(self, "_nested_tree_active", False):
-                context_tree.display = True
-                self._nested_tree_active = False
-            else:
+            # None visible - show the last active one
+            active = getattr(self, "_active_tree_view", "context")
+            if active == "nested":
                 nested_tree.display = True
-                self._nested_tree_active = True
+            elif active == "goal":
+                goal_tree.display = True
+                asyncio.create_task(self._ensure_goal_tree_loaded())
+            else:
+                context_tree.display = True
             self.query_one("#splitter", VerticalSplitter).display = True
+
+    async def _ensure_goal_tree_loaded(self) -> None:
+        """Ensure goal tree data is loaded."""
+        if self._goal_tree_sync is None:
+            self._goal_tree_sync = GoalTreeSyncManager(
+                self._goal_tree_state,
+                self._tree_state
+            )
+        await self._goal_tree_sync.initial_load()
 
     def action_toggle_tasks(self) -> None:
         """Toggle the task pane visibility."""
@@ -5309,8 +5444,10 @@ class BalloonsApp(App):
         self._tree_width = max(20, min(100, self._tree_width + delta))
         context_tree = self.query_one("#context-tree", ContextTreeView)
         nested_tree = self.query_one("#nested-tree", NestedTreeView)
+        goal_tree = self.query_one("#goal-tree", GoalTreeView)
         context_tree.styles.width = self._tree_width
         nested_tree.styles.width = self._tree_width
+        goal_tree.styles.width = self._tree_width
 
     def on_vertical_splitter_resized(self, event: VerticalSplitter.Resized) -> None:
         """Handle splitter drag."""

@@ -6,6 +6,7 @@ from .message_queue_popup import MessageQueuePopup
 from .status_bar import StatusBar
 from .context_tree import ContextTreeView
 from .nested_tree import NestedTreeView
+from .goal_tree import GoalTreeView, GoalTreeWidget
 from .splitter import VerticalSplitter, HorizontalSplitter
 from .context_preview import ContextPreview, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult
 from .task_pane import TaskPane
@@ -49,6 +50,8 @@ __all__ = [
     "StatusBar",
     "ContextTreeView",
     "NestedTreeView",
+    "GoalTreeView",
+    "GoalTreeWidget",
     # Backwards compatibility
     "ContextTree",
     "NestedSessionTree",
