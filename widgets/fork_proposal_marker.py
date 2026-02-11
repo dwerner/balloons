@@ -1,33 +1,23 @@
 """Fork proposal marker widget - inline proposal with Accept/Reject buttons."""
 
 from textual.widgets import Static, Button
-from textual.containers import Vertical, Horizontal
+from textual.containers import Vertical, Horizontal, VerticalScroll
 from textual.message import Message
-from rich.console import RenderableType
-from rich.text import Text
-from rich.markup import escape as escape_markup
 
-from models import ContextAssignmentData, ForkBindingData
+from models import ContextAssignmentData, ForkBindingData, ExchangeInfo
+from .context_plan_tree import ContextPlanTree, ContextPlanTreeStatic
 
 
-class ForkProposalMarker(Static):
+class ForkProposalMarker(Vertical):
     """Shows a fork proposal inline in the chat log with Accept/Reject buttons.
 
     This replaces the modal dialog approach, allowing proposals to persist
     in the conversation history and be acted upon even after switching sessions.
 
-    Displays:
-        Fork Proposal: implement-cache-layer
-        "What this fork will accomplish"
-
-        Context:
-        [+] 0-2 COPY - Contains requirements
-        [~] 3-5 COMPRESS - Background exploration
-        [-] 6-7 DROP - Failed approaches
-
-        Prompt: "Let's start by..."
-
-        [Accept] [Reject]
+    Features:
+    - Interactive context tree for pending proposals (click/space to toggle modes)
+    - Scrollable prompt preview for long prompts
+    - Static view for already-resolved proposals
     """
 
     DEFAULT_CSS = """
@@ -36,6 +26,7 @@ class ForkProposalMarker(Static):
         margin: 0 0 1 2;
         background: #1a2a3a;
         border: thick $accent;
+        height: auto;
     }
 
     ForkProposalMarker.hidden {
@@ -67,29 +58,20 @@ class ForkProposalMarker(Static):
         text-style: bold;
         color: $primary;
         margin-top: 1;
+        margin-bottom: 0;
     }
 
-    ForkProposalMarker .context-item {
-        padding-left: 1;
-    }
-
-    ForkProposalMarker .context-copy {
-        color: $success;
-    }
-
-    ForkProposalMarker .context-compress {
-        color: $warning;
-    }
-
-    ForkProposalMarker .context-drop {
-        color: $text-muted;
-    }
-
-    ForkProposalMarker .prompt-preview {
+    ForkProposalMarker .prompt-scroll {
+        max-height: 8;
+        height: auto;
         background: $surface-darken-1;
-        padding: 0 1;
-        margin-top: 1;
         border: solid $primary-darken-2;
+        margin-top: 1;
+        padding: 0 1;
+    }
+
+    ForkProposalMarker .prompt-text {
+        width: 100%;
     }
 
     ForkProposalMarker .button-row {
@@ -120,16 +102,10 @@ class ForkProposalMarker(Static):
         margin-top: 1;
     }
 
-    /* Context mode visual indicators */
-    ForkProposalMarker.context-copy {
-    }
-
-    ForkProposalMarker.context-compress {
-        background: #2d2a1a;
-    }
-
-    ForkProposalMarker.context-drop {
-        opacity: 0.4;
+    ForkProposalMarker .edit-hint {
+        color: $text-muted;
+        text-style: italic;
+        margin-top: 0;
     }
     """
 
@@ -176,18 +152,20 @@ class ForkProposalMarker(Static):
         bind_to_inherit: bool = False,
         status: str = "pending",
         turn_id: int = 0,
+        all_exchanges: list[ExchangeInfo] | None = None,
         **kwargs
     ):
         super().__init__(**kwargs)
         self.proposal_id = proposal_id
         self.fork_name = name  # Can't use 'name' - conflicts with Widget.name property
         self.description = description
-        self.context_plan = context_plan
+        self.context_plan = list(context_plan)  # Make a mutable copy
         self.initial_prompt = initial_prompt
         self.bind_to = bind_to
         self.bind_to_inherit = bind_to_inherit
         self.status = status
         self.turn_id = turn_id
+        self.all_exchanges = all_exchanges or []
 
         if status == "accepted":
             self.add_class("accepted")
@@ -206,25 +184,37 @@ class ForkProposalMarker(Static):
             binding_text = f"Binding: {self.bind_to.entity_type} {self.bind_to.entity_id[:8]}... (role: {self.bind_to.role})"
             yield Static(binding_text, classes="binding-info")
 
-        # Context plan section
-        if self.context_plan:
-            yield Static(f"Context ({len(self.context_plan)} items)", classes="section-title")
-            for assignment in self.context_plan:
-                mode_icons = {"copy": "+", "compress": "~", "drop": "-"}
-                icon = mode_icons.get(assignment.mode.lower(), "?")
-                mode_class = f"context-{assignment.mode.lower()}"
-                reason_part = f" - {escape_markup(assignment.reason)}" if assignment.reason else ""
-                label = f"[{icon}] {escape_markup(assignment.exchange_range)} {assignment.mode.upper()}{reason_part}"
-                yield Static(label, classes=f"context-item {mode_class}")
+        # Context plan section - interactive tree for pending, static for resolved
+        # Use all_exchanges if available (shows all exchanges with modes from context_plan)
+        # Otherwise fall back to just showing what's in context_plan
+        if self.status == "pending":
+            if self.all_exchanges:
+                yield Static(f"Context ({len(self.all_exchanges)} exchanges) [dim]click/space to toggle[/dim]", classes="section-title")
+                yield ContextPlanTree(
+                    self.context_plan,
+                    all_exchanges=self.all_exchanges,
+                    id=f"context-tree-{self.proposal_id}",
+                )
+            elif self.context_plan:
+                yield Static(f"Context ({len(self.context_plan)} items) [dim]click/space to toggle[/dim]", classes="section-title")
+                yield ContextPlanTree(
+                    self.context_plan,
+                    id=f"context-tree-{self.proposal_id}",
+                )
+        else:
+            # For resolved proposals, show the context plan as static
+            if self.context_plan:
+                yield Static(f"Context ({len(self.context_plan)} items)", classes="section-title")
+                yield ContextPlanTreeStatic(
+                    self.context_plan,
+                    id=f"context-tree-{self.proposal_id}",
+                )
 
-        # Initial prompt preview
+        # Initial prompt preview - scrollable for long prompts
         if self.initial_prompt:
             yield Static("Prompt", classes="section-title")
-            # Truncate long prompts for display
-            prompt_preview = self.initial_prompt
-            if len(prompt_preview) > 200:
-                prompt_preview = prompt_preview[:200] + "..."
-            yield Static(prompt_preview, classes="prompt-preview")
+            with VerticalScroll(classes="prompt-scroll"):
+                yield Static(self.initial_prompt, classes="prompt-text")
 
         # Buttons or status
         if self.status == "pending":
@@ -232,20 +222,31 @@ class ForkProposalMarker(Static):
                 yield Button("Accept", variant="success", classes="accept-btn", id=f"accept-{self.proposal_id}")
                 yield Button("Reject", variant="error", classes="reject-btn", id=f"reject-{self.proposal_id}")
         elif self.status == "accepted":
-            yield Static("[green]Accepted[/green]", classes="status-text")
+            yield Static("[green]✓ Accepted[/green]", classes="status-text")
         elif self.status == "rejected":
-            yield Static("[red]Rejected[/red]", classes="status-text")
+            yield Static("[red]✗ Rejected[/red]", classes="status-text")
+
+    def on_context_plan_tree_plan_changed(self, event: ContextPlanTree.PlanChanged) -> None:
+        """Update our context plan when user modifies it in the tree."""
+        self.context_plan = event.context_plan
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle Accept/Reject button clicks."""
         button_id = event.button.id or ""
 
         if button_id.startswith("accept-"):
+            # Get the potentially modified context plan from the tree
+            try:
+                tree = self.query_one(f"#context-tree-{self.proposal_id}", ContextPlanTree)
+                current_plan = tree.get_context_plan()
+            except Exception:
+                current_plan = self.context_plan
+
             self.post_message(self.Accepted(
                 proposal_id=self.proposal_id,
                 name=self.fork_name,
                 description=self.description,
-                context_plan=self.context_plan,
+                context_plan=current_plan,
                 initial_prompt=self.initial_prompt,
                 bind_to=self.bind_to,
                 bind_to_inherit=self.bind_to_inherit,

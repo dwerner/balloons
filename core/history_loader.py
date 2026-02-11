@@ -17,7 +17,8 @@ from models import (
     Message, Turn, TextBlock, ToolUseBlock, ToolResultBlock,
     InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock,
     MergeBlock, MergedToBlock, ArchiveBlock, ReviewBlock, Sentiment,
-    ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData
+    ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData,
+    ExchangeInfo
 )
 from session import Session
 
@@ -145,6 +146,7 @@ class RenderForkProposal(RenderInstruction):
     bind_to: ForkBindingData | None = None
     bind_to_inherit: bool = False
     status: str = "pending"  # "pending", "accepted", "rejected"
+    all_exchanges: list[ExchangeInfo] = field(default_factory=list)  # All exchanges for interactive tree
 
 
 @dataclass
@@ -379,6 +381,7 @@ class HistoryLoader:
                 bind_to=block.bind_to,
                 bind_to_inherit=block.bind_to_inherit,
                 status=block.status,
+                all_exchanges=block.all_exchanges,
             )
 
         elif isinstance(block, MergeProposalBlock):

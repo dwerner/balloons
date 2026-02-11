@@ -182,6 +182,18 @@ class ContextAssignmentData:
 
 
 @dataclass
+class ExchangeInfo:
+    """Information about an exchange for display in fork proposal tree.
+
+    Used to show ALL exchanges in the context tree, not just those
+    explicitly mentioned in the LLM's proposal.
+    """
+    index: int = 0  # Exchange index (0-based)
+    summary: str = ""  # Short summary of the exchange content
+    mode: str = "compress"  # Default mode - can be overridden by context_plan
+
+
+@dataclass
 class ForkBindingData:
     """Binding specification for a fork (stored form).
 
@@ -209,6 +221,7 @@ class ForkProposalBlock:
     bind_to: Optional[ForkBindingData] = None  # Explicit binding spec
     bind_to_inherit: bool = False  # True if bind_to was "inherit"
     status: str = "pending"  # "pending", "accepted", "rejected"
+    all_exchanges: list[ExchangeInfo] = field(default_factory=list)  # All exchanges for interactive tree
 
 
 @dataclass

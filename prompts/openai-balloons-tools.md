@@ -172,8 +172,11 @@ Track goals, plans, and todos across sessions.
 
 **create_todo** - Create a todo for a plan
 - `plan_id`, `title`, `description`, `is_spike`, `timebox_minutes`, `depends_on`
+- **Check `list_todos` first for duplicates** before creating
 
 **list_goals** - List goals (optionally include completed)
+
+**list_plans** - List plans (filter by goal_id). Use to find plan IDs for create_todo.
 
 **list_todos** - List priority-ranked todos (optionally filter by plan)
 

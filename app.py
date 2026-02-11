@@ -41,7 +41,7 @@ from config import get_config, BackendConfig, save_last_view
 from models import (
     TextDelta, ToolUseEvent, ToolResultEvent,
     TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, Message, ContextMode,
-    ArchiveBlock, ContextAssignmentData, ForkBindingData,
+    ArchiveBlock, ContextAssignmentData, ForkBindingData, ExchangeInfo,
 )
 from core import (
     CommandParser,
@@ -3200,6 +3200,10 @@ class BalloonsApp(App):
             self.notify("Session not found for proposal", severity="error")
             return
 
+        # Get all exchanges for the interactive tree BEFORE adding the proposal turn
+        # (excludes the current exchange which contains the proposal)
+        all_exchanges = self._get_all_exchange_info(session_id, exclude_current=True)
+
         # Add the proposal as a turn in the session
         exchange_id = ctx.exchange_id if ctx else None
         turn = session.add_fork_proposal_turn(
@@ -3212,6 +3216,7 @@ class BalloonsApp(App):
             bind_to_inherit=bind_to_inherit,
             status="pending",
             exchange_id=exchange_id,
+            all_exchanges=all_exchanges,
         )
 
         # Get the turn index for later reference
@@ -3243,6 +3248,7 @@ class BalloonsApp(App):
             bind_to_inherit=bind_to_inherit,
             status="pending",
             turn_id=turn_idx,
+            all_exchanges=all_exchanges,
         )
         chat_log.mount(widget)
         chat_log.scroll_end(animate=False)
@@ -3288,6 +3294,44 @@ class BalloonsApp(App):
             summaries.append(f"[{role}] {content}")
 
         return summaries
+
+    def _get_all_exchange_info(self, session_id: str, exclude_current: bool = True) -> list[ExchangeInfo]:
+        """Get ExchangeInfo for each exchange for display in fork proposal tree.
+
+        Args:
+            session_id: The session to get exchange info for
+            exclude_current: If True, exclude the last exchange (the one containing
+                           the fork proposal). This aligns with how Claude thinks
+                           about exchanges when proposing a fork - "last" means
+                           the last exchange before its current response.
+        """
+        exchanges = []
+        groups = self._tree_state.get_turns_grouped_by_exchange(session_id)
+
+        # Exclude the current (proposal) exchange if requested
+        if exclude_current and groups:
+            groups = groups[:-1]
+
+        for idx, group in enumerate(groups):
+            if not group:
+                continue
+            # Get first meaningful content from the group
+            first_turn = group[0]
+            content = first_turn.content or ""
+            # Truncate for display
+            if len(content) > 60:
+                content = content[:57] + "..."
+            # Remove newlines for single-line display
+            content = content.replace("\n", " ").strip()
+            role = first_turn.role
+            summary = f"[{role}] {content}"
+            exchanges.append(ExchangeInfo(
+                index=idx,
+                summary=summary,
+                mode="compress",  # Default, will be overridden by context_plan
+            ))
+
+        return exchanges
 
     async def _execute_fork_proposal(
         self,

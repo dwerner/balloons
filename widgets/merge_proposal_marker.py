@@ -1,11 +1,8 @@
 """Merge proposal marker widget - inline proposal with Accept/Reject buttons."""
 
 from textual.widgets import Static, Button, TextArea
-from textual.containers import Vertical, Horizontal
+from textual.containers import Vertical, Horizontal, VerticalScroll
 from textual.message import Message
-from rich.console import RenderableType
-from rich.text import Text
-from rich.markup import escape as escape_markup
 
 
 class MergeProposalMarker(Static):

@@ -570,6 +570,7 @@ class Session:
         bind_to_inherit: bool = False,
         status: str = "pending",
         exchange_id: str | None = None,
+        all_exchanges: list | None = None,
     ) -> Turn:
         """Add a fork proposal as a turn in the conversation.
 
@@ -586,6 +587,7 @@ class Session:
             bind_to_inherit: True if bind_to was "inherit"
             status: "pending", "accepted", or "rejected"
             exchange_id: If provided, groups this with the current exchange
+            all_exchanges: All exchanges for the interactive tree
         """
         proposal_block = ForkProposalBlock(
             proposal_id=proposal_id,
@@ -596,6 +598,7 @@ class Session:
             bind_to=bind_to,
             bind_to_inherit=bind_to_inherit,
             status=status,
+            all_exchanges=all_exchanges or [],
         )
         return self.add_turn(role="system", content_block=proposal_block, exchange_id=exchange_id)
 

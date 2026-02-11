@@ -577,6 +577,11 @@ Only `goal_id` is required; other fields are optional and only update if provide
 ```
 
 **create_todo** - Create a todo linked to a plan
+
+**IMPORTANT**: Before creating a todo, use `list_todos` to check for duplicates. If a similar
+todo already exists (same intent, even if worded differently), inform the user instead of
+creating a duplicate.
+
 ```json
 {
   "name": "create_todo",
@@ -597,6 +602,16 @@ Only `goal_id` is required; other fields are optional and only update if provide
   "name": "list_goals",
   "args": {
     "include_completed": false  // true to include completed/abandoned
+  }
+}
+```
+
+**list_plans** - List plans (needed to find plan IDs for create_todo)
+```json
+{
+  "name": "list_plans",
+  "args": {
+    "goal_id": "abc123"  // Optional: filter to plans for a specific goal
   }
 }
 ```

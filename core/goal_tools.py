@@ -295,6 +295,31 @@ Use this to see what goals exist and their current state.""",
     {
         "type": "function",
         "function": {
+            "name": "list_plans",
+            "description": """List all plans, optionally filtered by goal.
+
+Returns formatted list of plans showing:
+- Status (draft/active/completed/abandoned)
+- Parent goal
+- Title and description
+- ID (needed for create_todo)
+
+Use this to find plan IDs when creating todos.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal_id": {
+                        "type": "string",
+                        "description": "Optional: filter to plans for a specific goal (can be prefix)"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_todos",
             "description": """List priority-ranked todos that are available to work on.
 
@@ -434,6 +459,8 @@ async def execute_goal_tool(
         return await _create_todo(args, storage)
     elif name == "list_goals":
         return await _list_goals(args, storage)
+    elif name == "list_plans":
+        return await _list_plans(args, storage)
     elif name == "list_todos":
         return await _list_todos(args, storage)
     elif name == "get_todo":
@@ -774,6 +801,27 @@ async def _list_goals(args: dict, storage) -> tuple[str, bool]:
     include_completed = args.get("include_completed", False)
     executor = GoalCommandExecutor(storage)
     result = await executor.list_goals(include_completed)
+
+    if result.success:
+        # Strip Rich markup for tool output
+        formatted = result.formatted
+        formatted = formatted.replace("[bold cyan]", "").replace("[/bold cyan]", "")
+        formatted = formatted.replace("[bold]", "").replace("[/bold]", "")
+        formatted = formatted.replace("[dim]", "").replace("[/dim]", "")
+        formatted = formatted.replace("[green]●[/green]", "●")
+        formatted = formatted.replace("[blue]✓[/blue]", "✓")
+        formatted = formatted.replace("[yellow]→[/yellow]", "→")
+        formatted = formatted.replace("[red]✗[/red]", "✗")
+        return formatted, False
+    else:
+        return f"Error: {result.error}", True
+
+
+async def _list_plans(args: dict, storage) -> tuple[str, bool]:
+    """List plans."""
+    goal_id = args.get("goal_id", "")
+    executor = GoalCommandExecutor(storage)
+    result = await executor.list_plans(goal_id)
 
     if result.success:
         # Strip Rich markup for tool output

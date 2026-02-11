@@ -1375,6 +1375,17 @@ class ChatLogView(VerticalScroll):
                 self._smart_scroll()
                 return
 
+    def remove_streaming_tool(self, tool_use_id: str) -> None:
+        """Remove a streaming tool widget (used when tool is intercepted and handled separately).
+
+        Called when tools like propose_fork/propose_merge are handled with custom UI
+        instead of the standard tool widget.
+        """
+        for child in self.children:
+            if isinstance(child, ToolUseWidget) and child.tool_use_id == tool_use_id:
+                child.remove()
+                return
+
     def finish_streaming_tool(
         self,
         tool_use_id: str,
@@ -1703,6 +1714,7 @@ class ChatLogView(VerticalScroll):
                 bind_to_inherit=instr.bind_to_inherit,
                 status=instr.status,
                 turn_id=instr.turn_id,
+                all_exchanges=instr.all_exchanges,
             )
 
         elif isinstance(instr, RenderMergeProposal):

@@ -388,7 +388,7 @@ class AsyncStorage:
         from models import (
             TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock,
             ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock,
-            ArchiveBlock, SlideBlock, ReviewBlock
+            ArchiveBlock, SlideBlock, ReviewBlock, ForkProposalBlock, MergeProposalBlock
         )
 
         if isinstance(block, TextBlock):
@@ -483,6 +483,47 @@ class AsyncStorage:
                 "task_category": block.task_category,
                 "task_description": block.task_description,
             }
+        elif isinstance(block, ForkProposalBlock):
+            return {
+                "type": "fork_proposal",
+                "proposal_id": block.proposal_id,
+                "name": block.name,
+                "description": block.description,
+                "context_plan": [
+                    {
+                        "exchange_range": cp.exchange_range,
+                        "mode": cp.mode,
+                        "reason": cp.reason,
+                    }
+                    for cp in block.context_plan
+                ],
+                "initial_prompt": block.initial_prompt,
+                "bind_to": {
+                    "entity_type": block.bind_to.entity_type,
+                    "entity_id": block.bind_to.entity_id,
+                    "role": block.bind_to.role,
+                } if block.bind_to else None,
+                "bind_to_inherit": block.bind_to_inherit,
+                "status": block.status,
+                "all_exchanges": [
+                    {
+                        "index": ex.index,
+                        "summary": ex.summary,
+                        "mode": ex.mode,
+                    }
+                    for ex in block.all_exchanges
+                ],
+            }
+        elif isinstance(block, MergeProposalBlock):
+            return {
+                "type": "merge_proposal",
+                "proposal_id": block.proposal_id,
+                "summary": block.summary,
+                "reason": block.reason,
+                "files_changed": block.files_changed,
+                "key_accomplishments": block.key_accomplishments,
+                "status": block.status,
+            }
         return {"type": "unknown"}
 
     def _wire_to_session(self, data: dict) -> Session:
@@ -563,7 +604,7 @@ class AsyncStorage:
             TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock,
             ErrorBlock, LinkBlock, ForkBlock, MergeBlock, ArchiveBlock, SlideBlock,
             ReviewBlock, ArchiveSummary, ForkProposalBlock, MergeProposalBlock,
-            ContextAssignmentData, ForkBindingData
+            ContextAssignmentData, ForkBindingData, ExchangeInfo
         )
 
         block_type = data.get("type", "text")
@@ -681,6 +722,14 @@ class AsyncStorage:
                     entity_id=bt.get("entity_id", ""),
                     role=bt.get("role", ""),
                 )
+            # Deserialize all_exchanges
+            all_exchanges = []
+            for ex in data.get("all_exchanges", []):
+                all_exchanges.append(ExchangeInfo(
+                    index=ex.get("index", 0),
+                    summary=ex.get("summary", ""),
+                    mode=ex.get("mode", "compress"),
+                ))
             return ForkProposalBlock(
                 proposal_id=data.get("proposal_id", ""),
                 name=data.get("name", ""),
@@ -690,6 +739,7 @@ class AsyncStorage:
                 bind_to=bind_to,
                 bind_to_inherit=data.get("bind_to_inherit", False),
                 status=data.get("status", "pending"),
+                all_exchanges=all_exchanges,
             )
         elif block_type == "merge_proposal":
             return MergeProposalBlock(

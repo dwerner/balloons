@@ -292,7 +292,7 @@ class SessionLabelRenderer:
         if is_fork:
             if fork_status == "merged":
                 prefix = "[green]✓[/] "
-                status = "[dim][merged][/]"
+                status = "[dim]merged[/dim]"
             else:
                 prefix = "[magenta]↳[/] "
                 status = ""
@@ -418,7 +418,7 @@ class TurnLabelRenderer:
         if isinstance(content_block, ForkBlock):
             preview = f"{content_block.fork_name}"
             if content_block.status == "merged":
-                return f"{unviewed_indicator}{indicator} [green]🔀 Fork: {escape_markup(preview)} [merged][/]"
+                return f"{unviewed_indicator}{indicator} [green]🔀 Fork: {escape_markup(preview)} [dim]merged[/dim][/green]"
             return f"{unviewed_indicator}{indicator} [bold]🔀 Fork: {escape_markup(preview)}[/]"
 
         if isinstance(content_block, MergeBlock):
