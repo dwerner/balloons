@@ -308,3 +308,8 @@ class GoalTreeSyncManager:
         elif event == TreeEvent.CONTEXT_TOKENS_CHANGED:
             # Refresh all sessions to update token counts
             asyncio.create_task(self.refresh_all_sessions())
+
+        elif event == TreeEvent.FULL_REBUILD:
+            # TreeState was fully rebuilt (e.g., after :title command)
+            # Refresh all session data to pick up new titles, etc.
+            asyncio.create_task(self.refresh_all_sessions())

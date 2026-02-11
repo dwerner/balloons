@@ -43,6 +43,7 @@ class GoalTreeEvent(Enum):
     # Session binding events
     SESSION_BOUND = "session_bound"
     SESSION_UNBOUND = "session_unbound"
+    SESSION_UPDATED = "session_updated"  # Session metadata changed (title, tokens, etc.)
 
     # Selection events
     ENTITY_SELECTED = "entity_selected"
@@ -378,6 +379,7 @@ class GoalTreeState:
 
         # Check if already bound
         existing = next((s for s in self._bound_sessions[entity_id] if s.session_id == session.session_id), None)
+        is_update = existing is not None
         if existing:
             # Update existing
             idx = self._bound_sessions[entity_id].index(existing)
@@ -398,11 +400,16 @@ class GoalTreeState:
 
         self._all_session_ids.add(session.session_id)
 
-        self._notify(GoalTreeEvent.SESSION_BOUND, {
-            "entity_type": entity_type,
-            "entity_id": entity_id,
-            "session_id": session.session_id,
-        })
+        if is_update:
+            # Just updating an existing session's data (title, tokens, etc.)
+            self._notify(GoalTreeEvent.SESSION_UPDATED, {"session_id": session.session_id})
+        else:
+            # New binding
+            self._notify(GoalTreeEvent.SESSION_BOUND, {
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "session_id": session.session_id,
+            })
 
     def unbind_session(self, entity_id: str, session_id: str) -> None:
         """Unbind a session from an entity."""
@@ -435,6 +442,8 @@ class GoalTreeState:
         if existing:
             idx = self._unbound_sessions.index(existing)
             self._unbound_sessions[idx] = session
+            # Notify observers that session was updated
+            self._notify(GoalTreeEvent.SESSION_UPDATED, {"session_id": session.session_id})
         else:
             self._unbound_sessions.append(session)
 

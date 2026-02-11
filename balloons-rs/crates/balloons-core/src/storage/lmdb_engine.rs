@@ -287,9 +287,15 @@ impl StorageEngine for LmdbEngine {
                 None => 0,
             };
 
+            // Prefer fork_name over title for display (fork_name is set when forking)
+            let name = if !data.fork_name.is_empty() {
+                data.fork_name.clone()
+            } else {
+                data.title.clone()
+            };
             sessions.push(SessionMetadata {
                 id: data.id,
-                name: data.title.clone(),
+                name,
                 created_at: parse_iso_to_unix(&data.created),
                 updated_at: parse_iso_to_unix(&data.last_modified),
                 turn_count,

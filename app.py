@@ -3751,22 +3751,20 @@ class BalloonsApp(App):
         debug_log.info(
             f"_apply_pending_fork_binding called",
             category="fork",
-            fork_name=fork_name,
-            pending_keys=list(self._pending_fork_bindings.keys()),
+            details={"fork_name": fork_name, "pending_keys": list(self._pending_fork_bindings.keys())},
         )
         bind_to = self._pending_fork_bindings.pop(fork_name, None)
         if not bind_to:
             debug_log.info(
                 f"No pending binding found for fork",
                 category="fork",
-                fork_name=fork_name,
+                details={"fork_name": fork_name},
             )
             return
         debug_log.info(
             f"Found pending binding for fork",
             category="fork",
-            fork_name=fork_name,
-            bind_to=str(bind_to),
+            details={"fork_name": fork_name, "bind_to": str(bind_to)},
         )
 
         from core.fork import ForkBindingSpec

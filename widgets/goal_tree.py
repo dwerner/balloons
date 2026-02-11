@@ -401,6 +401,12 @@ class GoalTreeView(Vertical):
         elif event == GoalTreeEvent.SESSION_UNBOUND:
             self._rebuild_tree()
 
+        elif event == GoalTreeEvent.SESSION_UPDATED:
+            # Session metadata changed (title, tokens, etc.) - update just that label
+            session_id = data.get("session_id")
+            if session_id:
+                self._update_session_label(session_id)
+
     def _on_tree_state_event(self, event: TreeEvent, data: dict) -> None:
         """Handle TreeState events to keep session display in sync.
 
