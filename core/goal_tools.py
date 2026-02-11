@@ -47,6 +47,18 @@ GOAL_TOOL_NAMES = {
     "bind_session",
 }
 
+# Tools that mutate goal data and require UI refresh
+GOAL_MUTATION_TOOLS = {
+    "create_goal",
+    "update_goal",
+    "create_plan",
+    "update_plan",
+    "create_todo",
+    "update_todo",
+    "mark_todo_done",
+    "bind_session",
+}
+
 
 # Tool definitions in OpenAI function format
 GOAL_TOOLS = [

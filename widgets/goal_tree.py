@@ -539,6 +539,10 @@ class GoalTreeView(Vertical):
         for session in bound_sessions:
             self._add_session_node(plan_node, session, "plan", plan_data.id)
 
+        # Expand if has children (todos or sessions)
+        if todos or bound_sessions:
+            plan_node.expand()
+
     def _add_todo_node(self, parent_node, todo_data: TodoNodeData) -> None:
         """Add a todo node to the tree."""
         label = self._make_todo_label(todo_data)

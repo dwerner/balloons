@@ -36,28 +36,35 @@ async def load_goal_tree_data(
     if storage is None:
         storage = await get_goal_storage()
 
-    # Clear existing state
+    # Clear existing state (this fires FULL_REBUILD, tree will be empty)
     goal_state.clear()
 
-    # Load goals
-    goals = await storage.list_goals()
-    for goal in goals:
-        goal_state.add_goal(goal)
+    # Begin batch loading to suppress individual notifications
+    goal_state.begin_batch_loading()
 
-    # Load plans
-    plans = await storage.list_plans()
-    for plan in plans:
-        goal_state.add_plan(plan)
+    try:
+        # Load goals
+        goals = await storage.list_goals()
+        for goal in goals:
+            goal_state.add_goal(goal)
 
-    # Load todos with their plan links
-    todos = await storage.list_todos(include_spikes=True)
-    for todo in todos:
-        # Get plan IDs for this todo
-        plan_ids = await storage.get_plans_for_todo(todo.id)
-        goal_state.add_todo(todo, plan_ids)
+        # Load plans
+        plans = await storage.list_plans()
+        for plan in plans:
+            goal_state.add_plan(plan)
 
-    # Load session bindings and associate sessions
-    await sync_session_bindings(goal_state, tree_state, storage)
+        # Load todos with their plan links
+        todos = await storage.list_todos(include_spikes=True)
+        for todo in todos:
+            # Get plan IDs for this todo
+            plan_ids = await storage.get_plans_for_todo(todo.id)
+            goal_state.add_todo(todo, plan_ids)
+
+        # Load session bindings and associate sessions
+        await sync_session_bindings(goal_state, tree_state, storage)
+    finally:
+        # End batch loading - triggers a single FULL_REBUILD
+        goal_state.end_batch_loading()
 
 
 async def sync_session_bindings(

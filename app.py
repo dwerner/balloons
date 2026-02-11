@@ -135,6 +135,7 @@ from core.tool_executor import parse_fork_proposal, parse_merge_proposal
 from core.tree_state import TreeState, TreeEvent
 from core.goal_tree_state import GoalTreeState
 from core.goal_tree_sync import GoalTreeSyncManager
+from core.goal_tools import GOAL_MUTATION_TOOLS
 from core.task_state import get_task_state, TaskStatus
 from core.sounds import play_error_sound, play_done_sound, play_notification_sound
 from core.queue_state import get_queue_state, QueueState, QueueEvent, QueueSnapshot
@@ -1090,6 +1091,11 @@ class BalloonsApp(App):
                 if session_id == self._tree_state.get_current_session_id():
                     # Use call_later to ensure refresh happens after session state settles
                     self.call_later(self._refresh_slides_pane)
+
+            # Refresh goal tree when a goal mutation tool completes
+            if tool_name in GOAL_MUTATION_TOOLS and action.tool_use_id.startswith("balloons-"):
+                debug_log.info(f"Goal mutation tool {tool_name} completed, refreshing goal tree", category="goals")
+                self.call_later(self._refresh_goal_tree)
 
             if is_active:
                 # Display tool result widget
@@ -3203,6 +3209,15 @@ class BalloonsApp(App):
         # Get all exchanges for the interactive tree BEFORE adding the proposal turn
         # (excludes the current exchange which contains the proposal)
         all_exchanges = self._get_all_exchange_info(session_id, exclude_current=True)
+        debug_log.info(
+            f"_handle_fork_proposal: got all_exchanges",
+            category="fork",
+            details={
+                "session_id": session_id,
+                "all_exchanges_count": len(all_exchanges),
+                "session_in_tree_state": session_id in self._tree_state._sessions,
+            },
+        )
 
         # Add the proposal as a turn in the session
         exchange_id = ctx.exchange_id if ctx else None
@@ -3306,7 +3321,29 @@ class BalloonsApp(App):
                            the last exchange before its current response.
         """
         exchanges = []
+
+        # Ensure session is loaded before getting exchange groups.
+        # If not loaded, fork proposal tree would show no exchanges.
+        if not self._tree_state.is_session_loaded(session_id):
+            debug_log.warning(
+                f"Session not loaded in TreeState during _get_all_exchange_info - loading now",
+                category="fork",
+                details={"session_id": session_id},
+            )
+            session = self._manager.get_session(session_id)
+            if session:
+                self._tree_state.load_session(session_id, session)
+
         groups = self._tree_state.get_turns_grouped_by_exchange(session_id)
+
+        debug_log.info(
+            f"_get_all_exchange_info: got groups",
+            category="fork",
+            details={
+                "session_id": session_id,
+                "groups_count": len(groups),
+            },
+        )
 
         # Exclude the current (proposal) exchange if requested
         if exclude_current and groups:
@@ -3347,6 +3384,27 @@ class BalloonsApp(App):
         )
         status_bar = self.query_one("#status-bar", StatusBar)
         debug_log.info("_execute_fork_proposal: got status_bar", category="fork")
+
+        # Ensure session is loaded in TreeState before getting exchange groups.
+        # This is a defensive check - the session should already be loaded by _switch_to_session,
+        # but if it's not, fork proposals would silently lose all context.
+        if not self._tree_state.is_session_loaded(session_id):
+            debug_log.warning(
+                f"Session not loaded in TreeState during fork proposal - loading now",
+                category="fork",
+                details={"session_id": session_id},
+            )
+            session = self._manager.get_session(session_id)
+            if session:
+                self._tree_state.load_session(session_id, session)
+            else:
+                debug_log.error(
+                    f"Cannot load session for fork proposal - session not found in manager",
+                    category="fork",
+                    details={"session_id": session_id},
+                )
+                self.notify("Fork failed: session not found", severity="error")
+                return
 
         # Get exchange groups to map exchange indices to turn indices
         groups = self._tree_state.get_turns_grouped_by_exchange(session_id)
@@ -4371,6 +4429,13 @@ class BalloonsApp(App):
         # This ensures the tree displays correct count immediately
         if session.cached_context_tokens > 0:
             self._tree_state.set_context_tokens(session.cached_context_tokens, 0)
+
+        # IMPORTANT: Ensure session is loaded in TreeState before setting it active.
+        # Without this, get_turns_grouped_by_exchange() returns empty, breaking fork proposals.
+        # The session object has been loaded from disk (with turns), but TreeState may only
+        # have metadata if the session was added via add_session_from_metadata().
+        if not self._tree_state.is_session_loaded(session.id):
+            self._tree_state.load_session(session.id, session)
 
         context_tree.set_active_session(session.id)
 
@@ -5964,6 +6029,16 @@ class BalloonsApp(App):
                 tab_slides.label = "📊 Slides"
         except Exception as e:
             debug_log.warning(f"Failed to refresh slides pane: {e}", category="slides")
+
+    def _refresh_goal_tree(self) -> None:
+        """Refresh the goal tree after goal data mutations."""
+        if self._goal_tree_sync is None:
+            return
+        try:
+            debug_log.info("Refreshing goal tree after mutation", category="goals")
+            asyncio.create_task(self._goal_tree_sync.initial_load())
+        except Exception as e:
+            debug_log.warning(f"Failed to refresh goal tree: {e}", category="goals")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses for tab switching."""

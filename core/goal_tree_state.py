@@ -186,6 +186,9 @@ class GoalTreeState:
         # Observer callbacks
         self._observers: list[GoalTreeObserverCallback] = []
 
+        # Batch loading mode - when True, suppress individual notifications
+        self._batch_loading = False
+
     # --- Observer Management ---
 
     def add_observer(self, callback: GoalTreeObserverCallback) -> None:
@@ -200,9 +203,21 @@ class GoalTreeState:
 
     def _notify(self, event: GoalTreeEvent, data: dict[str, Any] = None) -> None:
         """Notify all observers of a state change."""
+        # Skip notifications during batch loading (except FULL_REBUILD)
+        if self._batch_loading and event != GoalTreeEvent.FULL_REBUILD:
+            return
         data = data or {}
         for callback in self._observers:
             callback(event, data)
+
+    def begin_batch_loading(self) -> None:
+        """Begin batch loading mode - suppress individual add/update notifications."""
+        self._batch_loading = True
+
+    def end_batch_loading(self) -> None:
+        """End batch loading mode and trigger a full rebuild."""
+        self._batch_loading = False
+        self._notify(GoalTreeEvent.FULL_REBUILD, {})
 
     # --- Goal Operations ---
 
