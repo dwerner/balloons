@@ -100,3 +100,5 @@ cython_debug/
 # Balloons-specific
 .claude
 .venv-*
+test/data.mdb
+test/lock.mdb

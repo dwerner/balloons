@@ -174,6 +174,9 @@ Track goals, plans, and todos across sessions.
 - `plan_id`, `title`, `description`, `is_spike`, `timebox_minutes`, `depends_on`
 - **Check `list_todos` first for duplicates** before creating
 
+**update_todo** - Update an existing todo (rename, change status, etc.)
+- `todo_id` (required), `title`, `description`, `status`, `is_spike`, `timebox_minutes`, `plan_id` (reparent)
+
 **list_goals** - List goals (optionally include completed)
 
 **list_plans** - List plans (filter by goal_id). Use to find plan IDs for create_todo.

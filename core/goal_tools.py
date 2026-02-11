@@ -10,6 +10,7 @@ Tool Names:
 - create_plan: Create a plan for achieving a goal
 - update_plan: Update an existing plan (rename, change status, reparent)
 - create_todo: Create a todo and link it to a plan
+- update_todo: Update an existing todo (rename, change status, reparent, etc.)
 - list_goals: List all goals with their status
 - list_todos: List priority-ranked available todos
 - get_todo: Get details of a single todo by ID
@@ -37,6 +38,7 @@ GOAL_TOOL_NAMES = {
     "create_plan",
     "update_plan",
     "create_todo",
+    "update_todo",
     "list_goals",
     "list_plans",
     "list_todos",
@@ -270,6 +272,59 @@ Use this when:
     {
         "type": "function",
         "function": {
+            "name": "update_todo",
+            "description": """Update an existing todo's fields.
+
+Allows modifying a todo's title, description, status, is_spike, timebox_minutes, or parent plan (reparenting).
+Only the fields provided will be updated; others remain unchanged.
+
+Use this when:
+- Renaming a todo (updating title)
+- Refining a todo's description
+- Changing status (pending/in_progress/done/abandoned)
+- Converting a regular todo to a spike (or vice versa)
+- Adjusting a spike's timebox
+- Moving a todo to a different plan (reparenting)""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "todo_id": {
+                        "type": "string",
+                        "description": "ID of the todo to update (can be prefix)"
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "New title for the todo (max 80 chars)"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "New description"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["pending", "in_progress", "done", "abandoned"],
+                        "description": "New status"
+                    },
+                    "is_spike": {
+                        "type": "boolean",
+                        "description": "Whether this is a timeboxed exploration task"
+                    },
+                    "timebox_minutes": {
+                        "type": "integer",
+                        "description": "For spikes: maximum time to spend (minutes). Set to null to remove timebox."
+                    },
+                    "plan_id": {
+                        "type": "string",
+                        "description": "New parent plan ID (can be prefix) - reparents the todo"
+                    }
+                },
+                "required": ["todo_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_goals",
             "description": """List all goals with their status and progress.
 
@@ -457,6 +512,8 @@ async def execute_goal_tool(
         return await _update_plan(args, storage)
     elif name == "create_todo":
         return await _create_todo(args, storage)
+    elif name == "update_todo":
+        return await _update_todo(args, storage)
     elif name == "list_goals":
         return await _list_goals(args, storage)
     elif name == "list_plans":
@@ -792,6 +849,146 @@ async def _create_todo(args: dict, storage) -> tuple[str, bool]:
             result += f" ({timebox_minutes} min)"
     if deps_added:
         result += f"\nDepends on: {', '.join(deps_added)}"
+
+    return result, False
+
+
+async def _update_todo(args: dict, storage) -> tuple[str, bool]:
+    """Update an existing todo."""
+    todo_id_prefix = args.get("todo_id", "").strip()
+    if not todo_id_prefix:
+        return "Error: todo_id is required", True
+
+    # Find todo by prefix
+    all_todos = await storage.list_todos(include_spikes=True)
+    todo = None
+    for t in all_todos:
+        if t.id.startswith(todo_id_prefix):
+            todo = t
+            break
+
+    if not todo:
+        return f"Error: Todo not found: {todo_id_prefix}", True
+
+    # Track what we're updating for the response
+    updates = []
+
+    # Update title if provided
+    if "title" in args:
+        new_title = args["title"].strip()
+        if new_title:
+            old_title = todo.title
+            todo.title = new_title[:80]
+            updates.append(f"title: '{old_title}' → '{todo.title}'")
+
+    # Update description if provided
+    if "description" in args:
+        new_desc = args["description"].strip()
+        if new_desc:
+            todo.description = new_desc
+            updates.append("description updated")
+
+    # Update status if provided
+    if "status" in args:
+        new_status = args["status"]
+        if new_status in ("pending", "in_progress", "done", "abandoned"):
+            old_status = todo.status
+            todo.status = new_status
+            updates.append(f"status: {old_status} → {new_status}")
+
+    # Update is_spike if provided
+    if "is_spike" in args:
+        new_is_spike = args["is_spike"]
+        if isinstance(new_is_spike, bool):
+            old_is_spike = todo.is_spike
+            todo.is_spike = new_is_spike
+            if old_is_spike != new_is_spike:
+                if new_is_spike:
+                    updates.append("converted to spike")
+                else:
+                    updates.append("converted from spike to regular todo")
+                    # Clear timebox when converting from spike
+                    if todo.timebox_minutes is not None:
+                        todo.timebox_minutes = None
+
+    # Update timebox_minutes if provided (only meaningful for spikes)
+    if "timebox_minutes" in args:
+        new_timebox = args["timebox_minutes"]
+        if new_timebox is None:
+            if todo.timebox_minutes is not None:
+                old_timebox = todo.timebox_minutes
+                todo.timebox_minutes = None
+                updates.append(f"timebox removed (was {old_timebox} min)")
+        elif isinstance(new_timebox, int) and new_timebox > 0:
+            old_timebox = todo.timebox_minutes
+            todo.timebox_minutes = new_timebox
+            if old_timebox is None:
+                updates.append(f"timebox set to {new_timebox} min")
+            else:
+                updates.append(f"timebox: {old_timebox} → {new_timebox} min")
+
+    # Reparent to different plan if plan_id provided
+    if "plan_id" in args:
+        new_plan_id_prefix = args["plan_id"].strip()
+        if new_plan_id_prefix:
+            # Find new plan by prefix
+            plans = await storage.list_plans()
+            new_plan = None
+            for p in plans:
+                if p.id.startswith(new_plan_id_prefix):
+                    new_plan = p
+                    break
+
+            if not new_plan:
+                return f"Error: Plan not found for reparenting: {new_plan_id_prefix}", True
+
+            # Get current plan(s) for display
+            current_plan_ids = await storage.get_plans_for_todo(todo.id)
+            old_plan_title = "unlinked"
+            if current_plan_ids:
+                old_plan = await storage.load_plan(current_plan_ids[0])
+                old_plan_title = old_plan.title if old_plan else current_plan_ids[0][:8]
+                # Remove old link(s)
+                for old_plan_id in current_plan_ids:
+                    await storage.delete_todo_plan_link(todo.id, old_plan_id)
+
+            # Create new link
+            now = datetime.now().isoformat()
+            link = TodoPlanLink(
+                todo_id=todo.id,
+                plan_id=new_plan.id,
+                created_at=now,
+            )
+            await storage.save_todo_plan_link(link)
+            updates.append(f"plan: '{old_plan_title}' → '{new_plan.title}'")
+
+    if not updates:
+        return "No valid updates provided", True
+
+    # Update the timestamp
+    todo.updated_at = datetime.now().isoformat()
+
+    # Save the updated todo
+    await storage.save_todo(todo)
+
+    # Get current plan for display
+    current_plan_ids = await storage.get_plans_for_todo(todo.id)
+    plan_title = "unlinked"
+    if current_plan_ids:
+        current_plan = await storage.load_plan(current_plan_ids[0])
+        plan_title = current_plan.title if current_plan else current_plan_ids[0][:8]
+
+    result = (
+        f"Updated todo: {todo.title}\n"
+        f"ID: {todo.id}\n"
+        f"Plan: {plan_title}\n"
+        f"Changes:\n" + "\n".join(f"  - {u}" for u in updates)
+    )
+
+    if todo.is_spike:
+        result += f"\nType: Spike"
+        if todo.timebox_minutes:
+            result += f" ({todo.timebox_minutes} min)"
 
     return result, False
 

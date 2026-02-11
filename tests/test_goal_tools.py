@@ -997,6 +997,476 @@ class TestCreateTodo:
         assert "First task" in result
 
 
+class TestUpdateTodo:
+    """Tests for update_todo tool."""
+
+    @pytest.mark.asyncio
+    async def test_update_todo_rename(self, goal_storage, mock_session, monkeypatch):
+        """Test renaming a todo."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        goal = GoalData(
+            id="goal-1", title="Goal", description="", weight=5, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal)
+
+        plan = PlanData(
+            id="plan-1", goal_id="goal-1", title="Plan", description="",
+            status="active", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan)
+
+        todo = TodoData(
+            id="todo-123", title="Original Title", description="Original description",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+        await goal_storage.save_todo_plan_link(TodoPlanLink(
+            todo_id="todo-123", plan_id="plan-1", created_at=now,
+        ))
+
+        result, is_error = await execute_goal_tool(
+            "update_todo",
+            {
+                "todo_id": "todo-123",
+                "title": "New Title",
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Updated todo" in result
+        assert "New Title" in result
+        assert "title:" in result
+
+        updated_todo = await goal_storage.load_todo("todo-123")
+        assert updated_todo.title == "New Title"
+        assert updated_todo.description == "Original description"  # Unchanged
+
+    @pytest.mark.asyncio
+    async def test_update_todo_with_prefix(self, goal_storage, mock_session, monkeypatch):
+        """Test updating todo by ID prefix."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo = TodoData(
+            id="abcdef12-3456-7890-abcd-ef1234567890", title="Todo", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "update_todo",
+            {
+                "todo_id": "abcdef12",  # Just prefix
+                "title": "Updated Todo",
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        updated_todo = await goal_storage.load_todo("abcdef12-3456-7890-abcd-ef1234567890")
+        assert updated_todo.title == "Updated Todo"
+
+    @pytest.mark.asyncio
+    async def test_update_todo_status(self, goal_storage, mock_session, monkeypatch):
+        """Test updating todo status."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo = TodoData(
+            id="todo-1", title="Todo", description="", status="pending",
+            is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "update_todo",
+            {
+                "todo_id": "todo-1",
+                "status": "in_progress",
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        assert "status: pending → in_progress" in result
+
+        updated_todo = await goal_storage.load_todo("todo-1")
+        assert updated_todo.status == "in_progress"
+
+    @pytest.mark.asyncio
+    async def test_update_todo_convert_to_spike(self, goal_storage, mock_session, monkeypatch):
+        """Test converting a regular todo to a spike."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo = TodoData(
+            id="todo-1", title="Todo", description="", status="pending",
+            is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "update_todo",
+            {
+                "todo_id": "todo-1",
+                "is_spike": True,
+                "timebox_minutes": 30,
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        assert "converted to spike" in result
+        assert "Spike" in result
+        assert "30 min" in result
+
+        updated_todo = await goal_storage.load_todo("todo-1")
+        assert updated_todo.is_spike is True
+        assert updated_todo.timebox_minutes == 30
+
+    @pytest.mark.asyncio
+    async def test_update_todo_convert_from_spike(self, goal_storage, mock_session, monkeypatch):
+        """Test converting a spike back to a regular todo."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo = TodoData(
+            id="todo-1", title="Todo", description="", status="pending",
+            is_spike=True, timebox_minutes=30, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "update_todo",
+            {
+                "todo_id": "todo-1",
+                "is_spike": False,
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        assert "converted from spike to regular todo" in result
+
+        updated_todo = await goal_storage.load_todo("todo-1")
+        assert updated_todo.is_spike is False
+        assert updated_todo.timebox_minutes is None  # Timebox cleared
+
+    @pytest.mark.asyncio
+    async def test_update_todo_timebox(self, goal_storage, mock_session, monkeypatch):
+        """Test updating a spike's timebox."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo = TodoData(
+            id="todo-1", title="Todo", description="", status="pending",
+            is_spike=True, timebox_minutes=30, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "update_todo",
+            {
+                "todo_id": "todo-1",
+                "timebox_minutes": 60,
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        assert "timebox: 30 → 60 min" in result
+
+        updated_todo = await goal_storage.load_todo("todo-1")
+        assert updated_todo.timebox_minutes == 60
+
+    @pytest.mark.asyncio
+    async def test_update_todo_remove_timebox(self, goal_storage, mock_session, monkeypatch):
+        """Test removing a spike's timebox."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo = TodoData(
+            id="todo-1", title="Todo", description="", status="pending",
+            is_spike=True, timebox_minutes=30, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "update_todo",
+            {
+                "todo_id": "todo-1",
+                "timebox_minutes": None,
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        assert "timebox removed" in result
+
+        updated_todo = await goal_storage.load_todo("todo-1")
+        assert updated_todo.timebox_minutes is None
+
+    @pytest.mark.asyncio
+    async def test_update_todo_reparent(self, goal_storage, mock_session, monkeypatch):
+        """Test reparenting a todo to a different plan."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        goal = GoalData(
+            id="goal-1", title="Goal", description="", weight=5, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal)
+
+        plan1 = PlanData(
+            id="plan-1", goal_id="goal-1", title="Original Plan",
+            description="", status="active", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan1)
+
+        plan2 = PlanData(
+            id="plan-2", goal_id="goal-1", title="New Plan",
+            description="", status="active", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan2)
+
+        todo = TodoData(
+            id="todo-1", title="Todo", description="", status="pending",
+            is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+        await goal_storage.save_todo_plan_link(TodoPlanLink(
+            todo_id="todo-1", plan_id="plan-1", created_at=now,
+        ))
+
+        result, is_error = await execute_goal_tool(
+            "update_todo",
+            {
+                "todo_id": "todo-1",
+                "plan_id": "plan-2",
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        assert "plan:" in result
+        assert "Original Plan" in result
+        assert "New Plan" in result
+
+        # Verify the todo is now linked to plan-2
+        plan_ids = await goal_storage.get_plans_for_todo("todo-1")
+        assert len(plan_ids) == 1
+        assert plan_ids[0] == "plan-2"
+
+    @pytest.mark.asyncio
+    async def test_update_todo_reparent_with_prefix(self, goal_storage, mock_session, monkeypatch):
+        """Test reparenting with plan ID prefix."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        goal = GoalData(
+            id="goal-1", title="Goal", description="", weight=5, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal)
+
+        plan1 = PlanData(
+            id="plan-aaa111", goal_id="goal-1", title="Plan A",
+            description="", status="active", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan1)
+
+        plan2 = PlanData(
+            id="plan-bbb222", goal_id="goal-1", title="Plan B",
+            description="", status="active", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan2)
+
+        todo = TodoData(
+            id="todo-1", title="Todo", description="", status="pending",
+            is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+        await goal_storage.save_todo_plan_link(TodoPlanLink(
+            todo_id="todo-1", plan_id="plan-aaa111", created_at=now,
+        ))
+
+        result, is_error = await execute_goal_tool(
+            "update_todo",
+            {
+                "todo_id": "todo-1",
+                "plan_id": "plan-bbb",  # Prefix
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        plan_ids = await goal_storage.get_plans_for_todo("todo-1")
+        assert plan_ids[0] == "plan-bbb222"
+
+    @pytest.mark.asyncio
+    async def test_update_todo_reparent_plan_not_found(self, goal_storage, mock_session, monkeypatch):
+        """Test error when reparenting to nonexistent plan."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo = TodoData(
+            id="todo-1", title="Todo", description="", status="pending",
+            is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "update_todo",
+            {
+                "todo_id": "todo-1",
+                "plan_id": "nonexistent",
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "Plan not found for reparenting" in result
+
+    @pytest.mark.asyncio
+    async def test_update_todo_multiple_fields(self, goal_storage, mock_session, monkeypatch):
+        """Test updating multiple fields at once."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        goal = GoalData(
+            id="goal-1", title="Goal", description="", weight=5, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal)
+
+        plan = PlanData(
+            id="plan-1", goal_id="goal-1", title="Plan", description="",
+            status="active", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan)
+
+        todo = TodoData(
+            id="todo-1", title="Old Title", description="Old desc",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+        await goal_storage.save_todo_plan_link(TodoPlanLink(
+            todo_id="todo-1", plan_id="plan-1", created_at=now,
+        ))
+
+        result, is_error = await execute_goal_tool(
+            "update_todo",
+            {
+                "todo_id": "todo-1",
+                "title": "New Title",
+                "description": "New description",
+                "status": "in_progress",
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        assert "title:" in result
+        assert "description updated" in result
+        assert "status: pending → in_progress" in result
+
+        updated_todo = await goal_storage.load_todo("todo-1")
+        assert updated_todo.title == "New Title"
+        assert updated_todo.description == "New description"
+        assert updated_todo.status == "in_progress"
+
+    @pytest.mark.asyncio
+    async def test_update_todo_not_found(self, goal_storage, mock_session, monkeypatch):
+        """Test error when todo doesn't exist."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "update_todo",
+            {
+                "todo_id": "nonexistent",
+                "title": "New Title",
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "Todo not found" in result
+
+    @pytest.mark.asyncio
+    async def test_update_todo_no_updates(self, goal_storage, mock_session, monkeypatch):
+        """Test error when no valid updates provided."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo = TodoData(
+            id="todo-1", title="Todo", description="", status="pending",
+            is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "update_todo",
+            {
+                "todo_id": "todo-1",
+                # No other fields provided
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "No valid updates" in result
+
+    @pytest.mark.asyncio
+    async def test_update_todo_missing_todo_id(self, goal_storage, mock_session, monkeypatch):
+        """Test error when todo_id is missing."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "update_todo",
+            {
+                "title": "New Title",
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "todo_id is required" in result
+
+    @pytest.mark.asyncio
+    async def test_update_todo_invalid_status(self, goal_storage, mock_session, monkeypatch):
+        """Test that invalid status values are ignored."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo = TodoData(
+            id="todo-1", title="Todo", description="", status="pending",
+            is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "update_todo",
+            {
+                "todo_id": "todo-1",
+                "status": "invalid_status",
+            },
+            mock_session,
+        )
+
+        # Since status is invalid and no other valid updates, this should error
+        assert is_error
+        assert "No valid updates" in result
+
+        # Verify status unchanged
+        updated_todo = await goal_storage.load_todo("todo-1")
+        assert updated_todo.status == "pending"
+
+
 class TestListGoals:
     """Tests for list_goals tool."""
 

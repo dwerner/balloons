@@ -596,6 +596,23 @@ creating a duplicate.
 }
 ```
 
+**update_todo** - Update an existing todo (rename, change status, etc.)
+```json
+{
+  "name": "update_todo",
+  "args": {
+    "todo_id": "jkl012",  // Can be prefix
+    "title": "New title",  // Optional
+    "description": "New description",  // Optional
+    "status": "in_progress",  // Optional: "pending", "in_progress", "done", "abandoned"
+    "is_spike": true,  // Optional: convert to/from spike
+    "timebox_minutes": 45,  // Optional: for spikes, set to null to remove
+    "plan_id": "def456"  // Optional: reparent to different plan
+  }
+}
+```
+Only `todo_id` is required; other fields are optional and only update if provided.
+
 **list_goals** - List all goals
 ```json
 {
