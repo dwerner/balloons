@@ -172,6 +172,11 @@ class TreeState:
         # Current active session
         self._current_session_id: str | None = None
 
+        # Session history: most recently viewed sessions (newest first)
+        # Limited to avoid unbounded growth
+        self._session_history: list[str] = []
+        self._session_history_max: int = 50
+
         # Sessions currently streaming
         self._streaming_sessions: set[str] = set()
 
@@ -343,6 +348,14 @@ class TreeState:
         self._sessions[session_id].is_current = True
         self._current_session_id = session_id
 
+        # Track session in history (move to front if already present)
+        if session_id in self._session_history:
+            self._session_history.remove(session_id)
+        self._session_history.insert(0, session_id)
+        # Trim to max size
+        if len(self._session_history) > self._session_history_max:
+            self._session_history = self._session_history[:self._session_history_max]
+
         self._notify(TreeEvent.SESSION_SELECTED, {
             "session_id": session_id,
             "prev_session_id": prev_session_id,
@@ -359,6 +372,20 @@ class TreeState:
     def get_all_sessions(self) -> dict[str, SessionData]:
         """Get all sessions."""
         return self._sessions.copy()
+
+    def get_session_history(self, limit: int | None = None) -> list[str]:
+        """Get session history (most recently viewed first).
+
+        Args:
+            limit: Optional max number of sessions to return
+
+        Returns:
+            List of session IDs in order of most recent access
+        """
+        history = [sid for sid in self._session_history if sid in self._sessions]
+        if limit:
+            return history[:limit]
+        return history
 
     def get_session_color(self, session_id: str) -> str:
         """Get the color assigned to a session."""
@@ -969,7 +996,7 @@ class TreeState:
 
     # --- Bulk Operations ---
 
-    def clear(self, preserve_streaming: bool = True) -> None:
+    def clear(self, preserve_streaming: bool = True, preserve_history: bool = True) -> None:
         """Clear all state.
 
         Args:
@@ -977,6 +1004,8 @@ class TreeState:
                 so that sessions that were streaming before clear() remain streaming
                 after being re-added. This prevents animation interruption during
                 load_all_sessions() calls.
+            preserve_history: If True (default), session history is preserved across
+                reloads so users can navigate back to recently viewed sessions.
         """
         self._sessions.clear()
         self._context_modes.clear()
@@ -984,6 +1013,8 @@ class TreeState:
         self._current_session_id = None
         if not preserve_streaming:
             self._streaming_sessions.clear()
+        if not preserve_history:
+            self._session_history.clear()
         self._session_colors.clear()
         self._notify(TreeEvent.FULL_REBUILD, {})
 

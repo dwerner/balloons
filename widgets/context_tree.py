@@ -2468,8 +2468,15 @@ class ContextTreeView(Vertical):
         self._update_root_label()
 
     def _get_session_ids(self) -> list[str]:
-        """Return session IDs in index order (most recently used first)."""
-        return list(self._state.get_all_sessions().keys())
+        """Return session IDs sorted by last_modified (most recently modified first)."""
+        all_sessions = self._state.get_all_sessions()
+        # Sort by last_modified descending (ISO timestamps sort lexicographically)
+        sorted_ids = sorted(
+            all_sessions.keys(),
+            key=lambda sid: all_sessions[sid].last_modified,
+            reverse=True
+        )
+        return sorted_ids
 
     def _on_key(self, event: Key) -> None:
         """Handle Escape to clear search."""

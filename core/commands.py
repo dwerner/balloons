@@ -95,6 +95,18 @@ class SwitchCommand(Command):
 
 
 @dataclass
+class HistoryCommand(Command):
+    """Show session history (recently viewed sessions).
+
+    Displays a picker with sessions ordered by most recent access.
+    Without index: show picker
+    With index: jump directly to that session (1 = most recent)
+    """
+    is_global: bool = True  # Can view history during streaming
+    index: int = 0  # 0 = show picker, 1+ = jump to that history entry
+
+
+@dataclass
 class ReturnCommand(Command):
     """Return from child session to parent. (Legacy - use :merge)"""
     return_prompt: str = ""
@@ -464,6 +476,7 @@ COMMAND_DOCS = [
     (":new[=title] [prompt]", "Create a new blank session, optionally with title and prompt"),
     (":title <title>", "Set the session title"),
     (":switch [name]", "Switch to another session (shows picker if no name)"),
+    (":history [N]", "Show recent sessions; :history N jumps to session N"),
     # Forking and merging
     (":fork[=name] <prompt>", "Fork with selected context, start a child session"),
     (":fork ... --bg", "Fork in background (continue working in parent)"),
@@ -581,6 +594,17 @@ class CommandParser:
         if text == ":switch" or text.startswith(":switch "):
             name = text[7:].strip() if len(text) > 7 else ""
             return SwitchCommand(name=name)
+
+        # Handle :history [index]
+        if text == ":history" or text.startswith(":history "):
+            arg = text[8:].strip() if len(text) > 8 else ""
+            if arg:
+                try:
+                    index = int(arg)
+                    return HistoryCommand(index=index)
+                except ValueError:
+                    raise ValueError(":history index must be a number")
+            return HistoryCommand()
 
         # Handle :query-with <prompt>
         if text == ":query-with" or text.startswith(":query-with "):

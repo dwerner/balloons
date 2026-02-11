@@ -2,6 +2,7 @@ from textual.widgets import Static
 from textual.reactive import reactive
 from textual.message import Message
 from textual.timer import Timer
+from textual.events import Click
 
 
 class StatusBar(Static):
@@ -10,6 +11,12 @@ class StatusBar(Static):
     class FollowClicked(Message):
         """Posted when the Follow indicator is clicked."""
         pass
+
+    class PriorityClicked(Message):
+        """Posted when the priority divergence indicator is clicked."""
+        def __init__(self, todo_id: str) -> None:
+            self.todo_id = todo_id
+            super().__init__()
 
     model: reactive[str] = reactive("")
     backend: reactive[str] = reactive("")  # Backend name (e.g., "openrouter", "claude")
@@ -25,6 +32,7 @@ class StatusBar(Static):
     working_directory: reactive[str] = reactive("")
     following: reactive[bool] = reactive(True)  # Whether chat is following new content
     priority_divergence: reactive[str] = reactive("")  # Priority divergence warning
+    _priority_todo_id: str = ""  # Todo ID for priority divergence click navigation
     _spinner_frame: reactive[int] = reactive(0)
     _spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     _spinner_timer: Timer | None = None
@@ -213,16 +221,39 @@ class StatusBar(Static):
         """Update the displayed working directory."""
         self.working_directory = path
 
-    def set_priority_divergence(self, message: str = "") -> None:
+    def set_priority_divergence(self, message: str = "", todo_id: str = "") -> None:
         """Set or clear the priority divergence warning.
 
         Args:
             message: Warning message (e.g., "Higher priority: fix-auth-bug")
                     Pass empty string to clear.
+            todo_id: The ID of the higher-priority todo to navigate to when clicked.
         """
         self.priority_divergence = message
+        self._priority_todo_id = todo_id
 
-    def on_click(self) -> None:
-        """Handle click - if not following, post message to follow."""
-        if not self.following:
+    def on_click(self, event: Click) -> None:
+        """Handle click on status bar indicators.
+
+        Priority (left to right):
+        1. If priority divergence is shown and clicked, navigate to todo
+        2. If Follow is shown and clicked, scroll to bottom
+
+        We use click position to determine which indicator was clicked.
+        """
+        # Get the rendered text to estimate indicator positions
+        # The priority indicator appears before the follow indicator
+        rendered = self.render()
+
+        # Find approximate positions of clickable indicators
+        # Priority indicator: "⚠ Higher priority: ..."
+        # Follow indicator: "↓ Follow"
+        has_priority = self.priority_divergence and self._priority_todo_id
+        has_follow = not self.following
+
+        if has_priority:
+            # If there's a priority warning, clicking anywhere on the status bar
+            # should navigate to the todo (it's the primary call to action)
+            self.post_message(self.PriorityClicked(self._priority_todo_id))
+        elif has_follow:
             self.post_message(self.FollowClicked())

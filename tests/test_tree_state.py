@@ -865,3 +865,98 @@ class TestTreeStateViewedTracking:
 
         assert count == 2  # Only 2 were actually marked (user was already viewed)
         assert state.get_unviewed_count("s1") == 0
+
+
+class TestTreeStateSessionHistory:
+    """Test session history tracking."""
+
+    def test_set_current_session_adds_to_history(self):
+        """Setting current session adds it to history."""
+        state = TreeState()
+        state.add_session(MockSession(id="s1"))
+        state.add_session(MockSession(id="s2"))
+
+        state.set_current_session("s1")
+        state.set_current_session("s2")
+
+        history = state.get_session_history()
+        assert history == ["s2", "s1"]  # Most recent first
+
+    def test_history_moves_existing_to_front(self):
+        """Revisiting a session moves it to front of history."""
+        state = TreeState()
+        state.add_session(MockSession(id="s1"))
+        state.add_session(MockSession(id="s2"))
+        state.add_session(MockSession(id="s3"))
+
+        state.set_current_session("s1")
+        state.set_current_session("s2")
+        state.set_current_session("s3")
+        state.set_current_session("s1")  # Revisit s1
+
+        history = state.get_session_history()
+        assert history == ["s1", "s3", "s2"]
+
+    def test_history_limit_parameter(self):
+        """get_session_history respects limit parameter."""
+        state = TreeState()
+        for i in range(5):
+            state.add_session(MockSession(id=f"s{i}"))
+            state.set_current_session(f"s{i}")
+
+        history = state.get_session_history(limit=3)
+        assert len(history) == 3
+        assert history == ["s4", "s3", "s2"]
+
+    def test_history_excludes_removed_sessions(self):
+        """History excludes sessions that have been removed."""
+        state = TreeState()
+        state.add_session(MockSession(id="s1"))
+        state.add_session(MockSession(id="s2"))
+
+        state.set_current_session("s1")
+        state.set_current_session("s2")
+        state.remove_session("s1")
+
+        history = state.get_session_history()
+        assert history == ["s2"]  # s1 excluded because it no longer exists
+
+    def test_clear_preserves_history_by_default(self):
+        """clear() preserves history by default."""
+        state = TreeState()
+        state.add_session(MockSession(id="s1"))
+        state.set_current_session("s1")
+
+        state.clear()
+
+        # History preserved but will be empty after filtering by existing sessions
+        # Re-add the session to verify history was preserved
+        state.add_session(MockSession(id="s1"))
+        history = state.get_session_history()
+        assert history == ["s1"]
+
+    def test_clear_can_clear_history(self):
+        """clear(preserve_history=False) clears history."""
+        state = TreeState()
+        state.add_session(MockSession(id="s1"))
+        state.set_current_session("s1")
+
+        state.clear(preserve_history=False)
+        state.add_session(MockSession(id="s1"))
+
+        history = state.get_session_history()
+        assert history == []  # History was cleared
+
+    def test_history_respects_max_limit(self):
+        """History doesn't grow beyond max limit."""
+        state = TreeState()
+        state._session_history_max = 5  # Set small limit for testing
+
+        for i in range(10):
+            state.add_session(MockSession(id=f"s{i}"))
+            state.set_current_session(f"s{i}")
+
+        # Internal history should be limited
+        assert len(state._session_history) == 5
+        # Most recent 5 sessions
+        assert state._session_history == ["s9", "s8", "s7", "s6", "s5"]

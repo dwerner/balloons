@@ -2,7 +2,7 @@
 
 import json
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from core.link_tools import (
     LINK_TOOL_NAMES,
@@ -13,6 +13,7 @@ from core.link_tools import (
 from claude_runner import ClaudeRunner
 from session import Session
 from models import Message, TextBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, Turn
+from storage_schema import SessionBinding
 
 
 class TestLinkToolNames:
@@ -324,6 +325,72 @@ class TestExecuteLinkTool:
         assert data["merged_to"]["parent_session_id"] == "parent-session-456"
         assert data["merged_to"]["parent_turn"] == 42
         assert "authentication" in data["merged_to"]["summary"]
+
+    @pytest.mark.asyncio
+    async def test_session_info_with_binding(self):
+        """Test session_info includes binding info when session is bound to an entity."""
+        session = Mock(spec=Session)
+        session.id = "test-session-12345678"
+        session.title = "Implementation Session"
+        session.fork_name = ""
+        session.cached_context_tokens = 40000
+        session.context_window = 200000
+        session.is_merged.return_value = False
+        session.parent_id = None
+        session.get_all_merge_blocks.return_value = []
+        session.get_all_fork_blocks.return_value = []
+        session.get_merged_to_block.return_value = None
+
+        # Mock binding
+        binding = SessionBinding(
+            id="binding-123",
+            session_id="test-session-12345678",
+            entity_type="todo",
+            entity_id="todo-456",
+            role="implementation",
+            created_at="2024-01-01T00:00:00",
+            released_at=None,
+        )
+
+        with patch('core.link_tools.GoalStorage') as MockStorage:
+            mock_instance = MockStorage.return_value
+            mock_instance.get_bindings_for_session = AsyncMock(return_value=[binding])
+            result, is_error = await execute_link_tool("session_info", {}, session)
+
+        assert not is_error
+        data = json.loads(result)
+
+        # Check binding is present
+        assert "binding" in data
+        assert data["binding"]["entity_type"] == "todo"
+        assert data["binding"]["entity_id"] == "todo-456"
+        assert data["binding"]["role"] == "implementation"
+
+    @pytest.mark.asyncio
+    async def test_session_info_no_binding(self):
+        """Test session_info omits binding when session has no binding."""
+        session = Mock(spec=Session)
+        session.id = "test-session-12345678"
+        session.title = "Unbound Session"
+        session.fork_name = ""
+        session.cached_context_tokens = 40000
+        session.context_window = 200000
+        session.is_merged.return_value = False
+        session.parent_id = None
+        session.get_all_merge_blocks.return_value = []
+        session.get_all_fork_blocks.return_value = []
+        session.get_merged_to_block.return_value = None
+
+        with patch('core.link_tools.GoalStorage') as MockStorage:
+            mock_instance = MockStorage.return_value
+            mock_instance.get_bindings_for_session = AsyncMock(return_value=[])  # No bindings
+            result, is_error = await execute_link_tool("session_info", {}, session)
+
+        assert not is_error
+        data = json.loads(result)
+
+        # Check binding is NOT present (omitted, not null)
+        assert "binding" not in data
 
     @pytest.mark.asyncio
     async def test_follow_link_with_session_id(self):

@@ -23,6 +23,7 @@ from core.commands import (
     ChatCommand,
     ReviewCommand,
     GoalInterviewCommand,
+    HistoryCommand,
 )
 
 
@@ -265,3 +266,25 @@ class TestGoalInterviewCommand:
         """':goal-interview= prompt' with empty title should error."""
         with pytest.raises(ValueError, match="Missing title"):
             parser.parse(":goal-interview= I want to build a web UI")
+
+
+class TestHistoryCommand:
+    """Tests for :history command parsing."""
+
+    def test_history_no_args(self, parser):
+        """':history' returns HistoryCommand with index=0 (show list)."""
+        cmd = parser.parse(":history")
+        assert isinstance(cmd, HistoryCommand)
+        assert cmd.index == 0
+        assert cmd.is_global is True
+
+    def test_history_with_index(self, parser):
+        """':history N' returns HistoryCommand with that index."""
+        cmd = parser.parse(":history 3")
+        assert isinstance(cmd, HistoryCommand)
+        assert cmd.index == 3
+
+    def test_history_with_invalid_index(self, parser):
+        """':history abc' should error."""
+        with pytest.raises(ValueError, match="index must be a number"):
+            parser.parse(":history abc")

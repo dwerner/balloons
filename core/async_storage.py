@@ -170,15 +170,19 @@ class AsyncStorage:
         """List all sessions with metadata.
 
         Returns:
-            List of session metadata dicts with keys:
+            List of session metadata dicts sorted by updated_at (most recent first).
+            Each dict has keys:
             - id: Session ID
             - name: Session title
-            - created_at: ISO timestamp
-            - updated_at: ISO timestamp
+            - created_at: Unix timestamp (seconds)
+            - updated_at: Unix timestamp (seconds)
             - turn_count: Number of turns
         """
         json_data = await self._run_sync(self._storage.list_sessions)
-        return json.loads(json_data)
+        sessions = json.loads(json_data)
+        # Sort by updated_at descending (most recently modified first)
+        sessions.sort(key=lambda s: s.get("updated_at", 0), reverse=True)
+        return sessions
 
     # =========================================================================
     # Review Operations (file-based for now, pending Rust integration)

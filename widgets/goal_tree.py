@@ -41,6 +41,8 @@ class GoalTreeWidget(Tree):
     - d/Delete: delete entity or session
     - m: mark todo done
     - b: bind session to current entity
+    - n: create new session bound to current entity
+    - Click [+]: create new session bound to that entity
     - :: jump to command input
     - left/right: collapse/expand or navigate parent
     """
@@ -49,7 +51,11 @@ class GoalTreeWidget(Tree):
         super().__init__(*args, **kwargs)
 
     def render_label(self, node, base_style: Style, style: Style) -> Text:
-        """Render label with custom icons based on node type."""
+        """Render label with custom icons based on node type.
+
+        For goal/plan/todo nodes, adds a clickable [+] widget that creates
+        a new session bound to that entity.
+        """
         TOGGLE_STYLE = Style.from_meta({"toggle": True})
 
         node_label = node._label.copy()
@@ -74,6 +80,21 @@ class GoalTreeWidget(Tree):
             prefix = Text("", style=base_style)
 
         text = Text.assemble(prefix, node_label)
+
+        # Add clickable [+] widget for goal/plan/todo nodes to create new session
+        node_type = node.data.get("type") if node.data else None
+        if node_type in ("goal", "plan", "todo"):
+            # Create a meta style for the new session action
+            entity_id = node.data.get(f"{node_type}_id")
+            if entity_id:
+                new_session_style = Style.from_meta({
+                    "new_session": True,
+                    "entity_type": node_type,
+                    "entity_id": entity_id,
+                })
+                text.append(" ")
+                text.append("[+]", style=Style(color="bright_green", bold=True) + new_session_style)
+
         return text
 
     # --- Messages ---
@@ -128,6 +149,31 @@ class GoalTreeWidget(Tree):
         def __init__(self, session_id: str) -> None:
             self.session_id = session_id
             super().__init__()
+
+    class NewSessionRequested(Message):
+        """Fired when user clicks [+] to create a new session bound to entity."""
+        def __init__(self, entity_type: str, entity_id: str) -> None:
+            self.entity_type = entity_type
+            self.entity_id = entity_id
+            super().__init__()
+
+    # --- Click handling ---
+
+    def on_click(self, event: Click) -> None:
+        """Handle clicks on tree nodes.
+
+        Detects clicks on the [+] widget to create new sessions bound to entities.
+        """
+        meta = event.style.meta
+
+        # Check if this is a click on the [+] new session widget
+        if meta.get("new_session"):
+            entity_type = meta.get("entity_type")
+            entity_id = meta.get("entity_id")
+            if entity_type and entity_id:
+                self.post_message(self.NewSessionRequested(entity_type, entity_id))
+                event.stop()
+                return
 
     # --- Key handling ---
 
@@ -209,6 +255,18 @@ class GoalTreeWidget(Tree):
                     entity_id = node.data.get(f"{node_type}_id")
                     if entity_id:
                         self.post_message(self.BindSessionRequested(node_type, entity_id))
+                        event.prevent_default()
+                        event.stop()
+                        return
+
+        elif event.key == "n":
+            # Create new session bound to current entity
+            if node and node.data:
+                node_type = node.data.get("type")
+                if node_type in ("goal", "plan", "todo"):
+                    entity_id = node.data.get(f"{node_type}_id")
+                    if entity_id:
+                        self.post_message(self.NewSessionRequested(node_type, entity_id))
                         event.prevent_default()
                         event.stop()
                         return
@@ -313,6 +371,13 @@ class GoalTreeView(Vertical):
             self.session_id = session_id
             self.turn_idx = turn_idx
             self.new_mode = new_mode
+            super().__init__()
+
+    class NewSessionRequested(Message):
+        """Fired when user clicks [+] to create a new session bound to entity."""
+        def __init__(self, entity_type: str, entity_id: str) -> None:
+            self.entity_type = entity_type
+            self.entity_id = entity_id
             super().__init__()
 
     def __init__(
@@ -831,6 +896,10 @@ class GoalTreeView(Vertical):
         for turn in session_data.turns:
             self._tree_state.set_context_mode(session_id, turn.idx, new_mode)
             self.post_message(self.ContextModeChanged(session_id, turn.idx, new_mode))
+
+    def on_goal_tree_new_session_requested(self, event: GoalTreeWidget.NewSessionRequested) -> None:
+        """Bubble up new session request."""
+        self.post_message(self.NewSessionRequested(event.entity_type, event.entity_id))
 
     def on_tree_node_selected(self, event) -> None:
         """Handle node selection."""

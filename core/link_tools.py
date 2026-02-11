@@ -10,6 +10,7 @@ the execution logic.
 import json
 from typing import Any, Callable
 
+from core.async_storage import GoalStorage
 from session import Session
 
 
@@ -347,6 +348,18 @@ async def _execute_session_info(session: Session) -> tuple[str, bool]:
             "status": block.status,
         })
     result["forked_to"] = forked_to
+
+    # Get session binding if any
+    storage = GoalStorage()
+    bindings = await storage.get_bindings_for_session(session.id, active_only=True)
+    if bindings:
+        # Use the most recent active binding
+        binding = bindings[-1]
+        result["binding"] = {
+            "entity_type": binding.entity_type,
+            "entity_id": binding.entity_id,
+            "role": binding.role,
+        }
 
     return json.dumps(result, indent=2), False
 

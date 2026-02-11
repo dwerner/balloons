@@ -32,7 +32,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, GoalTreeView, VerticalSplitter, HorizontalSplitter, TaskPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, ReviewMarker, ForkProposalMarker, MergeProposalMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, MessageStash, StashPopup, SlidesPane, PresentationScreen, MessageQueuePopup, EntityPane, ActionableToastRack, ActionableNotification, ActionableToast
+from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, GoalTreeView, GoalTreeWidget, VerticalSplitter, HorizontalSplitter, TaskPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, ReviewMarker, ForkProposalMarker, MergeProposalMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, MessageStash, StashPopup, SlidesPane, PresentationScreen, MessageQueuePopup, EntityPane, ActionableToastRack, ActionableNotification, ActionableToast
 from widgets.input_box import CompletionPopup
 from widgets.archive_marker import ArchiveMarker
 from claude_runner import ClaudeRunner
@@ -60,6 +60,7 @@ from core import (
     MergeCommand,
     DeriveCommand,
     SwitchCommand,
+    HistoryCommand,
     ReturnCommand,
     PwdCommand,
     CdCommand,
@@ -2171,6 +2172,8 @@ class BalloonsApp(App):
             await self._handle_derive_command(cmd.prompt)
         elif isinstance(cmd, SwitchCommand):
             await self._handle_switch_command(cmd.name)
+        elif isinstance(cmd, HistoryCommand):
+            await self._handle_history_command(cmd.index)
         elif isinstance(cmd, ReturnCommand):
             await self._handle_return_command(cmd.return_prompt)
         elif isinstance(cmd, PwdCommand):
@@ -4049,6 +4052,55 @@ class BalloonsApp(App):
         else:
             self.notify(result.error, severity="error")
 
+    async def _handle_history_command(self, index: int = 0) -> None:
+        """Show or jump to session history (recently viewed sessions).
+
+        Args:
+            index: If 0, show list. If 1+, jump to that history entry.
+        """
+        from session import Session
+
+        # Get session history from TreeState
+        history = self._tree_state.get_session_history(limit=10)
+
+        if not history:
+            self.notify("No session history yet")
+            return
+
+        if index == 0:
+            # Show history list
+            lines = ["Recent sessions:"]
+            for i, session_id in enumerate(history, 1):
+                session_data = self._tree_state.get_session(session_id)
+                if session_data:
+                    name = session_data.fork_name or session_data.title or session_id[:8]
+                    current = " (current)" if session_data.is_current else ""
+                    lines.append(f"  {i}. {name}{current}")
+                else:
+                    lines.append(f"  {i}. {session_id[:8]}")
+            lines.append("Use :history N to jump to session N")
+            self.notify("\n".join(lines))
+        else:
+            # Jump to history entry
+            if index < 1 or index > len(history):
+                self.notify(f"Invalid history index. Use 1-{len(history)}", severity="error")
+                return
+
+            target_session_id = history[index - 1]
+
+            # Skip if it's the current session
+            if target_session_id == self._tree_state.get_current_session_id():
+                self.notify("Already on that session")
+                return
+
+            # Load the session and switch
+            target_session = await Session.load(target_session_id)
+            if target_session:
+                await self._switch_to_session(target_session)
+                self.notify(f"Switched to session {index} in history")
+            else:
+                self.notify(f"Could not load session {target_session_id[:8]}", severity="error")
+
     # ===== END NEW COMMANDS =====
 
     async def _handle_return_command(self, return_prompt: str = "") -> None:
@@ -4561,8 +4613,8 @@ class BalloonsApp(App):
         try:
             info = await check_priority_divergence(session_id)
             status_bar = self.query_one("#status-bar", StatusBar)
-            if info.is_diverged:
-                status_bar.set_priority_divergence(info.message)
+            if info.is_diverged and info.top_todo:
+                status_bar.set_priority_divergence(info.message, info.top_todo.id)
             else:
                 status_bar.set_priority_divergence("")
         except Exception:
@@ -5231,6 +5283,39 @@ class BalloonsApp(App):
         # Persist to session if it's the current session
         if self.session and event.session_id == self.session.id:
             await self._persist_context_mode(event.turn_idx, event.new_mode)
+
+    async def on_goal_tree_view_new_session_requested(self, event: GoalTreeView.NewSessionRequested) -> None:
+        """Handle request to create a new session bound to an entity from goal tree."""
+        # Create a new session
+        new_session = await self._manager.create_session()
+        await self._manager.set_active(new_session.id)
+
+        # Add to tree state
+        self._tree_state.add_session(new_session, is_current=True)
+
+        # Update UI
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+        await context_tree.load_all_sessions(new_session)
+        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
+        await breadcrumb.set_session(new_session)
+
+        # Bind the session to the entity
+        from core.goal_commands import GoalCommandExecutor
+        from core.async_storage import get_goal_storage
+
+        storage = await get_goal_storage()
+        executor = GoalCommandExecutor(storage)
+
+        # Default to implementation role
+        result = await executor.bind_session(new_session.id, event.entity_type, event.entity_id, "implementation")
+
+        if result.success:
+            # Refresh goal tree to show new binding
+            if self._goal_tree_sync:
+                await self._goal_tree_sync.initial_load()
+            self.notify(f"Created new session bound to {event.entity_type}")
+        else:
+            self.notify(f"Session created but binding failed: {result.error}", severity="warning")
 
     async def on_breadcrumb_segment_clicked(self, event: Breadcrumb.SegmentClicked) -> None:
         """Handle clicking a breadcrumb segment to navigate up."""
@@ -6173,6 +6258,38 @@ class BalloonsApp(App):
     def on_status_bar_follow_clicked(self, event: StatusBar.FollowClicked) -> None:
         """Handle click on Follow indicator - scroll to bottom."""
         self.action_scroll_to_bottom()
+
+    async def on_status_bar_priority_clicked(self, event: StatusBar.PriorityClicked) -> None:
+        """Handle click on priority divergence indicator - navigate to the higher-priority todo."""
+        todo_id = event.todo_id
+
+        # Ensure goals tree is visible
+        goal_tree = self.query_one("#goal-tree", GoalTreeView)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+        nested_tree = self.query_one("#nested-tree", NestedTreeView)
+
+        # Show goals tree if not visible
+        if not goal_tree.display:
+            # Hide other trees and show goals tree
+            context_tree.display = False
+            nested_tree.display = False
+            goal_tree.display = True
+
+        # Navigate to the todo in the goals tree
+        # Find the todo node and select it
+        tree_widget = goal_tree.query_one("#goal-tree-widget", GoalTreeWidget)
+        if todo_id in goal_tree._todo_nodes:
+            todo_node = goal_tree._todo_nodes[todo_id]
+            # Expand parent nodes to make the todo visible
+            parent = todo_node.parent
+            while parent and parent != tree_widget.root:
+                parent.expand()
+                parent = parent.parent
+            # Select the todo node
+            tree_widget.select_node(todo_node)
+            tree_widget.scroll_to_node(todo_node)
+            # Focus the tree
+            goal_tree.focus()
 
     def on_more_below_indicator_clicked(self, event: MoreBelowIndicator.Clicked) -> None:
         """Handle click on more-below indicator - scroll to bottom."""
