@@ -43,6 +43,33 @@ if TYPE_CHECKING:
 # Note: LMDB uses a directory, not a single file (unlike redb)
 DEFAULT_DB_PATH = Path.home() / ".balloons" / "sessions.lmdb"
 
+# Shared storage handle (singleton pattern to avoid LMDB "already open" errors)
+_shared_storage = None
+_shared_storage_path = None
+
+
+def _get_shared_storage(db_path: Path) -> "balloons_storage.Storage":
+    """Get or create a shared storage handle.
+
+    LMDB doesn't allow multiple opens with different options, so we need
+    a single shared instance for the same database path.
+    """
+    global _shared_storage, _shared_storage_path
+
+    if _shared_storage is not None and _shared_storage_path == db_path:
+        return _shared_storage
+
+    if not RUST_STORAGE_AVAILABLE:
+        raise RuntimeError(
+            "balloons_storage module not available. "
+            "Run 'maturin develop' in balloons-rs/ to build it."
+        )
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    _shared_storage = balloons_storage.Storage(str(db_path))
+    _shared_storage_path = db_path
+    return _shared_storage
+
 
 class AsyncStorage:
     """Async wrapper for Rust storage backend.
@@ -63,17 +90,9 @@ class AsyncStorage:
         Args:
             db_path: Path to the database file. Defaults to ~/.balloons/sessions.db
         """
-        if not RUST_STORAGE_AVAILABLE:
-            raise RuntimeError(
-                "balloons_storage module not available. "
-                "Run 'maturin develop' in balloons-rs/ to build it."
-            )
-
         self._db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Create the sync Rust storage handle
-        self._storage = balloons_storage.Storage(str(self._db_path))
+        # Use shared storage handle to avoid LMDB "already open" errors
+        self._storage = _get_shared_storage(self._db_path)
 
     @classmethod
     async def _get_executor(cls) -> ThreadPoolExecutor:
@@ -825,17 +844,9 @@ class GoalStorage:
         Args:
             db_path: Path to the database file. Defaults to ~/.balloons/sessions.lmdb
         """
-        if not RUST_STORAGE_AVAILABLE:
-            raise RuntimeError(
-                "balloons_storage module not available. "
-                "Run 'maturin develop' in balloons-rs/ to build it."
-            )
-
         self._db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Create the sync Rust storage handle
-        self._storage = balloons_storage.Storage(str(self._db_path))
+        # Use shared storage handle to avoid LMDB "already open" errors
+        self._storage = _get_shared_storage(self._db_path)
 
     @classmethod
     async def _get_executor(cls) -> ThreadPoolExecutor:
@@ -1474,9 +1485,17 @@ class EntityHierarchy:
     cycle_path: list[str] = field(default_factory=list)
 
 
+# Singleton instance for GoalStorage
+_goal_storage_instance: GoalStorage | None = None
+
+
 async def get_goal_storage() -> GoalStorage:
-    """Get the default GoalStorage instance.
+    """Get the default GoalStorage instance (singleton).
 
     Uses the default database path (~/.balloons/sessions.lmdb).
+    Returns the same instance on subsequent calls to avoid LMDB conflicts.
     """
-    return GoalStorage(DEFAULT_DB_PATH)
+    global _goal_storage_instance
+    if _goal_storage_instance is None:
+        _goal_storage_instance = GoalStorage(DEFAULT_DB_PATH)
+    return _goal_storage_instance

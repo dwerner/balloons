@@ -756,6 +756,8 @@ class GoalTreeView(Vertical):
 
     def _rebuild_tree(self) -> None:
         """Rebuild the entire tree from GoalTreeState."""
+        from core.debug_log import debug_log
+
         tree = self.query_one("#goal-tree-widget", GoalTreeWidget)
         tree.root.remove_children()
 
@@ -767,6 +769,7 @@ class GoalTreeView(Vertical):
 
         # Add goals
         goals = self._goal_state.get_all_goals()
+        debug_log.info(f"_rebuild_tree: got {len(goals)} goals from GoalTreeState", category="goals")
         for goal_node_data in goals:
             self._add_goal_node(tree.root, goal_node_data)
 

@@ -597,6 +597,8 @@ class BalloonsApp(App):
         # Log deferred startup message now that event loop is running
         if debug_log._log_file:
             debug_log.info("Debug logging to file enabled", category="startup")
+        # Migrate goal data from JSON to LMDB if needed (one-time migration)
+        await self._migrate_goals_if_needed()
         # Ensure default prompts are installed to ~/.balloons/prompts/
         ensure_prompts_installed()
         # Subscribe to TreeState for context mode changes
@@ -1923,6 +1925,24 @@ class BalloonsApp(App):
 
         session = await self._manager.load_session(session_id)
         return session, None  # No saved turn index for fallback
+
+    async def _migrate_goals_if_needed(self) -> None:
+        """Migrate goal data from JSON files to LMDB if needed.
+
+        This is a one-time migration that runs if:
+        - JSON goal files exist in ~/.balloons/goals/
+        - LMDB goal tables are empty
+
+        Creates a backup of JSON files before migration.
+        """
+        try:
+            from scripts.migrate_goals_to_lmdb import auto_migrate_if_needed
+            migrated = await auto_migrate_if_needed(verbose=False)
+            if migrated:
+                debug_log.info("Migrated goal data from JSON to LMDB", category="startup")
+        except Exception as e:
+            # Migration failure should not block app startup
+            debug_log.error(f"Goal migration failed: {e}", category="startup")
 
     async def _initialize_session(self) -> None:
         """Initialize the UI with the current session."""
@@ -5929,7 +5949,7 @@ class BalloonsApp(App):
                 nested_tree.display = True
             elif active == "goal":
                 goal_tree.display = True
-                asyncio.create_task(self._ensure_goal_tree_loaded())
+                self.call_later(self._ensure_goal_tree_loaded)
             else:
                 context_tree.display = True
             splitter.display = True
@@ -5958,7 +5978,7 @@ class BalloonsApp(App):
             goal_tree.display = True
             self._active_tree_view = "goal"
             # Load goal tree data if not already loaded
-            asyncio.create_task(self._ensure_goal_tree_loaded())
+            self.call_later(self._ensure_goal_tree_loaded)
         elif goal_tree.display:
             # Goal -> Context
             context_tree.display = True
@@ -5972,19 +5992,21 @@ class BalloonsApp(App):
                 nested_tree.display = True
             elif active == "goal":
                 goal_tree.display = True
-                asyncio.create_task(self._ensure_goal_tree_loaded())
+                self.call_later(self._ensure_goal_tree_loaded)
             else:
                 context_tree.display = True
             self.query_one("#splitter", VerticalSplitter).display = True
 
     async def _ensure_goal_tree_loaded(self) -> None:
         """Ensure goal tree data is loaded."""
+        debug_log.info("_ensure_goal_tree_loaded called", category="goals")
         if self._goal_tree_sync is None:
             self._goal_tree_sync = GoalTreeSyncManager(
                 self._goal_tree_state,
                 self._tree_state
             )
         await self._goal_tree_sync.initial_load()
+        debug_log.info(f"_ensure_goal_tree_loaded done, state has {len(self._goal_tree_state._goals)} goals", category="goals")
 
     def action_toggle_tasks(self) -> None:
         """Toggle the task pane visibility."""

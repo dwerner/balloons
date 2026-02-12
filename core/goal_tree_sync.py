@@ -16,6 +16,7 @@ from core.goal_tree_state import (
 )
 from core.tree_state import TreeState, SessionData
 from core.async_storage import get_goal_storage, GoalStorage
+from core.debug_log import debug_log
 from storage_schema import SessionBinding
 
 
@@ -45,16 +46,19 @@ async def load_goal_tree_data(
     try:
         # Load goals
         goals = await storage.list_goals()
+        debug_log.info(f"load_goal_tree_data: loaded {len(goals)} goals from storage", category="goals")
         for goal in goals:
             goal_state.add_goal(goal)
 
         # Load plans
         plans = await storage.list_plans()
+        debug_log.info(f"load_goal_tree_data: loaded {len(plans)} plans from storage", category="goals")
         for plan in plans:
             goal_state.add_plan(plan)
 
         # Load todos with their plan links
         todos = await storage.list_todos(include_spikes=True)
+        debug_log.info(f"load_goal_tree_data: loaded {len(todos)} todos from storage", category="goals")
         for todo in todos:
             # Get plan IDs for this todo
             plan_ids = await storage.get_plans_for_todo(todo.id)
@@ -65,6 +69,7 @@ async def load_goal_tree_data(
     finally:
         # End batch loading - triggers a single FULL_REBUILD
         goal_state.end_batch_loading()
+        debug_log.info(f"load_goal_tree_data: complete, goal_state has {len(goal_state._goals)} goals", category="goals")
 
 
 async def sync_session_bindings(
