@@ -1640,6 +1640,23 @@ impl StorageEngine for LmdbEngine {
 
         Ok(bindings)
     }
+
+    async fn list_bindings(&self) -> Result<Vec<SessionBinding>> {
+        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        let mut bindings = Vec::new();
+        let iter = self.session_bindings.iter(&rtxn)
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        for result in iter {
+            let (_key, bytes) = result.map_err(|e| Error::Database(e.to_string()))?;
+            let binding: SessionBinding = serde_json::from_slice(bytes)
+                .map_err(|e| Error::Serialization(e.to_string()))?;
+            bindings.push(binding);
+        }
+
+        Ok(bindings)
+    }
 }
 
 #[cfg(test)]

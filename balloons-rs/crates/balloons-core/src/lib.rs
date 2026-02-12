@@ -7,7 +7,10 @@ pub mod storage;
 mod testutil;
 
 // Re-export schema types from generated module
-pub use generated::{SessionData, SessionMetadata, TurnData, TurnOrder};
+pub use generated::{
+    GoalData, PlanData, SessionBinding, SessionData, SessionMetadata, TodoData, TodoDependency,
+    TodoPlanLink, TurnData, TurnOrder,
+};
 
 // Re-export storage types
 pub use storage::{Error, LmdbEngine, Result, StorageClient, StorageEngine};

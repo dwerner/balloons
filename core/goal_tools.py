@@ -1636,19 +1636,7 @@ async def _list_all_bindings(args: dict, storage) -> tuple[str, bool]:
             todo_ids_under_goal.update(todo_ids)
 
     # Get all bindings (include released for filtering)
-    all_bindings = []
-    bindings_dir = storage._bindings_dir
-    import aiofiles
-    import json
-
-    for binding_file in bindings_dir.glob("*.json"):
-        try:
-            async with aiofiles.open(binding_file, "r", encoding="utf-8") as f:
-                data = json.loads(await f.read())
-            binding = SessionBinding(**data)
-            all_bindings.append(binding)
-        except Exception:
-            continue
+    all_bindings = await storage.list_bindings(active_only=False)
 
     # Classify bindings
     active_bindings = []
@@ -1897,20 +1885,7 @@ async def _unbind_sessions(args: dict, storage) -> tuple[str, bool]:
     existing_sessions = await _get_session_ids_set()
 
     # Get all active bindings
-    all_bindings = []
-    import aiofiles
-    import json
-
-    bindings_dir = storage._bindings_dir
-    for binding_file in bindings_dir.glob("*.json"):
-        try:
-            async with aiofiles.open(binding_file, "r", encoding="utf-8") as f:
-                data = json.loads(await f.read())
-            binding = SessionBinding(**data)
-            if binding.released_at is None:  # Only active bindings
-                all_bindings.append(binding)
-        except Exception:
-            continue
+    all_bindings = await storage.list_bindings(active_only=True)
 
     # Determine which bindings to release
     to_release = []

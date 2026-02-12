@@ -11,16 +11,17 @@ from storage_schema import GoalData, PlanData, TodoData, TodoPlanLink, TodoDepen
 
 
 @pytest.fixture
-def temp_goal_dir():
-    """Create a temporary directory for goal storage."""
+def temp_db_path():
+    """Create a temporary directory for LMDB database."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir)
+        # LMDB uses a directory, so provide the db path
+        yield Path(tmpdir) / "test.lmdb"
 
 
 @pytest.fixture
-def goal_storage(temp_goal_dir):
-    """Create a GoalStorage with a temp directory."""
-    return GoalStorage(temp_goal_dir)
+def goal_storage(temp_db_path):
+    """Create a GoalStorage with a temp database."""
+    return GoalStorage(temp_db_path)
 
 
 @pytest.fixture
@@ -246,6 +247,27 @@ async def test_todo_plan_links(goal_storage):
     """Test many-to-many todo-plan linking."""
     now = datetime.now().isoformat()
 
+    # Create the entities first (required for Rust backend)
+    goal = GoalData(
+        id="goal-1", title="Test Goal", description="", weight=5, status="active",
+        acceptance_criteria=[], created_at=now, updated_at=now
+    )
+    await goal_storage.save_goal(goal)
+
+    plan1 = PlanData(id="plan-1", goal_id="goal-1", title="Plan 1", description="",
+                     status="active", created_at=now, updated_at=now)
+    plan2 = PlanData(id="plan-2", goal_id="goal-1", title="Plan 2", description="",
+                     status="active", created_at=now, updated_at=now)
+    await goal_storage.save_plan(plan1)
+    await goal_storage.save_plan(plan2)
+
+    todo1 = TodoData(id="todo-1", title="Todo 1", description="", status="pending",
+                     is_spike=False, created_at=now, updated_at=now)
+    todo2 = TodoData(id="todo-2", title="Todo 2", description="", status="pending",
+                     is_spike=False, created_at=now, updated_at=now)
+    await goal_storage.save_todo(todo1)
+    await goal_storage.save_todo(todo2)
+
     # Create links
     link1 = TodoPlanLink(todo_id="todo-1", plan_id="plan-1", created_at=now)
     link2 = TodoPlanLink(todo_id="todo-1", plan_id="plan-2", created_at=now)
@@ -275,6 +297,14 @@ async def test_todo_plan_links(goal_storage):
 async def test_todo_dependencies(goal_storage):
     """Test todo dependency graph."""
     now = datetime.now().isoformat()
+
+    # Create the todos first (required for Rust backend)
+    for i in range(1, 4):
+        todo = TodoData(
+            id=f"todo-{i}", title=f"Todo {i}", description="", status="pending",
+            is_spike=False, created_at=now, updated_at=now
+        )
+        await goal_storage.save_todo(todo)
 
     # todo-2 depends on todo-1
     # todo-3 depends on todo-1 and todo-2
@@ -573,9 +603,15 @@ async def test_get_hierarchy_detects_cycles(goal_storage):
     """Test that hierarchy traversal detects cycles in dependencies."""
     now = datetime.now().isoformat()
 
-    # Create plan (no goal needed for this test)
+    # Create goal and plan
+    goal = GoalData(
+        id="goal-1", title="Goal", description="", weight=5, status="active",
+        acceptance_criteria=[], created_at=now, updated_at=now,
+    )
+    await goal_storage.save_goal(goal)
+
     plan = PlanData(
-        id="plan-1", goal_id="", title="Plan", description="",
+        id="plan-1", goal_id="goal-1", title="Plan", description="",
         status="active", created_at=now, updated_at=now,
     )
     await goal_storage.save_plan(plan)

@@ -240,4 +240,9 @@ impl StorageClient {
     ) -> Result<Vec<SessionBinding>> {
         self.engine.get_bindings_for_entity(entity_type, entity_id).await
     }
+
+    /// List all session bindings in the storage.
+    pub async fn list_bindings(&self) -> Result<Vec<SessionBinding>> {
+        self.engine.list_bindings().await
+    }
 }

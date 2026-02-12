@@ -253,4 +253,9 @@ pub trait StorageEngine: Send + Sync {
         entity_type: &str,
         entity_id: &str,
     ) -> Result<Vec<SessionBinding>>;
+
+    /// List all session bindings in the storage.
+    ///
+    /// Returns all bindings regardless of session or entity.
+    async fn list_bindings(&self) -> Result<Vec<SessionBinding>>;
 }
