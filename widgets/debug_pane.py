@@ -193,9 +193,13 @@ class DebugPane(RichLog):
     def on_click(self, event: Click) -> None:
         """Handle click on log lines. Ctrl+click inserts into input."""
         if event.ctrl:
-            # Get line number from y position (relative to scroll)
-            # RichLog stores lines, so we can calculate which line was clicked
-            line_idx = event.y + self.scroll_offset.y
+            # Get position relative to content area (accounting for borders/padding)
+            content_offset = event.get_content_offset(self)
+            if content_offset is None:
+                return  # Click was on border/padding, not content
+
+            # Calculate line index from content y position plus scroll offset
+            line_idx = content_offset.y + self.scroll_offset.y
             if 0 <= line_idx < len(self._line_entries):
                 entry = self._line_entries[line_idx]
                 full_text = self._format_entry_full(entry)
