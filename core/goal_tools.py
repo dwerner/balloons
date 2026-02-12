@@ -43,6 +43,7 @@ GOAL_TOOL_NAMES = {
     "update_plan",
     "create_todo",
     "update_todo",
+    "delete_todo",
     "list_goals",
     "list_plans",
     "list_todos",
@@ -63,6 +64,7 @@ GOAL_MUTATION_TOOLS = {
     "update_plan",
     "create_todo",
     "update_todo",
+    "delete_todo",
     "mark_todo_done",
     "bind_session",
     "rebind_session",
@@ -339,6 +341,34 @@ Use this when:
                     "plan_id": {
                         "type": "string",
                         "description": "New parent plan ID (can be prefix) - reparents the todo"
+                    }
+                },
+                "required": ["todo_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_todo",
+            "description": """Permanently delete a todo.
+
+Removes the todo, its plan links, dependencies, and any session bindings.
+This action cannot be undone.
+
+Use this when:
+- A todo was created by mistake
+- A todo is no longer relevant and should be removed (not just abandoned)
+- Cleaning up duplicate todos
+
+Note: Consider using update_todo with status='abandoned' if you want to
+preserve the todo for historical reference instead of permanently deleting it.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "todo_id": {
+                        "type": "string",
+                        "description": "ID of the todo to delete (can be prefix)"
                     }
                 },
                 "required": ["todo_id"]
@@ -681,6 +711,8 @@ async def execute_goal_tool(
         return await _create_todo(args, storage)
     elif name == "update_todo":
         return await _update_todo(args, storage)
+    elif name == "delete_todo":
+        return await _delete_todo(args, storage)
     elif name == "list_goals":
         return await _list_goals(args, storage)
     elif name == "list_plans":
@@ -1166,6 +1198,64 @@ async def _update_todo(args: dict, storage) -> tuple[str, bool]:
             result += f" ({todo.timebox_minutes} min)"
 
     return result, False
+
+
+async def _delete_todo(args: dict, storage) -> tuple[str, bool]:
+    """Delete a todo permanently."""
+    todo_id_prefix = args.get("todo_id", "").strip()
+    if not todo_id_prefix:
+        return "Error: todo_id is required", True
+
+    # Find todo by prefix
+    all_todos = await storage.list_todos(include_spikes=True)
+    todo = None
+    for t in all_todos:
+        if t.id.startswith(todo_id_prefix):
+            todo = t
+            break
+
+    if not todo:
+        return f"Error: Todo not found: {todo_id_prefix}", True
+
+    # Get plan info for display before deleting
+    plan_ids = await storage.get_plans_for_todo(todo.id)
+    plan_title = "unlinked"
+    if plan_ids:
+        plan = await storage.load_plan(plan_ids[0])
+        if plan:
+            plan_title = plan.title
+
+    # Delete all plan links
+    for plan_id in plan_ids:
+        await storage.delete_todo_plan_link(todo.id, plan_id)
+
+    # Delete all dependencies (both directions)
+    # Get todos that this todo depends on
+    dep_ids = await storage.get_dependencies(todo.id)
+    for dep_id in dep_ids:
+        await storage.delete_todo_dependency(todo.id, dep_id)
+
+    # Get todos that depend on this todo
+    dependent_ids = await storage.get_dependents(todo.id)
+    for dependent_id in dependent_ids:
+        await storage.delete_todo_dependency(dependent_id, todo.id)
+
+    # Release any session bindings for this todo
+    bindings = await storage.get_bindings_for_entity("todo", todo.id, active_only=True)
+    now = datetime.now().isoformat()
+    for binding in bindings:
+        binding.released_at = now
+        await storage.save_session_binding(binding)
+
+    # Delete the todo itself
+    await storage.delete_todo(todo.id)
+
+    return (
+        f"Deleted todo: {todo.title}\n"
+        f"ID: {todo.id}\n"
+        f"Plan: {plan_title}\n"
+        f"Cleaned up: {len(plan_ids)} plan link(s), {len(dep_ids) + len(dependent_ids)} dependency(ies), {len(bindings)} binding(s)"
+    ), False
 
 
 async def _list_goals(args: dict, storage) -> tuple[str, bool]:

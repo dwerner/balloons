@@ -177,6 +177,11 @@ Track goals, plans, and todos across sessions.
 **update_todo** - Update an existing todo (rename, change status, etc.)
 - `todo_id` (required), `title`, `description`, `status`, `is_spike`, `timebox_minutes`, `plan_id` (reparent)
 
+**delete_todo** - Permanently delete a todo
+- `todo_id` (required): ID of the todo to delete (can be prefix)
+- Removes todo, plan links, dependencies, and session bindings
+- Consider `update_todo` with `status: "abandoned"` to preserve history instead
+
 **list_goals** - List goals (optionally include completed)
 
 **list_plans** - List plans (filter by goal_id). Use to find plan IDs for create_todo.

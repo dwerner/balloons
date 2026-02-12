@@ -1952,6 +1952,176 @@ class TestUnbindSessions:
         assert "No orphaned" in result or "0" in result or "no" in result.lower()
 
 
+class TestDeleteTodo:
+    """Tests for delete_todo tool."""
+
+    @pytest.mark.asyncio
+    async def test_delete_todo_success(self, goal_storage, mock_session, monkeypatch):
+        """Test successful todo deletion."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        goal = GoalData(
+            id="goal-1", title="Goal", description="", weight=5, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal)
+
+        plan = PlanData(
+            id="plan-1", goal_id="goal-1", title="Plan", description="",
+            status="active", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan)
+
+        todo = TodoData(
+            id="todo-123", title="Task to delete", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+        await goal_storage.save_todo_plan_link(TodoPlanLink(
+            todo_id="todo-123", plan_id="plan-1", created_at=now,
+        ))
+
+        result, is_error = await execute_goal_tool(
+            "delete_todo",
+            {"todo_id": "todo-123"},
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Deleted todo" in result
+        assert "Task to delete" in result
+
+        # Verify todo was deleted
+        deleted_todo = await goal_storage.load_todo("todo-123")
+        assert deleted_todo is None
+
+        # Verify plan link was deleted
+        plan_todos = await goal_storage.get_todos_for_plan("plan-1")
+        assert "todo-123" not in plan_todos
+
+    @pytest.mark.asyncio
+    async def test_delete_todo_with_prefix(self, goal_storage, mock_session, monkeypatch):
+        """Test deleting todo by ID prefix."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo = TodoData(
+            id="abcdef12-3456-7890-abcd-ef1234567890", title="Task", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "delete_todo",
+            {"todo_id": "abcdef12"},  # Just prefix
+            mock_session,
+        )
+
+        assert not is_error
+        deleted_todo = await goal_storage.load_todo("abcdef12-3456-7890-abcd-ef1234567890")
+        assert deleted_todo is None
+
+    @pytest.mark.asyncio
+    async def test_delete_todo_not_found(self, goal_storage, mock_session, monkeypatch):
+        """Test error when todo doesn't exist."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "delete_todo",
+            {"todo_id": "nonexistent"},
+            mock_session,
+        )
+
+        assert is_error
+        assert "not found" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_delete_todo_missing_id(self, goal_storage, mock_session, monkeypatch):
+        """Test error when todo_id is missing."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "delete_todo",
+            {},
+            mock_session,
+        )
+
+        assert is_error
+        assert "todo_id is required" in result
+
+    @pytest.mark.asyncio
+    async def test_delete_todo_with_dependencies(self, goal_storage, mock_session, monkeypatch):
+        """Test deleting a todo that has dependencies."""
+        from storage_schema import TodoDependency
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+
+        # Create a todo that will depend on the one we delete
+        dependent_todo = TodoData(
+            id="dependent-todo", title="Dependent task", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(dependent_todo)
+
+        # Create the todo to delete (with a dependency on it)
+        todo_to_delete = TodoData(
+            id="todo-to-delete", title="Task to delete", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo_to_delete)
+
+        # dependent_todo depends on todo_to_delete
+        await goal_storage.save_todo_dependency(TodoDependency(
+            todo_id="dependent-todo", depends_on_id="todo-to-delete", created_at=now,
+        ))
+
+        result, is_error = await execute_goal_tool(
+            "delete_todo",
+            {"todo_id": "todo-to-delete"},
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Deleted todo" in result
+        assert "dependency" in result.lower()
+
+        # Verify todo was deleted
+        deleted_todo = await goal_storage.load_todo("todo-to-delete")
+        assert deleted_todo is None
+
+        # Verify dependency was cleaned up
+        deps = await goal_storage.get_dependencies("dependent-todo")
+        assert "todo-to-delete" not in deps
+
+    @pytest.mark.asyncio
+    async def test_delete_spike_todo(self, goal_storage, mock_session, monkeypatch):
+        """Test deleting a spike todo."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        spike = TodoData(
+            id="spike-123", title="Spike to delete", description="",
+            status="pending", is_spike=True, timebox_minutes=30,
+            created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(spike)
+
+        result, is_error = await execute_goal_tool(
+            "delete_todo",
+            {"todo_id": "spike-123"},
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Deleted todo" in result
+
+        # Verify spike was deleted
+        deleted_spike = await goal_storage.load_todo("spike-123")
+        assert deleted_spike is None
+
+
 class TestUnknownTool:
     """Test handling of unknown tool names."""
 

@@ -613,6 +613,18 @@ creating a duplicate.
 ```
 Only `todo_id` is required; other fields are optional and only update if provided.
 
+**delete_todo** - Permanently delete a todo
+```json
+{
+  "name": "delete_todo",
+  "args": {
+    "todo_id": "jkl012"  // Can be prefix
+  }
+}
+```
+Permanently removes the todo, its plan links, dependencies, and session bindings.
+Consider using `update_todo` with `status: "abandoned"` to preserve history instead.
+
 **list_goals** - List all goals
 ```json
 {

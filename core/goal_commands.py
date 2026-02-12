@@ -55,6 +55,18 @@ class TodoDoneResult:
 
 
 @dataclass
+class TodoDeleteResult:
+    """Result of delete_todo command."""
+    success: bool
+    error: Optional[str] = None
+    todo: Optional[TodoData] = None
+    plan_links_deleted: int = 0
+    dependencies_deleted: int = 0
+    bindings_released: int = 0
+    formatted: str = ""
+
+
+@dataclass
 class BindResult:
     """Result of :bind command."""
     success: bool
@@ -464,6 +476,77 @@ class GoalCommandExecutor:
         return None
 
     # =========================================================================
+    # delete_todo command
+    # =========================================================================
+
+    async def delete_todo(self, todo_id: str) -> "TodoDeleteResult":
+        """Delete a todo permanently.
+
+        Removes the todo, its plan links, dependencies, and releases session bindings.
+        """
+        try:
+            storage = await self._get_storage()
+
+            # Find todo by prefix
+            todo = await self._find_todo_by_prefix(todo_id)
+            if not todo:
+                return TodoDeleteResult(
+                    success=False,
+                    error=f"Todo not found: {todo_id}"
+                )
+
+            # Get plan info for display before deleting
+            plan_ids = await storage.get_plans_for_todo(todo.id)
+            plan_title = "unlinked"
+            if plan_ids:
+                plan = await storage.load_plan(plan_ids[0])
+                if plan:
+                    plan_title = plan.title
+
+            # Delete all plan links
+            for plan_id in plan_ids:
+                await storage.delete_todo_plan_link(todo.id, plan_id)
+
+            # Delete all dependencies (both directions)
+            dep_ids = await storage.get_dependencies(todo.id)
+            for dep_id in dep_ids:
+                await storage.delete_todo_dependency(todo.id, dep_id)
+
+            dependent_ids = await storage.get_dependents(todo.id)
+            for dependent_id in dependent_ids:
+                await storage.delete_todo_dependency(dependent_id, todo.id)
+
+            # Release any session bindings for this todo
+            bindings = await storage.get_bindings_for_entity("todo", todo.id, active_only=True)
+            now = datetime.now().isoformat()
+            for binding in bindings:
+                binding.released_at = now
+                await storage.save_session_binding(binding)
+
+            # Delete the todo itself
+            await storage.delete_todo(todo.id)
+
+            formatted = (
+                f"[green]✓[/green] Deleted todo: [bold]{todo.title}[/bold]\n"
+                f"Plan: {plan_title}\n"
+                f"Cleaned up: {len(plan_ids)} plan link(s), "
+                f"{len(dep_ids) + len(dependent_ids)} dependency(ies), "
+                f"{len(bindings)} binding(s)"
+            )
+
+            return TodoDeleteResult(
+                success=True,
+                todo=todo,
+                plan_links_deleted=len(plan_ids),
+                dependencies_deleted=len(dep_ids) + len(dependent_ids),
+                bindings_released=len(bindings),
+                formatted=formatted
+            )
+
+        except Exception as e:
+            return TodoDeleteResult(success=False, error=str(e))
+
+    # =========================================================================
     # :bind command
     # =========================================================================
 
@@ -667,6 +750,12 @@ async def mark_todo_done(todo_id: str, session_id: str) -> TodoDoneResult:
     """Convenience function for marking todo done."""
     executor = GoalCommandExecutor()
     return await executor.mark_todo_done(todo_id, session_id)
+
+
+async def delete_todo(todo_id: str) -> TodoDeleteResult:
+    """Convenience function for deleting a todo."""
+    executor = GoalCommandExecutor()
+    return await executor.delete_todo(todo_id)
 
 
 # =============================================================================
