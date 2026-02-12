@@ -2,7 +2,7 @@
 //!
 //! Generated from Python domain entities marked with @rust_schema.
 //! Source: models.py and other domain modules
-//! Generated: 2026-02-09T16:28:18.022613
+//! Generated: 2026-02-12T12:22:32.313702
 //!
 //! To regenerate:
 //!     python -m codegen.generate_rust
@@ -21,7 +21,9 @@ pub struct TurnData {
     pub timestamp: String,
     pub context_mode: String,
     pub summary: String,
+    #[serde(default)]
     pub exchange_id: Option<String>,
+    #[serde(default)]
     pub sentiment: Option<String>,
 }
 
@@ -35,10 +37,13 @@ pub struct SessionData {
     pub total_output_tokens: i64,
     pub total_cost: f64,
     pub context_window: i64,
+    #[serde(default)]
     pub parent_id: Option<String>,
+    #[serde(default)]
     pub children: Vec<serde_json::Value>,
     pub returned: bool,
     pub return_condition: String,
+    #[serde(default)]
     pub working_directories: Vec<String>,
     pub title: String,
     pub summary: String,
@@ -55,6 +60,7 @@ pub struct SessionData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnOrder {
     pub session_id: String,
+    #[serde(default)]
     pub turn_ids: Vec<String>,
 }
 
@@ -86,6 +92,7 @@ pub struct ReviewData {
     pub user_summary: String,
     pub llm_commentary: String,
     pub spec_version: String,
+    #[serde(default)]
     pub session_duration_minutes: Option<i64>,
     pub turn_count: i64,
     pub sentiment_counts: serde_json::Value,
@@ -98,10 +105,13 @@ pub struct GoalData {
     pub description: String,
     pub weight: i64,
     pub status: String,
+    #[serde(default)]
     pub acceptance_criteria: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
     pub completed_at: Option<String>,
+    #[serde(default)]
     pub supersedes_id: Option<String>,
 }
 
@@ -114,7 +124,9 @@ pub struct PlanData {
     pub status: String,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
     pub completed_at: Option<String>,
+    #[serde(default)]
     pub postmortem: Option<String>,
 }
 
@@ -127,7 +139,9 @@ pub struct TodoData {
     pub is_spike: bool,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
     pub completed_at: Option<String>,
+    #[serde(default)]
     pub timebox_minutes: Option<i64>,
 }
 
@@ -153,5 +167,6 @@ pub struct SessionBinding {
     pub entity_id: String,
     pub role: String,
     pub created_at: String,
+    #[serde(default)]
     pub released_at: Option<String>,
 }

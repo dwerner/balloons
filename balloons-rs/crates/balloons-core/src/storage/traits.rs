@@ -19,6 +19,9 @@ pub enum Error {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("Schema version mismatch: database is version {db_version}, application expects {app_version}")]
+    SchemaTooNew { db_version: u32, app_version: u32 },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

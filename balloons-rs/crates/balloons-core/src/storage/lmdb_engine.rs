@@ -34,6 +34,32 @@ fn parse_iso_to_unix(iso_str: &str) -> i64 {
 /// set upfront. If we hit MDB_MAP_FULL, we can reopen with a larger size.
 const DEFAULT_MAP_SIZE: usize = 1024 * 1024 * 1024; // 1GB
 
+// ============================================================================
+// Schema Versioning
+// ============================================================================
+
+/// Key used to store the schema version in the metadata table.
+const SCHEMA_VERSION_KEY: &str = "__schema_version__";
+
+/// Current schema version. Increment this when making breaking changes.
+///
+/// Version history:
+/// - 1: Initial schema with goal system tables
+const CURRENT_SCHEMA_VERSION: u32 = 1;
+
+/// Result of checking the database schema version against the application's expected version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchemaStatus {
+    /// Schema version matches - no action needed
+    Current,
+    /// Database has older schema - migrations available
+    NeedsMigration { from: u32, to: u32 },
+    /// Database has newer schema than application - cannot open safely
+    TooNew { db_version: u32, app_version: u32 },
+    /// Database has no version stamp (legacy or fresh database)
+    Unversioned,
+}
+
 /// LMDB-backed storage engine using heed
 ///
 /// ## Database Schema
@@ -212,7 +238,7 @@ impl LmdbEngine {
 
         wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
 
-        Ok(Self {
+        let engine = Self {
             env: Arc::new(env),
 
             // Session management
@@ -237,7 +263,138 @@ impl LmdbEngine {
             session_bindings,
             bindings_by_session,
             bindings_by_entity,
-        })
+        };
+
+        // Ensure schema version is compatible and up-to-date
+        engine.ensure_schema_version()?;
+
+        Ok(engine)
+    }
+
+    // =========================================================================
+    // Schema Versioning Methods
+    // =========================================================================
+
+    /// Check the database schema version against the application's expected version.
+    ///
+    /// Returns the schema status indicating whether:
+    /// - The schema is current (no action needed)
+    /// - The schema needs migration (older version)
+    /// - The schema is too new (application is outdated)
+    /// - The schema is unversioned (legacy or fresh database)
+    pub fn check_schema_version(&self) -> Result<SchemaStatus> {
+        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        match self.metadata.get(&rtxn, SCHEMA_VERSION_KEY).map_err(|e| Error::Database(e.to_string()))? {
+            Some(bytes) => {
+                let version: u32 = serde_json::from_slice(bytes)
+                    .map_err(|e| Error::Serialization(e.to_string()))?;
+
+                if version == CURRENT_SCHEMA_VERSION {
+                    Ok(SchemaStatus::Current)
+                } else if version < CURRENT_SCHEMA_VERSION {
+                    Ok(SchemaStatus::NeedsMigration {
+                        from: version,
+                        to: CURRENT_SCHEMA_VERSION,
+                    })
+                } else {
+                    Ok(SchemaStatus::TooNew {
+                        db_version: version,
+                        app_version: CURRENT_SCHEMA_VERSION,
+                    })
+                }
+            }
+            None => Ok(SchemaStatus::Unversioned),
+        }
+    }
+
+    /// Stamp the database with the current schema version.
+    ///
+    /// This should be called after:
+    /// - Creating a new database
+    /// - Successfully completing all migrations
+    pub fn stamp_version(&self) -> Result<()> {
+        let bytes = serde_json::to_vec(&CURRENT_SCHEMA_VERSION)
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+
+        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        self.metadata
+            .put(&mut wtxn, SCHEMA_VERSION_KEY, &bytes)
+            .map_err(|e| Error::Database(e.to_string()))?;
+        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Run all necessary migrations to bring the database up to the current version.
+    ///
+    /// This is a no-op if the database is already at the current version or unversioned.
+    /// Migrations are run in order from the current version to the target version.
+    ///
+    /// # Migration Framework
+    ///
+    /// When adding a new migration:
+    /// 1. Increment CURRENT_SCHEMA_VERSION
+    /// 2. Add a match arm for the old version in the loop below
+    /// 3. Implement the migration function
+    /// 4. Add the version to the history comment
+    fn run_migrations(&self, from_version: u32) -> Result<()> {
+        // Migration framework: when adding migrations, uncomment the loop and add match arms.
+        // For now, we only have version 1 and no migrations to run.
+        //
+        // Example for future migrations:
+        // let mut current = from_version;
+        // while current < CURRENT_SCHEMA_VERSION {
+        //     match current {
+        //         0 => { self.migrate_v0_to_v1()?; current = 1; }
+        //         1 => { self.migrate_v1_to_v2()?; current = 2; }
+        //         _ => break,
+        //     }
+        // }
+
+        // Currently no migrations defined - fail if we somehow get here with an old version
+        if from_version < CURRENT_SCHEMA_VERSION {
+            return Err(Error::Database(format!(
+                "No migration path from version {} to {}",
+                from_version, CURRENT_SCHEMA_VERSION
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Ensure the database schema is compatible and up-to-date.
+    ///
+    /// This method:
+    /// 1. Checks the current schema version
+    /// 2. Runs migrations if needed
+    /// 3. Stamps the version if unversioned or after migrations
+    /// 4. Returns an error if the database is too new
+    ///
+    /// Called automatically during `open()`.
+    fn ensure_schema_version(&self) -> Result<()> {
+        match self.check_schema_version()? {
+            SchemaStatus::Current => {
+                // Nothing to do
+                Ok(())
+            }
+            SchemaStatus::Unversioned => {
+                // Fresh or legacy database - stamp with current version
+                // (We assume legacy databases are compatible with v1 since we're just
+                // adding the versioning system now)
+                self.stamp_version()?;
+                Ok(())
+            }
+            SchemaStatus::NeedsMigration { from, to: _ } => {
+                // Run migrations and stamp the new version
+                self.run_migrations(from)?;
+                self.stamp_version()?;
+                Ok(())
+            }
+            SchemaStatus::TooNew { db_version, app_version } => {
+                Err(Error::SchemaTooNew { db_version, app_version })
+            }
+        }
     }
 }
 
@@ -1246,6 +1403,50 @@ mod tests {
                 assert_eq!(loaded, session_ids);
             });
         }
+    }
+
+    // =========================================================================
+    // Schema Versioning Tests
+    // =========================================================================
+
+    #[test]
+    fn test_schema_version_stamped_on_open() {
+        let dir = TestDir::new("lmdb_test_schema_version_stamped");
+        let engine = LmdbEngine::open(dir.db_path()).unwrap();
+
+        // New database should be stamped with current version
+        let status = engine.check_schema_version().unwrap();
+        assert_eq!(status, SchemaStatus::Current);
+    }
+
+    #[test]
+    fn test_schema_version_persists() {
+        let dir = TestDir::new("lmdb_test_schema_version_persists");
+        let db_path = dir.db_path();
+
+        // Open and close
+        {
+            let _engine = LmdbEngine::open(&db_path).unwrap();
+        }
+
+        // Reopen and verify version is still there
+        {
+            let engine = LmdbEngine::open(&db_path).unwrap();
+            let status = engine.check_schema_version().unwrap();
+            assert_eq!(status, SchemaStatus::Current);
+        }
+    }
+
+    #[test]
+    fn test_schema_version_stamp() {
+        let dir = TestDir::new("lmdb_test_schema_version_stamp");
+        let engine = LmdbEngine::open(dir.db_path()).unwrap();
+
+        // After opening, we should be able to explicitly stamp (idempotent)
+        engine.stamp_version().unwrap();
+
+        let status = engine.check_schema_version().unwrap();
+        assert_eq!(status, SchemaStatus::Current);
     }
 
 }

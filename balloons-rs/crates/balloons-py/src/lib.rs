@@ -530,11 +530,228 @@ fn recover_database(py: Python<'_>, source_path: &str, target_path: &str) -> PyR
     })
 }
 
+// =============================================================================
+// Backup and Recovery functions
+// =============================================================================
+
+/// Create a timestamped backup of the LMDB database.
+///
+/// This creates a consistent snapshot by copying the LMDB files.
+/// The backup is placed in a timestamped subdirectory.
+///
+/// Args:
+///     source_path: Path to the LMDB database directory
+///     backup_dir: Optional custom backup directory. If None, creates backup
+///                 next to source as `{name}.backup.{timestamp}/`
+///
+/// Returns:
+///     Dict with keys: backup_path, timestamp, size_bytes, files_copied
+#[pyfunction]
+#[pyo3(signature = (source_path, backup_dir=None))]
+fn create_backup(
+    py: Python<'_>,
+    source_path: &str,
+    backup_dir: Option<&str>,
+) -> PyResult<PyObject> {
+    let source = source_path.to_string();
+    let backup = backup_dir.map(|s| std::path::PathBuf::from(s));
+
+    py.allow_threads(|| {
+        let result = balloons_core::create_backup(&source, backup.as_deref())
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        Python::with_gil(|py| {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("backup_path", result.backup_path.to_string_lossy().to_string())?;
+            dict.set_item("timestamp", result.timestamp)?;
+            dict.set_item("size_bytes", result.size_bytes)?;
+            dict.set_item("files_copied", result.files_copied)?;
+            Ok(dict.into())
+        })
+    })
+}
+
+/// Export all data from an LMDB database to JSON files.
+///
+/// Creates:
+/// - `manifest.json`: Export metadata and session history
+/// - `sessions/`: Directory containing one JSON file per session
+///
+/// Args:
+///     source_path: Path to the LMDB database directory
+///     export_path: Path for the export directory (will be created)
+///
+/// Returns:
+///     Dict with keys: export_path, timestamp, sessions_exported, turns_exported, size_bytes
+#[pyfunction]
+fn export_to_json(py: Python<'_>, source_path: &str, export_path: &str) -> PyResult<PyObject> {
+    let source = source_path.to_string();
+    let export = export_path.to_string();
+
+    py.allow_threads(|| {
+        let result = future::block_on(async {
+            balloons_core::export_to_json(&source, &export, None::<fn(&str)>).await
+        })
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        Python::with_gil(|py| {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("export_path", result.export_path.to_string_lossy().to_string())?;
+            dict.set_item("timestamp", result.timestamp)?;
+            dict.set_item("sessions_exported", result.sessions_exported)?;
+            dict.set_item("turns_exported", result.turns_exported)?;
+            dict.set_item("size_bytes", result.size_bytes)?;
+            Ok(dict.into())
+        })
+    })
+}
+
+/// Import data from a JSON export into an LMDB database.
+///
+/// Sessions that already exist in the target are skipped.
+///
+/// Args:
+///     export_path: Path to the export directory
+///     target_path: Path to the target LMDB database (will be created if needed)
+///
+/// Returns:
+///     Dict with keys: target_path, sessions_imported, sessions_skipped, turns_imported
+#[pyfunction]
+fn import_from_json(py: Python<'_>, export_path: &str, target_path: &str) -> PyResult<PyObject> {
+    let export = export_path.to_string();
+    let target = target_path.to_string();
+
+    py.allow_threads(|| {
+        let result = future::block_on(async {
+            balloons_core::import_from_json(&export, &target, None::<fn(&str)>).await
+        })
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        Python::with_gil(|py| {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("target_path", result.target_path.to_string_lossy().to_string())?;
+            dict.set_item("sessions_imported", result.sessions_imported)?;
+            dict.set_item("sessions_skipped", result.sessions_skipped)?;
+            dict.set_item("turns_imported", result.turns_imported)?;
+            Ok(dict.into())
+        })
+    })
+}
+
+/// Check the health of an LMDB database.
+///
+/// Verifies:
+/// - Database can be opened
+/// - All sessions are readable
+/// - Turn references are consistent
+///
+/// Args:
+///     path: Path to the LMDB database directory
+///
+/// Returns:
+///     Dict with health report (can_open, is_healthy, session_count, turn_count, etc.)
+#[pyfunction]
+fn health_check(py: Python<'_>, path: &str) -> PyResult<PyObject> {
+    let path = path.to_string();
+
+    py.allow_threads(|| {
+        let result = future::block_on(async { balloons_core::health_check(&path).await })
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        Python::with_gil(|py| {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("path", result.path.to_string_lossy().to_string())?;
+            dict.set_item("can_open", result.can_open)?;
+            dict.set_item("is_healthy", result.is_healthy)?;
+            dict.set_item("session_count", result.session_count)?;
+            dict.set_item("turn_count", result.turn_count)?;
+            dict.set_item("orphaned_turns", result.orphaned_turns)?;
+            dict.set_item("missing_turns", result.missing_turns)?;
+            dict.set_item("size_bytes", result.size_bytes)?;
+            dict.set_item("issues", result.issues)?;
+            Ok(dict.into())
+        })
+    })
+}
+
+/// List available backups for a database.
+///
+/// Looks for directories matching the backup naming pattern next to the source.
+///
+/// Args:
+///     source_path: Path to the LMDB database directory
+///
+/// Returns:
+///     List of dicts with backup info (backup_path, timestamp, size_bytes, files_copied)
+#[pyfunction]
+fn list_backups(py: Python<'_>, source_path: &str) -> PyResult<PyObject> {
+    let source = source_path.to_string();
+
+    py.allow_threads(|| {
+        let backups = balloons_core::list_backups(&source)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        Python::with_gil(|py| {
+            let list = pyo3::types::PyList::empty(py);
+            for backup in backups {
+                let dict = pyo3::types::PyDict::new(py);
+                dict.set_item("backup_path", backup.backup_path.to_string_lossy().to_string())?;
+                dict.set_item("timestamp", backup.timestamp)?;
+                dict.set_item("size_bytes", backup.size_bytes)?;
+                dict.set_item("files_copied", backup.files_copied)?;
+                list.append(dict)?;
+            }
+            Ok(list.into())
+        })
+    })
+}
+
+/// Restore from a backup directory.
+///
+/// Copies the backup files to the target location.
+///
+/// Args:
+///     backup_path: Path to the backup directory
+///     target_path: Path to restore to (will be overwritten if exists)
+///
+/// Returns:
+///     Dict with restore info (backup_path, timestamp, size_bytes, files_copied)
+#[pyfunction]
+fn restore_from_backup(
+    py: Python<'_>,
+    backup_path: &str,
+    target_path: &str,
+) -> PyResult<PyObject> {
+    let backup = backup_path.to_string();
+    let target = target_path.to_string();
+
+    py.allow_threads(|| {
+        let result = balloons_core::restore_from_backup(&backup, &target)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        Python::with_gil(|py| {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("backup_path", result.backup_path.to_string_lossy().to_string())?;
+            dict.set_item("timestamp", result.timestamp)?;
+            dict.set_item("size_bytes", result.size_bytes)?;
+            dict.set_item("files_copied", result.files_copied)?;
+            Ok(dict.into())
+        })
+    })
+}
+
 /// Python module definition
 #[pymodule]
 fn balloons_storage(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Storage>()?;
     m.add_class::<Supervisor>()?;
     m.add_function(wrap_pyfunction!(recover_database, m)?)?;
+    // Backup and recovery functions
+    m.add_function(wrap_pyfunction!(create_backup, m)?)?;
+    m.add_function(wrap_pyfunction!(export_to_json, m)?)?;
+    m.add_function(wrap_pyfunction!(import_from_json, m)?)?;
+    m.add_function(wrap_pyfunction!(health_check, m)?)?;
+    m.add_function(wrap_pyfunction!(list_backups, m)?)?;
+    m.add_function(wrap_pyfunction!(restore_from_backup, m)?)?;
     Ok(())
 }

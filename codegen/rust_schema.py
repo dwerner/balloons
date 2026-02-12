@@ -136,6 +136,30 @@ def collect_rust_imports(cls: type) -> set[str]:
     return imports
 
 
+def needs_serde_default(py_type: type) -> bool:
+    """Check if a field type should have #[serde(default)].
+
+    Returns True for Optional<T> and Vec<T> types, which enables graceful
+    deserialization when these fields are missing from stored data.
+    This supports schema evolution - new optional/collection fields can
+    be added without breaking existing stored data.
+    """
+    origin = get_origin(py_type)
+
+    # Check for Optional[T] (Union[T, None])
+    if origin is Union:
+        args = get_args(py_type)
+        non_none_args = [a for a in args if a is not type(None)]
+        if len(non_none_args) == 1 and type(None) in args:
+            return True
+
+    # Check for list[T] (becomes Vec<T>)
+    if origin is list:
+        return True
+
+    return False
+
+
 def generate_rust_struct(cls: type) -> str:
     """Generate Rust struct definition from a Python dataclass."""
     if not is_dataclass(cls):
@@ -148,7 +172,15 @@ def generate_rust_struct(cls: type) -> str:
     ]
 
     for f in fields(cls):
-        rust_type = python_type_to_rust(type_hints[f.name], type_hints)
+        py_type = type_hints[f.name]
+        rust_type = python_type_to_rust(py_type, type_hints)
+
+        # Add #[serde(default)] for Option<T> and Vec<T> fields
+        # This enables graceful schema evolution - new optional/collection fields
+        # will deserialize as None/[] even if missing from stored data
+        if needs_serde_default(py_type):
+            lines.append(f"    #[serde(default)]")
+
         lines.append(f"    pub {f.name}: {rust_type},")
 
     lines.append("}")

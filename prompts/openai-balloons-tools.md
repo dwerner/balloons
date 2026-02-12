@@ -159,6 +159,14 @@ Create presentation slides that appear in the Slides tab.
 
 Track goals, plans, and todos across sessions.
 
+**IMPORTANT**: Always use these goal management tools instead of CLI commands like `:goals`,
+`:plans`, or `:todos`. The tools provide richer information and integrate better with your
+workflow. Specifically:
+- Use `list_goals` instead of `:goals`
+- Use `list_plans` instead of `:plans`
+- Use `list_todos` instead of `:todos`
+- Use `get_hierarchy` to understand how goals, plans, and todos relate to each other
+
 ### Available Tools
 
 **create_goal** - Create a new goal with acceptance criteria
@@ -187,6 +195,19 @@ Track goals, plans, and todos across sessions.
 **list_plans** - List plans (filter by goal_id). Use to find plan IDs for create_todo.
 
 **list_todos** - List priority-ranked todos (optionally filter by plan)
+
+**get_hierarchy** - Get complete hierarchy for any entity (goal, plan, or todo)
+- `entity_type` (required): "goal", "plan", or "todo"
+- `entity_id` (required): ID of the entity (can be prefix)
+- `include_bindings`: Show session bindings (default: true)
+- `include_dependencies`: Show todo dependencies (default: true)
+
+Use `get_hierarchy` to understand context and relationships:
+- For a **todo**: Shows parent plans, goal, and all dependencies
+- For a **plan**: Shows parent goal and all todos under it
+- For a **goal**: Shows all plans and their todos
+
+Returns: goal info, related plans, related todos with status, dependencies (with cycle detection), and session bindings.
 
 **mark_todo_done** - Mark a todo complete (triggers lifecycle hooks)
 

@@ -1,3 +1,4 @@
+pub mod backup;
 pub mod generated;
 pub mod recovery;
 pub mod storage;
@@ -13,3 +14,9 @@ pub use storage::{Error, LmdbEngine, Result, StorageClient, StorageEngine};
 
 // Re-export recovery utilities
 pub use recovery::{recover_database, RecoveryResult};
+
+// Re-export backup utilities
+pub use backup::{
+    create_backup, export_to_json, health_check, import_from_json, list_backups,
+    restore_from_backup, BackupError, BackupResult, ExportResult, HealthReport, ImportResult,
+};

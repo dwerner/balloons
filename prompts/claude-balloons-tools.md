@@ -520,6 +520,14 @@ Processes report one of three states:
 You have access to tools for tracking goals, plans, and todos. Use these to maintain
 alignment between sessions and high-level objectives.
 
+**IMPORTANT**: Always use these goal management tools instead of CLI commands like `:goals`,
+`:plans`, or `:todos`. The tools provide richer information and integrate better with your
+workflow. Specifically:
+- Use `list_goals` instead of `:goals`
+- Use `list_plans` instead of `:plans`
+- Use `list_todos` instead of `:todos`
+- Use `get_hierarchy` to understand how goals, plans, and todos relate to each other
+
 ### Why Use Goal Tracking?
 
 Goal tracking helps maintain focus across long conversations and multiple sessions:
@@ -654,6 +662,40 @@ Consider using `update_todo` with `status: "abandoned"` to preserve history inst
   }
 }
 ```
+
+**get_hierarchy** - Get the complete hierarchy for any entity (goal, plan, or todo)
+
+Use this to understand context and relationships. It traverses all connections to build
+a comprehensive view:
+- For a **todo**: Shows parent plans and goal, plus all dependencies
+- For a **plan**: Shows parent goal and all todos under it
+- For a **goal**: Shows all plans and their todos
+
+```json
+{
+  "name": "get_hierarchy",
+  "args": {
+    "entity_type": "todo",       // "goal", "plan", or "todo"
+    "entity_id": "abc123",       // Can be prefix
+    "include_bindings": true,    // Show session bindings (default: true)
+    "include_dependencies": true // Show todo dependencies (default: true)
+  }
+}
+```
+
+The result includes:
+- The goal at the top of the hierarchy
+- All related plans
+- All related todos with status indicators
+- Todo dependencies (what depends on what)
+- Cycle detection for dependency graphs
+- Session bindings for all entities
+
+**When to use `get_hierarchy`:**
+- When starting work on a todo - understand its context
+- When planning - see what already exists under a goal
+- When debugging dependency issues - detect cycles
+- When reviewing - see all work items and their status
 
 **mark_todo_done** - Mark a todo as complete
 ```json
