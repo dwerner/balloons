@@ -166,10 +166,15 @@ class GoalTreeWidget(Tree):
         """
         meta = event.style.meta
 
+        # Debug: log all meta to understand what's available
+        from core.debug_log import debug_log
+        debug_log.info(f"GoalTreeWidget click meta: {meta}", category="goal_tree")
+
         # Check if this is a click on the [+] new session widget
         if meta.get("new_session"):
             entity_type = meta.get("entity_type")
             entity_id = meta.get("entity_id")
+            debug_log.info(f"GoalTreeWidget [+] clicked: type={entity_type}, id={entity_id}", category="goal_tree")
             if entity_type and entity_id:
                 self.post_message(self.NewSessionRequested(entity_type, entity_id))
                 event.stop()
@@ -826,7 +831,7 @@ class GoalTreeView(Vertical):
 
     # --- Event Handlers ---
 
-    def on_goal_tree_activate_requested(self, event: GoalTreeWidget.ActivateRequested) -> None:
+    def on_goal_tree_widget_activate_requested(self, event: GoalTreeWidget.ActivateRequested) -> None:
         """Handle Enter key activation."""
         node_type = event.node_data.get("type")
 
@@ -841,21 +846,21 @@ class GoalTreeView(Vertical):
                 self._goal_state.select_entity(node_type, entity_id)
                 self.post_message(self.EntitySelected(node_type, entity_id))
 
-    def on_goal_tree_toggle_requested(self, event: GoalTreeWidget.ToggleRequested) -> None:
+    def on_goal_tree_widget_toggle_requested(self, event: GoalTreeWidget.ToggleRequested) -> None:
         """Handle Space key toggle."""
         # For now, just toggle expand/collapse (handled by widget)
         # Future: toggle context mode for session nodes
         pass
 
-    def on_goal_tree_colon_pressed(self, event: GoalTreeWidget.ColonPressed) -> None:
+    def on_goal_tree_widget_colon_pressed(self, event: GoalTreeWidget.ColonPressed) -> None:
         """Bubble up colon pressed."""
         self.post_message(self.ColonPressed())
 
-    def on_goal_tree_search_requested(self, event: GoalTreeWidget.SearchRequested) -> None:
+    def on_goal_tree_widget_search_requested(self, event: GoalTreeWidget.SearchRequested) -> None:
         """Bubble up search request."""
         self.post_message(self.SearchRequested())
 
-    def on_goal_tree_delete_requested(self, event: GoalTreeWidget.DeleteRequested) -> None:
+    def on_goal_tree_widget_delete_requested(self, event: GoalTreeWidget.DeleteRequested) -> None:
         """Handle delete request for entities or sessions."""
         node_type = event.node_data.get("type")
 
@@ -868,15 +873,15 @@ class GoalTreeView(Vertical):
             if entity_id:
                 self.post_message(self.DeleteRequested(node_type, entity_id))
 
-    def on_goal_tree_mark_todo_done_requested(self, event: GoalTreeWidget.MarkTodoDoneRequested) -> None:
+    def on_goal_tree_widget_mark_todo_done_requested(self, event: GoalTreeWidget.MarkTodoDoneRequested) -> None:
         """Bubble up mark todo done request."""
         self.post_message(self.MarkTodoDoneRequested(event.todo_id))
 
-    def on_goal_tree_bind_session_requested(self, event: GoalTreeWidget.BindSessionRequested) -> None:
+    def on_goal_tree_widget_bind_session_requested(self, event: GoalTreeWidget.BindSessionRequested) -> None:
         """Bubble up bind session request."""
         self.post_message(self.BindSessionRequested(event.entity_type, event.entity_id))
 
-    def on_goal_tree_context_mode_toggle_requested(self, event: GoalTreeWidget.ContextModeToggleRequested) -> None:
+    def on_goal_tree_widget_context_mode_toggle_requested(self, event: GoalTreeWidget.ContextModeToggleRequested) -> None:
         """Handle context mode toggle for a session.
 
         This toggles the context mode for all turns in the session.
@@ -897,8 +902,10 @@ class GoalTreeView(Vertical):
             self._tree_state.set_context_mode(session_id, turn.idx, new_mode)
             self.post_message(self.ContextModeChanged(session_id, turn.idx, new_mode))
 
-    def on_goal_tree_new_session_requested(self, event: GoalTreeWidget.NewSessionRequested) -> None:
+    def on_goal_tree_widget_new_session_requested(self, event: GoalTreeWidget.NewSessionRequested) -> None:
         """Bubble up new session request."""
+        from core.debug_log import debug_log
+        debug_log.info(f"GoalTreeView received NewSessionRequested: type={event.entity_type}, id={event.entity_id}", category="goal_tree")
         self.post_message(self.NewSessionRequested(event.entity_type, event.entity_id))
 
     def on_tree_node_selected(self, event) -> None:

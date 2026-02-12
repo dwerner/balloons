@@ -86,4 +86,19 @@ pub trait StorageEngine: Send + Sync {
         session_id: &str,
         turns: &[TurnData],
     ) -> Result<()>;
+
+    // =========================================================================
+    // Session History - tracks recently viewed sessions (MRU list)
+    // =========================================================================
+
+    /// Load the session history (list of session IDs, most recent first).
+    ///
+    /// Returns an empty vector if no history exists.
+    async fn load_session_history(&self) -> Result<Vec<String>>;
+
+    /// Save the session history (list of session IDs, most recent first).
+    ///
+    /// This replaces the entire history. The caller is responsible for
+    /// maintaining ordering and size limits.
+    async fn save_session_history(&self, session_ids: &[String]) -> Result<()>;
 }

@@ -55,7 +55,7 @@ class AsyncStorage:
 
     # Shared executor for all instances (1 thread is enough for I/O-bound storage)
     _executor: ThreadPoolExecutor | None = None
-    _executor_lock = asyncio.Lock()
+    _executor_lock: asyncio.Lock | None = None
 
     def __init__(self, db_path: str | Path | None = None):
         """Initialize async storage.
@@ -79,6 +79,9 @@ class AsyncStorage:
     async def _get_executor(cls) -> ThreadPoolExecutor:
         """Get or create the shared thread pool executor."""
         if cls._executor is None:
+            # Lazily create lock within async context to avoid event loop issues
+            if cls._executor_lock is None:
+                cls._executor_lock = asyncio.Lock()
             async with cls._executor_lock:
                 if cls._executor is None:
                     # Single thread is sufficient for sequential storage ops
@@ -319,6 +322,28 @@ class AsyncStorage:
         """
         json_data = json.dumps(turn_ids)
         await self._run_sync(self._storage.reorder_turns, session_id, json_data)
+
+    # =========================================================================
+    # Session History Operations
+    # =========================================================================
+
+    async def load_session_history(self) -> list[str]:
+        """Load session history (most recently viewed sessions first).
+
+        Returns:
+            List of session IDs in order of most recent access
+        """
+        json_data = await self._run_sync(self._storage.load_session_history)
+        return json.loads(json_data)
+
+    async def save_session_history(self, session_ids: list[str]) -> None:
+        """Save session history.
+
+        Args:
+            session_ids: List of session IDs in order of most recent access
+        """
+        json_data = json.dumps(session_ids)
+        await self._run_sync(self._storage.save_session_history, json_data)
 
     # =========================================================================
     # Wire Format Conversion

@@ -245,6 +245,45 @@ impl Storage {
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })
     }
+
+    /// Load the session history (list of session IDs, most recent first).
+    ///
+    /// Returns:
+    ///     JSON array of session IDs
+    fn load_session_history(&self, py: Python<'_>) -> PyResult<String> {
+        let client = Arc::clone(&self.client);
+
+        py.allow_threads(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move { client.load_session_history().await });
+            let history = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+            serde_json::to_string(&history).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Save the session history (list of session IDs, most recent first).
+    ///
+    /// Args:
+    ///     session_ids_json: JSON array of session IDs
+    fn save_session_history(&self, py: Python<'_>, session_ids_json: &str) -> PyResult<()> {
+        let session_ids: Vec<String> = serde_json::from_str(session_ids_json)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        let client = Arc::clone(&self.client);
+
+        py.allow_threads(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move {
+                client.save_session_history(&session_ids).await
+            });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
 }
 
 // =============================================================================
@@ -454,10 +493,48 @@ impl Supervisor {
     }
 }
 
+// =============================================================================
+// Recovery function
+// =============================================================================
+
+/// Recover all sessions from a source database to a target database.
+///
+/// This function copies sessions and their turns from the source database
+/// to the target database. Sessions that already exist in the target are skipped.
+///
+/// Args:
+///     source_path: Path to the source LMDB database directory
+///     target_path: Path to the target LMDB database directory
+///
+/// Returns:
+///     Dict with keys: recovered, skipped, failed, history_entries
+#[pyfunction]
+fn recover_database(py: Python<'_>, source_path: &str, target_path: &str) -> PyResult<PyObject> {
+    let source = source_path.to_string();
+    let target = target_path.to_string();
+
+    py.allow_threads(|| {
+        let result = future::block_on(async {
+            balloons_core::recover_database(&source, &target, None::<fn(&str)>).await
+        })
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        Python::with_gil(|py| {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("recovered", result.recovered)?;
+            dict.set_item("skipped", result.skipped)?;
+            dict.set_item("failed", result.failed)?;
+            dict.set_item("history_entries", result.history_entries)?;
+            Ok(dict.into())
+        })
+    })
+}
+
 /// Python module definition
 #[pymodule]
 fn balloons_storage(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Storage>()?;
     m.add_class::<Supervisor>()?;
+    m.add_function(wrap_pyfunction!(recover_database, m)?)?;
     Ok(())
 }

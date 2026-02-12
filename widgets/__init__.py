@@ -9,7 +9,7 @@ from .nested_tree import NestedTreeView
 from .goal_tree import GoalTreeView, GoalTreeWidget
 from .splitter import VerticalSplitter, HorizontalSplitter
 from .context_preview import ContextPreview, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult
-from .task_pane import TaskPane
+from .task_pane import TaskPane, ClickableSessionLink
 from .tool_bar import ToolBar
 from .preferences_modal import PreferencesModal
 from core.preferences import ToolPreferences, DEFAULT_TOOLS
@@ -25,6 +25,7 @@ from .merge_proposal_marker import MergeProposalMarker
 from .breadcrumb import Breadcrumb
 from .fork_proposal_modal import ForkProposalModal, ForkProposalResult, ResolvedBinding
 from .merge_proposal_modal import MergeProposalModal, MergeProposalResult
+from .bound_session_modal import BoundSessionModal, BoundSessionResult
 from .slides_pane import SlidesPane, SlideCard
 from .presentation_screen import PresentationScreen
 from .directory_picker import DirectoryBrowser
@@ -65,6 +66,7 @@ __all__ = [
     "NewSessionModal",
     "NewSessionResult",
     "TaskPane",
+    "ClickableSessionLink",
     "ToolBar",
     "PreferencesModal",
     "ToolPreferences",
@@ -84,6 +86,8 @@ __all__ = [
     "ResolvedBinding",
     "MergeProposalModal",
     "MergeProposalResult",
+    "BoundSessionModal",
+    "BoundSessionResult",
     "SlidesPane",
     "SlideCard",
     "PresentationScreen",

@@ -1270,3 +1270,23 @@ class Session:
         if sessions:
             return sessions[0]["id"]  # Already sorted by last_modified desc
         return None
+
+    @classmethod
+    async def load_session_history(cls) -> list[str]:
+        """Load session history (most recently viewed sessions first).
+
+        Returns:
+            List of session IDs in order of most recent access
+        """
+        storage = _get_storage()
+        return await storage.load_session_history()
+
+    @classmethod
+    async def save_session_history(cls, session_ids: list[str]) -> None:
+        """Save session history.
+
+        Args:
+            session_ids: List of session IDs in order of most recent access
+        """
+        storage = _get_storage()
+        await storage.save_session_history(session_ids)

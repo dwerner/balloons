@@ -142,6 +142,8 @@ class TreeEvent(Enum):
 
     FULL_REBUILD = "full_rebuild"
 
+    SESSION_HISTORY_CHANGED = "session_history_changed"
+
 
 # Type alias for observer callbacks
 ObserverCallback = Callable[[TreeEvent, dict[str, Any]], None]
@@ -349,9 +351,15 @@ class TreeState:
         self._current_session_id = session_id
 
         # Track session in history (move to front if already present)
+        history_changed = False
         if session_id in self._session_history:
-            self._session_history.remove(session_id)
-        self._session_history.insert(0, session_id)
+            if self._session_history[0] != session_id:
+                self._session_history.remove(session_id)
+                self._session_history.insert(0, session_id)
+                history_changed = True
+        else:
+            self._session_history.insert(0, session_id)
+            history_changed = True
         # Trim to max size
         if len(self._session_history) > self._session_history_max:
             self._session_history = self._session_history[:self._session_history_max]
@@ -360,6 +368,12 @@ class TreeState:
             "session_id": session_id,
             "prev_session_id": prev_session_id,
         })
+
+        # Notify about history change for persistence
+        if history_changed:
+            self._notify(TreeEvent.SESSION_HISTORY_CHANGED, {
+                "session_history": self._session_history.copy(),
+            })
 
     def get_session(self, session_id: str) -> SessionData | None:
         """Get session data by ID."""
@@ -386,6 +400,29 @@ class TreeState:
         if limit:
             return history[:limit]
         return history
+
+    def get_raw_session_history(self) -> list[str]:
+        """Get the raw session history list (for persistence).
+
+        Unlike get_session_history(), this returns the full internal list
+        without filtering by currently loaded sessions. Use this when
+        saving history to storage.
+
+        Returns:
+            The internal session history list
+        """
+        return self._session_history.copy()
+
+    def set_session_history(self, session_ids: list[str]) -> None:
+        """Set the session history from persistent storage.
+
+        Call this on startup to restore session history from storage.
+        The list is trimmed to _session_history_max entries.
+
+        Args:
+            session_ids: List of session IDs in order of most recent access
+        """
+        self._session_history = session_ids[:self._session_history_max]
 
     def get_session_color(self, session_id: str) -> str:
         """Get the color assigned to a session."""

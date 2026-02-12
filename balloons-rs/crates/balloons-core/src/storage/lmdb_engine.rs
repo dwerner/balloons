@@ -37,12 +37,17 @@ const DEFAULT_MAP_SIZE: usize = 1024 * 1024 * 1024; // 1GB
 /// - SESSIONS: session_id → JSON-encoded SessionData
 /// - TURNS: turn_id → JSON-encoded TurnData
 /// - TURN_ORDER: session_id → JSON-encoded TurnOrder
+/// - METADATA: key → value (for app-level metadata like session_history)
 pub struct LmdbEngine {
     env: Arc<Env>,
     sessions: Database<Str, Bytes>,
     turns: Database<Str, Bytes>,
     turn_order: Database<Str, Bytes>,
+    metadata: Database<Str, Bytes>,
 }
+
+/// Key used for session history in the metadata table
+const SESSION_HISTORY_KEY: &str = "session_history";
 
 impl LmdbEngine {
     /// Open or create a database at the given path
@@ -63,7 +68,7 @@ impl LmdbEngine {
         let env = unsafe {
             EnvOpenOptions::new()
                 .map_size(map_size)
-                .max_dbs(3) // sessions, turns, turn_order
+                .max_dbs(4) // sessions, turns, turn_order, metadata
                 .open(path)
                 .map_err(|e| Error::Database(e.to_string()))?
         };
@@ -80,6 +85,9 @@ impl LmdbEngine {
         let turn_order = env
             .create_database(&mut wtxn, Some("turn_order"))
             .map_err(|e| Error::Database(e.to_string()))?;
+        let metadata = env
+            .create_database(&mut wtxn, Some("metadata"))
+            .map_err(|e| Error::Database(e.to_string()))?;
 
         wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
 
@@ -88,6 +96,7 @@ impl LmdbEngine {
             sessions,
             turns,
             turn_order,
+            metadata,
         })
     }
 }
@@ -474,6 +483,32 @@ impl StorageEngine for LmdbEngine {
 
         Ok(())
     }
+
+    async fn load_session_history(&self) -> Result<Vec<String>> {
+        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        match self.metadata.get(&rtxn, SESSION_HISTORY_KEY).map_err(|e| Error::Database(e.to_string()))? {
+            Some(bytes) => {
+                let history: Vec<String> = serde_json::from_slice(bytes)
+                    .map_err(|e| Error::Serialization(e.to_string()))?;
+                Ok(history)
+            }
+            None => Ok(vec![]),
+        }
+    }
+
+    async fn save_session_history(&self, session_ids: &[String]) -> Result<()> {
+        let bytes = serde_json::to_vec(session_ids)
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+
+        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        self.metadata
+            .put(&mut wtxn, SESSION_HISTORY_KEY, &bytes)
+            .map_err(|e| Error::Database(e.to_string()))?;
+        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -520,6 +555,7 @@ mod tests {
             context_mode: "compress".to_string(),
             summary: String::new(),
             exchange_id: None,
+            sentiment: None,
         }
     }
 
@@ -991,4 +1027,85 @@ mod tests {
             assert!(matches!(result, Err(Error::SessionNotFound(_))));
         });
     }
+
+    // =========================================================================
+    // Session History Tests
+    // =========================================================================
+
+    #[test]
+    fn test_session_history_empty() {
+        let dir = TestDir::new("lmdb_test_session_history_empty");
+        let engine = LmdbEngine::open(dir.db_path()).unwrap();
+
+        future::block_on(async {
+            let history = engine.load_session_history().await.unwrap();
+            assert!(history.is_empty());
+        });
+    }
+
+    #[test]
+    fn test_session_history_save_and_load() {
+        let dir = TestDir::new("lmdb_test_session_history_save_load");
+        let engine = LmdbEngine::open(dir.db_path()).unwrap();
+
+        let session_ids = vec![
+            "sess-3".to_string(),
+            "sess-1".to_string(),
+            "sess-2".to_string(),
+        ];
+
+        future::block_on(async {
+            engine.save_session_history(&session_ids).await.unwrap();
+            let loaded = engine.load_session_history().await.unwrap();
+            assert_eq!(loaded, session_ids);
+        });
+    }
+
+    #[test]
+    fn test_session_history_overwrite() {
+        let dir = TestDir::new("lmdb_test_session_history_overwrite");
+        let engine = LmdbEngine::open(dir.db_path()).unwrap();
+
+        future::block_on(async {
+            // Save initial history
+            let initial = vec!["sess-1".to_string(), "sess-2".to_string()];
+            engine.save_session_history(&initial).await.unwrap();
+
+            // Save new history (should overwrite)
+            let updated = vec!["sess-3".to_string(), "sess-1".to_string()];
+            engine.save_session_history(&updated).await.unwrap();
+
+            let loaded = engine.load_session_history().await.unwrap();
+            assert_eq!(loaded, updated);
+        });
+    }
+
+    #[test]
+    fn test_session_history_persistence() {
+        let dir = TestDir::new("lmdb_test_session_history_persistence");
+        let db_path = dir.db_path();
+
+        let session_ids = vec![
+            "sess-a".to_string(),
+            "sess-b".to_string(),
+        ];
+
+        // Save and close
+        {
+            let engine = LmdbEngine::open(&db_path).unwrap();
+            future::block_on(async {
+                engine.save_session_history(&session_ids).await.unwrap();
+            });
+        }
+
+        // Reopen and verify
+        {
+            let engine = LmdbEngine::open(&db_path).unwrap();
+            future::block_on(async {
+                let loaded = engine.load_session_history().await.unwrap();
+                assert_eq!(loaded, session_ids);
+            });
+        }
+    }
+
 }

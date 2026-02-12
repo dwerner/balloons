@@ -74,4 +74,14 @@ impl StorageClient {
     ) -> Result<()> {
         self.engine.replace_session_turns(session_id, turns).await
     }
+
+    /// Load the session history (list of session IDs, most recent first).
+    pub async fn load_session_history(&self) -> Result<Vec<String>> {
+        self.engine.load_session_history().await
+    }
+
+    /// Save the session history (list of session IDs, most recent first).
+    pub async fn save_session_history(&self, session_ids: &[String]) -> Result<()> {
+        self.engine.save_session_history(session_ids).await
+    }
 }

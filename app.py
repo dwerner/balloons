@@ -32,7 +32,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, GoalTreeView, GoalTreeWidget, VerticalSplitter, HorizontalSplitter, TaskPane, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, ReviewMarker, ForkProposalMarker, MergeProposalMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, MessageStash, StashPopup, SlidesPane, PresentationScreen, MessageQueuePopup, EntityPane, ActionableToastRack, ActionableNotification, ActionableToast
+from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, GoalTreeView, GoalTreeWidget, VerticalSplitter, HorizontalSplitter, TaskPane, ClickableSessionLink, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, ReviewMarker, ForkProposalMarker, MergeProposalMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, MessageStash, StashPopup, SlidesPane, PresentationScreen, MessageQueuePopup, EntityPane, ActionableToastRack, ActionableNotification, ActionableToast
 from widgets.input_box import CompletionPopup
 from widgets.archive_marker import ArchiveMarker
 from claude_runner import ClaudeRunner
@@ -648,6 +648,19 @@ class BalloonsApp(App):
             if session_id == self._tree_state.get_current_session_id():
                 self._update_base_context_tokens()
                 self._update_context_tokens()
+
+        elif event == TreeEvent.SESSION_HISTORY_CHANGED:
+            # Session history changed - persist to storage
+            # Use create_task to avoid blocking the UI
+            session_history = data.get("session_history", [])
+            asyncio.create_task(self._save_session_history(session_history))
+
+    async def _save_session_history(self, session_history: list[str]) -> None:
+        """Save session history to storage (background task)."""
+        try:
+            await Session.save_session_history(session_history)
+        except Exception:
+            pass  # History persistence is non-critical
 
     def _update_unviewed_markers(self) -> None:
         """Update the chat log scrollbar markers for unviewed turns."""
@@ -1939,6 +1952,14 @@ class BalloonsApp(App):
         # This ensures the tree displays correct count immediately
         if self.session.cached_context_tokens > 0:
             self._tree_state.set_context_tokens(self.session.cached_context_tokens, 0)
+
+        # Load session history from storage before loading sessions
+        # This restores the MRU (most recently used) list across restarts
+        try:
+            history = await Session.load_session_history()
+            self._tree_state.set_session_history(history)
+        except Exception:
+            pass  # History is non-critical, continue without it
 
         # Load all sessions from index (fast - single file read)
         # Sessions are lazy-loaded: only metadata initially, full data on expand/activate
@@ -3255,6 +3276,10 @@ class BalloonsApp(App):
             "turn_idx": turn_idx,
         }
 
+        # Remove the streaming tool widget that was created for propose_fork
+        # (we're replacing it with the custom ForkProposalMarker widget)
+        chat_log.remove_streaming_tool(tool_use_id)
+
         # Add the proposal widget to the chat log
         widget = ForkProposalMarker(
             proposal_id=proposal_id,
@@ -3548,6 +3573,10 @@ class BalloonsApp(App):
             "ctx": ctx,
             "turn_idx": turn_idx,
         }
+
+        # Remove the streaming tool widget that was created for propose_merge
+        # (we're replacing it with the custom MergeProposalMarker widget)
+        chat_log.remove_streaming_tool(tool_use_id)
 
         # Add the proposal widget to the chat log
         widget = MergeProposalMarker(
@@ -4207,6 +4236,17 @@ class BalloonsApp(App):
         child_session = await Session.load(event.child_session_id)
         if child_session:
             await self._switch_to_session(child_session)
+
+    async def on_clickable_session_link_clicked(self, event: ClickableSessionLink.Clicked) -> None:
+        """Handle clicking on a session link in task pane to navigate to that session."""
+        session = self._manager._sessions.get(event.session_id)
+        if not session:
+            # Try to load it
+            session = await Session.load(event.session_id)
+        if session:
+            await self._switch_to_session(session)
+        else:
+            self.notify(f"Session not found: {event.session_id[:16]}...", severity="warning")
 
     async def on_fork_proposal_marker_accepted(self, event: ForkProposalMarker.Accepted) -> None:
         """Handle accepting a fork proposal."""
@@ -5285,8 +5325,79 @@ class BalloonsApp(App):
             await self._persist_context_mode(event.turn_idx, event.new_mode)
 
     async def on_goal_tree_view_new_session_requested(self, event: GoalTreeView.NewSessionRequested) -> None:
-        """Handle request to create a new session bound to an entity from goal tree."""
-        # Create a new session
+        """Handle request to create a new session bound to an entity from goal tree.
+
+        Shows a modal to let the user select the session role and generates
+        an appropriate initial prompt based on the entity type and role.
+        """
+        from core.debug_log import debug_log
+        debug_log.info(f"App received NewSessionRequested: type={event.entity_type}, id={event.entity_id}", category="goal_tree")
+
+        from core.async_storage import get_goal_storage
+        from widgets.bound_session_modal import BoundSessionModal, BoundSessionResult
+
+        # Load the entity data for the modal
+        storage = await get_goal_storage()
+        entity_data = None
+        parent_goal = None
+        parent_plan = None
+
+        if event.entity_type == "goal":
+            entity_data = await storage.load_goal(event.entity_id)
+        elif event.entity_type == "plan":
+            entity_data = await storage.load_plan(event.entity_id)
+            if entity_data and entity_data.goal_id:
+                parent_goal = await storage.load_goal(entity_data.goal_id)
+        elif event.entity_type == "todo":
+            entity_data = await storage.load_todo(event.entity_id)
+            # Find parent plan and goal for context
+            plans = await storage.list_plans()
+            for plan in plans:
+                links = await storage.get_todos_for_plan(plan.id)
+                if any(link.todo_id == event.entity_id for link in links):
+                    parent_plan = plan
+                    if plan.goal_id:
+                        parent_goal = await storage.load_goal(plan.goal_id)
+                    break
+
+        if not entity_data:
+            self.notify(f"Could not load {event.entity_type}", severity="error")
+            return
+
+        # Show the modal
+        def handle_result(result: BoundSessionResult | None) -> None:
+            if result is not None:
+                asyncio.create_task(self._create_bound_session(result))
+
+        self.push_screen(
+            BoundSessionModal(
+                entity_type=event.entity_type,
+                entity_id=event.entity_id,
+                entity_data=entity_data,
+                parent_goal=parent_goal,
+                parent_plan=parent_plan,
+            ),
+            handle_result,
+        )
+
+    async def _create_bound_session(self, result: "BoundSessionResult") -> None:
+        """Create a new session from the BoundSessionModal result."""
+        from core.goal_commands import GoalCommandExecutor
+        from core.async_storage import get_goal_storage
+        from widgets.bound_session_modal import BoundSessionResult
+
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
+
+        # Background old session
+        old_session_id = self._manager._active_session_id
+        self._background_old_session(old_session_id)
+
+        # Show loading indicator
+        chat_log.show_loading("Creating new session...")
+
+        # Create new session
         new_session = await self._manager.create_session()
         await self._manager.set_active(new_session.id)
 
@@ -5294,28 +5405,32 @@ class BalloonsApp(App):
         self._tree_state.add_session(new_session, is_current=True)
 
         # Update UI
-        context_tree = self.query_one("#context-tree", ContextTreeView)
+        chat_log.hide_loading()
         await context_tree.load_all_sessions(new_session)
-        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
         await breadcrumb.set_session(new_session)
 
         # Bind the session to the entity
-        from core.goal_commands import GoalCommandExecutor
-        from core.async_storage import get_goal_storage
-
         storage = await get_goal_storage()
         executor = GoalCommandExecutor(storage)
 
-        # Default to implementation role
-        result = await executor.bind_session(new_session.id, event.entity_type, event.entity_id, "implementation")
+        bind_result = await executor.bind_session(
+            new_session.id,
+            result.entity_type,
+            result.entity_id,
+            result.role,
+        )
 
-        if result.success:
+        if bind_result.success:
             # Refresh goal tree to show new binding
             if self._goal_tree_sync:
                 await self._goal_tree_sync.initial_load()
-            self.notify(f"Created new session bound to {event.entity_type}")
+            self.notify(f"Created session bound to {result.entity_type} ({result.role})")
+
+            # Start streaming with the initial prompt
+            if result.initial_prompt:
+                self._start_streaming(result.initial_prompt)
         else:
-            self.notify(f"Session created but binding failed: {result.error}", severity="warning")
+            self.notify(f"Session created but binding failed: {bind_result.error}", severity="warning")
 
     async def on_breadcrumb_segment_clicked(self, event: Breadcrumb.SegmentClicked) -> None:
         """Handle clicking a breadcrumb segment to navigate up."""

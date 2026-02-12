@@ -4,6 +4,7 @@ from textual.widgets import Static, Tree
 from textual.containers import Vertical, VerticalScroll
 from textual.reactive import reactive
 from textual.timer import Timer
+from textual.message import Message
 from rich.text import Text
 from datetime import datetime
 
@@ -18,6 +19,45 @@ from core.task_state import (
 
 # Sparkline characters (8 levels of height)
 SPARKLINE_CHARS = "▁▂▃▄▅▆▇█"
+
+
+class ClickableSessionLink(Static):
+    """A clickable session link that posts a message when clicked."""
+
+    DEFAULT_CSS = """
+    ClickableSessionLink {
+        width: auto;
+        height: auto;
+    }
+
+    ClickableSessionLink:hover {
+        background: $primary 20%;
+    }
+    """
+
+    class Clicked(Message):
+        """Posted when user clicks the session link."""
+
+        def __init__(self, session_id: str) -> None:
+            super().__init__()
+            self.session_id = session_id
+
+    def __init__(self, session_id: str, display_text: str, **kwargs):
+        super().__init__(**kwargs)
+        self.session_id = session_id
+        self._display_text = display_text
+
+    def render(self) -> Text:
+        text = Text()
+        text.append("  Session: ", style="dim")
+        text.append(self._display_text, style="cyan underline")
+        text.append(" ", style="dim")
+        text.append("→", style="cyan dim")
+        return text
+
+    def on_click(self) -> None:
+        """Navigate to the session when clicked."""
+        self.post_message(self.Clicked(self.session_id))
 
 
 def render_sparkline(values: list[float], width: int = 20) -> str:
@@ -83,8 +123,16 @@ class TaskPane(Vertical):
         border-top: solid $primary;
     }
 
-    TaskPane > #task-detail-scroll > #task-detail {
-        padding: 1;
+    TaskPane > #task-detail-scroll > #task-detail-header {
+        padding: 1 1 0 1;
+    }
+
+    TaskPane > #task-detail-scroll > #task-detail-body {
+        padding: 0 1 1 1;
+    }
+
+    TaskPane > #task-detail-scroll > ClickableSessionLink {
+        padding: 0 1;
     }
     """
 
@@ -108,7 +156,9 @@ class TaskPane(Vertical):
         tree.root.expand()
         yield tree
         with VerticalScroll(id="task-detail-scroll"):
-            yield Static("Select a task to view details", id="task-detail")
+            yield Static("Select a task to view details", id="task-detail-header")
+            # Session link is dynamically added/removed
+            yield Static("", id="task-detail-body")
 
     def on_mount(self) -> None:
         """Start observing task state changes."""
@@ -279,9 +329,12 @@ class TaskPane(Vertical):
 
     def _show_task_detail(self, task: Task) -> None:
         """Show detailed properties for selected task."""
-        detail = self.query_one("#task-detail", Static)
+        header_widget = self.query_one("#task-detail-header", Static)
+        body_widget = self.query_one("#task-detail-body", Static)
+        scroll_container = self.query_one("#task-detail-scroll", VerticalScroll)
 
-        lines = []
+        # Build header lines (status, properties section start)
+        header_lines = []
 
         # Header with status
         status_icon = self._get_status_icon(task.status)
@@ -290,43 +343,70 @@ class TaskPane(Vertical):
         header.append(f"{status_icon} ", style=status_style)
         header.append(self._get_type_label(task.task_type), style="bold")
         header.append(f" - {task.status.value}", style=status_style)
-        lines.append(header)
-        lines.append(Text(""))
+        header_lines.append(header)
+        header_lines.append(Text(""))
 
         # Properties section
-        lines.append(Text("Properties", style="bold underline"))
+        header_lines.append(Text("Properties", style="bold underline"))
 
         # Task ID
-        lines.append(Text(f"  Task ID: ", style="dim").append(task.task_id[:16] + ("..." if len(task.task_id) > 16 else "")))
+        header_lines.append(Text(f"  Task ID: ", style="dim").append(task.task_id[:16] + ("..." if len(task.task_id) > 16 else "")))
 
-        # Session
-        if task.session_id:
-            lines.append(Text(f"  Session: ", style="dim").append(task.session_id[:16] + ("..." if len(task.session_id) > 16 else "")))
+        # Update header widget
+        header_output = Text()
+        for i, line in enumerate(header_lines):
+            if i > 0:
+                header_output.append("\n")
+            header_output.append_text(line)
+        header_widget.update(header_output)
+
+        # Handle clickable session link
+        # Only update if session_id changed to avoid flicker during spinner updates
+        existing_links = list(scroll_container.query(ClickableSessionLink))
+        existing_session_id = existing_links[0].session_id if existing_links else None
+
+        if existing_session_id != task.session_id:
+            # Remove existing links
+            for link in existing_links:
+                link.remove()
+
+            # Add new link if task has a session
+            if task.session_id:
+                display_text = task.session_id[:16] + ("..." if len(task.session_id) > 16 else "")
+                session_link = ClickableSessionLink(
+                    task.session_id,
+                    display_text,
+                )
+                # Mount after header, before body
+                scroll_container.mount(session_link, after=header_widget)
+
+        # Build body lines (everything after session)
+        body_lines = []
 
         # Backend
         if task.backend_name:
-            lines.append(Text(f"  Backend: ", style="dim").append(task.backend_name, style="cyan"))
+            body_lines.append(Text(f"  Backend: ", style="dim").append(task.backend_name, style="cyan"))
 
         # Model
         if task.model:
-            lines.append(Text(f"  Model: ", style="dim").append(task.model, style="magenta"))
+            body_lines.append(Text(f"  Model: ", style="dim").append(task.model, style="magenta"))
 
-        lines.append(Text(""))
+        body_lines.append(Text(""))
 
         # Timing section
-        lines.append(Text("Timing", style="bold underline"))
+        body_lines.append(Text("Timing", style="bold underline"))
         started = task.started_at.strftime("%H:%M:%S.%f")[:-3]
-        lines.append(Text(f"  Started: ", style="dim").append(started))
-        lines.append(Text(f"  Duration: ", style="dim").append(f"{task.duration_seconds:.2f}s", style="green" if task.is_active else ""))
+        body_lines.append(Text(f"  Started: ", style="dim").append(started))
+        body_lines.append(Text(f"  Duration: ", style="dim").append(f"{task.duration_seconds:.2f}s", style="green" if task.is_active else ""))
 
         if task.finished_at:
             finished = task.finished_at.strftime("%H:%M:%S.%f")[:-3]
-            lines.append(Text(f"  Finished: ", style="dim").append(finished))
+            body_lines.append(Text(f"  Finished: ", style="dim").append(finished))
 
-        lines.append(Text(""))
+        body_lines.append(Text(""))
 
         # Tokens section
-        lines.append(Text("Tokens", style="bold underline"))
+        body_lines.append(Text("Tokens", style="bold underline"))
 
         # Get output token count (prefer actual, fall back to estimate)
         output_count = task.output_tokens if task.output_tokens > 0 else task.tokens_streamed
@@ -340,63 +420,63 @@ class TaskPane(Vertical):
             context_line.append(f"{task.input_tokens:,}", style=usage_style)
             context_line.append(f" / {task.context_window:,}", style="dim")
             context_line.append(f" ({usage_pct:.1f}%)", style=usage_style)
-            lines.append(context_line)
+            body_lines.append(context_line)
 
         # Output tokens (response tokens)
         if output_count > 0:
             output_style = "green"
             output_text = f"~{output_count:,}" if is_estimated else f"{output_count:,}"
-            lines.append(Text(f"  Output: ", style="dim").append(output_text, style=output_style))
+            body_lines.append(Text(f"  Output: ", style="dim").append(output_text, style=output_style))
 
         # Token rate and sparkline (inference speed)
         token_rate = task.current_token_rate
         if token_rate > 0:
             rate_text = Text(f"  Speed: ", style="dim").append(f"{token_rate:.1f} tok/s", style="cyan")
-            lines.append(rate_text)
+            body_lines.append(rate_text)
 
             # Render sparkline of recent rates
             rates = task.get_token_rates()
             if rates:
                 sparkline = render_sparkline(rates, width=30)
                 sparkline_text = Text(f"  ", style="dim").append(sparkline, style="cyan")
-                lines.append(sparkline_text)
+                body_lines.append(sparkline_text)
 
-        lines.append(Text(""))
+        body_lines.append(Text(""))
 
         # Tools section
-        lines.append(Text("Tools", style="bold underline"))
+        body_lines.append(Text("Tools", style="bold underline"))
         tools_style = "yellow" if task.tool_count > 0 else "dim"
-        lines.append(Text(f"  Executed: ", style="dim").append(str(task.tool_count), style=tools_style))
+        body_lines.append(Text(f"  Executed: ", style="dim").append(str(task.tool_count), style=tools_style))
 
         if task.tool_name:
-            lines.append(Text(f"  Current: ", style="dim").append(task.tool_name, style="yellow bold"))
+            body_lines.append(Text(f"  Current: ", style="dim").append(task.tool_name, style="yellow bold"))
 
         # Error section
         if task.error:
-            lines.append(Text(""))
-            lines.append(Text("Error", style="bold underline red"))
+            body_lines.append(Text(""))
+            body_lines.append(Text("Error", style="bold underline red"))
             # Wrap error text
             error_text = task.error
-            lines.append(Text(f"  {error_text}", style="red"))
+            body_lines.append(Text(f"  {error_text}", style="red"))
 
         # Prompt section
         if task.prompt:
-            lines.append(Text(""))
-            lines.append(Text("Prompt", style="bold underline"))
+            body_lines.append(Text(""))
+            body_lines.append(Text("Prompt", style="bold underline"))
             # Show truncated prompt
             prompt_preview = task.prompt[:300]
             if len(task.prompt) > 300:
                 prompt_preview += "..."
-            lines.append(Text(f"  {prompt_preview}", style="italic dim"))
+            body_lines.append(Text(f"  {prompt_preview}", style="italic dim"))
 
-        # Combine all lines
-        output = Text()
-        for i, line in enumerate(lines):
+        # Combine body lines
+        body_output = Text()
+        for i, line in enumerate(body_lines):
             if i > 0:
-                output.append("\n")
-            output.append_text(line)
+                body_output.append("\n")
+            body_output.append_text(line)
 
-        detail.update(output)
+        body_widget.update(body_output)
 
     def refresh_tasks(self) -> None:
         """Manually refresh the task tree."""

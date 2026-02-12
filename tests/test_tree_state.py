@@ -960,3 +960,87 @@ class TestTreeStateSessionHistory:
         assert len(state._session_history) == 5
         # Most recent 5 sessions
         assert state._session_history == ["s9", "s8", "s7", "s6", "s5"]
+
+    def test_get_raw_session_history(self):
+        """get_raw_session_history returns full internal list."""
+        state = TreeState()
+        state.add_session(MockSession(id="s1"))
+        state.add_session(MockSession(id="s2"))
+        state.set_current_session("s1")
+        state.set_current_session("s2")
+
+        # Remove s1 from sessions (simulating deleted session)
+        state.remove_session("s1")
+
+        # get_session_history filters out removed sessions
+        assert state.get_session_history() == ["s2"]
+
+        # get_raw_session_history returns the internal list (for persistence)
+        raw = state.get_raw_session_history()
+        assert "s2" in raw
+        # s1 may or may not be in raw depending on when remove_session cleans it
+
+    def test_set_session_history(self):
+        """set_session_history restores history from storage."""
+        state = TreeState()
+
+        # Set history before any sessions are added
+        state.set_session_history(["s3", "s1", "s2"])
+
+        assert state._session_history == ["s3", "s1", "s2"]
+
+    def test_set_session_history_trims_to_max(self):
+        """set_session_history trims to max limit."""
+        state = TreeState()
+        state._session_history_max = 3
+
+        # Try to set more than max
+        state.set_session_history(["s1", "s2", "s3", "s4", "s5"])
+
+        # Should be trimmed to max
+        assert state._session_history == ["s1", "s2", "s3"]
+
+    def test_session_history_changed_event(self):
+        """SESSION_HISTORY_CHANGED event fires when history changes."""
+        state = TreeState()
+        events = []
+
+        def callback(event, data):
+            events.append((event, data))
+
+        state.add_observer(callback)
+        state.add_session(MockSession(id="s1"))
+        state.add_session(MockSession(id="s2"))
+
+        # First session switch - should fire event
+        state.set_current_session("s1")
+        history_events = [e for e in events if e[0] == TreeEvent.SESSION_HISTORY_CHANGED]
+        assert len(history_events) == 1
+        assert history_events[0][1]["session_history"] == ["s1"]
+
+        events.clear()
+
+        # Switch to s2 - should fire event
+        state.set_current_session("s2")
+        history_events = [e for e in events if e[0] == TreeEvent.SESSION_HISTORY_CHANGED]
+        assert len(history_events) == 1
+        assert history_events[0][1]["session_history"] == ["s2", "s1"]
+
+    def test_session_history_no_event_if_unchanged(self):
+        """SESSION_HISTORY_CHANGED event doesn't fire if already at front."""
+        state = TreeState()
+        events = []
+
+        def callback(event, data):
+            events.append((event, data))
+
+        state.add_observer(callback)
+        state.add_session(MockSession(id="s1"))
+        state.set_current_session("s1")
+
+        events.clear()
+
+        # Set current to same session - should NOT fire history event
+        state.set_current_session("s1")
+        history_events = [e for e in events if e[0] == TreeEvent.SESSION_HISTORY_CHANGED]
+        assert len(history_events) == 0
