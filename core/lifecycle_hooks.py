@@ -175,6 +175,15 @@ class LifecycleHooks:
         Returns:
             LifecyclePrompt with spike completion options
         """
+        storage = await self._get_storage()
+
+        # Mark spike as completed first
+        now = datetime.now().isoformat()
+        spike.status = "completed"
+        spike.completed_at = now
+        spike.updated_at = now
+        await storage.save_todo(spike)
+
         return LifecyclePrompt(
             prompt_type="spike_complete",
             message=f"Spike '{spike.title}' complete. What would you like to do?",

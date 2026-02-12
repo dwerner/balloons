@@ -1021,13 +1021,17 @@ class GoalTreeView(Vertical):
             node.label = self._make_plan_label(plan_data)
 
     def _update_todo_label(self, todo_id: str) -> None:
-        """Update a todo node's label."""
+        """Update a todo node's label and status data."""
         node = self._todo_nodes.get(todo_id)
         if not node:
             return
         todo_data = self._goal_state.get_todo(todo_id)
         if todo_data:
             node.label = self._make_todo_label(todo_data)
+            # Also update the node's data so render_label uses correct status
+            # (affects whether [done] button is shown)
+            if node.data:
+                node.data["todo_status"] = todo_data.status
 
     def _update_root_label(self) -> None:
         """Update root label with stats."""
