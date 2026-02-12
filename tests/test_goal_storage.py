@@ -387,3 +387,334 @@ async def test_goal_supersession(goal_storage):
     # Verify old goal is marked superseded
     old = await goal_storage.load_goal("goal-old")
     assert old.status == "superseded"
+
+
+# =============================================================================
+# Hierarchy Traversal Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_get_hierarchy_from_goal(goal_storage):
+    """Test getting hierarchy starting from a goal."""
+    now = datetime.now().isoformat()
+
+    # Create a goal with plans and todos
+    goal = GoalData(
+        id="goal-1",
+        title="Test Goal",
+        description="A test goal",
+        weight=5,
+        status="active",
+        acceptance_criteria=["Done"],
+        created_at=now,
+        updated_at=now,
+    )
+    await goal_storage.save_goal(goal)
+
+    plan = PlanData(
+        id="plan-1",
+        goal_id="goal-1",
+        title="Test Plan",
+        description="A test plan",
+        status="active",
+        created_at=now,
+        updated_at=now,
+    )
+    await goal_storage.save_plan(plan)
+
+    todo1 = TodoData(
+        id="todo-1",
+        title="Task 1",
+        description="First task",
+        status="pending",
+        is_spike=False,
+        created_at=now,
+        updated_at=now,
+    )
+    todo2 = TodoData(
+        id="todo-2",
+        title="Task 2",
+        description="Second task",
+        status="pending",
+        is_spike=False,
+        created_at=now,
+        updated_at=now,
+    )
+    await goal_storage.save_todo(todo1)
+    await goal_storage.save_todo(todo2)
+
+    # Link todos to plan
+    link1 = TodoPlanLink(todo_id="todo-1", plan_id="plan-1", created_at=now)
+    link2 = TodoPlanLink(todo_id="todo-2", plan_id="plan-1", created_at=now)
+    await goal_storage.save_todo_plan_link(link1)
+    await goal_storage.save_todo_plan_link(link2)
+
+    # Get hierarchy from goal
+    hierarchy = await goal_storage.get_hierarchy("goal", "goal-1")
+
+    assert hierarchy.entity_type == "goal"
+    assert hierarchy.entity_id == "goal-1"
+    assert hierarchy.goal is not None
+    assert hierarchy.goal.id == "goal-1"
+    assert len(hierarchy.plans) == 1
+    assert hierarchy.plans[0].id == "plan-1"
+    assert len(hierarchy.todos) == 2
+    assert {t.id for t in hierarchy.todos} == {"todo-1", "todo-2"}
+    assert len(hierarchy.todo_plan_links) == 2
+    assert not hierarchy.cycle_detected
+
+
+@pytest.mark.asyncio
+async def test_get_hierarchy_from_todo(goal_storage):
+    """Test getting hierarchy starting from a todo."""
+    now = datetime.now().isoformat()
+
+    # Create hierarchy
+    goal = GoalData(
+        id="goal-1",
+        title="Test Goal",
+        description="",
+        weight=5,
+        status="active",
+        acceptance_criteria=[],
+        created_at=now,
+        updated_at=now,
+    )
+    await goal_storage.save_goal(goal)
+
+    plan = PlanData(
+        id="plan-1",
+        goal_id="goal-1",
+        title="Test Plan",
+        description="",
+        status="active",
+        created_at=now,
+        updated_at=now,
+    )
+    await goal_storage.save_plan(plan)
+
+    todo = TodoData(
+        id="todo-1",
+        title="Task 1",
+        description="",
+        status="pending",
+        is_spike=False,
+        created_at=now,
+        updated_at=now,
+    )
+    await goal_storage.save_todo(todo)
+
+    link = TodoPlanLink(todo_id="todo-1", plan_id="plan-1", created_at=now)
+    await goal_storage.save_todo_plan_link(link)
+
+    # Get hierarchy from todo - should traverse up to goal
+    hierarchy = await goal_storage.get_hierarchy("todo", "todo-1")
+
+    assert hierarchy.entity_type == "todo"
+    assert hierarchy.entity_id == "todo-1"
+    assert hierarchy.goal is not None
+    assert hierarchy.goal.id == "goal-1"
+    assert len(hierarchy.plans) == 1
+    assert hierarchy.plans[0].id == "plan-1"
+    assert len(hierarchy.todos) == 1
+    assert hierarchy.todos[0].id == "todo-1"
+
+
+@pytest.mark.asyncio
+async def test_get_hierarchy_with_dependencies(goal_storage):
+    """Test hierarchy includes todo dependencies."""
+    now = datetime.now().isoformat()
+
+    # Create goal and plan
+    goal = GoalData(
+        id="goal-1", title="Goal", description="", weight=5, status="active",
+        acceptance_criteria=[], created_at=now, updated_at=now,
+    )
+    await goal_storage.save_goal(goal)
+
+    plan = PlanData(
+        id="plan-1", goal_id="goal-1", title="Plan", description="",
+        status="active", created_at=now, updated_at=now,
+    )
+    await goal_storage.save_plan(plan)
+
+    # Create todos with dependencies: todo-3 depends on todo-2, which depends on todo-1
+    for i in range(1, 4):
+        todo = TodoData(
+            id=f"todo-{i}",
+            title=f"Task {i}",
+            description="",
+            status="pending",
+            is_spike=False,
+            created_at=now,
+            updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+        link = TodoPlanLink(todo_id=f"todo-{i}", plan_id="plan-1", created_at=now)
+        await goal_storage.save_todo_plan_link(link)
+
+    # Create dependency chain
+    dep1 = TodoDependency(todo_id="todo-2", depends_on_id="todo-1", created_at=now)
+    dep2 = TodoDependency(todo_id="todo-3", depends_on_id="todo-2", created_at=now)
+    await goal_storage.save_todo_dependency(dep1)
+    await goal_storage.save_todo_dependency(dep2)
+
+    # Get hierarchy from todo-3
+    hierarchy = await goal_storage.get_hierarchy("todo", "todo-3")
+
+    assert len(hierarchy.todos) == 3
+    assert len(hierarchy.dependencies) >= 2  # At least the 2 we created
+    assert not hierarchy.cycle_detected
+
+
+@pytest.mark.asyncio
+async def test_get_hierarchy_detects_cycles(goal_storage):
+    """Test that hierarchy traversal detects cycles in dependencies."""
+    now = datetime.now().isoformat()
+
+    # Create plan (no goal needed for this test)
+    plan = PlanData(
+        id="plan-1", goal_id="", title="Plan", description="",
+        status="active", created_at=now, updated_at=now,
+    )
+    await goal_storage.save_plan(plan)
+
+    # Create todos with circular dependency: A -> B -> C -> A
+    for name in ["A", "B", "C"]:
+        todo = TodoData(
+            id=f"todo-{name}",
+            title=f"Task {name}",
+            description="",
+            status="pending",
+            is_spike=False,
+            created_at=now,
+            updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+        link = TodoPlanLink(todo_id=f"todo-{name}", plan_id="plan-1", created_at=now)
+        await goal_storage.save_todo_plan_link(link)
+
+    # Create circular dependencies
+    deps = [
+        TodoDependency(todo_id="todo-A", depends_on_id="todo-B", created_at=now),
+        TodoDependency(todo_id="todo-B", depends_on_id="todo-C", created_at=now),
+        TodoDependency(todo_id="todo-C", depends_on_id="todo-A", created_at=now),  # Creates cycle
+    ]
+    for dep in deps:
+        await goal_storage.save_todo_dependency(dep)
+
+    # Get hierarchy - should detect cycle
+    hierarchy = await goal_storage.get_hierarchy("todo", "todo-A")
+
+    assert hierarchy.cycle_detected
+    assert len(hierarchy.cycle_path) > 0
+    # The cycle path should contain todo-A twice (start and end of cycle)
+    assert hierarchy.cycle_path[0] == hierarchy.cycle_path[-1]
+
+
+@pytest.mark.asyncio
+async def test_get_hierarchy_with_prefix(goal_storage):
+    """Test that hierarchy can resolve entity by prefix."""
+    now = datetime.now().isoformat()
+
+    goal = GoalData(
+        id="goal-abc123-full-uuid",
+        title="Test Goal",
+        description="",
+        weight=5,
+        status="active",
+        acceptance_criteria=[],
+        created_at=now,
+        updated_at=now,
+    )
+    await goal_storage.save_goal(goal)
+
+    # Get hierarchy using prefix
+    hierarchy = await goal_storage.get_hierarchy("goal", "goal-abc")
+
+    assert hierarchy.entity_id == "goal-abc123-full-uuid"
+    assert hierarchy.goal is not None
+    assert hierarchy.goal.id == "goal-abc123-full-uuid"
+
+
+@pytest.mark.asyncio
+async def test_get_hierarchy_nonexistent(goal_storage):
+    """Test hierarchy for nonexistent entity returns empty result."""
+    hierarchy = await goal_storage.get_hierarchy("goal", "nonexistent")
+
+    assert hierarchy.entity_type == "goal"
+    assert hierarchy.entity_id == "nonexistent"
+    assert hierarchy.goal is None
+    assert len(hierarchy.plans) == 0
+    assert len(hierarchy.todos) == 0
+
+
+@pytest.mark.asyncio
+async def test_get_hierarchy_with_bindings(goal_storage):
+    """Test hierarchy includes session bindings."""
+    now = datetime.now().isoformat()
+
+    goal = GoalData(
+        id="goal-1", title="Goal", description="", weight=5, status="active",
+        acceptance_criteria=[], created_at=now, updated_at=now,
+    )
+    await goal_storage.save_goal(goal)
+
+    # Create a binding
+    binding = SessionBinding(
+        id="binding-1",
+        session_id="session-123",
+        entity_type="goal",
+        entity_id="goal-1",
+        role="planning",
+        created_at=now,
+    )
+    await goal_storage.save_session_binding(binding)
+
+    # Get hierarchy with bindings
+    hierarchy = await goal_storage.get_hierarchy("goal", "goal-1", include_bindings=True)
+
+    assert len(hierarchy.bindings) == 1
+    assert hierarchy.bindings[0].session_id == "session-123"
+
+    # Get hierarchy without bindings
+    hierarchy_no_bindings = await goal_storage.get_hierarchy("goal", "goal-1", include_bindings=False)
+    assert len(hierarchy_no_bindings.bindings) == 0
+
+
+@pytest.mark.asyncio
+async def test_get_hierarchy_from_plan(goal_storage):
+    """Test getting hierarchy starting from a plan."""
+    now = datetime.now().isoformat()
+
+    goal = GoalData(
+        id="goal-1", title="Goal", description="", weight=5, status="active",
+        acceptance_criteria=[], created_at=now, updated_at=now,
+    )
+    await goal_storage.save_goal(goal)
+
+    plan = PlanData(
+        id="plan-1", goal_id="goal-1", title="Plan", description="",
+        status="active", created_at=now, updated_at=now,
+    )
+    await goal_storage.save_plan(plan)
+
+    todo = TodoData(
+        id="todo-1", title="Task", description="", status="pending",
+        is_spike=False, created_at=now, updated_at=now,
+    )
+    await goal_storage.save_todo(todo)
+
+    link = TodoPlanLink(todo_id="todo-1", plan_id="plan-1", created_at=now)
+    await goal_storage.save_todo_plan_link(link)
+
+    # Get hierarchy from plan
+    hierarchy = await goal_storage.get_hierarchy("plan", "plan-1")
+
+    assert hierarchy.entity_type == "plan"
+    assert hierarchy.entity_id == "plan-1"
+    assert hierarchy.goal is not None
+    assert hierarchy.goal.id == "goal-1"
+    assert len(hierarchy.plans) == 1
+    assert len(hierarchy.todos) == 1

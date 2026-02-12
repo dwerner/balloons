@@ -2122,6 +2122,145 @@ class TestDeleteTodo:
         assert deleted_spike is None
 
 
+class TestGetHierarchy:
+    """Test the get_hierarchy tool."""
+
+    @pytest.mark.asyncio
+    async def test_get_hierarchy_from_goal(self, goal_storage, mock_session, monkeypatch):
+        """Test getting hierarchy starting from a goal."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+
+        # Create a complete hierarchy
+        goal = GoalData(
+            id="goal-hier-1", title="Hierarchy Test Goal", description="Test",
+            weight=7, status="active", acceptance_criteria=["Done"],
+            created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal)
+
+        plan = PlanData(
+            id="plan-hier-1", goal_id="goal-hier-1", title="Test Plan",
+            description="", status="active", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan)
+
+        todo = TodoData(
+            id="todo-hier-1", title="Test Todo", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        link = TodoPlanLink(todo_id="todo-hier-1", plan_id="plan-hier-1", created_at=now)
+        await goal_storage.save_todo_plan_link(link)
+
+        result, is_error = await execute_goal_tool(
+            "get_hierarchy",
+            {"entity_type": "goal", "entity_id": "goal-hier-1"},
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Hierarchy Test Goal" in result
+        assert "Test Plan" in result
+        assert "Test Todo" in result
+        assert "Goals: 1" in result
+        assert "Plans: 1" in result
+        assert "Todos: 1" in result
+
+    @pytest.mark.asyncio
+    async def test_get_hierarchy_from_todo(self, goal_storage, mock_session, monkeypatch):
+        """Test getting hierarchy starting from a todo (traverses up)."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+
+        goal = GoalData(
+            id="goal-up-1", title="Parent Goal", description="",
+            weight=5, status="active", acceptance_criteria=[],
+            created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal)
+
+        plan = PlanData(
+            id="plan-up-1", goal_id="goal-up-1", title="Parent Plan",
+            description="", status="active", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan)
+
+        todo = TodoData(
+            id="todo-up-1", title="Child Todo", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        link = TodoPlanLink(todo_id="todo-up-1", plan_id="plan-up-1", created_at=now)
+        await goal_storage.save_todo_plan_link(link)
+
+        result, is_error = await execute_goal_tool(
+            "get_hierarchy",
+            {"entity_type": "todo", "entity_id": "todo-up-1"},
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Parent Goal" in result
+        assert "Parent Plan" in result
+        assert "Child Todo" in result
+
+    @pytest.mark.asyncio
+    async def test_get_hierarchy_invalid_entity_type(self, goal_storage, mock_session, monkeypatch):
+        """Test error for invalid entity type."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "get_hierarchy",
+            {"entity_type": "invalid", "entity_id": "123"},
+            mock_session,
+        )
+
+        assert is_error
+        assert "entity_type must be" in result
+
+    @pytest.mark.asyncio
+    async def test_get_hierarchy_entity_not_found(self, goal_storage, mock_session, monkeypatch):
+        """Test error when entity doesn't exist."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "get_hierarchy",
+            {"entity_type": "goal", "entity_id": "nonexistent"},
+            mock_session,
+        )
+
+        assert is_error
+        assert "not found" in result
+
+    @pytest.mark.asyncio
+    async def test_get_hierarchy_with_prefix(self, goal_storage, mock_session, monkeypatch):
+        """Test hierarchy resolution with ID prefix."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+
+        goal = GoalData(
+            id="goal-prefix-abc123", title="Prefix Test", description="",
+            weight=5, status="active", acceptance_criteria=[],
+            created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal)
+
+        result, is_error = await execute_goal_tool(
+            "get_hierarchy",
+            {"entity_type": "goal", "entity_id": "goal-prefix"},
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Prefix Test" in result
+
+
 class TestUnknownTool:
     """Test handling of unknown tool names."""
 

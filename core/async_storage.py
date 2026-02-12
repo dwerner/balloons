@@ -22,7 +22,7 @@ import asyncio
 import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -1175,6 +1175,323 @@ class GoalStorage:
 
         bindings.sort(key=lambda b: b.created_at)
         return bindings
+
+    # =========================================================================
+    # Hierarchy Traversal
+    # =========================================================================
+
+    async def get_hierarchy(
+        self,
+        entity_type: str,
+        entity_id: str,
+        include_bindings: bool = True,
+        include_dependencies: bool = True,
+    ) -> "EntityHierarchy":
+        """Get the complete hierarchy for an entity.
+
+        Traverses relationships to build a list of all related entities:
+        - For a todo: traverses up to plans and goal, plus dependencies
+        - For a plan: traverses up to goal and down to todos
+        - For a goal: traverses down to plans and todos
+
+        Watches for cycles in todo dependencies and reports them.
+
+        Args:
+            entity_type: "goal", "plan", or "todo"
+            entity_id: The entity ID (can be prefix)
+            include_bindings: Whether to include session bindings
+            include_dependencies: Whether to traverse todo dependencies
+
+        Returns:
+            EntityHierarchy with all related entities
+        """
+        from storage_schema import GoalData, PlanData, TodoData, TodoPlanLink, TodoDependency, SessionBinding
+
+        # Resolve entity by prefix
+        resolved_id = await self._resolve_entity_id(entity_type, entity_id)
+        if not resolved_id:
+            # Return empty hierarchy if not found
+            return EntityHierarchy(entity_type=entity_type, entity_id=entity_id)
+
+        entity_id = resolved_id
+
+        # Initialize result
+        result = EntityHierarchy(entity_type=entity_type, entity_id=entity_id)
+
+        # Track visited entities to detect cycles
+        visited_goals: set[str] = set()
+        visited_plans: set[str] = set()
+        visited_todos: set[str] = set()
+
+        # Collect entities
+        goals_map: dict[str, GoalData] = {}
+        plans_map: dict[str, PlanData] = {}
+        todos_map: dict[str, TodoData] = {}
+
+        if entity_type == "todo":
+            await self._traverse_from_todo(
+                entity_id, goals_map, plans_map, todos_map, result,
+                visited_todos, include_dependencies
+            )
+        elif entity_type == "plan":
+            await self._traverse_from_plan(
+                entity_id, goals_map, plans_map, todos_map, result,
+                visited_todos, include_dependencies
+            )
+        elif entity_type == "goal":
+            await self._traverse_from_goal(
+                entity_id, goals_map, plans_map, todos_map, result,
+                visited_todos, include_dependencies
+            )
+
+        # Set the goal (there should be at most one)
+        if goals_map:
+            result.goal = list(goals_map.values())[0]
+
+        # Set collections
+        result.plans = list(plans_map.values())
+        result.todos = list(todos_map.values())
+
+        # Get all todo-plan links for the collected entities
+        for todo_id in todos_map:
+            plan_ids = await self.get_plans_for_todo(todo_id)
+            for plan_id in plan_ids:
+                # Only include links to plans in our hierarchy
+                if plan_id in plans_map:
+                    link = TodoPlanLink(
+                        todo_id=todo_id,
+                        plan_id=plan_id,
+                        created_at=""  # We don't have the original timestamp
+                    )
+                    result.todo_plan_links.append(link)
+
+        # Collect bindings if requested
+        if include_bindings:
+            entity_ids = []
+            if result.goal:
+                entity_ids.append(("goal", result.goal.id))
+            for plan in result.plans:
+                entity_ids.append(("plan", plan.id))
+            for todo in result.todos:
+                entity_ids.append(("todo", todo.id))
+
+            for etype, eid in entity_ids:
+                bindings = await self.get_bindings_for_entity(etype, eid, active_only=True)
+                result.bindings.extend(bindings)
+
+        return result
+
+    async def _resolve_entity_id(self, entity_type: str, entity_id: str) -> Optional[str]:
+        """Resolve an entity ID that may be a prefix to its full ID."""
+        if entity_type == "goal":
+            goals = await self.list_goals()
+            for g in goals:
+                if g.id.startswith(entity_id) or g.id == entity_id:
+                    return g.id
+        elif entity_type == "plan":
+            plans = await self.list_plans()
+            for p in plans:
+                if p.id.startswith(entity_id) or p.id == entity_id:
+                    return p.id
+        elif entity_type == "todo":
+            todos = await self.list_todos(include_spikes=True)
+            for t in todos:
+                if t.id.startswith(entity_id) or t.id == entity_id:
+                    return t.id
+        return None
+
+    async def _traverse_from_todo(
+        self,
+        todo_id: str,
+        goals_map: dict[str, "GoalData"],
+        plans_map: dict[str, "PlanData"],
+        todos_map: dict[str, "TodoData"],
+        result: "EntityHierarchy",
+        visited_todos: set[str],
+        include_dependencies: bool,
+        dependency_path: list[str] = None,
+    ) -> None:
+        """Traverse hierarchy starting from a todo.
+
+        Goes up to plans and goal, and optionally traverses dependencies.
+        """
+        from storage_schema import TodoDependency
+
+        # Check for cycle
+        if dependency_path is None:
+            dependency_path = []
+
+        if todo_id in dependency_path:
+            # Cycle detected!
+            result.cycle_detected = True
+            cycle_start = dependency_path.index(todo_id)
+            result.cycle_path = dependency_path[cycle_start:] + [todo_id]
+            return
+
+        if todo_id in visited_todos:
+            return
+
+        visited_todos.add(todo_id)
+
+        # Load the todo
+        todo = await self.load_todo(todo_id)
+        if not todo:
+            return
+
+        todos_map[todo_id] = todo
+
+        # Get parent plans
+        plan_ids = await self.get_plans_for_todo(todo_id)
+        for plan_id in plan_ids:
+            if plan_id not in plans_map:
+                plan = await self.load_plan(plan_id)
+                if plan:
+                    plans_map[plan_id] = plan
+                    # Get parent goal
+                    if plan.goal_id and plan.goal_id not in goals_map:
+                        goal = await self.load_goal(plan.goal_id)
+                        if goal:
+                            goals_map[plan.goal_id] = goal
+
+        # Traverse dependencies if requested
+        if include_dependencies:
+            dep_ids = await self.get_dependencies(todo_id)
+            for dep_id in dep_ids:
+                # Record the dependency
+                dep = TodoDependency(
+                    todo_id=todo_id,
+                    depends_on_id=dep_id,
+                    created_at=""
+                )
+                result.dependencies.append(dep)
+
+                # Recursively traverse, passing the current path for cycle detection
+                await self._traverse_from_todo(
+                    dep_id, goals_map, plans_map, todos_map, result,
+                    visited_todos, include_dependencies,
+                    dependency_path + [todo_id]
+                )
+
+            # Also get dependents (things that depend on this todo)
+            dependent_ids = await self.get_dependents(todo_id)
+            for dependent_id in dependent_ids:
+                dep = TodoDependency(
+                    todo_id=dependent_id,
+                    depends_on_id=todo_id,
+                    created_at=""
+                )
+                # Only add if not already present
+                if not any(d.todo_id == dep.todo_id and d.depends_on_id == dep.depends_on_id
+                           for d in result.dependencies):
+                    result.dependencies.append(dep)
+
+                # Traverse dependent todos (but not their dependencies to avoid explosion)
+                if dependent_id not in visited_todos:
+                    visited_todos.add(dependent_id)
+                    dependent_todo = await self.load_todo(dependent_id)
+                    if dependent_todo:
+                        todos_map[dependent_id] = dependent_todo
+
+    async def _traverse_from_plan(
+        self,
+        plan_id: str,
+        goals_map: dict[str, "GoalData"],
+        plans_map: dict[str, "PlanData"],
+        todos_map: dict[str, "TodoData"],
+        result: "EntityHierarchy",
+        visited_todos: set[str],
+        include_dependencies: bool,
+    ) -> None:
+        """Traverse hierarchy starting from a plan.
+
+        Goes up to goal and down to todos.
+        """
+        # Load the plan
+        plan = await self.load_plan(plan_id)
+        if not plan:
+            return
+
+        plans_map[plan_id] = plan
+
+        # Get parent goal
+        if plan.goal_id and plan.goal_id not in goals_map:
+            goal = await self.load_goal(plan.goal_id)
+            if goal:
+                goals_map[plan.goal_id] = goal
+
+        # Get child todos
+        todo_ids = await self.get_todos_for_plan(plan_id)
+        for todo_id in todo_ids:
+            await self._traverse_from_todo(
+                todo_id, goals_map, plans_map, todos_map, result,
+                visited_todos, include_dependencies
+            )
+
+    async def _traverse_from_goal(
+        self,
+        goal_id: str,
+        goals_map: dict[str, "GoalData"],
+        plans_map: dict[str, "PlanData"],
+        todos_map: dict[str, "TodoData"],
+        result: "EntityHierarchy",
+        visited_todos: set[str],
+        include_dependencies: bool,
+    ) -> None:
+        """Traverse hierarchy starting from a goal.
+
+        Goes down to plans and todos.
+        """
+        # Load the goal
+        goal = await self.load_goal(goal_id)
+        if not goal:
+            return
+
+        goals_map[goal_id] = goal
+
+        # Get child plans
+        plans = await self.list_plans(goal_id=goal_id)
+        for plan in plans:
+            plans_map[plan.id] = plan
+
+            # Get todos for each plan
+            todo_ids = await self.get_todos_for_plan(plan.id)
+            for todo_id in todo_ids:
+                await self._traverse_from_todo(
+                    todo_id, goals_map, plans_map, todos_map, result,
+                    visited_todos, include_dependencies
+                )
+
+
+@dataclass
+class EntityHierarchy:
+    """Complete hierarchy for an entity.
+
+    Contains the entity itself plus all related entities traversed
+    upward (parents) and downward (children) in the goal→plan→todo
+    hierarchy.
+
+    Attributes:
+        entity_type: The type of the root entity ("goal", "plan", or "todo")
+        entity_id: The ID of the root entity
+        goal: The goal at the top of the hierarchy (None if not found)
+        plans: All plans in the hierarchy
+        todos: All todos in the hierarchy
+        todo_plan_links: Links between todos and plans
+        dependencies: Todo dependencies found
+        bindings: Session bindings for all entities in hierarchy
+        cycle_detected: True if a cycle was detected during traversal
+        cycle_path: If cycle detected, the path of entity IDs that form the cycle
+    """
+    entity_type: str
+    entity_id: str
+    goal: Optional["GoalData"] = None
+    plans: list["PlanData"] = field(default_factory=list)
+    todos: list["TodoData"] = field(default_factory=list)
+    todo_plan_links: list["TodoPlanLink"] = field(default_factory=list)
+    dependencies: list["TodoDependency"] = field(default_factory=list)
+    bindings: list["SessionBinding"] = field(default_factory=list)
+    cycle_detected: bool = False
+    cycle_path: list[str] = field(default_factory=list)
 
 
 async def get_goal_storage() -> GoalStorage:

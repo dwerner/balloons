@@ -48,6 +48,7 @@ GOAL_TOOL_NAMES = {
     "list_plans",
     "list_todos",
     "get_todo",
+    "get_hierarchy",
     "mark_todo_done",
     "bind_session",
     "list_all_bindings",
@@ -478,6 +479,53 @@ such as when starting work on it or checking its details.""",
     {
         "type": "function",
         "function": {
+            "name": "get_hierarchy",
+            "description": """Get the complete hierarchy for any entity (goal, plan, or todo).
+
+Traverses all relationships to build a comprehensive view:
+- For a todo: traverses up to parent plans and goal, plus all dependencies
+- For a plan: traverses up to goal and down to all todos
+- For a goal: traverses down to all plans and their todos
+
+The result includes:
+- The goal at the top of the hierarchy
+- All related plans
+- All related todos
+- Todo-plan links (many-to-many relationships)
+- Todo dependencies (what depends on what)
+- Session bindings for all entities
+- Cycle detection for dependency graphs
+
+Use this when you need to understand the full context of an entity,
+see all related work items, or detect circular dependencies.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity_type": {
+                        "type": "string",
+                        "enum": ["goal", "plan", "todo"],
+                        "description": "Type of entity to get hierarchy for"
+                    },
+                    "entity_id": {
+                        "type": "string",
+                        "description": "ID of the entity (can be prefix)"
+                    },
+                    "include_bindings": {
+                        "type": "boolean",
+                        "description": "Include session bindings in result. Default: true"
+                    },
+                    "include_dependencies": {
+                        "type": "boolean",
+                        "description": "Traverse todo dependencies. Default: true"
+                    }
+                },
+                "required": ["entity_type", "entity_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "mark_todo_done",
             "description": """Mark a todo as complete.
 
@@ -721,6 +769,8 @@ async def execute_goal_tool(
         return await _list_todos(args, storage)
     elif name == "get_todo":
         return await _get_todo(args, storage)
+    elif name == "get_hierarchy":
+        return await _get_hierarchy(args, storage)
     elif name == "mark_todo_done":
         return await _mark_todo_done(args, storage, session)
     elif name == "bind_session":
@@ -1383,6 +1433,107 @@ async def _get_todo(args: dict, storage) -> tuple[str, bool]:
     lines.append(f"Created: {todo.created_at}")
     if todo.updated_at != todo.created_at:
         lines.append(f"Updated: {todo.updated_at}")
+
+    return "\n".join(lines), False
+
+
+async def _get_hierarchy(args: dict, storage) -> tuple[str, bool]:
+    """Get the complete hierarchy for an entity."""
+    entity_type = args.get("entity_type", "").strip()
+    if entity_type not in ("goal", "plan", "todo"):
+        return "Error: entity_type must be 'goal', 'plan', or 'todo'", True
+
+    entity_id = args.get("entity_id", "").strip()
+    if not entity_id:
+        return "Error: entity_id is required", True
+
+    include_bindings = args.get("include_bindings", True)
+    include_dependencies = args.get("include_dependencies", True)
+
+    hierarchy = await storage.get_hierarchy(
+        entity_type, entity_id,
+        include_bindings=include_bindings,
+        include_dependencies=include_dependencies
+    )
+
+    # Check if entity was found
+    if entity_type == "goal" and hierarchy.goal is None:
+        return f"Error: Goal not found: {entity_id}", True
+    elif entity_type == "plan" and len(hierarchy.plans) == 0:
+        return f"Error: Plan not found: {entity_id}", True
+    elif entity_type == "todo" and len(hierarchy.todos) == 0:
+        return f"Error: Todo not found: {entity_id}", True
+
+    # Build formatted output
+    lines = [f"Hierarchy for {entity_type}: {entity_id}"]
+    lines.append("")
+
+    # Goal section
+    if hierarchy.goal:
+        lines.append(f"Goal: {hierarchy.goal.title}")
+        lines.append(f"  ID: {hierarchy.goal.id}")
+        lines.append(f"  Status: {hierarchy.goal.status}")
+        lines.append(f"  Weight: {hierarchy.goal.weight}/10")
+        lines.append("")
+
+    # Plans section
+    if hierarchy.plans:
+        lines.append(f"Plans ({len(hierarchy.plans)}):")
+        for plan in hierarchy.plans:
+            lines.append(f"  - {plan.title}")
+            lines.append(f"    ID: {plan.id[:8]}")
+            lines.append(f"    Status: {plan.status}")
+        lines.append("")
+
+    # Todos section
+    if hierarchy.todos:
+        lines.append(f"Todos ({len(hierarchy.todos)}):")
+        for todo in hierarchy.todos:
+            status_icon = {
+                "pending": "○",
+                "in_progress": "◐",
+                "done": "✓",
+                "completed": "✓",
+                "abandoned": "✗",
+                "blocked": "⊘",
+            }.get(todo.status, "?")
+            spike_marker = " [spike]" if todo.is_spike else ""
+            lines.append(f"  {status_icon} {todo.title}{spike_marker}")
+            lines.append(f"    ID: {todo.id[:8]}")
+            lines.append(f"    Status: {todo.status}")
+        lines.append("")
+
+    # Dependencies section
+    if hierarchy.dependencies:
+        lines.append(f"Dependencies ({len(hierarchy.dependencies)}):")
+        for dep in hierarchy.dependencies:
+            lines.append(f"  {dep.todo_id[:8]} depends on {dep.depends_on_id[:8]}")
+        lines.append("")
+
+    # Cycle warning
+    if hierarchy.cycle_detected:
+        lines.append("⚠️  CYCLE DETECTED in dependencies!")
+        if hierarchy.cycle_path:
+            path_str = " → ".join(p[:8] for p in hierarchy.cycle_path)
+            lines.append(f"  Cycle path: {path_str}")
+        lines.append("")
+
+    # Bindings section
+    if hierarchy.bindings:
+        lines.append(f"Session Bindings ({len(hierarchy.bindings)}):")
+        for binding in hierarchy.bindings:
+            lines.append(f"  - Session {binding.session_id[:8]} → {binding.entity_type} ({binding.role})")
+        lines.append("")
+
+    # Summary
+    lines.append("Summary:")
+    lines.append(f"  Goals: {1 if hierarchy.goal else 0}")
+    lines.append(f"  Plans: {len(hierarchy.plans)}")
+    lines.append(f"  Todos: {len(hierarchy.todos)}")
+    if include_dependencies:
+        lines.append(f"  Dependencies: {len(hierarchy.dependencies)}")
+    if include_bindings:
+        lines.append(f"  Bindings: {len(hierarchy.bindings)}")
 
     return "\n".join(lines), False
 
