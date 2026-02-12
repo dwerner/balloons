@@ -5,7 +5,10 @@ use heed::{Database, Env, EnvOpenOptions};
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::generated::{SessionData, SessionMetadata, TurnData, TurnOrder};
+use crate::generated::{
+    GoalData, PlanData, SessionBinding, SessionData, SessionMetadata, TodoData, TodoDependency,
+    TodoPlanLink, TurnData, TurnOrder,
+};
 use super::traits::{Error, Result, StorageEngine};
 
 /// Parse an ISO 8601 timestamp string to Unix timestamp (seconds).
@@ -33,17 +36,92 @@ const DEFAULT_MAP_SIZE: usize = 1024 * 1024 * 1024; // 1GB
 
 /// LMDB-backed storage engine using heed
 ///
-/// Uses the same table structure as the previous redb implementation:
-/// - SESSIONS: session_id → JSON-encoded SessionData
-/// - TURNS: turn_id → JSON-encoded TurnData
-/// - TURN_ORDER: session_id → JSON-encoded TurnOrder
-/// - METADATA: key → value (for app-level metadata like session_history)
+/// ## Database Schema
+///
+/// ### Session Management
+/// - `sessions`: session_id → JSON-encoded SessionData
+/// - `turns`: turn_id → JSON-encoded TurnData
+/// - `turn_order`: session_id → JSON-encoded TurnOrder (ordered list of turn_ids)
+/// - `metadata`: key → value (for app-level metadata like session_history)
+///
+/// ### Goal System
+///
+/// Primary entity tables (key = entity id):
+/// - `goals`: goal_id → JSON-encoded GoalData
+/// - `plans`: plan_id → JSON-encoded PlanData
+/// - `todos`: todo_id → JSON-encoded TodoData
+///
+/// Index tables for efficient lookups:
+/// - `plans_by_goal`: goal_id → JSON-encoded Vec<plan_id>
+///   Enables: "get all plans for a goal"
+///
+/// - `todos_by_plan`: plan_id → JSON-encoded Vec<todo_id>
+///   Enables: "get all todos for a plan"
+///   Note: A todo can belong to multiple plans (many-to-many via TodoPlanLink)
+///
+/// - `plans_by_todo`: todo_id → JSON-encoded Vec<plan_id>
+///   Enables: "get all plans a todo belongs to" (reverse lookup)
+///
+/// - `todo_dependencies`: todo_id → JSON-encoded Vec<TodoDependency>
+///   Enables: "get todos this todo depends on"
+///
+/// - `todo_dependents`: todo_id → JSON-encoded Vec<todo_id>
+///   Enables: "get todos that depend on this todo" (reverse lookup)
+///
+/// Session binding tables:
+/// - `session_bindings`: binding_id → JSON-encoded SessionBinding
+///   Primary storage for all bindings
+///
+/// - `bindings_by_session`: session_id → JSON-encoded Vec<binding_id>
+///   Enables: "get all bindings for a session"
+///
+/// - `bindings_by_entity`: "entity_type:entity_id" → JSON-encoded Vec<binding_id>
+///   Enables: "get all sessions bound to a goal/plan/todo"
+///
+/// ## Key Design Decisions
+///
+/// 1. **Separate index tables vs composite keys**: Using index tables (like turn_order)
+///    rather than composite keys because:
+///    - Simpler key structure (just IDs)
+///    - Easier to maintain ordering
+///    - Consistent with existing session/turn pattern
+///
+/// 2. **Bidirectional indexes for many-to-many**: Both `todos_by_plan` and `plans_by_todo`
+///    exist because we need efficient lookups in both directions.
+///
+/// 3. **Entity key format for bindings_by_entity**: Using "type:id" composite key
+///    (e.g., "goal:abc123") to enable lookups by entity without scanning.
+///
+/// 4. **TodoPlanLink stored in indexes, not as separate table**: The link data is
+///    simple enough that we store it implicitly in the index tables. The created_at
+///    timestamp is stored in the Vec entries if needed.
 pub struct LmdbEngine {
     env: Arc<Env>,
+
+    // Session management (existing)
     sessions: Database<Str, Bytes>,
     turns: Database<Str, Bytes>,
     turn_order: Database<Str, Bytes>,
     metadata: Database<Str, Bytes>,
+
+    // Goal system - primary entity tables
+    goals: Database<Str, Bytes>,
+    plans: Database<Str, Bytes>,
+    todos: Database<Str, Bytes>,
+
+    // Goal system - index tables for relationships
+    plans_by_goal: Database<Str, Bytes>,   // goal_id → [plan_id]
+    todos_by_plan: Database<Str, Bytes>,   // plan_id → [todo_id]
+    plans_by_todo: Database<Str, Bytes>,   // todo_id → [plan_id] (reverse index)
+
+    // Todo dependency tracking
+    todo_dependencies: Database<Str, Bytes>, // todo_id → [TodoDependency]
+    todo_dependents: Database<Str, Bytes>,   // todo_id → [todo_id] (reverse index)
+
+    // Session bindings
+    session_bindings: Database<Str, Bytes>,    // binding_id → SessionBinding
+    bindings_by_session: Database<Str, Bytes>, // session_id → [binding_id]
+    bindings_by_entity: Database<Str, Bytes>,  // "entity_type:entity_id" → [binding_id]
 }
 
 /// Key used for session history in the metadata table
@@ -65,10 +143,11 @@ impl LmdbEngine {
         // Create directory if it doesn't exist
         std::fs::create_dir_all(path)?;
 
+        // Database count: 4 session + 3 goal entities + 5 goal indexes + 3 binding = 15
         let env = unsafe {
             EnvOpenOptions::new()
                 .map_size(map_size)
-                .max_dbs(4) // sessions, turns, turn_order, metadata
+                .max_dbs(15)
                 .open(path)
                 .map_err(|e| Error::Database(e.to_string()))?
         };
@@ -76,6 +155,7 @@ impl LmdbEngine {
         // Create databases (tables)
         let mut wtxn = env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
 
+        // Session management tables
         let sessions = env
             .create_database(&mut wtxn, Some("sessions"))
             .map_err(|e| Error::Database(e.to_string()))?;
@@ -89,14 +169,74 @@ impl LmdbEngine {
             .create_database(&mut wtxn, Some("metadata"))
             .map_err(|e| Error::Database(e.to_string()))?;
 
+        // Goal system - primary entity tables
+        let goals = env
+            .create_database(&mut wtxn, Some("goals"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let plans = env
+            .create_database(&mut wtxn, Some("plans"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let todos = env
+            .create_database(&mut wtxn, Some("todos"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        // Goal system - relationship indexes
+        let plans_by_goal = env
+            .create_database(&mut wtxn, Some("plans_by_goal"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let todos_by_plan = env
+            .create_database(&mut wtxn, Some("todos_by_plan"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let plans_by_todo = env
+            .create_database(&mut wtxn, Some("plans_by_todo"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        // Todo dependency indexes
+        let todo_dependencies = env
+            .create_database(&mut wtxn, Some("todo_dependencies"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let todo_dependents = env
+            .create_database(&mut wtxn, Some("todo_dependents"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        // Session binding tables
+        let session_bindings = env
+            .create_database(&mut wtxn, Some("session_bindings"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let bindings_by_session = env
+            .create_database(&mut wtxn, Some("bindings_by_session"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let bindings_by_entity = env
+            .create_database(&mut wtxn, Some("bindings_by_entity"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+
         wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
 
         Ok(Self {
             env: Arc::new(env),
+
+            // Session management
             sessions,
             turns,
             turn_order,
             metadata,
+
+            // Goal system entities
+            goals,
+            plans,
+            todos,
+
+            // Goal system indexes
+            plans_by_goal,
+            todos_by_plan,
+            plans_by_todo,
+            todo_dependencies,
+            todo_dependents,
+
+            // Session bindings
+            session_bindings,
+            bindings_by_session,
+            bindings_by_entity,
         })
     }
 }
