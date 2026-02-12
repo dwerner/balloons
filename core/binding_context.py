@@ -19,6 +19,25 @@ from storage_schema import GoalData, PlanData, TodoData, SessionBinding
 _role_guidance_cache: dict[str, str] = {}
 
 
+# Completion guidance templates based on whether we're in a fork
+_COMPLETION_IN_FORK = """
+### Session Completion (Fork)
+This session is a **fork** with a parent session. When work is complete:
+- Propose a merge back to parent with a summary of what was accomplished
+- Use `propose_merge` tool with summary, files_changed, and key_accomplishments
+"""
+
+_COMPLETION_NOT_IN_FORK = """
+### Session Completion (Standalone)
+This session is **not a fork** - it's a standalone session bound to a task.
+When work is complete:
+- **Do NOT propose a merge** (there's no parent to merge to)
+- Instead, let the user know the task is complete and summarize what was done
+- Mark the todo as done using `mark_todo_done` if appropriate
+- The user can close this session and return to their main workflow
+"""
+
+
 def _get_prompts_dir() -> Path:
     """Get the prompts directory path."""
     # Navigate from core/ to project root, then to prompts/
@@ -71,7 +90,7 @@ class BindingContextBuilder:
             self._goal_storage = await get_goal_storage()
         return self._goal_storage
 
-    async def build_binding_context(self, session_id: str) -> str:
+    async def build_binding_context(self, session_id: str, is_fork: bool = False) -> str:
         """Build context string from session's active bindings.
 
         Loads all active (non-released) bindings for the session and
@@ -81,6 +100,7 @@ class BindingContextBuilder:
 
         Args:
             session_id: The session to build context for
+            is_fork: Whether this session has a parent (is a fork)
 
         Returns:
             Formatted context string, or empty string if no bindings
@@ -117,6 +137,16 @@ class BindingContextBuilder:
             for guidance in guidance_parts:
                 parts.append(guidance)
                 parts.append("")
+
+        # Add completion guidance based on fork status
+        # Only add for roles that have completion workflows
+        completion_roles = {"implementation", "planning", "exploration", "postmortem"}
+        if seen_roles & completion_roles:
+            if is_fork:
+                parts.append(_COMPLETION_IN_FORK)
+            else:
+                parts.append(_COMPLETION_NOT_IN_FORK)
+            parts.append("")
 
         return "\n".join(parts)
 
@@ -224,14 +254,15 @@ class BindingContextBuilder:
         return "\n".join(lines)
 
 
-async def build_binding_context_for_session(session_id: str) -> str:
+async def build_binding_context_for_session(session_id: str, is_fork: bool = False) -> str:
     """Convenience function to build binding context for a session.
 
     Args:
         session_id: The session to build context for
+        is_fork: Whether this session has a parent (is a fork)
 
     Returns:
         Formatted context string, or empty string if no bindings
     """
     builder = BindingContextBuilder()
-    return await builder.build_binding_context(session_id)
+    return await builder.build_binding_context(session_id, is_fork=is_fork)

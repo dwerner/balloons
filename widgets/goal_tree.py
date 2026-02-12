@@ -40,9 +40,16 @@ class GoalTreeWidget(Tree):
     - /: search
     - d/Delete: delete entity or session
     - m: mark todo done
-    - b: bind session to current entity
+    - b: bind session to current entity (when on goal/plan/todo node)
     - n: create new session bound to current entity
-    - Click [+]: create new session bound to that entity
+    - r: rebind session to different entity (when on session node)
+    - u: unbind session from entity (when on session node)
+    - Click [done]: mark todo as complete (when on pending/in_progress todo)
+    - Click [+session]: create new session bound to that entity
+    - Click [+plan]: create new plan under goal
+    - Click [+todo]: create new todo under plan
+    - Click [bind]/[move]: rebind session to different entity
+    - Click [unbind]: remove session's binding
     - :: jump to command input
     - left/right: collapse/expand or navigate parent
     """
@@ -53,10 +60,18 @@ class GoalTreeWidget(Tree):
     def render_label(self, node, base_style: Style, style: Style) -> Text:
         """Render label with custom icons based on node type.
 
-        For goal/plan/todo nodes, adds a clickable [+] widget that creates
-        a new session bound to that entity.
+        For goal/plan/todo nodes, adds clickable buttons ONLY when cursor is on node:
+        - Goals: [+plan] (cyan) and [+session] (bright green)
+        - Plans: [+todo] (magenta) and [+session] (bright green)
+        - Todos: [+session] (bright green)
+        - Sessions: [move]/[bind] and [unbind]
+
+        When not the cursor node, more space is available for text display.
         """
         TOGGLE_STYLE = Style.from_meta({"toggle": True})
+
+        # Check if this is the cursor node - buttons only shown on cursor row
+        is_cursor = node == self.cursor_node
 
         node_label = node._label.copy()
         node_label.stylize(style)
@@ -81,19 +96,99 @@ class GoalTreeWidget(Tree):
 
         text = Text.assemble(prefix, node_label)
 
-        # Add clickable [+] widget for goal/plan/todo nodes to create new session
+        # Add clickable buttons ONLY on cursor row
+        if not is_cursor:
+            return text
+
         node_type = node.data.get("type") if node.data else None
-        if node_type in ("goal", "plan", "todo"):
-            # Create a meta style for the new session action
-            entity_id = node.data.get(f"{node_type}_id")
-            if entity_id:
-                new_session_style = Style.from_meta({
-                    "new_session": True,
-                    "entity_type": node_type,
-                    "entity_id": entity_id,
+
+        if node_type == "goal":
+            goal_id = node.data.get("goal_id")
+            if goal_id:
+                # [+plan] button for goals - cyan to match plan color
+                new_plan_style = Style.from_meta({
+                    "new_plan": True,
+                    "goal_id": goal_id,
                 })
                 text.append(" ")
-                text.append("[+]", style=Style(color="bright_green", bold=True) + new_session_style)
+                text.append("[+plan]", style=Style(color="cyan", bold=True) + new_plan_style)
+
+                # [+session] button
+                new_session_style = Style.from_meta({
+                    "new_session": True,
+                    "entity_type": "goal",
+                    "entity_id": goal_id,
+                })
+                text.append(" ")
+                text.append("[+session]", style=Style(color="bright_green", bold=True) + new_session_style)
+
+        elif node_type == "plan":
+            plan_id = node.data.get("plan_id")
+            if plan_id:
+                # [+todo] button for plans - magenta for visibility
+                new_todo_style = Style.from_meta({
+                    "new_todo": True,
+                    "plan_id": plan_id,
+                })
+                text.append(" ")
+                text.append("[+todo]", style=Style(color="magenta", bold=True) + new_todo_style)
+
+                # [+session] button
+                new_session_style = Style.from_meta({
+                    "new_session": True,
+                    "entity_type": "plan",
+                    "entity_id": plan_id,
+                })
+                text.append(" ")
+                text.append("[+session]", style=Style(color="bright_green", bold=True) + new_session_style)
+
+        elif node_type == "todo":
+            todo_id = node.data.get("todo_id")
+            todo_status = node.data.get("todo_status", "pending")
+            if todo_id:
+                # [done] button for incomplete todos - allows marking complete via click
+                if todo_status in ("pending", "in_progress"):
+                    done_style = Style.from_meta({
+                        "mark_done": True,
+                        "todo_id": todo_id,
+                    })
+                    text.append(" ")
+                    text.append("[done]", style=Style(color="green", bold=True) + done_style)
+
+                # [+session] button for todos
+                new_session_style = Style.from_meta({
+                    "new_session": True,
+                    "entity_type": "todo",
+                    "entity_id": todo_id,
+                })
+                text.append(" ")
+                text.append("[+session]", style=Style(color="bright_green", bold=True) + new_session_style)
+
+        elif node_type == "session":
+            session_id = node.data.get("session_id")
+            bound_to_type = node.data.get("bound_to_type")
+            if session_id:
+                # [bind] button for sessions - allows rebinding or binding unbound sessions
+                bind_style = Style.from_meta({
+                    "bind_session": True,
+                    "session_id": session_id,
+                })
+                text.append(" ")
+                if bound_to_type:
+                    # Already bound - show [move] to rebind
+                    text.append("[move]", style=Style(color="yellow", bold=True) + bind_style)
+                else:
+                    # Unbound - show [bind]
+                    text.append("[bind]", style=Style(color="bright_green", bold=True) + bind_style)
+
+                # [unbind] button only for bound sessions
+                if bound_to_type:
+                    unbind_style = Style.from_meta({
+                        "unbind_session": True,
+                        "session_id": session_id,
+                    })
+                    text.append(" ")
+                    text.append("[unbind]", style=Style(color="red") + unbind_style)
 
         return text
 
@@ -151,10 +246,34 @@ class GoalTreeWidget(Tree):
             super().__init__()
 
     class NewSessionRequested(Message):
-        """Fired when user clicks [+] to create a new session bound to entity."""
+        """Fired when user clicks [+session] to create a new session bound to entity."""
         def __init__(self, entity_type: str, entity_id: str) -> None:
             self.entity_type = entity_type
             self.entity_id = entity_id
+            super().__init__()
+
+    class NewTodoRequested(Message):
+        """Fired when user clicks [+todo] on a plan to create a new todo."""
+        def __init__(self, plan_id: str) -> None:
+            self.plan_id = plan_id
+            super().__init__()
+
+    class NewPlanRequested(Message):
+        """Fired when user clicks [+plan] on a goal to create a new plan."""
+        def __init__(self, goal_id: str) -> None:
+            self.goal_id = goal_id
+            super().__init__()
+
+    class MoveSessionRequested(Message):
+        """Fired when user clicks [move]/[bind] to rebind a session to a different entity."""
+        def __init__(self, session_id: str) -> None:
+            self.session_id = session_id
+            super().__init__()
+
+    class UnbindSessionRequested(Message):
+        """Fired when user clicks [unbind] to remove session's binding."""
+        def __init__(self, session_id: str) -> None:
+            self.session_id = session_id
             super().__init__()
 
     # --- Click handling ---
@@ -162,7 +281,7 @@ class GoalTreeWidget(Tree):
     def on_click(self, event: Click) -> None:
         """Handle clicks on tree nodes.
 
-        Detects clicks on the [+] widget to create new sessions bound to entities.
+        Detects clicks on the [+session], [+todo], and [+plan] widgets.
         """
         meta = event.style.meta
 
@@ -170,13 +289,58 @@ class GoalTreeWidget(Tree):
         from core.debug_log import debug_log
         debug_log.info(f"GoalTreeWidget click meta: {meta}", category="goal_tree")
 
-        # Check if this is a click on the [+] new session widget
+        # Check if this is a click on [+plan] (on goal nodes)
+        if meta.get("new_plan"):
+            goal_id = meta.get("goal_id")
+            debug_log.info(f"GoalTreeWidget [+plan] clicked: goal_id={goal_id}", category="goal_tree")
+            if goal_id:
+                self.post_message(self.NewPlanRequested(goal_id))
+                event.stop()
+                return
+
+        # Check if this is a click on [+todo] (on plan nodes)
+        if meta.get("new_todo"):
+            plan_id = meta.get("plan_id")
+            debug_log.info(f"GoalTreeWidget [+todo] clicked: plan_id={plan_id}", category="goal_tree")
+            if plan_id:
+                self.post_message(self.NewTodoRequested(plan_id))
+                event.stop()
+                return
+
+        # Check if this is a click on the [+session] widget
         if meta.get("new_session"):
             entity_type = meta.get("entity_type")
             entity_id = meta.get("entity_id")
-            debug_log.info(f"GoalTreeWidget [+] clicked: type={entity_type}, id={entity_id}", category="goal_tree")
+            debug_log.info(f"GoalTreeWidget [+session] clicked: type={entity_type}, id={entity_id}", category="goal_tree")
             if entity_type and entity_id:
                 self.post_message(self.NewSessionRequested(entity_type, entity_id))
+                event.stop()
+                return
+
+        # Check if this is a click on [bind]/[move] (on session nodes)
+        if meta.get("bind_session"):
+            session_id = meta.get("session_id")
+            debug_log.info(f"GoalTreeWidget [bind]/[move] clicked: session_id={session_id}", category="goal_tree")
+            if session_id:
+                self.post_message(self.MoveSessionRequested(session_id))
+                event.stop()
+                return
+
+        # Check if this is a click on [unbind] (on session nodes)
+        if meta.get("unbind_session"):
+            session_id = meta.get("session_id")
+            debug_log.info(f"GoalTreeWidget [unbind] clicked: session_id={session_id}", category="goal_tree")
+            if session_id:
+                self.post_message(self.UnbindSessionRequested(session_id))
+                event.stop()
+                return
+
+        # Check if this is a click on [done] (on todo nodes)
+        if meta.get("mark_done"):
+            todo_id = meta.get("todo_id")
+            debug_log.info(f"GoalTreeWidget [done] clicked: todo_id={todo_id}", category="goal_tree")
+            if todo_id:
+                self.post_message(self.MarkTodoDoneRequested(todo_id))
                 event.stop()
                 return
 
@@ -276,6 +440,30 @@ class GoalTreeWidget(Tree):
                         event.stop()
                         return
 
+        elif event.key == "r":
+            # Rebind/move session to a different entity
+            if node and node.data:
+                node_type = node.data.get("type")
+                if node_type == "session":
+                    session_id = node.data.get("session_id")
+                    if session_id:
+                        self.post_message(self.MoveSessionRequested(session_id))
+                        event.prevent_default()
+                        event.stop()
+                        return
+
+        elif event.key == "u":
+            # Unbind session from current entity
+            if node and node.data:
+                node_type = node.data.get("type")
+                if node_type == "session":
+                    session_id = node.data.get("session_id")
+                    if session_id:
+                        self.post_message(self.UnbindSessionRequested(session_id))
+                        event.prevent_default()
+                        event.stop()
+                        return
+
         elif event.key == "right":
             if node and node._allow_expand and not node.is_expanded:
                 node.expand()
@@ -310,7 +498,7 @@ class GoalTreeView(Vertical):
 
     DEFAULT_CSS = """
     GoalTreeView {
-        width: 40;
+        width: 50;
         height: 100%;
         border-right: solid $primary;
     }
@@ -379,10 +567,34 @@ class GoalTreeView(Vertical):
             super().__init__()
 
     class NewSessionRequested(Message):
-        """Fired when user clicks [+] to create a new session bound to entity."""
+        """Fired when user clicks [+session] to create a new session bound to entity."""
         def __init__(self, entity_type: str, entity_id: str) -> None:
             self.entity_type = entity_type
             self.entity_id = entity_id
+            super().__init__()
+
+    class NewTodoRequested(Message):
+        """Fired when user clicks [+todo] on a plan to create a new todo."""
+        def __init__(self, plan_id: str) -> None:
+            self.plan_id = plan_id
+            super().__init__()
+
+    class NewPlanRequested(Message):
+        """Fired when user clicks [+plan] on a goal to create a new plan."""
+        def __init__(self, goal_id: str) -> None:
+            self.goal_id = goal_id
+            super().__init__()
+
+    class MoveSessionRequested(Message):
+        """Fired when user clicks [move]/[bind] to rebind a session to a different entity."""
+        def __init__(self, session_id: str) -> None:
+            self.session_id = session_id
+            super().__init__()
+
+    class UnbindSessionClicked(Message):
+        """Fired when user clicks [unbind] to remove session's binding."""
+        def __init__(self, session_id: str) -> None:
+            self.session_id = session_id
             super().__init__()
 
     def __init__(
@@ -619,7 +831,7 @@ class GoalTreeView(Vertical):
 
         todo_node = parent_node.add(
             label,
-            data={"type": "todo", "todo_id": todo_data.id}
+            data={"type": "todo", "todo_id": todo_data.id, "todo_status": todo_data.status}
         )
         self._todo_nodes[todo_data.id] = todo_node
 
@@ -680,7 +892,11 @@ class GoalTreeView(Vertical):
     # --- Label Formatters ---
 
     def _make_goal_label(self, goal_data: GoalNodeData) -> str:
-        """Create label for a goal node."""
+        """Create label for a goal node.
+
+        Title is not truncated here - the tree widget will handle overflow.
+        Buttons are only shown on cursor row, so full text can be displayed.
+        """
         status_icon = {
             "active": "[green]●[/]",
             "completed": "[blue]✓[/]",
@@ -692,8 +908,7 @@ class GoalTreeView(Vertical):
         weight_bar = "█" * min(weight, 5) + "░" * max(0, 5 - weight)
 
         title = goal_data.title
-        if len(title) > 30:
-            title = title[:27] + "..."
+        # No truncation - let tree widget handle overflow
 
         session_count = len(goal_data.bound_session_ids)
         session_indicator = f" [dim]({session_count}s)[/]" if session_count > 0 else ""
@@ -704,7 +919,11 @@ class GoalTreeView(Vertical):
         )
 
     def _make_plan_label(self, plan_data: PlanNodeData) -> str:
-        """Create label for a plan node."""
+        """Create label for a plan node.
+
+        Title is not truncated - tree widget handles overflow.
+        Buttons only shown on cursor row.
+        """
         status_icon = {
             "draft": "[yellow]◌[/]",
             "active": "[green]●[/]",
@@ -713,8 +932,7 @@ class GoalTreeView(Vertical):
         }.get(plan_data.status, "○")
 
         title = plan_data.title
-        if len(title) > 30:
-            title = title[:27] + "..."
+        # No truncation - let tree widget handle overflow
 
         # Count todos
         todo_count = len(plan_data.todo_ids) if hasattr(plan_data, 'todo_ids') else 0
@@ -723,7 +941,11 @@ class GoalTreeView(Vertical):
         return f"{status_icon} 📋 [cyan]{escape_markup(title)}[/]{todo_indicator}"
 
     def _make_todo_label(self, todo_data: TodoNodeData) -> str:
-        """Create label for a todo node."""
+        """Create label for a todo node.
+
+        Title is not truncated - tree widget handles overflow.
+        Buttons only shown on cursor row.
+        """
         status_icon = {
             "pending": "[yellow]○[/]",
             "in_progress": "[cyan]◐[/]",
@@ -733,8 +955,7 @@ class GoalTreeView(Vertical):
         }.get(todo_data.status, "○")
 
         title = todo_data.title
-        if len(title) > 30:
-            title = title[:27] + "..."
+        # No truncation - let tree widget handle overflow
 
         spike_marker = " [magenta][spike][/]" if todo_data.is_spike else ""
         priority_marker = f" [yellow]p:{todo_data.priority:.1f}[/]" if todo_data.priority > 0 else ""
@@ -768,19 +989,12 @@ class GoalTreeView(Vertical):
         else:
             fork_indicator = ""
 
-        # Name
+        # Name - no truncation, let tree widget handle overflow
         name = session.name
-        if len(name) > 20:
-            name = name[:17] + "..."
 
-        # Role indicator
-        role_abbrev = {
-            "interview": "int",
-            "planning": "plan",
-            "implementation": "impl",
-            "postmortem": "post",
-            "exploration": "expl",
-        }.get(session.binding_role, "")
+        # Role indicator (use central ROLE_ABBREV mapping)
+        from core.goal_commands import ROLE_ABBREV
+        role_abbrev = ROLE_ABBREV.get(session.binding_role, "")
         role_indicator = f" [dim][{role_abbrev}][/]" if role_abbrev else ""
 
         return (
@@ -907,6 +1121,30 @@ class GoalTreeView(Vertical):
         from core.debug_log import debug_log
         debug_log.info(f"GoalTreeView received NewSessionRequested: type={event.entity_type}, id={event.entity_id}", category="goal_tree")
         self.post_message(self.NewSessionRequested(event.entity_type, event.entity_id))
+
+    def on_goal_tree_widget_new_todo_requested(self, event: GoalTreeWidget.NewTodoRequested) -> None:
+        """Bubble up new todo request."""
+        from core.debug_log import debug_log
+        debug_log.info(f"GoalTreeView received NewTodoRequested: plan_id={event.plan_id}", category="goal_tree")
+        self.post_message(self.NewTodoRequested(event.plan_id))
+
+    def on_goal_tree_widget_new_plan_requested(self, event: GoalTreeWidget.NewPlanRequested) -> None:
+        """Bubble up new plan request."""
+        from core.debug_log import debug_log
+        debug_log.info(f"GoalTreeView received NewPlanRequested: goal_id={event.goal_id}", category="goal_tree")
+        self.post_message(self.NewPlanRequested(event.goal_id))
+
+    def on_goal_tree_widget_move_session_requested(self, event: GoalTreeWidget.MoveSessionRequested) -> None:
+        """Bubble up move session request (rebind to different entity)."""
+        from core.debug_log import debug_log
+        debug_log.info(f"GoalTreeView received MoveSessionRequested: session_id={event.session_id}", category="goal_tree")
+        self.post_message(self.MoveSessionRequested(event.session_id))
+
+    def on_goal_tree_widget_unbind_session_requested(self, event: GoalTreeWidget.UnbindSessionRequested) -> None:
+        """Bubble up unbind session request."""
+        from core.debug_log import debug_log
+        debug_log.info(f"GoalTreeView received UnbindSessionRequested: session_id={event.session_id}", category="goal_tree")
+        self.post_message(self.UnbindSessionClicked(event.session_id))
 
     def on_tree_node_selected(self, event) -> None:
         """Handle node selection."""

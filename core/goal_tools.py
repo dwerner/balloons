@@ -16,16 +16,20 @@ Tool Names:
 - get_todo: Get details of a single todo by ID
 - mark_todo_done: Mark a todo as complete
 - bind_session: Bind current session to a goal/plan/todo
+- list_all_bindings: List all session bindings with filtering
+- rebind_session: Rebind any session to a different entity
+- bind_entity_to_sessions: Bulk bind an entity to multiple sessions
+- unbind_sessions: Bulk unbind sessions or cleanup orphans
 """
 
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from core.async_storage import get_goal_storage
+from core.async_storage import get_goal_storage, AsyncStorage
 from core.goal_commands import GoalCommandExecutor
 from core.lifecycle_hooks import LifecycleHooks
-from storage_schema import GoalData, PlanData, TodoData, TodoPlanLink, TodoDependency
+from storage_schema import GoalData, PlanData, TodoData, TodoPlanLink, TodoDependency, SessionBinding
 
 if TYPE_CHECKING:
     from session import Session
@@ -45,6 +49,10 @@ GOAL_TOOL_NAMES = {
     "get_todo",
     "mark_todo_done",
     "bind_session",
+    "list_all_bindings",
+    "rebind_session",
+    "bind_entity_to_sessions",
+    "unbind_sessions",
 }
 
 # Tools that mutate goal data and require UI refresh
@@ -57,6 +65,9 @@ GOAL_MUTATION_TOOLS = {
     "update_todo",
     "mark_todo_done",
     "bind_session",
+    "rebind_session",
+    "bind_entity_to_sessions",
+    "unbind_sessions",
 }
 
 
@@ -494,6 +505,150 @@ Roles:
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_all_bindings",
+            "description": """List all session bindings across the system.
+
+Shows which sessions are bound to which goals/plans/todos, with filters
+to help identify orphaned bindings (sessions that no longer exist) or
+focus on specific areas.
+
+Results are paginated. Use offset/limit to page through large result sets.
+Use this to review and clean up session bindings.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filter": {
+                        "type": "string",
+                        "enum": ["all", "active", "orphaned", "released"],
+                        "description": "Filter bindings: 'active' (default), 'orphaned' (session missing), 'released', or 'all'"
+                    },
+                    "goal_id": {
+                        "type": "string",
+                        "description": "Optional: only show bindings for entities under this goal (can be prefix)"
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["summary", "detail"],
+                        "description": "Output mode: 'summary' for counts only, 'detail' (default) for full list"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of entities to show. Default: 10"
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Number of entities to skip. Default: 0"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "rebind_session",
+            "description": """Rebind any session to a different entity.
+
+Unlike bind_session (which only works on current session), this can
+rebind any session. Useful for cleanup and reorganization.
+
+The old binding is released and a new one created.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "ID of the session to rebind (can be prefix)"
+                    },
+                    "entity_type": {
+                        "type": "string",
+                        "enum": ["goal", "plan", "todo"],
+                        "description": "Type of entity to bind to"
+                    },
+                    "entity_id": {
+                        "type": "string",
+                        "description": "ID of the entity (can be prefix)"
+                    },
+                    "role": {
+                        "type": "string",
+                        "enum": ["interview", "planning", "implementation", "postmortem", "exploration"],
+                        "description": "Role for this session. Default: 'implementation'"
+                    }
+                },
+                "required": ["session_id", "entity_type", "entity_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "bind_entity_to_sessions",
+            "description": """Bulk bind an entity to multiple sessions.
+
+Entity-centric binding: specify which sessions should be bound to
+a goal/plan/todo. Optionally unbind other sessions not in the list.
+
+Useful for reorganization: "this todo should have exactly these sessions".""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity_type": {
+                        "type": "string",
+                        "enum": ["goal", "plan", "todo"],
+                        "description": "Type of entity"
+                    },
+                    "entity_id": {
+                        "type": "string",
+                        "description": "ID of the entity (can be prefix)"
+                    },
+                    "session_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of session IDs to bind (can be prefixes)"
+                    },
+                    "role": {
+                        "type": "string",
+                        "enum": ["interview", "planning", "implementation", "postmortem", "exploration"],
+                        "description": "Role for all sessions. Default: 'implementation'"
+                    },
+                    "unbind_others": {
+                        "type": "boolean",
+                        "description": "If true, unbind sessions not in the list. Default: false"
+                    }
+                },
+                "required": ["entity_type", "entity_id", "session_ids"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "unbind_sessions",
+            "description": """Bulk unbind sessions.
+
+Can unbind specific sessions or clean up orphaned bindings
+(bindings for sessions that no longer exist).""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of session IDs to unbind (can be prefixes). If empty with orphans_only=true, only cleans orphans."
+                    },
+                    "orphans_only": {
+                        "type": "boolean",
+                        "description": "If true, only unbind orphaned sessions (session no longer exists). Default: false"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
 ]
 
 
@@ -538,6 +693,14 @@ async def execute_goal_tool(
         return await _mark_todo_done(args, storage, session)
     elif name == "bind_session":
         return await _bind_session(args, storage, session)
+    elif name == "list_all_bindings":
+        return await _list_all_bindings(args, storage)
+    elif name == "rebind_session":
+        return await _rebind_session(args, storage)
+    elif name == "bind_entity_to_sessions":
+        return await _bind_entity_to_sessions(args, storage)
+    elif name == "unbind_sessions":
+        return await _unbind_sessions(args, storage)
     else:
         return f"Unknown goal tool: {name}", True
 
@@ -1177,3 +1340,367 @@ async def _bind_session(args: dict, storage, session) -> tuple[str, bool]:
         return f"Session bound to {entity_type} with role: {role}", False
     else:
         return f"Error: {result.error}", True
+
+
+async def _get_session_ids_set() -> set[str]:
+    """Get set of all existing session IDs."""
+    session_storage = AsyncStorage()
+    sessions = await session_storage.list_sessions()
+    return {s["id"] for s in sessions}
+
+
+async def _find_session_by_prefix(session_id_prefix: str) -> str | None:
+    """Find a session ID by prefix. Returns full ID or None."""
+    session_storage = AsyncStorage()
+    sessions = await session_storage.list_sessions()
+    for s in sessions:
+        if s["id"].startswith(session_id_prefix):
+            return s["id"]
+    return None
+
+
+async def _list_all_bindings(args: dict, storage) -> tuple[str, bool]:
+    """List all session bindings with filtering and pagination."""
+    filter_type = args.get("filter", "active")
+    goal_id_prefix = args.get("goal_id", "")
+    mode = args.get("mode", "detail")
+    limit = args.get("limit", 10)
+    offset = args.get("offset", 0)
+
+    # Get all existing session IDs
+    existing_sessions = await _get_session_ids_set()
+
+    # Get all goal/plan/todo IDs for filtering
+    goal_filter_id = None
+    plan_ids_under_goal = set()
+    todo_ids_under_goal = set()
+
+    if goal_id_prefix:
+        # Find the goal
+        goals = await storage.list_goals()
+        for g in goals:
+            if g.id.startswith(goal_id_prefix):
+                goal_filter_id = g.id
+                break
+        if not goal_filter_id:
+            return f"Error: Goal not found: {goal_id_prefix}", True
+
+        # Get plans under this goal
+        plans = await storage.list_plans(goal_id=goal_filter_id)
+        plan_ids_under_goal = {p.id for p in plans}
+
+        # Get todos under these plans
+        for plan in plans:
+            todo_ids = await storage.get_todos_for_plan(plan.id)
+            todo_ids_under_goal.update(todo_ids)
+
+    # Get all bindings (include released for filtering)
+    all_bindings = []
+    bindings_dir = storage._bindings_dir
+    import aiofiles
+    import json
+
+    for binding_file in bindings_dir.glob("*.json"):
+        try:
+            async with aiofiles.open(binding_file, "r", encoding="utf-8") as f:
+                data = json.loads(await f.read())
+            binding = SessionBinding(**data)
+            all_bindings.append(binding)
+        except Exception:
+            continue
+
+    # Classify bindings
+    active_bindings = []
+    orphaned_bindings = []
+    released_bindings = []
+
+    for binding in all_bindings:
+        # Check if under goal filter
+        if goal_filter_id:
+            if binding.entity_type == "goal" and binding.entity_id != goal_filter_id:
+                continue
+            if binding.entity_type == "plan" and binding.entity_id not in plan_ids_under_goal:
+                continue
+            if binding.entity_type == "todo" and binding.entity_id not in todo_ids_under_goal:
+                continue
+
+        session_exists = binding.session_id in existing_sessions
+
+        if binding.released_at is not None:
+            released_bindings.append((binding, session_exists))
+        elif not session_exists:
+            orphaned_bindings.append(binding)
+        else:
+            active_bindings.append(binding)
+
+    # Summary mode
+    if mode == "summary":
+        lines = ["Session Bindings Summary"]
+        lines.append(f"  Active: {len(active_bindings)}")
+        lines.append(f"  Orphaned: {len(orphaned_bindings)} (session deleted)")
+        lines.append(f"  Released: {len(released_bindings)}")
+        if goal_filter_id:
+            goal = await storage.load_goal(goal_filter_id)
+            lines.append(f"\nFiltered to goal: {goal.title if goal else goal_filter_id[:8]}")
+        return "\n".join(lines), False
+
+    # Detail mode - filter by type
+    if filter_type == "active":
+        bindings_to_show = [(b, True) for b in active_bindings]
+    elif filter_type == "orphaned":
+        bindings_to_show = [(b, False) for b in orphaned_bindings]
+    elif filter_type == "released":
+        bindings_to_show = released_bindings
+    else:  # all
+        bindings_to_show = (
+            [(b, True) for b in active_bindings] +
+            [(b, False) for b in orphaned_bindings] +
+            released_bindings
+        )
+
+    if not bindings_to_show:
+        return f"No {filter_type} bindings found.", False
+
+    # Group by entity for readability
+    by_entity = {}
+    for binding, session_exists in bindings_to_show:
+        key = (binding.entity_type, binding.entity_id)
+        if key not in by_entity:
+            by_entity[key] = []
+        by_entity[key].append((binding, session_exists))
+
+    # Sort entities and apply pagination
+    sorted_entities = sorted(by_entity.items())
+    total_entities = len(sorted_entities)
+    paginated_entities = sorted_entities[offset:offset + limit]
+
+    if not paginated_entities:
+        return f"No {filter_type} bindings found at offset {offset}.", False
+
+    # Format output
+    lines = [f"Session Bindings ({filter_type})"]
+    lines.append(f"Showing {offset + 1}-{offset + len(paginated_entities)} of {total_entities} entities")
+    lines.append("")
+
+    for (entity_type, entity_id), entity_bindings in paginated_entities:
+        # Get entity name
+        entity_name = entity_id[:8]
+        if entity_type == "goal":
+            goal = await storage.load_goal(entity_id)
+            if goal:
+                entity_name = goal.title
+        elif entity_type == "plan":
+            plan = await storage.load_plan(entity_id)
+            if plan:
+                entity_name = plan.title
+        elif entity_type == "todo":
+            todo = await storage.load_todo(entity_id)
+            if todo:
+                entity_name = todo.title
+
+        lines.append(f"{entity_type.title()}: {entity_name}")
+        for binding, session_exists in entity_bindings:
+            status = ""
+            if binding.released_at:
+                status = " [released]"
+            elif not session_exists:
+                status = " [orphaned]"
+            lines.append(f"  - {binding.session_id[:8]} ({binding.role}){status}")
+        lines.append("")
+
+    # Add pagination hint if there are more results
+    if offset + limit < total_entities:
+        lines.append(f"[Use offset={offset + limit} to see more]")
+
+    return "\n".join(lines), False
+
+
+async def _rebind_session(args: dict, storage) -> tuple[str, bool]:
+    """Rebind any session to a different entity."""
+    session_id_prefix = args.get("session_id", "").strip()
+    if not session_id_prefix:
+        return "Error: session_id is required", True
+
+    entity_type = args.get("entity_type", "").strip()
+    if entity_type not in ("goal", "plan", "todo"):
+        return "Error: entity_type must be 'goal', 'plan', or 'todo'", True
+
+    entity_id_prefix = args.get("entity_id", "").strip()
+    if not entity_id_prefix:
+        return "Error: entity_id is required", True
+
+    role = args.get("role", "implementation")
+    valid_roles = ("interview", "planning", "implementation", "postmortem", "exploration")
+    if role not in valid_roles:
+        role = "implementation"
+
+    # Find full session ID
+    full_session_id = await _find_session_by_prefix(session_id_prefix)
+    if not full_session_id:
+        return f"Error: Session not found: {session_id_prefix}", True
+
+    # Use GoalCommandExecutor to bind (it handles entity resolution and unbinding)
+    executor = GoalCommandExecutor(storage)
+
+    # First unbind existing bindings for this session
+    await executor.unbind_session(full_session_id)
+
+    # Then bind to new entity
+    result = await executor.bind_session(full_session_id, entity_type, entity_id_prefix, role)
+
+    if result.success:
+        return f"Rebound session {full_session_id[:8]} to {entity_type} with role: {role}", False
+    else:
+        return f"Error: {result.error}", True
+
+
+async def _bind_entity_to_sessions(args: dict, storage) -> tuple[str, bool]:
+    """Bulk bind an entity to multiple sessions."""
+    entity_type = args.get("entity_type", "").strip()
+    if entity_type not in ("goal", "plan", "todo"):
+        return "Error: entity_type must be 'goal', 'plan', or 'todo'", True
+
+    entity_id_prefix = args.get("entity_id", "").strip()
+    if not entity_id_prefix:
+        return "Error: entity_id is required", True
+
+    session_id_prefixes = args.get("session_ids", [])
+    if not session_id_prefixes:
+        return "Error: session_ids is required (list of session IDs)", True
+
+    role = args.get("role", "implementation")
+    valid_roles = ("interview", "planning", "implementation", "postmortem", "exploration")
+    if role not in valid_roles:
+        role = "implementation"
+
+    unbind_others = args.get("unbind_others", False)
+
+    executor = GoalCommandExecutor(storage)
+
+    # Resolve entity ID
+    entity_title = ""
+    full_entity_id = None
+    if entity_type == "goal":
+        goals = await storage.list_goals()
+        for g in goals:
+            if g.id.startswith(entity_id_prefix):
+                full_entity_id = g.id
+                entity_title = g.title
+                break
+    elif entity_type == "plan":
+        plans = await storage.list_plans()
+        for p in plans:
+            if p.id.startswith(entity_id_prefix):
+                full_entity_id = p.id
+                entity_title = p.title
+                break
+    elif entity_type == "todo":
+        todos = await storage.list_todos(include_spikes=True)
+        for t in todos:
+            if t.id.startswith(entity_id_prefix):
+                full_entity_id = t.id
+                entity_title = t.title
+                break
+
+    if not full_entity_id:
+        return f"Error: {entity_type.title()} not found: {entity_id_prefix}", True
+
+    # Resolve session IDs
+    full_session_ids = []
+    not_found = []
+    for prefix in session_id_prefixes:
+        full_id = await _find_session_by_prefix(prefix)
+        if full_id:
+            full_session_ids.append(full_id)
+        else:
+            not_found.append(prefix)
+
+    if not_found:
+        return f"Error: Sessions not found: {', '.join(not_found)}", True
+
+    # If unbind_others, release bindings for sessions not in the list
+    if unbind_others:
+        existing_bindings = await storage.get_bindings_for_entity(entity_type, full_entity_id, active_only=True)
+        for binding in existing_bindings:
+            if binding.session_id not in full_session_ids:
+                binding.released_at = datetime.now().isoformat()
+                await storage.save_session_binding(binding)
+
+    # Bind each session
+    bound_count = 0
+    for session_id in full_session_ids:
+        # Check if already bound
+        existing = await storage.get_bindings_for_session(session_id, active_only=True)
+        already_bound = any(
+            b.entity_type == entity_type and b.entity_id == full_entity_id
+            for b in existing
+        )
+
+        if not already_bound:
+            result = await executor.bind_session(session_id, entity_type, entity_id_prefix, role)
+            if result.success:
+                bound_count += 1
+
+    result_msg = f"Bound {bound_count} session(s) to {entity_type}: {entity_title}"
+    if unbind_others:
+        result_msg += " (unbound others)"
+
+    return result_msg, False
+
+
+async def _unbind_sessions(args: dict, storage) -> tuple[str, bool]:
+    """Bulk unbind sessions or cleanup orphans."""
+    session_id_prefixes = args.get("session_ids", [])
+    orphans_only = args.get("orphans_only", False)
+
+    existing_sessions = await _get_session_ids_set()
+
+    # Get all active bindings
+    all_bindings = []
+    import aiofiles
+    import json
+
+    bindings_dir = storage._bindings_dir
+    for binding_file in bindings_dir.glob("*.json"):
+        try:
+            async with aiofiles.open(binding_file, "r", encoding="utf-8") as f:
+                data = json.loads(await f.read())
+            binding = SessionBinding(**data)
+            if binding.released_at is None:  # Only active bindings
+                all_bindings.append(binding)
+        except Exception:
+            continue
+
+    # Determine which bindings to release
+    to_release = []
+
+    if orphans_only:
+        # Only orphaned bindings
+        for binding in all_bindings:
+            if binding.session_id not in existing_sessions:
+                to_release.append(binding)
+    elif session_id_prefixes:
+        # Specific sessions
+        for binding in all_bindings:
+            for prefix in session_id_prefixes:
+                if binding.session_id.startswith(prefix):
+                    to_release.append(binding)
+                    break
+    else:
+        return "Error: Provide session_ids or set orphans_only=true", True
+
+    if not to_release:
+        if orphans_only:
+            return "No orphaned bindings found.", False
+        return "No matching bindings found.", False
+
+    # Release the bindings
+    now = datetime.now().isoformat()
+    for binding in to_release:
+        binding.released_at = now
+        await storage.save_session_binding(binding)
+
+    if orphans_only:
+        return f"Released {len(to_release)} orphaned binding(s).", False
+    else:
+        return f"Released {len(to_release)} binding(s).", False

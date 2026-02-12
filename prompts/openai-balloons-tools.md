@@ -187,6 +187,41 @@ Track goals, plans, and todos across sessions.
 
 **bind_session** - Bind session to goal/plan/todo with role
 
+### Session Binding Management
+
+Tools for reviewing and managing session bindings in bulk:
+
+**list_all_bindings** - View all session bindings (paginated)
+- `filter`: "all", "active", "orphaned", "released" (default: "active")
+- `goal_id`: Only show bindings under this goal
+- `mode`: "summary" for counts, "detail" for full list
+- `limit`: Max entities per page (default: 10)
+- `offset`: Skip N entities for pagination (default: 0)
+
+**rebind_session** - Rebind any session (not just current)
+- `session_id` (required): Session to rebind
+- `entity_type` (required): "goal", "plan", or "todo"
+- `entity_id` (required): Entity to bind to
+- `role`: Session role (default: "implementation")
+
+**bind_entity_to_sessions** - Bulk bind entity to multiple sessions
+- `entity_type` (required): "goal", "plan", or "todo"
+- `entity_id` (required): Entity to bind
+- `session_ids` (required): List of session IDs
+- `role`: Role for all sessions
+- `unbind_others`: If true, unbind sessions not in list
+
+**unbind_sessions** - Bulk unbind
+- `session_ids`: Specific sessions to unbind
+- `orphans_only`: If true, only cleanup orphaned bindings
+
+#### Binding Cleanup Workflow
+
+1. `list_all_bindings(mode="summary")` - Get overview
+2. `list_all_bindings(filter="orphaned")` - Find problems
+3. `unbind_sessions(orphans_only=true)` - Clean orphans
+4. `rebind_session(...)` - Fix specific bindings
+
 ### Goal-Driven Session Workflow
 
 Goals integrate with the fork/merge workflow. Each phase uses a dedicated session:

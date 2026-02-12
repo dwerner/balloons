@@ -744,3 +744,77 @@ Spikes are timeboxed exploration tasks:
 - Exempt from priority ranking
 - Don't block plan completion
 - On completion, prompt to: promote to todo, spawn new goal, or discard
+
+### Session Binding Management
+
+Tools for reviewing and managing session bindings in bulk. Useful for cleanup
+and reorganization when bindings get out of sync.
+
+**list_all_bindings** - View all session bindings with filtering
+```json
+{
+  "name": "list_all_bindings",
+  "args": {
+    "filter": "active",    // "all", "active", "orphaned", "released"
+    "goal_id": "abc123",   // Optional: only show bindings under this goal
+    "mode": "detail",      // "summary" for counts, "detail" for full list
+    "limit": 10,           // Max entities per page (default: 10)
+    "offset": 0            // Skip N entities for pagination (default: 0)
+  }
+}
+```
+
+Use `filter: "orphaned"` to find bindings for sessions that no longer exist.
+Use `mode: "summary"` first to see counts, then drill into details.
+Results are paginated by entity - use `offset` to page through large result sets.
+
+**rebind_session** - Rebind any session (not just current)
+```json
+{
+  "name": "rebind_session",
+  "args": {
+    "session_id": "abc123",     // Can be prefix
+    "entity_type": "todo",      // "goal", "plan", or "todo"
+    "entity_id": "def456",      // Can be prefix
+    "role": "implementation"    // Role for the session
+  }
+}
+```
+
+Unlike `bind_session`, this can rebind any session, not just the current one.
+
+**bind_entity_to_sessions** - Bulk bind an entity to multiple sessions
+```json
+{
+  "name": "bind_entity_to_sessions",
+  "args": {
+    "entity_type": "plan",
+    "entity_id": "abc123",
+    "session_ids": ["sess1", "sess2"],  // Can be prefixes
+    "role": "implementation",
+    "unbind_others": true  // Unbind sessions not in list
+  }
+}
+```
+
+Entity-centric binding: "this plan should have exactly these sessions bound to it."
+
+**unbind_sessions** - Bulk unbind or cleanup orphans
+```json
+{
+  "name": "unbind_sessions",
+  "args": {
+    "session_ids": ["abc123", "def456"],  // Optional: specific sessions
+    "orphans_only": true  // true to only cleanup orphaned bindings
+  }
+}
+```
+
+Use `orphans_only: true` to clean up bindings for deleted sessions.
+
+#### Binding Cleanup Workflow
+
+1. **Get overview**: `list_all_bindings(mode="summary")`
+2. **Find problems**: `list_all_bindings(filter="orphaned")`
+3. **Clean orphans**: `unbind_sessions(orphans_only=true)`
+4. **Fix specific bindings**: `rebind_session(...)` or `bind_entity_to_sessions(...)`

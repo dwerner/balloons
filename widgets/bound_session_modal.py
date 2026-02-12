@@ -38,6 +38,7 @@ class BoundSessionResult:
     entity_id: str
     role: str  # "interview", "planning", "implementation", etc.
     initial_prompt: str  # The prompt to start the conversation
+    entity_title: str  # Title of the entity for session naming
 
 
 def generate_initial_prompt(
@@ -396,6 +397,7 @@ class BoundSessionModal(ModalScreen[Optional[BoundSessionResult]]):
             entity_id=self.entity_id,
             role=self._current_role,
             initial_prompt=prompt,
+            entity_title=self.entity_data.title,
         ))
 
     def action_cancel(self) -> None:

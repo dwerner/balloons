@@ -5,7 +5,7 @@ from textual.containers import Vertical, Horizontal, VerticalScroll
 from textual.message import Message
 
 
-class MergeProposalMarker(Static):
+class MergeProposalMarker(Vertical):
     """Shows a merge proposal inline in the chat log with Accept/Reject buttons.
 
     This replaces the modal dialog approach, allowing proposals to persist
@@ -35,6 +35,7 @@ class MergeProposalMarker(Static):
         margin: 0 0 1 2;
         background: #1a3a2a;
         border: thick $success;
+        height: auto;
     }
 
     MergeProposalMarker.hidden {

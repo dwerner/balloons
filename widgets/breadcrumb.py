@@ -13,9 +13,11 @@ class Breadcrumb(Static):
 
     Displays a path like:
         Main Session > auth-bug > deep-dive
+        └─ impl: Add caching layer for database queries
 
     Each segment is clickable to navigate up the hierarchy.
     Shows [merged] indicator for read-only forks.
+    Shows preview line for sessions bound to goals/plans/todos.
     """
 
     DEFAULT_CSS = """
@@ -44,6 +46,7 @@ class Breadcrumb(Static):
         self._session: Session | None = None
         self._path: list[dict] = []  # [{session_id, name, is_merged}]
         self._binding_indicator: str = ""  # Role/binding for current session
+        self._binding_preview: str = ""  # Preview line: entity title + description
 
     def render(self) -> RenderableType:
         if not self._path:
@@ -69,6 +72,12 @@ class Breadcrumb(Static):
                 # Ancestor - clickable
                 text.append(name, style="underline")
 
+        # Add preview line if we have binding context
+        if self._binding_preview:
+            text.append("\n")
+            text.append("└─ ", style="dim")
+            text.append(self._binding_preview, style="dim italic")
+
         return text
 
     async def set_session(self, session: Session, binding_indicator: str = "") -> None:
@@ -87,6 +96,27 @@ class Breadcrumb(Static):
     def update_binding_indicator(self, indicator: str) -> None:
         """Update just the binding indicator without rebuilding the path."""
         self._binding_indicator = indicator
+        self.refresh()
+
+    def update_binding_preview(self, preview: str) -> None:
+        """Update the binding preview line.
+
+        Args:
+            preview: Preview text showing entity title and description snippet.
+                     Empty string clears the preview.
+        """
+        self._binding_preview = preview
+        self.refresh()
+
+    def update_binding(self, indicator: str, preview: str) -> None:
+        """Update both binding indicator and preview in one call.
+
+        Args:
+            indicator: Role/binding text like "[impl: Add caching]"
+            preview: Preview line like "Add caching layer for database queries"
+        """
+        self._binding_indicator = indicator
+        self._binding_preview = preview
         self.refresh()
 
     async def _build_path(self, session: Session) -> list[dict]:
@@ -112,11 +142,18 @@ class Breadcrumb(Static):
         return path
 
     def _get_session_name(self, session: Session) -> str:
-        """Get a display name for a session."""
+        """Get a display name for a session.
+
+        Fork names are shown in full (they're deliberately short).
+        Titles are truncated at 40 chars to fit typical terminal widths.
+        Falls back to session ID prefix if no name/title.
+        """
         if session.fork_name:
+            # Fork names are intentionally short, show in full
             return session.fork_name
         elif session.title:
-            return session.title[:20] + "..." if len(session.title) > 20 else session.title
+            # Titles can be longer, truncate at 40 chars
+            return session.title[:40] + "..." if len(session.title) > 40 else session.title
         else:
             return session.id[:8]
 
@@ -137,5 +174,6 @@ class Breadcrumb(Static):
         self._session = None
         self._path = []
         self._binding_indicator = ""
+        self._binding_preview = ""
         self.add_class("hidden")
         self.refresh()

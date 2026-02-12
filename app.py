@@ -131,7 +131,7 @@ from core.exceptions import BackendNotFoundError
 from core.context_grouper import group_messages_by_context_mode, build_context_messages
 from core.fork import ForkManager, ForkResult, MergeResult, DeriveResult, SwitchResult, ForkProposal, MergeProposal, ForkData, DeriveData, ForkBindingSpec
 from core.command_executor import CommandExecutor, ArchiveResult, RehydrateResult, LinkResult, BackendResult, ShellResult
-from core.goal_commands import GoalCommandExecutor, check_priority_divergence, get_session_binding_indicator
+from core.goal_commands import GoalCommandExecutor, check_priority_divergence, get_session_binding_info
 from core.tool_executor import parse_fork_proposal, parse_merge_proposal
 from core.tree_state import TreeState, TreeEvent
 from core.goal_tree_state import GoalTreeState
@@ -5324,6 +5324,121 @@ class BalloonsApp(App):
         if self.session and event.session_id == self.session.id:
             await self._persist_context_mode(event.turn_idx, event.new_mode)
 
+    async def on_goal_tree_view_move_session_requested(self, event: GoalTreeView.MoveSessionRequested) -> None:
+        """Handle request to move/rebind a session to a different entity.
+
+        Opens the EntityPickerModal to let the user select a new goal/plan/todo
+        to bind the session to.
+        """
+        from core.debug_log import debug_log
+        from core.async_storage import get_goal_storage
+        from widgets.entity_picker import EntityPickerModal, EntityPickerResult
+
+        debug_log.info(f"App received MoveSessionRequested: session_id={event.session_id}", category="goal_tree")
+
+        # Load the session to get its name
+        session = await Session.load(event.session_id)
+        if not session:
+            self.notify(f"Session not found: {event.session_id[:8]}", severity="error")
+            return
+
+        session_name = session.fork_name or session.title or session.id[:8]
+
+        # Load all goals, plans, todos for the picker
+        storage = await get_goal_storage()
+        goals = await storage.list_goals()
+        plans = await storage.list_plans()
+        todos = await storage.list_todos(include_spikes=True)
+
+        # Build todo-plan mapping
+        todo_plan_mapping: dict[str, list[str]] = {}
+        for plan in plans:
+            plan_todo_ids = await storage.get_todos_for_plan(plan.id)
+            if plan_todo_ids:
+                todo_plan_mapping[plan.id] = plan_todo_ids
+
+        # Get current binding
+        bindings = await storage.get_bindings_for_session(event.session_id, active_only=True)
+        current_binding = None
+        if bindings:
+            # Use most specific binding
+            for binding in bindings:
+                if binding.entity_type == "todo":
+                    current_binding = ("todo", binding.entity_id)
+                    break
+                elif binding.entity_type == "plan" and current_binding is None:
+                    current_binding = ("plan", binding.entity_id)
+                elif binding.entity_type == "goal" and current_binding is None:
+                    current_binding = ("goal", binding.entity_id)
+
+        async def handle_result(result: EntityPickerResult | None) -> None:
+            if result is None:
+                return  # User cancelled
+
+            from core.goal_commands import GoalCommandExecutor
+
+            executor = GoalCommandExecutor(storage)
+
+            # Check if user chose to unbind (empty entity_type)
+            if not result.entity_type:
+                # Unbind the session
+                unbind_result = await executor.unbind_session(event.session_id)
+                if unbind_result.success:
+                    self.notify(f"Unbound session: {session_name}")
+                else:
+                    self.notify(f"Error unbinding: {unbind_result.error}", severity="error")
+            else:
+                # First unbind existing bindings
+                await executor.unbind_session(event.session_id)
+
+                # Then create new binding
+                bind_result = await executor.bind_session(
+                    event.session_id,
+                    result.entity_type,
+                    result.entity_id,
+                    result.role,
+                )
+
+                if bind_result.success:
+                    self.notify(f"Bound session to {result.entity_type}: {result.entity_title}")
+                else:
+                    self.notify(f"Error binding: {bind_result.error}", severity="error")
+
+            # Refresh the goal tree
+            if self._goal_tree_sync:
+                await self._goal_tree_sync.initial_load()
+
+        self.push_screen(
+            EntityPickerModal(
+                session_id=event.session_id,
+                session_name=session_name,
+                goals=goals,
+                plans=plans,
+                todos=todos,
+                current_binding=current_binding,
+                todo_plan_mapping=todo_plan_mapping,
+            ),
+            handle_result,
+        )
+
+    async def on_goal_tree_view_unbind_session_clicked(self, event: GoalTreeView.UnbindSessionClicked) -> None:
+        """Handle request to unbind a session from its entity."""
+        from core.debug_log import debug_log
+        from core.goal_commands import GoalCommandExecutor
+
+        debug_log.info(f"App received UnbindSessionClicked: session_id={event.session_id}", category="goal_tree")
+
+        executor = GoalCommandExecutor()
+        result = await executor.unbind_session(event.session_id)
+
+        if result.success:
+            self.notify(result.formatted)
+            # Refresh the goal tree
+            if self._goal_tree_sync:
+                await self._goal_tree_sync.initial_load()
+        else:
+            self.notify(f"Error: {result.error}", severity="error")
+
     async def on_goal_tree_view_new_session_requested(self, event: GoalTreeView.NewSessionRequested) -> None:
         """Handle request to create a new session bound to an entity from goal tree.
 
@@ -5380,6 +5495,123 @@ class BalloonsApp(App):
             handle_result,
         )
 
+    async def on_goal_tree_view_new_plan_requested(self, event: GoalTreeView.NewPlanRequested) -> None:
+        """Handle request to create a new plan under a goal from goal tree."""
+        from core.debug_log import debug_log
+        debug_log.info(f"App received NewPlanRequested: goal_id={event.goal_id}", category="goal_tree")
+
+        from core.async_storage import get_goal_storage
+        from widgets.create_entity_modal import CreatePlanModal, CreatePlanResult
+
+        # Load the goal data for the modal
+        storage = await get_goal_storage()
+        goal = await storage.load_goal(event.goal_id)
+
+        if not goal:
+            self.notify("Could not load goal", severity="error")
+            return
+
+        # Show the modal
+        def handle_result(result: CreatePlanResult | None) -> None:
+            if result is not None:
+                asyncio.create_task(self._create_plan_from_modal(result))
+
+        self.push_screen(
+            CreatePlanModal(
+                goal_id=event.goal_id,
+                goal_title=goal.title,
+            ),
+            handle_result,
+        )
+
+    async def _create_plan_from_modal(self, result: "CreatePlanResult") -> None:
+        """Create a new plan from the CreatePlanModal result."""
+        from core.goal_commands import GoalCommandExecutor
+        from core.async_storage import get_goal_storage
+        from core.debug_log import debug_log
+
+        try:
+            storage = await get_goal_storage()
+            executor = GoalCommandExecutor(storage)
+
+            create_result = await executor.create_plan(
+                goal_id=result.goal_id,
+                title=result.title,
+                description=result.description,
+                status=result.status,
+            )
+
+            if create_result.success:
+                # Refresh goal tree
+                if self._goal_tree_sync:
+                    await self._goal_tree_sync.initial_load()
+                self.notify(f"Created plan: {result.title}")
+            else:
+                debug_log.error(f"Failed to create plan: {create_result.error}", category="goal_tree")
+                self.notify(f"Failed to create plan: {create_result.error}", severity="error")
+        except Exception as e:
+            debug_log.error(f"Exception creating plan: {e}", category="goal_tree", details={"error": str(e)})
+            self.notify(f"Failed to create plan: {e}", severity="error")
+
+    async def on_goal_tree_view_new_todo_requested(self, event: GoalTreeView.NewTodoRequested) -> None:
+        """Handle request to create a new todo under a plan from goal tree."""
+        from core.debug_log import debug_log
+        debug_log.info(f"App received NewTodoRequested: plan_id={event.plan_id}", category="goal_tree")
+
+        from core.async_storage import get_goal_storage
+        from widgets.create_entity_modal import CreateTodoModal, CreateTodoResult
+
+        # Load the plan data for the modal
+        storage = await get_goal_storage()
+        plan = await storage.load_plan(event.plan_id)
+
+        if not plan:
+            self.notify("Could not load plan", severity="error")
+            return
+
+        # Show the modal
+        def handle_result(result: CreateTodoResult | None) -> None:
+            if result is not None:
+                asyncio.create_task(self._create_todo_from_modal(result))
+
+        self.push_screen(
+            CreateTodoModal(
+                plan_id=event.plan_id,
+                plan_title=plan.title,
+            ),
+            handle_result,
+        )
+
+    async def _create_todo_from_modal(self, result: "CreateTodoResult") -> None:
+        """Create a new todo from the CreateTodoModal result."""
+        from core.goal_commands import GoalCommandExecutor
+        from core.async_storage import get_goal_storage
+        from core.debug_log import debug_log
+
+        try:
+            storage = await get_goal_storage()
+            executor = GoalCommandExecutor(storage)
+
+            create_result = await executor.create_todo(
+                plan_id=result.plan_id,
+                title=result.title,
+                description=result.description,
+                is_spike=result.is_spike,
+                timebox_minutes=result.timebox_minutes,
+            )
+
+            if create_result.success:
+                # Refresh goal tree
+                if self._goal_tree_sync:
+                    await self._goal_tree_sync.initial_load()
+                self.notify(f"Created todo: {result.title}")
+            else:
+                debug_log.error(f"Failed to create todo: {create_result.error}", category="goal_tree")
+                self.notify(f"Failed to create todo: {create_result.error}", severity="error")
+        except Exception as e:
+            debug_log.error(f"Exception creating todo: {e}", category="goal_tree", details={"error": str(e)})
+            self.notify(f"Failed to create todo: {e}", severity="error")
+
     async def _create_bound_session(self, result: "BoundSessionResult") -> None:
         """Create a new session from the BoundSessionModal result."""
         from core.goal_commands import GoalCommandExecutor
@@ -5397,8 +5629,17 @@ class BalloonsApp(App):
         # Show loading indicator
         chat_log.show_loading("Creating new session...")
 
-        # Create new session
+        # Create new session with title from entity
         new_session = await self._manager.create_session()
+        # Set title: "[role-abbrev] Entity Title" (truncated to reasonable length)
+        # Use abbreviated role names: impl, plan, int, post, expl
+        from core.goal_commands import ROLE_ABBREV
+        role_abbrev = ROLE_ABBREV.get(result.role, result.role[:4])
+        title = f"[{role_abbrev}] {result.entity_title}"
+        if len(title) > 60:
+            title = title[:57] + "..."
+        new_session.title = title
+        await new_session.save()
         await self._manager.set_active(new_session.id)
 
         # Add to tree state
@@ -5406,6 +5647,7 @@ class BalloonsApp(App):
 
         # Update UI
         chat_log.hide_loading()
+        chat_log.set_session_title(new_session.title)
         await context_tree.load_all_sessions(new_session)
         await breadcrumb.set_session(new_session)
 
@@ -5901,13 +6143,13 @@ class BalloonsApp(App):
 
     async def _update_session_binding_indicator(self, session_id: str) -> None:
         """Update the binding indicator for a session in the tree state and breadcrumb."""
-        indicator = await get_session_binding_indicator(session_id)
+        indicator, preview = await get_session_binding_info(session_id)
         self._tree_state.update_session_binding_indicator(session_id, indicator)
 
         # Also update breadcrumb if this is the current session
         if session_id == self.session.id:
             breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
-            breadcrumb.update_binding_indicator(indicator)
+            breadcrumb.update_binding(indicator, preview)
 
     async def _handle_lifecycle_prompt(self, prompt) -> None:
         """Handle a lifecycle prompt from todo/plan completion.

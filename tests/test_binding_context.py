@@ -381,12 +381,20 @@ class TestRoleGuidance:
         await goal_storage.save_session_binding(binding)
 
         builder = BindingContextBuilder(goal_storage)
-        context = await builder.build_binding_context("session-impl")
 
-        # Implementation guidance should include merge instructions (from prompts/shared/roles/implementation.md)
-        assert "Implementation Role" in context
-        assert "propose_merge" in context or "Propose a merge" in context
-        assert "Stay focused" in context
+        # Test standalone session (not a fork) - should NOT mention merge
+        context_standalone = await builder.build_binding_context("session-impl", is_fork=False)
+        assert "Implementation Role" in context_standalone
+        assert "Stay focused" in context_standalone
+        assert "Session Completion (Standalone)" in context_standalone
+        assert "Do NOT propose a merge" in context_standalone
+
+        # Test fork session - should include merge instructions
+        context_fork = await builder.build_binding_context("session-impl", is_fork=True)
+        assert "Implementation Role" in context_fork
+        assert "Stay focused" in context_fork
+        assert "Session Completion (Fork)" in context_fork
+        assert "propose_merge" in context_fork
 
     @pytest.mark.asyncio
     async def test_interview_role_includes_discovery_guidance(self, goal_storage, sample_goal):

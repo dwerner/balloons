@@ -26,6 +26,8 @@ from .breadcrumb import Breadcrumb
 from .fork_proposal_modal import ForkProposalModal, ForkProposalResult, ResolvedBinding
 from .merge_proposal_modal import MergeProposalModal, MergeProposalResult
 from .bound_session_modal import BoundSessionModal, BoundSessionResult
+from .entity_picker import EntityPickerModal, EntityPickerResult
+from .create_entity_modal import CreatePlanModal, CreatePlanResult, CreateTodoModal, CreateTodoResult
 from .slides_pane import SlidesPane, SlideCard
 from .presentation_screen import PresentationScreen
 from .directory_picker import DirectoryBrowser
@@ -88,6 +90,12 @@ __all__ = [
     "MergeProposalResult",
     "BoundSessionModal",
     "BoundSessionResult",
+    "EntityPickerModal",
+    "EntityPickerResult",
+    "CreatePlanModal",
+    "CreatePlanResult",
+    "CreateTodoModal",
+    "CreateTodoResult",
     "SlidesPane",
     "SlideCard",
     "PresentationScreen",

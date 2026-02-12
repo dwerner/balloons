@@ -11,6 +11,8 @@ from core.goal_commands import (
     GoalCommandExecutor,
     check_priority_divergence,
     get_session_binding_indicator,
+    get_session_binding_preview,
+    get_session_binding_info,
 )
 from core.async_storage import GoalStorage
 from storage_schema import (
@@ -206,6 +208,52 @@ class TestGoalCommandExecutor:
         assert result.todos[0].todo.id == sample_todo.id
         # Priority should be goal_weight * completion_factor (0.1 for empty plan)
         assert result.todos[0].priority == pytest.approx(0.8, rel=0.1)  # 8 * 0.1
+
+    @pytest.mark.asyncio
+    async def test_mark_todo_done(
+        self, goal_storage, sample_goal, sample_plan, sample_todo
+    ):
+        """Test marking a todo as done via the tree."""
+        await goal_storage.save_goal(sample_goal)
+        await goal_storage.save_plan(sample_plan)
+        await goal_storage.save_todo(sample_todo)
+
+        # Link todo to plan
+        link = TodoPlanLink(
+            todo_id=sample_todo.id,
+            plan_id=sample_plan.id,
+            created_at=datetime.now().isoformat(),
+        )
+        await goal_storage.save_todo_plan_link(link)
+
+        # Verify todo is initially pending
+        todo = await goal_storage.load_todo(sample_todo.id)
+        assert todo.status == "pending"
+
+        # Mark it done
+        executor = GoalCommandExecutor(goal_storage)
+        session_id = str(uuid.uuid4())
+        result = await executor.mark_todo_done(sample_todo.id[:8], session_id)
+
+        assert result.success
+        assert result.todo is not None
+        assert result.todo.status == "completed"
+        assert "Marked todo complete" in result.formatted
+
+        # Verify it persisted
+        updated_todo = await goal_storage.load_todo(sample_todo.id)
+        assert updated_todo.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_mark_todo_done_not_found(self, goal_storage):
+        """Test marking a non-existent todo as done."""
+        executor = GoalCommandExecutor(goal_storage)
+        session_id = str(uuid.uuid4())
+        result = await executor.mark_todo_done("nonexistent-id", session_id)
+
+        assert not result.success
+        assert result.error is not None
+        assert "not found" in result.error.lower()
 
     @pytest.mark.asyncio
     async def test_bind_session(self, goal_storage, sample_goal):
@@ -538,5 +586,159 @@ class TestBindingIndicator:
             assert "..." in indicator
             # The full title should not be present
             assert "truncated for display" not in indicator
+        finally:
+            core.goal_commands.get_goal_storage = original_get
+
+
+class TestBindingPreview:
+    """Tests for session binding preview (for breadcrumb display)."""
+
+    @pytest.mark.asyncio
+    async def test_no_preview_when_not_bound(self, goal_storage):
+        """Test that no preview is returned when session has no bindings."""
+        session_id = str(uuid.uuid4())
+
+        import core.goal_commands
+        original_get = core.goal_commands.get_goal_storage
+
+        async def mock_get():
+            return goal_storage
+
+        core.goal_commands.get_goal_storage = mock_get
+
+        try:
+            preview = await get_session_binding_preview(session_id)
+            assert preview == ""
+        finally:
+            core.goal_commands.get_goal_storage = original_get
+
+    @pytest.mark.asyncio
+    async def test_preview_shows_description(self, goal_storage, sample_todo):
+        """Test preview shows description when available."""
+        await goal_storage.save_todo(sample_todo)
+
+        session_id = str(uuid.uuid4())
+        binding = SessionBinding(
+            id=str(uuid.uuid4()),
+            session_id=session_id,
+            entity_type="todo",
+            entity_id=sample_todo.id,
+            role="implementation",
+            created_at=datetime.now().isoformat(),
+        )
+        await goal_storage.save_session_binding(binding)
+
+        import core.goal_commands
+        original_get = core.goal_commands.get_goal_storage
+
+        async def mock_get():
+            return goal_storage
+
+        core.goal_commands.get_goal_storage = mock_get
+
+        try:
+            preview = await get_session_binding_preview(session_id)
+            # Should show role and description
+            assert "impl:" in preview
+            assert "reusable button" in preview.lower()
+        finally:
+            core.goal_commands.get_goal_storage = original_get
+
+    @pytest.mark.asyncio
+    async def test_preview_shows_title_when_no_description(self, goal_storage):
+        """Test preview shows title when no description available."""
+        no_desc_todo = TodoData(
+            id=str(uuid.uuid4()),
+            title="Fix the bug",
+            description="",  # No description
+            status="pending",
+            is_spike=False,
+            created_at=datetime.now().isoformat(),
+            updated_at=datetime.now().isoformat(),
+        )
+        await goal_storage.save_todo(no_desc_todo)
+
+        session_id = str(uuid.uuid4())
+        binding = SessionBinding(
+            id=str(uuid.uuid4()),
+            session_id=session_id,
+            entity_type="todo",
+            entity_id=no_desc_todo.id,
+            role="implementation",
+            created_at=datetime.now().isoformat(),
+        )
+        await goal_storage.save_session_binding(binding)
+
+        import core.goal_commands
+        original_get = core.goal_commands.get_goal_storage
+
+        async def mock_get():
+            return goal_storage
+
+        core.goal_commands.get_goal_storage = mock_get
+
+        try:
+            preview = await get_session_binding_preview(session_id)
+            assert "impl:" in preview
+            assert "Fix the bug" in preview
+        finally:
+            core.goal_commands.get_goal_storage = original_get
+
+
+class TestBindingInfo:
+    """Tests for get_session_binding_info which returns both indicator and preview."""
+
+    @pytest.mark.asyncio
+    async def test_returns_both_indicator_and_preview(self, goal_storage, sample_todo):
+        """Test that both indicator and preview are returned."""
+        await goal_storage.save_todo(sample_todo)
+
+        session_id = str(uuid.uuid4())
+        binding = SessionBinding(
+            id=str(uuid.uuid4()),
+            session_id=session_id,
+            entity_type="todo",
+            entity_id=sample_todo.id,
+            role="implementation",
+            created_at=datetime.now().isoformat(),
+        )
+        await goal_storage.save_session_binding(binding)
+
+        import core.goal_commands
+        original_get = core.goal_commands.get_goal_storage
+
+        async def mock_get():
+            return goal_storage
+
+        core.goal_commands.get_goal_storage = mock_get
+
+        try:
+            indicator, preview = await get_session_binding_info(session_id)
+            # Indicator should be [impl: title]
+            assert "[impl:" in indicator
+            assert indicator.endswith("]")
+            # Preview should be impl: description
+            assert "impl:" in preview
+            assert not preview.startswith("[")  # No brackets in preview
+        finally:
+            core.goal_commands.get_goal_storage = original_get
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_not_bound(self, goal_storage):
+        """Test that empty strings are returned when not bound."""
+        session_id = str(uuid.uuid4())
+
+        import core.goal_commands
+        original_get = core.goal_commands.get_goal_storage
+
+        async def mock_get():
+            return goal_storage
+
+        core.goal_commands.get_goal_storage = mock_get
+
+        try:
+            indicator, preview = await get_session_binding_info(session_id)
+            assert indicator == ""
+            assert preview == ""
         finally:
             core.goal_commands.get_goal_storage = original_get

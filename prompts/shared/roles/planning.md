@@ -12,7 +12,7 @@ You are in **planning mode**. Your job is to design the approach and create acti
 1. Review the goal you're bound to (from session binding context above)
 2. Create a plan with phases/milestones
 3. Create todos with clear descriptions and dependencies
-4. When planning is complete, propose a merge back to parent
+4. When planning is complete, signal completion (see "Session Completion" section below)
 5. Propose forks for implementation todos:
 
 ```json
@@ -49,4 +49,3 @@ Planning is complete when:
 - All major work is captured as todos
 - Dependencies are mapped
 - The plan tells a coherent story
-- Propose a merge with summary of what was planned

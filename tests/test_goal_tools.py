@@ -1773,6 +1773,185 @@ class TestBindSession:
         assert "goal" in result or "plan" in result or "todo" in result
 
 
+class TestListAllBindings:
+    """Tests for list_all_bindings tool."""
+
+    @pytest.mark.asyncio
+    async def test_list_all_bindings_summary(self, goal_storage, mock_session, monkeypatch):
+        """Test list_all_bindings in summary mode."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        # Mock session storage to return empty sessions
+        async def mock_get_session_ids_set():
+            return set()
+        monkeypatch.setattr("core.goal_tools._get_session_ids_set", mock_get_session_ids_set)
+
+        result, is_error = await execute_goal_tool(
+            "list_all_bindings",
+            {"mode": "summary"},
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Session Bindings Summary" in result
+
+    @pytest.mark.asyncio
+    async def test_list_all_bindings_with_filter(self, goal_storage, mock_session, monkeypatch):
+        """Test list_all_bindings with orphaned filter."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        async def mock_get_session_ids_set():
+            return set()
+        monkeypatch.setattr("core.goal_tools._get_session_ids_set", mock_get_session_ids_set)
+
+        result, is_error = await execute_goal_tool(
+            "list_all_bindings",
+            {"filter": "orphaned", "mode": "detail"},
+            mock_session,
+        )
+
+        assert not is_error
+        # With no bindings, should return a message
+        assert "orphaned" in result.lower() or "no " in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_list_all_bindings_goal_not_found(self, goal_storage, mock_session, monkeypatch):
+        """Test list_all_bindings with invalid goal_id filter."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        async def mock_get_session_ids_set():
+            return set()
+        monkeypatch.setattr("core.goal_tools._get_session_ids_set", mock_get_session_ids_set)
+
+        result, is_error = await execute_goal_tool(
+            "list_all_bindings",
+            {"goal_id": "nonexistent"},
+            mock_session,
+        )
+
+        assert is_error
+        assert "Goal not found" in result
+
+
+class TestRebindSession:
+    """Tests for rebind_session tool."""
+
+    @pytest.mark.asyncio
+    async def test_rebind_session_missing_session_id(self, goal_storage, mock_session, monkeypatch):
+        """Test error when session_id is missing."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "rebind_session",
+            {
+                "entity_type": "todo",
+                "entity_id": "abc123",
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "session_id is required" in result
+
+    @pytest.mark.asyncio
+    async def test_rebind_session_invalid_entity_type(self, goal_storage, mock_session, monkeypatch):
+        """Test error with invalid entity_type."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "rebind_session",
+            {
+                "session_id": "test123",
+                "entity_type": "invalid",
+                "entity_id": "abc123",
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "entity_type" in result
+
+
+class TestBindEntityToSessions:
+    """Tests for bind_entity_to_sessions tool."""
+
+    @pytest.mark.asyncio
+    async def test_bind_entity_missing_session_ids(self, goal_storage, mock_session, monkeypatch):
+        """Test error when session_ids is missing."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "bind_entity_to_sessions",
+            {
+                "entity_type": "todo",
+                "entity_id": "abc123",
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "session_ids is required" in result
+
+    @pytest.mark.asyncio
+    async def test_bind_entity_invalid_entity_type(self, goal_storage, mock_session, monkeypatch):
+        """Test error with invalid entity_type."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "bind_entity_to_sessions",
+            {
+                "entity_type": "invalid",
+                "entity_id": "abc123",
+                "session_ids": ["sess1"],
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "entity_type" in result
+
+
+class TestUnbindSessions:
+    """Tests for unbind_sessions tool."""
+
+    @pytest.mark.asyncio
+    async def test_unbind_sessions_no_params(self, goal_storage, mock_session, monkeypatch):
+        """Test error when neither session_ids nor orphans_only is provided."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        async def mock_get_session_ids_set():
+            return set()
+        monkeypatch.setattr("core.goal_tools._get_session_ids_set", mock_get_session_ids_set)
+
+        result, is_error = await execute_goal_tool(
+            "unbind_sessions",
+            {},
+            mock_session,
+        )
+
+        assert is_error
+        assert "session_ids" in result or "orphans_only" in result
+
+    @pytest.mark.asyncio
+    async def test_unbind_sessions_orphans_only_empty(self, goal_storage, mock_session, monkeypatch):
+        """Test unbind_sessions with orphans_only when no orphans exist."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        async def mock_get_session_ids_set():
+            return set()
+        monkeypatch.setattr("core.goal_tools._get_session_ids_set", mock_get_session_ids_set)
+
+        result, is_error = await execute_goal_tool(
+            "unbind_sessions",
+            {"orphans_only": True},
+            mock_session,
+        )
+
+        # Should succeed but find no orphans
+        assert not is_error
+        assert "No orphaned" in result or "0" in result or "no" in result.lower()
+
+
 class TestUnknownTool:
     """Test handling of unknown tool names."""
 

@@ -12,7 +12,7 @@ from datetime import datetime
 from core.async_storage import GoalStorage, get_goal_storage
 from core.priority_engine import PriorityEngine, TodoWithContext
 from core.lifecycle_hooks import LifecycleHooks, LifecyclePrompt
-from storage_schema import GoalData, PlanData, TodoData, SessionBinding
+from storage_schema import GoalData, PlanData, TodoData, SessionBinding, TodoPlanLink
 
 
 @dataclass
@@ -260,6 +260,100 @@ class GoalCommandExecutor:
 
         except Exception as e:
             return TodoListResult(success=False, error=str(e))
+
+    # =========================================================================
+    # Create plan
+    # =========================================================================
+
+    async def create_plan(
+        self,
+        goal_id: str,
+        title: str,
+        description: str = "",
+        status: str = "active",
+    ) -> BindResult:
+        """Create a new plan under a goal."""
+        try:
+            storage = await self._get_storage()
+
+            # Validate goal exists
+            goal = await self._find_goal_by_prefix(goal_id)
+            if not goal:
+                return BindResult(success=False, error=f"Goal not found: {goal_id}")
+
+            # Create plan
+            now = datetime.now().isoformat()
+            plan = PlanData(
+                id=str(uuid.uuid4()),
+                goal_id=goal.id,
+                title=title,
+                description=description,
+                status=status,
+                created_at=now,
+                updated_at=now,
+            )
+            await storage.save_plan(plan)
+
+            # Note: The plan-to-goal relationship is stored in plan.goal_id.
+            # There's no plan_ids list on GoalData - the relationship is queried
+            # by filtering plans by goal_id when needed.
+
+            formatted = f"[green]✓[/green] Created plan: [bold]{title}[/bold]"
+            return BindResult(success=True, formatted=formatted)
+
+        except Exception as e:
+            return BindResult(success=False, error=str(e))
+
+    # =========================================================================
+    # Create todo
+    # =========================================================================
+
+    async def create_todo(
+        self,
+        plan_id: str,
+        title: str,
+        description: str = "",
+        is_spike: bool = False,
+        timebox_minutes: Optional[int] = None,
+    ) -> BindResult:
+        """Create a new todo under a plan."""
+        try:
+            storage = await self._get_storage()
+
+            # Validate plan exists
+            plan = await self._find_plan_by_prefix(plan_id)
+            if not plan:
+                return BindResult(success=False, error=f"Plan not found: {plan_id}")
+
+            # Create todo
+            now = datetime.now().isoformat()
+            todo = TodoData(
+                id=str(uuid.uuid4()),
+                title=title,
+                description=description,
+                status="pending",
+                is_spike=is_spike,
+                timebox_minutes=timebox_minutes,
+                created_at=now,
+                updated_at=now,
+            )
+            await storage.save_todo(todo)
+
+            # Link todo to plan
+            link = TodoPlanLink(
+                todo_id=todo.id,
+                plan_id=plan.id,
+                created_at=now,
+            )
+            await storage.save_todo_plan_link(link)
+
+            formatted = f"[green]✓[/green] Created todo: [bold]{title}[/bold]"
+            if is_spike:
+                formatted += f" [magenta][spike][/magenta]"
+            return BindResult(success=True, formatted=formatted)
+
+        except Exception as e:
+            return BindResult(success=False, error=str(e))
 
     async def _find_plan_by_prefix(self, prefix: str) -> Optional[PlanData]:
         """Find a plan by ID prefix."""
@@ -669,3 +763,167 @@ async def get_all_session_binding_indicators(session_ids: list[str]) -> dict[str
         pass
 
     return result
+
+
+async def get_session_binding_preview(session_id: str) -> str:
+    """Get a preview line for session binding display.
+
+    Returns a string like "Add caching layer for database queries"
+    showing the entity title and/or description snippet, suitable for
+    display under the breadcrumb.
+
+    Returns empty string if session is not bound to any entity.
+    """
+    try:
+        storage = await get_goal_storage()
+        bindings = await storage.get_bindings_for_session(session_id, active_only=True)
+
+        if not bindings:
+            return ""
+
+        # Use the most specific binding (todo > plan > goal)
+        # Same priority logic as get_session_binding_indicator
+        best_binding = None
+        type_priority = {"todo": 0, "plan": 1, "goal": 2}
+
+        for binding in bindings:
+            if best_binding is None:
+                best_binding = binding
+            elif type_priority.get(binding.entity_type, 99) < type_priority.get(best_binding.entity_type, 99):
+                best_binding = binding
+            elif (type_priority.get(binding.entity_type, 99) == type_priority.get(best_binding.entity_type, 99)
+                  and binding.created_at > best_binding.created_at):
+                best_binding = binding
+
+        if not best_binding:
+            return ""
+
+        # Get entity title and description
+        entity_title = ""
+        entity_desc = ""
+
+        if best_binding.entity_type == "todo":
+            todo = await storage.load_todo(best_binding.entity_id)
+            if todo:
+                entity_title = todo.title
+                entity_desc = todo.description or ""
+        elif best_binding.entity_type == "plan":
+            plan = await storage.load_plan(best_binding.entity_id)
+            if plan:
+                entity_title = plan.title
+                entity_desc = plan.description or ""
+        elif best_binding.entity_type == "goal":
+            goal = await storage.load_goal(best_binding.entity_id)
+            if goal:
+                entity_title = goal.title
+                entity_desc = goal.description or ""
+
+        if not entity_title:
+            return ""
+
+        # Build preview: "title: description snippet" or just "title"
+        # Truncate to fit typical terminal width (~80 chars)
+        role_abbrev = ROLE_ABBREV.get(best_binding.role, best_binding.role[:4])
+        preview_parts = [f"{role_abbrev}:"]
+
+        if entity_desc:
+            # First line of description, truncated
+            first_line = entity_desc.split('\n')[0].strip()
+            max_desc_len = 70 - len(role_abbrev) - 2  # Leave room for role prefix
+            if len(first_line) > max_desc_len:
+                first_line = first_line[:max_desc_len - 3] + "..."
+            preview_parts.append(first_line)
+        else:
+            # No description, just show title
+            max_title_len = 70 - len(role_abbrev) - 2
+            if len(entity_title) > max_title_len:
+                entity_title = entity_title[:max_title_len - 3] + "..."
+            preview_parts.append(entity_title)
+
+        return " ".join(preview_parts)
+
+    except Exception:
+        return ""
+
+
+async def get_session_binding_info(session_id: str) -> tuple[str, str]:
+    """Get both binding indicator and preview for a session.
+
+    Returns (indicator, preview) tuple. Both may be empty strings
+    if session is not bound.
+
+    This is more efficient than calling both functions separately
+    as it only queries storage once.
+    """
+    try:
+        storage = await get_goal_storage()
+        bindings = await storage.get_bindings_for_session(session_id, active_only=True)
+
+        if not bindings:
+            return ("", "")
+
+        # Use the most specific binding (todo > plan > goal)
+        best_binding = None
+        type_priority = {"todo": 0, "plan": 1, "goal": 2}
+
+        for binding in bindings:
+            if best_binding is None:
+                best_binding = binding
+            elif type_priority.get(binding.entity_type, 99) < type_priority.get(best_binding.entity_type, 99):
+                best_binding = binding
+            elif (type_priority.get(binding.entity_type, 99) == type_priority.get(best_binding.entity_type, 99)
+                  and binding.created_at > best_binding.created_at):
+                best_binding = binding
+
+        if not best_binding:
+            return ("", "")
+
+        # Get entity data
+        entity_title = ""
+        entity_desc = ""
+
+        if best_binding.entity_type == "todo":
+            todo = await storage.load_todo(best_binding.entity_id)
+            if todo:
+                entity_title = todo.title
+                entity_desc = todo.description or ""
+        elif best_binding.entity_type == "plan":
+            plan = await storage.load_plan(best_binding.entity_id)
+            if plan:
+                entity_title = plan.title
+                entity_desc = plan.description or ""
+        elif best_binding.entity_type == "goal":
+            goal = await storage.load_goal(best_binding.entity_id)
+            if goal:
+                entity_title = goal.title
+                entity_desc = goal.description or ""
+
+        if not entity_title:
+            return ("", "")
+
+        role_abbrev = ROLE_ABBREV.get(best_binding.role, best_binding.role[:4])
+
+        # Build indicator: [role: title]
+        truncated_title = entity_title[:20] + "..." if len(entity_title) > 20 else entity_title
+        indicator = f"[{role_abbrev}: {truncated_title}]"
+
+        # Build preview: "role: description" or "role: title"
+        preview_parts = [f"{role_abbrev}:"]
+        if entity_desc:
+            first_line = entity_desc.split('\n')[0].strip()
+            max_desc_len = 70 - len(role_abbrev) - 2
+            if len(first_line) > max_desc_len:
+                first_line = first_line[:max_desc_len - 3] + "..."
+            preview_parts.append(first_line)
+        else:
+            max_title_len = 70 - len(role_abbrev) - 2
+            if len(entity_title) > max_title_len:
+                entity_title = entity_title[:max_title_len - 3] + "..."
+            preview_parts.append(entity_title)
+
+        preview = " ".join(preview_parts)
+
+        return (indicator, preview)
+
+    except Exception:
+        return ("", "")

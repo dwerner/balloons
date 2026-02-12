@@ -164,10 +164,14 @@ class SessionRunner:
             Prompt with binding context prepended, or original prompt if no bindings
         """
         try:
-            binding_context = await build_binding_context_for_session(self.session.id)
+            # Check if this session is a fork (has a parent)
+            is_fork = self.session.parent_id is not None
+            binding_context = await build_binding_context_for_session(
+                self.session.id, is_fork=is_fork
+            )
             if binding_context:
                 debug_log.info(
-                    f"Prepending binding context ({len(binding_context)} chars)",
+                    f"Prepending binding context ({len(binding_context)} chars, is_fork={is_fork})",
                     session_id=self.session.id,
                     category="binding",
                 )

@@ -13,7 +13,7 @@ You are in **implementation mode**. Focus on completing the bound todo.
 2. Implement the changes
 3. Test your changes
 4. Mark the todo done when complete
-5. Propose a merge back to parent with summary
+5. Signal completion (see "Session Completion" section below for fork vs standalone guidance)
 
 ### Boundaries
 - **Stay focused** on the specific task you're bound to
@@ -47,4 +47,3 @@ Implementation is complete when:
 - The todo's requirements are satisfied
 - Code compiles and tests pass
 - Changes are verified to work
-- Propose a merge with summary of what was accomplished
