@@ -61,6 +61,7 @@ class BindResult:
     error: Optional[str] = None
     binding: Optional[SessionBinding] = None
     formatted: str = ""
+    entity_id: Optional[str] = None  # ID of created entity (for create_plan/create_todo)
 
 
 @dataclass
@@ -299,7 +300,7 @@ class GoalCommandExecutor:
             # by filtering plans by goal_id when needed.
 
             formatted = f"[green]✓[/green] Created plan: [bold]{title}[/bold]"
-            return BindResult(success=True, formatted=formatted)
+            return BindResult(success=True, formatted=formatted, entity_id=plan.id)
 
         except Exception as e:
             return BindResult(success=False, error=str(e))
@@ -350,7 +351,7 @@ class GoalCommandExecutor:
             formatted = f"[green]✓[/green] Created todo: [bold]{title}[/bold]"
             if is_spike:
                 formatted += f" [magenta][spike][/magenta]"
-            return BindResult(success=True, formatted=formatted)
+            return BindResult(success=True, formatted=formatted, entity_id=todo.id)
 
         except Exception as e:
             return BindResult(success=False, error=str(e))

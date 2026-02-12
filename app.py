@@ -5546,6 +5546,15 @@ class BalloonsApp(App):
                 if self._goal_tree_sync:
                     await self._goal_tree_sync.initial_load()
                 self.notify(f"Created plan: {result.title}")
+
+                # If user clicked "Create & Begin", start a bound session
+                if result.begin_session and create_result.entity_id:
+                    await self._begin_session_for_plan(
+                        plan_id=create_result.entity_id,
+                        plan_title=result.title,
+                        plan_description=result.description,
+                        goal_id=result.goal_id,
+                    )
             else:
                 debug_log.error(f"Failed to create plan: {create_result.error}", category="goal_tree")
                 self.notify(f"Failed to create plan: {create_result.error}", severity="error")
@@ -5605,12 +5614,208 @@ class BalloonsApp(App):
                 if self._goal_tree_sync:
                     await self._goal_tree_sync.initial_load()
                 self.notify(f"Created todo: {result.title}")
+
+                # If user clicked "Create & Begin", start a bound session
+                if result.begin_session and create_result.entity_id:
+                    await self._begin_session_for_todo(
+                        todo_id=create_result.entity_id,
+                        todo_title=result.title,
+                        todo_description=result.description,
+                        is_spike=result.is_spike,
+                        timebox_minutes=result.timebox_minutes,
+                        plan_id=result.plan_id,
+                    )
             else:
                 debug_log.error(f"Failed to create todo: {create_result.error}", category="goal_tree")
                 self.notify(f"Failed to create todo: {create_result.error}", severity="error")
         except Exception as e:
             debug_log.error(f"Exception creating todo: {e}", category="goal_tree", details={"error": str(e)})
             self.notify(f"Failed to create todo: {e}", severity="error")
+
+    async def _begin_session_for_plan(
+        self,
+        plan_id: str,
+        plan_title: str,
+        plan_description: str,
+        goal_id: str,
+    ) -> None:
+        """Create and start a session bound to a newly created plan.
+
+        Uses 'planning' role by default for plans.
+        """
+        from core.goal_commands import GoalCommandExecutor, ROLE_ABBREV
+        from core.async_storage import get_goal_storage
+        from widgets.bound_session_modal import generate_initial_prompt
+        from storage_schema import PlanData, GoalData
+
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
+
+        # Background old session
+        old_session_id = self._manager._active_session_id
+        self._background_old_session(old_session_id)
+
+        # Show loading indicator
+        chat_log.show_loading("Creating new session...")
+
+        # Load parent goal for prompt generation
+        storage = await get_goal_storage()
+        parent_goal = await storage.load_goal(goal_id)
+
+        # Create temporary PlanData for prompt generation
+        plan_data = PlanData(
+            id=plan_id,
+            goal_id=goal_id,
+            title=plan_title,
+            description=plan_description,
+            status="active",
+            created_at="",
+            updated_at="",
+        )
+
+        # Create new session
+        new_session = await self._manager.create_session()
+        role = "planning"
+        role_abbrev = ROLE_ABBREV.get(role, role[:4])
+        title = f"[{role_abbrev}] {plan_title}"
+        if len(title) > 60:
+            title = title[:57] + "..."
+        new_session.title = title
+        await new_session.save()
+        await self._manager.set_active(new_session.id)
+
+        # Add to tree state
+        self._tree_state.add_session(new_session, is_current=True)
+
+        # Update UI
+        chat_log.hide_loading()
+        chat_log.set_session_title(new_session.title)
+        await context_tree.load_all_sessions(new_session)
+        await breadcrumb.set_session(new_session)
+
+        # Bind the session to the plan
+        executor = GoalCommandExecutor(storage)
+        bind_result = await executor.bind_session(
+            new_session.id,
+            "plan",
+            plan_id,
+            role,
+        )
+
+        if bind_result.success:
+            # Refresh goal tree to show new binding
+            if self._goal_tree_sync:
+                await self._goal_tree_sync.initial_load()
+            self.notify(f"Created session bound to plan ({role})")
+
+            # Generate and send initial prompt
+            initial_prompt = generate_initial_prompt(
+                "plan",
+                plan_data,
+                role,
+                parent_goal=parent_goal,
+            )
+            self._start_streaming(initial_prompt)
+        else:
+            self.notify(f"Session created but binding failed: {bind_result.error}", severity="warning")
+
+    async def _begin_session_for_todo(
+        self,
+        todo_id: str,
+        todo_title: str,
+        todo_description: str,
+        is_spike: bool,
+        timebox_minutes: int | None,
+        plan_id: str,
+    ) -> None:
+        """Create and start a session bound to a newly created todo.
+
+        Uses 'implementation' role by default, or 'exploration' for spikes.
+        """
+        from core.goal_commands import GoalCommandExecutor, ROLE_ABBREV
+        from core.async_storage import get_goal_storage
+        from widgets.bound_session_modal import generate_initial_prompt
+        from storage_schema import TodoData, PlanData, GoalData
+
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
+
+        # Background old session
+        old_session_id = self._manager._active_session_id
+        self._background_old_session(old_session_id)
+
+        # Show loading indicator
+        chat_log.show_loading("Creating new session...")
+
+        # Load parent plan and goal for prompt generation
+        storage = await get_goal_storage()
+        parent_plan = await storage.load_plan(plan_id)
+        parent_goal = None
+        if parent_plan:
+            parent_goal = await storage.load_goal(parent_plan.goal_id)
+
+        # Create temporary TodoData for prompt generation
+        todo_data = TodoData(
+            id=todo_id,
+            title=todo_title,
+            description=todo_description,
+            status="pending",
+            is_spike=is_spike,
+            timebox_minutes=timebox_minutes,
+            created_at="",
+            updated_at="",
+        )
+
+        # Use exploration role for spikes, implementation for normal todos
+        role = "exploration" if is_spike else "implementation"
+
+        # Create new session
+        new_session = await self._manager.create_session()
+        role_abbrev = ROLE_ABBREV.get(role, role[:4])
+        title = f"[{role_abbrev}] {todo_title}"
+        if len(title) > 60:
+            title = title[:57] + "..."
+        new_session.title = title
+        await new_session.save()
+        await self._manager.set_active(new_session.id)
+
+        # Add to tree state
+        self._tree_state.add_session(new_session, is_current=True)
+
+        # Update UI
+        chat_log.hide_loading()
+        chat_log.set_session_title(new_session.title)
+        await context_tree.load_all_sessions(new_session)
+        await breadcrumb.set_session(new_session)
+
+        # Bind the session to the todo
+        executor = GoalCommandExecutor(storage)
+        bind_result = await executor.bind_session(
+            new_session.id,
+            "todo",
+            todo_id,
+            role,
+        )
+
+        if bind_result.success:
+            # Refresh goal tree to show new binding
+            if self._goal_tree_sync:
+                await self._goal_tree_sync.initial_load()
+            self.notify(f"Created session bound to todo ({role})")
+
+            # Generate and send initial prompt
+            initial_prompt = generate_initial_prompt(
+                "todo",
+                todo_data,
+                role,
+                parent_goal=parent_goal,
+                parent_plan=parent_plan,
+            )
+            self._start_streaming(initial_prompt)
+        else:
+            self.notify(f"Session created but binding failed: {bind_result.error}", severity="warning")
 
     async def _create_bound_session(self, result: "BoundSessionResult") -> None:
         """Create a new session from the BoundSessionModal result."""
