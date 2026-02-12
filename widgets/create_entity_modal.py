@@ -18,6 +18,7 @@ class CreatePlanResult:
     title: str
     description: str
     status: str  # "draft" or "active"
+    begin_session: bool = False  # If True, also create and start a bound session
 
 
 @dataclass
@@ -28,6 +29,7 @@ class CreateTodoResult:
     description: str
     is_spike: bool
     timebox_minutes: Optional[int]
+    begin_session: bool = False  # If True, also create and start a bound session
 
 
 class CreatePlanModal(ModalScreen[Optional[CreatePlanResult]]):
@@ -146,6 +148,7 @@ class CreatePlanModal(ModalScreen[Optional[CreatePlanResult]]):
             with Horizontal(id="buttons"):
                 yield Button("Cancel", id="cancel-btn", variant="default")
                 yield Button("Create Plan", id="create-btn", variant="primary")
+                yield Button("Create & Begin", id="create-begin-btn", variant="success")
 
     def on_mount(self) -> None:
         """Focus the title input when modal opens."""
@@ -153,16 +156,18 @@ class CreatePlanModal(ModalScreen[Optional[CreatePlanResult]]):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "create-btn":
-            self._submit()
+            self._submit(begin_session=False)
+        elif event.button.id == "create-begin-btn":
+            self._submit(begin_session=True)
         else:
             self.dismiss(None)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Allow Enter in title field to submit."""
         if event.input.id == "title-input":
-            self._submit()
+            self._submit(begin_session=False)
 
-    def _submit(self) -> None:
+    def _submit(self, begin_session: bool = False) -> None:
         """Submit the form."""
         title_input = self.query_one("#title-input", Input)
         description_input = self.query_one("#description-input", TextArea)
@@ -178,6 +183,7 @@ class CreatePlanModal(ModalScreen[Optional[CreatePlanResult]]):
             title=title,
             description=description_input.text.strip(),
             status="active" if active_checkbox.value else "draft",
+            begin_session=begin_session,
         ))
 
     def action_cancel(self) -> None:
@@ -314,6 +320,7 @@ class CreateTodoModal(ModalScreen[Optional[CreateTodoResult]]):
             with Horizontal(id="buttons"):
                 yield Button("Cancel", id="cancel-btn", variant="default")
                 yield Button("Create Todo", id="create-btn", variant="primary")
+                yield Button("Create & Begin", id="create-begin-btn", variant="success")
 
     def on_mount(self) -> None:
         """Focus the title input when modal opens."""
@@ -329,16 +336,18 @@ class CreateTodoModal(ModalScreen[Optional[CreateTodoResult]]):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "create-btn":
-            self._submit()
+            self._submit(begin_session=False)
+        elif event.button.id == "create-begin-btn":
+            self._submit(begin_session=True)
         else:
             self.dismiss(None)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Allow Enter in title field to submit."""
         if event.input.id == "title-input":
-            self._submit()
+            self._submit(begin_session=False)
 
-    def _submit(self) -> None:
+    def _submit(self, begin_session: bool = False) -> None:
         """Submit the form."""
         title_input = self.query_one("#title-input", Input)
         description_input = self.query_one("#description-input", TextArea)
@@ -363,6 +372,7 @@ class CreateTodoModal(ModalScreen[Optional[CreateTodoResult]]):
             description=description_input.text.strip(),
             is_spike=spike_checkbox.value,
             timebox_minutes=timebox_minutes,
+            begin_session=begin_session,
         ))
 
     def action_cancel(self) -> None:
