@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use crate::generated::{SessionData, SessionMetadata, TurnData};
+use crate::generated::{
+    GoalData, PlanData, SessionBinding, SessionData, SessionMetadata, TodoData, TodoDependency,
+    TodoPlanLink, TurnData,
+};
 use super::traits::{Result, StorageEngine};
 
 /// High-level async client for storage operations
@@ -83,5 +86,158 @@ impl StorageClient {
     /// Save the session history (list of session IDs, most recent first).
     pub async fn save_session_history(&self, session_ids: &[String]) -> Result<()> {
         self.engine.save_session_history(session_ids).await
+    }
+
+    // =========================================================================
+    // Goal System - Goals
+    // =========================================================================
+
+    /// Save a goal (upsert).
+    pub async fn save_goal(&self, goal: &GoalData) -> Result<()> {
+        self.engine.save_goal(goal).await
+    }
+
+    /// Load a goal by ID.
+    pub async fn load_goal(&self, id: &str) -> Result<Option<GoalData>> {
+        self.engine.load_goal(id).await
+    }
+
+    /// Delete a goal by ID.
+    pub async fn delete_goal(&self, id: &str) -> Result<()> {
+        self.engine.delete_goal(id).await
+    }
+
+    /// List all goals.
+    pub async fn list_goals(&self) -> Result<Vec<GoalData>> {
+        self.engine.list_goals().await
+    }
+
+    // =========================================================================
+    // Goal System - Plans
+    // =========================================================================
+
+    /// Save a plan (upsert).
+    pub async fn save_plan(&self, plan: &PlanData) -> Result<()> {
+        self.engine.save_plan(plan).await
+    }
+
+    /// Load a plan by ID.
+    pub async fn load_plan(&self, id: &str) -> Result<Option<PlanData>> {
+        self.engine.load_plan(id).await
+    }
+
+    /// Delete a plan by ID.
+    pub async fn delete_plan(&self, id: &str) -> Result<()> {
+        self.engine.delete_plan(id).await
+    }
+
+    /// List all plans, optionally filtered by goal_id.
+    pub async fn list_plans(&self, goal_id: Option<&str>) -> Result<Vec<PlanData>> {
+        self.engine.list_plans(goal_id).await
+    }
+
+    // =========================================================================
+    // Goal System - Todos
+    // =========================================================================
+
+    /// Save a todo (upsert).
+    pub async fn save_todo(&self, todo: &TodoData) -> Result<()> {
+        self.engine.save_todo(todo).await
+    }
+
+    /// Load a todo by ID.
+    pub async fn load_todo(&self, id: &str) -> Result<Option<TodoData>> {
+        self.engine.load_todo(id).await
+    }
+
+    /// Delete a todo by ID.
+    pub async fn delete_todo(&self, id: &str) -> Result<()> {
+        self.engine.delete_todo(id).await
+    }
+
+    /// List all todos, optionally filtered by plan_id.
+    pub async fn list_todos(&self, plan_id: Option<&str>) -> Result<Vec<TodoData>> {
+        self.engine.list_todos(plan_id).await
+    }
+
+    // =========================================================================
+    // Goal System - Todo-Plan Links
+    // =========================================================================
+
+    /// Link a todo to a plan.
+    pub async fn save_todo_plan_link(&self, link: &TodoPlanLink) -> Result<()> {
+        self.engine.save_todo_plan_link(link).await
+    }
+
+    /// Remove a todo from a plan.
+    pub async fn delete_todo_plan_link(&self, todo_id: &str, plan_id: &str) -> Result<()> {
+        self.engine.delete_todo_plan_link(todo_id, plan_id).await
+    }
+
+    /// Get all plans that a todo belongs to.
+    pub async fn get_plans_for_todo(&self, todo_id: &str) -> Result<Vec<PlanData>> {
+        self.engine.get_plans_for_todo(todo_id).await
+    }
+
+    /// Get all todos in a plan.
+    pub async fn get_todos_for_plan(&self, plan_id: &str) -> Result<Vec<TodoData>> {
+        self.engine.get_todos_for_plan(plan_id).await
+    }
+
+    // =========================================================================
+    // Goal System - Todo Dependencies
+    // =========================================================================
+
+    /// Create a dependency: todo_id depends on depends_on_id.
+    pub async fn save_todo_dependency(&self, dependency: &TodoDependency) -> Result<()> {
+        self.engine.save_todo_dependency(dependency).await
+    }
+
+    /// Remove a dependency.
+    pub async fn delete_todo_dependency(&self, todo_id: &str, depends_on_id: &str) -> Result<()> {
+        self.engine.delete_todo_dependency(todo_id, depends_on_id).await
+    }
+
+    /// Get todos that the given todo depends on (prerequisites).
+    pub async fn get_dependencies(&self, todo_id: &str) -> Result<Vec<TodoData>> {
+        self.engine.get_dependencies(todo_id).await
+    }
+
+    /// Get todos that depend on the given todo (blockers).
+    pub async fn get_dependents(&self, todo_id: &str) -> Result<Vec<TodoData>> {
+        self.engine.get_dependents(todo_id).await
+    }
+
+    // =========================================================================
+    // Goal System - Session Bindings
+    // =========================================================================
+
+    /// Save a session binding (upsert).
+    pub async fn save_session_binding(&self, binding: &SessionBinding) -> Result<()> {
+        self.engine.save_session_binding(binding).await
+    }
+
+    /// Load a session binding by ID.
+    pub async fn load_session_binding(&self, id: &str) -> Result<Option<SessionBinding>> {
+        self.engine.load_session_binding(id).await
+    }
+
+    /// Delete a session binding by ID.
+    pub async fn delete_session_binding(&self, id: &str) -> Result<()> {
+        self.engine.delete_session_binding(id).await
+    }
+
+    /// Get all bindings for a session.
+    pub async fn get_bindings_for_session(&self, session_id: &str) -> Result<Vec<SessionBinding>> {
+        self.engine.get_bindings_for_session(session_id).await
+    }
+
+    /// Get all bindings for an entity (goal, plan, or todo).
+    pub async fn get_bindings_for_entity(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+    ) -> Result<Vec<SessionBinding>> {
+        self.engine.get_bindings_for_entity(entity_type, entity_id).await
     }
 }
