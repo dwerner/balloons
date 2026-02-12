@@ -21,6 +21,18 @@ class LogLevel(Enum):
     WARNING = "warning"
     INFO = "info"
     DEBUG = "debug"
+    TRACE = "trace"  # Very verbose, for scroll events etc.
+
+    @classmethod
+    def severity(cls, level: "LogLevel") -> int:
+        """Return numeric severity (higher = more severe)."""
+        return {
+            cls.ERROR: 50,
+            cls.WARNING: 40,
+            cls.INFO: 30,
+            cls.DEBUG: 20,
+            cls.TRACE: 10,
+        }[level]
 
 
 @dataclass
@@ -61,6 +73,7 @@ class DebugLog:
             cls._instance._log_file: Path | None = None
             cls._instance._enabled = True
             cls._instance._seq_counter = 0  # Monotonic sequence counter
+            cls._instance._min_level = LogLevel.DEBUG  # Filter out TRACE by default
         return cls._instance
 
     @property
@@ -72,6 +85,23 @@ class DebugLog:
     def enabled(self, value: bool) -> None:
         """Enable or disable logging."""
         self._enabled = value
+
+    @property
+    def min_level(self) -> LogLevel:
+        """Minimum log level to display (filters out lower severity)."""
+        return self._min_level
+
+    @min_level.setter
+    def min_level(self, value: LogLevel) -> None:
+        """Set minimum log level to display."""
+        self._min_level = value
+        # Notify listeners that filter changed
+        for listener in self._listeners:
+            try:
+                if hasattr(listener, '__self__') and hasattr(listener.__self__, 'on_level_changed'):
+                    listener.__self__.on_level_changed(value)
+            except Exception:
+                pass
 
     def set_log_file(self, path: str | Path | None) -> None:
         """Enable file persistence for debug logs.
@@ -115,6 +145,9 @@ class DebugLog:
     def _add_entry(self, entry: LogEntry) -> None:
         """Add entry and notify listeners."""
         if not self._enabled:
+            return
+        # Filter by minimum level
+        if LogLevel.severity(entry.level) < LogLevel.severity(self._min_level):
             return
         self._entries.append(entry)
         # Write to file if configured
@@ -197,6 +230,18 @@ class DebugLog:
     ) -> None:
         """Log a debug message."""
         entry = self._make_entry(LogLevel.DEBUG, message, session_id, category, details, run_id)
+        self._add_entry(entry)
+
+    def trace(
+        self,
+        message: str,
+        session_id: str = "",
+        category: str = "",
+        details: dict | None = None,
+        run_id: str = "",
+    ) -> None:
+        """Log a trace message (very verbose, for scroll events etc.)."""
+        entry = self._make_entry(LogLevel.TRACE, message, session_id, category, details, run_id)
         self._add_entry(entry)
 
     def add_listener(self, callback: Callable[[LogEntry], None]) -> None:

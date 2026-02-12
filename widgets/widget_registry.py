@@ -344,12 +344,12 @@ class WidgetRegistry:
     def _log_info(self, message: str) -> None:
         """Log info message if debug_log is available."""
         if self._debug_log:
-            self._debug_log.info(message, category="widget_registry")
+            self._debug_log.trace(message, category="widget_registry")
 
     def _log_debug(self, message: str) -> None:
         """Log debug message if debug_log is available."""
         if self._debug_log:
-            self._debug_log.debug(message, category="widget_registry")
+            self._debug_log.trace(message, category="widget_registry")
 
     def _log_warning(self, message: str) -> None:
         """Log warning message if debug_log is available."""

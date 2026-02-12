@@ -557,7 +557,7 @@ class ContextTreeView(Vertical):
         This is the observer callback - translates state changes to UI updates.
         All UI updates should flow through here in response to TreeState changes.
         """
-        debug_log.debug(f"TreeState event: {event.name}", category="tree", details=data)
+        debug_log.trace(f"TreeState event: {event.name}", category="tree", details=data)
         if event == TreeEvent.FULL_REBUILD:
             # TreeState was cleared or requests full rebuild
             self._rebuild_tree()
@@ -921,7 +921,7 @@ class ContextTreeView(Vertical):
 
                 # Yield to event loop periodically to keep UI responsive
                 if count % 100 == 0:
-                    debug_log.debug(f"Background load: {count} sessions", category="tree")
+                    debug_log.trace(f"Background load: {count} sessions", category="tree")
                     await asyncio.sleep(0)
 
         finally:
@@ -1603,7 +1603,7 @@ class ContextTreeView(Vertical):
         Token counts come from TreeState (calculated by app from compiled context).
         This method also builds turn_modes dict for the chat log.
         """
-        debug_log.debug("_update_root_label called", category="tree")
+        debug_log.trace("_update_root_label called", category="tree")
         tree = self.query_one("#turn-tree", SelectableTreeWidget)
 
         current_session_turn_ids = []
@@ -2420,7 +2420,7 @@ class ContextTreeView(Vertical):
             self._tool_use_nodes.clear()
 
             all_sessions = self._state.get_all_sessions()
-            debug_log.debug(f"_rebuild_tree: {len(all_sessions)} sessions to process", category="tree")
+            debug_log.trace(f"_rebuild_tree: {len(all_sessions)} sessions to process", category="tree")
             if not all_sessions:
                 self._update_root_label()
                 return

@@ -319,4 +319,4 @@ class ScrollController:
     def _log_debug(self, message: str) -> None:
         """Log debug message if debug_log is available."""
         if self._debug_log:
-            self._debug_log.debug(message, category="scroll")
+            self._debug_log.trace(message, category="scroll")

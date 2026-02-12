@@ -981,7 +981,7 @@ class ChatLogView(VerticalScroll):
         We sync the controller's state to match.
         """
         from core.debug_log import debug_log
-        debug_log.info(f"watch_following: following changed to {following}", category="chat_log")
+        debug_log.trace(f"watch_following: following changed to {following}", category="chat_log")
         # Sync controller state (avoid re-triggering if already in sync)
         if self._scroll_controller.following != following:
             self._scroll_controller._following = following  # Direct set to avoid callback loop
@@ -1067,7 +1067,7 @@ class ChatLogView(VerticalScroll):
         user and programmatic scrolls using a flag.
         """
         from core.debug_log import debug_log
-        debug_log.debug(
+        debug_log.trace(
             f"watch_scroll_y: {old_value:.0f} -> {new_value:.0f}, "
             f"max={self.max_scroll_y:.0f}, "
             f"programmatic={self._scroll_controller.is_programmatic_scroll}, "
@@ -1076,7 +1076,7 @@ class ChatLogView(VerticalScroll):
         )
         super().watch_scroll_y(old_value, new_value)
         self._scroll_controller.on_scroll_changed(old_scroll_y=old_value)
-        debug_log.debug(
+        debug_log.trace(
             f"watch_scroll_y after: following={self._scroll_controller.following}",
             category="scroll"
         )
@@ -1096,10 +1096,10 @@ class ChatLogView(VerticalScroll):
         Returns True if the turn was found and scrolled to, False otherwise.
         """
         from core.debug_log import debug_log
-        debug_log.info(f"scroll_to_turn: looking for turn_id={turn_id}, scroll_to_top={scroll_to_top}", category="chat_log")
+        debug_log.trace(f"scroll_to_turn: looking for turn_id={turn_id}, scroll_to_top={scroll_to_top}", category="chat_log")
         for child in self.children:
             if hasattr(child, 'turn_id') and child.turn_id == turn_id:
-                debug_log.info(f"scroll_to_turn: found turn_id={turn_id}, scrolling", category="chat_log")
+                debug_log.trace(f"scroll_to_turn: found turn_id={turn_id}, scrolling", category="chat_log")
                 if scroll_to_top:
                     self.scroll_to_widget_at_top(child)
                 else:
@@ -1136,7 +1136,7 @@ class ChatLogView(VerticalScroll):
         region = widget.virtual_region
         content_offset_y = self.content_offset.y if hasattr(self, 'content_offset') else 0
         turn_id = getattr(widget, 'turn_id', '?')
-        debug_log.info(
+        debug_log.trace(
             f"scroll_to_widget_at_top: turn_id={turn_id}, "
             f"region.y={region.y}, region.height={region.height}, "
             f"widget.size={widget.size}, widget._content_width={getattr(widget, '_content', '?')[:30] if hasattr(widget, '_content') else '?'}",
@@ -1529,9 +1529,9 @@ class ChatLogView(VerticalScroll):
                           If False (default), use smart scroll that minimizes movement.
         """
         from core.debug_log import debug_log
-        debug_log.info(f"highlight_turn: turn_id={turn_id}, scroll_to_top={scroll_to_top}", category="chat_log")
+        debug_log.trace(f"highlight_turn: turn_id={turn_id}, scroll_to_top={scroll_to_top}", category="chat_log")
         scroll_target = self._widget_registry.highlight_turn(turn_id)
-        debug_log.info(f"highlight_turn: scroll_target={scroll_target}, type={type(scroll_target).__name__ if scroll_target else None}", category="chat_log")
+        debug_log.trace(f"highlight_turn: scroll_target={scroll_target}, type={type(scroll_target).__name__ if scroll_target else None}", category="chat_log")
         if scroll_target:
             if scroll_to_top:
                 self.scroll_to_widget_at_top(scroll_target)

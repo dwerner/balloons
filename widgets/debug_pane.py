@@ -2,60 +2,130 @@
 
 Collapsible bottom drawer showing debug log entries for Claude observability.
 Uses RichLog for simple append-only display with strict ordering by sequence number.
+Includes a log level selector to filter by severity.
 """
 
 from textual.events import Click
 from textual.message import Message
-from textual.widgets import RichLog
+from textual.widgets import RichLog, Static
+from textual.containers import Horizontal, Vertical
+from textual.reactive import reactive
 from rich.text import Text
 
 from core.debug_log import debug_log, LogEntry, LogLevel
 
 
-class DebugPane(RichLog):
-    """Collapsible debug pane showing log entries.
+class LogLevelSelector(Static):
+    """Clickable log level selector widget.
 
-    Simple append-only log display. Entries are ordered strictly by their
-    monotonic sequence number to prevent UI jumping.
-    Toggle with Ctrl+G, auto-expands on errors.
+    Shows buttons for each log level. Clicking a level sets the minimum
+    display level (e.g., clicking INFO shows INFO, WARNING, ERROR).
     """
 
-    class NewLogEntry(Message):
-        """Message posted when a new log entry arrives.
+    DEFAULT_CSS = """
+    LogLevelSelector {
+        height: 1;
+        width: auto;
+        padding: 0 1;
+        background: $surface-darken-1;
+    }
 
-        Using Textual messages ensures entries are processed in order
-        on the main thread, preventing race conditions.
-        """
+    LogLevelSelector .level-btn {
+        padding: 0 1;
+    }
 
-        def __init__(self, entry: LogEntry) -> None:
+    LogLevelSelector .level-btn.active {
+        text-style: bold reverse;
+    }
+    """
+
+    class LevelChanged(Message):
+        """Posted when user clicks a log level button."""
+
+        def __init__(self, level: LogLevel) -> None:
             super().__init__()
-            self.entry = entry
+            self.level = level
 
-    class LogLineSelected(Message):
-        """Message posted when user Ctrl+clicks a log line.
+    # Level order from most verbose to most severe
+    LEVELS = [LogLevel.TRACE, LogLevel.DEBUG, LogLevel.INFO, LogLevel.WARNING, LogLevel.ERROR]
 
-        The app can use this to insert the log line into the input box.
-        """
+    LEVEL_LABELS = {
+        LogLevel.ERROR: "E",
+        LogLevel.WARNING: "W",
+        LogLevel.INFO: "I",
+        LogLevel.DEBUG: "D",
+        LogLevel.TRACE: "T",
+    }
 
-        def __init__(self, text: str) -> None:
-            super().__init__()
-            self.text = text
+    LEVEL_COLORS = {
+        LogLevel.ERROR: "red",
+        LogLevel.WARNING: "yellow",
+        LogLevel.INFO: "white",
+        LogLevel.DEBUG: "dim white",
+        LogLevel.TRACE: "dim cyan",
+    }
+
+    current_level: reactive[LogLevel] = reactive(LogLevel.DEBUG)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.current_level = debug_log.min_level
+
+    def render(self) -> Text:
+        """Render the level selector as clickable buttons."""
+        text = Text()
+        text.append("Level: ", style="dim")
+
+        for i, level in enumerate(self.LEVELS):
+            color = self.LEVEL_COLORS[level]
+            label = self.LEVEL_LABELS[level]
+
+            # Check if this level is active (at or above min_level)
+            is_active = LogLevel.severity(level) >= LogLevel.severity(self.current_level)
+
+            if is_active:
+                text.append(f"[{label}]", style=f"bold {color} reverse")
+            else:
+                text.append(f"[{label}]", style=f"dim {color}")
+
+            if i < len(self.LEVELS) - 1:
+                text.append(" ")
+
+        return text
+
+    def on_click(self, event: Click) -> None:
+        """Handle click on level buttons."""
+        # Calculate which button was clicked based on x position
+        # Format: "Level: [T] [D] [I] [W] [E]"
+        # "Level: " = 7 chars, each button = 3 chars + 1 space
+        content_offset = event.get_content_offset(self)
+        if content_offset is None:
+            return
+
+        x = content_offset.x
+        # Subtract padding and "Level: " prefix
+        x_adjusted = x - 7  # "Level: " = 7 chars
+
+        if x_adjusted < 0:
+            return
+
+        # Each level button is 3 chars + 1 space = 4 chars (except last)
+        button_idx = x_adjusted // 4
+        if 0 <= button_idx < len(self.LEVELS):
+            level = self.LEVELS[button_idx]
+            self.current_level = level
+            debug_log.min_level = level
+            self.post_message(self.LevelChanged(level))
+            self.refresh()
+
+
+class DebugLogView(RichLog):
+    """The actual log display (RichLog-based)."""
 
     DEFAULT_CSS = """
-    DebugPane {
-        height: 0;
-        background: $surface;
-        border-top: solid $primary;
+    DebugLogView {
+        height: 1fr;
         scrollbar-size: 1 1;
-    }
-
-    DebugPane.expanded {
-        height: 14;
-    }
-
-    DebugPane.auto-expanded {
-        height: 10;
-        border-top: solid $error;
     }
     """
 
@@ -64,6 +134,7 @@ class DebugPane(RichLog):
         LogLevel.WARNING: "yellow",
         LogLevel.INFO: "white",
         LogLevel.DEBUG: "dim white",
+        LogLevel.TRACE: "dim cyan",
     }
 
     LEVEL_SYMBOLS = {
@@ -71,82 +142,49 @@ class DebugPane(RichLog):
         LogLevel.WARNING: "W",
         LogLevel.INFO: "I",
         LogLevel.DEBUG: "D",
+        LogLevel.TRACE: "T",
     }
+
+    class LogLineSelected(Message):
+        """Message posted when user Ctrl+clicks a log line."""
+
+        def __init__(self, text: str, line_idx: int) -> None:
+            super().__init__()
+            self.text = text
+            self.line_idx = line_idx
 
     def __init__(self, **kwargs):
         super().__init__(highlight=False, markup=False, wrap=False, **kwargs)
-        self._expanded = False
-        self._auto_expanded = False
-        self._last_seq = 0  # Track last displayed sequence number
-        self._line_entries: list[LogEntry] = []  # Map line number to entry
+        self._last_seq = 0
+        self._line_entries: list[LogEntry] = []
+        self._highlighted_line: int | None = None
 
-    def on_mount(self) -> None:
-        """Subscribe to debug log updates."""
-        # Load existing entries FIRST (before adding listener)
-        # get_entries returns newest-first, so reverse to add oldest-first
-        for entry in reversed(debug_log.get_entries(limit=100)):
-            self._add_entry(entry)
-        # Now subscribe to new entries - they'll arrive after existing ones
-        debug_log.add_listener(self._on_log_entry)
-
-    def on_unmount(self) -> None:
-        """Unsubscribe from debug log updates."""
-        debug_log.remove_listener(self._on_log_entry)
-
-    def _on_log_entry(self, entry: LogEntry) -> None:
-        """Handle new log entry from debug_log listener.
-
-        Posts a message to ensure processing happens on Textual's main thread,
-        maintaining correct ordering even when entries arrive from async tasks.
-        """
-        # Post message to process on main thread - this ensures ordering
-        self.post_message(self.NewLogEntry(entry))
-
-    def on_debug_pane_new_log_entry(self, message: NewLogEntry) -> None:
-        """Process log entry on the main thread."""
-        entry = message.entry
-        self._add_entry(entry)
-
-        # Auto-expand on errors
-        if entry.level == LogLevel.ERROR and not self._expanded:
-            self._auto_expanded = True
-            self.add_class("auto-expanded")
-
-    def _add_entry(self, entry: LogEntry) -> None:
-        """Add an entry to the log, enforcing strict sequence ordering."""
-        # Skip entries we've already displayed (prevents duplicates)
-        if entry.seq <= self._last_seq:
-            return
-
-        self._last_seq = entry.seq
-
-        # Store entry for click handling
-        self._line_entries.append(entry)
-
-        # Format and write the entry
-        label = self._format_entry(entry)
-        self.write(label)
-
-    def _format_entry(self, entry: LogEntry) -> Text:
+    def _format_entry(self, entry: LogEntry, highlighted: bool = False) -> Text:
         """Format a log entry for display."""
         color = self.LEVEL_COLORS.get(entry.level, "white")
         symbol = self.LEVEL_SYMBOLS.get(entry.level, "?")
 
         text = Text()
-        text.append(f"[{entry.timestamp}] ", style="dim")
-        text.append(f"[{symbol}] ", style=color)
+
+        # Add highlight background if this line is highlighted
+        base_style = "on #333366" if highlighted else ""
+
+        text.append(f"[{entry.timestamp}] ", style=f"dim {base_style}")
+        text.append(f"[{symbol}] ", style=f"{color} {base_style}")
 
         if entry.run_id:
-            text.append(f"pid:{entry.run_id} ", style="cyan dim")
+            text.append(f"pid:{entry.run_id} ", style=f"cyan dim {base_style}")
 
         if entry.category:
-            text.append(f"{entry.category}: ", style="cyan")
+            text.append(f"{entry.category}: ", style=f"cyan {base_style}")
 
         # Truncate long messages
         message = entry.message
         if len(message) > 100:
             message = message[:97] + "..."
-        text.append(message, style=color if entry.level in (LogLevel.ERROR, LogLevel.WARNING) else "")
+
+        msg_style = color if entry.level in (LogLevel.ERROR, LogLevel.WARNING) else ""
+        text.append(message, style=f"{msg_style} {base_style}")
 
         # Show key details inline (compact)
         if entry.details:
@@ -166,45 +204,9 @@ class DebugPane(RichLog):
                         str_v = str_v[:27] + "..."
                     details_parts.append(f"{k}={str_v}")
             if details_parts:
-                text.append(f" ({', '.join(details_parts)})", style="dim")
+                text.append(f" ({', '.join(details_parts)})", style=f"dim {base_style}")
 
         return text
-
-    def toggle(self) -> None:
-        """Toggle the debug pane visibility."""
-        if self._expanded or self._auto_expanded:
-            self._expanded = False
-            self._auto_expanded = False
-            self.remove_class("expanded")
-            self.remove_class("auto-expanded")
-        else:
-            self._expanded = True
-            self._auto_expanded = False
-            self.add_class("expanded")
-            self.remove_class("auto-expanded")
-
-    def clear_entries(self) -> None:
-        """Clear all displayed entries."""
-        self.clear()
-        self._last_seq = 0
-        self._line_entries.clear()
-        debug_log.clear()
-
-    def on_click(self, event: Click) -> None:
-        """Handle click on log lines. Ctrl+click inserts into input."""
-        if event.ctrl:
-            # Get position relative to content area (accounting for borders/padding)
-            content_offset = event.get_content_offset(self)
-            if content_offset is None:
-                return  # Click was on border/padding, not content
-
-            # Calculate line index from content y position plus scroll offset
-            line_idx = content_offset.y + self.scroll_offset.y
-            if 0 <= line_idx < len(self._line_entries):
-                entry = self._line_entries[line_idx]
-                full_text = self._format_entry_full(entry)
-                self.post_message(self.LogLineSelected(full_text))
-                event.stop()
 
     def _format_entry_full(self, entry: LogEntry) -> str:
         """Format a log entry as full text for insertion into input."""
@@ -225,12 +227,176 @@ class DebugPane(RichLog):
             details_parts = []
             for k, v in entry.details.items():
                 str_v = str(v)
-                # Don't truncate for full text
                 details_parts.append(f"{k}={str_v}")
             if details_parts:
                 parts.append(f"({', '.join(details_parts)})")
 
         return " ".join(parts)
+
+    def add_entry(self, entry: LogEntry) -> None:
+        """Add an entry to the log, enforcing strict sequence ordering."""
+        if entry.seq <= self._last_seq:
+            return
+
+        self._last_seq = entry.seq
+        self._line_entries.append(entry)
+
+        label = self._format_entry(entry)
+        self.write(label)
+
+    def highlight_line(self, line_idx: int) -> None:
+        """Highlight a specific line visually."""
+        if self._highlighted_line is not None:
+            # Clear previous highlight by re-rendering that line
+            self._rerender_line(self._highlighted_line, highlighted=False)
+
+        self._highlighted_line = line_idx
+        self._rerender_line(line_idx, highlighted=True)
+
+    def _rerender_line(self, line_idx: int, highlighted: bool) -> None:
+        """Re-render a specific line with or without highlight."""
+        if 0 <= line_idx < len(self._line_entries):
+            # RichLog doesn't support in-place updates, so we can't truly
+            # re-render. Instead, we'll just track the highlight state for
+            # visual feedback via border color change on the parent.
+            pass
+
+    def clear_entries(self) -> None:
+        """Clear all displayed entries."""
+        self.clear()
+        self._last_seq = 0
+        self._line_entries.clear()
+        self._highlighted_line = None
+
+    def on_click(self, event: Click) -> None:
+        """Handle click on log lines. Ctrl+click inserts into input."""
+        if event.ctrl:
+            content_offset = event.get_content_offset(self)
+            if content_offset is None:
+                return
+
+            # RichLog uses scroll_y for vertical scroll position
+            # content_offset.y is the y within the visible area
+            # We need to add scroll_y to get the actual line index
+            line_idx = int(content_offset.y + self.scroll_y)
+
+            if 0 <= line_idx < len(self._line_entries):
+                entry = self._line_entries[line_idx]
+                full_text = self._format_entry_full(entry)
+                self.post_message(self.LogLineSelected(full_text, line_idx))
+                event.stop()
+
+
+class DebugPane(Vertical):
+    """Collapsible debug pane showing log entries.
+
+    Contains a log level selector and the actual log view.
+    Toggle with Ctrl+G, auto-expands on errors.
+    """
+
+    class NewLogEntry(Message):
+        """Message posted when a new log entry arrives."""
+
+        def __init__(self, entry: LogEntry) -> None:
+            super().__init__()
+            self.entry = entry
+
+    class LogLineSelected(Message):
+        """Message posted when user Ctrl+clicks a log line."""
+
+        def __init__(self, text: str) -> None:
+            super().__init__()
+            self.text = text
+
+    DEFAULT_CSS = """
+    DebugPane {
+        height: 0;
+        background: $surface;
+        border-top: solid $primary;
+    }
+
+    DebugPane.expanded {
+        height: 14;
+    }
+
+    DebugPane.auto-expanded {
+        height: 10;
+        border-top: solid $error;
+    }
+
+    DebugPane.line-selected {
+        border-top: solid $accent;
+    }
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._expanded = False
+        self._auto_expanded = False
+        self._log_view: DebugLogView | None = None
+        self._level_selector: LogLevelSelector | None = None
+
+    def compose(self):
+        self._level_selector = LogLevelSelector(id="log-level-selector")
+        self._log_view = DebugLogView(id="debug-log-view")
+        yield self._level_selector
+        yield self._log_view
+
+    def on_mount(self) -> None:
+        """Subscribe to debug log updates."""
+        # Load existing entries
+        for entry in reversed(debug_log.get_entries(limit=100)):
+            if self._log_view:
+                self._log_view.add_entry(entry)
+        # Subscribe to new entries
+        debug_log.add_listener(self._on_log_entry)
+
+    def on_unmount(self) -> None:
+        """Unsubscribe from debug log updates."""
+        debug_log.remove_listener(self._on_log_entry)
+
+    def _on_log_entry(self, entry: LogEntry) -> None:
+        """Handle new log entry from debug_log listener."""
+        self.post_message(self.NewLogEntry(entry))
+
+    def on_debug_pane_new_log_entry(self, message: NewLogEntry) -> None:
+        """Process log entry on the main thread."""
+        entry = message.entry
+        if self._log_view:
+            self._log_view.add_entry(entry)
+
+        # Auto-expand on errors
+        if entry.level == LogLevel.ERROR and not self._expanded:
+            self._auto_expanded = True
+            self.add_class("auto-expanded")
+
+    def on_debug_log_view_log_line_selected(self, event: DebugLogView.LogLineSelected) -> None:
+        """Handle log line selection from the log view."""
+        # Show visual feedback
+        self.add_class("line-selected")
+        # Schedule removal of the visual feedback
+        self.set_timer(0.5, lambda: self.remove_class("line-selected"))
+        # Bubble up the message
+        self.post_message(self.LogLineSelected(event.text))
+
+    def toggle(self) -> None:
+        """Toggle the debug pane visibility."""
+        if self._expanded or self._auto_expanded:
+            self._expanded = False
+            self._auto_expanded = False
+            self.remove_class("expanded")
+            self.remove_class("auto-expanded")
+        else:
+            self._expanded = True
+            self._auto_expanded = False
+            self.add_class("expanded")
+            self.remove_class("auto-expanded")
+
+    def clear_entries(self) -> None:
+        """Clear all displayed entries."""
+        if self._log_view:
+            self._log_view.clear_entries()
+        debug_log.clear()
 
     @property
     def is_expanded(self) -> bool:

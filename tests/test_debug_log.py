@@ -78,6 +78,58 @@ class TestDebugLog:
         assert entries[0].level == LogLevel.DEBUG
         assert entries[0].details == {"foo": "bar"}
 
+    def test_trace_creates_entry_when_enabled(self):
+        """Test that trace messages are logged when min_level is TRACE."""
+        original_level = debug_log.min_level
+        try:
+            debug_log.min_level = LogLevel.TRACE
+            debug_log.trace("Test trace", category="scroll")
+            entries = debug_log.get_entries()
+            assert len(entries) == 1
+            assert entries[0].level == LogLevel.TRACE
+            assert entries[0].message == "Test trace"
+            assert entries[0].category == "scroll"
+        finally:
+            debug_log.min_level = original_level
+
+    def test_trace_filtered_when_min_level_is_debug(self):
+        """Test that trace messages are filtered when min_level is DEBUG."""
+        original_level = debug_log.min_level
+        try:
+            debug_log.min_level = LogLevel.DEBUG
+            debug_log.trace("This should be filtered")
+            debug_log.debug("This should appear")
+            entries = debug_log.get_entries()
+            assert len(entries) == 1
+            assert entries[0].level == LogLevel.DEBUG
+        finally:
+            debug_log.min_level = original_level
+
+    def test_min_level_filtering(self):
+        """Test that min_level filters messages below the threshold."""
+        original_level = debug_log.min_level
+        try:
+            debug_log.min_level = LogLevel.WARNING
+            debug_log.trace("Filtered")
+            debug_log.debug("Filtered")
+            debug_log.info("Filtered")
+            debug_log.warning("Should appear")
+            debug_log.error("Should appear")
+            entries = debug_log.get_entries()
+            assert len(entries) == 2
+            levels = {e.level for e in entries}
+            assert LogLevel.WARNING in levels
+            assert LogLevel.ERROR in levels
+        finally:
+            debug_log.min_level = original_level
+
+    def test_level_severity(self):
+        """Test that log levels have correct severity ordering."""
+        assert LogLevel.severity(LogLevel.TRACE) < LogLevel.severity(LogLevel.DEBUG)
+        assert LogLevel.severity(LogLevel.DEBUG) < LogLevel.severity(LogLevel.INFO)
+        assert LogLevel.severity(LogLevel.INFO) < LogLevel.severity(LogLevel.WARNING)
+        assert LogLevel.severity(LogLevel.WARNING) < LogLevel.severity(LogLevel.ERROR)
+
     def test_entries_in_order(self):
         debug_log.info("First")
         debug_log.info("Second")
