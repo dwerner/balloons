@@ -5353,8 +5353,8 @@ class BalloonsApp(App):
             # Find parent plan and goal for context
             plans = await storage.list_plans()
             for plan in plans:
-                links = await storage.get_todos_for_plan(plan.id)
-                if any(link.todo_id == event.entity_id for link in links):
+                todo_ids = await storage.get_todos_for_plan(plan.id)
+                if event.entity_id in todo_ids:
                     parent_plan = plan
                     if plan.goal_id:
                         parent_goal = await storage.load_goal(plan.goal_id)

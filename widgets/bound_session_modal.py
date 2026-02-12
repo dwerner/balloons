@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from textual.screen import ModalScreen
-from textual.widgets import Static, Button, Select, Input, Label
+from textual.widgets import Static, Button, Select, TextArea, Label
 from textual.containers import Vertical, Horizontal
 
 from storage_schema import GoalData, PlanData, TodoData
@@ -232,9 +232,9 @@ class BoundSessionModal(ModalScreen[Optional[BoundSessionResult]]):
     }
 
     #bound-session-dialog {
-        width: 70;
+        width: 80;
         height: auto;
-        max-height: 80%;
+        max-height: 85%;
         background: $surface;
         border: thick $primary;
         padding: 1 2;
@@ -245,11 +245,13 @@ class BoundSessionModal(ModalScreen[Optional[BoundSessionResult]]):
         text-style: bold;
         padding-bottom: 1;
         color: $primary;
+        height: auto;
     }
 
     #entity-info {
+        height: auto;
         margin-bottom: 1;
-        padding: 1;
+        padding: 0 1;
         background: $surface-darken-1;
         border: solid $primary-darken-2;
     }
@@ -257,21 +259,23 @@ class BoundSessionModal(ModalScreen[Optional[BoundSessionResult]]):
     #entity-type-label {
         color: $text-muted;
         text-style: italic;
+        height: 1;
     }
 
     #entity-title {
         text-style: bold;
-        margin-top: 0;
+        height: auto;
     }
 
     #entity-description {
         color: $text-muted;
-        margin-top: 0;
+        height: auto;
     }
 
     .field-label {
         margin-top: 1;
         margin-bottom: 0;
+        height: 1;
     }
 
     #role-select {
@@ -279,12 +283,9 @@ class BoundSessionModal(ModalScreen[Optional[BoundSessionResult]]):
         width: 100%;
     }
 
-    #prompt-preview {
-        height: 8;
+    #prompt-input {
+        height: 10;
         margin-bottom: 1;
-        background: $surface-darken-1;
-        border: solid $primary-darken-2;
-        padding: 1;
     }
 
     #buttons {
@@ -345,8 +346,8 @@ class BoundSessionModal(ModalScreen[Optional[BoundSessionResult]]):
                 id="role-select",
             )
 
-            # Prompt preview
-            yield Label("Initial Prompt:", classes="field-label")
+            # Editable initial prompt
+            yield Label("Initial Prompt (editable):", classes="field-label")
             initial_prompt = generate_initial_prompt(
                 self.entity_type,
                 self.entity_data,
@@ -354,7 +355,7 @@ class BoundSessionModal(ModalScreen[Optional[BoundSessionResult]]):
                 self.parent_goal,
                 self.parent_plan,
             )
-            yield Static(initial_prompt, id="prompt-preview")
+            yield TextArea(initial_prompt, id="prompt-input")
 
             # Buttons
             with Horizontal(id="buttons"):
@@ -366,10 +367,10 @@ class BoundSessionModal(ModalScreen[Optional[BoundSessionResult]]):
         self.query_one("#role-select", Select).focus()
 
     def on_select_changed(self, event: Select.Changed) -> None:
-        """Update prompt preview when role changes."""
+        """Update prompt when role changes."""
         if event.select.id == "role-select" and event.value is not None:
             self._current_role = event.value
-            # Update the prompt preview
+            # Update the prompt textarea
             new_prompt = generate_initial_prompt(
                 self.entity_type,
                 self.entity_data,
@@ -377,8 +378,8 @@ class BoundSessionModal(ModalScreen[Optional[BoundSessionResult]]):
                 self.parent_goal,
                 self.parent_plan,
             )
-            preview = self.query_one("#prompt-preview", Static)
-            preview.update(new_prompt)
+            prompt_input = self.query_one("#prompt-input", TextArea)
+            prompt_input.load_text(new_prompt)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "create-btn":
@@ -387,14 +388,9 @@ class BoundSessionModal(ModalScreen[Optional[BoundSessionResult]]):
             self.dismiss(None)
 
     def _submit(self) -> None:
-        """Submit the form."""
-        prompt = generate_initial_prompt(
-            self.entity_type,
-            self.entity_data,
-            self._current_role,
-            self.parent_goal,
-            self.parent_plan,
-        )
+        """Submit the form with the user-edited prompt."""
+        prompt_input = self.query_one("#prompt-input", TextArea)
+        prompt = prompt_input.text.strip()
         self.dismiss(BoundSessionResult(
             entity_type=self.entity_type,
             entity_id=self.entity_id,
