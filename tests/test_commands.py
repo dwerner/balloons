@@ -24,6 +24,7 @@ from core.commands import (
     ReviewCommand,
     GoalInterviewCommand,
     HistoryCommand,
+    StatusCommand,
 )
 
 
@@ -288,3 +289,44 @@ class TestHistoryCommand:
         """':history abc' should error."""
         with pytest.raises(ValueError, match="index must be a number"):
             parser.parse(":history abc")
+
+
+class TestStatusCommand:
+    """Tests for :status command parsing."""
+
+    def test_status_no_args(self, parser):
+        """':status' returns StatusCommand with scope='all'."""
+        cmd = parser.parse(":status")
+        assert isinstance(cmd, StatusCommand)
+        assert cmd.scope == "all"
+        assert cmd.is_global is True
+
+    def test_status_with_all(self, parser):
+        """':status all' returns StatusCommand with scope='all'."""
+        cmd = parser.parse(":status all")
+        assert isinstance(cmd, StatusCommand)
+        assert cmd.scope == "all"
+
+    def test_status_with_goal_id(self, parser):
+        """':status abc123' returns StatusCommand with that scope."""
+        cmd = parser.parse(":status abc123")
+        assert isinstance(cmd, StatusCommand)
+        assert cmd.scope == "abc123"
+
+    def test_status_with_plan_id(self, parser):
+        """':status plan456' returns StatusCommand with that scope."""
+        cmd = parser.parse(":status plan456")
+        assert isinstance(cmd, StatusCommand)
+        assert cmd.scope == "plan456"
+
+    def test_status_with_trailing_space(self, parser):
+        """':status ' (trailing space) returns scope='all'."""
+        cmd = parser.parse(":status ")
+        assert isinstance(cmd, StatusCommand)
+        assert cmd.scope == "all"
+
+    def test_status_strips_extra_spaces(self, parser):
+        """':status   spaced  ' strips extra whitespace from scope."""
+        cmd = parser.parse(":status   spaced  ")
+        assert isinstance(cmd, StatusCommand)
+        assert cmd.scope == "spaced"

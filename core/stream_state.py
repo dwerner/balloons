@@ -66,6 +66,7 @@ class StreamType(Enum):
     LINK_SUMMARY = "link"        # Link summary generation
     ARCHIVE_SUMMARY = "archive"  # Archive summary generation
     TITLE = "title"              # Session title generation
+    REPORT_SUMMARY = "report"    # Status report executive summary
 
 
 @dataclass

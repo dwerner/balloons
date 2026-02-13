@@ -5506,6 +5506,59 @@ class BalloonsApp(App):
         else:
             self.notify(f"Error: {result.error}", severity="error")
 
+    async def on_goal_tree_view_rollup_requested(self, event: GoalTreeView.RollupRequested) -> None:
+        """Handle request to generate a status report from the goal tree.
+
+        Generates a status report scoped to the selected goal or plan,
+        writes it to the configured output path, and shows confirmation.
+        """
+        from core.debug_log import debug_log
+        from core.status_report import StatusReportGenerator
+        from config import get_config_async
+
+        debug_log.debug(
+            f"App received RollupRequested: scope_type={event.scope_type}, scope_id={event.scope_id}",
+            category="goal_tree"
+        )
+
+        try:
+            # Get config for output path
+            config = await get_config_async()
+
+            # Generate the report with scope
+            generator = StatusReportGenerator()
+            report_data = await generator.generate(
+                scope_type=event.scope_type,
+                scope_id=event.scope_id,
+            )
+
+            # Generate LLM-powered executive summary
+            current_session_id = self._tree_state.get_current_session_id()
+            report_data = await generator.generate_summary(
+                report_data,
+                runner=self._helper_runner,
+                session_id=current_session_id,
+                backend_name=self._backend_config.name,
+            )
+
+            # Write to file
+            output_path = await generator.write_report(report_data, config=config)
+
+            # Show confirmation with file path
+            self.notify(f"Status report written to: {output_path}")
+            debug_log.info(f"Status report generated: {output_path}", category="goal_tree")
+
+            # Show the report in a modal markdown viewer
+            from widgets.markdown_viewer import MarkdownViewerModal
+            self.push_screen(MarkdownViewerModal(
+                file_path=output_path,
+                title="Status Report",
+            ))
+
+        except Exception as e:
+            debug_log.error(f"Failed to generate status report: {e}", category="goal_tree")
+            self.notify(f"Failed to generate report: {e}", severity="error")
+
     async def on_goal_tree_view_new_session_requested(self, event: GoalTreeView.NewSessionRequested) -> None:
         """Handle request to create a new session bound to an entity from goal tree.
 

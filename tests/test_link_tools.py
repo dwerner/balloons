@@ -455,7 +455,7 @@ class TestClaudeRunnerSession:
 class TestBalloonsToolParsing:
     """Test parsing of <balloons-tool> blocks from Claude's text output."""
 
-    def test_parse_balloons_tool_simple(self):
+    def test_parse_balloons_tools_simple(self):
         runner = ClaudeRunner()
         text = '''Let me check the links.
 
@@ -463,53 +463,56 @@ class TestBalloonsToolParsing:
 {"name": "list_links", "args": {}}
 </balloons-tool>'''
 
-        tool_name, tool_id, tool_args = runner._parse_balloons_tool(text)
+        results = runner._parse_balloons_tools(text)
 
+        assert len(results) == 1
+        tool_name, tool_id, tool_args = results[0]
         assert tool_name == "list_links"
         assert tool_id is not None
         assert tool_id.startswith("balloons-")
         assert tool_args == {}
 
-    def test_parse_balloons_tool_with_args(self):
+    def test_parse_balloons_tools_with_args(self):
         runner = ClaudeRunner()
         text = '''<balloons-tool>
 {"name": "follow_link", "args": {"link_id": "abc123", "include_messages": 5}}
 </balloons-tool>'''
 
-        tool_name, tool_id, tool_args = runner._parse_balloons_tool(text)
+        results = runner._parse_balloons_tools(text)
 
+        assert len(results) == 1
+        tool_name, tool_id, tool_args = results[0]
         assert tool_name == "follow_link"
         assert tool_args == {"link_id": "abc123", "include_messages": 5}
 
-    def test_parse_balloons_tool_no_match(self):
+    def test_parse_balloons_tools_no_match(self):
         runner = ClaudeRunner()
         text = "Just some regular text without any tool calls."
 
-        tool_name, tool_id, tool_args = runner._parse_balloons_tool(text)
+        results = runner._parse_balloons_tools(text)
 
-        assert tool_name is None
-        assert tool_id is None
-        assert tool_args is None
+        assert results == []
 
-    def test_parse_balloons_tool_incomplete(self):
+    def test_parse_balloons_tools_incomplete(self):
         runner = ClaudeRunner()
         text = "<balloons-tool>{"  # Incomplete - no closing tag
 
-        tool_name, tool_id, tool_args = runner._parse_balloons_tool(text)
+        results = runner._parse_balloons_tools(text)
 
-        assert tool_name is None
+        assert results == []
 
-    def test_parse_balloons_tool_invalid_json(self):
+    def test_parse_balloons_tools_invalid_json(self):
         runner = ClaudeRunner()
         text = '''<balloons-tool>
 {invalid json}
 </balloons-tool>'''
 
-        tool_name, tool_id, tool_args = runner._parse_balloons_tool(text)
+        results = runner._parse_balloons_tools(text)
 
-        assert tool_name is None
+        # Invalid JSON is skipped but doesn't fail
+        assert results == []
 
-    def test_parse_balloons_tool_embedded_in_text(self):
+    def test_parse_balloons_tools_embedded_in_text(self):
         runner = ClaudeRunner()
         text = '''I'll look up the linked sessions for more context.
 
@@ -519,7 +522,109 @@ class TestBalloonsToolParsing:
 
 Based on the results, I can see...'''
 
-        tool_name, tool_id, tool_args = runner._parse_balloons_tool(text)
+        results = runner._parse_balloons_tools(text)
 
+        assert len(results) == 1
+        tool_name, tool_id, tool_args = results[0]
         assert tool_name == "list_links"
         assert tool_args == {}
+
+    def test_parse_balloons_tools_multiple_calls(self):
+        """Test parsing multiple balloons-tool blocks in a single message."""
+        runner = ClaudeRunner()
+        text = '''Let me check the session info and list the links.
+
+<balloons-tool>
+{"name": "session_info", "args": {}}
+</balloons-tool>
+
+<balloons-tool>
+{"name": "list_links", "args": {}}
+</balloons-tool>
+
+I'll analyze the results shortly.'''
+
+        results = runner._parse_balloons_tools(text)
+
+        assert len(results) == 2
+        assert results[0][0] == "session_info"
+        assert results[0][2] == {}
+        assert results[1][0] == "list_links"
+        assert results[1][2] == {}
+
+    def test_parse_balloons_tools_multiple_with_args(self):
+        """Test parsing multiple balloons-tool blocks with various arguments."""
+        runner = ClaudeRunner()
+        text = '''<balloons-tool>
+{"name": "follow_link", "args": {"link_id": "abc123", "limit": 5}}
+</balloons-tool>
+
+<balloons-tool>
+{"name": "search_linked_session", "args": {"link_id": "abc123", "query": "authentication"}}
+</balloons-tool>'''
+
+        results = runner._parse_balloons_tools(text)
+
+        assert len(results) == 2
+        assert results[0][0] == "follow_link"
+        assert results[0][2] == {"link_id": "abc123", "limit": 5}
+        assert results[1][0] == "search_linked_session"
+        assert results[1][2] == {"link_id": "abc123", "query": "authentication"}
+
+    def test_parse_balloons_tools_partial_invalid(self):
+        """Test that valid tools are still parsed even if some are invalid."""
+        runner = ClaudeRunner()
+        text = '''<balloons-tool>
+{"name": "session_info", "args": {}}
+</balloons-tool>
+
+<balloons-tool>
+{invalid json here}
+</balloons-tool>
+
+<balloons-tool>
+{"name": "list_links", "args": {}}
+</balloons-tool>'''
+
+        results = runner._parse_balloons_tools(text)
+
+        # Should get 2 valid results, skipping the invalid one
+        assert len(results) == 2
+        assert results[0][0] == "session_info"
+        assert results[1][0] == "list_links"
+
+    def test_parse_balloons_tools_nested_json(self):
+        """Test parsing tool with nested JSON arguments (like propose_fork context_plan)."""
+        runner = ClaudeRunner()
+        text = '''<balloons-tool>
+{"name": "propose_fork", "args": {"name": "test-fork", "description": "Test", "context_plan": [{"exchange_range": "0", "mode": "copy", "reason": "Keep it"}]}}
+</balloons-tool>'''
+
+        results = runner._parse_balloons_tools(text)
+
+        assert len(results) == 1
+        tool_name, tool_id, tool_args = results[0]
+        assert tool_name == "propose_fork"
+        assert tool_args["name"] == "test-fork"
+        assert len(tool_args["context_plan"]) == 1
+        assert tool_args["context_plan"][0]["mode"] == "copy"
+
+    def test_parse_balloons_tools_each_has_unique_id(self):
+        """Test that each parsed tool gets a unique ID."""
+        runner = ClaudeRunner()
+        text = '''<balloons-tool>
+{"name": "session_info", "args": {}}
+</balloons-tool>
+
+<balloons-tool>
+{"name": "list_links", "args": {}}
+</balloons-tool>'''
+
+        results = runner._parse_balloons_tools(text)
+
+        assert len(results) == 2
+        # IDs should be different
+        assert results[0][1] != results[1][1]
+        # Both should start with balloons-
+        assert results[0][1].startswith("balloons-")
+        assert results[1][1].startswith("balloons-")

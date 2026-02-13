@@ -133,8 +133,18 @@ After you output a tool call, the system will execute it and provide the result.
 You can then use that information in your response.
 
 ### Important Notes
-- **CRITICAL: Only call ONE balloons-tool per message.** Do not combine session_info with propose_fork or propose_merge in the same response. Wait for the tool result before making another call.
-- Tool results will appear in a <balloons-tool-result> block
+- You can call multiple balloons-tools in a single message when appropriate. Results will be returned together in separate `<balloons-tool-result>` blocks with `tool` and `id` attributes to identify which result corresponds to which call.
+- Example of multiple calls in one message:
+
+<balloons-tool>
+{"name": "session_info", "args": {}}
+</balloons-tool>
+
+<balloons-tool>
+{"name": "list_links", "args": {}}
+</balloons-tool>
+
+- Tool results will appear in `<balloons-tool-result>` blocks
 
 ### Fork Tree Navigation
 

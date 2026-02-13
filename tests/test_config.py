@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import yaml
 
-from config import Config, BackendConfig, get_config_async, save_last_view_async
+from config import Config, BackendConfig, ReportsConfig, get_config_async, save_last_view_async
 
 
 class TestConfigAsync:
@@ -201,3 +201,104 @@ class TestConfigRoundTrip:
         assert sync_config.default_backend == async_config.default_backend
         assert set(sync_config.backends.keys()) == set(async_config.backends.keys())
         assert sync_config.backends["test"].model == async_config.backends["test"].model
+
+
+class TestReportsConfig:
+    """Tests for reports configuration."""
+
+    def test_default_output_path_linux(self, tmp_path):
+        """Test default output path on Linux."""
+        reports = ReportsConfig()
+        with patch("sys.platform", "linux"):
+            with patch.dict("os.environ", {"XDG_DATA_HOME": ""}, clear=False):
+                with patch("config.Path.home", return_value=tmp_path):
+                    path = reports.get_output_path()
+        assert path == tmp_path / ".local" / "share" / "balloons" / "reports"
+
+    def test_default_output_path_linux_xdg(self, tmp_path):
+        """Test default output path on Linux with XDG_DATA_HOME set."""
+        reports = ReportsConfig()
+        xdg_dir = tmp_path / "custom_xdg"
+        with patch("sys.platform", "linux"):
+            with patch.dict("os.environ", {"XDG_DATA_HOME": str(xdg_dir)}, clear=False):
+                path = reports.get_output_path()
+        assert path == xdg_dir / "balloons" / "reports"
+
+    def test_default_output_path_macos(self, tmp_path):
+        """Test default output path on macOS."""
+        reports = ReportsConfig()
+        with patch("sys.platform", "darwin"):
+            with patch("config.Path.home", return_value=tmp_path):
+                path = reports.get_output_path()
+        assert path == tmp_path / "Library" / "Application Support" / "balloons" / "reports"
+
+    def test_default_output_path_other(self, tmp_path):
+        """Test default output path on other platforms."""
+        reports = ReportsConfig()
+        with patch("sys.platform", "win32"):
+            with patch("config.Path.home", return_value=tmp_path):
+                path = reports.get_output_path()
+        assert path == tmp_path / "Documents" / "balloons" / "reports"
+
+    def test_custom_output_path(self, tmp_path):
+        """Test custom output path."""
+        custom_path = tmp_path / "custom" / "reports"
+        reports = ReportsConfig(output_path=str(custom_path))
+        assert reports.get_output_path() == custom_path
+
+    def test_custom_output_path_with_tilde(self, tmp_path):
+        """Test custom output path with ~ expansion."""
+        reports = ReportsConfig(output_path="~/my_reports")
+        path = reports.get_output_path()
+        assert path == Path.home() / "my_reports"
+
+    def test_ensure_output_dir_creates_directory(self, tmp_path):
+        """Test that ensure_output_dir creates the directory."""
+        custom_path = tmp_path / "new_dir" / "reports"
+        reports = ReportsConfig(output_path=str(custom_path))
+
+        assert not custom_path.exists()
+        result = reports.ensure_output_dir()
+        assert custom_path.exists()
+        assert result == custom_path
+
+    @pytest.mark.asyncio
+    async def test_reports_config_loaded_from_yaml(self, tmp_path):
+        """Test that reports config is loaded from YAML."""
+        config_dir = tmp_path / ".balloons"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+
+        config_data = {
+            "default_backend": "claude",
+            "backends": {"claude": {}},
+            "reports": {
+                "output_path": "~/custom/reports",
+            },
+        }
+        config_file.write_text(yaml.safe_dump(config_data))
+
+        with patch.dict("os.environ", {"BALLOONS_CONFIG": str(config_file)}):
+            config = await Config.load_async()
+
+        assert config.reports.output_path == "~/custom/reports"
+        assert config.reports.get_output_path() == Path.home() / "custom" / "reports"
+
+    @pytest.mark.asyncio
+    async def test_reports_config_defaults_when_not_in_yaml(self, tmp_path):
+        """Test that reports config uses defaults when not in YAML."""
+        config_dir = tmp_path / ".balloons"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+
+        config_data = {
+            "default_backend": "claude",
+            "backends": {"claude": {}},
+        }
+        config_file.write_text(yaml.safe_dump(config_data))
+
+        with patch.dict("os.environ", {"BALLOONS_CONFIG": str(config_file)}):
+            config = await Config.load_async()
+
+        assert config.reports.output_path is None
+        # get_output_path() should still work with platform defaults

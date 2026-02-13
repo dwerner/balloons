@@ -260,3 +260,29 @@ class SessionBinding:
     role: str  # "interview", "planning", "implementation", "postmortem", "exploration"
     created_at: str  # ISO 8601
     released_at: Optional[str] = None  # ISO 8601, when binding ended
+
+
+# =============================================================================
+# User Preferences
+# =============================================================================
+
+
+@rust_schema
+@dataclass
+class UserPrefs:
+    """User preferences for UI state and settings.
+
+    Stores persistent UI state like which tree nodes are collapsed,
+    and user settings. Each field is optional to allow incremental updates.
+
+    The goal_tree_collapsed_ids field stores IDs of nodes that should be
+    collapsed when the goal tree is displayed. By default, nodes are expanded;
+    this list tracks nodes the user explicitly collapsed.
+    """
+    # Goal tree UI state
+    goal_tree_collapsed_ids: list[str] = field(default_factory=list)  # IDs of collapsed nodes
+
+    # Future: add more user preferences here
+    # theme: Optional[str] = None
+    # default_backend: Optional[str] = None
+    # etc.

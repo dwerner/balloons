@@ -200,6 +200,13 @@ from .supervisor_tools import (
     get_running_count,
     stop_session_processes,
 )
+from .status_report import (
+    StatusReportGenerator,
+    StatusReportData,
+    GoalStatus,
+    PlanStatus,
+    TodoStatus,
+)
 
 __all__ = [
     # Commands
@@ -446,4 +453,10 @@ __all__ = [
     "list_plans",
     "list_todos",
     "mark_todo_done",
+    # Status reports
+    "StatusReportGenerator",
+    "StatusReportData",
+    "GoalStatus",
+    "PlanStatus",
+    "TodoStatus",
 ]

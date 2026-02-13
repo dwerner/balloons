@@ -50,6 +50,7 @@ class GoalTreeWidget(Tree):
     - Click [+session]: create new session bound to that entity
     - Click [+plan]: create new plan under goal
     - Click [+todo]: create new todo under plan
+    - Click [+rollup]: generate status report for goal or plan
     - Click [bind]/[move]: rebind session to different entity
     - Click [unbind]: remove session's binding
     - :: jump to command input
@@ -115,6 +116,15 @@ class GoalTreeWidget(Tree):
                 text.append(" ")
                 text.append("[+plan]", style=Style(color="cyan", bold=True) + new_plan_style)
 
+                # [+rollup] button for goals - orange for reports
+                rollup_style = Style.from_meta({
+                    "rollup": True,
+                    "scope_type": "goal",
+                    "scope_id": goal_id,
+                })
+                text.append(" ")
+                text.append("[+rollup]", style=Style(color="bright_yellow", bold=True) + rollup_style)
+
                 # [+session] button
                 new_session_style = Style.from_meta({
                     "new_session": True,
@@ -134,6 +144,15 @@ class GoalTreeWidget(Tree):
                 })
                 text.append(" ")
                 text.append("[+todo]", style=Style(color="magenta", bold=True) + new_todo_style)
+
+                # [+rollup] button for plans - orange for reports
+                rollup_style = Style.from_meta({
+                    "rollup": True,
+                    "scope_type": "plan",
+                    "scope_id": plan_id,
+                })
+                text.append(" ")
+                text.append("[+rollup]", style=Style(color="bright_yellow", bold=True) + rollup_style)
 
                 # [+session] button
                 new_session_style = Style.from_meta({
@@ -292,6 +311,13 @@ class GoalTreeWidget(Tree):
             self.session_id = session_id
             super().__init__()
 
+    class RollupRequested(Message):
+        """Fired when user clicks [+rollup] to generate a status report."""
+        def __init__(self, scope_type: str, scope_id: str) -> None:
+            self.scope_type = scope_type  # "goal" or "plan"
+            self.scope_id = scope_id
+            super().__init__()
+
     class NodeCollapseChanged(Message):
         """Fired when a node's expand/collapse state changes."""
         def __init__(self, entity_id: str, collapsed: bool) -> None:
@@ -327,6 +353,16 @@ class GoalTreeWidget(Tree):
             debug_log.debug(f"GoalTreeWidget [+todo] clicked: plan_id={plan_id}", category="goal_tree")
             if plan_id:
                 self.post_message(self.NewTodoRequested(plan_id))
+                event.stop()
+                return
+
+        # Check if this is a click on [+rollup] (on goal or plan nodes)
+        if meta.get("rollup"):
+            scope_type = meta.get("scope_type")
+            scope_id = meta.get("scope_id")
+            debug_log.debug(f"GoalTreeWidget [+rollup] clicked: scope_type={scope_type}, scope_id={scope_id}", category="goal_tree")
+            if scope_type and scope_id:
+                self.post_message(self.RollupRequested(scope_type, scope_id))
                 event.stop()
                 return
 
@@ -677,6 +713,13 @@ class GoalTreeView(Vertical):
             self.session_id = session_id
             super().__init__()
 
+    class RollupRequested(Message):
+        """Fired when user clicks [+rollup] to generate a status report."""
+        def __init__(self, scope_type: str, scope_id: str) -> None:
+            self.scope_type = scope_type  # "goal" or "plan"
+            self.scope_id = scope_id
+            super().__init__()
+
     def __init__(
         self,
         goal_state: GoalTreeState,
@@ -728,8 +771,8 @@ class GoalTreeView(Vertical):
             from core.debug_log import debug_log
             debug_log.warning(f"Failed to load collapsed state: {e}", category="goal_tree")
 
-        # Build tree with loaded collapsed state (call from UI thread)
-        self.call_from_thread(self._rebuild_tree)
+        # Build tree with loaded collapsed state
+        self._rebuild_tree()
 
     def on_unmount(self) -> None:
         self._goal_state.remove_observer(self._on_goal_state_event)
@@ -1555,6 +1598,12 @@ class GoalTreeView(Vertical):
         from core.debug_log import debug_log
         debug_log.debug(f"GoalTreeView received UnbindSessionRequested: session_id={event.session_id}", category="goal_tree")
         self.post_message(self.UnbindSessionClicked(event.session_id))
+
+    def on_goal_tree_widget_rollup_requested(self, event: GoalTreeWidget.RollupRequested) -> None:
+        """Bubble up rollup (status report) request."""
+        from core.debug_log import debug_log
+        debug_log.debug(f"GoalTreeView received RollupRequested: scope_type={event.scope_type}, scope_id={event.scope_id}", category="goal_tree")
+        self.post_message(self.RollupRequested(event.scope_type, event.scope_id))
 
     def on_goal_tree_widget_node_collapse_changed(self, event: GoalTreeWidget.NodeCollapseChanged) -> None:
         """Handle collapse state change - update state and persist."""

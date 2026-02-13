@@ -23,6 +23,16 @@ default_backend: claude
 #   error: Glitch.ogg      # Played on errors
 #   notification: Polite.ogg  # Played when input is required
 
+# Reports configuration
+# reports:
+#   # Directory where generated reports are saved
+#   # Supports ~ for home directory expansion
+#   # Defaults to:
+#   #   Linux: ~/.local/share/balloons/reports/ (or $XDG_DATA_HOME/balloons/reports/)
+#   #   macOS: ~/Library/Application Support/balloons/reports/
+#   #   Other: ~/Documents/balloons/reports/
+#   output_path: ~/Documents/balloons/reports/
+
 # Available backends
 backends:
   # Direct Claude API (default) - uses claude CLI

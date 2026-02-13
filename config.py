@@ -12,6 +12,51 @@ from tokenizer import count_tokens
 
 
 @dataclass
+class ReportsConfig:
+    """Reports configuration.
+
+    Attributes:
+        output_path: Directory where generated reports are saved.
+                     Supports ~ for home directory expansion.
+                     Defaults to ~/.local/share/balloons/reports/ on Linux,
+                     ~/Library/Application Support/balloons/reports/ on macOS,
+                     or ~/Documents/balloons/reports/ as fallback.
+    """
+    output_path: Optional[str] = None
+
+    def get_output_path(self) -> Path:
+        """Get the resolved output path, creating it if necessary.
+
+        Returns:
+            Path object for the reports directory.
+        """
+        if self.output_path:
+            path = Path(self.output_path).expanduser()
+        else:
+            # XDG-style default
+            import sys
+            if sys.platform == "darwin":
+                path = Path.home() / "Library" / "Application Support" / "balloons" / "reports"
+            elif sys.platform == "linux":
+                xdg_data = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+                path = Path(xdg_data) / "balloons" / "reports"
+            else:
+                # Fallback for Windows or other platforms
+                path = Path.home() / "Documents" / "balloons" / "reports"
+        return path
+
+    def ensure_output_dir(self) -> Path:
+        """Get the output path and ensure the directory exists.
+
+        Returns:
+            Path object for the reports directory.
+        """
+        path = self.get_output_path()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+
+@dataclass
 class SoundsConfig:
     """Sound notification configuration.
 
@@ -125,6 +170,7 @@ class Config:
     last_view_turn_index: Optional[int] = None  # Last viewed turn index (0-based)
     tts: TTSConfig = field(default_factory=TTSConfig)  # TTS configuration
     sounds: SoundsConfig = field(default_factory=SoundsConfig)  # Sound notifications
+    reports: ReportsConfig = field(default_factory=ReportsConfig)  # Reports configuration
     review_backend: Optional[str] = None  # Backend for session quality reviews (defaults to default_backend)
     _config_path: Optional[Path] = field(default=None, repr=False)  # Where config was loaded from
 
@@ -222,6 +268,12 @@ class Config:
             notification=sounds_data.get("notification", "Polite.ogg"),
         )
 
+        # Load reports config
+        reports_data = data.get("reports", {})
+        reports_config = ReportsConfig(
+            output_path=reports_data.get("output_path"),
+        )
+
         return cls(
             default_backend=data.get("default_backend", "claude"),
             backends=backends,
@@ -232,6 +284,7 @@ class Config:
             last_view_turn_index=last_view.get("turn_index") if last_view else None,
             tts=tts_config,
             sounds=sounds_config,
+            reports=reports_config,
             review_backend=data.get("review_backend"),
             _config_path=path,
         )

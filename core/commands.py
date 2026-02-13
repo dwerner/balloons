@@ -463,6 +463,19 @@ class UnbindCommand(Command):
 
 
 @dataclass
+class StatusCommand(Command):
+    """Generate a status report for goals/plans.
+
+    Scope can be:
+    - 'all': Show status for all goals and plans (default)
+    - A goal ID prefix: Show status for that goal and its plans
+    - A plan ID prefix: Show status for that specific plan
+    """
+    is_global: bool = True  # UI-only, no session interaction
+    scope: str = "all"  # 'all', goal ID prefix, or plan ID prefix
+
+
+@dataclass
 class GoalInterviewCommand(Command):
     """Start a goal interview session.
 
@@ -539,6 +552,7 @@ COMMAND_DOCS = [
     (":todos [plan_id]", "List priority-ranked todos (for specific plan if provided)"),
     (":todo-done [todo_id]", "Mark bound todo complete (or specify ID)"),
     (":todo-undone <todo_id>", "Revert completed todo back to pending"),
+    (":status [scope]", "Show status report (scope: goal/plan ID, or 'all')"),
     (":help", "Show this help"),
 ]
 
@@ -816,6 +830,13 @@ class CommandParser:
         if text == ":unbind" or text.startswith(":unbind "):
             entity_id = text[7:].strip() if len(text) > 7 else ""
             return UnbindCommand(entity_id=entity_id)
+
+        # Handle :status [scope]
+        if text == ":status" or text.startswith(":status "):
+            scope = text[7:].strip() if len(text) > 7 else "all"
+            if not scope:
+                scope = "all"
+            return StatusCommand(scope=scope)
 
         # Unknown command
         cmd_name = text.split()[0]

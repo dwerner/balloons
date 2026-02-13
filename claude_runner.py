@@ -24,9 +24,10 @@ from core.link_tools import LINK_TOOL_NAMES
 from core.tools import REVIEW_TOOL_NAMES
 
 # Regex to match <balloons-tool>...</balloons-tool> blocks
-# Use greedy match for JSON content since {.*?} cuts off at first } which breaks nested objects
+# Use non-greedy .*? to allow matching multiple blocks, but consume up to the matching closing tag
+# We use a regex that stops at the first </balloons-tool> after each opening tag
 BALLOONS_TOOL_RE = re.compile(
-    r'<balloons-tool>\s*(\{.*\})\s*</balloons-tool>',
+    r'<balloons-tool>\s*(\{[^<]*(?:<(?!/balloons-tool>)[^<]*)*\})\s*</balloons-tool>',
     re.DOTALL
 )
 
@@ -119,101 +120,114 @@ class ClaudeRunner(BaseRunner):
         self._current_session: "Session | None" = None  # Session for tool execution
         self._text_buffer: str = ""  # Buffer for detecting balloons-tool blocks
 
-    def _parse_balloons_tool(self, text: str) -> tuple[str | None, str | None, dict | None]:
-        """Parse a <balloons-tool> block from text.
+    def _parse_balloons_tools(self, text: str) -> list[tuple[str, str, dict]]:
+        """Parse all <balloons-tool> blocks from text.
 
         Args:
-            text: Text that may contain a balloons-tool block
+            text: Text that may contain one or more balloons-tool blocks
 
         Returns:
-            Tuple of (tool_name, tool_id, args) if found, (None, None, None) otherwise
+            List of (tool_name, tool_id, args) tuples for each valid tool call found
         """
-        match = BALLOONS_TOOL_RE.search(text)
-        if not match:
-            return None, None, None
+        matches = BALLOONS_TOOL_RE.findall(text)
+        if not matches:
+            return []
 
-        try:
-            captured = match.group(1)
-            debug_log.info(
-                f"Parsing balloons-tool JSON",
-                category="tool",
-                details={"captured_len": len(captured), "captured_preview": captured[:200]},
-                run_id=self._run_id,
-            )
-            tool_call = json.loads(captured)
-            tool_name = tool_call.get("name")
-            tool_args = tool_call.get("args", {})
-            if tool_name == "propose_fork":
+        results = []
+        for captured in matches:
+            try:
                 debug_log.info(
-                    f"propose_fork parsed",
+                    f"Parsing balloons-tool JSON",
                     category="tool",
-                    details={"context_plan_len": len(tool_args.get("context_plan", []))},
+                    details={"captured_len": len(captured), "captured_preview": captured[:200]},
                     run_id=self._run_id,
                 )
-            tool_id = f"balloons-{uuid.uuid4().hex[:12]}"
-            return tool_name, tool_id, tool_args
-        except json.JSONDecodeError as e:
-            debug_log.warning(
-                f"Failed to parse balloons-tool JSON: {e}",
-                category="tool",
-                details={"captured": match.group(1)[:500] if match else "no match"},
-                run_id=self._run_id,
-            )
-            return None, None, None
+                tool_call = json.loads(captured)
+                tool_name = tool_call.get("name")
+                tool_args = tool_call.get("args", {})
+                if tool_name == "propose_fork":
+                    debug_log.info(
+                        f"propose_fork parsed",
+                        category="tool",
+                        details={"context_plan_len": len(tool_args.get("context_plan", []))},
+                        run_id=self._run_id,
+                    )
+                tool_id = f"balloons-{uuid.uuid4().hex[:12]}"
+                results.append((tool_name, tool_id, tool_args))
+            except json.JSONDecodeError as e:
+                debug_log.warning(
+                    f"Failed to parse balloons-tool JSON: {e}",
+                    category="tool",
+                    details={"captured": captured[:500]},
+                    run_id=self._run_id,
+                )
+                # Continue to try other matches
 
-    async def _handle_balloons_tool(
+        return results
+
+    async def _handle_balloons_tools(
         self, text: str, working_dir: str
     ) -> AsyncIterator[RunnerEvent]:
         """Check for and handle <balloons-tool> blocks in text.
 
-        If a balloons-tool block is found, executes the tool and sends the result
+        If balloons-tool blocks are found, executes each tool and sends all results
         back to Claude as a continuation message.
 
         Args:
-            text: Text that may contain a balloons-tool block
+            text: Text that may contain one or more balloons-tool blocks
             working_dir: Working directory for tool execution
 
         Yields:
-            Tool use/result events if a tool was called
+            Tool use/result events for each tool called
         """
-        tool_name, tool_id, tool_args = self._parse_balloons_tool(text)
-        if not tool_name:
+        tool_calls = self._parse_balloons_tools(text)
+        if not tool_calls:
             return
 
         debug_log.info(
-            f"Detected balloons-tool: {tool_name}",
+            f"Detected {len(tool_calls)} balloons-tool(s)",
             category="tool",
-            details={"args": tool_args},
+            details={"tools": [tc[0] for tc in tool_calls]},
             run_id=self._run_id,
         )
 
-        # Yield tool use events so UI can display them
-        yield ToolUseStartEvent(tool_use_id=tool_id, tool_name=tool_name)
-        yield ToolUseEvent(
-            tool_use_id=tool_id,
-            tool_name=tool_name,
-            tool_input=tool_args,
-        )
+        # Process all tool calls and collect results
+        all_results = []
+        for tool_name, tool_id, tool_args in tool_calls:
+            # Yield tool use events so UI can display them
+            yield ToolUseStartEvent(tool_use_id=tool_id, tool_name=tool_name)
+            yield ToolUseEvent(
+                tool_use_id=tool_id,
+                tool_name=tool_name,
+                tool_input=tool_args,
+            )
 
-        # Execute the tool
-        result, is_error = await execute_tool(
-            tool_name,
-            tool_args,
-            working_dir,
-            self._run_id,
-            session=self._current_session,
-        )
+            # Execute the tool
+            result, is_error = await execute_tool(
+                tool_name,
+                tool_args,
+                working_dir,
+                self._run_id,
+                session=self._current_session,
+            )
 
-        # Yield result event
-        yield ToolResultEvent(tool_use_id=tool_id, result=result)
+            # Yield result event
+            yield ToolResultEvent(tool_use_id=tool_id, result=result)
 
-        # Send result back to Claude as a continuation
-        result_block = f"<balloons-tool-result>\n{result}\n</balloons-tool-result>"
+            # Collect result for batch continuation
+            all_results.append((tool_name, tool_id, result))
+
+        # Send all results back to Claude as a single continuation message
+        result_blocks = []
+        for tool_name, tool_id, result in all_results:
+            result_blocks.append(f"<balloons-tool-result tool=\"{tool_name}\" id=\"{tool_id}\">\n{result}\n</balloons-tool-result>")
+
+        continuation_text = "\n\n".join(result_blocks)
         continuation_msg = {
             "type": "user",
             "message": {
                 "role": "user",
-                "content": [{"type": "text", "text": result_block}],
+                "content": [{"type": "text", "text": continuation_text}],
             }
         }
         await self._send_message(continuation_msg)
@@ -511,17 +525,22 @@ class ClaudeRunner(BaseRunner):
                             # Check for balloons-tool blocks in text
                             self._text_buffer += text
                             if "<balloons-tool>" in self._text_buffer and "</balloons-tool>" in self._text_buffer:
-                                debug_log.info(
-                                    f"Found complete balloons-tool block",
-                                    category="tool",
-                                    details={"buffer_len": len(self._text_buffer), "buffer_preview": self._text_buffer[:500]},
-                                    run_id=self._run_id,
-                                )
-                                async for event in self._handle_balloons_tool(self._text_buffer, working_dir):
-                                    yield event
-                                self._text_buffer = ""
-                                # Mark that we're waiting for Claude to respond to the tool result
-                                awaiting_balloons_tool_response = True
+                                # Count opening and closing tags to ensure all blocks are complete
+                                opening_count = self._text_buffer.count("<balloons-tool>")
+                                closing_count = self._text_buffer.count("</balloons-tool>")
+
+                                if opening_count == closing_count:
+                                    debug_log.info(
+                                        f"Found {opening_count} complete balloons-tool block(s)",
+                                        category="tool",
+                                        details={"buffer_len": len(self._text_buffer), "buffer_preview": self._text_buffer[:500]},
+                                        run_id=self._run_id,
+                                    )
+                                    async for event in self._handle_balloons_tools(self._text_buffer, working_dir):
+                                        yield event
+                                    self._text_buffer = ""
+                                    # Mark that we're waiting for Claude to respond to the tool result
+                                    awaiting_balloons_tool_response = True
 
                     elif block_type == "tool_use":
                         tool_use_id = block.get("id", "")
