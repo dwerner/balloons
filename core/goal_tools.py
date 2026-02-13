@@ -44,6 +44,7 @@ if TYPE_CHECKING:
 GOAL_TOOL_NAMES = {
     "create_goal",
     "update_goal",
+    "reparent_goal",
     "create_plan",
     "update_plan",
     "create_todo",
@@ -68,6 +69,7 @@ GOAL_TOOL_NAMES = {
 GOAL_MUTATION_TOOLS = {
     "create_goal",
     "update_goal",
+    "reparent_goal",
     "create_plan",
     "update_plan",
     "create_todo",
@@ -92,12 +94,14 @@ GOAL_TOOLS = [
             "description": """Create a new goal for tracking work.
 
 Goals are high-level objectives with acceptance criteria that define completion.
-Each goal has a weight (1-10) indicating priority.
+Each goal has a weight (1-10) indicating priority. Goals can be nested under
+parent goals to create a hierarchy.
 
 Use this when:
 - Starting a new project or feature
 - Breaking down a large initiative
 - The user describes something they want to accomplish
+- Creating a sub-goal under an existing goal
 
 The goal will be created with 'active' status.""",
             "parameters": {
@@ -121,6 +125,10 @@ The goal will be created with 'active' status.""",
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "List of conditions that must be met to consider the goal complete"
+                    },
+                    "parent_goal_id": {
+                        "type": "string",
+                        "description": "Optional: ID of a parent goal to nest this goal under (can be prefix)"
                     }
                 },
                 "required": ["title", "description", "acceptance_criteria"]
@@ -171,6 +179,38 @@ Use this when:
                         "type": "string",
                         "enum": ["active", "completed", "abandoned"],
                         "description": "New status"
+                    }
+                },
+                "required": ["goal_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reparent_goal",
+            "description": """Move a goal under a different parent goal or make it a root-level goal.
+
+Goals can be nested under other goals to create a hierarchy. A child goal's
+completion contributes to its parent's progress. This tool lets you reorganize
+the goal hierarchy.
+
+Use this when:
+- Organizing goals into a hierarchy
+- Moving a goal to become a child of another goal
+- Making a nested goal into a root-level goal (unparenting)
+
+Note: Cannot create circular references (goal cannot be its own ancestor).""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal_id": {
+                        "type": "string",
+                        "description": "ID of the goal to reparent (can be prefix)"
+                    },
+                    "parent_goal_id": {
+                        "type": "string",
+                        "description": "ID of the new parent goal (can be prefix). Use null or empty string to make it a root-level goal."
                     }
                 },
                 "required": ["goal_id"]
@@ -851,6 +891,8 @@ async def execute_goal_tool(
         return await _create_goal(args, storage)
     elif name == "update_goal":
         return await _update_goal(args, storage)
+    elif name == "reparent_goal":
+        return await _reparent_goal(args, storage)
     elif name == "create_plan":
         return await _create_plan(args, storage)
     elif name == "update_plan":
@@ -909,6 +951,20 @@ async def _create_goal(args: dict, storage) -> tuple[str, bool]:
     if not 1 <= weight <= 10:
         weight = max(1, min(10, weight))
 
+    # Handle optional parent_goal_id
+    parent_goal_id = None
+    parent_goal_id_prefix = args.get("parent_goal_id", "").strip()
+    parent_title = None
+    if parent_goal_id_prefix:
+        goals = await storage.list_goals()
+        for g in goals:
+            if g.id.startswith(parent_goal_id_prefix):
+                parent_goal_id = g.id
+                parent_title = g.title
+                break
+        if not parent_goal_id:
+            return f"Error: Parent goal not found: {parent_goal_id_prefix}", True
+
     now = datetime.now().isoformat()
     goal = GoalData(
         id=str(uuid.uuid4()),
@@ -919,17 +975,21 @@ async def _create_goal(args: dict, storage) -> tuple[str, bool]:
         acceptance_criteria=acceptance_criteria,
         created_at=now,
         updated_at=now,
+        parent_goal_id=parent_goal_id,
     )
 
     await storage.save_goal(goal)
 
     criteria_str = "\n".join(f"  - {c}" for c in acceptance_criteria)
-    return (
+    result = (
         f"Created goal: {goal.title}\n"
         f"ID: {goal.id}\n"
         f"Weight: {goal.weight}/10\n"
-        f"Acceptance Criteria:\n{criteria_str}"
-    ), False
+    )
+    if parent_title:
+        result += f"Parent: {parent_title}\n"
+    result += f"Acceptance Criteria:\n{criteria_str}"
+    return result, False
 
 
 async def _update_goal(args: dict, storage) -> tuple[str, bool]:
@@ -1003,6 +1063,90 @@ async def _update_goal(args: dict, storage) -> tuple[str, bool]:
         f"Updated goal: {goal.title}\n"
         f"ID: {goal.id}\n"
         f"Changes:\n" + "\n".join(f"  - {u}" for u in updates)
+    ), False
+
+
+async def _reparent_goal(args: dict, storage) -> tuple[str, bool]:
+    """Reparent a goal under a different parent or make it a root-level goal."""
+    goal_id_prefix = args.get("goal_id", "").strip()
+    if not goal_id_prefix:
+        return "Error: goal_id is required", True
+
+    # Find goal by prefix
+    goals = await storage.list_goals()
+    goal = None
+    for g in goals:
+        if g.id.startswith(goal_id_prefix):
+            goal = g
+            break
+
+    if not goal:
+        return f"Error: Goal not found: {goal_id_prefix}", True
+
+    # Handle parent_goal_id - can be empty/null to unparent
+    new_parent_id = None
+    new_parent_title = None
+    parent_goal_id_prefix = args.get("parent_goal_id", "").strip() if args.get("parent_goal_id") else ""
+
+    if parent_goal_id_prefix:
+        # Find new parent
+        for g in goals:
+            if g.id.startswith(parent_goal_id_prefix):
+                new_parent_id = g.id
+                new_parent_title = g.title
+                break
+
+        if not new_parent_id:
+            return f"Error: Parent goal not found: {parent_goal_id_prefix}", True
+
+        # Check for circular reference - goal cannot be its own ancestor
+        if new_parent_id == goal.id:
+            return "Error: A goal cannot be its own parent", True
+
+        # Check if new parent is a descendant of this goal (would create cycle)
+        ancestor_id = new_parent_id
+        visited = set()
+        while ancestor_id:
+            if ancestor_id in visited:
+                break  # Already checked this one (shouldn't happen, but safety)
+            visited.add(ancestor_id)
+
+            if ancestor_id == goal.id:
+                return "Error: Cannot reparent - would create a circular reference", True
+
+            # Find the ancestor's parent
+            ancestor_goal = next((g for g in goals if g.id == ancestor_id), None)
+            if ancestor_goal:
+                ancestor_id = ancestor_goal.parent_goal_id
+            else:
+                break
+
+    # Get old parent info for output
+    old_parent_title = None
+    if goal.parent_goal_id:
+        old_parent = next((g for g in goals if g.id == goal.parent_goal_id), None)
+        if old_parent:
+            old_parent_title = old_parent.title
+
+    # Update the goal's parent
+    goal.parent_goal_id = new_parent_id
+    goal.updated_at = datetime.now().isoformat()
+    await storage.save_goal(goal)
+
+    # Build result message
+    if old_parent_title and new_parent_title:
+        change = f"Moved from '{old_parent_title}' to '{new_parent_title}'"
+    elif old_parent_title:
+        change = f"Moved from '{old_parent_title}' to root level"
+    elif new_parent_title:
+        change = f"Moved under '{new_parent_title}'"
+    else:
+        change = "No change (already at root level)"
+
+    return (
+        f"Reparented goal: {goal.title}\n"
+        f"ID: {goal.id}\n"
+        f"{change}"
     ), False
 
 

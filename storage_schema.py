@@ -162,6 +162,9 @@ class GoalData:
 
     Goals have weight (1-10) indicating priority, acceptance criteria for
     completion, and can supersede other goals when priorities change.
+
+    Goals can be nested under parent goals via parent_goal_id. A nested goal's
+    completion contributes to its parent's completion state.
     """
     id: str  # UUID
     title: str
@@ -173,6 +176,7 @@ class GoalData:
     updated_at: str  # ISO 8601
     completed_at: Optional[str] = None  # ISO 8601, when status became completed
     supersedes_id: Optional[str] = None  # Goal this one replaces
+    parent_goal_id: Optional[str] = None  # Parent goal ID for nesting
 
 
 @rust_schema

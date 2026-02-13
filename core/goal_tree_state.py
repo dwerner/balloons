@@ -57,9 +57,11 @@ class GoalNodeData:
     """Data for a goal node in the tree.
 
     Includes the goal data plus computed/runtime fields.
+    Goals can be nested under parent goals via parent_goal_id.
     """
     goal: GoalData
     plan_ids: list[str] = field(default_factory=list)  # Child plan IDs
+    child_goal_ids: list[str] = field(default_factory=list)  # Child goal IDs (for nesting)
     bound_session_ids: list[str] = field(default_factory=list)  # Sessions bound directly to goal
     is_expanded: bool = False
 
@@ -78,6 +80,10 @@ class GoalNodeData:
     @property
     def status(self) -> str:
         return self.goal.status
+
+    @property
+    def parent_goal_id(self) -> Optional[str]:
+        return self.goal.parent_goal_id
 
 
 @dataclass
@@ -222,24 +228,60 @@ class GoalTreeState:
     # --- Goal Operations ---
 
     def add_goal(self, goal: GoalData) -> None:
-        """Add or update a goal."""
+        """Add or update a goal.
+
+        If the goal has a parent_goal_id, it will be added as a child of that parent.
+        """
         is_new = goal.id not in self._goals
+        old_parent_id = None
 
         if is_new:
             node = GoalNodeData(goal=goal)
             self._goals[goal.id] = node
-            self._notify(GoalTreeEvent.GOAL_ADDED, {"goal_id": goal.id})
         else:
+            # Track old parent for reparenting
+            old_parent_id = self._goals[goal.id].parent_goal_id
             self._goals[goal.id].goal = goal
-            self._notify(GoalTreeEvent.GOAL_UPDATED, {"goal_id": goal.id})
+
+        # Handle parent-child relationship
+        new_parent_id = goal.parent_goal_id
+
+        # Remove from old parent if reparenting
+        if old_parent_id and old_parent_id != new_parent_id and old_parent_id in self._goals:
+            old_parent = self._goals[old_parent_id]
+            if goal.id in old_parent.child_goal_ids:
+                old_parent.child_goal_ids.remove(goal.id)
+
+        # Add to new parent's child list
+        if new_parent_id and new_parent_id in self._goals:
+            parent = self._goals[new_parent_id]
+            if goal.id not in parent.child_goal_ids:
+                parent.child_goal_ids.append(goal.id)
+
+        if is_new:
+            self._notify(GoalTreeEvent.GOAL_ADDED, {"goal_id": goal.id, "parent_goal_id": new_parent_id})
+        else:
+            self._notify(GoalTreeEvent.GOAL_UPDATED, {"goal_id": goal.id, "parent_goal_id": new_parent_id, "old_parent_id": old_parent_id})
 
     def remove_goal(self, goal_id: str) -> None:
-        """Remove a goal and its children."""
+        """Remove a goal and its children (including child goals)."""
         if goal_id not in self._goals:
             return
 
-        # Remove child plans
         goal_node = self._goals[goal_id]
+
+        # Remove from parent's child list
+        parent_id = goal_node.parent_goal_id
+        if parent_id and parent_id in self._goals:
+            parent = self._goals[parent_id]
+            if goal_id in parent.child_goal_ids:
+                parent.child_goal_ids.remove(goal_id)
+
+        # Remove child goals (recursively)
+        for child_goal_id in list(goal_node.child_goal_ids):
+            self.remove_goal(child_goal_id)
+
+        # Remove child plans
         for plan_id in goal_node.plan_ids:
             self.remove_plan(plan_id)
 
@@ -259,6 +301,25 @@ class GoalTreeState:
         goals = list(self._goals.values())
         goals.sort(key=lambda g: -g.weight)
         return goals
+
+    def get_root_goals(self) -> list[GoalNodeData]:
+        """Get only root-level goals (goals with no parent) sorted by weight (descending)."""
+        goals = [g for g in self._goals.values() if g.parent_goal_id is None]
+        goals.sort(key=lambda g: -g.weight)
+        return goals
+
+    def get_child_goals(self, goal_id: str) -> list[GoalNodeData]:
+        """Get child goals for a parent goal, sorted by weight (descending).
+
+        This dynamically finds children based on their parent_goal_id to handle
+        cases where children may have been added before their parent.
+        """
+        if goal_id not in self._goals:
+            return []
+        # Find all goals that have this goal as their parent
+        child_goals = [g for g in self._goals.values() if g.parent_goal_id == goal_id]
+        child_goals.sort(key=lambda g: -g.weight)
+        return child_goals
 
     # --- Plan Operations ---
 
@@ -550,8 +611,9 @@ class GoalTreeState:
     def get_goal_progress(self, goal_id: str) -> tuple[int, int]:
         """Get progress for a goal as (completed_todos, total_todos).
 
-        Counts todos across all plans in the goal.
-        Returns (0, 0) if goal has no plans or no todos.
+        Counts todos across all plans in the goal AND all child goals recursively.
+        This provides a comprehensive view of progress for nested goals.
+        Returns (0, 0) if goal has no plans, no todos, and no child goals.
         """
         goal_node = self._goals.get(goal_id)
         if not goal_node:
@@ -560,6 +622,7 @@ class GoalTreeState:
         total = 0
         completed = 0
 
+        # Count todos from this goal's plans
         for plan_id in goal_node.plan_ids:
             plan_node = self._plans.get(plan_id)
             if not plan_node:
@@ -574,7 +637,51 @@ class GoalTreeState:
                 if todo_node.status == "completed":
                     completed += 1
 
+        # Recursively count from child goals
+        for child_goal_id in goal_node.child_goal_ids:
+            child_completed, child_total = self.get_goal_progress(child_goal_id)
+            completed += child_completed
+            total += child_total
+
         return (completed, total)
+
+    def compute_goal_status_from_children(self, goal_id: str) -> str | None:
+        """Compute a goal's status based on child goals and todos.
+
+        Returns:
+            - "completed" if all children are completed
+            - "active" if any children are active/pending
+            - None if the goal has no children to compute from
+        """
+        goal_node = self._goals.get(goal_id)
+        if not goal_node:
+            return None
+
+        has_children = False
+
+        # Check child goals
+        for child_goal_id in goal_node.child_goal_ids:
+            child_goal = self._goals.get(child_goal_id)
+            if child_goal:
+                has_children = True
+                if child_goal.status not in ("completed", "abandoned"):
+                    return "active"  # Still has active child goals
+
+        # Check todos across plans
+        for plan_id in goal_node.plan_ids:
+            plan_node = self._plans.get(plan_id)
+            if not plan_node:
+                continue
+
+            for todo_id in plan_node.todo_ids:
+                todo_node = self._todos.get(todo_id)
+                if todo_node:
+                    has_children = True
+                    if todo_node.status not in ("completed", "abandoned"):
+                        return "active"  # Still has active todos
+
+        # All children completed
+        return "completed" if has_children else None
 
     # --- Aggregate Stats ---
 

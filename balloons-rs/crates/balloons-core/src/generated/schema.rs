@@ -2,7 +2,7 @@
 //!
 //! Generated from Python domain entities marked with @rust_schema.
 //! Source: models.py and other domain modules
-//! Generated: 2026-02-13T10:03:29.132390
+//! Generated: 2026-02-13T12:39:55.086844
 //!
 //! To regenerate:
 //!     python -m codegen.generate_rust
@@ -117,6 +117,8 @@ pub struct GoalData {
     pub completed_at: Option<String>,
     #[serde(default)]
     pub supersedes_id: Option<String>,
+    #[serde(default)]
+    pub parent_goal_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -861,9 +861,10 @@ class GoalTreeView(Vertical):
         self._session_nodes.clear()
         self._unbound_section_node = None
 
-        # Add goals
-        goals = self._goal_state.get_all_goals()
-        debug_log.debug(f"_rebuild_tree: got {len(goals)} goals from GoalTreeState", category="goals")
+        # Add only root-level goals (goals with no parent)
+        # Child goals will be added recursively by _add_goal_node
+        goals = self._goal_state.get_root_goals()
+        debug_log.debug(f"_rebuild_tree: got {len(goals)} root goals from GoalTreeState", category="goals")
         for goal_node_data in goals:
             self._add_goal_node(tree.root, goal_node_data)
 
@@ -875,7 +876,7 @@ class GoalTreeView(Vertical):
         self._update_root_label()
 
     def _add_goal_node(self, parent_node, goal_data: GoalNodeData) -> None:
-        """Add a goal node to the tree."""
+        """Add a goal node to the tree, including any child goals recursively."""
         label = self._make_goal_label(goal_data)
 
         goal_node = parent_node.add(
@@ -883,6 +884,11 @@ class GoalTreeView(Vertical):
             data={"type": "goal", "goal_id": goal_data.id}
         )
         self._goal_nodes[goal_data.id] = goal_node
+
+        # Add child goals (recursively)
+        child_goals = self._goal_state.get_child_goals(goal_data.id)
+        for child_goal_data in child_goals:
+            self._add_goal_node(goal_node, child_goal_data)
 
         # Add plans
         plans = self._goal_state.get_plans_for_goal(goal_data.id)
@@ -895,7 +901,7 @@ class GoalTreeView(Vertical):
             self._add_session_node(goal_node, session, "goal", goal_data.id)
 
         # Expand if has children
-        if plans or bound_sessions:
+        if child_goals or plans or bound_sessions:
             goal_node.expand()
 
     def _add_plan_node(self, parent_node, plan_data: PlanNodeData) -> None:
@@ -994,6 +1000,9 @@ class GoalTreeView(Vertical):
 
         Title is not truncated here - the tree widget will handle overflow.
         Buttons are only shown on cursor row, so full text can be displayed.
+
+        For nested goals (goals with a parent), uses a different icon to indicate nesting.
+        Progress includes all child goals recursively.
         """
         status_icon = {
             "active": "[green]●[/]",
@@ -1005,7 +1014,10 @@ class GoalTreeView(Vertical):
         title = goal_data.title
         # No truncation - let tree widget handle overflow
 
-        # Progress bar based on todo completion
+        # Use different icon for child goals vs root goals
+        goal_icon = "🎯" if goal_data.parent_goal_id is None else "📎"
+
+        # Progress bar based on todo completion (includes child goals)
         completed, total = self._goal_state.get_goal_progress(goal_data.id)
         if total > 0:
             progress_pct = completed / total
@@ -1016,12 +1028,16 @@ class GoalTreeView(Vertical):
             # No todos yet - show empty bar
             progress_str = "[dim][░░░░░][/] [dim]0/0[/]"
 
+        # Show child goal count if any
+        child_goal_count = len(goal_data.child_goal_ids)
+        child_indicator = f" [dim]({child_goal_count}g)[/]" if child_goal_count > 0 else ""
+
         session_count = len(goal_data.bound_session_ids)
         session_indicator = f" [dim]({session_count}s)[/]" if session_count > 0 else ""
 
         return (
-            f"{status_icon} 🎯 [bold]{escape_markup(title)}[/] "
-            f"{progress_str}{session_indicator}"
+            f"{status_icon} {goal_icon} [bold]{escape_markup(title)}[/] "
+            f"{progress_str}{child_indicator}{session_indicator}"
         )
 
     def _make_plan_label(self, plan_data: PlanNodeData) -> str:
@@ -1166,7 +1182,11 @@ class GoalTreeView(Vertical):
     # --- Incremental Updates ---
 
     def _add_goal_incrementally(self, goal_id: str) -> None:
-        """Add a single goal to the tree without full rebuild."""
+        """Add a single goal to the tree without full rebuild.
+
+        Handles nested goals: if the goal has a parent_goal_id, it will be
+        added under the parent node. Otherwise, it's added at root level.
+        """
         from core.debug_log import debug_log
         goal_data = self._goal_state.get_goal(goal_id)
         if not goal_data:
@@ -1175,35 +1195,46 @@ class GoalTreeView(Vertical):
 
         tree = self.query_one("#goal-tree-widget", GoalTreeWidget)
 
-        # Find insertion position (sorted by weight descending)
-        # Insert before first goal with lower weight
-        insert_before = None
-        for node in tree.root.children:
-            node_type = node.data.get("type") if node.data else None
-            if node_type == "goal":
-                existing_goal = self._goal_state.get_goal(node.data.get("goal_id"))
-                if existing_goal and existing_goal.weight < goal_data.weight:
+        # Determine parent node
+        parent_node = tree.root
+        parent_goal_id = goal_data.parent_goal_id
+        if parent_goal_id and parent_goal_id in self._goal_nodes:
+            parent_node = self._goal_nodes[parent_goal_id]
+
+        # For root-level goals, find insertion position (sorted by weight descending)
+        if parent_node == tree.root:
+            insert_before = None
+            for node in tree.root.children:
+                node_type = node.data.get("type") if node.data else None
+                if node_type == "goal":
+                    existing_goal = self._goal_state.get_goal(node.data.get("goal_id"))
+                    if existing_goal and existing_goal.weight < goal_data.weight:
+                        insert_before = node
+                        break
+                elif node_type == "unbound_section":
+                    # Insert before unbound section
                     insert_before = node
                     break
-            elif node_type == "unbound_section":
-                # Insert before unbound section
-                insert_before = node
-                break
 
-        if insert_before:
-            # Insert at specific position by adding after previous sibling
-            # Textual Tree doesn't have insert_before, so we need to rebuild
-            # the portion. For simplicity, add at end then re-sort.
-            self._add_goal_node(tree.root, goal_data)
-            # Re-sort children by moving the new node to correct position
-            # Note: Textual Tree doesn't support reordering, so for now we add at end
-            # TODO: Consider if we need true insertion ordering
+            if insert_before:
+                # Insert at specific position by adding after previous sibling
+                # Textual Tree doesn't have insert_before, so we need to rebuild
+                # the portion. For simplicity, add at end then re-sort.
+                self._add_goal_node(tree.root, goal_data)
+                # Note: Textual Tree doesn't support reordering, so for now we add at end
+            else:
+                # Add at end (before unbound section if it exists)
+                self._add_goal_node(tree.root, goal_data)
         else:
-            # Add at end (before unbound section if it exists)
-            self._add_goal_node(tree.root, goal_data)
+            # Add as child of parent goal
+            self._add_goal_node(parent_node, goal_data)
+            parent_node.expand()
+            # Update parent goal's label (may show child count)
+            if parent_goal_id:
+                self._update_goal_label(parent_goal_id)
 
         self._update_root_label()
-        debug_log.debug(f"_add_goal_incrementally: added goal {goal_id}", category="goals")
+        debug_log.debug(f"_add_goal_incrementally: added goal {goal_id} (parent: {parent_goal_id})", category="goals")
 
     def _add_plan_incrementally(self, plan_id: str, goal_id: str) -> None:
         """Add a single plan under its goal without full rebuild."""

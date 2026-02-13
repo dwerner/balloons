@@ -422,6 +422,293 @@ class TestUpdateGoal:
         assert updated_goal.weight == 5
 
 
+class TestCreateGoalWithParent:
+    """Tests for create_goal with parent_goal_id."""
+
+    @pytest.mark.asyncio
+    async def test_create_goal_with_parent(self, goal_storage, mock_session, monkeypatch):
+        """Test creating a goal under a parent goal."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        # Create parent goal
+        now = datetime.now().isoformat()
+        parent = GoalData(
+            id="parent-goal-1",
+            title="Parent Goal",
+            description="A parent goal",
+            weight=8,
+            status="active",
+            acceptance_criteria=["Parent criterion"],
+            created_at=now,
+            updated_at=now,
+        )
+        await goal_storage.save_goal(parent)
+
+        # Create child goal
+        result, is_error = await execute_goal_tool(
+            "create_goal",
+            {
+                "title": "Child Goal",
+                "description": "A child goal",
+                "weight": 5,
+                "acceptance_criteria": ["Child criterion"],
+                "parent_goal_id": "parent-goal-1",
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Child Goal" in result
+        assert "Parent: Parent Goal" in result
+
+        # Verify the child goal was created with parent_goal_id
+        goals = await goal_storage.list_goals()
+        child = next((g for g in goals if g.title == "Child Goal"), None)
+        assert child is not None
+        assert child.parent_goal_id == "parent-goal-1"
+
+    @pytest.mark.asyncio
+    async def test_create_goal_with_parent_prefix(self, goal_storage, mock_session, monkeypatch):
+        """Test creating a goal using parent ID prefix."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        parent = GoalData(
+            id="abc12345-parent-goal",
+            title="Parent Goal",
+            description="",
+            weight=8,
+            status="active",
+            acceptance_criteria=["Done"],
+            created_at=now,
+            updated_at=now,
+        )
+        await goal_storage.save_goal(parent)
+
+        result, is_error = await execute_goal_tool(
+            "create_goal",
+            {
+                "title": "Child Goal",
+                "description": "Child",
+                "acceptance_criteria": ["Done"],
+                "parent_goal_id": "abc12345",  # Just prefix
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        goals = await goal_storage.list_goals()
+        child = next((g for g in goals if g.title == "Child Goal"), None)
+        assert child.parent_goal_id == "abc12345-parent-goal"
+
+    @pytest.mark.asyncio
+    async def test_create_goal_with_nonexistent_parent(self, goal_storage, mock_session, monkeypatch):
+        """Test error when parent goal doesn't exist."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "create_goal",
+            {
+                "title": "Child Goal",
+                "description": "Child",
+                "acceptance_criteria": ["Done"],
+                "parent_goal_id": "nonexistent",
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "Parent goal not found" in result
+
+
+class TestReparentGoal:
+    """Tests for reparent_goal tool."""
+
+    @pytest.mark.asyncio
+    async def test_reparent_to_new_parent(self, goal_storage, mock_session, monkeypatch):
+        """Test moving a root-level goal under a parent."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+
+        # Create parent goal
+        parent = GoalData(
+            id="parent-1", title="Parent Goal", description="", weight=8,
+            status="active", acceptance_criteria=["Done"], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(parent)
+
+        # Create child goal (initially root level)
+        child = GoalData(
+            id="child-1", title="Child Goal", description="", weight=5,
+            status="active", acceptance_criteria=["Done"], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(child)
+
+        # Reparent child under parent
+        result, is_error = await execute_goal_tool(
+            "reparent_goal",
+            {
+                "goal_id": "child-1",
+                "parent_goal_id": "parent-1",
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Reparented goal" in result
+        assert "Child Goal" in result
+        assert "Parent Goal" in result
+
+        # Verify the goal was reparented
+        updated_child = await goal_storage.load_goal("child-1")
+        assert updated_child.parent_goal_id == "parent-1"
+
+    @pytest.mark.asyncio
+    async def test_reparent_to_root(self, goal_storage, mock_session, monkeypatch):
+        """Test making a nested goal into a root-level goal."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+
+        # Create parent and child
+        parent = GoalData(
+            id="parent-1", title="Parent Goal", description="", weight=8,
+            status="active", acceptance_criteria=["Done"], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(parent)
+
+        child = GoalData(
+            id="child-1", title="Child Goal", description="", weight=5,
+            status="active", acceptance_criteria=["Done"], created_at=now, updated_at=now,
+            parent_goal_id="parent-1",  # Already nested
+        )
+        await goal_storage.save_goal(child)
+
+        # Reparent to root (empty parent_goal_id)
+        result, is_error = await execute_goal_tool(
+            "reparent_goal",
+            {
+                "goal_id": "child-1",
+                "parent_goal_id": "",  # Empty = make root level
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        assert "root level" in result
+
+        # Verify the goal is now root level
+        updated_child = await goal_storage.load_goal("child-1")
+        assert updated_child.parent_goal_id is None
+
+    @pytest.mark.asyncio
+    async def test_reparent_prevent_self_parent(self, goal_storage, mock_session, monkeypatch):
+        """Test error when trying to make a goal its own parent."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        goal = GoalData(
+            id="goal-1", title="Goal", description="", weight=5,
+            status="active", acceptance_criteria=["Done"], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal)
+
+        result, is_error = await execute_goal_tool(
+            "reparent_goal",
+            {
+                "goal_id": "goal-1",
+                "parent_goal_id": "goal-1",  # Same as goal
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "own parent" in result
+
+    @pytest.mark.asyncio
+    async def test_reparent_prevent_circular_reference(self, goal_storage, mock_session, monkeypatch):
+        """Test error when reparenting would create a circular reference."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+
+        # Create a chain: grandparent -> parent -> child
+        grandparent = GoalData(
+            id="grandparent", title="Grandparent", description="", weight=8,
+            status="active", acceptance_criteria=["Done"], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(grandparent)
+
+        parent = GoalData(
+            id="parent", title="Parent", description="", weight=5,
+            status="active", acceptance_criteria=["Done"], created_at=now, updated_at=now,
+            parent_goal_id="grandparent",
+        )
+        await goal_storage.save_goal(parent)
+
+        child = GoalData(
+            id="child", title="Child", description="", weight=3,
+            status="active", acceptance_criteria=["Done"], created_at=now, updated_at=now,
+            parent_goal_id="parent",
+        )
+        await goal_storage.save_goal(child)
+
+        # Try to make grandparent a child of child (would create cycle)
+        result, is_error = await execute_goal_tool(
+            "reparent_goal",
+            {
+                "goal_id": "grandparent",
+                "parent_goal_id": "child",
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "circular reference" in result
+
+    @pytest.mark.asyncio
+    async def test_reparent_goal_not_found(self, goal_storage, mock_session, monkeypatch):
+        """Test error when goal doesn't exist."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "reparent_goal",
+            {
+                "goal_id": "nonexistent",
+                "parent_goal_id": "also-nonexistent",
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "Goal not found" in result
+
+    @pytest.mark.asyncio
+    async def test_reparent_parent_not_found(self, goal_storage, mock_session, monkeypatch):
+        """Test error when parent goal doesn't exist."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        goal = GoalData(
+            id="goal-1", title="Goal", description="", weight=5,
+            status="active", acceptance_criteria=["Done"], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal)
+
+        result, is_error = await execute_goal_tool(
+            "reparent_goal",
+            {
+                "goal_id": "goal-1",
+                "parent_goal_id": "nonexistent",
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "Parent goal not found" in result
+
+
 class TestCreatePlan:
     """Tests for create_plan tool."""
 
