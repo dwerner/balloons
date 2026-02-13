@@ -20,6 +20,10 @@ class TurnData:
 
     Simplified version of Turn from models.py.
     Content blocks are stored as JSON (serde_json::Value) for flexibility.
+
+    Timing fields for diagnosing streaming issues:
+    - started_at: When the turn began (streaming started)
+    - ended_at: When the turn completed (streaming finished)
     """
     id: str
     role: str  # "user", "assistant", "tool", "system"
@@ -30,6 +34,8 @@ class TurnData:
     summary: str  # Cached summary for compress mode
     exchange_id: Optional[str] = None  # Groups turns in an agentic loop
     sentiment: Optional[str] = None  # "excellent", "good", "review", "poor", "terrible"
+    started_at: Optional[str] = None  # ISO 8601 format, when streaming began
+    ended_at: Optional[str] = None  # ISO 8601 format, when streaming completed
 
 
 @rust_schema
@@ -205,6 +211,8 @@ class TodoData:
     updated_at: str  # ISO 8601
     completed_at: Optional[str] = None  # ISO 8601
     timebox_minutes: Optional[int] = None  # For spikes: max time to spend
+    completed_by_session: Optional[str] = None  # Session ID that completed this todo
+    completed_by: Optional[str] = None  # "llm" or "user" - who initiated completion
 
 
 @rust_schema

@@ -706,6 +706,8 @@ mod tests {
             summary: String::new(),
             exchange_id: None,
             sentiment: None,
+            started_at: None,
+            ended_at: None,
         }
     }
 

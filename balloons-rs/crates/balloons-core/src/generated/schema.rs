@@ -2,7 +2,7 @@
 //!
 //! Generated from Python domain entities marked with @rust_schema.
 //! Source: models.py and other domain modules
-//! Generated: 2026-02-12T12:22:32.313702
+//! Generated: 2026-02-13T10:03:29.132390
 //!
 //! To regenerate:
 //!     python -m codegen.generate_rust
@@ -25,6 +25,10 @@ pub struct TurnData {
     pub exchange_id: Option<String>,
     #[serde(default)]
     pub sentiment: Option<String>,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub ended_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,6 +147,10 @@ pub struct TodoData {
     pub completed_at: Option<String>,
     #[serde(default)]
     pub timebox_minutes: Option<i64>,
+    #[serde(default)]
+    pub completed_by_session: Option<String>,
+    #[serde(default)]
+    pub completed_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

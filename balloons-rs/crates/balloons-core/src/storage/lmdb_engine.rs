@@ -1704,6 +1704,8 @@ mod tests {
             summary: String::new(),
             exchange_id: None,
             sentiment: None,
+            started_at: None,
+            ended_at: None,
         }
     }
 
@@ -2344,6 +2346,8 @@ mod tests {
             updated_at: "2024-01-01T00:00:00Z".to_string(),
             completed_at: None,
             timebox_minutes: None,
+            completed_by_session: None,
+            completed_by: None,
         }
     }
 
