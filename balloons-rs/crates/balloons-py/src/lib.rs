@@ -1345,11 +1345,104 @@ fn restore_from_backup(
     })
 }
 
+// =============================================================================
+// Tokenizer bindings (non-blocking token counting)
+// =============================================================================
+
+// Global executor for tokenizer operations - uses multiple threads for CPU-bound work
+static TOKENIZER_EXECUTOR: OnceLock<Mutex<ThreadPoolExecutor>> = OnceLock::new();
+
+fn get_tokenizer_executor() -> &'static Mutex<ThreadPoolExecutor> {
+    // Use 4 threads for token counting - this is CPU-bound work that benefits from parallelism
+    TOKENIZER_EXECUTOR.get_or_init(|| Mutex::new(ThreadPoolExecutor::new(4)))
+}
+
+/// Python-facing tokenizer for async token counting.
+///
+/// Uses tiktoken-rs cl100k_base encoding (same as Python tiktoken).
+/// Token counting runs on a dedicated thread pool to avoid blocking the UI.
+#[pyclass]
+struct Tokenizer {
+    // No state needed - we use tiktoken's singleton
+}
+
+#[pymethods]
+impl Tokenizer {
+    /// Create a new tokenizer instance.
+    #[new]
+    fn new() -> Self {
+        Self {}
+    }
+
+    /// Count tokens in text (blocking, releases GIL).
+    ///
+    /// This runs on the tokenizer thread pool, releasing Python's GIL
+    /// so other Python code can run while counting.
+    ///
+    /// Args:
+    ///     text: The text to count tokens for
+    ///
+    /// Returns:
+    ///     Token count
+    fn count_tokens(&self, py: Python<'_>, text: &str) -> PyResult<usize> {
+        let text = text.to_string();
+
+        py.allow_threads(|| {
+            let mut executor = get_tokenizer_executor().lock().unwrap();
+            let task = executor.spawn_on_any(async move {
+                // Use tiktoken's singleton for efficiency
+                let bpe = tiktoken_rs::cl100k_base_singleton();
+                let lock = bpe.lock();
+                lock.encode_with_special_tokens(&text).len()
+            });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))
+        })
+    }
+
+    /// Count tokens for multiple texts in batch (blocking, releases GIL).
+    ///
+    /// More efficient than calling count_tokens repeatedly as it batches
+    /// the work across the thread pool.
+    ///
+    /// Args:
+    ///     texts: List of texts to count tokens for
+    ///
+    /// Returns:
+    ///     List of token counts (same order as input)
+    fn count_tokens_batch(&self, py: Python<'_>, texts: Vec<String>) -> PyResult<Vec<usize>> {
+        py.allow_threads(|| {
+            let mut executor = get_tokenizer_executor().lock().unwrap();
+
+            // Spawn all tasks
+            let mut tasks = Vec::with_capacity(texts.len());
+            for text in texts {
+                let task = executor.spawn_on_any(async move {
+                    let bpe = tiktoken_rs::cl100k_base_singleton();
+                    let lock = bpe.lock();
+                    lock.encode_with_special_tokens(&text).len()
+                });
+                tasks.push(task);
+            }
+
+            // Collect results
+            let mut results = Vec::with_capacity(tasks.len());
+            for task in tasks {
+                let count = future::block_on(task)
+                    .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?;
+                results.push(count);
+            }
+            Ok(results)
+        })
+    }
+}
+
 /// Python module definition
 #[pymodule]
 fn balloons_storage(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Storage>()?;
     m.add_class::<Supervisor>()?;
+    m.add_class::<Tokenizer>()?;
     m.add_function(wrap_pyfunction!(recover_database, m)?)?;
     // Backup and recovery functions
     m.add_function(wrap_pyfunction!(create_backup, m)?)?;

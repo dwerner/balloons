@@ -12,6 +12,9 @@ repository = "https://github.com/dwerner/balloons"
 # Async runtime
 core-executor = { git = "https://github.com/dwerner/core-executor" }
 
+# Tokenization
+tiktoken-rs = "0.6"
+
 # Process management
 procstream = { git = "https://github.com/dwerner/procstream", features = ["macros"] }
 

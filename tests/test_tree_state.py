@@ -312,7 +312,8 @@ class TestTreeStateTurnOperations:
         turn = state.get_turn("s1", 0)
         assert turn.content == "Hello, world!"
 
-    def test_finish_turn(self):
+    @pytest.mark.asyncio
+    async def test_finish_turn(self):
         state = TreeState()
         session = MockSession(id="s1", turns=[])
         state.load_session("s1", session)
@@ -321,7 +322,7 @@ class TestTreeStateTurnOperations:
         events = []
         state.add_observer(lambda e, d: events.append((e, d)))
 
-        state.finish_turn(
+        await state.finish_turn(
             "s1", 0,
             content="Final content",
             content_block=TextBlock(text="Final content"),
@@ -335,7 +336,8 @@ class TestTreeStateTurnOperations:
 
         assert any(e[0] == TreeEvent.TURN_FINISHED for e in events)
 
-    def test_finish_turn_updates_cached_tokens_incrementally(self):
+    @pytest.mark.asyncio
+    async def test_finish_turn_updates_cached_tokens_incrementally(self):
         """finish_turn should add to cached_context_tokens, not recalculate entire sum."""
         state = TreeState()
         session = MockSession(id="s1", turns=[])
@@ -347,7 +349,7 @@ class TestTreeStateTurnOperations:
 
         # Start and finish first turn
         state.start_turn("s1", 0, "user")
-        state.finish_turn("s1", 0, "Hello", TextBlock(text="Hello"), [])
+        await state.finish_turn("s1", 0, "Hello", TextBlock(text="Hello"), [])
 
         turn0_tokens = data.turns[0].tokens
         assert turn0_tokens > 0
@@ -355,7 +357,7 @@ class TestTreeStateTurnOperations:
 
         # Start and finish second turn
         state.start_turn("s1", 1, "assistant")
-        state.finish_turn("s1", 1, "Hi there!", TextBlock(text="Hi there!"), [])
+        await state.finish_turn("s1", 1, "Hi there!", TextBlock(text="Hi there!"), [])
 
         turn1_tokens = data.turns[1].tokens
         assert turn1_tokens > 0

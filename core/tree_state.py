@@ -40,9 +40,13 @@ from models import (
     InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock, ForkBlock, MergeBlock, ReviewBlock
 )
 from core.context import ContextBuilder
+from core.async_tokenizer import get_async_tokenizer
 
-# Module-level context builder for token counting
+# Module-level context builder for token counting (used for synchronous counting in load_session)
 _context_builder = ContextBuilder()
+
+# Async tokenizer for non-blocking token counting in finish_turn
+_async_tokenizer = get_async_tokenizer()
 
 
 class SessionProtocol(Protocol):
@@ -639,7 +643,7 @@ class TreeState:
                 })
                 break
 
-    def finish_turn(
+    async def finish_turn(
         self,
         session_id: str,
         turn_idx: int,
@@ -647,7 +651,11 @@ class TreeState:
         content_block: ContentBlock | None,
         events: list[dict] = None,
     ) -> None:
-        """Finalize a streaming turn when complete."""
+        """Finalize a streaming turn when complete.
+
+        Token counting runs in a thread pool to avoid blocking the UI.
+        This method is async and should be awaited.
+        """
         session_data = self._sessions.get(session_id)
         if not session_data or session_data.turns is None:
             return
@@ -658,11 +666,12 @@ class TreeState:
                 turn.content_block = content_block
                 turn.events = events or []
                 turn.streaming = False
-                turn.tokens = _context_builder.count_turn_tokens(turn.role, [content_block] if content_block else [])
 
-                # Incremental update: add this turn's tokens if not DROP
-                # (O(1) instead of O(N) sum over all turns)
-                # Compare by .value to handle different ContextMode class instances
+                # Count tokens async (runs in thread pool, releases GIL)
+                blocks = [content_block] if content_block else []
+                turn.tokens = await _async_tokenizer.count_turn_tokens(turn.role, blocks)
+
+                # Update cached session tokens if not DROP
                 if self.get_context_mode(session_id, turn_idx).value != ContextMode.DROP.value:
                     session_data.cached_context_tokens += turn.tokens
 

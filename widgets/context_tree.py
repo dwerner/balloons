@@ -1964,7 +1964,7 @@ class ContextTreeView(Vertical):
         """
         pass
 
-    def finish_turn(
+    async def finish_turn(
         self,
         session_id: str,
         turn_idx: int,
@@ -1977,9 +1977,11 @@ class ContextTreeView(Vertical):
         Called when a 'done' event is received from SessionRunner.
         Notifies TreeState which will fire TURN_FINISHED event.
         The observer callback (_finalize_turn_node) handles UI updates.
+
+        This is async because token counting runs in a thread pool.
         """
         # Notify TreeState - the observer will handle UI update
-        self._state.finish_turn(session_id, turn_idx, content, content_block, raw_events)
+        await self._state.finish_turn(session_id, turn_idx, content, content_block, raw_events)
 
         # Clean up streaming tracking state for this turn
         text_key = (session_id, turn_idx)

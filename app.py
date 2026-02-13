@@ -751,7 +751,7 @@ class BalloonsApp(App):
         else:
             input_box.border_title = ""
 
-    def _process_message_queue(self) -> None:
+    async def _process_message_queue(self) -> None:
         """Process queued messages after streaming completes.
 
         Drains messages until a paused one is reached, combining them
@@ -788,9 +788,9 @@ class BalloonsApp(App):
             session_id=session_id,
         )
         # Start streaming the combined prompt
-        self._start_streaming(combined_prompt)
+        await self._start_streaming(combined_prompt)
 
-    def _poll_background_sessions(self) -> None:
+    async def _poll_background_sessions(self) -> None:
         """Poll ALL streaming sessions for events and update UI.
 
         This is the core of the event-driven architecture:
@@ -817,7 +817,7 @@ class BalloonsApp(App):
 
             for event in events:
                 try:
-                    self._dispatch_polled_event(session_id, event, ctx, chat_log, context_tree, status_bar)
+                    await self._dispatch_polled_event(session_id, event, ctx, chat_log, context_tree, status_bar)
                 except Exception as e:
                     debug_log.error(
                         f"Event dispatch failed: {e}",
@@ -853,7 +853,7 @@ class BalloonsApp(App):
         for helper_id in helper_ids_to_remove:
             del self._helper_runners[helper_id]
 
-    def _dispatch_polled_event(
+    async def _dispatch_polled_event(
         self,
         session_id: str,
         event: StreamEvent,
@@ -878,9 +878,9 @@ class BalloonsApp(App):
             debug_event(f"{event.event_type}: session={session_id[:8]}")
 
         # Handle action based on type
-        self._handle_streaming_action(action, ctx, chat_log, context_tree, status_bar)
+        await self._handle_streaming_action(action, ctx, chat_log, context_tree, status_bar)
 
-    def _handle_streaming_action(
+    async def _handle_streaming_action(
         self,
         action,
         ctx: StreamingContext,
@@ -931,7 +931,7 @@ class BalloonsApp(App):
             )
             # Finish the text turn with proper content_block
             content_block = TextBlock(text=action.text)
-            context_tree.finish_turn(
+            await context_tree.finish_turn(
                 session_id, action.turn_idx, action.text, content_block, []
             )
 
@@ -1031,7 +1031,7 @@ class BalloonsApp(App):
                     input=action.tool_input,
                 )
                 # content param not used for tool turns - label uses content_block
-                context_tree.finish_turn(
+                await context_tree.finish_turn(
                     session_id, turn_idx, "", content_block, []
                 )
 
@@ -1040,7 +1040,7 @@ class BalloonsApp(App):
             if action.tool_name == "propose_fork" and is_active and action.tool_use_id.startswith("balloons-"):
                 proposal = parse_fork_proposal(action.tool_input)
                 if proposal:
-                    self._handle_fork_proposal(
+                    await self._handle_fork_proposal(
                         proposal,
                         action.tool_use_id,
                         session_id,
@@ -1053,7 +1053,7 @@ class BalloonsApp(App):
             if action.tool_name == "propose_merge" and is_active and action.tool_use_id.startswith("balloons-"):
                 proposal = parse_merge_proposal(action.tool_input)
                 if proposal:
-                    self._handle_merge_proposal(
+                    await self._handle_merge_proposal(
                         proposal,
                         action.tool_use_id,
                         session_id,
@@ -1096,7 +1096,7 @@ class BalloonsApp(App):
                 )
                 # Use truncated result as preview
                 preview = action.result[:100] if action.result else ""
-                context_tree.finish_turn(
+                await context_tree.finish_turn(
                     session_id, turn_idx, preview, content_block, []
                 )
 
@@ -1140,30 +1140,30 @@ class BalloonsApp(App):
         elif isinstance(action, DoneAction):
             debug_log.info("Received done action, calling finalize", category="stream", session_id=session_id)
             play_done_sound()
-            self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar)
+            await self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar)
 
         elif isinstance(action, ErrorAction):
             debug_log.error(action.error, session_id=session_id, category="stream")
             play_error_sound()
             if is_active:
                 chat_log.append_to_current(f"\n\n[Error: {action.error}]")
-            self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar, error=action.error)
+            await self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar, error=action.error)
 
         elif isinstance(action, RateLimitAction):
             play_error_sound()
             if is_active:
                 chat_log.append_to_current(f"\n\n[Rate Limit] {action.message}")
-            self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar, error=action.message)
+            await self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar, error=action.message)
 
         elif isinstance(action, CancelledAction):
-            self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar, cancelled=True)
+            await self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar, cancelled=True)
 
         elif isinstance(action, InputRequiredAction):
             play_notification_sound()
             if is_active:
                 chat_log.append_to_current("\n\n[Claude is asking a question - session ended]")
                 self.notify("Claude asked a question (not supported)", severity="warning")
-            self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar)
+            await self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar)
 
     def _dispatch_helper_event(
         self,
@@ -1363,7 +1363,7 @@ class BalloonsApp(App):
 
             # Start tree turns for child (with exchange_id for grouping)
             context_tree.start_turn(child_session.id, turn_idx, "user", exchange_id=exchange_id)
-            context_tree.finish_turn(
+            await context_tree.finish_turn(
                 child_session.id, turn_idx, prompt, TextBlock(text=prompt), []
             )
             context_tree.start_turn(child_session.id, turn_idx + 1, "assistant", exchange_id=exchange_id)
@@ -1393,7 +1393,7 @@ class BalloonsApp(App):
             await breadcrumb.set_session(child_session)
 
             # Start streaming the actual prompt
-            self._start_streaming(prompt)
+            await self._start_streaming(prompt)
 
     async def _complete_derive_after_compression(
         self,
@@ -1455,7 +1455,7 @@ class BalloonsApp(App):
         await breadcrumb.set_session(new_session)
 
         # Start streaming the actual prompt
-        self._start_streaming(prompt)
+        await self._start_streaming(prompt)
 
     async def _complete_archive_after_summary(
         self,
@@ -1724,7 +1724,7 @@ class BalloonsApp(App):
         self.streaming = False
         self.notify("Returned from child session")
 
-    def _finalize_streaming(
+    async def _finalize_streaming(
         self,
         session_id: str,
         ctx: StreamingContext,
@@ -1787,7 +1787,7 @@ class BalloonsApp(App):
             # Note: assistant_blocks may have multiple blocks from legacy streaming model
             # The tree view uses single content_block - take primary block (first text or tool use)
             primary_block = assistant_blocks[0] if assistant_blocks else TextBlock(text=content)
-            context_tree.finish_turn(
+            await context_tree.finish_turn(
                 session_id,
                 ctx.assistant_turn_idx,
                 content,
@@ -1829,7 +1829,7 @@ class BalloonsApp(App):
 
                 # Process any queued messages
                 if session and self._queue_state.has_messages(session.id):
-                    self._process_message_queue()
+                    await self._process_message_queue()
 
                 # Check for auto-return conditions
                 if session and self._check_auto_return(content):
@@ -2103,9 +2103,9 @@ class BalloonsApp(App):
             category="command",
             session_id=self.session.id if self.session else "",
         )
-        self._start_streaming(prompt)
+        await self._start_streaming(prompt)
 
-    def _start_streaming(self, prompt: str, is_active: bool = True) -> None:
+    async def _start_streaming(self, prompt: str, is_active: bool = True) -> None:
         """Start a streaming response in background mode.
 
         This is the event-driven approach: start the background stream,
@@ -2134,7 +2134,7 @@ class BalloonsApp(App):
 
         # Start the user turn in tree immediately (with exchange_id for grouping)
         context_tree.start_turn(self.session.id, turn_idx, "user", exchange_id=exchange_id)
-        context_tree.finish_turn(
+        await context_tree.finish_turn(
             self.session.id, turn_idx, prompt, TextBlock(text=prompt), []
         )
 
@@ -2381,7 +2381,7 @@ class BalloonsApp(App):
 
         # If a prompt was provided, send it
         if prompt:
-            self._start_streaming(prompt)
+            await self._start_streaming(prompt)
 
     def _handle_pwd_command(self) -> None:
         """Show the current working directory for the session."""
@@ -3161,11 +3161,11 @@ class BalloonsApp(App):
         if not result.success:
             # Still send error output to Claude
             prompt = f"# User executed shell command:\n```bash\n$ {cmd}\n```\n# Error:\n```\n{result.error}\n```"
-            self._start_streaming(prompt)
+            await self._start_streaming(prompt)
             return
 
         # Use the formatted prompt from the result
-        self._start_streaming(result.prompt)
+        await self._start_streaming(result.prompt)
 
     async def _generate_context_summary(self, messages: list) -> str:
         """Generate a summary of messages marked for summarization."""
@@ -3228,7 +3228,7 @@ class BalloonsApp(App):
 
     # ===== FORK PROPOSAL HANDLING =====
 
-    def _handle_fork_proposal(
+    async def _handle_fork_proposal(
         self,
         proposal: ForkProposal,
         tool_use_id: str,
@@ -3308,7 +3308,7 @@ class BalloonsApp(App):
         # Update context tree using the same pattern as streaming:
         # start_turn creates the node, finish_turn updates with final content
         context_tree.start_turn(session_id, turn_idx, "system", exchange_id=exchange_id)
-        context_tree.finish_turn(
+        await context_tree.finish_turn(
             session_id, turn_idx, "[Fork proposal]", turn.content_block, []
         )
 
@@ -3563,7 +3563,7 @@ class BalloonsApp(App):
 
     # ===== MERGE PROPOSAL HANDLING =====
 
-    def _handle_merge_proposal(
+    async def _handle_merge_proposal(
         self,
         proposal: MergeProposal,
         tool_use_id: str,
@@ -3606,7 +3606,7 @@ class BalloonsApp(App):
         # start_turn creates the node, finish_turn updates with final content
         turn_idx = len(self.session.turns) - 1
         context_tree.start_turn(session_id, turn_idx, "system", exchange_id=exchange_id)
-        context_tree.finish_turn(
+        await context_tree.finish_turn(
             session_id, turn_idx, "[Merge proposal]", turn.content_block, []
         )
 
@@ -3837,7 +3837,7 @@ class BalloonsApp(App):
             self._update_streaming_count()
 
             context_tree.start_turn(child_session.id, turn_idx, "user", exchange_id=exchange_id)
-            context_tree.finish_turn(
+            await context_tree.finish_turn(
                 child_session.id, turn_idx, result.prompt, TextBlock(text=result.prompt), []
             )
             context_tree.start_turn(child_session.id, turn_idx + 1, "assistant", exchange_id=exchange_id)
@@ -3869,7 +3869,7 @@ class BalloonsApp(App):
             await context_tree.load_all_sessions(child_session)
             await breadcrumb.set_session(child_session)
 
-            self._start_streaming(result.prompt)
+            await self._start_streaming(result.prompt)
 
     async def _apply_pending_fork_binding(
         self,
@@ -4095,7 +4095,7 @@ class BalloonsApp(App):
         await context_tree.load_all_sessions(new_session)
         await breadcrumb.set_session(new_session)
 
-        self._start_streaming(result.prompt)
+        await self._start_streaming(result.prompt)
 
     async def _handle_switch_command(self, name: str = "") -> None:
         """Switch view to a different session or fork.
@@ -5779,7 +5779,7 @@ class BalloonsApp(App):
                 role,
                 parent_goal=parent_goal,
             )
-            self._start_streaming(initial_prompt)
+            await self._start_streaming(initial_prompt)
         else:
             self.notify(f"Session created but binding failed: {bind_result.error}", severity="warning")
 
@@ -5876,7 +5876,7 @@ class BalloonsApp(App):
                 parent_goal=parent_goal,
                 parent_plan=parent_plan,
             )
-            self._start_streaming(initial_prompt)
+            await self._start_streaming(initial_prompt)
         else:
             self.notify(f"Session created but binding failed: {bind_result.error}", severity="warning")
 
@@ -5938,7 +5938,7 @@ class BalloonsApp(App):
 
             # Start streaming with the initial prompt
             if result.initial_prompt:
-                self._start_streaming(result.initial_prompt)
+                await self._start_streaming(result.initial_prompt)
         else:
             self.notify(f"Session created but binding failed: {bind_result.error}", severity="warning")
 
@@ -6220,7 +6220,7 @@ class BalloonsApp(App):
         # Start the review with metadata context
         # The LLM will see the full conversation history plus this prompt
         initial_prompt = f"{session_metadata}\n\nPlease help me review this session. Start by asking for my rubric scores."
-        self._start_streaming(initial_prompt)
+        await self._start_streaming(initial_prompt)
 
         self.notify(f"Started review session with {review_backend_config.name}")
 
@@ -6296,7 +6296,7 @@ class BalloonsApp(App):
             full_prompt = f"{interview_guidance}\nAsk the user what goal they'd like to work on."
 
         # Start streaming with the interview prompt
-        self._start_streaming(full_prompt)
+        await self._start_streaming(full_prompt)
 
     async def _handle_goals_command(self, include_completed: bool = False) -> None:
         """Handle :goals command - list all goals."""
@@ -6625,7 +6625,7 @@ class BalloonsApp(App):
             full_prompt = "".join(message_parts)
 
             # Send to Claude like a normal prompt
-            self._start_streaming(full_prompt)
+            await self._start_streaming(full_prompt)
 
         except Exception as e:
             self.notify(f"Failed to capture screen: {e}", severity="error")

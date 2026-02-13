@@ -112,7 +112,8 @@ class TestStreamingLabels:
         assert turn.content_block.tool_use_id == "tool-123"
         assert turn.content == "File contents..."  # Content is set to preview for labels
 
-    def test_finish_turn_replaces_skeleton_content_block(self):
+    @pytest.mark.asyncio
+    async def test_finish_turn_replaces_skeleton_content_block(self):
         """finish_turn replaces the skeleton content_block with the real one."""
         state = TreeState()
         session = MockSession(id="s1", turns=[])
@@ -136,7 +137,7 @@ class TestStreamingLabels:
 
         # Finish with real content_block that has actual input
         real_block = ToolUseBlock(id="tool-123", name="Read", input={"path": "/test"})
-        state.finish_turn("s1", 0, "Read /test", real_block, [])
+        await state.finish_turn("s1", 0, "Read /test", real_block, [])
 
         turn = state.get_turn("s1", 0)
 
@@ -146,7 +147,8 @@ class TestStreamingLabels:
         assert turn.content_block.name == "Read"
         assert turn.content_block.input == {"path": "/test"}
 
-    def test_finish_turn_calculates_tokens(self):
+    @pytest.mark.asyncio
+    async def test_finish_turn_calculates_tokens(self):
         """finish_turn calculates token count from content_block."""
         state = TreeState()
         session = MockSession(id="s1", turns=[])
@@ -173,14 +175,15 @@ class TestStreamingLabels:
             name="Read",
             input={"file_path": "/home/user/project/src/some_file.py"},
         )
-        state.finish_turn("s1", 0, "", real_block, [])
+        await state.finish_turn("s1", 0, "", real_block, [])
 
         turn = state.get_turn("s1", 0)
 
         # Tokens should now be calculated (non-zero for a real tool use)
         assert turn.tokens > 0
 
-    def test_finish_turn_calculates_tokens_for_tool_result(self):
+    @pytest.mark.asyncio
+    async def test_finish_turn_calculates_tokens_for_tool_result(self):
         """finish_turn calculates token count for tool_result turns."""
         state = TreeState()
         session = MockSession(id="s1", turns=[])
@@ -206,7 +209,7 @@ class TestStreamingLabels:
             tool_use_id="tool-123",
             content="Here is the file contents with lots of text that should result in tokens being counted properly.",
         )
-        state.finish_turn("s1", 0, "", real_block, [])
+        await state.finish_turn("s1", 0, "", real_block, [])
 
         turn = state.get_turn("s1", 0)
 

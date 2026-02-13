@@ -14,3 +14,4 @@ core-executor.workspace = true
 pyo3.workspace = true
 serde_json.workspace = true
 futures-lite.workspace = true
+tiktoken-rs.workspace = true
