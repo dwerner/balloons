@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use balloons_core::{
     GoalData, LmdbEngine, PlanData, SessionBinding, SessionData, StorageClient, TodoData,
-    TodoDependency, TodoPlanLink,
+    TodoDependency, TodoPlanLink, UserPrefs,
 };
 use balloons_supervisor::{ProcessSupervisor, StartRequest};
 
@@ -887,6 +887,49 @@ impl Storage {
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
             serde_json::to_string(&bindings).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    // =========================================================================
+    // User Preferences
+    // =========================================================================
+
+    /// Load user preferences, returns JSON string.
+    ///
+    /// Returns default preferences if none have been saved.
+    ///
+    /// Returns:
+    ///     JSON-encoded UserPrefs
+    fn load_user_prefs(&self, py: Python<'_>) -> PyResult<String> {
+        let client = Arc::clone(&self.client);
+
+        py.allow_threads(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move { client.load_user_prefs().await });
+            let prefs = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+            serde_json::to_string(&prefs).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Save user preferences from JSON string.
+    ///
+    /// Args:
+    ///     prefs_json: JSON-encoded UserPrefs
+    fn save_user_prefs(&self, py: Python<'_>, prefs_json: &str) -> PyResult<()> {
+        let prefs: UserPrefs =
+            serde_json::from_str(prefs_json).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        let client = Arc::clone(&self.client);
+
+        py.allow_threads(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move { client.save_user_prefs(&prefs).await });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })
     }
 }

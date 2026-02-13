@@ -3,7 +3,7 @@ use thiserror::Error;
 
 use crate::generated::{
     GoalData, PlanData, SessionBinding, SessionData, SessionMetadata, TodoData, TodoDependency,
-    TodoPlanLink, TurnData,
+    TodoPlanLink, TurnData, UserPrefs,
 };
 
 #[derive(Debug, Error)]
@@ -258,4 +258,18 @@ pub trait StorageEngine: Send + Sync {
     ///
     /// Returns all bindings regardless of session or entity.
     async fn list_bindings(&self) -> Result<Vec<SessionBinding>>;
+
+    // =========================================================================
+    // User Preferences
+    // =========================================================================
+
+    /// Load user preferences.
+    ///
+    /// Returns default prefs if none have been saved.
+    async fn load_user_prefs(&self) -> Result<UserPrefs>;
+
+    /// Save user preferences.
+    ///
+    /// Replaces all existing preferences with the provided data.
+    async fn save_user_prefs(&self, prefs: &UserPrefs) -> Result<()>;
 }

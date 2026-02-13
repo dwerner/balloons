@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::generated::{
     GoalData, PlanData, SessionBinding, SessionData, SessionMetadata, TodoData, TodoDependency,
-    TodoPlanLink, TurnData, TurnOrder,
+    TodoPlanLink, TurnData, TurnOrder, UserPrefs,
 };
 use super::traits::{Error, Result, StorageEngine};
 
@@ -152,6 +152,9 @@ pub struct LmdbEngine {
 
 /// Key used for session history in the metadata table
 const SESSION_HISTORY_KEY: &str = "session_history";
+
+/// Key used for user preferences in the metadata table
+const USER_PREFS_KEY: &str = "user_prefs";
 
 impl LmdbEngine {
     /// Open or create a database at the given path
@@ -1657,6 +1660,38 @@ impl StorageEngine for LmdbEngine {
 
         Ok(bindings)
     }
+
+    // =========================================================================
+    // User Preferences Implementation
+    // =========================================================================
+
+    async fn load_user_prefs(&self) -> Result<UserPrefs> {
+        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        match self.metadata.get(&rtxn, USER_PREFS_KEY).map_err(|e| Error::Database(e.to_string()))? {
+            Some(bytes) => {
+                let prefs: UserPrefs = serde_json::from_slice(bytes)
+                    .map_err(|e| Error::Serialization(e.to_string()))?;
+                Ok(prefs)
+            }
+            None => Ok(UserPrefs {
+                goal_tree_collapsed_ids: vec![],
+            }),
+        }
+    }
+
+    async fn save_user_prefs(&self, prefs: &UserPrefs) -> Result<()> {
+        let bytes = serde_json::to_vec(prefs)
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+
+        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        self.metadata
+            .put(&mut wtxn, USER_PREFS_KEY, &bytes)
+            .map_err(|e| Error::Database(e.to_string()))?;
+        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -2256,6 +2291,91 @@ mod tests {
                 assert_eq!(loaded, session_ids);
             });
         }
+    }
+
+    // =========================================================================
+    // User Preferences Tests
+    // =========================================================================
+
+    #[test]
+    fn test_user_prefs_default() {
+        let dir = TestDir::new("lmdb_test_user_prefs_default");
+        let engine = LmdbEngine::open(dir.db_path()).unwrap();
+
+        future::block_on(async {
+            let prefs = engine.load_user_prefs().await.unwrap();
+            assert!(prefs.goal_tree_collapsed_ids.is_empty());
+        });
+    }
+
+    #[test]
+    fn test_user_prefs_save_and_load() {
+        let dir = TestDir::new("lmdb_test_user_prefs_save_load");
+        let engine = LmdbEngine::open(dir.db_path()).unwrap();
+
+        let prefs = UserPrefs {
+            goal_tree_collapsed_ids: vec![
+                "goal-1".to_string(),
+                "plan-2".to_string(),
+                "todo-3".to_string(),
+            ],
+        };
+
+        future::block_on(async {
+            engine.save_user_prefs(&prefs).await.unwrap();
+            let loaded = engine.load_user_prefs().await.unwrap();
+            assert_eq!(loaded.goal_tree_collapsed_ids, prefs.goal_tree_collapsed_ids);
+        });
+    }
+
+    #[test]
+    fn test_user_prefs_persistence() {
+        let dir = TestDir::new("lmdb_test_user_prefs_persistence");
+        let db_path = dir.db_path();
+
+        let prefs = UserPrefs {
+            goal_tree_collapsed_ids: vec!["goal-abc".to_string(), "plan-xyz".to_string()],
+        };
+
+        // Save and close
+        {
+            let engine = LmdbEngine::open(&db_path).unwrap();
+            future::block_on(async {
+                engine.save_user_prefs(&prefs).await.unwrap();
+            });
+        }
+
+        // Reopen and verify
+        {
+            let engine = LmdbEngine::open(&db_path).unwrap();
+            future::block_on(async {
+                let loaded = engine.load_user_prefs().await.unwrap();
+                assert_eq!(loaded.goal_tree_collapsed_ids, prefs.goal_tree_collapsed_ids);
+            });
+        }
+    }
+
+    #[test]
+    fn test_user_prefs_overwrite() {
+        let dir = TestDir::new("lmdb_test_user_prefs_overwrite");
+        let engine = LmdbEngine::open(dir.db_path()).unwrap();
+
+        future::block_on(async {
+            // Save initial prefs
+            let initial = UserPrefs {
+                goal_tree_collapsed_ids: vec!["node-1".to_string()],
+            };
+            engine.save_user_prefs(&initial).await.unwrap();
+
+            // Save new prefs (should overwrite)
+            let updated = UserPrefs {
+                goal_tree_collapsed_ids: vec!["node-2".to_string(), "node-3".to_string()],
+            };
+            engine.save_user_prefs(&updated).await.unwrap();
+
+            let loaded = engine.load_user_prefs().await.unwrap();
+            assert_eq!(loaded.goal_tree_collapsed_ids, updated.goal_tree_collapsed_ids);
+        });
     }
 
     // =========================================================================

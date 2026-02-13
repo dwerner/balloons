@@ -1503,3 +1503,94 @@ async def get_goal_storage() -> GoalStorage:
     if _goal_storage_instance is None:
         _goal_storage_instance = GoalStorage(DEFAULT_DB_PATH)
     return _goal_storage_instance
+
+
+# =============================================================================
+# User Preferences Storage
+# =============================================================================
+
+
+@dataclass
+class UserPrefs:
+    """User preferences for UI state and settings.
+
+    Mirrors the Rust UserPrefs type. Used to store persistent UI state
+    like which tree nodes are collapsed.
+    """
+    goal_tree_collapsed_ids: list[str] = field(default_factory=list)
+
+
+class UserPrefsStorage:
+    """Async wrapper for user preferences storage using Rust backend.
+
+    Provides load/save operations for user preferences stored in LMDB.
+    """
+
+    # Shared executor
+    _executor: ThreadPoolExecutor | None = None
+    _executor_lock: asyncio.Lock | None = None
+
+    def __init__(self, db_path: str | Path | None = None):
+        """Initialize user prefs storage.
+
+        Args:
+            db_path: Path to the database file. Defaults to ~/.balloons/sessions.lmdb
+        """
+        self._db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
+        self._storage = _get_shared_storage(self._db_path)
+
+    @classmethod
+    async def _get_executor(cls) -> ThreadPoolExecutor:
+        """Get or create the shared thread pool executor."""
+        if cls._executor is None:
+            if cls._executor_lock is None:
+                cls._executor_lock = asyncio.Lock()
+            async with cls._executor_lock:
+                if cls._executor is None:
+                    cls._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="user_prefs")
+        return cls._executor
+
+    async def _run_sync(self, func, *args):
+        """Run a synchronous function in the thread pool."""
+        executor = await self._get_executor()
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(executor, func, *args)
+
+    async def load_prefs(self) -> UserPrefs:
+        """Load user preferences from storage.
+
+        Returns:
+            UserPrefs with current values, or defaults if none saved.
+        """
+        json_data = await self._run_sync(self._storage.load_user_prefs)
+        data = json.loads(json_data)
+        return UserPrefs(
+            goal_tree_collapsed_ids=data.get("goal_tree_collapsed_ids", []),
+        )
+
+    async def save_prefs(self, prefs: UserPrefs) -> None:
+        """Save user preferences to storage.
+
+        Args:
+            prefs: The preferences to save
+        """
+        data = {
+            "goal_tree_collapsed_ids": prefs.goal_tree_collapsed_ids,
+        }
+        json_data = json.dumps(data)
+        await self._run_sync(self._storage.save_user_prefs, json_data)
+
+
+# Singleton instance for UserPrefsStorage
+_user_prefs_instance: UserPrefsStorage | None = None
+
+
+async def get_user_prefs_storage() -> UserPrefsStorage:
+    """Get the default UserPrefsStorage instance (singleton).
+
+    Uses the default database path (~/.balloons/sessions.lmdb).
+    """
+    global _user_prefs_instance
+    if _user_prefs_instance is None:
+        _user_prefs_instance = UserPrefsStorage(DEFAULT_DB_PATH)
+    return _user_prefs_instance

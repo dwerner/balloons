@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::generated::{
     GoalData, PlanData, SessionBinding, SessionData, SessionMetadata, TodoData, TodoDependency,
-    TodoPlanLink, TurnData,
+    TodoPlanLink, TurnData, UserPrefs,
 };
 use super::traits::{Result, StorageEngine};
 
@@ -244,5 +244,19 @@ impl StorageClient {
     /// List all session bindings in the storage.
     pub async fn list_bindings(&self) -> Result<Vec<SessionBinding>> {
         self.engine.list_bindings().await
+    }
+
+    // =========================================================================
+    // User Preferences
+    // =========================================================================
+
+    /// Load user preferences.
+    pub async fn load_user_prefs(&self) -> Result<UserPrefs> {
+        self.engine.load_user_prefs().await
+    }
+
+    /// Save user preferences.
+    pub async fn save_user_prefs(&self, prefs: &UserPrefs) -> Result<()> {
+        self.engine.save_user_prefs(prefs).await
     }
 }

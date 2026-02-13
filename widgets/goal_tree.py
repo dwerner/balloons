@@ -292,6 +292,13 @@ class GoalTreeWidget(Tree):
             self.session_id = session_id
             super().__init__()
 
+    class NodeCollapseChanged(Message):
+        """Fired when a node's expand/collapse state changes."""
+        def __init__(self, entity_id: str, collapsed: bool) -> None:
+            self.entity_id = entity_id
+            self.collapsed = collapsed
+            super().__init__()
+
     # --- Click handling ---
 
     def on_click(self, event: Click) -> None:
@@ -399,6 +406,10 @@ class GoalTreeWidget(Tree):
                     self.post_message(self.ToggleRequested(node.data))
                     if node._allow_expand:
                         node.toggle()
+                        # Track collapse state change for persistence
+                        entity_id = self._get_entity_id_from_node(node)
+                        if entity_id:
+                            self.post_message(self.NodeCollapseChanged(entity_id, not node.is_expanded))
                     event.prevent_default()
                     event.stop()
                     return
@@ -406,6 +417,10 @@ class GoalTreeWidget(Tree):
         elif event.key == "e":
             if node and node._allow_expand:
                 node.toggle()
+                # Track collapse state change for persistence
+                entity_id = self._get_entity_id_from_node(node)
+                if entity_id:
+                    self.post_message(self.NodeCollapseChanged(entity_id, not node.is_expanded))
                 event.prevent_default()
                 event.stop()
                 return
@@ -504,6 +519,10 @@ class GoalTreeWidget(Tree):
         elif event.key == "right":
             if node and node._allow_expand and not node.is_expanded:
                 node.expand()
+                # Track collapse state change for persistence
+                entity_id = self._get_entity_id_from_node(node)
+                if entity_id:
+                    self.post_message(self.NodeCollapseChanged(entity_id, False))
                 event.prevent_default()
                 event.stop()
                 return
@@ -512,6 +531,10 @@ class GoalTreeWidget(Tree):
             if node:
                 if node.is_expanded:
                     node.collapse()
+                    # Track collapse state change for persistence
+                    entity_id = self._get_entity_id_from_node(node)
+                    if entity_id:
+                        self.post_message(self.NodeCollapseChanged(entity_id, True))
                     event.prevent_default()
                     event.stop()
                     return
@@ -520,7 +543,21 @@ class GoalTreeWidget(Tree):
                     event.prevent_default()
                     event.stop()
                     return
+
         await super()._on_key(event)
+
+    def _get_entity_id_from_node(self, node) -> str | None:
+        """Extract the entity ID from a tree node's data."""
+        if not node or not node.data:
+            return None
+        node_type = node.data.get("type")
+        if node_type == "goal":
+            return node.data.get("goal_id")
+        elif node_type == "plan":
+            return node.data.get("plan_id")
+        elif node_type == "todo":
+            return node.data.get("todo_id")
+        return None
 
 
 class GoalTreeView(Vertical):
@@ -676,8 +713,23 @@ class GoalTreeView(Vertical):
         # Register as observer for TreeState (session changes)
         self._tree_state.add_observer(self._on_tree_state_event)
 
-        # Initial build
-        self._rebuild_tree()
+        # Load collapsed state from storage, then build tree
+        self.run_worker(self._load_collapsed_state_and_build(), name="load-collapsed-state")
+
+    async def _load_collapsed_state_and_build(self) -> None:
+        """Load collapsed state from storage, then build the tree."""
+        from core.async_storage import get_user_prefs_storage
+
+        try:
+            storage = await get_user_prefs_storage()
+            prefs = await storage.load_prefs()
+            self._goal_state.set_collapsed_ids(prefs.goal_tree_collapsed_ids)
+        except Exception as e:
+            from core.debug_log import debug_log
+            debug_log.warning(f"Failed to load collapsed state: {e}", category="goal_tree")
+
+        # Build tree with loaded collapsed state (call from UI thread)
+        self.call_from_thread(self._rebuild_tree)
 
     def on_unmount(self) -> None:
         self._goal_state.remove_observer(self._on_goal_state_event)
@@ -900,9 +952,10 @@ class GoalTreeView(Vertical):
         for session in bound_sessions:
             self._add_session_node(goal_node, session, "goal", goal_data.id)
 
-        # Expand if has children
+        # Expand if has children AND not explicitly collapsed
         if child_goals or plans or bound_sessions:
-            goal_node.expand()
+            if not self._goal_state.is_collapsed(goal_data.id):
+                goal_node.expand()
 
     def _add_plan_node(self, parent_node, plan_data: PlanNodeData) -> None:
         """Add a plan node to the tree."""
@@ -924,9 +977,10 @@ class GoalTreeView(Vertical):
         for session in bound_sessions:
             self._add_session_node(plan_node, session, "plan", plan_data.id)
 
-        # Expand if has children (todos or sessions)
+        # Expand if has children AND not explicitly collapsed
         if todos or bound_sessions:
-            plan_node.expand()
+            if not self._goal_state.is_collapsed(plan_data.id):
+                plan_node.expand()
 
     def _add_todo_node(self, parent_node, todo_data: TodoNodeData) -> None:
         """Add a todo node to the tree."""
@@ -943,9 +997,10 @@ class GoalTreeView(Vertical):
         for session in bound_sessions:
             self._add_session_node(todo_node, session, "todo", todo_data.id)
 
-        # Expand if has sessions
+        # Expand if has sessions AND not explicitly collapsed
         if bound_sessions:
-            todo_node.expand()
+            if not self._goal_state.is_collapsed(todo_data.id):
+                todo_node.expand()
 
     def _add_session_node(
         self,
@@ -1500,6 +1555,33 @@ class GoalTreeView(Vertical):
         from core.debug_log import debug_log
         debug_log.debug(f"GoalTreeView received UnbindSessionRequested: session_id={event.session_id}", category="goal_tree")
         self.post_message(self.UnbindSessionClicked(event.session_id))
+
+    def on_goal_tree_widget_node_collapse_changed(self, event: GoalTreeWidget.NodeCollapseChanged) -> None:
+        """Handle collapse state change - update state and persist."""
+        from core.debug_log import debug_log
+        debug_log.debug(f"GoalTreeView collapse changed: {event.entity_id} -> collapsed={event.collapsed}", category="goal_tree")
+
+        # Update in-memory state
+        self._goal_state.set_collapsed(event.entity_id, event.collapsed)
+
+        # Persist to storage (async)
+        self._save_collapsed_state()
+
+    def _save_collapsed_state(self) -> None:
+        """Save collapsed state to user prefs storage (async)."""
+        self.run_worker(self._save_collapsed_state_async(), name="save-collapsed-state")
+
+    async def _save_collapsed_state_async(self) -> None:
+        """Async worker to save collapsed state to storage."""
+        from core.async_storage import get_user_prefs_storage, UserPrefs
+
+        try:
+            storage = await get_user_prefs_storage()
+            prefs = UserPrefs(goal_tree_collapsed_ids=self._goal_state.get_collapsed_ids())
+            await storage.save_prefs(prefs)
+        except Exception as e:
+            from core.debug_log import debug_log
+            debug_log.warning(f"Failed to save collapsed state: {e}", category="goal_tree")
 
     def on_tree_node_selected(self, event) -> None:
         """Handle node selection."""

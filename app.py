@@ -167,6 +167,7 @@ class BalloonsApp(App):
 
     ContextTreeView {
         width: 50;
+        display: none;
     }
 
     NestedTreeView {
@@ -176,7 +177,6 @@ class BalloonsApp(App):
 
     GoalTreeView {
         width: 50;
-        display: none;
     }
 
     #chat-container {
@@ -618,6 +618,8 @@ class BalloonsApp(App):
         await self._initialize_session()
         # Register app-level tool handlers
         register_app_tool_handler("screen_snapshot", self._execute_screen_snapshot_tool)
+        # Load goal tree data since it's shown by default
+        await self._ensure_goal_tree_loaded()
 
     def on_unmount(self) -> None:
         """Clean up when the app is unmounted."""
@@ -5988,15 +5990,15 @@ class BalloonsApp(App):
             goal_tree.display = False
             splitter.display = False
         else:
-            # Show whichever was last active (context_tree by default)
-            active = getattr(self, "_active_tree_view", "context")
+            # Show whichever was last active (goal_tree by default)
+            active = getattr(self, "_active_tree_view", "goal")
             if active == "nested":
                 nested_tree.display = True
-            elif active == "goal":
+            elif active == "context":
+                context_tree.display = True
+            else:
                 goal_tree.display = True
                 self.call_later(self._ensure_goal_tree_loaded)
-            else:
-                context_tree.display = True
             splitter.display = True
 
     def action_switch_tree_view(self) -> None:
@@ -6032,14 +6034,14 @@ class BalloonsApp(App):
             self._active_tree_view = "context"
         else:
             # None visible - show the last active one
-            active = getattr(self, "_active_tree_view", "context")
+            active = getattr(self, "_active_tree_view", "goal")
             if active == "nested":
                 nested_tree.display = True
-            elif active == "goal":
+            elif active == "context":
+                context_tree.display = True
+            else:
                 goal_tree.display = True
                 self.call_later(self._ensure_goal_tree_loaded)
-            else:
-                context_tree.display = True
             self.query_one("#splitter", VerticalSplitter).display = True
 
     async def _ensure_goal_tree_loaded(self) -> None:

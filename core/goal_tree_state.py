@@ -195,6 +195,10 @@ class GoalTreeState:
         # Batch loading mode - when True, suppress individual notifications
         self._batch_loading = False
 
+        # Collapsed node IDs (persisted to user prefs)
+        # Nodes are expanded by default; this tracks which are collapsed
+        self._collapsed_ids: set[str] = set()
+
     # --- Observer Management ---
 
     def add_observer(self, callback: GoalTreeObserverCallback) -> None:
@@ -703,3 +707,53 @@ class GoalTreeState:
             "bound_sessions": sum(len(s) for s in self._bound_sessions.values()),
             "unbound_sessions": len(self._unbound_sessions),
         }
+
+    # --- Collapsed State Management ---
+
+    def is_collapsed(self, entity_id: str) -> bool:
+        """Check if a node is collapsed.
+
+        Nodes are expanded by default; only explicitly collapsed nodes return True.
+        """
+        return entity_id in self._collapsed_ids
+
+    def set_collapsed(self, entity_id: str, collapsed: bool) -> None:
+        """Set the collapsed state of a node.
+
+        Args:
+            entity_id: The ID of the goal, plan, or todo
+            collapsed: True to collapse, False to expand
+        """
+        if collapsed:
+            self._collapsed_ids.add(entity_id)
+        else:
+            self._collapsed_ids.discard(entity_id)
+
+    def toggle_collapsed(self, entity_id: str) -> bool:
+        """Toggle the collapsed state of a node.
+
+        Returns:
+            The new collapsed state (True if now collapsed)
+        """
+        if entity_id in self._collapsed_ids:
+            self._collapsed_ids.discard(entity_id)
+            return False
+        else:
+            self._collapsed_ids.add(entity_id)
+            return True
+
+    def get_collapsed_ids(self) -> list[str]:
+        """Get list of all collapsed node IDs.
+
+        Returns:
+            List of entity IDs that are collapsed
+        """
+        return list(self._collapsed_ids)
+
+    def set_collapsed_ids(self, collapsed_ids: list[str]) -> None:
+        """Set the collapsed node IDs (used when loading from storage).
+
+        Args:
+            collapsed_ids: List of entity IDs that should be collapsed
+        """
+        self._collapsed_ids = set(collapsed_ids)
