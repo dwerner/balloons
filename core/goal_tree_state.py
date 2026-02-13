@@ -464,6 +464,12 @@ class GoalTreeState:
 
         self._all_session_ids.add(session.session_id)
 
+    def remove_unbound_session(self, session_id: str) -> None:
+        """Remove a session from the unbound sessions list."""
+        self._unbound_sessions = [s for s in self._unbound_sessions if s.session_id != session_id]
+        self._all_session_ids.discard(session_id)
+        self._notify(GoalTreeEvent.SESSION_UNBOUND, {"session_id": session_id})
+
     def get_bound_sessions(self, entity_id: str) -> list[SessionNodeData]:
         """Get sessions bound to an entity."""
         return self._bound_sessions.get(entity_id, [])

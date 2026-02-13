@@ -742,3 +742,63 @@ class TestBindingInfo:
             assert preview == ""
         finally:
             core.goal_commands.get_goal_storage = original_get
+
+
+class TestTodoUndone:
+    """Tests for :todo-undone command."""
+
+    @pytest.mark.asyncio
+    async def test_undone_completed_todo(self, goal_storage, sample_todo):
+        """Test reverting a completed todo back to pending."""
+        # Mark the todo as completed and save it
+        sample_todo.status = "completed"
+        sample_todo.completed_at = datetime.now().isoformat()
+        await goal_storage.save_todo(sample_todo)
+
+        executor = GoalCommandExecutor(goal_storage)
+
+        # Revert it
+        result = await executor.mark_todo_undone(sample_todo.id)
+
+        assert result.success
+        assert result.todo is not None
+        assert result.todo.status == "pending"
+        assert result.todo.completed_at is None
+        assert "pending" in result.formatted.lower()
+
+    @pytest.mark.asyncio
+    async def test_undone_not_found(self, goal_storage):
+        """Test reverting a todo that doesn't exist."""
+        executor = GoalCommandExecutor(goal_storage)
+        result = await executor.mark_todo_undone("nonexistent")
+
+        assert not result.success
+        assert "not found" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_undone_not_completed(self, goal_storage, sample_todo):
+        """Test reverting a todo that isn't completed fails."""
+        # Save todo with pending status (default)
+        await goal_storage.save_todo(sample_todo)
+
+        executor = GoalCommandExecutor(goal_storage)
+        result = await executor.mark_todo_undone(sample_todo.id)
+
+        assert not result.success
+        assert "not completed" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_undone_with_prefix(self, goal_storage, sample_todo):
+        """Test reverting a todo using ID prefix."""
+        sample_todo.status = "completed"
+        sample_todo.completed_at = datetime.now().isoformat()
+        await goal_storage.save_todo(sample_todo)
+
+        executor = GoalCommandExecutor(goal_storage)
+
+        # Use just the first 8 characters as prefix
+        prefix = sample_todo.id[:8]
+        result = await executor.mark_todo_undone(prefix)
+
+        assert result.success
+        assert result.todo.status == "pending"

@@ -55,6 +55,15 @@ class TodoDoneResult:
 
 
 @dataclass
+class TodoUndoneResult:
+    """Result of :todo-undone command."""
+    success: bool
+    error: Optional[str] = None
+    todo: Optional[TodoData] = None
+    formatted: str = ""
+
+
+@dataclass
 class TodoDeleteResult:
     """Result of delete_todo command."""
     success: bool
@@ -83,6 +92,7 @@ class UnbindResult:
     error: Optional[str] = None
     released_count: int = 0
     formatted: str = ""
+    released_bindings: list["SessionBinding"] = field(default_factory=list)  # For incremental UI updates
 
 
 class GoalCommandExecutor:
@@ -476,6 +486,52 @@ class GoalCommandExecutor:
         return None
 
     # =========================================================================
+    # :todo-undone command
+    # =========================================================================
+
+    async def mark_todo_undone(self, todo_id: str) -> TodoUndoneResult:
+        """Revert a completed todo back to pending status.
+
+        Use this when a todo was marked done in error.
+        """
+        try:
+            storage = await self._get_storage()
+
+            # Find todo by prefix
+            todo = await self._find_todo_by_prefix(todo_id)
+            if not todo:
+                return TodoUndoneResult(
+                    success=False,
+                    error=f"Todo not found: {todo_id}"
+                )
+
+            # Check it's actually completed
+            if todo.status != "completed":
+                return TodoUndoneResult(
+                    success=False,
+                    error=f"Todo is not completed (status: {todo.status})"
+                )
+
+            # Update status back to pending
+            from datetime import datetime
+            todo.status = "pending"
+            todo.completed_at = None
+            todo.updated_at = datetime.now().isoformat()
+
+            await storage.save_todo(todo)
+
+            formatted = f"[yellow]↶[/yellow] Reverted to pending: [bold]{todo.title}[/bold]"
+
+            return TodoUndoneResult(
+                success=True,
+                todo=todo,
+                formatted=formatted
+            )
+
+        except Exception as e:
+            return TodoUndoneResult(success=False, error=str(e))
+
+    # =========================================================================
     # delete_todo command
     # =========================================================================
 
@@ -629,6 +685,7 @@ class GoalCommandExecutor:
 
             now = datetime.now().isoformat()
             released = 0
+            released_bindings = []
 
             for binding in bindings:
                 if entity_id and not binding.entity_id.startswith(entity_id):
@@ -637,6 +694,7 @@ class GoalCommandExecutor:
                 binding.released_at = now
                 await storage.save_session_binding(binding)
                 released += 1
+                released_bindings.append(binding)
 
             if released == 0 and entity_id:
                 return UnbindResult(
@@ -645,7 +703,12 @@ class GoalCommandExecutor:
                 )
 
             formatted = f"[green]✓[/green] Released {released} binding(s)"
-            return UnbindResult(success=True, released_count=released, formatted=formatted)
+            return UnbindResult(
+                success=True,
+                released_count=released,
+                formatted=formatted,
+                released_bindings=released_bindings,
+            )
 
         except Exception as e:
             return UnbindResult(success=False, error=str(e))
@@ -750,6 +813,12 @@ async def mark_todo_done(todo_id: str, session_id: str) -> TodoDoneResult:
     """Convenience function for marking todo done."""
     executor = GoalCommandExecutor()
     return await executor.mark_todo_done(todo_id, session_id)
+
+
+async def mark_todo_undone(todo_id: str) -> TodoUndoneResult:
+    """Convenience function for reverting todo to pending."""
+    executor = GoalCommandExecutor()
+    return await executor.mark_todo_undone(todo_id)
 
 
 async def delete_todo(todo_id: str) -> TodoDeleteResult:

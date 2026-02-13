@@ -431,6 +431,16 @@ class TodoDoneCommand(Command):
 
 
 @dataclass
+class TodoUndoneCommand(Command):
+    """Revert a completed todo back to pending status.
+
+    Use this when a todo was marked done in error, or when
+    the work needs to be revisited.
+    """
+    todo_id: str = ""  # Required: the todo to revert
+
+
+@dataclass
 class BindCommand(Command):
     """Bind this session to a goal, plan, or todo.
 
@@ -528,6 +538,7 @@ COMMAND_DOCS = [
     (":plans [goal_id]", "List plans (for specific goal if provided)"),
     (":todos [plan_id]", "List priority-ranked todos (for specific plan if provided)"),
     (":todo-done [todo_id]", "Mark bound todo complete (or specify ID)"),
+    (":todo-undone <todo_id>", "Revert completed todo back to pending"),
     (":help", "Show this help"),
 ]
 
@@ -791,6 +802,11 @@ class CommandParser:
         if text == ":todo-done" or text.startswith(":todo-done "):
             todo_id = text[10:].strip() if len(text) > 10 else ""
             return TodoDoneCommand(todo_id=todo_id)
+
+        # Handle :todo-undone <todo_id> - revert completed todo to pending
+        if text.startswith(":todo-undone "):
+            todo_id = text[13:].strip()
+            return TodoUndoneCommand(todo_id=todo_id)
 
         # Handle :bind <type>=<id> [role]
         if text.startswith(":bind"):

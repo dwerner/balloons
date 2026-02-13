@@ -279,17 +279,55 @@ class GoalTreeSyncManager:
             self._goal_state, self._tree_state, session_id, entity_id
         )
 
+    async def refresh_todo(self, todo_id: str) -> None:
+        """Refresh a single todo's data from storage.
+
+        Use this after marking a todo done or updating it, instead of initial_load().
+        Fires TODO_UPDATED event for incremental tree update.
+        """
+        storage = await self._get_storage()
+        todo = await storage.load_todo(todo_id)
+        if todo:
+            plan_ids = await storage.get_plans_for_todo(todo_id)
+            self._goal_state.add_todo(todo, plan_ids)
+
+    async def refresh_goal(self, goal_id: str) -> None:
+        """Refresh a single goal's data from storage.
+
+        Use this after updating a goal, instead of initial_load().
+        Fires GOAL_UPDATED event for incremental tree update.
+        """
+        storage = await self._get_storage()
+        goal = await storage.load_goal(goal_id)
+        if goal:
+            self._goal_state.add_goal(goal)
+
+    async def refresh_plan(self, plan_id: str) -> None:
+        """Refresh a single plan's data from storage.
+
+        Use this after updating a plan, instead of initial_load().
+        Fires PLAN_UPDATED event for incremental tree update.
+        """
+        storage = await self._get_storage()
+        plan = await storage.load_plan(plan_id)
+        if plan:
+            self._goal_state.add_plan(plan)
+
     def on_tree_state_event(self, event, data: dict) -> None:
         """Handle TreeState events to keep goal tree in sync.
 
         This should be registered as an observer on TreeState.
+
+        Note: Metadata-only updates (streaming, tokens, selection) are now
+        handled directly by GoalTreeView for better performance. This handler
+        only processes structural changes (add/remove sessions).
         """
         from core.tree_state import TreeEvent
 
         if event == TreeEvent.SESSION_ADDED:
             session_id = data.get("session_id")
             if session_id:
-                # Schedule async refresh
+                # New session - need to add to goal tree
                 asyncio.create_task(self.refresh_session(session_id))
 
         elif event == TreeEvent.SESSION_REMOVED:
@@ -301,27 +339,15 @@ class GoalTreeSyncManager:
                     asyncio.create_task(
                         self.handle_binding_released(session_id, existing[1])
                     )
-
-        elif event == TreeEvent.SESSION_UPDATED:
-            session_id = data.get("session_id")
-            if session_id:
-                asyncio.create_task(self.refresh_session(session_id))
-
-        elif event == TreeEvent.STREAMING_STARTED:
-            session_id = data.get("session_id")
-            if session_id:
-                asyncio.create_task(self.refresh_session(session_id))
-
-        elif event == TreeEvent.STREAMING_STOPPED:
-            session_id = data.get("session_id")
-            if session_id:
-                asyncio.create_task(self.refresh_session(session_id))
-
-        elif event == TreeEvent.CONTEXT_TOKENS_CHANGED:
-            # Refresh all sessions to update token counts
-            asyncio.create_task(self.refresh_all_sessions())
+                else:
+                    # Remove from unbound sessions
+                    self._goal_state.remove_unbound_session(session_id)
 
         elif event == TreeEvent.FULL_REBUILD:
-            # TreeState was fully rebuilt (e.g., after :title command)
-            # Refresh all session data to pick up new titles, etc.
+            # TreeState was fully rebuilt (e.g., after app load)
+            # Need to resync all session bindings
             asyncio.create_task(self.refresh_all_sessions())
+
+        # Note: SESSION_UPDATED, STREAMING_STARTED, STREAMING_STOPPED,
+        # CONTEXT_TOKENS_CHANGED are handled directly by GoalTreeView
+        # for incremental label updates without storage roundtrips.

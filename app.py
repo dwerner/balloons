@@ -94,6 +94,7 @@ from core import (
     PlansCommand,
     TodosCommand,
     TodoDoneCommand,
+    TodoUndoneCommand,
     BindCommand,
     UnbindCommand,
     debug_log,
@@ -2280,6 +2281,8 @@ class BalloonsApp(App):
             await self._handle_todos_command(cmd.plan_id)
         elif isinstance(cmd, TodoDoneCommand):
             await self._handle_todo_done_command(cmd.todo_id)
+        elif isinstance(cmd, TodoUndoneCommand):
+            await self._handle_todo_undone_command(cmd.todo_id)
         elif isinstance(cmd, BindCommand):
             await self._handle_bind_command(cmd.entity_type, cmd.entity_id, cmd.role)
         elif isinstance(cmd, UnbindCommand):
@@ -5299,9 +5302,21 @@ class BalloonsApp(App):
         result = await mark_todo_done(event.todo_id, self.session.id if self.session else "")
         if result.success:
             self.notify(f"Marked complete: {result.todo.title}")
-            # Refresh the goal tree
-            if self._goal_tree_sync:
-                await self._goal_tree_sync.initial_load()
+            # Incrementally refresh just the todo that changed
+            if self._goal_tree_sync and result.todo:
+                await self._goal_tree_sync.refresh_todo(result.todo.id)
+        else:
+            self.notify(f"Error: {result.error}", severity="error")
+
+    async def on_goal_tree_view_mark_todo_undone_requested(self, event: GoalTreeView.MarkTodoUndoneRequested) -> None:
+        """Handle reverting a completed todo to pending from the goal tree."""
+        from core.goal_commands import mark_todo_undone
+        result = await mark_todo_undone(event.todo_id)
+        if result.success:
+            self.notify(f"Reverted to pending: {result.todo.title}")
+            # Incrementally refresh just the todo that changed
+            if self._goal_tree_sync and result.todo:
+                await self._goal_tree_sync.refresh_todo(result.todo.id)
         else:
             self.notify(f"Error: {result.error}", severity="error")
 
@@ -5325,9 +5340,9 @@ class BalloonsApp(App):
 
         if result.success:
             self.notify(f"Bound session to {event.entity_type}")
-            # Refresh the goal tree
-            if self._goal_tree_sync:
-                await self._goal_tree_sync.initial_load()
+            # Incrementally update just the binding
+            if self._goal_tree_sync and result.binding:
+                await self._goal_tree_sync.handle_binding_created(result.binding)
         else:
             self.notify(f"Error: {result.error}", severity="error")
 
@@ -5405,6 +5420,11 @@ class BalloonsApp(App):
                 unbind_result = await executor.unbind_session(event.session_id)
                 if unbind_result.success:
                     self.notify(f"Unbound session: {session_name}")
+                    # Incrementally update - unbind from old entity
+                    if self._goal_tree_sync and current_binding:
+                        await self._goal_tree_sync.handle_binding_released(
+                            event.session_id, current_binding[1]
+                        )
                 else:
                     self.notify(f"Error unbinding: {unbind_result.error}", severity="error")
             else:
@@ -5421,12 +5441,11 @@ class BalloonsApp(App):
 
                 if bind_result.success:
                     self.notify(f"Bound session to {result.entity_type}: {result.entity_title}")
+                    # Incrementally update the binding
+                    if self._goal_tree_sync and bind_result.binding:
+                        await self._goal_tree_sync.handle_binding_created(bind_result.binding)
                 else:
                     self.notify(f"Error binding: {bind_result.error}", severity="error")
-
-            # Refresh the goal tree
-            if self._goal_tree_sync:
-                await self._goal_tree_sync.initial_load()
 
         self.push_screen(
             EntityPickerModal(
@@ -5453,9 +5472,12 @@ class BalloonsApp(App):
 
         if result.success:
             self.notify(result.formatted)
-            # Refresh the goal tree
+            # Incrementally update for each released binding
             if self._goal_tree_sync:
-                await self._goal_tree_sync.initial_load()
+                for binding in result.released_bindings:
+                    await self._goal_tree_sync.handle_binding_released(
+                        binding.session_id, binding.entity_id
+                    )
         else:
             self.notify(f"Error: {result.error}", severity="error")
 
@@ -5562,9 +5584,9 @@ class BalloonsApp(App):
             )
 
             if create_result.success:
-                # Refresh goal tree
-                if self._goal_tree_sync:
-                    await self._goal_tree_sync.initial_load()
+                # Incrementally add the new plan to goal tree
+                if self._goal_tree_sync and create_result.entity_id:
+                    await self._goal_tree_sync.refresh_plan(create_result.entity_id)
                 self.notify(f"Created plan: {result.title}")
 
                 # If user clicked "Create & Begin", start a bound session
@@ -5630,9 +5652,9 @@ class BalloonsApp(App):
             )
 
             if create_result.success:
-                # Refresh goal tree
-                if self._goal_tree_sync:
-                    await self._goal_tree_sync.initial_load()
+                # Incrementally add the new todo to goal tree
+                if self._goal_tree_sync and create_result.entity_id:
+                    await self._goal_tree_sync.refresh_todo(create_result.entity_id)
                 self.notify(f"Created todo: {result.title}")
 
                 # If user clicked "Create & Begin", start a bound session
@@ -5724,9 +5746,9 @@ class BalloonsApp(App):
         )
 
         if bind_result.success:
-            # Refresh goal tree to show new binding
-            if self._goal_tree_sync:
-                await self._goal_tree_sync.initial_load()
+            # Incrementally add the new binding to goal tree
+            if self._goal_tree_sync and bind_result.binding:
+                await self._goal_tree_sync.handle_binding_created(bind_result.binding)
             self.notify(f"Created session bound to plan ({role})")
 
             # Generate and send initial prompt
@@ -5820,9 +5842,9 @@ class BalloonsApp(App):
         )
 
         if bind_result.success:
-            # Refresh goal tree to show new binding
-            if self._goal_tree_sync:
-                await self._goal_tree_sync.initial_load()
+            # Incrementally add the new binding to goal tree
+            if self._goal_tree_sync and bind_result.binding:
+                await self._goal_tree_sync.handle_binding_created(bind_result.binding)
             self.notify(f"Created session bound to todo ({role})")
 
             # Generate and send initial prompt
@@ -5888,9 +5910,9 @@ class BalloonsApp(App):
         )
 
         if bind_result.success:
-            # Refresh goal tree to show new binding
-            if self._goal_tree_sync:
-                await self._goal_tree_sync.initial_load()
+            # Incrementally add the new binding to goal tree
+            if self._goal_tree_sync and bind_result.binding:
+                await self._goal_tree_sync.handle_binding_created(bind_result.binding)
             self.notify(f"Created session bound to {result.entity_type} ({result.role})")
 
             # Start streaming with the initial prompt
@@ -6337,6 +6359,27 @@ class BalloonsApp(App):
             if result.lifecycle_prompt:
                 # Show follow-up prompt (e.g., plan complete, spike complete)
                 await self._handle_lifecycle_prompt(result.lifecycle_prompt)
+        else:
+            self.notify(f"Error: {result.error}", severity="error")
+
+    async def _handle_todo_undone_command(self, todo_id: str) -> None:
+        """Handle :todo-undone command - revert completed todo to pending.
+
+        Requires a todo_id to be specified.
+        """
+        if not todo_id:
+            self.notify("Usage: :todo-undone <todo_id>", severity="warning")
+            return
+
+        executor = GoalCommandExecutor()
+        result = await executor.mark_todo_undone(todo_id)
+
+        if result.success:
+            self.notify(result.formatted, timeout=5)
+
+            # Refresh the goal tree
+            if self._goal_tree_sync and result.todo:
+                await self._goal_tree_sync.refresh_todo(result.todo.id)
         else:
             self.notify(f"Error: {result.error}", severity="error")
 

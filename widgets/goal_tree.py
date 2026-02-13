@@ -40,6 +40,7 @@ class GoalTreeWidget(Tree):
     - /: search
     - d/Delete: delete entity or session
     - m: mark todo done
+    - !: revert completed todo to pending (undo mark done)
     - b: bind session to current entity (when on goal/plan/todo node)
     - n: create new session bound to current entity
     - r: rebind session to different entity (when on session node)
@@ -232,6 +233,12 @@ class GoalTreeWidget(Tree):
             self.todo_id = todo_id
             super().__init__()
 
+    class MarkTodoUndoneRequested(Message):
+        """Fired when user presses ! on a completed todo to revert it to pending."""
+        def __init__(self, todo_id: str) -> None:
+            self.todo_id = todo_id
+            super().__init__()
+
     class BindSessionRequested(Message):
         """Fired when user presses b to bind current session to entity."""
         def __init__(self, entity_type: str, entity_id: str) -> None:
@@ -416,6 +423,18 @@ class GoalTreeWidget(Tree):
                         event.stop()
                         return
 
+        elif event.key == "exclam":
+            # Revert completed todo to pending
+            if node and node.data:
+                node_type = node.data.get("type")
+                if node_type == "todo":
+                    todo_id = node.data.get("todo_id")
+                    if todo_id:
+                        self.post_message(self.MarkTodoUndoneRequested(todo_id))
+                        event.prevent_default()
+                        event.stop()
+                        return
+
         elif event.key == "b":
             # Bind session to current entity
             if node and node.data:
@@ -551,6 +570,12 @@ class GoalTreeView(Vertical):
             self.todo_id = todo_id
             super().__init__()
 
+    class MarkTodoUndoneRequested(Message):
+        """Fired when user reverts a completed todo back to pending."""
+        def __init__(self, todo_id: str) -> None:
+            self.todo_id = todo_id
+            super().__init__()
+
     class BindSessionRequested(Message):
         """Fired when user wants to bind current session to an entity."""
         def __init__(self, entity_type: str, entity_id: str) -> None:
@@ -643,12 +668,19 @@ class GoalTreeView(Vertical):
     # --- Observer Event Handler ---
 
     def _on_goal_state_event(self, event: GoalTreeEvent, data: dict) -> None:
-        """Handle state change notifications from GoalTreeState."""
+        """Handle state change notifications from GoalTreeState.
+
+        Uses incremental updates where possible to avoid full tree rebuilds.
+        """
+        from core.debug_log import debug_log
+
         if event == GoalTreeEvent.FULL_REBUILD:
             self._rebuild_tree()
 
         elif event == GoalTreeEvent.GOAL_ADDED:
-            self._rebuild_tree()  # Simplest approach for now
+            goal_id = data.get("goal_id")
+            if goal_id:
+                self._add_goal_incrementally(goal_id)
 
         elif event == GoalTreeEvent.GOAL_UPDATED:
             goal_id = data.get("goal_id")
@@ -660,9 +692,13 @@ class GoalTreeView(Vertical):
             if goal_id and goal_id in self._goal_nodes:
                 node = self._goal_nodes.pop(goal_id)
                 node.remove()
+                self._update_root_label()
 
         elif event == GoalTreeEvent.PLAN_ADDED:
-            self._rebuild_tree()
+            plan_id = data.get("plan_id")
+            goal_id = data.get("goal_id")
+            if plan_id and goal_id:
+                self._add_plan_incrementally(plan_id, goal_id)
 
         elif event == GoalTreeEvent.PLAN_UPDATED:
             plan_id = data.get("plan_id")
@@ -670,7 +706,10 @@ class GoalTreeView(Vertical):
                 self._update_plan_label(plan_id)
 
         elif event == GoalTreeEvent.TODO_ADDED:
-            self._rebuild_tree()
+            todo_id = data.get("todo_id")
+            plan_ids = data.get("plan_ids", [])
+            if todo_id and plan_ids:
+                self._add_todo_incrementally(todo_id, plan_ids)
 
         elif event == GoalTreeEvent.TODO_UPDATED:
             todo_id = data.get("todo_id")
@@ -678,10 +717,19 @@ class GoalTreeView(Vertical):
                 self._update_todo_label(todo_id)
 
         elif event == GoalTreeEvent.SESSION_BOUND:
-            self._rebuild_tree()
+            # Incremental session binding - add session to entity
+            entity_type = data.get("entity_type")
+            entity_id = data.get("entity_id")
+            session_id = data.get("session_id")
+            if entity_type and entity_id and session_id:
+                self._bind_session_incrementally(entity_type, entity_id, session_id)
 
         elif event == GoalTreeEvent.SESSION_UNBOUND:
-            self._rebuild_tree()
+            # Incremental session unbinding - remove session from entity
+            entity_id = data.get("entity_id")
+            session_id = data.get("session_id")
+            if session_id:
+                self._unbind_session_incrementally(session_id)
 
         elif event == GoalTreeEvent.SESSION_UPDATED:
             # Session metadata changed (title, tokens, etc.) - update just that label
@@ -692,31 +740,45 @@ class GoalTreeView(Vertical):
     def _on_tree_state_event(self, event: TreeEvent, data: dict) -> None:
         """Handle TreeState events to keep session display in sync.
 
-        Delegates to sync manager if available, or handles directly.
+        For performance, handle session metadata updates directly rather than
+        going through the sync manager (which would trigger a full refresh).
+        Only delegate to sync manager for structural changes.
         """
-        if self._sync_manager:
-            # Let sync manager handle the event (updates GoalTreeState)
+        # These events only need label updates - handle directly for performance
+        if event == TreeEvent.SESSION_SELECTED:
+            session_id = data.get("session_id")
+            prev_id = data.get("prev_session_id")
+            if prev_id and prev_id in self._session_nodes:
+                self._update_session_label(prev_id)
+            if session_id and session_id in self._session_nodes:
+                self._update_session_label(session_id)
+
+        elif event == TreeEvent.STREAMING_STARTED:
+            session_id = data.get("session_id")
+            if session_id and session_id in self._session_nodes:
+                self._update_session_label(session_id)
+
+        elif event == TreeEvent.STREAMING_STOPPED:
+            session_id = data.get("session_id")
+            if session_id and session_id in self._session_nodes:
+                self._update_session_label(session_id)
+
+        elif event == TreeEvent.CONTEXT_TOKENS_CHANGED:
+            # Global context tokens changed - update current session's label
+            # (this affects the token display for the current session)
+            current_session_id = self._tree_state.get_current_session_id()
+            if current_session_id and current_session_id in self._session_nodes:
+                self._update_session_label(current_session_id)
+
+        elif event == TreeEvent.SESSION_UPDATED:
+            # Session metadata changed - update label directly
+            session_id = data.get("session_id")
+            if session_id and session_id in self._session_nodes:
+                self._update_session_label(session_id)
+
+        elif self._sync_manager:
+            # Structural changes (add/remove) go through sync manager
             self._sync_manager.on_tree_state_event(event, data)
-        else:
-            # Direct handling for simple cases
-            if event == TreeEvent.SESSION_SELECTED:
-                # Update current session highlighting
-                session_id = data.get("session_id")
-                prev_id = data.get("prev_session_id")
-                if prev_id and prev_id in self._session_nodes:
-                    self._update_session_label(prev_id)
-                if session_id and session_id in self._session_nodes:
-                    self._update_session_label(session_id)
-
-            elif event == TreeEvent.STREAMING_STARTED:
-                session_id = data.get("session_id")
-                if session_id:
-                    self._update_session_label(session_id)
-
-            elif event == TreeEvent.STREAMING_STOPPED:
-                session_id = data.get("session_id")
-                if session_id:
-                    self._update_session_label(session_id)
 
     def _update_session_label(self, session_id: str) -> None:
         """Update a session node's label from TreeState data."""
@@ -864,6 +926,7 @@ class GoalTreeView(Vertical):
                 "session_id": session.session_id,
                 "bound_to_type": entity_type,
                 "bound_to_id": entity_id,
+                "binding_role": session.binding_role,
             },
             allow_expand=False,  # Sessions are leaf nodes in this view
         )
@@ -1050,6 +1113,206 @@ class GoalTreeView(Vertical):
             f"[dim]({active_goals}g, {pending_todos}+{in_progress}t)[/]"
         )
 
+    # --- Incremental Updates ---
+
+    def _add_goal_incrementally(self, goal_id: str) -> None:
+        """Add a single goal to the tree without full rebuild."""
+        from core.debug_log import debug_log
+        goal_data = self._goal_state.get_goal(goal_id)
+        if not goal_data:
+            debug_log.warning(f"_add_goal_incrementally: goal {goal_id} not found", category="goals")
+            return
+
+        tree = self.query_one("#goal-tree-widget", GoalTreeWidget)
+
+        # Find insertion position (sorted by weight descending)
+        # Insert before first goal with lower weight
+        insert_before = None
+        for node in tree.root.children:
+            node_type = node.data.get("type") if node.data else None
+            if node_type == "goal":
+                existing_goal = self._goal_state.get_goal(node.data.get("goal_id"))
+                if existing_goal and existing_goal.weight < goal_data.weight:
+                    insert_before = node
+                    break
+            elif node_type == "unbound_section":
+                # Insert before unbound section
+                insert_before = node
+                break
+
+        if insert_before:
+            # Insert at specific position by adding after previous sibling
+            # Textual Tree doesn't have insert_before, so we need to rebuild
+            # the portion. For simplicity, add at end then re-sort.
+            self._add_goal_node(tree.root, goal_data)
+            # Re-sort children by moving the new node to correct position
+            # Note: Textual Tree doesn't support reordering, so for now we add at end
+            # TODO: Consider if we need true insertion ordering
+        else:
+            # Add at end (before unbound section if it exists)
+            self._add_goal_node(tree.root, goal_data)
+
+        self._update_root_label()
+        debug_log.info(f"_add_goal_incrementally: added goal {goal_id}", category="goals")
+
+    def _add_plan_incrementally(self, plan_id: str, goal_id: str) -> None:
+        """Add a single plan under its goal without full rebuild."""
+        from core.debug_log import debug_log
+        plan_data = self._goal_state.get_plan(plan_id)
+        if not plan_data:
+            debug_log.warning(f"_add_plan_incrementally: plan {plan_id} not found", category="goals")
+            return
+
+        goal_node = self._goal_nodes.get(goal_id)
+        if not goal_node:
+            debug_log.warning(f"_add_plan_incrementally: goal node {goal_id} not found", category="goals")
+            return
+
+        self._add_plan_node(goal_node, plan_data)
+        goal_node.expand()
+        self._update_goal_label(goal_id)  # Update session count indicator
+        debug_log.info(f"_add_plan_incrementally: added plan {plan_id} to goal {goal_id}", category="goals")
+
+    def _add_todo_incrementally(self, todo_id: str, plan_ids: list[str]) -> None:
+        """Add a single todo under its plan(s) without full rebuild."""
+        from core.debug_log import debug_log
+        todo_data = self._goal_state.get_todo(todo_id)
+        if not todo_data:
+            debug_log.warning(f"_add_todo_incrementally: todo {todo_id} not found", category="goals")
+            return
+
+        # Add to first plan (todos can be under multiple plans but we show under first)
+        if plan_ids:
+            plan_id = plan_ids[0]
+            plan_node = self._plan_nodes.get(plan_id)
+            if plan_node:
+                self._add_todo_node(plan_node, todo_data)
+                plan_node.expand()
+                self._update_plan_label(plan_id)  # Update todo count indicator
+                debug_log.info(f"_add_todo_incrementally: added todo {todo_id} to plan {plan_id}", category="goals")
+            else:
+                debug_log.warning(f"_add_todo_incrementally: plan node {plan_id} not found", category="goals")
+
+        self._update_root_label()
+
+    def _bind_session_incrementally(self, entity_type: str, entity_id: str, session_id: str) -> None:
+        """Add a session to an entity without full rebuild."""
+        from core.debug_log import debug_log
+
+        # Get session data from GoalTreeState
+        sessions = self._goal_state.get_bound_sessions(entity_id)
+        session = next((s for s in sessions if s.session_id == session_id), None)
+        if not session:
+            debug_log.warning(f"_bind_session_incrementally: session {session_id} not found in bound sessions", category="goals")
+            return
+
+        # If session already has a node, remove it first (it may be moving from another entity)
+        if session_id in self._session_nodes:
+            old_node = self._session_nodes.pop(session_id)
+            old_node.remove()
+
+        # Find parent node
+        parent_node = None
+        if entity_type == "goal":
+            parent_node = self._goal_nodes.get(entity_id)
+        elif entity_type == "plan":
+            parent_node = self._plan_nodes.get(entity_id)
+        elif entity_type == "todo":
+            parent_node = self._todo_nodes.get(entity_id)
+
+        if not parent_node:
+            debug_log.warning(f"_bind_session_incrementally: parent node for {entity_type}:{entity_id} not found", category="goals")
+            return
+
+        # Also remove from unbound section if it was there
+        if self._unbound_section_node:
+            for child in list(self._unbound_section_node.children):
+                if child.data and child.data.get("session_id") == session_id:
+                    child.remove()
+                    self._update_unbound_section_label()
+                    break
+
+        self._add_session_node(parent_node, session, entity_type, entity_id)
+        parent_node.expand()
+
+        # Update parent label (session count changed)
+        if entity_type == "goal":
+            self._update_goal_label(entity_id)
+        elif entity_type == "plan":
+            self._update_plan_label(entity_id)
+        elif entity_type == "todo":
+            self._update_todo_label(entity_id)
+
+        debug_log.info(f"_bind_session_incrementally: bound session {session_id} to {entity_type}:{entity_id}", category="goals")
+
+    def _unbind_session_incrementally(self, session_id: str) -> None:
+        """Remove a session from its entity without full rebuild."""
+        from core.debug_log import debug_log
+
+        if session_id not in self._session_nodes:
+            debug_log.warning(f"_unbind_session_incrementally: session node {session_id} not found", category="goals")
+            return
+
+        node = self._session_nodes.pop(session_id)
+        entity_type = node.data.get("bound_to_type") if node.data else None
+        entity_id = node.data.get("bound_to_id") if node.data else None
+        node.remove()
+
+        # Update parent label (session count changed)
+        if entity_type == "goal" and entity_id:
+            self._update_goal_label(entity_id)
+        elif entity_type == "plan" and entity_id:
+            self._update_plan_label(entity_id)
+        elif entity_type == "todo" and entity_id:
+            self._update_todo_label(entity_id)
+
+        # Check if session should move to unbound section
+        unbound = self._goal_state.get_unbound_sessions()
+        unbound_session = next((s for s in unbound if s.session_id == session_id), None)
+        if unbound_session:
+            self._add_to_unbound_section(unbound_session)
+
+        debug_log.info(f"_unbind_session_incrementally: unbound session {session_id}", category="goals")
+
+    def _add_to_unbound_section(self, session: SessionNodeData) -> None:
+        """Add a session to the unbound section, creating section if needed."""
+        tree = self.query_one("#goal-tree-widget", GoalTreeWidget)
+
+        if not self._unbound_section_node:
+            # Create unbound section
+            self._unbound_section_node = tree.root.add(
+                f"[dim]📁 Unbound Sessions (1)[/]",
+                data={"type": "unbound_section"}
+            )
+        else:
+            self._update_unbound_section_label()
+
+        session_label = self._make_session_label(session)
+        session_node = self._unbound_section_node.add(
+            session_label,
+            data={
+                "type": "session",
+                "session_id": session.session_id,
+                "bound_to_type": None,
+                "bound_to_id": None,
+            },
+            allow_expand=False,
+        )
+        self._session_nodes[session.session_id] = session_node
+
+    def _update_unbound_section_label(self) -> None:
+        """Update the unbound section label with current count."""
+        if not self._unbound_section_node:
+            return
+
+        count = len(list(self._unbound_section_node.children))
+        if count == 0:
+            # Remove empty unbound section
+            self._unbound_section_node.remove()
+            self._unbound_section_node = None
+        else:
+            self._unbound_section_node.label = f"[dim]📁 Unbound Sessions ({count})[/]"
+
     # --- Event Handlers ---
 
     def on_goal_tree_widget_activate_requested(self, event: GoalTreeWidget.ActivateRequested) -> None:
@@ -1097,6 +1360,10 @@ class GoalTreeView(Vertical):
     def on_goal_tree_widget_mark_todo_done_requested(self, event: GoalTreeWidget.MarkTodoDoneRequested) -> None:
         """Bubble up mark todo done request."""
         self.post_message(self.MarkTodoDoneRequested(event.todo_id))
+
+    def on_goal_tree_widget_mark_todo_undone_requested(self, event: GoalTreeWidget.MarkTodoUndoneRequested) -> None:
+        """Bubble up mark todo undone request."""
+        self.post_message(self.MarkTodoUndoneRequested(event.todo_id))
 
     def on_goal_tree_widget_bind_session_requested(self, event: GoalTreeWidget.BindSessionRequested) -> None:
         """Bubble up bind session request."""
