@@ -164,8 +164,8 @@ class NestedTreeWidget(Tree):
                     node_type = node.data.get("type")
                     if node_type == "session":
                         session_id = node.data.get("session_id")
-                        debug_log.info(f"LINK DEBUG (nested): ctrl+click on node_type={node_type}, session_id='{session_id}' (len={len(session_id) if session_id else 0})", category="link")
-                        debug_log.info(f"LINK DEBUG (nested): full node.data = {node.data}", category="link")
+                        debug_log.debug(f"LINK DEBUG (nested): ctrl+click on node_type={node_type}, session_id='{session_id}' (len={len(session_id) if session_id else 0})", category="link")
+                        debug_log.debug(f"LINK DEBUG (nested): full node.data = {node.data}", category="link")
                         if session_id:
                             self.post_message(self.LinkRequested(session_id))
                             event.stop()

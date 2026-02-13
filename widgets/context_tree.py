@@ -188,8 +188,8 @@ class SelectableTreeWidget(Tree):
         if event.ctrl:
             if node_type in ("session", "fork", "merge"):
                 session_id = node.data.get("session_id")
-                debug_log.info(f"LINK DEBUG: ctrl+click on node_type={node_type}, session_id='{session_id}' (len={len(session_id) if session_id else 0})", category="link")
-                debug_log.info(f"LINK DEBUG: full node.data = {node.data}", category="link")
+                debug_log.debug(f"LINK DEBUG: ctrl+click on node_type={node_type}, session_id='{session_id}' (len={len(session_id) if session_id else 0})", category="link")
+                debug_log.debug(f"LINK DEBUG: full node.data = {node.data}", category="link")
                 if session_id:
                     self.post_message(self.LinkRequested(session_id))
                     event.stop()
@@ -2053,11 +2053,11 @@ class ContextTreeView(Vertical):
         from core.debug_log import debug_log
         node_data = event.node.data
         if not node_data:
-            debug_log.info("on_tree_node_selected: no node_data", category="tree")
+            debug_log.debug("on_tree_node_selected: no node_data", category="tree")
             return
 
         node_type = node_data.get("type")
-        debug_log.info(f"on_tree_node_selected: type={node_type}, data={node_data}", category="tree")
+        debug_log.debug(f"on_tree_node_selected: type={node_type}, data={node_data}", category="tree")
 
         if node_type == "session":
             # Just show session info in preview - don't activate
@@ -2088,13 +2088,13 @@ class ContextTreeView(Vertical):
             session_id = node_data.get("session_id")
             turn_idx = node_data.get("turn_idx")
             session_data = self._state.get_session(session_id)
-            debug_log.info(f"on_tree_node_selected turn: session_id={session_id}, turn_idx={turn_idx}, session_data_loaded={session_data.is_loaded if session_data else False}", category="tree")
+            debug_log.debug(f"on_tree_node_selected turn: session_id={session_id}, turn_idx={turn_idx}, session_data_loaded={session_data.is_loaded if session_data else False}", category="tree")
             if session_data and session_data.is_loaded and session_data.turns:
                 turn = self._state.get_turn(session_id, turn_idx)
                 if turn:
                     # Get context mode for this turn
                     mode = self._state.get_context_mode(session_id, turn_idx)
-                    debug_log.info(f"on_tree_node_selected: posting TurnInspected for session_id={session_id}, turn_idx={turn_idx}", category="tree")
+                    debug_log.debug(f"on_tree_node_selected: posting TurnInspected for session_id={session_id}, turn_idx={turn_idx}", category="tree")
                     # Send turn data for inspection (includes session_id for cross-session navigation)
                     self.post_message(self.TurnInspected({
                         "type": "turn",

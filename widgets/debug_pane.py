@@ -47,12 +47,13 @@ class LogLevelSelector(Static):
             self.level = level
 
     # Level order from most verbose to most severe
-    LEVELS = [LogLevel.TRACE, LogLevel.DEBUG, LogLevel.INFO, LogLevel.WARNING, LogLevel.ERROR]
+    LEVELS = [LogLevel.TRACE, LogLevel.DEBUG, LogLevel.PERF, LogLevel.INFO, LogLevel.WARNING, LogLevel.ERROR]
 
     LEVEL_LABELS = {
         LogLevel.ERROR: "E",
         LogLevel.WARNING: "W",
         LogLevel.INFO: "I",
+        LogLevel.PERF: "P",
         LogLevel.DEBUG: "D",
         LogLevel.TRACE: "T",
     }
@@ -61,6 +62,7 @@ class LogLevelSelector(Static):
         LogLevel.ERROR: "red",
         LogLevel.WARNING: "yellow",
         LogLevel.INFO: "white",
+        LogLevel.PERF: "green",
         LogLevel.DEBUG: "dim white",
         LogLevel.TRACE: "dim cyan",
     }
@@ -133,6 +135,7 @@ class DebugLogView(RichLog):
         LogLevel.ERROR: "red",
         LogLevel.WARNING: "yellow",
         LogLevel.INFO: "white",
+        LogLevel.PERF: "green",
         LogLevel.DEBUG: "dim white",
         LogLevel.TRACE: "dim cyan",
     }
@@ -141,6 +144,7 @@ class DebugLogView(RichLog):
         LogLevel.ERROR: "E",
         LogLevel.WARNING: "W",
         LogLevel.INFO: "I",
+        LogLevel.PERF: "P",
         LogLevel.DEBUG: "D",
         LogLevel.TRACE: "T",
     }

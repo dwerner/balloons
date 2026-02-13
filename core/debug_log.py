@@ -20,6 +20,7 @@ class LogLevel(Enum):
     ERROR = "error"
     WARNING = "warning"
     INFO = "info"
+    PERF = "perf"  # Performance markers and timing (visible in perf mode)
     DEBUG = "debug"
     TRACE = "trace"  # Very verbose, for scroll events etc.
 
@@ -30,6 +31,7 @@ class LogLevel(Enum):
             cls.ERROR: 50,
             cls.WARNING: 40,
             cls.INFO: 30,
+            cls.PERF: 25,  # Between INFO and DEBUG
             cls.DEBUG: 20,
             cls.TRACE: 10,
         }[level]
@@ -74,6 +76,7 @@ class DebugLog:
             cls._instance._enabled = True
             cls._instance._seq_counter = 0  # Monotonic sequence counter
             cls._instance._min_level = LogLevel.DEBUG  # Filter out TRACE by default
+            cls._instance._perf_mode = False  # Perf mode shows only PERF+ (timing/markers)
         return cls._instance
 
     @property
@@ -100,6 +103,27 @@ class DebugLog:
             try:
                 if hasattr(listener, '__self__') and hasattr(listener.__self__, 'on_level_changed'):
                     listener.__self__.on_level_changed(value)
+            except Exception:
+                pass
+
+    @property
+    def perf_mode(self) -> bool:
+        """Whether perf mode is enabled (shows only PERF level and above)."""
+        return self._perf_mode
+
+    @perf_mode.setter
+    def perf_mode(self, value: bool) -> None:
+        """Enable or disable perf mode.
+
+        When enabled, only PERF, WARNING, and ERROR level messages are shown.
+        This filters out the noise and shows only timing/performance markers.
+        """
+        self._perf_mode = value
+        # Notify listeners that filter changed
+        for listener in self._listeners:
+            try:
+                if hasattr(listener, '__self__') and hasattr(listener.__self__, 'on_perf_mode_changed'):
+                    listener.__self__.on_perf_mode_changed(value)
             except Exception:
                 pass
 
@@ -146,6 +170,11 @@ class DebugLog:
         """Add entry and notify listeners."""
         if not self._enabled:
             return
+        # In perf mode, only show PERF, WARNING, and ERROR
+        # This filters out all the chatty INFO/DEBUG/TRACE logs
+        if self._perf_mode:
+            if entry.level not in (LogLevel.PERF, LogLevel.WARNING, LogLevel.ERROR):
+                return
         # Filter by minimum level
         if LogLevel.severity(entry.level) < LogLevel.severity(self._min_level):
             return
@@ -242,6 +271,25 @@ class DebugLog:
     ) -> None:
         """Log a trace message (very verbose, for scroll events etc.)."""
         entry = self._make_entry(LogLevel.TRACE, message, session_id, category, details, run_id)
+        self._add_entry(entry)
+
+    def perf(
+        self,
+        message: str,
+        session_id: str = "",
+        category: str = "perf",
+        details: dict | None = None,
+        run_id: str = "",
+    ) -> None:
+        """Log a performance marker or timing event.
+
+        These messages are visible even in perf mode, which filters out
+        lower-level messages. Use for:
+        - Operation start/end timing
+        - Performance counters
+        - Key milestones in expensive operations
+        """
+        entry = self._make_entry(LogLevel.PERF, message, session_id, category, details, run_id)
         self._add_entry(entry)
 
     def add_listener(self, callback: Callable[[LogEntry], None]) -> None:
@@ -361,3 +409,55 @@ def timed(name: str, threshold_ms: float = 50.0):
                 category="perf",
                 details={"elapsed_ms": elapsed_ms, "threshold_ms": threshold_ms},
             )
+
+
+@contextmanager
+def perf_timed(name: str, threshold_ms: float = 0.0):
+    """Context manager that always logs timing at PERF level.
+
+    Unlike timed(), this always logs the duration (useful in perf mode).
+    If threshold_ms is set and exceeded, also logs a WARNING.
+
+    Usage:
+        with perf_timed("render_chat_log"):
+            render()
+
+    Args:
+        name: Name to identify the operation in logs
+        threshold_ms: If > 0, also log WARNING when exceeded
+    """
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        debug_log.perf(
+            f"{name}: {elapsed_ms:.1f}ms",
+            category="perf",
+            details={"elapsed_ms": elapsed_ms, "operation": name},
+        )
+        if threshold_ms > 0 and elapsed_ms > threshold_ms:
+            debug_log.warning(
+                f"SLOW: {name} took {elapsed_ms:.1f}ms (threshold: {threshold_ms}ms)",
+                category="perf",
+                details={"elapsed_ms": elapsed_ms, "threshold_ms": threshold_ms},
+            )
+
+
+def perf_marker(name: str, **details) -> None:
+    """Log a performance marker/checkpoint.
+
+    Use this for key milestones like:
+    - "stream_start", "first_token", "stream_end"
+    - "render_begin", "render_complete"
+    - "storage_read", "storage_write"
+
+    Args:
+        name: Marker name
+        **details: Additional details to include
+    """
+    debug_log.perf(
+        f"[{name}]",
+        category="perf",
+        details={"marker": name, **details},
+    )

@@ -303,12 +303,12 @@ class GoalTreeWidget(Tree):
 
         # Debug: log all meta to understand what's available
         from core.debug_log import debug_log
-        debug_log.info(f"GoalTreeWidget click meta: {meta}", category="goal_tree")
+        debug_log.debug(f"GoalTreeWidget click meta: {meta}", category="goal_tree")
 
         # Check if this is a click on [+plan] (on goal nodes)
         if meta.get("new_plan"):
             goal_id = meta.get("goal_id")
-            debug_log.info(f"GoalTreeWidget [+plan] clicked: goal_id={goal_id}", category="goal_tree")
+            debug_log.debug(f"GoalTreeWidget [+plan] clicked: goal_id={goal_id}", category="goal_tree")
             if goal_id:
                 self.post_message(self.NewPlanRequested(goal_id))
                 event.stop()
@@ -317,7 +317,7 @@ class GoalTreeWidget(Tree):
         # Check if this is a click on [+todo] (on plan nodes)
         if meta.get("new_todo"):
             plan_id = meta.get("plan_id")
-            debug_log.info(f"GoalTreeWidget [+todo] clicked: plan_id={plan_id}", category="goal_tree")
+            debug_log.debug(f"GoalTreeWidget [+todo] clicked: plan_id={plan_id}", category="goal_tree")
             if plan_id:
                 self.post_message(self.NewTodoRequested(plan_id))
                 event.stop()
@@ -327,7 +327,7 @@ class GoalTreeWidget(Tree):
         if meta.get("new_session"):
             entity_type = meta.get("entity_type")
             entity_id = meta.get("entity_id")
-            debug_log.info(f"GoalTreeWidget [+session] clicked: type={entity_type}, id={entity_id}", category="goal_tree")
+            debug_log.debug(f"GoalTreeWidget [+session] clicked: type={entity_type}, id={entity_id}", category="goal_tree")
             if entity_type and entity_id:
                 self.post_message(self.NewSessionRequested(entity_type, entity_id))
                 event.stop()
@@ -336,7 +336,7 @@ class GoalTreeWidget(Tree):
         # Check if this is a click on [bind]/[move] (on session nodes)
         if meta.get("bind_session"):
             session_id = meta.get("session_id")
-            debug_log.info(f"GoalTreeWidget [bind]/[move] clicked: session_id={session_id}", category="goal_tree")
+            debug_log.debug(f"GoalTreeWidget [bind]/[move] clicked: session_id={session_id}", category="goal_tree")
             if session_id:
                 self.post_message(self.MoveSessionRequested(session_id))
                 event.stop()
@@ -345,7 +345,7 @@ class GoalTreeWidget(Tree):
         # Check if this is a click on [unbind] (on session nodes)
         if meta.get("unbind_session"):
             session_id = meta.get("session_id")
-            debug_log.info(f"GoalTreeWidget [unbind] clicked: session_id={session_id}", category="goal_tree")
+            debug_log.debug(f"GoalTreeWidget [unbind] clicked: session_id={session_id}", category="goal_tree")
             if session_id:
                 self.post_message(self.UnbindSessionRequested(session_id))
                 event.stop()
@@ -354,7 +354,7 @@ class GoalTreeWidget(Tree):
         # Check if this is a click on [done] (on todo nodes)
         if meta.get("mark_done"):
             todo_id = meta.get("todo_id")
-            debug_log.info(f"GoalTreeWidget [done] clicked: todo_id={todo_id}", category="goal_tree")
+            debug_log.debug(f"GoalTreeWidget [done] clicked: todo_id={todo_id}", category="goal_tree")
             if todo_id:
                 self.post_message(self.MarkTodoDoneRequested(todo_id))
                 event.stop()
@@ -363,7 +363,7 @@ class GoalTreeWidget(Tree):
         # Check if this is a click on [!done] (on completed todo nodes)
         if meta.get("mark_undone"):
             todo_id = meta.get("todo_id")
-            debug_log.info(f"GoalTreeWidget [!done] clicked: todo_id={todo_id}", category="goal_tree")
+            debug_log.debug(f"GoalTreeWidget [!done] clicked: todo_id={todo_id}", category="goal_tree")
             if todo_id:
                 self.post_message(self.MarkTodoUndoneRequested(todo_id))
                 event.stop()
@@ -863,7 +863,7 @@ class GoalTreeView(Vertical):
 
         # Add goals
         goals = self._goal_state.get_all_goals()
-        debug_log.info(f"_rebuild_tree: got {len(goals)} goals from GoalTreeState", category="goals")
+        debug_log.debug(f"_rebuild_tree: got {len(goals)} goals from GoalTreeState", category="goals")
         for goal_node_data in goals:
             self._add_goal_node(tree.root, goal_node_data)
 
@@ -1203,7 +1203,7 @@ class GoalTreeView(Vertical):
             self._add_goal_node(tree.root, goal_data)
 
         self._update_root_label()
-        debug_log.info(f"_add_goal_incrementally: added goal {goal_id}", category="goals")
+        debug_log.debug(f"_add_goal_incrementally: added goal {goal_id}", category="goals")
 
     def _add_plan_incrementally(self, plan_id: str, goal_id: str) -> None:
         """Add a single plan under its goal without full rebuild."""
@@ -1221,7 +1221,7 @@ class GoalTreeView(Vertical):
         self._add_plan_node(goal_node, plan_data)
         goal_node.expand()
         self._update_goal_label(goal_id)  # Update session count indicator
-        debug_log.info(f"_add_plan_incrementally: added plan {plan_id} to goal {goal_id}", category="goals")
+        debug_log.debug(f"_add_plan_incrementally: added plan {plan_id} to goal {goal_id}", category="goals")
 
     def _add_todo_incrementally(self, todo_id: str, plan_ids: list[str]) -> None:
         """Add a single todo under its plan(s) without full rebuild."""
@@ -1239,7 +1239,7 @@ class GoalTreeView(Vertical):
                 self._add_todo_node(plan_node, todo_data)
                 plan_node.expand()
                 self._update_plan_label(plan_id)  # Update todo count indicator
-                debug_log.info(f"_add_todo_incrementally: added todo {todo_id} to plan {plan_id}", category="goals")
+                debug_log.debug(f"_add_todo_incrementally: added todo {todo_id} to plan {plan_id}", category="goals")
             else:
                 debug_log.warning(f"_add_todo_incrementally: plan node {plan_id} not found", category="goals")
 
@@ -1293,7 +1293,7 @@ class GoalTreeView(Vertical):
         elif entity_type == "todo":
             self._update_todo_label(entity_id)
 
-        debug_log.info(f"_bind_session_incrementally: bound session {session_id} to {entity_type}:{entity_id}", category="goals")
+        debug_log.debug(f"_bind_session_incrementally: bound session {session_id} to {entity_type}:{entity_id}", category="goals")
 
     def _unbind_session_incrementally(self, session_id: str) -> None:
         """Remove a session from its entity without full rebuild."""
@@ -1322,7 +1322,7 @@ class GoalTreeView(Vertical):
         if unbound_session:
             self._add_to_unbound_section(unbound_session)
 
-        debug_log.info(f"_unbind_session_incrementally: unbound session {session_id}", category="goals")
+        debug_log.debug(f"_unbind_session_incrementally: unbound session {session_id}", category="goals")
 
     def _add_to_unbound_section(self, session: SessionNodeData) -> None:
         """Add a session to the unbound section, creating section if needed."""
@@ -1443,31 +1443,31 @@ class GoalTreeView(Vertical):
     def on_goal_tree_widget_new_session_requested(self, event: GoalTreeWidget.NewSessionRequested) -> None:
         """Bubble up new session request."""
         from core.debug_log import debug_log
-        debug_log.info(f"GoalTreeView received NewSessionRequested: type={event.entity_type}, id={event.entity_id}", category="goal_tree")
+        debug_log.debug(f"GoalTreeView received NewSessionRequested: type={event.entity_type}, id={event.entity_id}", category="goal_tree")
         self.post_message(self.NewSessionRequested(event.entity_type, event.entity_id))
 
     def on_goal_tree_widget_new_todo_requested(self, event: GoalTreeWidget.NewTodoRequested) -> None:
         """Bubble up new todo request."""
         from core.debug_log import debug_log
-        debug_log.info(f"GoalTreeView received NewTodoRequested: plan_id={event.plan_id}", category="goal_tree")
+        debug_log.debug(f"GoalTreeView received NewTodoRequested: plan_id={event.plan_id}", category="goal_tree")
         self.post_message(self.NewTodoRequested(event.plan_id))
 
     def on_goal_tree_widget_new_plan_requested(self, event: GoalTreeWidget.NewPlanRequested) -> None:
         """Bubble up new plan request."""
         from core.debug_log import debug_log
-        debug_log.info(f"GoalTreeView received NewPlanRequested: goal_id={event.goal_id}", category="goal_tree")
+        debug_log.debug(f"GoalTreeView received NewPlanRequested: goal_id={event.goal_id}", category="goal_tree")
         self.post_message(self.NewPlanRequested(event.goal_id))
 
     def on_goal_tree_widget_move_session_requested(self, event: GoalTreeWidget.MoveSessionRequested) -> None:
         """Bubble up move session request (rebind to different entity)."""
         from core.debug_log import debug_log
-        debug_log.info(f"GoalTreeView received MoveSessionRequested: session_id={event.session_id}", category="goal_tree")
+        debug_log.debug(f"GoalTreeView received MoveSessionRequested: session_id={event.session_id}", category="goal_tree")
         self.post_message(self.MoveSessionRequested(event.session_id))
 
     def on_goal_tree_widget_unbind_session_requested(self, event: GoalTreeWidget.UnbindSessionRequested) -> None:
         """Bubble up unbind session request."""
         from core.debug_log import debug_log
-        debug_log.info(f"GoalTreeView received UnbindSessionRequested: session_id={event.session_id}", category="goal_tree")
+        debug_log.debug(f"GoalTreeView received UnbindSessionRequested: session_id={event.session_id}", category="goal_tree")
         self.post_message(self.UnbindSessionClicked(event.session_id))
 
     def on_tree_node_selected(self, event) -> None:

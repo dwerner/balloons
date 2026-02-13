@@ -296,6 +296,8 @@ class BalloonsApp(App):
         config = get_config()
         if config.debug_log_file:
             debug_log.set_log_file(config.debug_log_file)
+        if config.debug_perf_mode:
+            debug_log.perf_mode = True
         self._initial_session = session  # Will be loaded into manager
         self.streaming = False  # True if active session is streaming
         self._tree_width = 50
@@ -4979,7 +4981,7 @@ class BalloonsApp(App):
         """Handle ctrl+click on a session - populate or append to link command."""
         import re
 
-        debug_log.info(f"LINK DEBUG: event.session_id = '{event.session_id}' (len={len(event.session_id)})", category="link")
+        debug_log.debug(f"LINK DEBUG: event.session_id = '{event.session_id}' (len={len(event.session_id)})", category="link")
 
         # Don't allow linking to the current session
         if self.session and event.session_id == self.session.id:
@@ -5390,7 +5392,7 @@ class BalloonsApp(App):
         from core.async_storage import get_goal_storage
         from widgets.entity_picker import EntityPickerModal, EntityPickerResult
 
-        debug_log.info(f"App received MoveSessionRequested: session_id={event.session_id}", category="goal_tree")
+        debug_log.debug(f"App received MoveSessionRequested: session_id={event.session_id}", category="goal_tree")
 
         # Load the session to get its name
         session = await Session.load(event.session_id)
@@ -5486,7 +5488,7 @@ class BalloonsApp(App):
         from core.debug_log import debug_log
         from core.goal_commands import GoalCommandExecutor
 
-        debug_log.info(f"App received UnbindSessionClicked: session_id={event.session_id}", category="goal_tree")
+        debug_log.debug(f"App received UnbindSessionClicked: session_id={event.session_id}", category="goal_tree")
 
         executor = GoalCommandExecutor()
         result = await executor.unbind_session(event.session_id)
@@ -5509,7 +5511,7 @@ class BalloonsApp(App):
         an appropriate initial prompt based on the entity type and role.
         """
         from core.debug_log import debug_log
-        debug_log.info(f"App received NewSessionRequested: type={event.entity_type}, id={event.entity_id}", category="goal_tree")
+        debug_log.debug(f"App received NewSessionRequested: type={event.entity_type}, id={event.entity_id}", category="goal_tree")
 
         from core.async_storage import get_goal_storage
         from widgets.bound_session_modal import BoundSessionModal, BoundSessionResult
@@ -5561,7 +5563,7 @@ class BalloonsApp(App):
     async def on_goal_tree_view_new_plan_requested(self, event: GoalTreeView.NewPlanRequested) -> None:
         """Handle request to create a new plan under a goal from goal tree."""
         from core.debug_log import debug_log
-        debug_log.info(f"App received NewPlanRequested: goal_id={event.goal_id}", category="goal_tree")
+        debug_log.debug(f"App received NewPlanRequested: goal_id={event.goal_id}", category="goal_tree")
 
         from core.async_storage import get_goal_storage
         from widgets.create_entity_modal import CreatePlanModal, CreatePlanResult
@@ -5628,7 +5630,7 @@ class BalloonsApp(App):
     async def on_goal_tree_view_new_todo_requested(self, event: GoalTreeView.NewTodoRequested) -> None:
         """Handle request to create a new todo under a plan from goal tree."""
         from core.debug_log import debug_log
-        debug_log.info(f"App received NewTodoRequested: plan_id={event.plan_id}", category="goal_tree")
+        debug_log.debug(f"App received NewTodoRequested: plan_id={event.plan_id}", category="goal_tree")
 
         from core.async_storage import get_goal_storage
         from widgets.create_entity_modal import CreateTodoModal, CreateTodoResult

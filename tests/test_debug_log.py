@@ -126,9 +126,46 @@ class TestDebugLog:
     def test_level_severity(self):
         """Test that log levels have correct severity ordering."""
         assert LogLevel.severity(LogLevel.TRACE) < LogLevel.severity(LogLevel.DEBUG)
-        assert LogLevel.severity(LogLevel.DEBUG) < LogLevel.severity(LogLevel.INFO)
+        assert LogLevel.severity(LogLevel.DEBUG) < LogLevel.severity(LogLevel.PERF)
+        assert LogLevel.severity(LogLevel.PERF) < LogLevel.severity(LogLevel.INFO)
         assert LogLevel.severity(LogLevel.INFO) < LogLevel.severity(LogLevel.WARNING)
         assert LogLevel.severity(LogLevel.WARNING) < LogLevel.severity(LogLevel.ERROR)
+
+    def test_perf_creates_entry(self):
+        """Test that perf messages are logged at PERF level."""
+        debug_log.perf("Performance marker", details={"elapsed_ms": 42.5})
+        entries = debug_log.get_entries()
+        assert len(entries) == 1
+        assert entries[0].level == LogLevel.PERF
+        assert entries[0].message == "Performance marker"
+        assert entries[0].category == "perf"
+        assert entries[0].details == {"elapsed_ms": 42.5}
+
+    def test_perf_mode_filters_non_perf_messages(self):
+        """Test that perf mode only shows PERF and higher severity."""
+        original_perf_mode = debug_log.perf_mode
+        try:
+            debug_log.perf_mode = True
+            debug_log.trace("Trace message")
+            debug_log.debug("Debug message")
+            debug_log.info("Info message")
+            debug_log.perf("Perf marker")
+            debug_log.warning("Warning message")
+            debug_log.error("Error message")
+
+            entries = debug_log.get_entries()
+            levels = [e.level for e in entries]
+
+            # Only PERF, WARNING, and ERROR should be present
+            assert LogLevel.TRACE not in levels
+            assert LogLevel.DEBUG not in levels
+            assert LogLevel.INFO not in levels
+            assert LogLevel.PERF in levels
+            assert LogLevel.WARNING in levels
+            assert LogLevel.ERROR in levels
+            assert len(entries) == 3
+        finally:
+            debug_log.perf_mode = original_perf_mode
 
     def test_entries_in_order(self):
         debug_log.info("First")

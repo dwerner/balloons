@@ -604,6 +604,9 @@ class MockDebugLog:
     def warning(self, message: str, category: str = "") -> None:
         self.messages.append(("warning", message, category))
 
+    def trace(self, message: str, category: str = "") -> None:
+        self.messages.append(("trace", message, category))
+
 
 class TestDebugLogging:
     """Test debug logging functionality."""
@@ -618,8 +621,8 @@ class TestDebugLogging:
 
         registry.highlight_tool("tool_1")
 
-        info_messages = [m for level, m, _ in debug_log.messages if level == "info"]
-        assert any("found use=True" in m for m in info_messages)
+        trace_messages = [m for level, m, _ in debug_log.messages if level == "trace"]
+        assert any("found use=True" in m for m in trace_messages)
 
     def test_logs_highlight_tool_not_found(self, sample_widgets):
         """Logs warning when tool not found."""
