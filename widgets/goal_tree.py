@@ -46,6 +46,7 @@ class GoalTreeWidget(Tree):
     - r: rebind session to different entity (when on session node)
     - u: unbind session from entity (when on session node)
     - Click [done]: mark todo as complete (when on pending/in_progress todo)
+    - Click [!done]: revert completed todo to pending
     - Click [+session]: create new session bound to that entity
     - Click [+plan]: create new plan under goal
     - Click [+todo]: create new todo under plan
@@ -155,6 +156,14 @@ class GoalTreeWidget(Tree):
                     })
                     text.append(" ")
                     text.append("[done]", style=Style(color="green", bold=True) + done_style)
+                # [!done] button for completed todos - allows reverting to pending
+                elif todo_status == "completed":
+                    undone_style = Style.from_meta({
+                        "mark_undone": True,
+                        "todo_id": todo_id,
+                    })
+                    text.append(" ")
+                    text.append("[!done]", style=Style(color="yellow", bold=True) + undone_style)
 
                 # [+session] button for todos
                 new_session_style = Style.from_meta({
@@ -348,6 +357,15 @@ class GoalTreeWidget(Tree):
             debug_log.info(f"GoalTreeWidget [done] clicked: todo_id={todo_id}", category="goal_tree")
             if todo_id:
                 self.post_message(self.MarkTodoDoneRequested(todo_id))
+                event.stop()
+                return
+
+        # Check if this is a click on [!done] (on completed todo nodes)
+        if meta.get("mark_undone"):
+            todo_id = meta.get("todo_id")
+            debug_log.info(f"GoalTreeWidget [!done] clicked: todo_id={todo_id}", category="goal_tree")
+            if todo_id:
+                self.post_message(self.MarkTodoUndoneRequested(todo_id))
                 event.stop()
                 return
 
@@ -705,6 +723,13 @@ class GoalTreeView(Vertical):
             if plan_id:
                 self._update_plan_label(plan_id)
 
+        elif event == GoalTreeEvent.PLAN_REMOVED:
+            plan_id = data.get("plan_id")
+            if plan_id and plan_id in self._plan_nodes:
+                node = self._plan_nodes.pop(plan_id)
+                node.remove()
+                self._update_root_label()
+
         elif event == GoalTreeEvent.TODO_ADDED:
             todo_id = data.get("todo_id")
             plan_ids = data.get("plan_ids", [])
@@ -715,6 +740,13 @@ class GoalTreeView(Vertical):
             todo_id = data.get("todo_id")
             if todo_id:
                 self._update_todo_label(todo_id)
+
+        elif event == GoalTreeEvent.TODO_REMOVED:
+            todo_id = data.get("todo_id")
+            if todo_id and todo_id in self._todo_nodes:
+                node = self._todo_nodes.pop(todo_id)
+                node.remove()
+                self._update_root_label()
 
         elif event == GoalTreeEvent.SESSION_BOUND:
             # Incremental session binding - add session to entity
@@ -970,18 +1002,26 @@ class GoalTreeView(Vertical):
             "abandoned": "[red]✗[/]",
         }.get(goal_data.status, "○")
 
-        weight = goal_data.weight
-        weight_bar = "█" * min(weight, 5) + "░" * max(0, 5 - weight)
-
         title = goal_data.title
         # No truncation - let tree widget handle overflow
+
+        # Progress bar based on todo completion
+        completed, total = self._goal_state.get_goal_progress(goal_data.id)
+        if total > 0:
+            progress_pct = completed / total
+            filled = int(progress_pct * 5)
+            progress_bar = "█" * filled + "░" * (5 - filled)
+            progress_str = f"[dim][{progress_bar}][/] [dim]{completed}/{total}[/]"
+        else:
+            # No todos yet - show empty bar
+            progress_str = "[dim][░░░░░][/] [dim]0/0[/]"
 
         session_count = len(goal_data.bound_session_ids)
         session_indicator = f" [dim]({session_count}s)[/]" if session_count > 0 else ""
 
         return (
             f"{status_icon} 🎯 [bold]{escape_markup(title)}[/] "
-            f"[dim][{weight_bar}][/]{session_indicator}"
+            f"{progress_str}{session_indicator}"
         )
 
     def _make_plan_label(self, plan_data: PlanNodeData) -> str:
@@ -1087,7 +1127,10 @@ class GoalTreeView(Vertical):
             node.label = self._make_plan_label(plan_data)
 
     def _update_todo_label(self, todo_id: str) -> None:
-        """Update a todo node's label and status data."""
+        """Update a todo node's label and status data.
+
+        Also updates parent goal's progress bar since todo status affects goal progress.
+        """
         node = self._todo_nodes.get(todo_id)
         if not node:
             return
@@ -1098,6 +1141,13 @@ class GoalTreeView(Vertical):
             # (affects whether [done] button is shown)
             if node.data:
                 node.data["todo_status"] = todo_data.status
+
+            # Update parent goal's progress bar
+            # Todo -> Plan -> Goal
+            for plan_id in todo_data.plan_ids:
+                plan_data = self._goal_state.get_plan(plan_id)
+                if plan_data:
+                    self._update_goal_label(plan_data.goal_id)
 
     def _update_root_label(self) -> None:
         """Update root label with stats."""

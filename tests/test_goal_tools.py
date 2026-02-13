@@ -2261,6 +2261,440 @@ class TestGetHierarchy:
         assert "Prefix Test" in result
 
 
+class TestSplitTodo:
+    """Tests for split_todo tool."""
+
+    @pytest.mark.asyncio
+    async def test_split_todo_success(self, goal_storage, mock_session, monkeypatch):
+        """Test successfully splitting a todo into multiple todos."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        goal = GoalData(
+            id="goal-1", title="Goal", description="", weight=5, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal)
+
+        plan = PlanData(
+            id="plan-1", goal_id="goal-1", title="Test Plan", description="",
+            status="active", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan)
+
+        original_todo = TodoData(
+            id="todo-original", title="Large task", description="Original description",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(original_todo)
+        await goal_storage.save_todo_plan_link(TodoPlanLink(
+            todo_id="todo-original", plan_id="plan-1", created_at=now,
+        ))
+
+        result, is_error = await execute_goal_tool(
+            "split_todo",
+            {
+                "todo_id": "todo-original",
+                "new_todos": [
+                    {"title": "First subtask", "description": "Do first thing"},
+                    {"title": "Second subtask", "description": "Do second thing"},
+                ]
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Split todo" in result
+        assert "Large task" in result
+        assert "First subtask" in result
+        assert "Second subtask" in result
+        assert "2 new todos" in result
+
+        # Verify original todo is abandoned
+        updated_original = await goal_storage.load_todo("todo-original")
+        assert updated_original.status == "abandoned"
+        assert "Split into" in updated_original.description
+
+        # Verify new todos were created
+        all_todos = await goal_storage.list_todos(include_spikes=True)
+        new_todos = [t for t in all_todos if t.id != "todo-original"]
+        assert len(new_todos) == 2
+
+        # Verify new todos are linked to the same plan
+        for new_todo in new_todos:
+            plan_ids = await goal_storage.get_plans_for_todo(new_todo.id)
+            assert "plan-1" in plan_ids
+
+    @pytest.mark.asyncio
+    async def test_split_todo_with_chained_dependencies(self, goal_storage, mock_session, monkeypatch):
+        """Test splitting with chained dependencies creates sequence."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        goal = GoalData(
+            id="goal-1", title="Goal", description="", weight=5, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal)
+
+        plan = PlanData(
+            id="plan-1", goal_id="goal-1", title="Plan", description="",
+            status="active", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan)
+
+        original_todo = TodoData(
+            id="todo-original", title="Sequential work", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(original_todo)
+        await goal_storage.save_todo_plan_link(TodoPlanLink(
+            todo_id="todo-original", plan_id="plan-1", created_at=now,
+        ))
+
+        result, is_error = await execute_goal_tool(
+            "split_todo",
+            {
+                "todo_id": "todo-original",
+                "new_todos": [
+                    {"title": "Step 1"},
+                    {"title": "Step 2"},
+                    {"title": "Step 3"},
+                ],
+                "chain_dependencies": True
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        assert "chained" in result
+
+        # Find the new todos (excluding original)
+        all_todos = await goal_storage.list_todos(include_spikes=True)
+        new_todos = [t for t in all_todos if t.id != "todo-original" and t.status != "abandoned"]
+
+        # Should have 3 new todos
+        assert len(new_todos) == 3
+
+        # Find by title to check dependencies
+        step1 = next(t for t in new_todos if t.title == "Step 1")
+        step2 = next(t for t in new_todos if t.title == "Step 2")
+        step3 = next(t for t in new_todos if t.title == "Step 3")
+
+        # Step 2 should depend on Step 1
+        step2_deps = await goal_storage.get_dependencies(step2.id)
+        assert step1.id in step2_deps
+
+        # Step 3 should depend on Step 2
+        step3_deps = await goal_storage.get_dependencies(step3.id)
+        assert step2.id in step3_deps
+
+        # Step 1 should have no dependencies
+        step1_deps = await goal_storage.get_dependencies(step1.id)
+        assert len(step1_deps) == 0
+
+    @pytest.mark.asyncio
+    async def test_split_todo_with_prefix(self, goal_storage, mock_session, monkeypatch):
+        """Test splitting todo using ID prefix."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo = TodoData(
+            id="abcdef12-3456-7890-abcd-ef1234567890", title="Task", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "split_todo",
+            {
+                "todo_id": "abcdef12",  # Just prefix
+                "new_todos": [
+                    {"title": "Part A"},
+                    {"title": "Part B"},
+                ]
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        updated_todo = await goal_storage.load_todo("abcdef12-3456-7890-abcd-ef1234567890")
+        assert updated_todo.status == "abandoned"
+
+    @pytest.mark.asyncio
+    async def test_split_todo_not_found(self, goal_storage, mock_session, monkeypatch):
+        """Test error when todo doesn't exist."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "split_todo",
+            {
+                "todo_id": "nonexistent",
+                "new_todos": [
+                    {"title": "Part 1"},
+                    {"title": "Part 2"},
+                ]
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "not found" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_split_todo_missing_todo_id(self, goal_storage, mock_session, monkeypatch):
+        """Test error when todo_id is missing."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "split_todo",
+            {
+                "new_todos": [
+                    {"title": "Part 1"},
+                    {"title": "Part 2"},
+                ]
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "todo_id is required" in result
+
+    @pytest.mark.asyncio
+    async def test_split_todo_missing_new_todos(self, goal_storage, mock_session, monkeypatch):
+        """Test error when new_todos is missing."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo = TodoData(
+            id="todo-1", title="Task", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "split_todo",
+            {
+                "todo_id": "todo-1",
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "new_todos is required" in result
+
+    @pytest.mark.asyncio
+    async def test_split_todo_too_few_new_todos(self, goal_storage, mock_session, monkeypatch):
+        """Test error when only one new todo is provided."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo = TodoData(
+            id="todo-1", title="Task", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "split_todo",
+            {
+                "todo_id": "todo-1",
+                "new_todos": [
+                    {"title": "Single item"},  # Only one
+                ]
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "at least 2" in result
+
+    @pytest.mark.asyncio
+    async def test_split_todo_new_todo_missing_title(self, goal_storage, mock_session, monkeypatch):
+        """Test error when a new todo is missing title."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo = TodoData(
+            id="todo-1", title="Task", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "split_todo",
+            {
+                "todo_id": "todo-1",
+                "new_todos": [
+                    {"title": "Valid title"},
+                    {"description": "Missing title"},  # No title
+                ]
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "title" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_split_completed_todo_error(self, goal_storage, mock_session, monkeypatch):
+        """Test error when trying to split a completed todo."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo = TodoData(
+            id="todo-1", title="Completed task", description="",
+            status="completed", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "split_todo",
+            {
+                "todo_id": "todo-1",
+                "new_todos": [
+                    {"title": "Part 1"},
+                    {"title": "Part 2"},
+                ]
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "Cannot split" in result
+
+    @pytest.mark.asyncio
+    async def test_split_abandoned_todo_error(self, goal_storage, mock_session, monkeypatch):
+        """Test error when trying to split an abandoned todo."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo = TodoData(
+            id="todo-1", title="Abandoned task", description="",
+            status="abandoned", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "split_todo",
+            {
+                "todo_id": "todo-1",
+                "new_todos": [
+                    {"title": "Part 1"},
+                    {"title": "Part 2"},
+                ]
+            },
+            mock_session,
+        )
+
+        assert is_error
+        assert "Cannot split" in result
+
+    @pytest.mark.asyncio
+    async def test_split_todo_inherits_multiple_plan_links(self, goal_storage, mock_session, monkeypatch):
+        """Test that split todos inherit all plan links from original."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        goal = GoalData(
+            id="goal-1", title="Goal", description="", weight=5, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal)
+
+        plan1 = PlanData(
+            id="plan-1", goal_id="goal-1", title="Plan 1", description="",
+            status="active", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan1)
+
+        plan2 = PlanData(
+            id="plan-2", goal_id="goal-1", title="Plan 2", description="",
+            status="active", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan2)
+
+        original_todo = TodoData(
+            id="todo-multi-plan", title="Multi-plan task", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(original_todo)
+        # Link to both plans
+        await goal_storage.save_todo_plan_link(TodoPlanLink(
+            todo_id="todo-multi-plan", plan_id="plan-1", created_at=now,
+        ))
+        await goal_storage.save_todo_plan_link(TodoPlanLink(
+            todo_id="todo-multi-plan", plan_id="plan-2", created_at=now,
+        ))
+
+        result, is_error = await execute_goal_tool(
+            "split_todo",
+            {
+                "todo_id": "todo-multi-plan",
+                "new_todos": [
+                    {"title": "Part A"},
+                    {"title": "Part B"},
+                ]
+            },
+            mock_session,
+        )
+
+        assert not is_error
+
+        # Find the new todos
+        all_todos = await goal_storage.list_todos(include_spikes=True)
+        new_todos = [t for t in all_todos if t.id != "todo-multi-plan" and t.status != "abandoned"]
+
+        # Each new todo should be linked to both plans
+        for new_todo in new_todos:
+            plan_ids = await goal_storage.get_plans_for_todo(new_todo.id)
+            assert len(plan_ids) == 2
+            assert "plan-1" in plan_ids
+            assert "plan-2" in plan_ids
+
+    @pytest.mark.asyncio
+    async def test_split_todo_releases_session_bindings(self, goal_storage, mock_session, monkeypatch):
+        """Test that splitting a todo releases session bindings on original."""
+        from storage_schema import SessionBinding
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo = TodoData(
+            id="todo-bound", title="Bound task", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        # Create a session binding
+        binding = SessionBinding(
+            id="binding-1",
+            session_id="some-session",
+            entity_type="todo",
+            entity_id="todo-bound",
+            role="implementation",
+            created_at=now,
+        )
+        await goal_storage.save_session_binding(binding)
+
+        result, is_error = await execute_goal_tool(
+            "split_todo",
+            {
+                "todo_id": "todo-bound",
+                "new_todos": [
+                    {"title": "Part 1"},
+                    {"title": "Part 2"},
+                ]
+            },
+            mock_session,
+        )
+
+        assert not is_error
+
+        # Verify the binding was released
+        active_bindings = await goal_storage.get_bindings_for_entity("todo", "todo-bound", active_only=True)
+        assert len(active_bindings) == 0
+
+
 class TestUnknownTool:
     """Test handling of unknown tool names."""
 
@@ -2277,3 +2711,479 @@ class TestUnknownTool:
 
         assert is_error
         assert "Unknown" in result
+
+
+class TestMergeTodos:
+    """Tests for merge_todos tool."""
+
+    @pytest.mark.asyncio
+    async def test_merge_todos_success(self, goal_storage, mock_session, monkeypatch):
+        """Test successfully merging multiple todos."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        goal = GoalData(
+            id="goal-1", title="Goal", description="", weight=5, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal)
+
+        plan = PlanData(
+            id="plan-1", goal_id="goal-1", title="Test Plan", description="",
+            status="active", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan)
+
+        # Create two todos to merge
+        todo1 = TodoData(
+            id="todo-1", title="First task", description="Description 1",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo1)
+        await goal_storage.save_todo_plan_link(TodoPlanLink(
+            todo_id="todo-1", plan_id="plan-1", created_at=now,
+        ))
+
+        todo2 = TodoData(
+            id="todo-2", title="Second task", description="Description 2",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo2)
+        await goal_storage.save_todo_plan_link(TodoPlanLink(
+            todo_id="todo-2", plan_id="plan-1", created_at=now,
+        ))
+
+        result, is_error = await execute_goal_tool(
+            "merge_todos",
+            {"todo_ids": ["todo-1", "todo-2"]},
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Merged 2 todos" in result
+        assert "First task" in result
+        assert "Second task" in result
+
+        # Verify source todos are abandoned
+        updated_todo1 = await goal_storage.load_todo("todo-1")
+        updated_todo2 = await goal_storage.load_todo("todo-2")
+        assert updated_todo1.status == "abandoned"
+        assert updated_todo2.status == "abandoned"
+        assert "[Merged into" in updated_todo1.description
+        assert "[Merged into" in updated_todo2.description
+
+        # Verify merged todo was created and linked to plan
+        all_todos = await goal_storage.list_todos(include_spikes=True)
+        merged_todos = [t for t in all_todos if t.status == "pending"]
+        assert len(merged_todos) == 1
+        merged = merged_todos[0]
+
+        plan_ids = await goal_storage.get_plans_for_todo(merged.id)
+        assert "plan-1" in plan_ids
+
+    @pytest.mark.asyncio
+    async def test_merge_todos_with_custom_title(self, goal_storage, mock_session, monkeypatch):
+        """Test merging with custom title and description."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo1 = TodoData(
+            id="todo-1", title="Task A", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo1)
+
+        todo2 = TodoData(
+            id="todo-2", title="Task B", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo2)
+
+        result, is_error = await execute_goal_tool(
+            "merge_todos",
+            {
+                "todo_ids": ["todo-1", "todo-2"],
+                "title": "Combined Task",
+                "description": "Custom merged description",
+            },
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Combined Task" in result
+
+        all_todos = await goal_storage.list_todos(include_spikes=True)
+        merged = [t for t in all_todos if t.status == "pending"][0]
+        assert merged.title == "Combined Task"
+        assert merged.description == "Custom merged description"
+
+    @pytest.mark.asyncio
+    async def test_merge_todos_inherits_dependencies(self, goal_storage, mock_session, monkeypatch):
+        """Test that merged todo inherits dependencies from source todos."""
+        from storage_schema import TodoDependency
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+
+        # Create a prerequisite todo
+        prereq = TodoData(
+            id="prereq-1", title="Prerequisite", description="",
+            status="done", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(prereq)
+
+        # Create two todos that depend on the prerequisite
+        todo1 = TodoData(
+            id="todo-1", title="Task 1", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo1)
+        await goal_storage.save_todo_dependency(TodoDependency(
+            todo_id="todo-1", depends_on_id="prereq-1", created_at=now,
+        ))
+
+        todo2 = TodoData(
+            id="todo-2", title="Task 2", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo2)
+
+        result, is_error = await execute_goal_tool(
+            "merge_todos",
+            {"todo_ids": ["todo-1", "todo-2"]},
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Inherited 1 dependency" in result
+
+        # Verify merged todo depends on prereq
+        all_todos = await goal_storage.list_todos(include_spikes=True)
+        merged = [t for t in all_todos if t.status == "pending"][0]
+        deps = await goal_storage.get_dependencies(merged.id)
+        assert "prereq-1" in deps
+
+    @pytest.mark.asyncio
+    async def test_merge_todos_updates_dependents(self, goal_storage, mock_session, monkeypatch):
+        """Test that todos depending on sources now depend on merged todo."""
+        from storage_schema import TodoDependency
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+
+        # Create todos to merge
+        todo1 = TodoData(
+            id="todo-1", title="Task 1", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo1)
+
+        todo2 = TodoData(
+            id="todo-2", title="Task 2", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo2)
+
+        # Create a todo that depends on one of the source todos
+        dependent = TodoData(
+            id="dependent-1", title="Dependent Task", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(dependent)
+        await goal_storage.save_todo_dependency(TodoDependency(
+            todo_id="dependent-1", depends_on_id="todo-1", created_at=now,
+        ))
+
+        result, is_error = await execute_goal_tool(
+            "merge_todos",
+            {"todo_ids": ["todo-1", "todo-2"]},
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Updated 1 dependent" in result
+
+        # Verify dependent now depends on merged todo
+        all_todos = await goal_storage.list_todos(include_spikes=True)
+        # Find the merged todo - it's the one that's pending and not dependent-1
+        merged = [t for t in all_todos if t.status == "pending" and t.id != "dependent-1"][0]
+
+        deps = await goal_storage.get_dependencies("dependent-1")
+        assert merged.id in deps
+        assert "todo-1" not in deps
+
+    @pytest.mark.asyncio
+    async def test_merge_todos_multiple_plans(self, goal_storage, mock_session, monkeypatch):
+        """Test merging todos from different plans inherits all plan links."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        goal = GoalData(
+            id="goal-1", title="Goal", description="", weight=5, status="active",
+            acceptance_criteria=[], created_at=now, updated_at=now,
+        )
+        await goal_storage.save_goal(goal)
+
+        plan1 = PlanData(
+            id="plan-1", goal_id="goal-1", title="Plan A", description="",
+            status="active", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan1)
+
+        plan2 = PlanData(
+            id="plan-2", goal_id="goal-1", title="Plan B", description="",
+            status="active", created_at=now, updated_at=now,
+        )
+        await goal_storage.save_plan(plan2)
+
+        # Create todos linked to different plans
+        todo1 = TodoData(
+            id="todo-1", title="Task from Plan A", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo1)
+        await goal_storage.save_todo_plan_link(TodoPlanLink(
+            todo_id="todo-1", plan_id="plan-1", created_at=now,
+        ))
+
+        todo2 = TodoData(
+            id="todo-2", title="Task from Plan B", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo2)
+        await goal_storage.save_todo_plan_link(TodoPlanLink(
+            todo_id="todo-2", plan_id="plan-2", created_at=now,
+        ))
+
+        result, is_error = await execute_goal_tool(
+            "merge_todos",
+            {"todo_ids": ["todo-1", "todo-2"]},
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Plan A" in result
+        assert "Plan B" in result
+
+        # Verify merged todo is linked to both plans
+        all_todos = await goal_storage.list_todos(include_spikes=True)
+        merged = [t for t in all_todos if t.status == "pending"][0]
+
+        plan_ids = await goal_storage.get_plans_for_todo(merged.id)
+        assert "plan-1" in plan_ids
+        assert "plan-2" in plan_ids
+
+    @pytest.mark.asyncio
+    async def test_merge_todos_with_spikes(self, goal_storage, mock_session, monkeypatch):
+        """Test merging when one todo is a spike."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo1 = TodoData(
+            id="todo-1", title="Regular task", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo1)
+
+        todo2 = TodoData(
+            id="spike-1", title="Spike task", description="",
+            status="pending", is_spike=True, timebox_minutes=30,
+            created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo2)
+
+        result, is_error = await execute_goal_tool(
+            "merge_todos",
+            {"todo_ids": ["todo-1", "spike-1"]},
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Spike" in result
+        assert "30 min" in result
+
+        # Verify merged is a spike
+        all_todos = await goal_storage.list_todos(include_spikes=True)
+        merged = [t for t in all_todos if t.status == "pending"][0]
+        assert merged.is_spike is True
+        assert merged.timebox_minutes == 30
+
+    @pytest.mark.asyncio
+    async def test_merge_todos_not_enough_todos(self, goal_storage, mock_session, monkeypatch):
+        """Test error when less than 2 todos provided."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "merge_todos",
+            {"todo_ids": ["todo-1"]},
+            mock_session,
+        )
+
+        assert is_error
+        assert "at least 2" in result
+
+    @pytest.mark.asyncio
+    async def test_merge_todos_not_found(self, goal_storage, mock_session, monkeypatch):
+        """Test error when todo not found."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo1 = TodoData(
+            id="todo-1", title="Task", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo1)
+
+        result, is_error = await execute_goal_tool(
+            "merge_todos",
+            {"todo_ids": ["todo-1", "nonexistent"]},
+            mock_session,
+        )
+
+        assert is_error
+        assert "not found" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_merge_completed_todo_error(self, goal_storage, mock_session, monkeypatch):
+        """Test error when trying to merge completed todos."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo1 = TodoData(
+            id="todo-1", title="Completed task", description="",
+            status="completed", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo1)
+
+        todo2 = TodoData(
+            id="todo-2", title="Pending task", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo2)
+
+        result, is_error = await execute_goal_tool(
+            "merge_todos",
+            {"todo_ids": ["todo-1", "todo-2"]},
+            mock_session,
+        )
+
+        assert is_error
+        assert "Cannot merge" in result
+
+    @pytest.mark.asyncio
+    async def test_merge_abandoned_todo_error(self, goal_storage, mock_session, monkeypatch):
+        """Test error when trying to merge abandoned todos."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo1 = TodoData(
+            id="todo-1", title="Abandoned task", description="",
+            status="abandoned", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo1)
+
+        todo2 = TodoData(
+            id="todo-2", title="Pending task", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo2)
+
+        result, is_error = await execute_goal_tool(
+            "merge_todos",
+            {"todo_ids": ["todo-1", "todo-2"]},
+            mock_session,
+        )
+
+        assert is_error
+        assert "Cannot merge" in result
+
+    @pytest.mark.asyncio
+    async def test_merge_todos_with_prefix(self, goal_storage, mock_session, monkeypatch):
+        """Test merging using ID prefixes."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo1 = TodoData(
+            id="abc123-full-uuid", title="Task 1", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo1)
+
+        todo2 = TodoData(
+            id="def456-full-uuid", title="Task 2", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo2)
+
+        result, is_error = await execute_goal_tool(
+            "merge_todos",
+            {"todo_ids": ["abc123", "def456"]},  # Using prefixes
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Merged 2 todos" in result
+
+    @pytest.mark.asyncio
+    async def test_merge_duplicate_ids_deduplicated(self, goal_storage, mock_session, monkeypatch):
+        """Test that duplicate IDs are deduplicated."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo1 = TodoData(
+            id="todo-1", title="Task 1", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo1)
+
+        # Only one unique todo, should fail
+        result, is_error = await execute_goal_tool(
+            "merge_todos",
+            {"todo_ids": ["todo-1", "todo-1"]},
+            mock_session,
+        )
+
+        assert is_error
+        assert "at least 2 distinct" in result
+
+    @pytest.mark.asyncio
+    async def test_merge_todos_releases_bindings(self, goal_storage, mock_session, monkeypatch):
+        """Test that session bindings on source todos are released."""
+        from storage_schema import SessionBinding
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo1 = TodoData(
+            id="todo-1", title="Task 1", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo1)
+
+        todo2 = TodoData(
+            id="todo-2", title="Task 2", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo2)
+
+        # Create a binding for todo-1
+        binding = SessionBinding(
+            id="binding-1",
+            session_id="session-xyz",
+            entity_type="todo",
+            entity_id="todo-1",
+            role="implementation",
+            created_at=now,
+        )
+        await goal_storage.save_session_binding(binding)
+
+        result, is_error = await execute_goal_tool(
+            "merge_todos",
+            {"todo_ids": ["todo-1", "todo-2"]},
+            mock_session,
+        )
+
+        assert not is_error
+
+        # Verify binding was released
+        updated_binding = await goal_storage.load_session_binding("binding-1")
+        assert updated_binding.released_at is not None

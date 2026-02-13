@@ -599,3 +599,10 @@ Separate CLI tool that migrates databases offline.
 | Change field type | Migration to convert | Yes |
 
 **Key principle**: Use serde's flexibility for compatible changes; reserve explicit migrations for breaking changes. Database-level versioning keeps things simple.
+
+---
+
+## See Also
+
+- [Storage Extension Guide](../storage-guide.md) - Step-by-step process for adding new entity types
+- [Backup & Recovery](../backup-recovery.md) - Database backup and recovery procedures

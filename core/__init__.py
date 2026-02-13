@@ -122,14 +122,23 @@ from .command_executor import (
 )
 from .json_stream import StreamingJsonParser
 from .stream_buffer import StreamBuffer, Timer, TimerFactory
-from .task_state import (
+from .stream_state import (
+    # New names (preferred)
+    StreamState,
+    Stream,
+    StreamStatus,
+    StreamType,
+    StreamEvent,
+    SessionStreamInfo,
+    AsyncObserver,
+    get_stream_state,
+    # Backward compatibility aliases
     TaskState,
     Task,
     TaskStatus,
     TaskType,
     TaskEvent,
     SessionTaskInfo,
-    AsyncObserver,
     get_task_state,
 )
 from .queue_state import (
@@ -363,14 +372,22 @@ __all__ = [
     "StreamBuffer",
     "Timer",
     "TimerFactory",
-    # Task state
+    # Stream state (active LLM streams)
+    "StreamState",
+    "Stream",
+    "StreamStatus",
+    "StreamType",
+    "StreamEvent",
+    "SessionStreamInfo",
+    "AsyncObserver",
+    "get_stream_state",
+    # Backward compatibility aliases (deprecated, use Stream* instead)
     "TaskState",
     "Task",
     "TaskStatus",
     "TaskType",
     "TaskEvent",
     "SessionTaskInfo",
-    "AsyncObserver",
     "get_task_state",
     # Queue state
     "QueueState",

@@ -240,9 +240,41 @@ class TestGoalCommandExecutor:
         assert result.todo.status == "completed"
         assert "Marked todo complete" in result.formatted
 
-        # Verify it persisted
+        # Verify it persisted with completion tracking
         updated_todo = await goal_storage.load_todo(sample_todo.id)
         assert updated_todo.status == "completed"
+        assert updated_todo.completed_by_session == session_id
+        assert updated_todo.completed_by == "llm"  # Default is LLM
+
+    @pytest.mark.asyncio
+    async def test_mark_todo_done_by_user(
+        self, goal_storage, sample_goal, sample_plan, sample_todo
+    ):
+        """Test marking a todo as done by user (vs LLM)."""
+        await goal_storage.save_goal(sample_goal)
+        await goal_storage.save_plan(sample_plan)
+        await goal_storage.save_todo(sample_todo)
+
+        # Link todo to plan
+        link = TodoPlanLink(
+            todo_id=sample_todo.id,
+            plan_id=sample_plan.id,
+            created_at=datetime.now().isoformat(),
+        )
+        await goal_storage.save_todo_plan_link(link)
+
+        # Mark it done as user
+        executor = GoalCommandExecutor(goal_storage)
+        session_id = str(uuid.uuid4())
+        result = await executor.mark_todo_done(sample_todo.id[:8], session_id, "user")
+
+        assert result.success
+
+        # Verify completion tracking
+        updated_todo = await goal_storage.load_todo(sample_todo.id)
+        assert updated_todo.status == "completed"
+        assert updated_todo.completed_by_session == session_id
+        assert updated_todo.completed_by == "user"
 
     @pytest.mark.asyncio
     async def test_mark_todo_done_not_found(self, goal_storage):

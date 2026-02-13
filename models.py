@@ -516,7 +516,18 @@ class MessageQueue:
 
 @dataclass
 class Turn:
-    """A single turn in the conversation - one content block with metadata."""
+    """A single turn in the conversation - one content block with metadata.
+
+    Timing fields for diagnosing streaming issues:
+    - started_at: When the turn began (streaming started)
+    - ended_at: When the turn completed (streaming finished)
+    - duration_ms property: Calculated duration in milliseconds
+
+    These help diagnose whether apparent "hangs" are:
+    1. LLM taking long to respond (long duration)
+    2. Streaming getting stuck (started_at set but no ended_at)
+    3. UI not updating (both timestamps present but UI lagging)
+    """
     role: str  # "user", "assistant", "tool", or "system"
     content_block: ContentBlock  # Single content block
     tokens: int = 0
@@ -525,6 +536,25 @@ class Turn:
     summary: str = ""  # Cached summary for SUMMARIZE mode
     exchange_id: Optional[str] = None  # Groups turns in an agentic loop
     sentiment: Optional[Sentiment] = None  # User sentiment rating (assistant turns only)
+    started_at: Optional[str] = None  # ISO timestamp when streaming began
+    ended_at: Optional[str] = None  # ISO timestamp when streaming completed
+
+    @property
+    def duration_ms(self) -> Optional[int]:
+        """Calculate duration in milliseconds if both timestamps are set.
+
+        Returns:
+            Duration in milliseconds, or None if timestamps are missing/invalid
+        """
+        if not self.started_at or not self.ended_at:
+            return None
+        try:
+            start = datetime.fromisoformat(self.started_at)
+            end = datetime.fromisoformat(self.ended_at)
+            delta = end - start
+            return int(delta.total_seconds() * 1000)
+        except (ValueError, TypeError):
+            return None
 
     @property
     def content(self) -> str:

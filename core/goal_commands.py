@@ -83,6 +83,7 @@ class BindResult:
     binding: Optional[SessionBinding] = None
     formatted: str = ""
     entity_id: Optional[str] = None  # ID of created entity (for create_plan/create_todo)
+    entity_title: Optional[str] = None  # Title of bound entity
 
 
 @dataclass
@@ -442,8 +443,16 @@ class GoalCommandExecutor:
     # :todo-done command
     # =========================================================================
 
-    async def mark_todo_done(self, todo_id: str, session_id: str) -> TodoDoneResult:
-        """Mark a todo as complete, triggering lifecycle hooks."""
+    async def mark_todo_done(
+        self, todo_id: str, session_id: str, completed_by: str = "llm"
+    ) -> TodoDoneResult:
+        """Mark a todo as complete, triggering lifecycle hooks.
+
+        Args:
+            todo_id: The todo ID (or prefix) to mark complete
+            session_id: The session that completed it
+            completed_by: Who initiated completion - "llm" or "user"
+        """
         try:
             storage = await self._get_storage()
 
@@ -457,7 +466,7 @@ class GoalCommandExecutor:
 
             # Trigger lifecycle hook
             hooks = LifecycleHooks(storage)
-            prompt = await hooks.on_todo_complete(todo.id, session_id)
+            prompt = await hooks.on_todo_complete(todo.id, session_id, completed_by)
 
             # Reload todo to get updated status
             todo = await storage.load_todo(todo.id)
@@ -656,7 +665,7 @@ class GoalCommandExecutor:
                 f"[green]✓[/green] Bound session to {entity_type}: "
                 f"[bold]{entity_title}[/bold] (role: {role})"
             )
-            return BindResult(success=True, binding=binding, formatted=formatted)
+            return BindResult(success=True, binding=binding, formatted=formatted, entity_title=entity_title)
 
         except Exception as e:
             return BindResult(success=False, error=str(e))
@@ -809,10 +818,12 @@ async def list_todos(plan_id: str = "") -> TodoListResult:
     return await executor.list_todos(plan_id)
 
 
-async def mark_todo_done(todo_id: str, session_id: str) -> TodoDoneResult:
+async def mark_todo_done(
+    todo_id: str, session_id: str, completed_by: str = "llm"
+) -> TodoDoneResult:
     """Convenience function for marking todo done."""
     executor = GoalCommandExecutor()
-    return await executor.mark_todo_done(todo_id, session_id)
+    return await executor.mark_todo_done(todo_id, session_id, completed_by)
 
 
 async def mark_todo_undone(todo_id: str) -> TodoUndoneResult:

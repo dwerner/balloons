@@ -11,9 +11,14 @@ Tool Names:
 - update_plan: Update an existing plan (rename, change status, reparent)
 - create_todo: Create a todo and link it to a plan
 - update_todo: Update an existing todo (rename, change status, reparent, etc.)
+- delete_todo: Permanently delete a todo
+- split_todo: Split a todo into multiple smaller todos
+- merge_todos: Merge multiple todos into a single todo
 - list_goals: List all goals with their status
+- list_plans: List all plans
 - list_todos: List priority-ranked available todos
 - get_todo: Get details of a single todo by ID
+- get_hierarchy: Get the complete hierarchy for any entity
 - mark_todo_done: Mark a todo as complete
 - bind_session: Bind current session to a goal/plan/todo
 - list_all_bindings: List all session bindings with filtering
@@ -44,6 +49,8 @@ GOAL_TOOL_NAMES = {
     "create_todo",
     "update_todo",
     "delete_todo",
+    "split_todo",
+    "merge_todos",
     "list_goals",
     "list_plans",
     "list_todos",
@@ -66,6 +73,8 @@ GOAL_MUTATION_TOOLS = {
     "create_todo",
     "update_todo",
     "delete_todo",
+    "split_todo",
+    "merge_todos",
     "mark_todo_done",
     "bind_session",
     "rebind_session",
@@ -373,6 +382,97 @@ preserve the todo for historical reference instead of permanently deleting it.""
                     }
                 },
                 "required": ["todo_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "split_todo",
+            "description": """Split a todo into multiple smaller todos.
+
+Takes an existing todo and breaks it into multiple new todos. The original
+todo is marked as abandoned with a note indicating it was split. The new
+todos inherit the original's plan linkage and can optionally depend on
+each other in sequence.
+
+Use this when:
+- A todo turns out to be larger than expected
+- You want to break down a complex task into subtasks
+- A todo covers multiple distinct pieces of work
+
+Returns the IDs of the newly created todos.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "todo_id": {
+                        "type": "string",
+                        "description": "ID of the todo to split (can be prefix)"
+                    },
+                    "new_todos": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {
+                                    "type": "string",
+                                    "description": "Title for the new todo (max 80 chars)"
+                                },
+                                "description": {
+                                    "type": "string",
+                                    "description": "Description for the new todo"
+                                }
+                            },
+                            "required": ["title"]
+                        },
+                        "description": "List of new todo specifications to create"
+                    },
+                    "chain_dependencies": {
+                        "type": "boolean",
+                        "description": "If true, each todo depends on the previous one (creates a sequence). Default: false"
+                    }
+                },
+                "required": ["todo_id", "new_todos"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "merge_todos",
+            "description": """Merge multiple todos into a single todo.
+
+Combines several related todos into one, useful when:
+- Similar tasks should be done together
+- Todos were created with too much granularity
+- Consolidating duplicate or overlapping work
+
+The merged todo:
+- Gets a combined title/description from sources
+- Inherits all plan links from source todos
+- Inherits all dependencies from source todos
+- Takes over as the dependency for todos that depended on sources
+
+Source todos are marked as 'merged' (abandoned status).
+Session bindings from source todos are released.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "todo_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of todo IDs to merge (can be prefixes). Minimum 2 required."
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Optional: custom title for merged todo. If not provided, titles are combined."
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Optional: custom description for merged todo. If not provided, descriptions are combined."
+                    }
+                },
+                "required": ["todo_ids"]
             }
         }
     },
@@ -761,6 +861,10 @@ async def execute_goal_tool(
         return await _update_todo(args, storage)
     elif name == "delete_todo":
         return await _delete_todo(args, storage)
+    elif name == "split_todo":
+        return await _split_todo(args, storage)
+    elif name == "merge_todos":
+        return await _merge_todos(args, storage)
     elif name == "list_goals":
         return await _list_goals(args, storage)
     elif name == "list_plans":
@@ -1308,6 +1412,313 @@ async def _delete_todo(args: dict, storage) -> tuple[str, bool]:
     ), False
 
 
+async def _split_todo(args: dict, storage) -> tuple[str, bool]:
+    """Split a todo into multiple smaller todos."""
+    todo_id_prefix = args.get("todo_id", "").strip()
+    if not todo_id_prefix:
+        return "Error: todo_id is required", True
+
+    new_todos_specs = args.get("new_todos", [])
+    if not new_todos_specs:
+        return "Error: new_todos is required (list of {title, description?})", True
+
+    if len(new_todos_specs) < 2:
+        return "Error: new_todos must contain at least 2 items to split", True
+
+    chain_dependencies = args.get("chain_dependencies", False)
+
+    # Find the original todo by prefix
+    all_todos = await storage.list_todos(include_spikes=True)
+    original_todo = None
+    for t in all_todos:
+        if t.id.startswith(todo_id_prefix):
+            original_todo = t
+            break
+
+    if not original_todo:
+        return f"Error: Todo not found: {todo_id_prefix}", True
+
+    # Check if todo can be split (not already completed or abandoned)
+    if original_todo.status in ("completed", "done", "abandoned"):
+        return f"Error: Cannot split a {original_todo.status} todo", True
+
+    # Get the original todo's plan links to inherit
+    plan_ids = await storage.get_plans_for_todo(original_todo.id)
+
+    now = datetime.now().isoformat()
+    created_todos = []
+    previous_todo_id = None
+
+    # Create the new todos
+    for spec in new_todos_specs:
+        title = spec.get("title", "").strip()
+        if not title:
+            # Clean up any already-created todos on error
+            for created in created_todos:
+                await storage.delete_todo(created.id)
+            return "Error: Each new todo must have a title", True
+
+        description = spec.get("description", "").strip()
+
+        new_todo = TodoData(
+            id=str(uuid.uuid4()),
+            title=title[:80],
+            description=description,
+            status="pending",
+            is_spike=False,  # New todos from split are not spikes
+            created_at=now,
+            updated_at=now,
+        )
+
+        await storage.save_todo(new_todo)
+        created_todos.append(new_todo)
+
+        # Link to all of the original's plans
+        for plan_id in plan_ids:
+            link = TodoPlanLink(
+                todo_id=new_todo.id,
+                plan_id=plan_id,
+                created_at=now,
+            )
+            await storage.save_todo_plan_link(link)
+
+        # If chaining dependencies, make this todo depend on the previous one
+        if chain_dependencies and previous_todo_id is not None:
+            dep = TodoDependency(
+                todo_id=new_todo.id,
+                depends_on_id=previous_todo_id,
+                created_at=now,
+            )
+            await storage.save_todo_dependency(dep)
+
+        previous_todo_id = new_todo.id
+
+    # Mark the original todo as abandoned with a note
+    original_todo.status = "abandoned"
+    original_todo.description = (
+        f"[Split into {len(created_todos)} todos: "
+        f"{', '.join(t.id[:8] for t in created_todos)}]\n\n"
+        f"{original_todo.description}"
+    ).strip()
+    original_todo.updated_at = now
+    await storage.save_todo(original_todo)
+
+    # Release any session bindings for the original todo
+    bindings = await storage.get_bindings_for_entity("todo", original_todo.id, active_only=True)
+    for binding in bindings:
+        binding.released_at = now
+        await storage.save_session_binding(binding)
+
+    # Build result message
+    plan_info = ""
+    if plan_ids:
+        plan = await storage.load_plan(plan_ids[0])
+        if plan:
+            plan_info = f"Plan: {plan.title}\n"
+
+    new_todos_list = "\n".join(
+        f"  - {t.title} ({t.id[:8]})"
+        for t in created_todos
+    )
+
+    return (
+        f"Split todo: {original_todo.title}\n"
+        f"Original ID: {original_todo.id} (now abandoned)\n"
+        f"{plan_info}"
+        f"Created {len(created_todos)} new todos:\n{new_todos_list}\n"
+        f"Dependencies: {'chained' if chain_dependencies else 'none'}\n"
+        f"New todo IDs: {', '.join(t.id for t in created_todos)}"
+    ), False
+
+
+async def _merge_todos(args: dict, storage) -> tuple[str, bool]:
+    """Merge multiple todos into a single todo."""
+    todo_id_prefixes = args.get("todo_ids", [])
+    if not todo_id_prefixes or len(todo_id_prefixes) < 2:
+        return "Error: todo_ids must contain at least 2 todo IDs to merge", True
+
+    # Find all todos by prefix
+    all_todos = await storage.list_todos(include_spikes=True)
+    source_todos = []
+    not_found = []
+
+    for prefix in todo_id_prefixes:
+        prefix = prefix.strip()
+        found = None
+        for t in all_todos:
+            if t.id.startswith(prefix):
+                found = t
+                break
+        if found:
+            # Avoid duplicates
+            if found.id not in [st.id for st in source_todos]:
+                source_todos.append(found)
+        else:
+            not_found.append(prefix)
+
+    if not_found:
+        return f"Error: Todos not found: {', '.join(not_found)}", True
+
+    if len(source_todos) < 2:
+        return "Error: Need at least 2 distinct todos to merge", True
+
+    # Check that none of the source todos are already completed or abandoned
+    invalid_status = []
+    for todo in source_todos:
+        if todo.status in ("completed", "done", "abandoned"):
+            invalid_status.append(f"{todo.title} ({todo.status})")
+
+    if invalid_status:
+        return f"Error: Cannot merge completed/abandoned todos: {', '.join(invalid_status)}", True
+
+    now = datetime.now().isoformat()
+
+    # Build merged title and description
+    custom_title = args.get("title", "").strip()
+    custom_description = args.get("description", "").strip()
+
+    if custom_title:
+        merged_title = custom_title[:80]
+    else:
+        # Combine titles
+        titles = [t.title for t in source_todos]
+        merged_title = " + ".join(titles)[:80]
+
+    if custom_description:
+        merged_description = custom_description
+    else:
+        # Combine descriptions
+        descriptions = [t.description for t in source_todos if t.description]
+        if descriptions:
+            merged_description = "\n\n---\n\n".join(descriptions)
+        else:
+            merged_description = ""
+
+    # Create the merged todo
+    merged_todo = TodoData(
+        id=str(uuid.uuid4()),
+        title=merged_title,
+        description=merged_description,
+        status="pending",
+        is_spike=any(t.is_spike for t in source_todos),  # Spike if any source was spike
+        timebox_minutes=max((t.timebox_minutes or 0) for t in source_todos) or None,
+        created_at=now,
+        updated_at=now,
+    )
+    await storage.save_todo(merged_todo)
+
+    # Collect all unique plan IDs from source todos
+    all_plan_ids = set()
+    for todo in source_todos:
+        plan_ids = await storage.get_plans_for_todo(todo.id)
+        all_plan_ids.update(plan_ids)
+
+    # Link merged todo to all plans
+    for plan_id in all_plan_ids:
+        link = TodoPlanLink(
+            todo_id=merged_todo.id,
+            plan_id=plan_id,
+            created_at=now,
+        )
+        await storage.save_todo_plan_link(link)
+
+    # Collect all dependencies from source todos (what they depend on)
+    all_dependency_ids = set()
+    for todo in source_todos:
+        dep_ids = await storage.get_dependencies(todo.id)
+        all_dependency_ids.update(dep_ids)
+
+    # Remove self-references (don't depend on ourselves)
+    source_ids = {t.id for t in source_todos}
+    all_dependency_ids -= source_ids
+
+    # Create dependencies for merged todo
+    for dep_id in all_dependency_ids:
+        dep = TodoDependency(
+            todo_id=merged_todo.id,
+            depends_on_id=dep_id,
+            created_at=now,
+        )
+        await storage.save_todo_dependency(dep)
+
+    # Find todos that depended on any source todo and update them
+    # to depend on the merged todo instead
+    dependents_updated = 0
+    for todo in source_todos:
+        dependent_ids = await storage.get_dependents(todo.id)
+        for dependent_id in dependent_ids:
+            # Skip if the dependent is one of our source todos
+            if dependent_id in source_ids:
+                continue
+
+            # Delete old dependency
+            await storage.delete_todo_dependency(dependent_id, todo.id)
+
+            # Create new dependency on merged todo (avoid duplicates)
+            dep = TodoDependency(
+                todo_id=dependent_id,
+                depends_on_id=merged_todo.id,
+                created_at=now,
+            )
+            await storage.save_todo_dependency(dep)
+            dependents_updated += 1
+
+    # Mark source todos as abandoned (merged) and clean up
+    for todo in source_todos:
+        # Delete plan links
+        plan_ids = await storage.get_plans_for_todo(todo.id)
+        for plan_id in plan_ids:
+            await storage.delete_todo_plan_link(todo.id, plan_id)
+
+        # Delete dependencies (what this todo depends on)
+        dep_ids = await storage.get_dependencies(todo.id)
+        for dep_id in dep_ids:
+            await storage.delete_todo_dependency(todo.id, dep_id)
+
+        # Release session bindings
+        bindings = await storage.get_bindings_for_entity("todo", todo.id, active_only=True)
+        for binding in bindings:
+            binding.released_at = now
+            await storage.save_session_binding(binding)
+
+        # Mark as abandoned with merge note
+        todo.status = "abandoned"
+        todo.description = f"[Merged into {merged_todo.id[:8]}] {todo.description}"
+        todo.updated_at = now
+        await storage.save_todo(todo)
+
+    # Get plan names for display
+    plan_names = []
+    for plan_id in all_plan_ids:
+        plan = await storage.load_plan(plan_id)
+        if plan:
+            plan_names.append(plan.title)
+
+    source_titles = [t.title for t in source_todos]
+
+    result = (
+        f"Merged {len(source_todos)} todos into:\n"
+        f"  Title: {merged_todo.title}\n"
+        f"  ID: {merged_todo.id}\n"
+        f"  Plans: {', '.join(plan_names) if plan_names else 'none'}\n"
+        f"\nSource todos (now abandoned):\n"
+    )
+    for title in source_titles:
+        result += f"  - {title}\n"
+
+    if all_dependency_ids:
+        result += f"\nInherited {len(all_dependency_ids)} dependency(ies)"
+    if dependents_updated:
+        result += f"\nUpdated {dependents_updated} dependent todo(s) to point to merged todo"
+
+    if merged_todo.is_spike:
+        result += f"\nType: Spike"
+        if merged_todo.timebox_minutes:
+            result += f" ({merged_todo.timebox_minutes} min)"
+
+    return result, False
+
+
 async def _list_goals(args: dict, storage) -> tuple[str, bool]:
     """List goals."""
     include_completed = args.get("include_completed", False)
@@ -1548,7 +1959,7 @@ async def _mark_todo_done(args: dict, storage, session) -> tuple[str, bool]:
     result = await executor.mark_todo_done(todo_id, session.id)
 
     if result.success:
-        response = f"Marked complete: {result.todo.title}"
+        response = f"Marked complete: {result.todo.title}\nID: {result.todo.id}"
         if result.lifecycle_prompt:
             response += f"\n\nLifecycle prompt: {result.lifecycle_prompt.prompt_type}"
             response += f"\n{result.lifecycle_prompt.message}"
@@ -1578,7 +1989,9 @@ async def _bind_session(args: dict, storage, session) -> tuple[str, bool]:
     result = await executor.bind_session(session.id, entity_type, entity_id, role)
 
     if result.success:
-        return f"Session bound to {entity_type} with role: {role}", False
+        session_name = session.title or session.id[:8]
+        entity_title = result.entity_title or entity_id
+        return f"Session {session_name} bound to {entity_type} {entity_title} with role: {role}", False
     else:
         return f"Error: {result.error}", True
 

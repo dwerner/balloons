@@ -102,6 +102,7 @@ class LifecycleHooks:
         self,
         todo_id: str,
         session_id: str,
+        completed_by: str = "llm",
     ) -> LifecyclePrompt | None:
         """Hook called when a todo is marked complete.
 
@@ -112,6 +113,7 @@ class LifecycleHooks:
         Args:
             todo_id: The todo being completed
             session_id: The session completing the todo
+            completed_by: Who initiated completion - "llm" or "user"
 
         Returns:
             LifecyclePrompt if user action needed, None otherwise
@@ -124,13 +126,15 @@ class LifecycleHooks:
 
         # Handle spikes separately
         if todo.is_spike:
-            return await self._handle_spike_complete(todo, session_id)
+            return await self._handle_spike_complete(todo, session_id, completed_by)
 
         # Mark todo complete
         now = datetime.now().isoformat()
         todo.status = "completed"
         todo.completed_at = now
         todo.updated_at = now
+        todo.completed_by_session = session_id
+        todo.completed_by = completed_by
         await storage.save_todo(todo)
 
         # Get all plans this todo is linked to
@@ -165,12 +169,14 @@ class LifecycleHooks:
         self,
         spike: TodoData,
         session_id: str,
+        completed_by: str = "llm",
     ) -> LifecyclePrompt:
         """Handle spike completion with promotion/discard options.
 
         Args:
             spike: The spike being completed
             session_id: The session completing the spike
+            completed_by: Who initiated completion - "llm" or "user"
 
         Returns:
             LifecyclePrompt with spike completion options
@@ -182,6 +188,8 @@ class LifecycleHooks:
         spike.status = "completed"
         spike.completed_at = now
         spike.updated_at = now
+        spike.completed_by_session = session_id
+        spike.completed_by = completed_by
         await storage.save_todo(spike)
 
         return LifecyclePrompt(
@@ -699,10 +707,12 @@ class LifecycleHooks:
 # =============================================================================
 
 
-async def on_todo_complete(todo_id: str, session_id: str) -> LifecyclePrompt | None:
+async def on_todo_complete(
+    todo_id: str, session_id: str, completed_by: str = "llm"
+) -> LifecyclePrompt | None:
     """Convenience function for todo completion hook."""
     hooks = LifecycleHooks()
-    return await hooks.on_todo_complete(todo_id, session_id)
+    return await hooks.on_todo_complete(todo_id, session_id, completed_by)
 
 
 async def on_plan_complete(plan_id: str, session_id: str) -> LifecyclePrompt | None:

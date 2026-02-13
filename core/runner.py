@@ -458,6 +458,9 @@ class SessionRunner:
         self._exchange_id = str(uuid.uuid4())
         self._turns = []
         self._user_message_saved = False
+        # Timing tracking for diagnosing streaming hangs
+        self._text_turn_started_at: str | None = None  # When first text arrived
+        self._tool_use_started_at: dict[str, str] = {}  # tool_use_id -> ISO timestamp
         # Clear event queue
         while not self._event_queue.empty():
             try:
@@ -465,24 +468,36 @@ class SessionRunner:
             except asyncio.QueueEmpty:
                 break
 
-    def _create_turn(self, role: str, content: str, content_blocks: list) -> Turn:
-        """Create a Turn with the current exchange_id.
+    def _create_turn(
+        self,
+        role: str,
+        content: str,
+        content_blocks: list,
+        started_at: str | None = None,
+        ended_at: str | None = None,
+    ) -> Turn:
+        """Create a Turn with the current exchange_id and timing info.
 
         Args:
             role: "user", "assistant", or "tool"
             content: Text summary for display (not used directly, content_block provides text)
             content_blocks: List with a single content block
+            started_at: ISO timestamp when this turn began streaming (optional)
+            ended_at: ISO timestamp when this turn completed (optional, defaults to now)
 
         Returns:
-            Turn with exchange_id set
+            Turn with exchange_id and timing fields set
         """
         if not content_blocks:
             raise ValueError("content_blocks must contain exactly one block")
+        now = datetime.now().isoformat()
         return Turn(
             role=role,
             content_block=content_blocks[0],  # Turn takes single content_block
-            timestamp=datetime.now().isoformat(),
+            timestamp=now,
             exchange_id=self._exchange_id,
+            started_at=started_at,
+            ended_at=ended_at or now,  # Default ended_at to now if not specified
         )
 
     def _save_turn_to_session(self, turn: Turn, save_now: bool = False) -> None:
@@ -567,11 +582,17 @@ class SessionRunner:
             # Get turn index for this text turn
             text_turn_idx = len(self.session.turns)
 
-            # Create turn and save to session
-            turn = self._create_turn("assistant", flushed_text, [text_block])
+            # Create turn with timing info and save to session
+            turn = self._create_turn(
+                "assistant",
+                flushed_text,
+                [text_block],
+                started_at=self._text_turn_started_at,
+            )
             self._turns.append(turn)
             self._save_turn_to_session(turn, save_now=save_now)
             self._text_buffer = ""
+            self._text_turn_started_at = None  # Reset for next text turn
 
             if emit_event:
                 # Emit turn_started for this text turn so UI creates a new node
@@ -611,6 +632,9 @@ class SessionRunner:
                 })]
 
             elif isinstance(event, TextDelta):
+                # Track when text streaming started (first text delta)
+                if not self._text_turn_started_at and self._text_buffer == "":
+                    self._text_turn_started_at = datetime.now().isoformat()
                 self._text_buffer += event.text
                 return [self._make_event("text", event.text)]
 
@@ -624,6 +648,9 @@ class SessionRunner:
                 self._current_tool_use_id = event.tool_use_id
                 tool_idx = self._tool_index
                 self._tool_index += 1
+
+                # Track when this tool use started streaming
+                self._tool_use_started_at[event.tool_use_id] = datetime.now().isoformat()
 
                 events.append(self._make_event("tool_use_start", {
                     "tool_use_id": event.tool_use_id,
@@ -651,11 +678,15 @@ class SessionRunner:
                 # Get turn index for this tool_use turn
                 tool_use_turn_idx = len(self.session.turns)
 
+                # Get the start time we recorded when tool use began
+                tool_started_at = self._tool_use_started_at.get(event.tool_use_id)
+
                 # Create tool_use turn and save to session (don't save to disk yet - wait for result)
                 turn = self._create_turn(
                     "assistant",
                     f"[Tool: {event.tool_name}]",
-                    [tool_block]
+                    [tool_block],
+                    started_at=tool_started_at,
                 )
                 self._turns.append(turn)
                 self._save_turn_to_session(turn, save_now=False)
@@ -697,12 +728,21 @@ class SessionRunner:
                 # Get turn index for this tool_result turn
                 tool_result_turn_idx = len(self.session.turns)
 
+                # For tool results, started_at is when we started executing the tool
+                # (which is right after tool_use completed - we track this via the tool_use turn's ended_at)
+                # Since we create tool_use turn right before execution, we can look at its ended_at
+                # For simplicity, use the current time as both start and end (tool execution is sync)
+                tool_result_ended_at = datetime.now().isoformat()
+
                 # Create tool_result turn and save to session immediately
                 # This is the key checkpoint - tool has executed, we must persist
+                # Note: For tool results, started_at approximates when tool execution began
                 turn = self._create_turn(
                     "tool",
                     f"[Result: {len(event.result)} chars]",
-                    [result_block]
+                    [result_block],
+                    started_at=tool_result_ended_at,  # Tool execution is nearly instant
+                    ended_at=tool_result_ended_at,
                 )
                 self._turns.append(turn)
                 self._save_turn_to_session(turn, save_now=True)

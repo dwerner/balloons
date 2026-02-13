@@ -155,6 +155,12 @@ class BalloonsApp(App):
     SUB_TITLE = "Claude TUI"
 
     CSS = """
+    /* Text selection highlighting - make it visually distinct */
+    Screen > .screen--selection {
+        background: #4466aa;
+        color: white;
+    }
+
     #main-split {
         height: 1fr;
     }
@@ -268,7 +274,8 @@ class BalloonsApp(App):
 
     BINDINGS = [
         Binding("escape", "cancel_stream", "Cancel", show=True),
-        # Note: ctrl+c is reserved for copy (text selection) - use ctrl+q to quit
+        # Copy selected text to clipboard with feedback
+        Binding("ctrl+c", "copy_selection", "Copy", show=False),
         Binding("ctrl+q", "quit", "Quit", show=True),
         Binding("ctrl+space", "new_session", "New Session", show=True),
         Binding("ctrl+t", "toggle_tree", "Toggle Tree", show=True),
@@ -1112,7 +1119,7 @@ class BalloonsApp(App):
             # Refresh goal tree when a goal mutation tool completes
             if tool_name in GOAL_MUTATION_TOOLS and action.tool_use_id.startswith("balloons-"):
                 debug_log.info(f"Goal mutation tool {tool_name} completed, refreshing goal tree", category="goals")
-                self.call_later(self._refresh_goal_tree)
+                self.call_later(lambda tn=tool_name, r=action.result: self._refresh_goal_tree_for_tool(tn, r))
 
             if is_active:
                 # Display tool result widget
@@ -3018,6 +3025,20 @@ class BalloonsApp(App):
         editor = config.get_editor()
         with self.suspend():
             os.system(f"{editor} {prompt_path!s}")
+
+    def action_copy_selection(self) -> None:
+        """Copy selected text to clipboard with visual feedback."""
+        text = self.screen.get_selected_text()
+        if text:
+            self.copy_to_clipboard(text)
+            # Provide feedback about the copy
+            char_count = len(text)
+            if char_count > 100:
+                preview = text[:50].replace('\n', ' ') + '...'
+            else:
+                preview = text.replace('\n', ' ')
+            self.notify(f"Copied {char_count} chars", title="📋 Copied")
+        # If no text selected, silently do nothing (user might just be pressing ctrl+c)
 
     def action_cancel_stream(self) -> None:
         """Cancel streaming/shell and focus input box. Double-tap clears input."""
@@ -5208,13 +5229,13 @@ class BalloonsApp(App):
         """Handle turn delete request from nested tree."""
         # Reuse the ContextTreeView handler logic
         context_tree_event = ContextTreeView.TurnDeleteRequested(event.session_id, event.turn_index)
-        self.on_context_tree_turn_delete_requested(context_tree_event)
+        self.on_context_tree_view_turn_delete_requested(context_tree_event)
 
     def on_nested_tree_view_session_delete_requested(self, event: NestedTreeView.SessionDeleteRequested) -> None:
         """Handle session delete request from nested tree."""
         # Reuse the ContextTreeView handler logic
         context_tree_event = ContextTreeView.SessionDeleteRequested(event.session_id)
-        self.on_context_tree_session_delete_requested(context_tree_event)
+        self.on_context_tree_view_session_delete_requested(context_tree_event)
 
     def on_nested_tree_view_exchange_delete_requested(self, event: NestedTreeView.ExchangeDeleteRequested) -> None:
         """Handle exchange delete request from nested tree."""
@@ -5226,7 +5247,7 @@ class BalloonsApp(App):
         """Handle ctrl+click link request from nested tree."""
         # Reuse the ContextTreeView handler logic
         context_tree_event = ContextTreeView.SessionLinkRequested(event.session_id)
-        self.on_context_tree_session_link_requested(context_tree_event)
+        self.on_context_tree_view_session_link_requested(context_tree_event)
 
     async def on_nested_tree_view_session_load_requested(self, event: NestedTreeView.SessionLoadRequested) -> None:
         """Handle request to load a session's data for display in nested tree."""
@@ -5289,7 +5310,7 @@ class BalloonsApp(App):
         """Handle session delete request from goal tree."""
         # Reuse the ContextTreeView handler logic
         context_tree_event = ContextTreeView.SessionDeleteRequested(event.session_id)
-        self.on_context_tree_session_delete_requested(context_tree_event)
+        self.on_context_tree_view_session_delete_requested(context_tree_event)
 
     def on_goal_tree_view_delete_requested(self, event: GoalTreeView.DeleteRequested) -> None:
         """Handle entity delete request from goal tree."""
@@ -5297,9 +5318,9 @@ class BalloonsApp(App):
         self.notify(f"Delete {event.entity_type} not yet implemented")
 
     async def on_goal_tree_view_mark_todo_done_requested(self, event: GoalTreeView.MarkTodoDoneRequested) -> None:
-        """Handle marking a todo as done from the goal tree."""
+        """Handle marking a todo as done from the goal tree (user-initiated)."""
         from core.goal_commands import mark_todo_done
-        result = await mark_todo_done(event.todo_id, self.session.id if self.session else "")
+        result = await mark_todo_done(event.todo_id, self.session.id if self.session else "", "user")
         if result.success:
             self.notify(f"Marked complete: {result.todo.title}")
             # Incrementally refresh just the todo that changed
@@ -6350,7 +6371,7 @@ class BalloonsApp(App):
                 todo_id = selected_id
 
         executor = GoalCommandExecutor()
-        result = await executor.mark_todo_done(todo_id, self.session.id)
+        result = await executor.mark_todo_done(todo_id, self.session.id, "user")
 
         if result.success:
             self.notify(result.formatted, timeout=5)
@@ -6743,14 +6764,89 @@ class BalloonsApp(App):
             debug_log.warning(f"Failed to refresh slides pane: {e}", category="slides")
 
     def _refresh_goal_tree(self) -> None:
-        """Refresh the goal tree after goal data mutations."""
+        """Refresh the goal tree after goal data mutations (full rebuild)."""
         if self._goal_tree_sync is None:
             return
         try:
-            debug_log.info("Refreshing goal tree after mutation", category="goals")
+            debug_log.info("Refreshing goal tree (full rebuild)", category="goals")
             asyncio.create_task(self._goal_tree_sync.initial_load())
         except Exception as e:
             debug_log.warning(f"Failed to refresh goal tree: {e}", category="goals")
+
+    def _refresh_goal_tree_for_tool(self, tool_name: str, result: str) -> None:
+        """Refresh the goal tree incrementally after a specific tool completes.
+
+        Parses the tool result to extract entity IDs and uses incremental
+        refresh methods where possible, avoiding full tree rebuilds.
+
+        Args:
+            tool_name: Name of the tool that completed (e.g., "create_todo")
+            result: Tool result string (contains ID information)
+        """
+        if self._goal_tree_sync is None:
+            return
+
+        # Parse entity ID from result - format is typically "ID: <uuid>"
+        import re
+        id_match = re.search(r'ID:\s*([a-f0-9-]+)', result)
+        entity_id = id_match.group(1) if id_match else None
+
+        async def _do_refresh():
+            try:
+                if tool_name == "delete_todo":
+                    # For delete, remove the todo from state (it no longer exists in storage)
+                    if entity_id:
+                        debug_log.info(f"Removing deleted todo from goal tree: {entity_id[:8]}", category="goals")
+                        self._goal_tree_sync.remove_todo(entity_id)
+                    else:
+                        debug_log.info(f"No ID found in {tool_name} result, doing full refresh", category="goals")
+                        await self._goal_tree_sync.initial_load()
+
+                elif tool_name in ("create_todo", "update_todo", "mark_todo_done"):
+                    if entity_id:
+                        debug_log.info(f"Incremental todo refresh for {tool_name}: {entity_id[:8]}", category="goals")
+                        await self._goal_tree_sync.refresh_todo(entity_id)
+                    else:
+                        debug_log.info(f"No ID found in {tool_name} result, doing full refresh", category="goals")
+                        await self._goal_tree_sync.initial_load()
+
+                elif tool_name in ("create_plan", "update_plan"):
+                    if entity_id:
+                        debug_log.info(f"Incremental plan refresh for {tool_name}: {entity_id[:8]}", category="goals")
+                        await self._goal_tree_sync.refresh_plan(entity_id)
+                    else:
+                        debug_log.info(f"No ID found in {tool_name} result, doing full refresh", category="goals")
+                        await self._goal_tree_sync.initial_load()
+
+                elif tool_name in ("create_goal", "update_goal"):
+                    if entity_id:
+                        debug_log.info(f"Incremental goal refresh for {tool_name}: {entity_id[:8]}", category="goals")
+                        await self._goal_tree_sync.refresh_goal(entity_id)
+                    else:
+                        debug_log.info(f"No ID found in {tool_name} result, doing full refresh", category="goals")
+                        await self._goal_tree_sync.initial_load()
+
+                elif tool_name in ("bind_session", "rebind_session", "unbind_sessions"):
+                    # Session binding changes - refresh the affected session
+                    # The result doesn't easily give us the session ID, so do full refresh
+                    # But this only affects session nodes, not the whole tree
+                    debug_log.info(f"Session binding changed ({tool_name}), doing full refresh", category="goals")
+                    await self._goal_tree_sync.initial_load()
+
+                else:
+                    # Other tools (bind_entity_to_sessions, etc.) - do full refresh
+                    debug_log.info(f"Tool {tool_name} requires full refresh", category="goals")
+                    await self._goal_tree_sync.initial_load()
+
+            except Exception as e:
+                debug_log.warning(f"Failed to refresh goal tree for {tool_name}: {e}", category="goals")
+                # Fall back to full refresh
+                try:
+                    await self._goal_tree_sync.initial_load()
+                except Exception as e2:
+                    debug_log.warning(f"Full refresh also failed: {e2}", category="goals")
+
+        asyncio.create_task(_do_refresh())
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses for tab switching."""

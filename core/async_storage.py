@@ -426,6 +426,8 @@ class AsyncStorage:
             "summary": turn.summary,
             "exchange_id": turn.exchange_id,
             "sentiment": turn.sentiment.value if turn.sentiment else None,
+            "started_at": turn.started_at,
+            "ended_at": turn.ended_at,
         }
 
     def _serialize_content_block(self, block: ContentBlock) -> dict:
@@ -644,6 +646,8 @@ class AsyncStorage:
             summary=data.get("summary", ""),
             exchange_id=data.get("exchange_id"),
             sentiment=sentiment,
+            started_at=data.get("started_at"),
+            ended_at=data.get("ended_at"),
         )
 
     def _deserialize_content_block(self, data: dict) -> ContentBlock:

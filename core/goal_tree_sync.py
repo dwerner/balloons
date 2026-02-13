@@ -313,6 +313,14 @@ class GoalTreeSyncManager:
         if plan:
             self._goal_state.add_plan(plan)
 
+    def remove_todo(self, todo_id: str) -> None:
+        """Remove a todo from the goal tree state.
+
+        Use this after a todo is deleted, instead of initial_load().
+        Fires TODO_REMOVED event for incremental tree update.
+        """
+        self._goal_state.remove_todo(todo_id)
+
     def on_tree_state_event(self, event, data: dict) -> None:
         """Handle TreeState events to keep goal tree in sync.
 

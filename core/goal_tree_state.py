@@ -545,6 +545,37 @@ class GoalTreeState:
         """Request that all observers rebuild their views."""
         self._notify(GoalTreeEvent.FULL_REBUILD, {})
 
+    # --- Progress Computation ---
+
+    def get_goal_progress(self, goal_id: str) -> tuple[int, int]:
+        """Get progress for a goal as (completed_todos, total_todos).
+
+        Counts todos across all plans in the goal.
+        Returns (0, 0) if goal has no plans or no todos.
+        """
+        goal_node = self._goals.get(goal_id)
+        if not goal_node:
+            return (0, 0)
+
+        total = 0
+        completed = 0
+
+        for plan_id in goal_node.plan_ids:
+            plan_node = self._plans.get(plan_id)
+            if not plan_node:
+                continue
+
+            for todo_id in plan_node.todo_ids:
+                todo_node = self._todos.get(todo_id)
+                if not todo_node:
+                    continue
+
+                total += 1
+                if todo_node.status == "completed":
+                    completed += 1
+
+        return (completed, total)
+
     # --- Aggregate Stats ---
 
     def get_stats(self) -> dict[str, int]:
