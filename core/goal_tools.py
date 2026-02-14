@@ -50,6 +50,8 @@ GOAL_TOOL_NAMES = {
     "create_todo",
     "update_todo",
     "delete_todo",
+    "add_todo_dependency",
+    "remove_todo_dependency",
     "split_todo",
     "merge_todos",
     "list_goals",
@@ -76,6 +78,8 @@ GOAL_MUTATION_TOOLS = {
     "create_todo",
     "update_todo",
     "delete_todo",
+    "add_todo_dependency",
+    "remove_todo_dependency",
     "split_todo",
     "merge_todos",
     "mark_todo_done",
@@ -423,6 +427,71 @@ preserve the todo for historical reference instead of permanently deleting it.""
                     }
                 },
                 "required": ["todo_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_todo_dependency",
+            "description": """Add a dependency between two existing todos.
+
+Creates a dependency where todo_id cannot be started until depends_on_id is completed.
+This enables restructuring todo dependencies without recreating todos.
+
+Use this when:
+- A todo should wait for another todo to complete first
+- Reorganizing the order of work
+- Fixing a missing dependency that should have been set at creation
+
+The tool validates:
+- Both todos exist
+- No cycle would be created (A depends on B depends on A is not allowed)
+- The dependency doesn't already exist""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "todo_id": {
+                        "type": "string",
+                        "description": "ID of the todo that will depend on another (can be prefix)"
+                    },
+                    "depends_on_id": {
+                        "type": "string",
+                        "description": "ID of the todo that must complete first (can be prefix)"
+                    }
+                },
+                "required": ["todo_id", "depends_on_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remove_todo_dependency",
+            "description": """Remove a dependency between two todos.
+
+Removes the dependency relationship where todo_id was waiting for depends_on_id.
+This enables restructuring todo dependencies without recreating todos.
+
+Use this when:
+- A dependency is no longer relevant
+- Reorganizing the order of work
+- A todo should no longer wait for another
+
+The tool validates that the dependency exists before removing it.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "todo_id": {
+                        "type": "string",
+                        "description": "ID of the dependent todo (can be prefix)"
+                    },
+                    "depends_on_id": {
+                        "type": "string",
+                        "description": "ID of the todo it currently depends on (can be prefix)"
+                    }
+                },
+                "required": ["todo_id", "depends_on_id"]
             }
         }
     },
@@ -942,6 +1011,10 @@ async def execute_goal_tool(
         return await _update_todo(args, storage)
     elif name == "delete_todo":
         return await _delete_todo(args, storage)
+    elif name == "add_todo_dependency":
+        return await _add_todo_dependency(args, storage)
+    elif name == "remove_todo_dependency":
+        return await _remove_todo_dependency(args, storage)
     elif name == "split_todo":
         return await _split_todo(args, storage)
     elif name == "merge_todos":
@@ -1594,6 +1667,125 @@ async def _delete_todo(args: dict, storage) -> tuple[str, bool]:
         f"ID: {todo.id}\n"
         f"Plan: {plan_title}\n"
         f"Cleaned up: {len(plan_ids)} plan link(s), {len(dep_ids) + len(dependent_ids)} dependency(ies), {len(bindings)} binding(s)"
+    ), False
+
+
+async def _add_todo_dependency(args: dict, storage) -> tuple[str, bool]:
+    """Add a dependency between two existing todos."""
+    from datetime import datetime
+    from storage_schema import TodoDependency
+
+    todo_id_prefix = args.get("todo_id", "").strip()
+    depends_on_prefix = args.get("depends_on_id", "").strip()
+
+    if not todo_id_prefix:
+        return "Error: todo_id is required", True
+    if not depends_on_prefix:
+        return "Error: depends_on_id is required", True
+
+    # Resolve both todo IDs by prefix
+    all_todos = await storage.list_todos(include_spikes=True)
+    todo = None
+    depends_on = None
+
+    for t in all_todos:
+        if t.id.startswith(todo_id_prefix):
+            todo = t
+        if t.id.startswith(depends_on_prefix):
+            depends_on = t
+
+    if not todo:
+        return f"Error: Todo not found: {todo_id_prefix}", True
+    if not depends_on:
+        return f"Error: Dependency todo not found: {depends_on_prefix}", True
+
+    if todo.id == depends_on.id:
+        return "Error: A todo cannot depend on itself", True
+
+    # Check if dependency already exists
+    existing_deps = await storage.get_dependencies(todo.id)
+    if depends_on.id in existing_deps:
+        return f"Error: Dependency already exists: '{todo.title}' already depends on '{depends_on.title}'", True
+
+    # Check for cycles: if depends_on transitively depends on todo, adding this would create a cycle
+    async def would_create_cycle(target_id: str, new_dep_id: str, visited: set[str]) -> bool:
+        """Check if adding new_dep_id as a dependency of target_id would create a cycle."""
+        if new_dep_id in visited:
+            return False  # Already checked this path
+        visited.add(new_dep_id)
+
+        # Get what new_dep_id depends on
+        deps_of_new_dep = await storage.get_dependencies(new_dep_id)
+        for dep_id in deps_of_new_dep:
+            if dep_id == target_id:
+                return True  # Found a cycle
+            if await would_create_cycle(target_id, dep_id, visited):
+                return True
+        return False
+
+    if await would_create_cycle(todo.id, depends_on.id, set()):
+        return (
+            f"Error: Adding this dependency would create a cycle. "
+            f"'{depends_on.title}' already depends (directly or transitively) on '{todo.title}'."
+        ), True
+
+    # Create the dependency
+    dep = TodoDependency(
+        todo_id=todo.id,
+        depends_on_id=depends_on.id,
+        created_at=datetime.now().isoformat(),
+    )
+    await storage.save_todo_dependency(dep)
+
+    return (
+        f"Added dependency:\n"
+        f"'{todo.title}' now depends on '{depends_on.title}'\n"
+        f"Todo: {todo.id[:8]}\n"
+        f"Depends on: {depends_on.id[:8]}"
+    ), False
+
+
+async def _remove_todo_dependency(args: dict, storage) -> tuple[str, bool]:
+    """Remove a dependency between two todos."""
+    todo_id_prefix = args.get("todo_id", "").strip()
+    depends_on_prefix = args.get("depends_on_id", "").strip()
+
+    if not todo_id_prefix:
+        return "Error: todo_id is required", True
+    if not depends_on_prefix:
+        return "Error: depends_on_id is required", True
+
+    # Resolve both todo IDs by prefix
+    all_todos = await storage.list_todos(include_spikes=True)
+    todo = None
+    depends_on = None
+
+    for t in all_todos:
+        if t.id.startswith(todo_id_prefix):
+            todo = t
+        if t.id.startswith(depends_on_prefix):
+            depends_on = t
+
+    if not todo:
+        return f"Error: Todo not found: {todo_id_prefix}", True
+    if not depends_on:
+        return f"Error: Dependency todo not found: {depends_on_prefix}", True
+
+    # Check if dependency exists
+    existing_deps = await storage.get_dependencies(todo.id)
+    if depends_on.id not in existing_deps:
+        return (
+            f"Error: No dependency exists: '{todo.title}' does not depend on '{depends_on.title}'"
+        ), True
+
+    # Remove the dependency
+    await storage.delete_todo_dependency(todo.id, depends_on.id)
+
+    return (
+        f"Removed dependency:\n"
+        f"'{todo.title}' no longer depends on '{depends_on.title}'\n"
+        f"Todo: {todo.id[:8]}\n"
+        f"Was depending on: {depends_on.id[:8]}"
     ), False
 
 

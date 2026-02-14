@@ -8,6 +8,7 @@ from textual.widgets import Static, Button, Checkbox
 from textual.containers import Vertical, Horizontal, ScrollableContainer
 
 from core.goal_tools import BeginStreamingTodoProposal
+from core.debug_log import debug_log
 from storage_schema import TodoData
 
 
@@ -171,6 +172,7 @@ class BeginStreamingModal(ModalScreen[Optional[BeginStreamingResult]]):
             self._selected[todo_id] = event.value
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        debug_log.info(f"BeginStreamingModal button pressed: {event.button.id}", category="goal")
         if event.button.id == "start-btn":
             self.action_start()
         elif event.button.id == "cancel-btn":
@@ -196,9 +198,11 @@ class BeginStreamingModal(ModalScreen[Optional[BeginStreamingResult]]):
 
     def action_start(self) -> None:
         """Start sessions for selected todos."""
+        debug_log.info("action_start called", category="goal")
         todos_to_start = []
 
         for todo in self._proposal.resolved_todos:
+            debug_log.info(f"Checking todo {todo.id}: selected={self._selected.get(todo.id, False)}", category="goal")
             if self._selected.get(todo.id, False):
                 # Get custom prompt if provided, otherwise generate default
                 initial_prompt = self._proposal.initial_prompts.get(
@@ -207,8 +211,10 @@ class BeginStreamingModal(ModalScreen[Optional[BeginStreamingResult]]):
                 )
                 todos_to_start.append((todo.id, initial_prompt))
 
+        debug_log.info(f"todos_to_start: {len(todos_to_start)}", category="goal")
         if not todos_to_start:
             # Nothing selected - treat as cancel
+            debug_log.info("No todos selected, cancelling", category="goal")
             self.action_cancel()
             return
 
@@ -216,6 +222,7 @@ class BeginStreamingModal(ModalScreen[Optional[BeginStreamingResult]]):
             accepted=True,
             todos_to_start=todos_to_start,
         )
+        debug_log.info(f"Dismissing with result: accepted={result.accepted}, count={len(result.todos_to_start)}", category="goal")
         self.dismiss(result)
 
     def action_cancel(self) -> None:

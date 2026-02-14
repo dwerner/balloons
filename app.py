@@ -3820,32 +3820,35 @@ class BalloonsApp(App):
         """
         chat_log = self.query_one("#chat-log", ChatLogView)
 
-        # Show the modal and get user selection
-        modal = BeginStreamingModal(proposal)
-        result = await self.push_screen_wait(modal)
-
-        if not result or not result.accepted or not result.todos_to_start:
-            # User cancelled or didn't select any todos
-            self.notify("Todo streaming cancelled")
-            # Remove the tool widget
-            chat_log.remove_streaming_tool(tool_use_id)
-            return
-
-        # Start sessions for each selected todo
-        started_count = 0
-        for todo_id, initial_prompt in result.todos_to_start:
-            try:
-                await self._start_todo_session(todo_id, initial_prompt)
-                started_count += 1
-            except Exception as e:
-                debug_log.error(f"Failed to start session for todo {todo_id}: {e}", category="goal")
-                self.notify(f"Failed to start session for todo: {e}", severity="error")
-
-        # Remove the tool widget
+        # Remove the tool widget immediately - we'll handle everything via modal
         chat_log.remove_streaming_tool(tool_use_id)
 
-        if started_count > 0:
-            self.notify(f"Started {started_count} background session(s)")
+        # Define callback to handle modal result
+        async def on_modal_dismiss(result: BeginStreamingResult | None) -> None:
+            debug_log.info(f"BeginStreamingModal returned: {result}", category="goal")
+
+            if not result or not result.accepted or not result.todos_to_start:
+                # User cancelled or didn't select any todos
+                self.notify("Todo streaming cancelled")
+                return
+
+            # Start sessions for each selected todo
+            started_count = 0
+            for todo_id, initial_prompt in result.todos_to_start:
+                try:
+                    await self._start_todo_session(todo_id, initial_prompt)
+                    started_count += 1
+                except Exception as e:
+                    debug_log.error(f"Failed to start session for todo {todo_id}: {e}", category="goal")
+                    self.notify(f"Failed to start session for todo: {e}", severity="error")
+
+            if started_count > 0:
+                self.notify(f"Started {started_count} background session(s)")
+
+        # Show the modal with callback (no waiting)
+        modal = BeginStreamingModal(proposal)
+        debug_log.info("Showing BeginStreamingModal", category="goal")
+        self.push_screen(modal, on_modal_dismiss)
 
     async def _start_todo_session(self, todo_id: str, initial_prompt: str) -> None:
         """Create a new session bound to a todo and start streaming.
@@ -3890,8 +3893,9 @@ class BalloonsApp(App):
         # Save session
         await new_session.save()
 
-        # Load in context tree
-        await context_tree.load_session(new_session, collapsed=True)
+        # Add session to tree state (same pattern as fork handling)
+        self._tree_state.add_session(new_session, is_current=False)
+        self._tree_state.load_session(new_session.id, new_session)
 
         # Generate exchange ID
         exchange_id = str(uuid.uuid4())
@@ -3911,6 +3915,15 @@ class BalloonsApp(App):
             exchange_id=exchange_id,
         )
         self._streaming_contexts[new_session.id] = stream_ctx
+
+        # Register with stream state so it appears in the streaming manager
+        backend_name = new_session.backend_name or self._backend_config.name
+        get_stream_state().register_session_stream(
+            session_id=new_session.id,
+            exchange_id=exchange_id,
+            prompt=initial_prompt,
+            backend_name=backend_name,
+        )
 
         # Update tree to show streaming
         context_tree.set_session_streaming(new_session.id, True)
