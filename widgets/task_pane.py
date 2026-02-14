@@ -1,4 +1,4 @@
-"""Task pane showing active LLM tasks and their status."""
+"""Stream pane showing active LLM streams and their status."""
 
 from textual.widgets import Static, Tree
 from textual.containers import Vertical, VerticalScroll
@@ -99,7 +99,7 @@ def render_sparkline(values: list[float], width: int = 20) -> str:
 
 
 class TaskPane(Vertical):
-    """Right panel showing active tasks in a tree with details below."""
+    """Right panel showing active streams in a tree with details below."""
 
     DEFAULT_CSS = """
     TaskPane {
@@ -152,11 +152,11 @@ class TaskPane(Vertical):
         self._spinner_timer: Timer | None = None
 
     def compose(self):
-        tree = Tree("[bold]Tasks[/]", id="task-tree")
+        tree = Tree("[bold]Streams[/]", id="task-tree")
         tree.root.expand()
         yield tree
         with VerticalScroll(id="task-detail-scroll"):
-            yield Static("Select a task to view details", id="task-detail-header")
+            yield Static("Select a stream to view details", id="task-detail-header")
             # Session link is dynamically added/removed
             yield Static("", id="task-detail-body")
 
@@ -214,9 +214,9 @@ class TaskPane(Vertical):
         # Update root label
         active_count = len(active_streams)
         if active_count > 0:
-            tree.root.set_label(f"[bold]Tasks[/] [green]({active_count} active)[/]")
+            tree.root.set_label(f"[bold]Streams[/] [green]({active_count} active)[/]")
         else:
-            tree.root.set_label("[bold]Tasks[/] [dim](none active)[/]")
+            tree.root.set_label("[bold]Streams[/] [dim](none active)[/]")
 
         if active_streams:
             active_node = tree.root.add("[green bold]Active[/]", expand=True)

@@ -14,6 +14,10 @@ Available services:
 - SessionManagerService: Session lifecycle (create, switch, list, delete, streaming status)
 - GoalTreeStateService: Goal/plan/todo management with session bindings
 - TaskStateService: LLM task lifecycle (streaming, progress, completion)
+
+WebSocket server:
+- WsServer: WebSocket server with JSON-RPC dispatch to services
+- create_server: Convenience function to create and start a server
 """
 
 from service.tree_state_service import TreeStateService
@@ -21,6 +25,7 @@ from service.queue_state_service import QueueStateService
 from service.session_manager_service import SessionManagerService
 from service.goal_tree_state_service import GoalTreeStateService
 from service.task_state_service import TaskStateService
+from service.ws_server import WsServer, create_server
 
 __all__ = [
     "TreeStateService",
@@ -28,4 +33,6 @@ __all__ = [
     "SessionManagerService",
     "GoalTreeStateService",
     "TaskStateService",
+    "WsServer",
+    "create_server",
 ]

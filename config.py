@@ -12,6 +12,85 @@ from tokenizer import count_tokens
 
 
 @dataclass
+class TLSConfig:
+    """TLS configuration for secure connections.
+
+    Attributes:
+        enabled: Whether TLS is enabled
+        cert_path: Path to certificate file (PEM format)
+        key_path: Path to private key file (PEM format)
+    """
+    enabled: bool = False
+    cert_path: Optional[str] = None
+    key_path: Optional[str] = None
+
+    def get_cert_path(self) -> Optional[Path]:
+        """Get the resolved certificate path.
+
+        Returns:
+            Path object for the certificate file, or None if not configured.
+        """
+        if not self.cert_path:
+            return None
+        return Path(self.cert_path).expanduser()
+
+    def get_key_path(self) -> Optional[Path]:
+        """Get the resolved key path.
+
+        Returns:
+            Path object for the key file, or None if not configured.
+        """
+        if not self.key_path:
+            return None
+        return Path(self.key_path).expanduser()
+
+    def validate(self) -> None:
+        """Validate TLS configuration.
+
+        Raises:
+            ValueError: If enabled but cert_path or key_path missing or files don't exist.
+        """
+        if not self.enabled:
+            return
+
+        if not self.cert_path:
+            raise ValueError("TLS enabled but cert_path not configured")
+        if not self.key_path:
+            raise ValueError("TLS enabled but key_path not configured")
+
+        cert = self.get_cert_path()
+        key = self.get_key_path()
+
+        if cert and not cert.exists():
+            raise ValueError(f"Certificate file not found: {cert}")
+        if key and not key.exists():
+            raise ValueError(f"Key file not found: {key}")
+
+
+@dataclass
+class WebSocketConfig:
+    """WebSocket server configuration.
+
+    Attributes:
+        host: Bind address (default localhost)
+        port: WebSocket port (default 8765)
+        tls: TLS configuration for wss:// support
+    """
+    host: str = "localhost"
+    port: int = 8765
+    tls: TLSConfig = field(default_factory=TLSConfig)
+
+    def get_url(self) -> str:
+        """Get the WebSocket URL for this configuration.
+
+        Returns:
+            WebSocket URL (ws:// or wss://)
+        """
+        scheme = "wss" if self.tls.enabled else "ws"
+        return f"{scheme}://{self.host}:{self.port}"
+
+
+@dataclass
 class ReportsConfig:
     """Reports configuration.
 
@@ -171,6 +250,7 @@ class Config:
     tts: TTSConfig = field(default_factory=TTSConfig)  # TTS configuration
     sounds: SoundsConfig = field(default_factory=SoundsConfig)  # Sound notifications
     reports: ReportsConfig = field(default_factory=ReportsConfig)  # Reports configuration
+    websocket: WebSocketConfig = field(default_factory=WebSocketConfig)  # WebSocket server config
     review_backend: Optional[str] = None  # Backend for session quality reviews (defaults to default_backend)
     _config_path: Optional[Path] = field(default=None, repr=False)  # Where config was loaded from
 
@@ -274,6 +354,20 @@ class Config:
             output_path=reports_data.get("output_path"),
         )
 
+        # Load websocket config
+        ws_data = data.get("websocket", {})
+        tls_data = ws_data.get("tls", {})
+        tls_config = TLSConfig(
+            enabled=tls_data.get("enabled", False),
+            cert_path=tls_data.get("cert_path"),
+            key_path=tls_data.get("key_path"),
+        )
+        websocket_config = WebSocketConfig(
+            host=ws_data.get("host", "localhost"),
+            port=ws_data.get("port", 8765),
+            tls=tls_config,
+        )
+
         return cls(
             default_backend=data.get("default_backend", "claude"),
             backends=backends,
@@ -285,6 +379,7 @@ class Config:
             tts=tts_config,
             sounds=sounds_config,
             reports=reports_config,
+            websocket=websocket_config,
             review_backend=data.get("review_backend"),
             _config_path=path,
         )
