@@ -17,6 +17,7 @@ from codegen.ws_expose import (
 from service.ws_server import (
     WsServer,
     ServiceRegistration,
+    ConnectedClient,
     MethodNotFoundError,
     InvalidParamsError,
     PARSE_ERROR,
@@ -857,3 +858,264 @@ class TestTLSServer:
         assert server.tls_enabled is True
 
         await server.stop()
+
+
+class TestJWTConfig:
+    """Tests for JWT configuration in WebSocket config."""
+
+    def test_jwt_config_defaults(self):
+        from config import JWTConfig
+
+        config = JWTConfig()
+        assert config.enabled is True
+        assert config.secret is None
+        assert config.expiration_seconds == 86400
+
+    def test_parse_jwt_config_from_yaml(self, tmp_path):
+        from config import Config
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("""
+backends:
+  claude: {}
+
+websocket:
+  host: localhost
+  port: 8765
+  jwt:
+    enabled: true
+    secret: my-secret-key
+    expiration_seconds: 3600
+""")
+
+        config = Config._load_from_file(config_file)
+        assert config.websocket.jwt.enabled is True
+        assert config.websocket.jwt.secret == "my-secret-key"
+        assert config.websocket.jwt.expiration_seconds == 3600
+
+    def test_parse_jwt_config_disabled(self, tmp_path):
+        from config import Config
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("""
+backends:
+  claude: {}
+
+websocket:
+  jwt:
+    enabled: false
+""")
+
+        config = Config._load_from_file(config_file)
+        assert config.websocket.jwt.enabled is False
+
+    def test_jwt_config_defaults_when_not_specified(self, tmp_path):
+        from config import Config
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("""
+backends:
+  claude: {}
+""")
+
+        config = Config._load_from_file(config_file)
+        assert config.websocket.jwt.enabled is True  # Default
+        assert config.websocket.jwt.secret is None
+
+
+class TestJWTAuthentication:
+    """Tests for JWT authentication in WsServer."""
+
+    def test_jwt_enabled_property_true(self):
+        from config import WebSocketConfig, JWTConfig
+
+        config = WebSocketConfig(
+            jwt=JWTConfig(enabled=True, secret="test-secret"),
+        )
+        server = WsServer(config=config)
+        assert server.jwt_enabled is True
+
+    def test_jwt_enabled_property_false(self):
+        from config import WebSocketConfig, JWTConfig
+
+        config = WebSocketConfig(
+            jwt=JWTConfig(enabled=False),
+        )
+        server = WsServer(config=config)
+        assert server.jwt_enabled is False
+
+    def test_jwt_enabled_property_no_config(self):
+        server = WsServer()
+        assert server.jwt_enabled is False
+
+    def test_generate_token_returns_token(self):
+        from config import WebSocketConfig, JWTConfig
+
+        config = WebSocketConfig(
+            jwt=JWTConfig(enabled=True, secret="test-secret-key-32-chars-long!!"),
+        )
+        server = WsServer(config=config)
+
+        token = server.generate_token("my-session")
+        assert token is not None
+        assert isinstance(token, str)
+        assert len(token) > 0
+
+    def test_generate_token_returns_none_when_disabled(self):
+        from config import WebSocketConfig, JWTConfig
+
+        config = WebSocketConfig(
+            jwt=JWTConfig(enabled=False),
+        )
+        server = WsServer(config=config)
+
+        token = server.generate_token("my-session")
+        assert token is None
+
+    def test_generate_token_returns_none_when_no_config(self):
+        server = WsServer()
+        token = server.generate_token("my-session")
+        assert token is None
+
+    @pytest.mark.asyncio
+    async def test_authenticate_connection_disabled(self):
+        """When JWT is disabled, all connections are authenticated."""
+        from config import WebSocketConfig, JWTConfig
+
+        config = WebSocketConfig(
+            jwt=JWTConfig(enabled=False),
+        )
+        server = WsServer(config=config)
+
+        # Mock websocket
+        mock_ws = MagicMock()
+        mock_ws.request = None
+
+        authenticated, subject, error = await server._authenticate_connection(mock_ws)
+        assert authenticated is True
+        assert subject is None
+        assert error is None
+
+    @pytest.mark.asyncio
+    async def test_authenticate_connection_no_token(self):
+        """When JWT is enabled but no token provided, reject connection."""
+        from config import WebSocketConfig, JWTConfig
+
+        config = WebSocketConfig(
+            jwt=JWTConfig(enabled=True, secret="test-secret"),
+        )
+        server = WsServer(config=config)
+
+        # Mock websocket without token
+        mock_ws = MagicMock()
+        mock_ws.request = MagicMock()
+        mock_ws.request.path = "/"
+        mock_ws.subprotocol = None
+
+        authenticated, subject, error = await server._authenticate_connection(mock_ws)
+        assert authenticated is False
+        assert subject is None
+        assert "token required" in error.lower()
+
+    @pytest.mark.asyncio
+    async def test_authenticate_connection_with_query_token(self):
+        """Token in query parameter is validated."""
+        from config import WebSocketConfig, JWTConfig
+
+        secret = "test-secret-key-32-characters-!!"
+        config = WebSocketConfig(
+            jwt=JWTConfig(enabled=True, secret=secret),
+        )
+        server = WsServer(config=config)
+
+        # Generate a valid token
+        token = server.generate_token("session-123")
+
+        # Mock websocket with token in query
+        mock_ws = MagicMock()
+        mock_ws.request = MagicMock()
+        mock_ws.request.path = f"/?token={token}"
+        mock_ws.subprotocol = None
+        mock_ws.request.headers = {}
+
+        authenticated, subject, error = await server._authenticate_connection(mock_ws)
+        assert authenticated is True
+        assert subject == "session-123"
+        assert error is None
+
+    @pytest.mark.asyncio
+    async def test_authenticate_connection_invalid_token(self):
+        """Invalid token is rejected."""
+        from config import WebSocketConfig, JWTConfig
+
+        config = WebSocketConfig(
+            jwt=JWTConfig(enabled=True, secret="test-secret"),
+        )
+        server = WsServer(config=config)
+
+        # Mock websocket with invalid token
+        mock_ws = MagicMock()
+        mock_ws.request = MagicMock()
+        mock_ws.request.path = "/?token=invalid-token"
+        mock_ws.subprotocol = None
+
+        authenticated, subject, error = await server._authenticate_connection(mock_ws)
+        assert authenticated is False
+        assert subject is None
+        assert error is not None
+
+    def test_extract_token_from_query(self):
+        from config import WebSocketConfig, JWTConfig
+
+        config = WebSocketConfig(
+            jwt=JWTConfig(enabled=True, secret="test"),
+        )
+        server = WsServer(config=config)
+
+        # Mock websocket with token in query
+        mock_ws = MagicMock()
+        mock_ws.request = MagicMock()
+        mock_ws.request.path = "/?token=mytoken123&other=value"
+
+        token = server._extract_token_from_request(mock_ws)
+        assert token == "mytoken123"
+
+    def test_extract_token_from_request_no_token(self):
+        from config import WebSocketConfig, JWTConfig
+
+        config = WebSocketConfig(
+            jwt=JWTConfig(enabled=True, secret="test"),
+        )
+        server = WsServer(config=config)
+
+        # Mock websocket without token
+        mock_ws = MagicMock()
+        mock_ws.request = MagicMock()
+        mock_ws.request.path = "/"
+        mock_ws.subprotocol = None
+        mock_ws.request.headers = {}
+
+        token = server._extract_token_from_request(mock_ws)
+        assert token is None
+
+
+class TestConnectedClientWithAuth:
+    """Tests for ConnectedClient with authentication fields."""
+
+    def test_connected_client_default_not_authenticated(self):
+        mock_ws = MagicMock()
+        client = ConnectedClient(websocket=mock_ws)
+
+        assert client.authenticated is False
+        assert client.token_subject is None
+
+    def test_connected_client_with_authentication(self):
+        mock_ws = MagicMock()
+        client = ConnectedClient(
+            websocket=mock_ws,
+            authenticated=True,
+            token_subject="user-123",
+        )
+
+        assert client.authenticated is True
+        assert client.token_subject == "user-123"

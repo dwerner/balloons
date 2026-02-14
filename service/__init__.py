@@ -18,6 +18,10 @@ Available services:
 WebSocket server:
 - WsServer: WebSocket server with JSON-RPC dispatch to services
 - create_server: Convenience function to create and start a server
+
+Authentication:
+- JWTAuth: JWT token generation and validation
+- JWTConfig: JWT authentication configuration
 """
 
 from service.tree_state_service import TreeStateService
@@ -26,6 +30,7 @@ from service.session_manager_service import SessionManagerService
 from service.goal_tree_state_service import GoalTreeStateService
 from service.task_state_service import TaskStateService
 from service.ws_server import WsServer, create_server
+from service.jwt_auth import JWTAuth, JWTConfig, TokenClaims
 
 __all__ = [
     "TreeStateService",
@@ -35,4 +40,7 @@ __all__ = [
     "TaskStateService",
     "WsServer",
     "create_server",
+    "JWTAuth",
+    "JWTConfig",
+    "TokenClaims",
 ]

@@ -57,7 +57,8 @@ from websockets.exceptions import ConnectionClosed
 from codegen.ws_expose import WsExposeRegistry, to_snake_case, MethodSpec
 
 if TYPE_CHECKING:
-    from config import WebSocketConfig
+    from config import WebSocketConfig, JWTConfig
+    from service.jwt_auth import JWTAuth, TokenClaims
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,8 @@ class ConnectedClient:
     websocket: ServerConnection
     client_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     subscriptions: set[str] = field(default_factory=set)  # Event patterns subscribed to
+    authenticated: bool = False  # Whether client passed JWT auth
+    token_subject: str | None = None  # Subject from JWT token (e.g., session ID)
 
 
 class WsServer:
@@ -129,12 +132,14 @@ class WsServer:
             self._tls_enabled = config.tls.enabled
             self._tls_cert_path = config.tls.get_cert_path()
             self._tls_key_path = config.tls.get_key_path()
+            self._jwt_config = config.jwt
         else:
             self.host = host
             self.port = port
             self._tls_enabled = False
             self._tls_cert_path = None
             self._tls_key_path = None
+            self._jwt_config = None
 
         self.ping_interval = ping_interval
         self.ping_timeout = ping_timeout
@@ -152,6 +157,9 @@ class WsServer:
         self._server: Any = None  # Server type from websockets.asyncio.server
         self._running = False
         self._ssl_context: ssl.SSLContext | None = None
+
+        # JWT auth handler (lazy initialized)
+        self._jwt_auth: "JWTAuth | None" = None
 
     def register_service(self, service_instance: Any) -> None:
         """Register a service instance for dispatch.
@@ -293,6 +301,97 @@ class WsServer:
         )
         return ssl_context
 
+    def _get_jwt_auth(self) -> "JWTAuth | None":
+        """Get the JWT auth handler, creating it if needed.
+
+        Returns:
+            JWTAuth instance if JWT is configured and enabled, None otherwise.
+        """
+        if self._jwt_auth is not None:
+            return self._jwt_auth
+
+        if self._jwt_config is None or not self._jwt_config.enabled:
+            return None
+
+        # Lazy import to avoid circular dependency
+        from service.jwt_auth import JWTAuth, JWTConfig as JWTAuthConfig
+
+        # Convert config types
+        auth_config = JWTAuthConfig(
+            enabled=self._jwt_config.enabled,
+            secret=self._jwt_config.secret,
+            expiration_seconds=self._jwt_config.expiration_seconds,
+        )
+        self._jwt_auth = JWTAuth(auth_config)
+        return self._jwt_auth
+
+    def _extract_token_from_request(self, websocket: ServerConnection) -> str | None:
+        """Extract JWT token from WebSocket connection request.
+
+        Looks for token in:
+        1. Query parameter: ws://host:port?token=<jwt>
+        2. Subprotocol: Sec-WebSocket-Protocol: balloons.auth.<jwt>
+
+        Args:
+            websocket: The WebSocket connection
+
+        Returns:
+            Token string if found, None otherwise.
+        """
+        # Try query parameter first
+        path = websocket.request.path if websocket.request else None
+        if path and "?" in path:
+            query_string = path.split("?", 1)[1]
+            from urllib.parse import parse_qs
+
+            params = parse_qs(query_string)
+            tokens = params.get("token", [])
+            if tokens:
+                return tokens[0]
+
+        # Try subprotocol
+        subprotocols = websocket.subprotocol
+        if subprotocols:
+            # websockets library sets subprotocol to the selected one
+            # We need to check the original request headers
+            if hasattr(websocket.request, "headers"):
+                proto_header = websocket.request.headers.get("Sec-WebSocket-Protocol", "")
+                protos = [p.strip() for p in proto_header.split(",")]
+                for proto in protos:
+                    if proto.startswith("balloons.auth."):
+                        return proto[len("balloons.auth.") :]
+
+        return None
+
+    async def _authenticate_connection(
+        self, websocket: ServerConnection
+    ) -> tuple[bool, str | None, str | None]:
+        """Authenticate a WebSocket connection.
+
+        Args:
+            websocket: The WebSocket connection to authenticate
+
+        Returns:
+            Tuple of (authenticated, subject, error_message).
+            If JWT is disabled, returns (True, None, None).
+            If authenticated, returns (True, subject, None).
+            If failed, returns (False, None, error_message).
+        """
+        jwt_auth = self._get_jwt_auth()
+        if jwt_auth is None:
+            # JWT disabled - allow all connections
+            return (True, None, None)
+
+        token = self._extract_token_from_request(websocket)
+        if not token:
+            return (False, None, "Authentication token required")
+
+        try:
+            claims = jwt_auth.validate_token(token)
+            return (True, claims.subject, None)
+        except Exception as e:
+            return (False, None, str(e))
+
     async def start(self) -> None:
         """Start the WebSocket server.
 
@@ -345,23 +444,44 @@ class WsServer:
     async def _handle_connection(self, websocket: ServerConnection) -> None:
         """Handle a new WebSocket connection.
 
-        This is the main handler for each client connection. It receives
-        messages, dispatches them to services, and sends responses.
+        This is the main handler for each client connection. It:
+        1. Authenticates the connection (if JWT enabled)
+        2. Receives messages and dispatches them to services
+        3. Sends responses back to the client
 
         Args:
             websocket: The client's websocket connection
         """
-        client = ConnectedClient(websocket=websocket)
-        self._clients.add(websocket)
-        self._client_info[websocket] = client
-
-        # Get remote address safely
+        # Get remote address safely (for logging)
         remote = websocket.remote_address
         if remote:
             client_addr = f"{remote[0]}:{remote[1]}"
         else:
             client_addr = "unknown"
-        logger.info(f"Client connected: {client.client_id} from {client_addr}")
+
+        # Authenticate the connection
+        authenticated, subject, error = await self._authenticate_connection(websocket)
+        if not authenticated:
+            logger.warning(f"Authentication failed for {client_addr}: {error}")
+            await websocket.close(4001, error or "Authentication failed")
+            return
+
+        # Create client record
+        client = ConnectedClient(
+            websocket=websocket,
+            authenticated=authenticated,
+            token_subject=subject,
+        )
+        self._clients.add(websocket)
+        self._client_info[websocket] = client
+
+        if subject:
+            logger.info(
+                f"Client connected: {client.client_id} from {client_addr} "
+                f"(subject: {subject})"
+            )
+        else:
+            logger.info(f"Client connected: {client.client_id} from {client_addr}")
 
         try:
             async for message in websocket:
@@ -586,6 +706,31 @@ class WsServer:
     def get_registered_services(self) -> list[str]:
         """Get list of all registered service names."""
         return list(self._services.keys())
+
+    @property
+    def jwt_enabled(self) -> bool:
+        """Check if JWT authentication is enabled."""
+        return self._jwt_config is not None and self._jwt_config.enabled
+
+    def generate_token(self, subject: str) -> str | None:
+        """Generate a JWT token for a client.
+
+        This is typically called by the TUI to get a token for connecting
+        to the WebSocket server.
+
+        Args:
+            subject: The subject for the token (e.g., session ID)
+
+        Returns:
+            JWT token string, or None if JWT is not enabled.
+
+        Raises:
+            RuntimeError: If JWT is enabled but configuration is invalid.
+        """
+        jwt_auth = self._get_jwt_auth()
+        if jwt_auth is None:
+            return None
+        return jwt_auth.generate_token(subject)
 
 
 class MethodNotFoundError(Exception):

@@ -68,6 +68,21 @@ class TLSConfig:
 
 
 @dataclass
+class JWTConfig:
+    """JWT authentication configuration for WebSocket connections.
+
+    Attributes:
+        enabled: Whether JWT auth is required (if False, all connections allowed)
+        secret: Secret key for signing tokens. If None, a random secret is generated
+                at startup (tokens won't persist across restarts).
+        expiration_seconds: Token lifetime in seconds (default 24 hours)
+    """
+    enabled: bool = True
+    secret: Optional[str] = None
+    expiration_seconds: int = 86400  # 24 hours
+
+
+@dataclass
 class WebSocketConfig:
     """WebSocket server configuration.
 
@@ -75,10 +90,12 @@ class WebSocketConfig:
         host: Bind address (default localhost)
         port: WebSocket port (default 8765)
         tls: TLS configuration for wss:// support
+        jwt: JWT authentication configuration
     """
     host: str = "localhost"
     port: int = 8765
     tls: TLSConfig = field(default_factory=TLSConfig)
+    jwt: JWTConfig = field(default_factory=JWTConfig)
 
     def get_url(self) -> str:
         """Get the WebSocket URL for this configuration.
@@ -362,10 +379,17 @@ class Config:
             cert_path=tls_data.get("cert_path"),
             key_path=tls_data.get("key_path"),
         )
+        jwt_data = ws_data.get("jwt", {})
+        jwt_config = JWTConfig(
+            enabled=jwt_data.get("enabled", True),
+            secret=jwt_data.get("secret"),
+            expiration_seconds=jwt_data.get("expiration_seconds", 86400),
+        )
         websocket_config = WebSocketConfig(
             host=ws_data.get("host", "localhost"),
             port=ws_data.get("port", 8765),
             tls=tls_config,
+            jwt=jwt_config,
         )
 
         return cls(

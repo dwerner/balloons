@@ -10,6 +10,13 @@
 
 3. **Context management** - Per-turn COPY/COMPRESS/DROP modes for context window management.
 
+4. **Multi-Frontend Architecture** - Service-oriented architecture enabling multiple frontends (TUI, web, CLI) sharing a common backend. See [Multi-Frontend Architecture](docs/design/multi-frontend-architecture.md).
+
+   - **Service layer**: 5 services wrap core state managers (`TreeStateService`, `SessionManagerService`, etc.)
+   - **WebSocket server**: JSON-RPC dispatch with JWT auth and TLS support
+   - **TypeScript codegen**: Auto-generated clients from `@ws_expose` decorated Python services
+   - **Wire protocol**: JSON-RPC 2.0 with events for real-time updates
+
 ### Tentative Decisions (Under Development)
 
 1. **Rust storage layer (balloons-rs)** - Investigating a Rust-based ACID storage backend to replace JSON file storage. Status: scaffolded, not yet integrated.
@@ -51,12 +58,34 @@ This approach allows us to:
 ```
 balloons/
 ├── app.py              # Main Textual application
+├── main.py             # Entry point, CLI argument parsing
 ├── session.py          # Session management (current JSON backend)
 ├── models.py           # Domain entities (Turn, Message, ContentBlock types)
 ├── storage_schema.py   # Storage DTOs for Rust codegen
-├── codegen/            # Python-to-Rust code generation
+├── core/               # Core state managers (no network concerns)
+│   ├── tree_state.py   # Session/turn view state
+│   ├── goal_tree_state.py  # Goal/plan/todo state
+│   ├── queue_state.py  # Message queue state
+│   ├── stream_state.py # LLM task state
+│   └── manager.py      # Session lifecycle manager
+├── service/            # WebSocket-exposed services
+│   ├── tree_state_service.py    # Wraps TreeState
+│   ├── session_manager_service.py  # Wraps SessionManager
+│   ├── goal_tree_state_service.py  # Wraps GoalTreeState
+│   ├── task_state_service.py    # Wraps StreamState
+│   ├── queue_state_service.py   # Wraps QueueState
+│   └── ws_server.py    # WebSocket server with JSON-RPC dispatch
+├── codegen/            # Code generation
 │   ├── rust_schema.py  # @rust_schema decorator and type mapping
-│   └── generate_rust.py # Generator script
+│   ├── ws_expose.py    # @ws_expose, @ws_event, @ws_type decorators
+│   ├── generate_rust.py # Rust struct generator
+│   └── generate_typescript.py  # TypeScript client generator
+├── web/                # Web frontend support
+│   └── generated/      # Auto-generated TypeScript clients
+│       ├── types.ts    # Wire types as TypeScript interfaces
+│       ├── client.ts   # Service client classes
+│       └── balloons-client.ts  # Unified client entry point
+├── widgets/            # Textual TUI widgets
 └── balloons-rs/        # Rust workspace (tentative)
     └── crates/
         ├── balloons-core/  # Storage engine, generated schema
