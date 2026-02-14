@@ -15,6 +15,7 @@ Example usage:
     # {"event": "sessionCreated", "data": {"sessionId": "abc123"}}
 """
 
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -29,6 +30,7 @@ from core.stream_state import (
     StreamStatus,
     get_stream_state,
 )
+from models import TextBlock
 
 
 class SessionManagerEvent(Enum):
@@ -40,6 +42,7 @@ class SessionManagerEvent(Enum):
     SESSION_UPDATED = "session_updated"
     STREAMING_STARTED = "streaming_started"
     STREAMING_STOPPED = "streaming_stopped"
+    MESSAGE_SUBMITTED = "message_submitted"
 
 
 @ws_type
@@ -89,6 +92,20 @@ class SessionEventData:
     event_type: str  # Maps to SessionManagerEvent enum value
     session_id: str
     data: dict = field(default_factory=dict)
+
+
+@ws_type
+@dataclass
+class SubmitMessageResult:
+    """Result of submitting a message to a session.
+
+    Contains the IDs needed to track the resulting stream and turn.
+    """
+
+    session_id: str
+    exchange_id: str  # UUID grouping user prompt + assistant response
+    turn_index: int  # Index of the user turn just created
+    status: str  # "started" or "queued"
 
 
 @ws_service
@@ -427,6 +444,97 @@ class SessionManagerService:
         runner.cancel()
         return True
 
+    # --- Message Submission ---
+
+    @ws_expose
+    async def submit_message(
+        self,
+        session_id: str,
+        content: str,
+        queue: bool = False,
+        allowed_tools: list[str] | None = None,
+    ) -> SubmitMessageResult:
+        """Submit a message to a session and start streaming the response.
+
+        This is the primary way for frontends to interact with the LLM.
+        The message is added to the session and streaming begins immediately
+        (unless queue=True, in which case it waits for current stream to finish).
+
+        After calling this method, listen for streaming events on TaskStateService:
+        - onContentDelta: Streaming text chunks
+        - onToolUseStarted: Tool execution beginning
+        - onToolResult: Tool execution completed
+        - onTurnFinished: Exchange completed
+
+        Args:
+            session_id: ID of the session to submit to
+            content: The message content (user prompt)
+            queue: If True, queue the message instead of starting immediately.
+                   If False and session is already streaming, returns error.
+            allowed_tools: List of tool names to allow, or None for all tools
+
+        Returns:
+            SubmitMessageResult with IDs for tracking the stream
+
+        Raises:
+            ValueError: If session not found or already streaming (when queue=False)
+        """
+        # Get or load session
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                raise ValueError(f"Session {session_id} not found")
+
+        # Get runner
+        runner = self._manager.get_runner(session_id)
+        if not runner:
+            raise ValueError(f"No runner for session {session_id}")
+
+        # Check if already streaming
+        if runner.is_streaming:
+            if not queue:
+                raise ValueError(
+                    f"Session {session_id} is already streaming. "
+                    "Use queue=True to queue this message."
+                )
+            # TODO: Implement actual message queueing
+            # For now, just reject - full queue support is a future enhancement
+            raise ValueError("Message queueing not yet implemented")
+
+        # Generate exchange ID for this user prompt + assistant response
+        exchange_id = str(uuid.uuid4())
+
+        # Add user message to session (persists immediately)
+        turn_index = len(session.turns)
+        user_blocks = [TextBlock(text=content)]
+        session.add_message(
+            "user", content, content_blocks=user_blocks, exchange_id=exchange_id
+        )
+        await session.save()
+
+        # Register the stream in StreamState for tracking
+        self._stream_state.register_session_stream(
+            session_id=session_id,
+            exchange_id=exchange_id,
+            prompt=content,
+            backend_name=runner._runner.__class__.__name__ if hasattr(runner, '_runner') else "unknown",
+        )
+
+        # Start background streaming
+        runner.start_background(
+            prompt=content,
+            messages=session.turns,
+            allowed_tools=allowed_tools,
+        )
+
+        return SubmitMessageResult(
+            session_id=session_id,
+            exchange_id=exchange_id,
+            turn_index=turn_index,
+            status="started",
+        )
+
     # --- Events ---
 
     @ws_event
@@ -457,4 +565,9 @@ class SessionManagerService:
     @ws_event
     async def on_streaming_stopped(self) -> SessionEventData:
         """Emitted when a session stops streaming."""
+        ...
+
+    @ws_event
+    async def on_message_submitted(self) -> SubmitMessageResult:
+        """Emitted when a message is submitted and streaming begins."""
         ...

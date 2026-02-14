@@ -2411,6 +2411,387 @@ class TestDeleteTodo:
         assert deleted_spike is None
 
 
+class TestAddTodoDependency:
+    """Test the add_todo_dependency tool."""
+
+    @pytest.mark.asyncio
+    async def test_add_dependency_success(self, goal_storage, mock_session, monkeypatch):
+        """Test successfully adding a dependency between two todos."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+
+        # Create two todos
+        todo1 = TodoData(
+            id="todo-dep-1", title="First task", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        todo2 = TodoData(
+            id="todo-dep-2", title="Second task", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo1)
+        await goal_storage.save_todo(todo2)
+
+        result, is_error = await execute_goal_tool(
+            "add_todo_dependency",
+            {"todo_id": "todo-dep-1", "depends_on_id": "todo-dep-2"},
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Added dependency" in result
+        assert "First task" in result
+        assert "Second task" in result
+
+        # Verify the dependency was created
+        deps = await goal_storage.get_dependencies("todo-dep-1")
+        assert "todo-dep-2" in deps
+
+    @pytest.mark.asyncio
+    async def test_add_dependency_with_prefix(self, goal_storage, mock_session, monkeypatch):
+        """Test adding dependency using ID prefixes."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+
+        todo1 = TodoData(
+            id="abcd1234-5678-90ab-cdef-111111111111", title="Task A", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        todo2 = TodoData(
+            id="efgh5678-5678-90ab-cdef-222222222222", title="Task B", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo1)
+        await goal_storage.save_todo(todo2)
+
+        result, is_error = await execute_goal_tool(
+            "add_todo_dependency",
+            {"todo_id": "abcd", "depends_on_id": "efgh"},
+            mock_session,
+        )
+
+        assert not is_error
+        deps = await goal_storage.get_dependencies(todo1.id)
+        assert todo2.id in deps
+
+    @pytest.mark.asyncio
+    async def test_add_dependency_self_reference_error(self, goal_storage, mock_session, monkeypatch):
+        """Test error when trying to add self-dependency."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+
+        todo = TodoData(
+            id="todo-self", title="Self task", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "add_todo_dependency",
+            {"todo_id": "todo-self", "depends_on_id": "todo-self"},
+            mock_session,
+        )
+
+        assert is_error
+        assert "cannot depend on itself" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_add_dependency_already_exists_error(self, goal_storage, mock_session, monkeypatch):
+        """Test error when dependency already exists."""
+        from storage_schema import TodoDependency
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+
+        todo1 = TodoData(
+            id="todo-dup-1", title="Task 1", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        todo2 = TodoData(
+            id="todo-dup-2", title="Task 2", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo1)
+        await goal_storage.save_todo(todo2)
+
+        # Create the dependency first
+        dep = TodoDependency(
+            todo_id="todo-dup-1", depends_on_id="todo-dup-2", created_at=now
+        )
+        await goal_storage.save_todo_dependency(dep)
+
+        # Try to add the same dependency again
+        result, is_error = await execute_goal_tool(
+            "add_todo_dependency",
+            {"todo_id": "todo-dup-1", "depends_on_id": "todo-dup-2"},
+            mock_session,
+        )
+
+        assert is_error
+        assert "already" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_add_dependency_cycle_detection(self, goal_storage, mock_session, monkeypatch):
+        """Test error when adding dependency would create a cycle."""
+        from storage_schema import TodoDependency
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+
+        # Create three todos: A -> B -> C
+        todos = [
+            TodoData(id=f"cycle-{i}", title=f"Task {i}", description="",
+                     status="pending", is_spike=False, created_at=now, updated_at=now)
+            for i in ["a", "b", "c"]
+        ]
+        for t in todos:
+            await goal_storage.save_todo(t)
+
+        # Create chain: A depends on B, B depends on C
+        await goal_storage.save_todo_dependency(
+            TodoDependency(todo_id="cycle-a", depends_on_id="cycle-b", created_at=now)
+        )
+        await goal_storage.save_todo_dependency(
+            TodoDependency(todo_id="cycle-b", depends_on_id="cycle-c", created_at=now)
+        )
+
+        # Try to make C depend on A (would create cycle: A -> B -> C -> A)
+        result, is_error = await execute_goal_tool(
+            "add_todo_dependency",
+            {"todo_id": "cycle-c", "depends_on_id": "cycle-a"},
+            mock_session,
+        )
+
+        assert is_error
+        assert "cycle" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_add_dependency_todo_not_found(self, goal_storage, mock_session, monkeypatch):
+        """Test error when todo doesn't exist."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+
+        todo = TodoData(
+            id="existing-todo", title="Existing task", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "add_todo_dependency",
+            {"todo_id": "nonexistent", "depends_on_id": "existing-todo"},
+            mock_session,
+        )
+
+        assert is_error
+        assert "not found" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_add_dependency_depends_on_not_found(self, goal_storage, mock_session, monkeypatch):
+        """Test error when depends_on todo doesn't exist."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+
+        todo = TodoData(
+            id="existing-todo-2", title="Existing task", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "add_todo_dependency",
+            {"todo_id": "existing-todo-2", "depends_on_id": "nonexistent"},
+            mock_session,
+        )
+
+        assert is_error
+        assert "not found" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_add_dependency_missing_todo_id(self, goal_storage, mock_session, monkeypatch):
+        """Test error when todo_id is missing."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "add_todo_dependency",
+            {"depends_on_id": "some-id"},
+            mock_session,
+        )
+
+        assert is_error
+        assert "todo_id is required" in result
+
+    @pytest.mark.asyncio
+    async def test_add_dependency_missing_depends_on_id(self, goal_storage, mock_session, monkeypatch):
+        """Test error when depends_on_id is missing."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "add_todo_dependency",
+            {"todo_id": "some-id"},
+            mock_session,
+        )
+
+        assert is_error
+        assert "depends_on_id is required" in result
+
+
+class TestRemoveTodoDependency:
+    """Test the remove_todo_dependency tool."""
+
+    @pytest.mark.asyncio
+    async def test_remove_dependency_success(self, goal_storage, mock_session, monkeypatch):
+        """Test successfully removing a dependency."""
+        from storage_schema import TodoDependency
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+
+        todo1 = TodoData(
+            id="rem-todo-1", title="Task 1", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        todo2 = TodoData(
+            id="rem-todo-2", title="Task 2", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo1)
+        await goal_storage.save_todo(todo2)
+
+        # Create the dependency first
+        dep = TodoDependency(
+            todo_id="rem-todo-1", depends_on_id="rem-todo-2", created_at=now
+        )
+        await goal_storage.save_todo_dependency(dep)
+
+        # Verify it exists
+        deps_before = await goal_storage.get_dependencies("rem-todo-1")
+        assert "rem-todo-2" in deps_before
+
+        # Remove it
+        result, is_error = await execute_goal_tool(
+            "remove_todo_dependency",
+            {"todo_id": "rem-todo-1", "depends_on_id": "rem-todo-2"},
+            mock_session,
+        )
+
+        assert not is_error
+        assert "Removed dependency" in result
+
+        # Verify it was removed
+        deps_after = await goal_storage.get_dependencies("rem-todo-1")
+        assert "rem-todo-2" not in deps_after
+
+    @pytest.mark.asyncio
+    async def test_remove_dependency_with_prefix(self, goal_storage, mock_session, monkeypatch):
+        """Test removing dependency using ID prefixes."""
+        from storage_schema import TodoDependency
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+
+        todo1 = TodoData(
+            id="wxyz1234-5678-90ab-cdef-111111111111", title="Task X", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        todo2 = TodoData(
+            id="qrst5678-5678-90ab-cdef-222222222222", title="Task Y", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo1)
+        await goal_storage.save_todo(todo2)
+
+        dep = TodoDependency(
+            todo_id=todo1.id, depends_on_id=todo2.id, created_at=now
+        )
+        await goal_storage.save_todo_dependency(dep)
+
+        result, is_error = await execute_goal_tool(
+            "remove_todo_dependency",
+            {"todo_id": "wxyz", "depends_on_id": "qrst"},
+            mock_session,
+        )
+
+        assert not is_error
+        deps = await goal_storage.get_dependencies(todo1.id)
+        assert todo2.id not in deps
+
+    @pytest.mark.asyncio
+    async def test_remove_dependency_not_exists_error(self, goal_storage, mock_session, monkeypatch):
+        """Test error when dependency doesn't exist."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+
+        todo1 = TodoData(
+            id="rem-noex-1", title="Task 1", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        todo2 = TodoData(
+            id="rem-noex-2", title="Task 2", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo1)
+        await goal_storage.save_todo(todo2)
+
+        # Try to remove a dependency that doesn't exist
+        result, is_error = await execute_goal_tool(
+            "remove_todo_dependency",
+            {"todo_id": "rem-noex-1", "depends_on_id": "rem-noex-2"},
+            mock_session,
+        )
+
+        assert is_error
+        assert "no dependency exists" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_remove_dependency_todo_not_found(self, goal_storage, mock_session, monkeypatch):
+        """Test error when todo doesn't exist."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "remove_todo_dependency",
+            {"todo_id": "nonexistent", "depends_on_id": "also-nonexistent"},
+            mock_session,
+        )
+
+        assert is_error
+        assert "not found" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_remove_dependency_missing_todo_id(self, goal_storage, mock_session, monkeypatch):
+        """Test error when todo_id is missing."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "remove_todo_dependency",
+            {"depends_on_id": "some-id"},
+            mock_session,
+        )
+
+        assert is_error
+        assert "todo_id is required" in result
+
+    @pytest.mark.asyncio
+    async def test_remove_dependency_missing_depends_on_id(self, goal_storage, mock_session, monkeypatch):
+        """Test error when depends_on_id is missing."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "remove_todo_dependency",
+            {"todo_id": "some-id"},
+            mock_session,
+        )
+
+        assert is_error
+        assert "depends_on_id is required" in result
+
+
 class TestGetHierarchy:
     """Test the get_hierarchy tool."""
 

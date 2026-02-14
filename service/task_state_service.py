@@ -95,6 +95,119 @@ class BackendSummary:
     active_count: int
 
 
+# --- Streaming Content Event Types ---
+# These events provide fine-grained streaming updates for frontends.
+
+
+@ws_type
+@dataclass
+class ContentDeltaEvent:
+    """Event payload for streaming text content.
+
+    Emitted as text tokens arrive from the LLM.
+    """
+
+    session_id: str
+    exchange_id: str
+    turn_index: int
+    delta: str  # The new text chunk
+    accumulated: str  # All text so far in this turn (for late-joining clients)
+
+
+@ws_type
+@dataclass
+class TurnStartedEvent:
+    """Event payload when a new turn begins in a session.
+
+    Emitted at the start of user, assistant, or tool turns.
+    """
+
+    session_id: str
+    exchange_id: str
+    turn_index: int
+    role: str  # "user", "assistant", or "tool"
+
+
+@ws_type
+@dataclass
+class TurnFinishedEvent:
+    """Event payload when a turn completes.
+
+    Emitted when an assistant response or tool result finishes.
+    """
+
+    session_id: str
+    exchange_id: str
+    turn_index: int
+    role: str
+    content: str  # Final content of the turn
+
+
+@ws_type
+@dataclass
+class ToolUseStartedEvent:
+    """Event payload when a tool execution begins.
+
+    Emitted when the LLM starts a tool call (input may still be streaming).
+    """
+
+    session_id: str
+    exchange_id: str
+    turn_index: int
+    tool_use_id: str
+    tool_name: str
+    tool_index: int  # Order of this tool in the current exchange
+
+
+@ws_type
+@dataclass
+class ToolInputDeltaEvent:
+    """Event payload for streaming tool input JSON.
+
+    Emitted as tool input JSON streams from the LLM.
+    """
+
+    session_id: str
+    exchange_id: str
+    tool_use_id: str
+    partial_json: str  # The new JSON chunk
+
+
+@ws_type
+@dataclass
+class ToolUseEvent:
+    """Event payload when tool input is complete and ready for execution.
+
+    Emitted when the LLM finishes streaming tool input.
+    """
+
+    session_id: str
+    exchange_id: str
+    turn_index: int
+    tool_use_id: str
+    tool_name: str
+    tool_input: dict  # Complete parsed tool input
+    tool_index: int
+
+
+@ws_type
+@dataclass
+class ToolResultEvent:
+    """Event payload when a tool execution completes.
+
+    Emitted after the tool runs with its result.
+    """
+
+    session_id: str
+    exchange_id: str
+    turn_index: int
+    tool_use_id: str
+    tool_name: str
+    result: str  # Tool output as string
+    is_error: bool
+    tool_index: int
+
+
 def _task_to_info(task: Task) -> TaskInfo:
     """Convert internal Task to wire-format TaskInfo."""
     return TaskInfo(
@@ -547,6 +660,224 @@ class TaskStateService:
         info = self._state.get_session_summary(session_id)
         return _session_summary_to_wire(info)
 
+    # --- Streaming Content Event Emission ---
+    # These methods are called by the event pump to relay SessionRunner events.
+
+    def emit_content_delta(
+        self,
+        session_id: str,
+        exchange_id: str,
+        turn_index: int,
+        delta: str,
+        accumulated: str,
+    ) -> None:
+        """Emit a content delta event for streaming text.
+
+        Called by the event pump when SessionRunner emits a "text" event.
+
+        Args:
+            session_id: Session the content belongs to
+            exchange_id: Exchange ID for this prompt/response
+            turn_index: Index of the current turn
+            delta: New text chunk
+            accumulated: All text accumulated so far
+        """
+        event_data = ContentDeltaEvent(
+            session_id=session_id,
+            exchange_id=exchange_id,
+            turn_index=turn_index,
+            delta=delta,
+            accumulated=accumulated,
+        )
+        for handler in self._event_handlers:
+            handler("contentDelta", event_data.__dict__)
+
+    def emit_turn_started(
+        self,
+        session_id: str,
+        exchange_id: str,
+        turn_index: int,
+        role: str,
+    ) -> None:
+        """Emit a turn started event.
+
+        Called when a new turn begins (user message added, assistant starts, tool starts).
+
+        Args:
+            session_id: Session ID
+            exchange_id: Exchange ID
+            turn_index: Index of the new turn
+            role: Turn role ("user", "assistant", or "tool")
+        """
+        event_data = TurnStartedEvent(
+            session_id=session_id,
+            exchange_id=exchange_id,
+            turn_index=turn_index,
+            role=role,
+        )
+        for handler in self._event_handlers:
+            handler("turnStarted", event_data.__dict__)
+
+    def emit_turn_finished(
+        self,
+        session_id: str,
+        exchange_id: str,
+        turn_index: int,
+        role: str,
+        content: str,
+    ) -> None:
+        """Emit a turn finished event.
+
+        Called when a turn completes (assistant response done, tool result received).
+
+        Args:
+            session_id: Session ID
+            exchange_id: Exchange ID
+            turn_index: Index of the completed turn
+            role: Turn role
+            content: Final content of the turn
+        """
+        event_data = TurnFinishedEvent(
+            session_id=session_id,
+            exchange_id=exchange_id,
+            turn_index=turn_index,
+            role=role,
+            content=content,
+        )
+        for handler in self._event_handlers:
+            handler("turnFinished", event_data.__dict__)
+
+    def emit_tool_use_started(
+        self,
+        session_id: str,
+        exchange_id: str,
+        turn_index: int,
+        tool_use_id: str,
+        tool_name: str,
+        tool_index: int,
+    ) -> None:
+        """Emit a tool use started event.
+
+        Called when the LLM begins generating a tool call.
+
+        Args:
+            session_id: Session ID
+            exchange_id: Exchange ID
+            turn_index: Index of the tool_use turn
+            tool_use_id: Unique ID for this tool invocation
+            tool_name: Name of the tool being called
+            tool_index: Order of this tool in the exchange
+        """
+        event_data = ToolUseStartedEvent(
+            session_id=session_id,
+            exchange_id=exchange_id,
+            turn_index=turn_index,
+            tool_use_id=tool_use_id,
+            tool_name=tool_name,
+            tool_index=tool_index,
+        )
+        for handler in self._event_handlers:
+            handler("toolUseStarted", event_data.__dict__)
+
+    def emit_tool_input_delta(
+        self,
+        session_id: str,
+        exchange_id: str,
+        tool_use_id: str,
+        partial_json: str,
+    ) -> None:
+        """Emit a tool input delta event.
+
+        Called as tool input JSON streams from the LLM.
+
+        Args:
+            session_id: Session ID
+            exchange_id: Exchange ID
+            tool_use_id: Tool invocation ID
+            partial_json: New JSON chunk
+        """
+        event_data = ToolInputDeltaEvent(
+            session_id=session_id,
+            exchange_id=exchange_id,
+            tool_use_id=tool_use_id,
+            partial_json=partial_json,
+        )
+        for handler in self._event_handlers:
+            handler("toolInputDelta", event_data.__dict__)
+
+    def emit_tool_use(
+        self,
+        session_id: str,
+        exchange_id: str,
+        turn_index: int,
+        tool_use_id: str,
+        tool_name: str,
+        tool_input: dict,
+        tool_index: int,
+    ) -> None:
+        """Emit a tool use event (input complete, ready for execution).
+
+        Called when tool input is fully streamed and parsed.
+
+        Args:
+            session_id: Session ID
+            exchange_id: Exchange ID
+            turn_index: Index of the tool_use turn
+            tool_use_id: Tool invocation ID
+            tool_name: Name of the tool
+            tool_input: Complete parsed input
+            tool_index: Order of this tool in the exchange
+        """
+        event_data = ToolUseEvent(
+            session_id=session_id,
+            exchange_id=exchange_id,
+            turn_index=turn_index,
+            tool_use_id=tool_use_id,
+            tool_name=tool_name,
+            tool_input=tool_input,
+            tool_index=tool_index,
+        )
+        for handler in self._event_handlers:
+            handler("toolUse", event_data.__dict__)
+
+    def emit_tool_result(
+        self,
+        session_id: str,
+        exchange_id: str,
+        turn_index: int,
+        tool_use_id: str,
+        tool_name: str,
+        result: str,
+        is_error: bool,
+        tool_index: int,
+    ) -> None:
+        """Emit a tool result event.
+
+        Called when a tool execution completes.
+
+        Args:
+            session_id: Session ID
+            exchange_id: Exchange ID
+            turn_index: Index of the tool_result turn
+            tool_use_id: Tool invocation ID
+            tool_name: Name of the tool
+            result: Tool output as string
+            is_error: Whether the tool errored
+            tool_index: Order of this tool in the exchange
+        """
+        event_data = ToolResultEvent(
+            session_id=session_id,
+            exchange_id=exchange_id,
+            turn_index=turn_index,
+            tool_use_id=tool_use_id,
+            tool_name=tool_name,
+            result=result,
+            is_error=is_error,
+            tool_index=tool_index,
+        )
+        for handler in self._event_handlers:
+            handler("toolResult", event_data.__dict__)
+
     # --- Cleanup Operations ---
 
     @ws_expose
@@ -586,4 +917,64 @@ class TaskStateService:
     @ws_event
     async def on_task_cancelled(self) -> TaskEventData:
         """Emitted when a task is cancelled by the user."""
+        ...
+
+    # --- Streaming Content Events ---
+    # These provide fine-grained updates for rendering streaming responses.
+
+    @ws_event
+    async def on_content_delta(self) -> ContentDeltaEvent:
+        """Emitted when new text content streams from the LLM.
+
+        Subscribe to this event to render streaming text in real-time.
+        The `accumulated` field allows late-joining clients to catch up.
+        """
+        ...
+
+    @ws_event
+    async def on_turn_started(self) -> TurnStartedEvent:
+        """Emitted when a new turn begins (user, assistant, or tool).
+
+        Use this to create UI elements for the new turn.
+        """
+        ...
+
+    @ws_event
+    async def on_turn_finished(self) -> TurnFinishedEvent:
+        """Emitted when a turn completes.
+
+        Use this to finalize UI rendering for the turn.
+        """
+        ...
+
+    @ws_event
+    async def on_tool_use_started(self) -> ToolUseStartedEvent:
+        """Emitted when the LLM begins a tool call.
+
+        The tool input may still be streaming at this point.
+        """
+        ...
+
+    @ws_event
+    async def on_tool_input_delta(self) -> ToolInputDeltaEvent:
+        """Emitted when tool input JSON streams from the LLM.
+
+        Use this to show tool input as it's being generated.
+        """
+        ...
+
+    @ws_event
+    async def on_tool_use(self) -> ToolUseEvent:
+        """Emitted when tool input is complete and execution begins.
+
+        The full tool input is now available.
+        """
+        ...
+
+    @ws_event
+    async def on_tool_result(self) -> ToolResultEvent:
+        """Emitted when a tool execution completes.
+
+        Contains the tool's output or error.
+        """
         ...

@@ -16,6 +16,13 @@ from service.task_state_service import (
     TaskEventData,
     SessionTaskSummary,
     BackendSummary,
+    ContentDeltaEvent,
+    TurnStartedEvent,
+    TurnFinishedEvent,
+    ToolUseStartedEvent,
+    ToolInputDeltaEvent,
+    ToolUseEvent,
+    ToolResultEvent,
 )
 
 
@@ -654,3 +661,246 @@ class TestTaskInfoConversion:
         assert result.duration_seconds >= 0
         assert result.is_active is True
         assert result.current_token_rate >= 0
+
+
+class TestStreamingContentEvents:
+    """Tests for streaming content event emission."""
+
+    def test_emit_content_delta(self, service):
+        """Test emitting content delta events."""
+        events = []
+
+        def handler(event_name: str, data: dict):
+            events.append((event_name, data))
+
+        service.add_event_handler(handler)
+
+        service.emit_content_delta(
+            session_id="session-1",
+            exchange_id="exchange-1",
+            turn_index=1,
+            delta="Hello",
+            accumulated="Hello",
+        )
+
+        assert len(events) == 1
+        assert events[0][0] == "contentDelta"
+        assert events[0][1]["session_id"] == "session-1"
+        assert events[0][1]["exchange_id"] == "exchange-1"
+        assert events[0][1]["turn_index"] == 1
+        assert events[0][1]["delta"] == "Hello"
+        assert events[0][1]["accumulated"] == "Hello"
+
+    def test_emit_turn_started(self, service):
+        """Test emitting turn started events."""
+        events = []
+
+        def handler(event_name: str, data: dict):
+            events.append((event_name, data))
+
+        service.add_event_handler(handler)
+
+        service.emit_turn_started(
+            session_id="session-1",
+            exchange_id="exchange-1",
+            turn_index=0,
+            role="user",
+        )
+
+        assert len(events) == 1
+        assert events[0][0] == "turnStarted"
+        assert events[0][1]["role"] == "user"
+        assert events[0][1]["turn_index"] == 0
+
+    def test_emit_turn_finished(self, service):
+        """Test emitting turn finished events."""
+        events = []
+
+        def handler(event_name: str, data: dict):
+            events.append((event_name, data))
+
+        service.add_event_handler(handler)
+
+        service.emit_turn_finished(
+            session_id="session-1",
+            exchange_id="exchange-1",
+            turn_index=1,
+            role="assistant",
+            content="Hello, I'm Claude!",
+        )
+
+        assert len(events) == 1
+        assert events[0][0] == "turnFinished"
+        assert events[0][1]["role"] == "assistant"
+        assert events[0][1]["content"] == "Hello, I'm Claude!"
+
+    def test_emit_tool_use_started(self, service):
+        """Test emitting tool use started events."""
+        events = []
+
+        def handler(event_name: str, data: dict):
+            events.append((event_name, data))
+
+        service.add_event_handler(handler)
+
+        service.emit_tool_use_started(
+            session_id="session-1",
+            exchange_id="exchange-1",
+            turn_index=2,
+            tool_use_id="tool-123",
+            tool_name="Read",
+            tool_index=0,
+        )
+
+        assert len(events) == 1
+        assert events[0][0] == "toolUseStarted"
+        assert events[0][1]["tool_use_id"] == "tool-123"
+        assert events[0][1]["tool_name"] == "Read"
+        assert events[0][1]["tool_index"] == 0
+
+    def test_emit_tool_input_delta(self, service):
+        """Test emitting tool input delta events."""
+        events = []
+
+        def handler(event_name: str, data: dict):
+            events.append((event_name, data))
+
+        service.add_event_handler(handler)
+
+        service.emit_tool_input_delta(
+            session_id="session-1",
+            exchange_id="exchange-1",
+            tool_use_id="tool-123",
+            partial_json='{"file_path": "/home',
+        )
+
+        assert len(events) == 1
+        assert events[0][0] == "toolInputDelta"
+        assert events[0][1]["tool_use_id"] == "tool-123"
+        assert events[0][1]["partial_json"] == '{"file_path": "/home'
+
+    def test_emit_tool_use(self, service):
+        """Test emitting tool use (input complete) events."""
+        events = []
+
+        def handler(event_name: str, data: dict):
+            events.append((event_name, data))
+
+        service.add_event_handler(handler)
+
+        service.emit_tool_use(
+            session_id="session-1",
+            exchange_id="exchange-1",
+            turn_index=2,
+            tool_use_id="tool-123",
+            tool_name="Read",
+            tool_input={"file_path": "/home/user/file.txt"},
+            tool_index=0,
+        )
+
+        assert len(events) == 1
+        assert events[0][0] == "toolUse"
+        assert events[0][1]["tool_input"] == {"file_path": "/home/user/file.txt"}
+
+    def test_emit_tool_result(self, service):
+        """Test emitting tool result events."""
+        events = []
+
+        def handler(event_name: str, data: dict):
+            events.append((event_name, data))
+
+        service.add_event_handler(handler)
+
+        service.emit_tool_result(
+            session_id="session-1",
+            exchange_id="exchange-1",
+            turn_index=3,
+            tool_use_id="tool-123",
+            tool_name="Read",
+            result="File contents here...",
+            is_error=False,
+            tool_index=0,
+        )
+
+        assert len(events) == 1
+        assert events[0][0] == "toolResult"
+        assert events[0][1]["result"] == "File contents here..."
+        assert events[0][1]["is_error"] is False
+
+    def test_streaming_content_event_dataclasses(self):
+        """Test that streaming event dataclasses have expected fields."""
+        # ContentDeltaEvent
+        delta = ContentDeltaEvent(
+            session_id="s1",
+            exchange_id="e1",
+            turn_index=1,
+            delta="Hello",
+            accumulated="Hello World",
+        )
+        assert delta.delta == "Hello"
+        assert delta.accumulated == "Hello World"
+
+        # TurnStartedEvent
+        turn_started = TurnStartedEvent(
+            session_id="s1",
+            exchange_id="e1",
+            turn_index=0,
+            role="user",
+        )
+        assert turn_started.role == "user"
+
+        # TurnFinishedEvent
+        turn_finished = TurnFinishedEvent(
+            session_id="s1",
+            exchange_id="e1",
+            turn_index=1,
+            role="assistant",
+            content="Response",
+        )
+        assert turn_finished.content == "Response"
+
+        # ToolUseStartedEvent
+        tool_started = ToolUseStartedEvent(
+            session_id="s1",
+            exchange_id="e1",
+            turn_index=2,
+            tool_use_id="t1",
+            tool_name="Read",
+            tool_index=0,
+        )
+        assert tool_started.tool_name == "Read"
+
+        # ToolInputDeltaEvent
+        tool_delta = ToolInputDeltaEvent(
+            session_id="s1",
+            exchange_id="e1",
+            tool_use_id="t1",
+            partial_json='{"key":',
+        )
+        assert tool_delta.partial_json == '{"key":'
+
+        # ToolUseEvent
+        tool_use = ToolUseEvent(
+            session_id="s1",
+            exchange_id="e1",
+            turn_index=2,
+            tool_use_id="t1",
+            tool_name="Read",
+            tool_input={"file_path": "/test"},
+            tool_index=0,
+        )
+        assert tool_use.tool_input == {"file_path": "/test"}
+
+        # ToolResultEvent
+        tool_result = ToolResultEvent(
+            session_id="s1",
+            exchange_id="e1",
+            turn_index=3,
+            tool_use_id="t1",
+            tool_name="Read",
+            result="contents",
+            is_error=False,
+            tool_index=0,
+        )
+        assert tool_result.result == "contents"
+        assert tool_result.is_error is False

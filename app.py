@@ -376,6 +376,8 @@ class BalloonsApp(App):
         self._batch_context_mode_changes = False
         # WebSocket server (created in on_mount if enabled)
         self._ws_server: WsServer | None = None
+        # Task state service for emitting streaming events to WebSocket clients
+        self._task_service: TaskStateService | None = None
 
     @property
     def session(self) -> Session | None:
@@ -674,13 +676,14 @@ class BalloonsApp(App):
             queue_service = QueueStateService(self._queue_state)
             session_service = SessionManagerService(self._manager)
             goal_service = GoalTreeStateService(self._goal_tree_state)
-            task_service = TaskStateService(get_stream_state())
+            # Store task_service as instance variable so we can emit streaming events from poll loop
+            self._task_service = TaskStateService(get_stream_state())
 
             self._ws_server.register_service(tree_service)
             self._ws_server.register_service(queue_service)
             self._ws_server.register_service(session_service)
             self._ws_server.register_service(goal_service)
-            self._ws_server.register_service(task_service)
+            self._ws_server.register_service(self._task_service)
 
             # Start the server
             await self._ws_server.start()
@@ -701,6 +704,7 @@ class BalloonsApp(App):
             except Exception as e:
                 debug_log.error(f"Error stopping WebSocket server: {e}", category="websocket")
             finally:
+                self._task_service = None
                 self._ws_server = None
 
     def _on_tree_state_event(self, event: TreeEvent, data: dict) -> None:
@@ -994,6 +998,16 @@ class BalloonsApp(App):
             approx_tokens = len(ctx.content) // 4
             get_stream_state().update_stream(ctx.exchange_id, tokens_streamed=approx_tokens)
 
+            # Emit content delta event for WebSocket clients
+            if self._task_service is not None:
+                self._task_service.emit_content_delta(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    turn_index=ctx.assistant_turn_idx,
+                    delta=action.text,
+                    accumulated=ctx.content,
+                )
+
             if is_active:
                 chat_log.append_to_current(action.text)
             else:
@@ -1015,6 +1029,16 @@ class BalloonsApp(App):
             await context_tree.finish_turn(
                 session_id, action.turn_idx, action.text, content_block, []
             )
+
+            # Emit turn finished event for WebSocket clients
+            if self._task_service is not None:
+                self._task_service.emit_turn_finished(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    turn_index=action.turn_idx,
+                    role="assistant",
+                    content=action.text,
+                )
 
         elif isinstance(action, TurnStartedAction):
             # New turn started during streaming (text_turn, tool_use, or tool_result)
@@ -1045,6 +1069,15 @@ class BalloonsApp(App):
                     f"Tool result turn started",
                     session_id=session_id,
                     category="stream",
+                )
+
+            # Emit turn started event for WebSocket clients
+            if self._task_service is not None:
+                self._task_service.emit_turn_started(
+                    session_id=session_id,
+                    exchange_id=action.exchange_id,
+                    turn_index=action.turn_idx,
+                    role=action.role,
                 )
 
         elif isinstance(action, InitAction):
@@ -1090,6 +1123,19 @@ class BalloonsApp(App):
                 tool_count=ctx.tool_count,
             )
 
+            # Emit tool use started event for WebSocket clients
+            if self._task_service is not None:
+                # Get turn index for this tool use
+                tool_turn_idx = ctx.tool_turn_indices.get((action.tool_use_id, "tool_use"), ctx.assistant_turn_idx)
+                self._task_service.emit_tool_use_started(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    turn_index=tool_turn_idx,
+                    tool_use_id=action.tool_use_id,
+                    tool_name=action.tool_name,
+                    tool_index=action.tool_index,
+                )
+
             if is_active:
                 # Add streaming tool widget
                 chat_log.add_streaming_tool_use(action.tool_name, action.tool_use_id)
@@ -1097,6 +1143,15 @@ class BalloonsApp(App):
         elif isinstance(action, ToolInputDeltaAction):
             # Note: Tree node is created by TurnStartedAction (tool_use_turn_started event)
             # This action only updates the chat log streaming widget
+
+            # Emit tool input delta event for WebSocket clients
+            if self._task_service is not None:
+                self._task_service.emit_tool_input_delta(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    tool_use_id=action.tool_use_id,
+                    partial_json=action.partial_json,
+                )
 
             if is_active:
                 # Update streaming tool widget
@@ -1114,6 +1169,19 @@ class BalloonsApp(App):
                 # content param not used for tool turns - label uses content_block
                 await context_tree.finish_turn(
                     session_id, turn_idx, "", content_block, []
+                )
+
+            # Emit tool use event for WebSocket clients (input complete, ready for execution)
+            if self._task_service is not None:
+                tool_turn_idx = turn_idx if turn_idx is not None else ctx.assistant_turn_idx
+                self._task_service.emit_tool_use(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    turn_index=tool_turn_idx,
+                    tool_use_id=action.tool_use_id,
+                    tool_name=action.tool_name,
+                    tool_input=action.tool_input,
+                    tool_index=action.tool_index,
                 )
 
             # Intercept propose_fork tool - show modal before execution
@@ -1201,6 +1269,21 @@ class BalloonsApp(App):
                 tool_name=None,
             )
 
+            # Emit tool result event for WebSocket clients
+            if self._task_service is not None:
+                tool_turn_idx = turn_idx if turn_idx is not None else ctx.assistant_turn_idx
+                tool_name = ctx.tool_names.get(action.tool_use_id, "")
+                self._task_service.emit_tool_result(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    turn_index=tool_turn_idx,
+                    tool_use_id=action.tool_use_id,
+                    tool_name=tool_name,
+                    result=action.result,
+                    is_error=False,  # ToolResultAction doesn't track errors separately
+                    tool_index=action.tool_index,
+                )
+
             # Refresh slides pane when create_slide tool completes
             tool_name = ctx.tool_names.get(action.tool_use_id)
             debug_log.debug(f"ToolResultAction: tool_use_id={action.tool_use_id}, tool_name={tool_name}, tool_names={ctx.tool_names}", category="slides")
@@ -1234,6 +1317,17 @@ class BalloonsApp(App):
         elif isinstance(action, DoneAction):
             debug_log.info("Received done action, calling finalize", category="stream", session_id=session_id)
             play_done_sound()
+
+            # Emit turn finished event for the final assistant turn
+            if self._task_service is not None and ctx.content:
+                self._task_service.emit_turn_finished(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    turn_index=ctx.assistant_turn_idx,
+                    role="assistant",
+                    content=ctx.content,
+                )
+
             await self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar)
 
         elif isinstance(action, ErrorAction):

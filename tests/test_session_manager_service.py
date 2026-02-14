@@ -10,6 +10,7 @@ from service.session_manager_service import (
     ManagedSessionInfo,
     StreamingInfo,
     SessionEventData,
+    SubmitMessageResult,
 )
 from core.stream_state import StreamState, StreamStatus, StreamType, Stream
 
@@ -428,3 +429,140 @@ class TestWsTypeDataclasses:
         )
         assert data.event_type == "sessionCreated"
         assert data.data == {}
+
+    def test_submit_message_result_fields(self):
+        """Test SubmitMessageResult has expected fields."""
+        result = SubmitMessageResult(
+            session_id="test-123",
+            exchange_id="exchange-456",
+            turn_index=0,
+            status="started",
+        )
+        assert result.session_id == "test-123"
+        assert result.exchange_id == "exchange-456"
+        assert result.turn_index == 0
+        assert result.status == "started"
+
+
+class TestSubmitMessage:
+    @pytest.mark.asyncio
+    async def test_submit_message_success(self, service, mock_manager, mock_session, mock_runner):
+        """Test successfully submitting a message."""
+        mock_session.turns = []
+        mock_session.add_message = MagicMock()
+        mock_session.save = AsyncMock()
+        mock_runner.is_streaming = False
+        mock_runner.start_background = MagicMock()
+
+        result = await service.submit_message(
+            session_id=mock_session.id,
+            content="Hello, Claude!",
+        )
+
+        assert isinstance(result, SubmitMessageResult)
+        assert result.session_id == mock_session.id
+        assert result.turn_index == 0
+        assert result.status == "started"
+        assert result.exchange_id is not None
+
+        # Verify message was added
+        mock_session.add_message.assert_called_once()
+        call_args = mock_session.add_message.call_args
+        assert call_args[0][0] == "user"
+        assert call_args[0][1] == "Hello, Claude!"
+
+        # Verify session was saved
+        mock_session.save.assert_called_once()
+
+        # Verify background streaming was started
+        mock_runner.start_background.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_submit_message_session_not_found(self, service, mock_manager):
+        """Test submitting to a nonexistent session."""
+        mock_manager.get_session.return_value = None
+        mock_manager.load_session.return_value = None
+
+        with pytest.raises(ValueError, match="not found"):
+            await service.submit_message(
+                session_id="nonexistent",
+                content="Hello",
+            )
+
+    @pytest.mark.asyncio
+    async def test_submit_message_already_streaming(self, service, mock_manager, mock_session, mock_runner):
+        """Test submitting when session is already streaming."""
+        mock_runner.is_streaming = True
+
+        with pytest.raises(ValueError, match="already streaming"):
+            await service.submit_message(
+                session_id=mock_session.id,
+                content="Hello",
+            )
+
+    @pytest.mark.asyncio
+    async def test_submit_message_with_queue_not_implemented(self, service, mock_manager, mock_session, mock_runner):
+        """Test that queue=True raises not implemented error."""
+        mock_runner.is_streaming = True
+
+        with pytest.raises(ValueError, match="queueing not yet implemented"):
+            await service.submit_message(
+                session_id=mock_session.id,
+                content="Hello",
+                queue=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_submit_message_with_allowed_tools(self, service, mock_manager, mock_session, mock_runner):
+        """Test submitting with specific allowed tools."""
+        mock_session.turns = []
+        mock_session.add_message = MagicMock()
+        mock_session.save = AsyncMock()
+        mock_runner.is_streaming = False
+        mock_runner.start_background = MagicMock()
+
+        await service.submit_message(
+            session_id=mock_session.id,
+            content="Hello",
+            allowed_tools=["Bash", "Read"],
+        )
+
+        # Verify allowed_tools was passed
+        call_args = mock_runner.start_background.call_args
+        assert call_args[1]["allowed_tools"] == ["Bash", "Read"]
+
+    @pytest.mark.asyncio
+    async def test_submit_message_increments_turn_index(self, service, mock_manager, mock_session, mock_runner):
+        """Test that turn_index reflects existing turns."""
+        mock_session.turns = [MagicMock(), MagicMock()]  # 2 existing turns
+        mock_session.add_message = MagicMock()
+        mock_session.save = AsyncMock()
+        mock_runner.is_streaming = False
+        mock_runner.start_background = MagicMock()
+
+        result = await service.submit_message(
+            session_id=mock_session.id,
+            content="Hello",
+        )
+
+        assert result.turn_index == 2  # Next turn index
+
+    @pytest.mark.asyncio
+    async def test_submit_message_registers_stream(self, service, mock_manager, mock_session, mock_runner, stream_state):
+        """Test that submit_message registers the stream in StreamState."""
+        mock_session.turns = []
+        mock_session.add_message = MagicMock()
+        mock_session.save = AsyncMock()
+        mock_runner.is_streaming = False
+        mock_runner.start_background = MagicMock()
+
+        result = await service.submit_message(
+            session_id=mock_session.id,
+            content="Hello",
+        )
+
+        # Verify stream was registered
+        stream = stream_state.get_session_stream(mock_session.id)
+        assert stream is not None
+        assert stream.stream_id == result.exchange_id
+        assert stream.prompt == "Hello"
