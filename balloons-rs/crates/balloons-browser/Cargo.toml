@@ -1,0 +1,28 @@
+[package]
+name = "balloons-browser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Browser automation for Balloons using surfer-rs with smol runtime"
+
+[dependencies]
+# Browser automation - using smol-runtime for core-executor compatibility
+surfer-rs = { git = "https://github.com/dwerner/surfer-rs", features = ["smol-runtime"], default-features = false }
+
+# Async runtime (smol for core-executor compatibility)
+smol = "2"
+async-process = "2"
+futures-lite.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# Unique IDs
+uuid.workspace = true
+
+# Logging
+tracing.workspace = true

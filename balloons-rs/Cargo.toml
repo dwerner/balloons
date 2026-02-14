@@ -31,6 +31,7 @@ async-trait = "0.1"
 futures-lite = { version = "2", features = ["race"] }
 async-lock = "3"
 async-channel = "2"
+smol = "2"
 
 # Error handling
 thiserror = "2"
@@ -53,3 +54,4 @@ pyo3 = { version = "0.25", features = ["extension-module"] }
 # Internal crates
 balloons-core = { path = "crates/balloons-core" }
 balloons-supervisor = { path = "crates/balloons-supervisor" }
+balloons-browser = { path = "crates/balloons-browser" }

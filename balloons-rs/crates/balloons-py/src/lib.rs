@@ -1503,12 +1503,416 @@ impl Tokenizer {
     }
 }
 
+// =========================================================================
+// Browser Automation
+// =========================================================================
+
+use balloons_browser::{Browser as RustBrowser, BrowserConfig as RustBrowserConfig};
+
+/// Python-facing browser configuration.
+#[pyclass]
+#[derive(Clone)]
+struct BrowserConfig {
+    inner: RustBrowserConfig,
+}
+
+#[pymethods]
+impl BrowserConfig {
+    /// Create a new browser config with default settings.
+    ///
+    /// Args:
+    ///     browser_type: "firefox" (default) or "chrome"
+    ///     headless: Run in headless mode (default: False)
+    ///     port: WebDriver port (default: 4444)
+    ///     webdriver_url: Optional WebDriver URL to connect to
+    #[new]
+    #[pyo3(signature = (browser_type="firefox", headless=false, port=4444, webdriver_url=None))]
+    fn new(
+        browser_type: &str,
+        headless: bool,
+        port: u16,
+        webdriver_url: Option<String>,
+    ) -> Self {
+        let mut config = RustBrowserConfig {
+            browser_type: browser_type.to_string(),
+            headless,
+            port,
+            webdriver_url: None,
+        };
+        if let Some(url) = webdriver_url {
+            config.webdriver_url = Some(url);
+        }
+        Self { inner: config }
+    }
+
+    /// Create a Firefox config.
+    #[staticmethod]
+    fn firefox() -> Self {
+        Self {
+            inner: RustBrowserConfig::firefox(),
+        }
+    }
+
+    /// Create a Chrome config.
+    #[staticmethod]
+    fn chrome() -> Self {
+        Self {
+            inner: RustBrowserConfig::chrome(),
+        }
+    }
+
+    /// Get browser type.
+    #[getter]
+    fn browser_type(&self) -> &str {
+        &self.inner.browser_type
+    }
+
+    /// Get headless setting.
+    #[getter]
+    fn headless(&self) -> bool {
+        self.inner.headless
+    }
+
+    /// Get port.
+    #[getter]
+    fn port(&self) -> u16 {
+        self.inner.port
+    }
+}
+
+/// Python-facing browser for web automation.
+///
+/// Uses surfer-rs for browser automation via WebDriver protocol.
+/// All operations are synchronous from Python's perspective but release
+/// the GIL to allow other Python threads to run.
+#[pyclass]
+struct Browser {
+    inner: Option<RustBrowser>,
+}
+
+#[pymethods]
+impl Browser {
+    /// Create a new browser instance with the given config.
+    ///
+    /// The browser is not connected yet - call connect() to start it.
+    #[new]
+    fn new(config: &BrowserConfig) -> Self {
+        Self {
+            inner: Some(RustBrowser::new(config.inner.clone())),
+        }
+    }
+
+    /// Get the browser ID.
+    #[getter]
+    fn id(&self) -> PyResult<String> {
+        self.inner
+            .as_ref()
+            .map(|b| b.id().to_string())
+            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))
+    }
+
+    /// Check if browser is connected.
+    fn is_connected(&self) -> bool {
+        self.inner.as_ref().map(|b| b.is_connected()).unwrap_or(false)
+    }
+
+    /// Connect to the browser (starts webdriver and browser).
+    ///
+    /// This must be called before any navigation or interaction methods.
+    fn connect(&mut self, py: Python<'_>) -> PyResult<()> {
+        let browser = self
+            .inner
+            .as_mut()
+            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+
+        py.allow_threads(|| {
+            smol::block_on(async { browser.connect().await })
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Disconnect and close the browser.
+    fn disconnect(&mut self, py: Python<'_>) -> PyResult<()> {
+        let browser = self
+            .inner
+            .as_mut()
+            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+
+        py.allow_threads(|| {
+            smol::block_on(async { browser.disconnect().await })
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Navigate to a URL.
+    fn goto(&self, py: Python<'_>, url: &str) -> PyResult<()> {
+        let browser = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+        let url = url.to_string();
+
+        py.allow_threads(|| {
+            smol::block_on(async { browser.goto(&url).await })
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Go back in history.
+    fn back(&self, py: Python<'_>) -> PyResult<()> {
+        let browser = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+
+        py.allow_threads(|| {
+            smol::block_on(async { browser.back().await })
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Go forward in history.
+    fn forward(&self, py: Python<'_>) -> PyResult<()> {
+        let browser = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+
+        py.allow_threads(|| {
+            smol::block_on(async { browser.forward().await })
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Refresh the page.
+    fn refresh(&self, py: Python<'_>) -> PyResult<()> {
+        let browser = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+
+        py.allow_threads(|| {
+            smol::block_on(async { browser.refresh().await })
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Get the current URL.
+    fn url(&self, py: Python<'_>) -> PyResult<String> {
+        let browser = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+
+        py.allow_threads(|| {
+            smol::block_on(async { browser.url().await })
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Get the page title.
+    fn title(&self, py: Python<'_>) -> PyResult<String> {
+        let browser = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+
+        py.allow_threads(|| {
+            smol::block_on(async { browser.title().await })
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Get the page HTML.
+    fn html(&self, py: Python<'_>) -> PyResult<String> {
+        let browser = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+
+        py.allow_threads(|| {
+            smol::block_on(async { browser.html().await })
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Take a screenshot (returns PNG bytes).
+    fn screenshot(&self, py: Python<'_>) -> PyResult<Vec<u8>> {
+        let browser = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+
+        py.allow_threads(|| {
+            smol::block_on(async { browser.screenshot().await })
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Click an element by CSS selector.
+    fn click(&self, py: Python<'_>, selector: &str) -> PyResult<()> {
+        let browser = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+        let selector = selector.to_string();
+
+        py.allow_threads(|| {
+            smol::block_on(async { browser.click(&selector).await })
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Fill an input by CSS selector (clears first, then types).
+    fn fill(&self, py: Python<'_>, selector: &str, text: &str) -> PyResult<()> {
+        let browser = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+        let selector = selector.to_string();
+        let text = text.to_string();
+
+        py.allow_threads(|| {
+            smol::block_on(async { browser.fill(&selector, &text).await })
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Type text into an element (without clearing first).
+    fn type_text(&self, py: Python<'_>, selector: &str, text: &str) -> PyResult<()> {
+        let browser = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+        let selector = selector.to_string();
+        let text = text.to_string();
+
+        py.allow_threads(|| {
+            smol::block_on(async { browser.type_text(&selector, &text).await })
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Submit the currently focused form.
+    fn submit(&self, py: Python<'_>) -> PyResult<()> {
+        let browser = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+
+        py.allow_threads(|| {
+            smol::block_on(async { browser.submit().await })
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Discover all input elements on the page.
+    ///
+    /// Returns a JSON array of input info objects.
+    fn inputs(&self, py: Python<'_>) -> PyResult<String> {
+        let browser = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+
+        py.allow_threads(|| {
+            let inputs = smol::block_on(async { browser.inputs().await })
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))?;
+            serde_json::to_string(&inputs)
+                .map_err(|e| PyRuntimeError::new_err(format!("JSON error: {}", e)))
+        })
+    }
+
+    /// Discover all button elements on the page.
+    ///
+    /// Returns a JSON array of button info objects.
+    fn buttons(&self, py: Python<'_>) -> PyResult<String> {
+        let browser = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+
+        py.allow_threads(|| {
+            let buttons = smol::block_on(async { browser.buttons().await })
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))?;
+            serde_json::to_string(&buttons)
+                .map_err(|e| PyRuntimeError::new_err(format!("JSON error: {}", e)))
+        })
+    }
+
+    /// Discover all link elements on the page.
+    ///
+    /// Args:
+    ///     limit: Optional maximum number of links to return
+    ///
+    /// Returns a JSON array of link info objects.
+    #[pyo3(signature = (limit=None))]
+    fn links(&self, py: Python<'_>, limit: Option<usize>) -> PyResult<String> {
+        let browser = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+
+        py.allow_threads(|| {
+            let links = smol::block_on(async { browser.links(limit).await })
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))?;
+            serde_json::to_string(&links)
+                .map_err(|e| PyRuntimeError::new_err(format!("JSON error: {}", e)))
+        })
+    }
+
+    /// Click a button by index (from buttons() discovery).
+    fn click_button(&self, py: Python<'_>, index: usize) -> PyResult<()> {
+        let browser = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+
+        py.allow_threads(|| {
+            smol::block_on(async { browser.click_button(index).await })
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Set an input by index (from inputs() discovery).
+    fn set_input(&self, py: Python<'_>, index: usize, value: &str) -> PyResult<()> {
+        let browser = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+        let value = value.to_string();
+
+        py.allow_threads(|| {
+            smol::block_on(async { browser.set_input(index, &value).await })
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Execute JavaScript and return the result as JSON string.
+    fn execute_js(&self, py: Python<'_>, script: &str) -> PyResult<String> {
+        let browser = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+        let script = script.to_string();
+
+        py.allow_threads(|| {
+            let result = smol::block_on(async { browser.execute_js(&script).await })
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))?;
+            serde_json::to_string(&result)
+                .map_err(|e| PyRuntimeError::new_err(format!("JSON error: {}", e)))
+        })
+    }
+}
+
 /// Python module definition
 #[pymodule]
 fn balloons_storage(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Storage>()?;
     m.add_class::<Supervisor>()?;
     m.add_class::<Tokenizer>()?;
+    m.add_class::<BrowserConfig>()?;
+    m.add_class::<Browser>()?;
     m.add_function(wrap_pyfunction!(recover_database, m)?)?;
     // Backup and recovery functions
     m.add_function(wrap_pyfunction!(create_backup, m)?)?;
