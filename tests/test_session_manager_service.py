@@ -1,5 +1,6 @@
 """Tests for SessionManagerService."""
 
+import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from dataclasses import dataclass
@@ -11,7 +12,9 @@ from service.session_manager_service import (
     StreamingInfo,
     SessionEventData,
     SubmitMessageResult,
+    _StreamingContext,
 )
+from service.task_state_service import TaskStateService
 from core.stream_state import StreamState, StreamStatus, StreamType, Stream
 
 
@@ -566,3 +569,375 @@ class TestSubmitMessage:
         assert stream is not None
         assert stream.stream_id == result.exchange_id
         assert stream.prompt == "Hello"
+
+    @pytest.mark.asyncio
+    async def test_submit_message_creates_streaming_context(self, service, mock_manager, mock_session, mock_runner):
+        """Test that submit_message creates a streaming context for event pump."""
+        mock_session.turns = []
+        mock_session.add_message = MagicMock()
+        mock_session.save = AsyncMock()
+        mock_runner.is_streaming = False
+        mock_runner.start_background = MagicMock()
+
+        result = await service.submit_message(
+            session_id=mock_session.id,
+            content="Hello",
+        )
+
+        # Verify streaming context was created
+        assert mock_session.id in service._streaming_contexts
+        ctx = service._streaming_contexts[mock_session.id]
+        assert ctx.session_id == mock_session.id
+        assert ctx.exchange_id == result.exchange_id
+        assert ctx.user_turn_idx == 0
+        assert ctx.assistant_turn_idx == 1
+
+    @pytest.mark.asyncio
+    async def test_submit_message_emits_event(self, service, mock_manager, mock_session, mock_runner):
+        """Test that submit_message emits MESSAGE_SUBMITTED event."""
+        mock_session.turns = []
+        mock_session.add_message = MagicMock()
+        mock_session.save = AsyncMock()
+        mock_runner.is_streaming = False
+        mock_runner.start_background = MagicMock()
+
+        handler = MagicMock()
+        service.add_event_handler(handler)
+
+        result = await service.submit_message(
+            session_id=mock_session.id,
+            content="Hello",
+        )
+
+        # Verify event was emitted
+        handler.assert_called()
+        call_args = handler.call_args[0]
+        assert call_args[0] == "messageSubmitted"
+        assert call_args[1]["session_id"] == mock_session.id
+        assert call_args[1]["exchange_id"] == result.exchange_id
+
+
+class TestEventPump:
+    """Tests for the event pump functionality."""
+
+    @pytest.fixture
+    def task_service(self, stream_state):
+        """Create a TaskStateService for testing."""
+        return TaskStateService(stream_state)
+
+    @pytest.fixture
+    def service_with_pump(self, mock_manager, stream_state, task_service):
+        """Create a SessionManagerService with task service wired up."""
+        return SessionManagerService(
+            mock_manager,
+            stream_state,
+            task_state_service=task_service,
+        )
+
+    def test_set_task_state_service(self, service, task_service):
+        """Test setting the task state service."""
+        assert service._task_service is None
+        service.set_task_state_service(task_service)
+        assert service._task_service == task_service
+
+    @pytest.mark.asyncio
+    async def test_start_event_pump(self, service_with_pump):
+        """Test starting the event pump."""
+        assert not service_with_pump._pump_running
+        assert service_with_pump._pump_task is None
+
+        service_with_pump.start_event_pump()
+
+        assert service_with_pump._pump_running
+        assert service_with_pump._pump_task is not None
+        assert not service_with_pump._pump_task.done()
+
+        # Clean up
+        service_with_pump.stop_event_pump()
+        # Give pump time to stop
+        await asyncio.sleep(0.1)
+
+    @pytest.mark.asyncio
+    async def test_start_event_pump_idempotent(self, service_with_pump):
+        """Test that starting pump multiple times is safe."""
+        service_with_pump.start_event_pump()
+        task1 = service_with_pump._pump_task
+
+        service_with_pump.start_event_pump()
+        task2 = service_with_pump._pump_task
+
+        # Should be the same task
+        assert task1 is task2
+
+        # Clean up
+        service_with_pump.stop_event_pump()
+        await asyncio.sleep(0.1)
+
+    @pytest.mark.asyncio
+    async def test_stop_event_pump(self, service_with_pump):
+        """Test stopping the event pump."""
+        service_with_pump.start_event_pump()
+        service_with_pump.stop_event_pump()
+
+        assert not service_with_pump._pump_running
+        # Give pump time to stop
+        await asyncio.sleep(0.1)
+
+    @pytest.mark.asyncio
+    async def test_cancel_streaming_cleans_up_context(self, service_with_pump, mock_manager, mock_session, mock_runner, stream_state):
+        """Test that cancelling streaming cleans up the streaming context."""
+        # Set up streaming state
+        mock_session.turns = []
+        mock_session.add_message = MagicMock()
+        mock_session.save = AsyncMock()
+        mock_runner.is_streaming = False
+        mock_runner.start_background = MagicMock()
+
+        # Submit a message to create context
+        result = await service_with_pump.submit_message(
+            session_id=mock_session.id,
+            content="Hello",
+        )
+
+        # Now mark runner as streaming
+        mock_runner.is_streaming = True
+
+        # Verify context exists
+        assert mock_session.id in service_with_pump._streaming_contexts
+
+        # Cancel streaming
+        await service_with_pump.cancel_streaming(mock_session.id)
+
+        # Verify context was cleaned up
+        assert mock_session.id not in service_with_pump._streaming_contexts
+
+
+class TestStreamingContextDataclass:
+    """Tests for the _StreamingContext dataclass."""
+
+    def test_streaming_context_defaults(self):
+        """Test default values for streaming context."""
+        ctx = _StreamingContext(
+            session_id="test-123",
+            exchange_id="exchange-456",
+            user_turn_idx=0,
+        )
+
+        assert ctx.session_id == "test-123"
+        assert ctx.exchange_id == "exchange-456"
+        assert ctx.user_turn_idx == 0
+        assert ctx.assistant_turn_idx == -1
+        assert ctx.content == ""
+        assert ctx.tool_count == 0
+        assert ctx.tool_turn_indices == {}
+        assert ctx.tool_names == {}
+
+    def test_streaming_context_with_values(self):
+        """Test streaming context with custom values."""
+        ctx = _StreamingContext(
+            session_id="test-123",
+            exchange_id="exchange-456",
+            user_turn_idx=0,
+            assistant_turn_idx=1,
+            content="Hello",
+            tool_count=2,
+        )
+
+        assert ctx.assistant_turn_idx == 1
+        assert ctx.content == "Hello"
+        assert ctx.tool_count == 2
+
+
+class TestEventDispatch:
+    """Tests for the event dispatch functionality."""
+
+    @pytest.fixture
+    def task_service(self, stream_state):
+        """Create a TaskStateService for testing."""
+        return TaskStateService(stream_state)
+
+    @pytest.fixture
+    def service_with_task(self, mock_manager, stream_state, task_service):
+        """Create a SessionManagerService with task service."""
+        return SessionManagerService(
+            mock_manager,
+            stream_state,
+            task_state_service=task_service,
+        )
+
+    @pytest.fixture
+    def ctx(self):
+        """Create a test streaming context."""
+        return _StreamingContext(
+            session_id="test-123",
+            exchange_id="exchange-456",
+            user_turn_idx=0,
+            assistant_turn_idx=1,
+        )
+
+    @pytest.fixture
+    def mock_event(self):
+        """Create a mock event."""
+        class MockEvent:
+            def __init__(self, event_type, data=None):
+                self.event_type = event_type
+                self.data = data
+        return MockEvent
+
+    @pytest.mark.asyncio
+    async def test_dispatch_text_event(self, service_with_task, task_service, ctx, mock_event):
+        """Test dispatching a text event."""
+        handler = MagicMock()
+        task_service.add_event_handler(handler)
+
+        event = mock_event("text", "Hello")
+        await service_with_task._dispatch_event("test-123", event, ctx)
+
+        # Verify content was accumulated
+        assert ctx.content == "Hello"
+
+        # Verify event was emitted
+        handler.assert_called_once()
+        args = handler.call_args[0]
+        assert args[0] == "contentDelta"
+        assert args[1]["delta"] == "Hello"
+        assert args[1]["accumulated"] == "Hello"
+
+    @pytest.mark.asyncio
+    async def test_dispatch_text_accumulates(self, service_with_task, task_service, ctx, mock_event):
+        """Test that text events accumulate content."""
+        handler = MagicMock()
+        task_service.add_event_handler(handler)
+
+        await service_with_task._dispatch_event("test-123", mock_event("text", "Hello"), ctx)
+        await service_with_task._dispatch_event("test-123", mock_event("text", " World"), ctx)
+
+        assert ctx.content == "Hello World"
+
+        # Check last emit
+        args = handler.call_args[0]
+        assert args[1]["delta"] == " World"
+        assert args[1]["accumulated"] == "Hello World"
+
+    @pytest.mark.asyncio
+    async def test_dispatch_turn_started(self, service_with_task, task_service, ctx, mock_event):
+        """Test dispatching turn_started event."""
+        handler = MagicMock()
+        task_service.add_event_handler(handler)
+
+        event = mock_event("turn_started", {"turn_index": 5})
+        await service_with_task._dispatch_event("test-123", event, ctx)
+
+        # Verify turn index was updated
+        assert ctx.assistant_turn_idx == 5
+
+        # Verify event was emitted
+        handler.assert_called_once()
+        args = handler.call_args[0]
+        assert args[0] == "turnStarted"
+        assert args[1]["turn_index"] == 5
+        assert args[1]["role"] == "assistant"
+
+    @pytest.mark.asyncio
+    async def test_dispatch_tool_use_start(self, service_with_task, task_service, ctx, mock_event):
+        """Test dispatching tool_use_start event."""
+        handler = MagicMock()
+        task_service.add_event_handler(handler)
+
+        event = mock_event("tool_use_start", {
+            "tool_use_id": "tool-123",
+            "tool_name": "Bash",
+            "tool_index": 0,
+        })
+        await service_with_task._dispatch_event("test-123", event, ctx)
+
+        # Verify tool tracking
+        assert ctx.tool_count == 1
+        assert ctx.tool_names["tool-123"] == "Bash"
+
+        # Verify event was emitted
+        handler.assert_called_once()
+        args = handler.call_args[0]
+        assert args[0] == "toolUseStarted"
+        assert args[1]["tool_name"] == "Bash"
+
+    @pytest.mark.asyncio
+    async def test_dispatch_tool_result(self, service_with_task, task_service, ctx, mock_event):
+        """Test dispatching tool_result event."""
+        # Add tool to context
+        ctx.tool_names["tool-123"] = "Bash"
+
+        handler = MagicMock()
+        task_service.add_event_handler(handler)
+
+        event = mock_event("tool_result", {
+            "tool_use_id": "tool-123",
+            "result": "command output",
+            "tool_index": 0,
+            "turn_index": 2,
+        })
+        await service_with_task._dispatch_event("test-123", event, ctx)
+
+        # Verify event was emitted
+        handler.assert_called_once()
+        args = handler.call_args[0]
+        assert args[0] == "toolResult"
+        assert args[1]["tool_name"] == "Bash"
+        assert args[1]["result"] == "command output"
+
+    @pytest.mark.asyncio
+    async def test_dispatch_done_cleans_up(self, service_with_task, task_service, ctx, mock_event):
+        """Test that done event cleans up streaming context."""
+        ctx.content = "Final content"
+        service_with_task._streaming_contexts["test-123"] = ctx
+
+        handler = MagicMock()
+        task_service.add_event_handler(handler)
+
+        event = mock_event("done", {"result": {}})
+        await service_with_task._dispatch_event("test-123", event, ctx)
+
+        # Verify context was cleaned up
+        assert "test-123" not in service_with_task._streaming_contexts
+
+        # Verify turn finished was emitted
+        handler.assert_called()
+        # Find the turnFinished call
+        calls = [c[0] for c in handler.call_args_list]
+        assert any(c[0] == "turnFinished" for c in calls)
+
+    @pytest.mark.asyncio
+    async def test_dispatch_error_cleans_up(self, service_with_task, ctx, mock_event, stream_state):
+        """Test that error event cleans up and marks stream failed."""
+        service_with_task._streaming_contexts["test-123"] = ctx
+
+        # Register a stream
+        stream_state.register_session_stream(
+            session_id="test-123",
+            exchange_id=ctx.exchange_id,
+            prompt="Test",
+        )
+
+        event = mock_event("error", "Something went wrong")
+        await service_with_task._dispatch_event("test-123", event, ctx)
+
+        # Verify context was cleaned up
+        assert "test-123" not in service_with_task._streaming_contexts
+
+        # Verify stream was marked as failed
+        stream = stream_state.get_stream(ctx.exchange_id)
+        assert stream.status == StreamStatus.ERROR
+
+    @pytest.mark.asyncio
+    async def test_dispatch_without_task_service(self, mock_manager, stream_state, ctx, mock_event):
+        """Test that dispatch does nothing without task service."""
+        service = SessionManagerService(mock_manager, stream_state)
+
+        # Should not raise
+        event = mock_event("text", "Hello")
+        await service._dispatch_event("test-123", event, ctx)
+
+        # Context should not be modified (no handler was called)
+        # But we still accumulate content locally
+        # Actually no - without task_service we return early
+        assert ctx.content == ""  # Nothing happened

@@ -13,13 +13,33 @@ Example usage:
 
     # Events are pushed to subscribed clients:
     # {"event": "sessionCreated", "data": {"sessionId": "abc123"}}
+
+Frontend Interaction:
+    The service provides two main pieces for frontends:
+
+    1. submit_message() - Submit a prompt and start streaming
+       Returns a SubmitMessageResult with exchange_id for tracking.
+
+    2. Streaming events via TaskStateService:
+       - onContentDelta: Text chunks as they arrive
+       - onToolUseStarted: Tool execution beginning
+       - onToolResult: Tool execution completed
+       - onTurnFinished: Exchange complete
+
+    Frontend Pattern:
+       1. Subscribe to TaskStateService events
+       2. Call submitMessage(sessionId, content)
+       3. Receive deltas via onContentDelta
+       4. Render incrementally
+       5. turnFinished signals completion
 """
 
+import asyncio
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Callable, Any
+from typing import Callable, Any, TYPE_CHECKING
 
 from codegen import ws_service, ws_expose, ws_event, ws_type
 from core.manager import SessionManager
@@ -30,7 +50,10 @@ from core.stream_state import (
     StreamStatus,
     get_stream_state,
 )
-from models import TextBlock
+from models import TextBlock, ToolUseBlock, ToolResultBlock
+
+if TYPE_CHECKING:
+    from service.task_state_service import TaskStateService
 
 
 class SessionManagerEvent(Enum):
@@ -108,28 +131,63 @@ class SubmitMessageResult:
     status: str  # "started" or "queued"
 
 
+@dataclass
+class _StreamingContext:
+    """Internal context for tracking streaming state per session.
+
+    Used by the event pump to accumulate content and track turn indices.
+    """
+
+    session_id: str
+    exchange_id: str
+    # Turn tracking
+    user_turn_idx: int  # Index of the user message turn
+    assistant_turn_idx: int = -1  # Index of current assistant turn (text or tool_use)
+    # Content accumulation
+    content: str = ""  # Accumulated text content for current assistant turn
+    # Tool tracking
+    tool_count: int = 0
+    tool_turn_indices: dict = field(default_factory=dict)  # (tool_use_id, turn_type) -> turn_idx
+    tool_names: dict = field(default_factory=dict)  # tool_use_id -> tool_name
+
+
 @ws_service
 class SessionManagerService:
     """WebSocket-exposed service for session lifecycle management.
 
     Provides operations for creating, switching, listing, and deleting sessions.
     Also exposes streaming status for all sessions.
+
+    For frontend interaction, use submit_message() to send prompts and receive
+    streaming events via the wired TaskStateService. The event pump automatically
+    converts SessionRunner events to TaskStateService events.
     """
 
     def __init__(
         self,
         session_manager: SessionManager,
         stream_state: StreamState | None = None,
+        task_state_service: "TaskStateService | None" = None,
     ):
         """Initialize service with a SessionManager instance.
 
         Args:
             session_manager: The SessionManager to expose via WebSocket
             stream_state: Optional StreamState for tracking streaming. Uses global if not provided.
+            task_state_service: Optional TaskStateService for emitting streaming events.
+                               If provided, the event pump will relay events to frontends.
         """
         self._manager = session_manager
         self._stream_state = stream_state or get_stream_state()
+        self._task_service = task_state_service
         self._event_handlers: list[Callable[[str, dict], None]] = []
+
+        # Event pump state
+        self._pump_task: asyncio.Task | None = None
+        self._pump_running = False
+        self._pump_interval = 0.05  # 50ms polling interval
+        # Track streaming context per session (exchange_id, accumulated content, etc.)
+        self._streaming_contexts: dict[str, _StreamingContext] = {}
 
         # Wire up StreamState observer to emit streaming events
         self._stream_state.add_observer(self._on_stream_event)
@@ -145,6 +203,314 @@ class SessionManagerService:
         """Unregister an event handler."""
         if handler in self._event_handlers:
             self._event_handlers.remove(handler)
+
+    def set_task_state_service(self, task_service: "TaskStateService") -> None:
+        """Set the TaskStateService for emitting streaming events.
+
+        This enables the event pump to relay SessionRunner events to frontends.
+        Call start_event_pump() after setting this to begin pumping events.
+
+        Args:
+            task_service: The TaskStateService to emit events through
+        """
+        self._task_service = task_service
+
+    def start_event_pump(self) -> None:
+        """Start the event pump for relaying streaming events.
+
+        The event pump polls all running sessions for events and relays them
+        through TaskStateService. This should be called when the service is
+        ready to handle WebSocket connections.
+
+        The pump is idempotent - calling multiple times is safe.
+        """
+        if self._pump_running:
+            return
+
+        self._pump_running = True
+        self._pump_task = asyncio.create_task(self._event_pump_loop())
+
+    def stop_event_pump(self) -> None:
+        """Stop the event pump.
+
+        Call this when shutting down the service.
+        """
+        self._pump_running = False
+        if self._pump_task and not self._pump_task.done():
+            self._pump_task.cancel()
+
+    async def _event_pump_loop(self) -> None:
+        """Main event pump loop - polls sessions and relays events."""
+        while self._pump_running:
+            try:
+                await self._pump_events()
+                await asyncio.sleep(self._pump_interval)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                # Log but don't crash the pump
+                await asyncio.sleep(self._pump_interval)
+
+    async def _pump_events(self) -> None:
+        """Poll all sessions and relay events to TaskStateService."""
+        if not self._task_service:
+            return
+
+        for session_id, events in self._manager.poll_all():
+            ctx = self._streaming_contexts.get(session_id)
+            if not ctx and events:
+                # Find the streaming context - should have been created by submit_message
+                # If not, skip these events (they're from TUI or other source)
+                continue
+
+            for event in events:
+                await self._dispatch_event(session_id, event, ctx)
+
+    async def _dispatch_event(
+        self, session_id: str, event: Any, ctx: _StreamingContext
+    ) -> None:
+        """Dispatch a single streaming event to TaskStateService.
+
+        Converts SessionRunner events to TaskStateService emit calls.
+
+        Args:
+            session_id: The session this event belongs to
+            event: StreamEvent from the SessionRunner
+            ctx: Streaming context for tracking state
+        """
+        if not self._task_service:
+            return
+
+        event_type = event.event_type
+        data = event.data
+
+        if event_type == "turn_started":
+            # Initial turn_started event - update context with turn info
+            ctx.assistant_turn_idx = data.get("turn_index", ctx.user_turn_idx + 1)
+            self._task_service.emit_turn_started(
+                session_id=session_id,
+                exchange_id=ctx.exchange_id,
+                turn_index=ctx.assistant_turn_idx,
+                role="assistant",
+            )
+
+        elif event_type == "text":
+            # Text delta - accumulate and emit
+            text = data if isinstance(data, str) else str(data)
+            ctx.content += text
+
+            # Update stream state with approximate token count
+            approx_tokens = len(ctx.content) // 4
+            self._stream_state.update_stream(ctx.exchange_id, tokens_streamed=approx_tokens)
+
+            self._task_service.emit_content_delta(
+                session_id=session_id,
+                exchange_id=ctx.exchange_id,
+                turn_index=ctx.assistant_turn_idx,
+                delta=text,
+                accumulated=ctx.content,
+            )
+
+        elif event_type == "text_flush":
+            # Text segment complete before tool use
+            text = data.get("text", "") if isinstance(data, dict) else ""
+            turn_idx = data.get("turn_index", ctx.assistant_turn_idx) if isinstance(data, dict) else ctx.assistant_turn_idx
+            self._task_service.emit_turn_finished(
+                session_id=session_id,
+                exchange_id=ctx.exchange_id,
+                turn_index=turn_idx,
+                role="assistant",
+                content=text,
+            )
+
+        elif event_type == "text_turn_started":
+            # Text turn started - emit turn_started
+            turn_idx = data.get("turn_index", ctx.assistant_turn_idx) if isinstance(data, dict) else ctx.assistant_turn_idx
+            self._task_service.emit_turn_started(
+                session_id=session_id,
+                exchange_id=ctx.exchange_id,
+                turn_index=turn_idx,
+                role="assistant",
+            )
+
+        elif event_type == "tool_use_start":
+            # Tool use started - update context and emit
+            tool_use_id = data.get("tool_use_id", "")
+            tool_name = data.get("tool_name", "")
+            tool_idx = data.get("tool_index", ctx.tool_count)
+
+            ctx.tool_count += 1
+            ctx.tool_names[tool_use_id] = tool_name
+
+            # Update stream state
+            self._stream_state.update_stream(
+                ctx.exchange_id,
+                status=StreamStatus.EXECUTING,
+                tool_name=tool_name,
+                tool_count=ctx.tool_count,
+            )
+
+            self._task_service.emit_tool_use_started(
+                session_id=session_id,
+                exchange_id=ctx.exchange_id,
+                turn_index=ctx.assistant_turn_idx,
+                tool_use_id=tool_use_id,
+                tool_name=tool_name,
+                tool_index=tool_idx,
+            )
+
+        elif event_type == "tool_input_delta":
+            # Tool input JSON streaming
+            tool_use_id = data.get("tool_use_id", "")
+            partial_json = data.get("partial_json", "")
+            self._task_service.emit_tool_input_delta(
+                session_id=session_id,
+                exchange_id=ctx.exchange_id,
+                tool_use_id=tool_use_id,
+                partial_json=partial_json,
+            )
+
+        elif event_type == "tool_use_turn_started":
+            # Tool use turn started - track turn index
+            turn_idx = data.get("turn_index", ctx.assistant_turn_idx) if isinstance(data, dict) else ctx.assistant_turn_idx
+            tool_use_id = data.get("tool_use_id", "")
+            ctx.tool_turn_indices[(tool_use_id, "tool_use")] = turn_idx
+            self._task_service.emit_turn_started(
+                session_id=session_id,
+                exchange_id=ctx.exchange_id,
+                turn_index=turn_idx,
+                role="assistant",
+            )
+
+        elif event_type == "tool_use":
+            # Tool input complete - emit tool_use event
+            tool_use_id = data.get("tool_use_id", "")
+            tool_name = data.get("tool_name", "")
+            tool_input = data.get("tool_input", {})
+            tool_idx = data.get("tool_index", 0)
+            turn_idx = data.get("turn_index", ctx.assistant_turn_idx)
+
+            self._task_service.emit_tool_use(
+                session_id=session_id,
+                exchange_id=ctx.exchange_id,
+                turn_index=turn_idx,
+                tool_use_id=tool_use_id,
+                tool_name=tool_name,
+                tool_input=tool_input,
+                tool_index=tool_idx,
+            )
+
+        elif event_type == "tool_result_turn_started":
+            # Tool result turn started - track turn index
+            turn_idx = data.get("turn_index", ctx.assistant_turn_idx) if isinstance(data, dict) else ctx.assistant_turn_idx
+            tool_use_id = data.get("tool_use_id", "")
+            ctx.tool_turn_indices[(tool_use_id, "tool_result")] = turn_idx
+            self._task_service.emit_turn_started(
+                session_id=session_id,
+                exchange_id=ctx.exchange_id,
+                turn_index=turn_idx,
+                role="tool",
+            )
+
+        elif event_type == "tool_result":
+            # Tool execution complete
+            tool_use_id = data.get("tool_use_id", "")
+            result = data.get("result", "")
+            tool_idx = data.get("tool_index", 0)
+            turn_idx = data.get("turn_index", ctx.assistant_turn_idx)
+            tool_name = ctx.tool_names.get(tool_use_id, "")
+
+            # Update stream state - back to streaming
+            self._stream_state.update_stream(
+                ctx.exchange_id,
+                status=StreamStatus.STREAMING,
+                tool_name=None,
+            )
+
+            self._task_service.emit_tool_result(
+                session_id=session_id,
+                exchange_id=ctx.exchange_id,
+                turn_index=turn_idx,
+                tool_use_id=tool_use_id,
+                tool_name=tool_name,
+                result=result,
+                is_error=False,
+                tool_index=tool_idx,
+            )
+
+        elif event_type == "init":
+            # Model info - update stream state
+            model = data.get("model", "")
+            context_window = data.get("context_window", 0)
+            self._stream_state.update_stream(
+                ctx.exchange_id,
+                model=model,
+                context_window=context_window,
+            )
+
+        elif event_type == "result":
+            # Usage stats - update stream state
+            input_tokens = data.get("input_tokens", 0)
+            output_tokens = data.get("output_tokens", 0)
+            self._stream_state.update_stream(
+                ctx.exchange_id,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
+
+        elif event_type == "done":
+            # Stream complete - emit final turn_finished and clean up
+            if ctx.content:
+                self._task_service.emit_turn_finished(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    turn_index=ctx.assistant_turn_idx,
+                    role="assistant",
+                    content=ctx.content,
+                )
+            # Complete the stream
+            self._stream_state.complete_stream(ctx.exchange_id)
+            # Clean up context
+            if session_id in self._streaming_contexts:
+                del self._streaming_contexts[session_id]
+
+        elif event_type == "error":
+            # Error - mark stream as failed
+            error_msg = data if isinstance(data, str) else str(data)
+            self._stream_state.fail_stream(ctx.exchange_id, error_msg)
+            # Clean up context
+            if session_id in self._streaming_contexts:
+                del self._streaming_contexts[session_id]
+
+        elif event_type == "rate_limit":
+            # Rate limit error - mark stream as failed
+            error_msg = data if isinstance(data, str) else str(data)
+            self._stream_state.fail_stream(ctx.exchange_id, f"Rate limit: {error_msg}")
+            if session_id in self._streaming_contexts:
+                del self._streaming_contexts[session_id]
+
+        elif event_type == "cancelled":
+            # Cancelled - mark stream as cancelled
+            self._stream_state.cancel_stream(ctx.exchange_id)
+            if session_id in self._streaming_contexts:
+                del self._streaming_contexts[session_id]
+
+        elif event_type == "input_required":
+            # Claude is asking for input - this shouldn't happen for non-interactive frontends
+            # Mark as completed since we can't respond
+            if ctx.content:
+                self._task_service.emit_turn_finished(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    turn_index=ctx.assistant_turn_idx,
+                    role="assistant",
+                    content=ctx.content,
+                )
+            self._stream_state.complete_stream(ctx.exchange_id)
+            if session_id in self._streaming_contexts:
+                del self._streaming_contexts[session_id]
+
+        # Note: "raw" events are not relayed - they're for debugging only
 
     async def _on_stream_event(self, event: StreamStateEvent, stream: Stream) -> None:
         """Convert StreamState events to WebSocket events."""
@@ -442,6 +808,12 @@ class SessionManagerService:
             return False
 
         runner.cancel()
+
+        # Clean up streaming context
+        if session_id in self._streaming_contexts:
+            ctx = self._streaming_contexts.pop(session_id)
+            self._stream_state.cancel_stream(ctx.exchange_id)
+
         return True
 
     # --- Message Submission ---
@@ -521,11 +893,26 @@ class SessionManagerService:
             backend_name=runner._runner.__class__.__name__ if hasattr(runner, '_runner') else "unknown",
         )
 
+        # Create streaming context for event pump to track this exchange
+        self._streaming_contexts[session_id] = _StreamingContext(
+            session_id=session_id,
+            exchange_id=exchange_id,
+            user_turn_idx=turn_index,
+            assistant_turn_idx=turn_index + 1,  # Next turn will be assistant
+        )
+
         # Start background streaming
         runner.start_background(
             prompt=content,
             messages=session.turns,
             allowed_tools=allowed_tools,
+        )
+
+        # Emit message submitted event
+        self._emit_event(
+            SessionManagerEvent.MESSAGE_SUBMITTED,
+            session_id,
+            {"exchange_id": exchange_id, "turn_index": turn_index},
         )
 
         return SubmitMessageResult(

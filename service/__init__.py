@@ -22,6 +22,47 @@ WebSocket server:
 Authentication:
 - JWTAuth: JWT token generation and validation
 - JWTConfig: JWT authentication configuration
+
+Frontend Interaction API:
+    For web/mobile frontends to interact with the LLM, use:
+
+    1. SessionManagerService.submit_message(sessionId, content)
+       - Submits a prompt and starts streaming
+       - Returns SubmitMessageResult with exchange_id for tracking
+
+    2. TaskStateService streaming events:
+       - onContentDelta: Text chunks as they arrive
+       - onTurnStarted: New turn (assistant, tool_use, tool_result)
+       - onToolUseStarted: Tool execution beginning
+       - onToolInputDelta: Tool input JSON streaming
+       - onToolUse: Tool input complete
+       - onToolResult: Tool execution completed
+       - onTurnFinished: Turn completed
+
+    Frontend Pattern:
+       1. Subscribe to TaskStateService events
+       2. Call submitMessage(sessionId, content)
+       3. Receive deltas via onContentDelta
+       4. Render incrementally
+       5. turnFinished signals completion
+
+    Integration (headless mode without TUI):
+       # Create services with event pump wiring
+       task_service = TaskStateService(get_stream_state())
+       session_service = SessionManagerService(
+           session_manager,
+           task_state_service=task_service,
+       )
+
+       # Start event pump to relay streaming events
+       session_service.start_event_pump()
+
+       # Register services with WebSocket server
+       ws_server.register_service(session_service)
+       ws_server.register_service(task_service)
+
+       # Stop pump on shutdown
+       session_service.stop_event_pump()
 """
 
 from service.tree_state_service import TreeStateService
