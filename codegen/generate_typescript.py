@@ -357,6 +357,8 @@ def main():
     # Add imports here for any module with services to export to TypeScript
     try:
         import service.tree_state_service  # TreeStateService
+        import service.queue_state_service  # QueueStateService
+        import service.task_state_service  # TaskStateService
     except ImportError as e:
         print(f"Warning: Could not import service modules: {e}")
 

@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-10T07:52:59.260331
+// Generated: 2026-02-14T09:59:57.695513
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -41,5 +41,196 @@ export interface TreeEventData {
   sessionId: string;
   turnIdx?: number | null;
   data?: Record<string, unknown>;
+}
+
+export interface QueuedMessageInfo {
+  id: string;
+  content: string;
+  created: string;
+  paused: boolean;
+  preview: string;
+}
+
+export interface QueueInfo {
+  sessionId: string;
+  messages: QueuedMessageInfo[];
+  isBlocked: boolean;
+  firstPauseIndex: number;
+  messageCount: number;
+}
+
+export interface QueueEventData {
+  eventType: string;
+  sessionId: string;
+  messageId?: string | null;
+  data?: Record<string, unknown>;
+}
+
+export interface ManagedSessionInfo {
+  id: string;
+  title: string;
+  created: string;
+  model: string;
+  messageCount: number;
+  isActive: boolean;
+  isStreaming: boolean;
+  isChild: boolean;
+  isReturned: boolean;
+  parentId?: string | null;
+  workingDirectory?: string;
+}
+
+export interface StreamingInfo {
+  sessionId: string;
+  streamId: string;
+  status: string;
+  backendName: string;
+  startedAt: string;
+  tokensStreamed: number;
+  toolName?: string | null;
+  toolCount?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
+export interface SessionEventData {
+  eventType: string;
+  sessionId: string;
+  data?: Record<string, unknown>;
+}
+
+export interface GoalInfo {
+  id: string;
+  title: string;
+  description: string;
+  weight: number;
+  status: string;
+  acceptanceCriteria: string[];
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string | null;
+  parentGoalId?: string | null;
+  planIds?: string[];
+  childGoalIds?: string[];
+  boundSessionIds?: string[];
+  isExpanded?: boolean;
+}
+
+export interface PlanInfo {
+  id: string;
+  goalId: string;
+  title: string;
+  description: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string | null;
+  postmortem?: string | null;
+  todoIds?: string[];
+  boundSessionIds?: string[];
+  isExpanded?: boolean;
+}
+
+export interface TodoInfo {
+  id: string;
+  title: string;
+  description: string;
+  status: string;
+  isSpike: boolean;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string | null;
+  timeboxMinutes?: number | null;
+  planIds?: string[];
+  boundSessionIds?: string[];
+  dependencyIds?: string[];
+  isExpanded?: boolean;
+  priority?: number;
+}
+
+export interface SessionBindingInfo {
+  sessionId: string;
+  name: string;
+  tokenCount: number;
+  isCurrent: boolean;
+  isStreaming: boolean;
+  forkStatus: string;
+  bindingRole: string;
+}
+
+export interface GoalTreeStats {
+  totalGoals: number;
+  activeGoals: number;
+  totalPlans: number;
+  activePlans: number;
+  totalTodos: number;
+  pendingTodos: number;
+  inProgressTodos: number;
+  boundSessions: number;
+  unboundSessions: number;
+}
+
+export interface GoalProgress {
+  completed: number;
+  total: number;
+}
+
+export interface SelectedEntity {
+  entityType: string;
+  entityId: string;
+}
+
+export interface GoalTreeEventData {
+  eventType: string;
+  entityType?: string | null;
+  entityId?: string | null;
+  data?: Record<string, unknown>;
+}
+
+export interface TaskInfo {
+  taskId: string;
+  taskType: string;
+  status: string;
+  sessionId: string | null;
+  backendName: string;
+  startedAt: string;
+  finishedAt: string | null;
+  prompt: string;
+  tokensStreamed: number;
+  error: string | null;
+  toolName: string | null;
+  toolCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  contextWindow: number;
+  model: string;
+  durationSeconds: number;
+  isActive: boolean;
+  currentTokenRate: number;
+}
+
+export interface SessionTaskSummary {
+  sessionId: string;
+  sessionTitle: string;
+  backendName: string;
+  isStreaming: boolean;
+  hasActiveTask: boolean;
+  totalExchanges: number;
+  lastActivity: string | null;
+}
+
+export interface TaskEventData {
+  eventType: string;
+  taskId: string;
+  taskType: string;
+  status: string;
+  sessionId?: string | null;
+  error?: string | null;
+  data?: Record<string, unknown>;
+}
+
+export interface BackendSummary {
+  backendName: string;
+  activeCount: number;
 }
 

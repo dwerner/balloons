@@ -5380,9 +5380,15 @@ class BalloonsApp(App):
         else:
             context_tree._state.set_context_mode(event.session_id, event.turn_idx, event.new_mode)
 
-        # Persist to session if it's the current session
-        if self.session and event.session_id == self.session.id:
-            await self._persist_context_mode(event.turn_idx, event.new_mode)
+        # Persist to session
+        if self.session and self.session.id == event.session_id:
+            session = self.session
+        else:
+            session = await Session.load(event.session_id)
+
+        if session and event.turn_idx < len(session.turns):
+            session.turns[event.turn_idx].context_mode = event.new_mode
+            asyncio.create_task(session.save())
 
     async def on_goal_tree_view_move_session_requested(self, event: GoalTreeView.MoveSessionRequested) -> None:
         """Handle request to move/rebind a session to a different entity.
