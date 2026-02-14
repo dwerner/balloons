@@ -87,11 +87,13 @@ class WebSocketConfig:
     """WebSocket server configuration.
 
     Attributes:
+        enabled: Whether to start the WebSocket server (default False)
         host: Bind address (default localhost)
         port: WebSocket port (default 8765)
         tls: TLS configuration for wss:// support
         jwt: JWT authentication configuration
     """
+    enabled: bool = False
     host: str = "localhost"
     port: int = 8765
     tls: TLSConfig = field(default_factory=TLSConfig)
@@ -386,6 +388,7 @@ class Config:
             expiration_seconds=jwt_data.get("expiration_seconds", 86400),
         )
         websocket_config = WebSocketConfig(
+            enabled=ws_data.get("enabled", False),
             host=ws_data.get("host", "localhost"),
             port=ws_data.get("port", 8765),
             tls=tls_config,

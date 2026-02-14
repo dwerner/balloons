@@ -1139,6 +1139,29 @@ impl Supervisor {
                 .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))
         })
     }
+
+    /// Shutdown the supervisor, stopping all running processes.
+    ///
+    /// Call this before exiting to avoid panics from orphaned background tasks.
+    fn shutdown(&self, py: Python<'_>) -> PyResult<()> {
+        let supervisor = Arc::clone(&self.inner);
+
+        py.allow_threads(|| {
+            let mut executor = get_supervisor_executor().lock().unwrap();
+            let task = executor.spawn_on_any(async move {
+                // Get all running processes and stop them
+                let processes = supervisor.list_processes(None).await;
+                for process in processes {
+                    if process.status.is_running() {
+                        let _ = supervisor.stop_process(&process.id).await;
+                    }
+                }
+            });
+            // Block until all processes are stopped
+            let _ = future::block_on(task);
+            Ok(())
+        })
+    }
 }
 
 // =============================================================================

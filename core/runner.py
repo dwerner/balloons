@@ -19,7 +19,7 @@ from models import (
 from .exceptions import RateLimitError, InputRequiredError, StreamTimeoutError
 from .binding_context import build_binding_context_for_session
 from session import Session, Turn
-from .debug_log import debug_log
+from .debug_log import debug_log, perf_marker
 from .base_runner import BaseRunner
 
 
@@ -206,6 +206,8 @@ class SessionRunner:
         Yields:
             StreamEvent for each event from Claude
         """
+        import time
+
         self._reset_state()
         self._status = RunnerStatus.STREAMING
         self._turn_index = len(self.session.turns)  # Next turn index
@@ -220,13 +222,38 @@ class SessionRunner:
             "exchange_id": self._exchange_id,
         })
 
+        stream_start = time.perf_counter()
+        first_token_time = None
+        token_count = 0
+
         try:
             async for event in self._runner.stream_response(
                 messages, effective_prompt, allowed_tools,
                 working_dir=self.session.working_directory
             ):
+                # Track first token timing
+                if first_token_time is None and isinstance(event, TextDelta):
+                    first_token_time = time.perf_counter()
+                    ttft_ms = (first_token_time - stream_start) * 1000
+                    perf_marker(
+                        "llm.first_token",
+                        session_id=self.session.id[:8],
+                        ttft_ms=round(ttft_ms, 1),
+                    )
+                if isinstance(event, TextDelta):
+                    token_count += 1
+
                 for stream_event in self._process_event(event):
                     yield stream_event
+
+            # Log stream completion timing
+            stream_elapsed_ms = (time.perf_counter() - stream_start) * 1000
+            perf_marker(
+                "llm.stream_complete",
+                session_id=self.session.id[:8],
+                elapsed_ms=round(stream_elapsed_ms, 1),
+                token_events=token_count,
+            )
 
             # Finalize
             await self._finalize_stream()
@@ -321,6 +348,8 @@ class SessionRunner:
         allowed_tools: list[str] | None,
     ) -> None:
         """Internal: background streaming task."""
+        import time
+
         # Add binding context to prompt if session has active bindings
         effective_prompt = await self._build_prompt_with_bindings(prompt)
 
@@ -331,13 +360,38 @@ class SessionRunner:
             "exchange_id": self._exchange_id,
         }))
 
+        stream_start = time.perf_counter()
+        first_token_time = None
+        token_count = 0
+
         try:
             async for event in self._runner.stream_response(
                 messages, effective_prompt, allowed_tools,
                 working_dir=self.session.working_directory
             ):
+                # Track first token timing
+                if first_token_time is None and isinstance(event, TextDelta):
+                    first_token_time = time.perf_counter()
+                    ttft_ms = (first_token_time - stream_start) * 1000
+                    perf_marker(
+                        "llm.first_token",
+                        session_id=self.session.id[:8],
+                        ttft_ms=round(ttft_ms, 1),
+                    )
+                if isinstance(event, TextDelta):
+                    token_count += 1
+
                 for stream_event in self._process_event(event):
                     await self._event_queue.put(stream_event)
+
+            # Log stream completion timing
+            stream_elapsed_ms = (time.perf_counter() - stream_start) * 1000
+            perf_marker(
+                "llm.stream_complete",
+                session_id=self.session.id[:8],
+                elapsed_ms=round(stream_elapsed_ms, 1),
+                token_events=token_count,
+            )
 
             # Finalize
             await self._finalize_stream()

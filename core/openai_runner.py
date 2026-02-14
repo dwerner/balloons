@@ -13,7 +13,7 @@ from models import (
     ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultEvent,
 )
 from .base_runner import BaseRunner, RunnerEvent
-from .debug_log import debug_log, dump_failed_json
+from .debug_log import debug_log, dump_failed_json, perf_marker
 from .tools import get_tools_for_request
 from .tool_executor import execute_tool
 
@@ -326,6 +326,8 @@ class OpenAICompatibleRunner(BaseRunner):
                 - tool_calls: list of tool calls (if any)
                 - content: text content (if any)
         """
+        import time
+
         events = []
         tool_calls = {}  # id -> {id, name, arguments_json}
         content_buffer = ""
@@ -342,11 +344,25 @@ class OpenAICompatibleRunner(BaseRunner):
         if tools:
             kwargs["tools"] = tools
 
+        api_start = time.perf_counter()
+        first_chunk_time = None
+
         stream = await self.client.chat.completions.create(**kwargs)
 
         async for chunk in stream:
             if self._cancelled:
                 break
+
+            # Track first chunk timing
+            if first_chunk_time is None:
+                first_chunk_time = time.perf_counter()
+                ttfc_ms = (first_chunk_time - api_start) * 1000
+                perf_marker(
+                    "openai.first_chunk",
+                    model=self.model,
+                    ttfc_ms=round(ttfc_ms, 1),
+                    run_id=self._run_id,
+                )
 
             # Extract usage from final chunk
             if chunk.usage:
@@ -435,6 +451,18 @@ class OpenAICompatibleRunner(BaseRunner):
                 tool_name=tc["name"],
                 tool_input=arguments,
             ))
+
+        # Log API call completion timing
+        api_elapsed_ms = (time.perf_counter() - api_start) * 1000
+        perf_marker(
+            "openai.api_complete",
+            model=self.model,
+            elapsed_ms=round(api_elapsed_ms, 1),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            tool_calls=len(finalized_tool_calls),
+            run_id=self._run_id,
+        )
 
         return {
             "events": events,

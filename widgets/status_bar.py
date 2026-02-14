@@ -106,8 +106,13 @@ class StatusBar(Static):
         else:
             wd_display = f" [dim]@{wd_path}[/]"
 
-        # Show follow indicator when not following (clickable to jump to bottom)
-        follow_indicator = "" if self.following else " [bold yellow]↓ Follow[/]"
+        # Always show follow indicator - toggle state with visual feedback
+        # When following: checkmark indicates active, clicking disables
+        # When not following: arrow indicates can scroll, clicking enables
+        if self.following:
+            follow_indicator = " [dim]✓ Follow[/]"
+        else:
+            follow_indicator = " [bold yellow]↓ Follow[/]"
 
         # Show priority divergence warning if working on non-highest-priority todo
         priority_indicator = f" [bold orange1]⚠ {self.priority_divergence}[/]" if self.priority_divergence else ""
@@ -255,5 +260,6 @@ class StatusBar(Static):
             # If there's a priority warning, clicking anywhere on the status bar
             # should navigate to the todo (it's the primary call to action)
             self.post_message(self.PriorityClicked(self._priority_todo_id))
-        elif has_follow:
+        else:
+            # Follow indicator is always visible - clicking toggles follow mode
             self.post_message(self.FollowClicked())

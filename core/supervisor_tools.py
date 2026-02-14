@@ -288,3 +288,21 @@ def stop_session_processes(session_id: str) -> int:
     except Exception as e:
         debug_log.error(f"Error stopping session processes: {e}", category="supervisor")
         return 0
+
+
+def shutdown_supervisor() -> None:
+    """Shutdown the supervisor, stopping all running processes.
+
+    Called when the app is exiting to cleanly stop all supervised processes
+    and avoid panics from orphaned background tasks.
+    """
+    global _supervisor
+    if _supervisor is None:
+        return
+    try:
+        _supervisor.shutdown()
+        debug_log.info("Supervisor shutdown complete", category="supervisor")
+    except Exception as e:
+        debug_log.error(f"Error during supervisor shutdown: {e}", category="supervisor")
+    finally:
+        _supervisor = None

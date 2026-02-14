@@ -59,7 +59,7 @@ from .context import ContextBuilder
 from .formatter import Formatter, format_edit_as_diff, guess_language
 from .runner import SessionRunner, RunnerStatus, StreamEvent, StreamResult, HelperRunner
 from .manager import SessionManager, SessionInfo
-from .debug_log import debug_log, DebugLog, LogLevel, LogEntry, dump_failed_json, timed
+from .debug_log import debug_log, DebugLog, LogLevel, LogEntry, dump_failed_json, timed, perf_timed, perf_marker
 from .base_runner import BaseRunner, RunnerEvent
 from .exceptions import RateLimitError, InputRequiredError, BackendNotFoundError
 from .link_tools import LINK_TOOL_NAMES, execute_link_tool, register_app_tool_handler, unregister_app_tool_handler
@@ -285,6 +285,8 @@ __all__ = [
     "LogEntry",
     "dump_failed_json",
     "timed",
+    "perf_timed",
+    "perf_marker",
     # Base runner
     "BaseRunner",
     "RunnerEvent",

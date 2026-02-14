@@ -34,6 +34,8 @@ try:
 except ImportError:
     RUST_STORAGE_AVAILABLE = False
 
+from .debug_log import perf_timed, perf_marker
+
 if TYPE_CHECKING:
     from session import Session
     from models import Turn, ContentBlock
@@ -129,6 +131,9 @@ class AsyncStorage:
         Args:
             session: The Session object to save
         """
+        import time
+        start = time.perf_counter()
+
         # Build the wire format data
         session_data = self._session_to_wire(session)
         session_json = json.dumps(session_data)
@@ -152,6 +157,14 @@ class AsyncStorage:
         # Atomically replace all turns (handles deletes, upserts, and ordering)
         await self._run_sync(self._storage.replace_session_turns, session.id, turns_json)
 
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        perf_marker(
+            "storage.save_session",
+            session_id=session.id[:8],
+            turn_count=len(session.turns),
+            elapsed_ms=round(elapsed_ms, 1),
+        )
+
     async def load_session(self, session_id: str) -> Optional[Session]:
         """Load a session from storage.
 
@@ -165,6 +178,9 @@ class AsyncStorage:
         Returns:
             The Session object, or None if not found
         """
+        import time
+        start = time.perf_counter()
+
         json_data = await self._run_sync(self._storage.load_session, session_id)
         if json_data is None:
             return None
@@ -177,6 +193,14 @@ class AsyncStorage:
         for turn_data in turns_data:
             turn = self._wire_to_turn(turn_data)
             session.turns.append(turn)
+
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        perf_marker(
+            "storage.load_session",
+            session_id=session_id[:8],
+            turn_count=len(session.turns),
+            elapsed_ms=round(elapsed_ms, 1),
+        )
 
         return session
 

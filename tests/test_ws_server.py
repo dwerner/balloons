@@ -697,6 +697,7 @@ backends:
   claude: {}
 
 websocket:
+  enabled: true
   host: 0.0.0.0
   port: 9000
   tls:
@@ -704,6 +705,7 @@ websocket:
 """)
 
         config = Config._load_from_file(config_file)
+        assert config.websocket.enabled is True
         assert config.websocket.host == "0.0.0.0"
         assert config.websocket.port == 9000
         assert config.websocket.tls.enabled is False
@@ -745,9 +747,29 @@ backends:
 """)
 
         config = Config._load_from_file(config_file)
+        assert config.websocket.enabled is False  # Default disabled
         assert config.websocket.host == "localhost"
         assert config.websocket.port == 8765
         assert config.websocket.tls.enabled is False
+
+    def test_parse_websocket_config_enabled(self, tmp_path):
+        from config import Config
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("""
+backends:
+  claude: {}
+
+websocket:
+  enabled: true
+  host: 0.0.0.0
+  port: 9000
+""")
+
+        config = Config._load_from_file(config_file)
+        assert config.websocket.enabled is True
+        assert config.websocket.host == "0.0.0.0"
+        assert config.websocket.port == 9000
 
     def test_websocket_config_get_url(self):
         from config import WebSocketConfig, TLSConfig
@@ -1119,3 +1141,36 @@ class TestConnectedClientWithAuth:
 
         assert client.authenticated is True
         assert client.token_subject == "user-123"
+
+
+class TestWebSocketConfigEnabled:
+    """Tests for WebSocketConfig.enabled field."""
+
+    def test_websocket_config_enabled_default(self):
+        """Default value should be False."""
+        from config import WebSocketConfig
+
+        config = WebSocketConfig()
+        assert config.enabled is False
+
+    def test_websocket_config_enabled_true(self):
+        """Can enable WebSocket server."""
+        from config import WebSocketConfig
+
+        config = WebSocketConfig(enabled=True)
+        assert config.enabled is True
+
+    def test_websocket_config_enabled_with_all_options(self):
+        """Enabled works with all other options."""
+        from config import WebSocketConfig, TLSConfig, JWTConfig
+
+        config = WebSocketConfig(
+            enabled=True,
+            host="0.0.0.0",
+            port=9000,
+            tls=TLSConfig(enabled=False),
+            jwt=JWTConfig(enabled=False),
+        )
+        assert config.enabled is True
+        assert config.host == "0.0.0.0"
+        assert config.port == 9000

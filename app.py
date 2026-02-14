@@ -97,6 +97,11 @@ from core import (
     TodoUndoneCommand,
     BindCommand,
     UnbindCommand,
+    # Supervisor commands
+    SupervisorStartCommand,
+    SupervisorListCommand,
+    SupervisorLogsCommand,
+    SupervisorStopCommand,
     debug_log,
     create_runner,
     ensure_prompts_installed,
@@ -141,7 +146,16 @@ from core.goal_tools import GOAL_MUTATION_TOOLS
 from core.stream_state import get_stream_state, StreamStatus
 from core.sounds import play_error_sound, play_done_sound, play_notification_sound
 from core.queue_state import get_queue_state, QueueState, QueueEvent, QueueSnapshot
+from core.supervisor_tools import set_supervisor, shutdown_supervisor
 from tokenizer import count_tokens
+from service import (
+    WsServer,
+    TreeStateService,
+    QueueStateService,
+    SessionManagerService,
+    GoalTreeStateService,
+    TaskStateService,
+)
 
 
 # Claude CLI system overhead: ~19.3k tokens for built-in tools and system prompt
@@ -359,6 +373,8 @@ class BalloonsApp(App):
         self._pending_merge_proposals: dict[str, dict] = {}
         # Suppress context token updates during batch context mode changes
         self._batch_context_mode_changes = False
+        # WebSocket server (created in on_mount if enabled)
+        self._ws_server: WsServer | None = None
 
     @property
     def session(self) -> Session | None:
@@ -607,6 +623,8 @@ class BalloonsApp(App):
         # Log deferred startup message now that event loop is running
         if debug_log._log_file:
             debug_log.info("Debug logging to file enabled", category="startup")
+        # Initialize process supervisor for dev server management
+        self._initialize_supervisor()
         # Migrate goal data from JSON to LMDB if needed (one-time migration)
         await self._migrate_goals_if_needed()
         # Ensure default prompts are installed to ~/.balloons/prompts/
@@ -620,11 +638,69 @@ class BalloonsApp(App):
         register_app_tool_handler("screen_snapshot", self._execute_screen_snapshot_tool)
         # Load goal tree data since it's shown by default
         await self._ensure_goal_tree_loaded()
+        # Start WebSocket server if enabled
+        await self._start_ws_server_if_enabled()
 
-    def on_unmount(self) -> None:
+    async def on_unmount(self) -> None:
         """Clean up when the app is unmounted."""
         # Unregister app-level tool handlers
         unregister_app_tool_handler("screen_snapshot")
+        # Stop WebSocket server if running
+        await self._stop_ws_server()
+        # Shutdown process supervisor (stops all running processes)
+        shutdown_supervisor()
+
+    async def _start_ws_server_if_enabled(self) -> None:
+        """Start the WebSocket server if enabled in config.
+
+        Creates and registers all 5 services:
+        - TreeStateService: Session tree view state
+        - QueueStateService: Message queue management
+        - SessionManagerService: Session lifecycle
+        - GoalTreeStateService: Goal/plan/todo management
+        - TaskStateService: LLM task lifecycle
+        """
+        config = get_config()
+        if not config.websocket.enabled:
+            return
+
+        try:
+            # Create the WebSocket server with config
+            self._ws_server = WsServer(config=config.websocket)
+
+            # Create and register services with shared state
+            tree_service = TreeStateService(self._tree_state)
+            queue_service = QueueStateService(self._queue_state)
+            session_service = SessionManagerService(self._manager)
+            goal_service = GoalTreeStateService(self._goal_tree_state)
+            task_service = TaskStateService(get_stream_state())
+
+            self._ws_server.register_service(tree_service)
+            self._ws_server.register_service(queue_service)
+            self._ws_server.register_service(session_service)
+            self._ws_server.register_service(goal_service)
+            self._ws_server.register_service(task_service)
+
+            # Start the server
+            await self._ws_server.start()
+            debug_log.info(
+                f"WebSocket server started on {config.websocket.get_url()}",
+                category="websocket",
+            )
+        except Exception as e:
+            debug_log.error(f"Failed to start WebSocket server: {e}", category="websocket")
+            self._ws_server = None
+
+    async def _stop_ws_server(self) -> None:
+        """Stop the WebSocket server if running."""
+        if self._ws_server is not None:
+            try:
+                await self._ws_server.stop()
+                debug_log.info("WebSocket server stopped", category="websocket")
+            except Exception as e:
+                debug_log.error(f"Error stopping WebSocket server: {e}", category="websocket")
+            finally:
+                self._ws_server = None
 
     def _on_tree_state_event(self, event: TreeEvent, data: dict) -> None:
         """Handle state changes from TreeState that affect token counts and UI."""
@@ -1938,6 +2014,25 @@ class BalloonsApp(App):
         session = await self._manager.load_session(session_id)
         return session, None  # No saved turn index for fallback
 
+    def _initialize_supervisor(self) -> None:
+        """Initialize the process supervisor for dev server management.
+
+        Creates a Supervisor instance from the Rust backend and registers it
+        with supervisor_tools for use by LLM tools and user commands.
+        """
+        try:
+            import balloons_storage
+            supervisor = balloons_storage.Supervisor()
+            set_supervisor(supervisor)
+            debug_log.info("Process supervisor initialized", category="startup")
+        except ImportError:
+            debug_log.warning(
+                "balloons_storage not available, supervisor disabled",
+                category="startup",
+            )
+        except Exception as e:
+            debug_log.error(f"Failed to initialize supervisor: {e}", category="startup")
+
     async def _migrate_goals_if_needed(self) -> None:
         """Migrate goal data from JSON files to LMDB if needed.
 
@@ -2298,6 +2393,15 @@ class BalloonsApp(App):
             await self._handle_bind_command(cmd.entity_type, cmd.entity_id, cmd.role)
         elif isinstance(cmd, UnbindCommand):
             await self._handle_unbind_command(cmd.entity_id)
+        # Supervisor commands
+        elif isinstance(cmd, SupervisorStartCommand):
+            await self._handle_supervisor_start(cmd.command, cmd.name)
+        elif isinstance(cmd, SupervisorListCommand):
+            await self._handle_supervisor_list(cmd.all_sessions)
+        elif isinstance(cmd, SupervisorLogsCommand):
+            await self._handle_supervisor_logs(cmd.process_id, cmd.limit)
+        elif isinstance(cmd, SupervisorStopCommand):
+            await self._handle_supervisor_stop(cmd.process_id)
 
     def _format_tool_use(
         self, event: ToolUseEvent
@@ -6495,6 +6599,153 @@ class BalloonsApp(App):
         else:
             self.notify(f"Error: {result.error}", severity="error")
 
+    # =========================================================================
+    # Supervisor Commands - Process management for dev servers
+    # =========================================================================
+
+    async def _handle_supervisor_start(self, command: str, name: str = "") -> None:
+        """Handle :sup-start command - start a supervised background process."""
+        from core.supervisor_tools import get_supervisor
+        import json
+
+        supervisor = get_supervisor()
+        if supervisor is None:
+            self.notify("Process supervisor not initialized", severity="error")
+            return
+
+        # Use current working directory
+        working_dir = self.session.working_directories[-1] if self.session.working_directories else str(Path.home())
+
+        try:
+            process_id = supervisor.start(
+                command=command,
+                session_id=self.session.id,
+                working_dir=working_dir,
+                name=name or None,
+                env_json=None,
+            )
+            display_name = name if name else command[:30]
+            self.notify(
+                f"Started process: {display_name}\nID: {process_id[:8]}",
+                timeout=5,
+            )
+            debug_log.info(
+                f"Started supervised process: {process_id[:8]}",
+                category="supervisor",
+                details={"command": command, "name": name},
+            )
+        except Exception as e:
+            self.notify(f"Failed to start process: {e}", severity="error")
+
+    async def _handle_supervisor_list(self, all_sessions: bool = False) -> None:
+        """Handle :sup-list command - list supervised processes."""
+        from core.supervisor_tools import get_supervisor
+        import json
+
+        supervisor = get_supervisor()
+        if supervisor is None:
+            self.notify("Process supervisor not initialized", severity="error")
+            return
+
+        try:
+            session_filter = None if all_sessions else self.session.id
+            processes_json = supervisor.list_processes(session_filter)
+            processes = json.loads(processes_json)
+
+            if not processes:
+                scope = "any session" if all_sessions else "this session"
+                self.notify(f"No supervised processes for {scope}")
+                return
+
+            # Format output for display
+            chat_log = self.query_one("#chat-log", ChatLogView)
+            lines = ["[bold]Supervised Processes[/bold]\n"]
+
+            for p in processes:
+                status = p.get("status", {})
+                state = status.get("state", "unknown")
+                pid = status.get("pid", "")
+                name = p.get("name") or p.get("command", "")[:30]
+                proc_id = p.get("id", "")[:8]
+
+                # Format state with emoji
+                if state == "running":
+                    state_str = f"[green]● running[/green] (PID {pid})"
+                elif state == "exited":
+                    code = status.get("code", "?")
+                    state_str = f"[dim]○ exited[/dim] (code {code})"
+                else:
+                    state_str = f"[yellow]? {state}[/yellow]"
+
+                lines.append(f"  [cyan]{proc_id}[/cyan] {name}")
+                lines.append(f"      {state_str}")
+
+            chat_log.add_info_message("\n".join(lines), title="Supervisor")
+        except Exception as e:
+            self.notify(f"Failed to list processes: {e}", severity="error")
+
+    async def _handle_supervisor_logs(self, process_id: str, limit: int = 50) -> None:
+        """Handle :sup-logs command - view process output logs."""
+        from core.supervisor_tools import get_supervisor
+        import json
+
+        supervisor = get_supervisor()
+        if supervisor is None:
+            self.notify("Process supervisor not initialized", severity="error")
+            return
+
+        try:
+            # Get process info
+            process_json = supervisor.get_process(process_id)
+            process = json.loads(process_json)
+            name = process.get("name") or process.get("command", "")[:30]
+
+            # Get logs
+            output_json = supervisor.get_output(process_id, limit)
+            logs = json.loads(output_json)
+
+            # Format output for display
+            chat_log = self.query_one("#chat-log", ChatLogView)
+
+            if not logs:
+                chat_log.add_info_message(f"No logs for process {process_id[:8]}", title="Supervisor Logs")
+                return
+
+            lines = [f"[bold]Logs for {name}[/bold] ({process_id[:8]})\n"]
+            for log in logs:
+                source = log.get("source", "")
+                content = log.get("content", "")
+
+                # Color by source
+                if source == "stdout":
+                    lines.append(content)
+                elif source == "stderr":
+                    lines.append(f"[red]{content}[/red]")
+                elif source == "system":
+                    lines.append(f"[dim]{content}[/dim]")
+                else:
+                    lines.append(content)
+
+            chat_log.add_info_message("\n".join(lines), title="Supervisor Logs")
+        except Exception as e:
+            self.notify(f"Failed to get logs: {e}", severity="error")
+
+    async def _handle_supervisor_stop(self, process_id: str) -> None:
+        """Handle :sup-stop command - stop a supervised process."""
+        from core.supervisor_tools import get_supervisor
+
+        supervisor = get_supervisor()
+        if supervisor is None:
+            self.notify("Process supervisor not initialized", severity="error")
+            return
+
+        try:
+            supervisor.stop_process(process_id)
+            self.notify(f"Stopped process: {process_id[:8]}", timeout=5)
+            debug_log.info(f"Stopped supervised process: {process_id[:8]}", category="supervisor")
+        except Exception as e:
+            self.notify(f"Failed to stop process: {e}", severity="error")
+
     async def _update_session_binding_indicator(self, session_id: str) -> None:
         """Update the binding indicator for a session in the tree state and breadcrumb."""
         indicator, preview = await get_session_binding_info(session_id)
@@ -7042,8 +7293,8 @@ class BalloonsApp(App):
                 )
 
     def on_status_bar_follow_clicked(self, event: StatusBar.FollowClicked) -> None:
-        """Handle click on Follow indicator - scroll to bottom."""
-        self.action_scroll_to_bottom()
+        """Handle click on Follow indicator - toggle follow mode."""
+        self._handle_follow_toggle()
 
     async def on_status_bar_priority_clicked(self, event: StatusBar.PriorityClicked) -> None:
         """Handle click on priority divergence indicator - navigate to the higher-priority todo."""

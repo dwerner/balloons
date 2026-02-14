@@ -1573,19 +1573,39 @@ class ChatLogView(VerticalScroll):
         Uses HistoryLoader to transform messages into render instructions, then
         interprets those instructions to create and mount widgets.
         """
+        import time
+        from core.debug_log import perf_marker
+
+        start = time.perf_counter()
+
         # Hide loading indicator if present
         self.hide_loading()
 
         loader = HistoryLoader()
         result = await loader.load(messages, session=session, start_turn_id=self._turn_counter)
 
+        mount_start = time.perf_counter()
+        widget_count = 0
         for instr in result.instructions:
             widget = self._instruction_to_widget(instr)
             if widget:
                 self.mount(widget)
+                widget_count += 1
 
         self._turn_counter = result.final_turn_id
         self.scroll_end(animate=False)
+
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        mount_ms = (time.perf_counter() - mount_start) * 1000
+        session_id = session.id[:8] if session else "unknown"
+        perf_marker(
+            "chat_log.load_history",
+            session_id=session_id,
+            message_count=len(messages),
+            widget_count=widget_count,
+            elapsed_ms=round(elapsed_ms, 1),
+            mount_ms=round(mount_ms, 1),
+        )
 
     def _instruction_to_widget(self, instr):
         """Convert a render instruction to a widget.
