@@ -171,6 +171,18 @@ class Stream:
             return (last_tokens - first_tokens) / dt
         return 0.0
 
+    # Backward compatibility property aliases
+    # TODO: Remove these after all callers are updated.
+    @property
+    def task_id(self) -> str:
+        """Backward compatibility alias for stream_id."""
+        return self.stream_id
+
+    @property
+    def task_type(self) -> "StreamType":
+        """Backward compatibility alias for stream_type."""
+        return self.stream_type
+
 
 @dataclass
 class SessionStreamInfo:
@@ -185,6 +197,13 @@ class SessionStreamInfo:
     current_stream: Optional[Stream] = None
     total_exchanges: int = 0  # Number of completed exchanges
     last_activity: Optional[datetime] = None
+
+    # Backward compatibility property alias
+    # TODO: Remove after all callers are updated.
+    @property
+    def current_task(self) -> Optional[Stream]:
+        """Backward compatibility alias for current_stream."""
+        return self.current_stream
 
 
 class StreamEvent(Enum):
@@ -667,6 +686,45 @@ class StreamState:
         """Clear all stream state. Use for testing or reset."""
         self._streams.clear()
         self._session_streams.clear()
+
+    # =========================================================================
+    # Backward Compatibility Method Aliases
+    # =========================================================================
+    # These allow existing code to continue working during migration.
+    # TODO: Remove these after all callers are updated.
+
+    # Registration wrappers (handle parameter name changes)
+    def register_helper_task(
+        self,
+        task_id: str,
+        task_type: StreamType,
+        prompt: str = "",
+        session_id: Optional[str] = None,
+        backend_name: str = "",
+    ) -> Stream:
+        """Backward compatibility alias for register_helper_stream."""
+        return self.register_helper_stream(
+            stream_id=task_id,
+            stream_type=task_type,
+            prompt=prompt,
+            session_id=session_id,
+            backend_name=backend_name,
+        )
+
+    # Simple aliases (no parameter name changes needed)
+    register_session_task = register_session_stream
+    update_task = update_stream
+    complete_task = complete_stream
+    fail_task = fail_stream
+    cancel_task = cancel_stream
+    get_task = get_stream
+    get_session_task = get_session_stream
+    get_all_tasks = get_all_streams
+    get_active_tasks = get_active_streams
+    get_streaming_tasks = get_streaming_streams
+    get_tasks_by_type = get_streams_by_type
+    get_tasks_by_session = get_streams_by_session
+    get_tasks_by_backend = get_streams_by_backend
 
 
 # Convenience function to get the singleton

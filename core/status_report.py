@@ -30,7 +30,7 @@ import aiofiles
 
 from core.async_storage import GoalStorage, get_goal_storage
 from core.debug_log import debug_log
-from core.task_state import get_task_state, TaskType
+from core.stream_state import get_stream_state, StreamType
 from storage_schema import GoalData, PlanData, TodoData
 
 if TYPE_CHECKING:
@@ -662,11 +662,11 @@ class StatusReportGenerator:
         else:
             full_prompt = status_prompt
 
-        # Register task for tracking
-        task_id = str(uuid.uuid4())
-        get_task_state().register_helper_task(
-            task_id=task_id,
-            task_type=TaskType.REPORT_SUMMARY,
+        # Register stream for tracking
+        stream_id = str(uuid.uuid4())
+        get_stream_state().register_helper_stream(
+            stream_id=stream_id,
+            stream_type=StreamType.REPORT_SUMMARY,
             prompt="Generating executive summary",
             session_id=session_id,
             backend_name=backend_name,
@@ -680,9 +680,9 @@ class StatusReportGenerator:
                 # Use duck typing: accept any event with a text attribute
                 if hasattr(event, "text"):
                     summary_parts.append(event.text)
-            get_task_state().complete_task(task_id)
+            get_stream_state().complete_stream(stream_id)
         except Exception as e:
-            get_task_state().fail_task(task_id, str(e))
+            get_stream_state().fail_stream(stream_id, str(e))
             debug_log.error(
                 f"Executive summary generation failed: {e}",
                 category="report",

@@ -4,7 +4,12 @@ import pytest
 import asyncio
 from datetime import datetime
 
-from core.task_state import TaskState, TaskType, TaskStatus, TaskEvent
+from core.stream_state import (
+    StreamState as TaskState,
+    StreamType as TaskType,
+    StreamStatus as TaskStatus,
+    StreamEvent as TaskEvent,
+)
 from service.task_state_service import (
     TaskStateService,
     TaskInfo,

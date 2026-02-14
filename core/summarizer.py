@@ -14,7 +14,7 @@ from models import Message, TextDelta, ArchiveSummary
 from session import Session
 from core.context import ContextBuilder
 from core.debug_log import debug_log
-from core.task_state import get_task_state, TaskType, TaskStatus
+from core.stream_state import get_stream_state, StreamType, StreamStatus
 
 # Load link summary prompt from file
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
@@ -90,25 +90,25 @@ class Summarizer:
         """Update the session ID for task tracking."""
         self._session_id = session_id
 
-    def _register_task(self, task_type: TaskType, prompt: str) -> str:
-        """Register a helper task with TaskState, returns task_id."""
-        task_id = str(uuid.uuid4())
-        get_task_state().register_helper_task(
-            task_id=task_id,
-            task_type=task_type,
+    def _register_stream(self, stream_type: StreamType, prompt: str) -> str:
+        """Register a helper stream with StreamState, returns stream_id."""
+        stream_id = str(uuid.uuid4())
+        get_stream_state().register_helper_stream(
+            stream_id=stream_id,
+            stream_type=stream_type,
             prompt=prompt,
             session_id=self._session_id,
             backend_name=self._backend_name,
         )
-        return task_id
+        return stream_id
 
-    def _complete_task(self, task_id: str) -> None:
-        """Mark a task as completed."""
-        get_task_state().complete_task(task_id)
+    def _complete_stream(self, stream_id: str) -> None:
+        """Mark a stream as completed."""
+        get_stream_state().complete_stream(stream_id)
 
-    def _fail_task(self, task_id: str, error: str) -> None:
-        """Mark a task as failed."""
-        get_task_state().fail_task(task_id, error)
+    def _fail_stream(self, stream_id: str, error: str) -> None:
+        """Mark a stream as failed."""
+        get_stream_state().fail_stream(stream_id, error)
 
     async def generate_context_summary(self, messages: list[Message]) -> str:
         """Generate a summary of messages for context compression.
@@ -123,16 +123,16 @@ class Summarizer:
             return ""
 
         summary_prompt = self._context_builder.build_context_summary_prompt(messages)
-        task_id = self._register_task(TaskType.COMPRESSION, f"Compressing {len(messages)} messages")
+        stream_id = self._register_stream(StreamType.COMPRESSION, f"Compressing {len(messages)} messages")
 
         summary_parts = []
         try:
             async for event in self._runner.stream_response([], summary_prompt):
                 if isinstance(event, TextDelta):
                     summary_parts.append(event.text)
-            self._complete_task(task_id)
+            self._complete_stream(stream_id)
         except Exception as e:
-            self._fail_task(task_id, str(e))
+            self._fail_stream(stream_id, str(e))
             # Fall back to raw content
             context_parts = [
                 f"{'User' if m.role == 'user' else 'Assistant'}: {m.content}"
@@ -192,7 +192,7 @@ class Summarizer:
         if summary_prompt is None:
             return session.title or "Empty session"
 
-        task_id = self._register_task(TaskType.LINK_SUMMARY, f"Summarizing session: {session.title or session.id[:8]}")
+        stream_id = self._register_stream(StreamType.LINK_SUMMARY, f"Summarizing session: {session.title or session.id[:8]}")
 
         summary_parts = []
         try:
@@ -201,9 +201,9 @@ class Summarizer:
             ):
                 if isinstance(event, TextDelta):
                     summary_parts.append(event.text)
-            self._complete_task(task_id)
+            self._complete_stream(stream_id)
         except Exception as e:
-            self._fail_task(task_id, str(e))
+            self._fail_stream(stream_id, str(e))
             debug_log.error(f"Session summary generation failed: {e}", category="link")
             return session.title or "Session"
 
@@ -271,16 +271,16 @@ Summary:"""
             A concise summary of the fork's work
         """
         summary_prompt = self.build_merge_summary_prompt(fork_session, user_prompt)
-        task_id = self._register_task(TaskType.MERGE_SUMMARY, f"Summarizing merge: {fork_session.title or fork_session.id[:8]}")
+        stream_id = self._register_stream(StreamType.MERGE_SUMMARY, f"Summarizing merge: {fork_session.title or fork_session.id[:8]}")
 
         summary_parts = []
         try:
             async for event in self._runner.stream_response([], summary_prompt):
                 if isinstance(event, TextDelta):
                     summary_parts.append(event.text)
-            self._complete_task(task_id)
+            self._complete_stream(stream_id)
         except Exception as e:
-            self._fail_task(task_id, str(e))
+            self._fail_stream(stream_id, str(e))
             return f"Merge completed (summary generation failed: {e})"
 
         return "".join(summary_parts).strip() if summary_parts else "Merge completed"
@@ -304,16 +304,16 @@ Summary:"""
             messages, return_prompt
         )
 
-        task_id = self._register_task(TaskType.COMPRESSION, f"Summarizing return ({len(messages)} messages)")
+        stream_id = self._register_stream(StreamType.COMPRESSION, f"Summarizing return ({len(messages)} messages)")
 
         summary_parts = []
         try:
             async for event in self._runner.stream_response([], prompt):
                 if isinstance(event, TextDelta):
                     summary_parts.append(event.text)
-            self._complete_task(task_id)
+            self._complete_stream(stream_id)
         except Exception as e:
-            self._fail_task(task_id, str(e))
+            self._fail_stream(stream_id, str(e))
             # Fall back to raw content
             context_parts = [
                 f"{'User' if m.role == 'user' else 'Assistant'}: {m.content}"
@@ -411,7 +411,7 @@ Structured summary:"""
             return ArchiveSummary()
 
         summary_prompt = self.build_archive_summary_prompt(messages, user_hint)
-        task_id = self._register_task(TaskType.ARCHIVE_SUMMARY, f"Summarizing archive ({len(messages)} turns)")
+        stream_id = self._register_stream(StreamType.ARCHIVE_SUMMARY, f"Summarizing archive ({len(messages)} turns)")
 
         response_parts = []
         try:
@@ -420,9 +420,9 @@ Structured summary:"""
             ):
                 if isinstance(event, TextDelta):
                     response_parts.append(event.text)
-            self._complete_task(task_id)
+            self._complete_stream(stream_id)
         except Exception as e:
-            self._fail_task(task_id, str(e))
+            self._fail_stream(stream_id, str(e))
             debug_log.error(f"Archive summary generation failed: {e}", category="archive")
             # Return a basic summary on error
             return ArchiveSummary(

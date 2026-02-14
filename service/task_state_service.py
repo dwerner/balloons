@@ -19,13 +19,13 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from codegen import ws_service, ws_expose, ws_event, ws_type
-from core.task_state import (
-    TaskState,
-    Task,
-    TaskEvent,
-    TaskStatus,
-    TaskType,
-    SessionTaskInfo,
+from core.stream_state import (
+    StreamState as TaskState,
+    Stream as Task,
+    StreamEvent as TaskEvent,
+    StreamStatus as TaskStatus,
+    StreamType as TaskType,
+    SessionStreamInfo as SessionTaskInfo,
 )
 
 
@@ -198,9 +198,18 @@ class TaskStateService:
             handler(event_name, event_data.__dict__)
 
     def _task_event_to_wire_name(self, event: TaskEvent) -> str:
-        """Convert TaskEvent enum to camelCase wire name."""
-        # TaskEvent.TASK_STARTED -> "taskStarted"
-        parts = event.value.split("_")
+        """Convert TaskEvent enum to camelCase wire name.
+
+        Maps StreamEvent values to backward-compatible "task*" wire names:
+        - stream_started -> taskStarted
+        - stream_updated -> taskUpdated
+        - etc.
+        """
+        # Map stream_* to task_* for backward compatibility
+        value = event.value
+        if value.startswith("stream_"):
+            value = "task_" + value[7:]  # Replace "stream_" with "task_"
+        parts = value.split("_")
         return parts[0] + "".join(p.title() for p in parts[1:])
 
     # --- Task Query Operations ---

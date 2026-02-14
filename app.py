@@ -138,7 +138,7 @@ from core.tree_state import TreeState, TreeEvent
 from core.goal_tree_state import GoalTreeState
 from core.goal_tree_sync import GoalTreeSyncManager
 from core.goal_tools import GOAL_MUTATION_TOOLS
-from core.task_state import get_task_state, TaskStatus
+from core.stream_state import get_stream_state, StreamStatus
 from core.sounds import play_error_sound, play_done_sound, play_notification_sound
 from core.queue_state import get_queue_state, QueueState, QueueEvent, QueueSnapshot
 from tokenizer import count_tokens
@@ -915,7 +915,7 @@ class BalloonsApp(App):
 
             # Update task state with approximate token count (rough estimate: 4 chars per token)
             approx_tokens = len(ctx.content) // 4
-            get_task_state().update_task(ctx.exchange_id, tokens_streamed=approx_tokens)
+            get_stream_state().update_stream(ctx.exchange_id, tokens_streamed=approx_tokens)
 
             if is_active:
                 chat_log.append_to_current(action.text)
@@ -972,7 +972,7 @@ class BalloonsApp(App):
 
         elif isinstance(action, InitAction):
             # Update task with model info
-            get_task_state().update_task(
+            get_stream_state().update_stream(
                 ctx.exchange_id,
                 model=action.model,
                 context_window=action.context_window,
@@ -985,7 +985,7 @@ class BalloonsApp(App):
 
         elif isinstance(action, ResultAction):
             # Update task with actual token counts
-            get_task_state().update_task(
+            get_stream_state().update_stream(
                 ctx.exchange_id,
                 input_tokens=action.input_tokens,
                 output_tokens=action.output_tokens,
@@ -1006,9 +1006,9 @@ class BalloonsApp(App):
 
             # Track tool count for task state
             ctx.tool_count = getattr(ctx, 'tool_count', 0) + 1
-            get_task_state().update_task(
+            get_stream_state().update_stream(
                 ctx.exchange_id,
-                status=TaskStatus.EXECUTING,
+                status=StreamStatus.EXECUTING,
                 tool_name=action.tool_name,
                 tool_count=ctx.tool_count,
             )
@@ -1105,9 +1105,9 @@ class BalloonsApp(App):
                 )
 
             # Tool done, back to streaming
-            get_task_state().update_task(
+            get_stream_state().update_stream(
                 ctx.exchange_id,
-                status=TaskStatus.STREAMING,
+                status=StreamStatus.STREAMING,
                 tool_name=None,
             )
 
@@ -1882,13 +1882,13 @@ class BalloonsApp(App):
             current_ctx = self._streaming_contexts.get(session_id)
             if current_ctx is ctx:
                 # Update task state
-                task_state = get_task_state()
+                stream_state = get_stream_state()
                 if cancelled:
-                    task_state.cancel_task(ctx.exchange_id)
+                    stream_state.cancel_stream(ctx.exchange_id)
                 elif error:
-                    task_state.fail_task(ctx.exchange_id, error)
+                    stream_state.fail_stream(ctx.exchange_id, error)
                 else:
-                    task_state.complete_task(ctx.exchange_id)
+                    stream_state.complete_stream(ctx.exchange_id)
 
                 del self._streaming_contexts[session_id]
                 # Update tree streaming indicator and status bar count
@@ -1904,13 +1904,13 @@ class BalloonsApp(App):
                     session_id=session_id,
                 )
                 # Still complete the OLD task
-                task_state = get_task_state()
+                stream_state = get_stream_state()
                 if cancelled:
-                    task_state.cancel_task(ctx.exchange_id)
+                    stream_state.cancel_stream(ctx.exchange_id)
                 elif error:
-                    task_state.fail_task(ctx.exchange_id, error)
+                    stream_state.fail_stream(ctx.exchange_id, error)
                 else:
-                    task_state.complete_task(ctx.exchange_id)
+                    stream_state.complete_stream(ctx.exchange_id)
 
     async def _load_last_viewed_session(self) -> tuple[Session | None, int | None]:
         """Load the last viewed session and turn index from config.
@@ -2172,7 +2172,7 @@ class BalloonsApp(App):
         backend_name = self.session.backend_name or self._backend_config.name
         overhead_tokens, context_tokens = self._calculate_context_tokens(prompt)
         context_window = self._backend_config.context_window
-        task = get_task_state().register_session_task(
+        task = get_stream_state().register_session_stream(
             session_id=self.session.id,
             exchange_id=exchange_id,
             prompt=prompt,
