@@ -25,6 +25,7 @@ from .merge_proposal_marker import MergeProposalMarker
 from .breadcrumb import Breadcrumb
 from .fork_proposal_modal import ForkProposalModal, ForkProposalResult, ResolvedBinding
 from .merge_proposal_modal import MergeProposalModal, MergeProposalResult
+from .begin_streaming_modal import BeginStreamingModal, BeginStreamingResult
 from .bound_session_modal import BoundSessionModal, BoundSessionResult
 from .entity_picker import EntityPickerModal, EntityPickerResult
 from .create_entity_modal import CreatePlanModal, CreatePlanResult, CreateTodoModal, CreateTodoResult
@@ -88,6 +89,8 @@ __all__ = [
     "ResolvedBinding",
     "MergeProposalModal",
     "MergeProposalResult",
+    "BeginStreamingModal",
+    "BeginStreamingResult",
     "BoundSessionModal",
     "BoundSessionResult",
     "EntityPickerModal",

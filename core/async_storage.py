@@ -120,13 +120,15 @@ class AsyncStorage:
     # =========================================================================
 
     async def save_session(self, session: Session) -> None:
-        """Save a session to storage.
+        """Save a session to storage using incremental saves when possible.
 
-        Uses atomic batch operations for efficiency:
-        1. Save session metadata to SESSIONS table
-        2. Atomically replace all turns (handles insert/update/delete/reorder)
+        Incremental save strategy:
+        1. Save session metadata only if _metadata_dirty
+        2. Save only dirty turns (new or modified)
+        3. Delete turns that were removed
+        4. Reorder turns only if order changed
 
-        All operations happen in a single database transaction.
+        Falls back to full replace_session_turns for new sessions (no saved order).
 
         Args:
             session: The Session object to save
@@ -134,6 +136,33 @@ class AsyncStorage:
         import time
         start = time.perf_counter()
 
+        # Check if this is a new session (never saved before)
+        is_new_session = len(session._saved_turn_order) == 0
+
+        if is_new_session:
+            # New session: use full save (atomic batch)
+            await self._full_save_session(session)
+            save_type = "full"
+        else:
+            # Existing session: use incremental save
+            save_type = await self._incremental_save_session(session)
+
+        # Mark everything as clean after successful save
+        session.mark_all_clean()
+
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        dirty_count = sum(1 for t in session.turns if t._dirty) if not is_new_session else len(session.turns)
+        perf_marker(
+            "storage.save_session",
+            session_id=session.id[:8],
+            turn_count=len(session.turns),
+            save_type=save_type,
+            dirty_turns=dirty_count,
+            elapsed_ms=round(elapsed_ms, 1),
+        )
+
+    async def _full_save_session(self, session: Session) -> None:
+        """Full save: session metadata + all turns atomically."""
         # Build the wire format data
         session_data = self._session_to_wire(session)
         session_json = json.dumps(session_data)
@@ -157,13 +186,54 @@ class AsyncStorage:
         # Atomically replace all turns (handles deletes, upserts, and ordering)
         await self._run_sync(self._storage.replace_session_turns, session.id, turns_json)
 
-        elapsed_ms = (time.perf_counter() - start) * 1000
-        perf_marker(
-            "storage.save_session",
-            session_id=session.id[:8],
-            turn_count=len(session.turns),
-            elapsed_ms=round(elapsed_ms, 1),
-        )
+    async def _incremental_save_session(self, session: Session) -> str:
+        """Incremental save: only write what changed.
+
+        Returns a string indicating what was saved: "none", "metadata", "turns", "both"
+
+        Note: We always save metadata since it's small and direct attribute
+        assignments (like session.title = "x") don't trigger dirty tracking.
+        The real performance win is from incremental turn saves.
+        """
+        saved_metadata = False
+        saved_turns = False
+
+        # 1. Always save session metadata (small, and direct attribute changes
+        # don't trigger dirty tracking without property setters)
+        session_data = self._session_to_wire(session)
+        session_json = json.dumps(session_data)
+        await self._run_sync(self._storage.save_session, session.id, session_json)
+        saved_metadata = True
+
+        # 2. Delete removed turns
+        deleted_ids = session.get_deleted_turn_ids()
+        for turn_id in deleted_ids:
+            await self._run_sync(self._storage.delete_turn, session.id, turn_id)
+            saved_turns = True
+
+        # 3. Save dirty turns (new or modified)
+        dirty_turns = session.get_dirty_turns()
+        for turn in dirty_turns:
+            turn_data = self._turn_to_wire(turn)
+            turn_json = json.dumps(turn_data)
+            await self._run_sync(self._storage.save_turn, session.id, turn_json)
+            saved_turns = True
+
+        # 4. Reorder turns if order changed
+        if session.has_turn_order_changed():
+            current_order = [t.id for t in session.turns]
+            order_json = json.dumps(current_order)
+            await self._run_sync(self._storage.reorder_turns, session.id, order_json)
+            saved_turns = True
+
+        if saved_metadata and saved_turns:
+            return "both"
+        elif saved_metadata:
+            return "metadata"
+        elif saved_turns:
+            return "turns"
+        else:
+            return "none"
 
     async def load_session(self, session_id: str) -> Optional[Session]:
         """Load a session from storage.
@@ -171,6 +241,8 @@ class AsyncStorage:
         Uses split storage model:
         1. Load session metadata from SESSIONS table
         2. Load turns from TURNS table via TURN_ORDER
+
+        After loading, session is marked clean (no pending saves).
 
         Args:
             session_id: The session ID to load
@@ -193,6 +265,11 @@ class AsyncStorage:
         for turn_data in turns_data:
             turn = self._wire_to_turn(turn_data)
             session.turns.append(turn)
+
+        # Initialize dirty tracking state - session is clean after load
+        session._metadata_dirty = False
+        session._deleted_turn_ids = set()
+        session._saved_turn_order = [t.id for t in session.turns]
 
         elapsed_ms = (time.perf_counter() - start) * 1000
         perf_marker(
@@ -429,19 +506,10 @@ class AsyncStorage:
         """Convert a Turn to the wire format for storage.
 
         This matches the TurnData schema expected by Rust.
+        Turn now has a persistent `id` field, so we use that directly.
         """
-        # Generate a stable turn ID if not present
-        # For now, we use a combination of timestamp and content hash
-        turn_id = getattr(turn, "id", None)
-        if not turn_id:
-            # Generate deterministic ID from content
-            import hashlib
-            content_str = json.dumps(self._serialize_content_block(turn.content_block), sort_keys=True)
-            content_hash = hashlib.md5(content_str.encode()).hexdigest()[:8]
-            turn_id = f"{turn.timestamp[:19].replace(':', '-').replace('T', '_')}_{content_hash}"
-
         return {
-            "id": turn_id,
+            "id": turn.id,  # Turn.id is always set (generated on creation)
             "role": turn.role,
             "content_block": self._serialize_content_block(turn.content_block),
             "tokens": turn.tokens,
@@ -641,7 +709,10 @@ class AsyncStorage:
         return session
 
     def _wire_to_turn(self, data: dict) -> Turn:
-        """Convert wire format turn data to a Turn object."""
+        """Convert wire format turn data to a Turn object.
+
+        Loaded turns start clean (not dirty) since they're fresh from storage.
+        """
         from models import Turn, ContextMode, Sentiment
 
         content_block = self._deserialize_content_block(data.get("content_block", {"type": "text", "text": ""}))
@@ -661,7 +732,17 @@ class AsyncStorage:
             except ValueError:
                 pass  # Invalid sentiment value, leave as None
 
-        return Turn(
+        # Get turn ID from storage, or generate a new one for legacy data
+        turn_id = data.get("id")
+        if not turn_id:
+            # Generate deterministic ID from content for backwards compat
+            import hashlib
+            content_str = json.dumps(self._serialize_content_block(content_block), sort_keys=True)
+            content_hash = hashlib.md5(content_str.encode()).hexdigest()[:8]
+            timestamp = data.get("timestamp", "")
+            turn_id = f"{timestamp[:19].replace(':', '-').replace('T', '_')}_{content_hash}"
+
+        turn = Turn(
             role=data["role"],
             content_block=content_block,
             tokens=data.get("tokens", 0),
@@ -672,7 +753,11 @@ class AsyncStorage:
             sentiment=sentiment,
             started_at=data.get("started_at"),
             ended_at=data.get("ended_at"),
+            id=turn_id,
+            # Loaded turns start clean - they're fresh from storage
+            _dirty=False,
         )
+        return turn
 
     def _deserialize_content_block(self, data: dict) -> ContentBlock:
         """Deserialize a content block from a dict."""

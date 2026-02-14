@@ -514,6 +514,11 @@ class MessageQueue:
 # =============================================================================
 
 
+def _generate_turn_id() -> str:
+    """Generate a unique turn ID using UUID."""
+    return str(uuid.uuid4())
+
+
 @dataclass
 class Turn:
     """A single turn in the conversation - one content block with metadata.
@@ -527,6 +532,11 @@ class Turn:
     1. LLM taking long to respond (long duration)
     2. Streaming getting stuck (started_at set but no ended_at)
     3. UI not updating (both timestamps present but UI lagging)
+
+    Dirty tracking for incremental saves:
+    - _dirty: True if turn has been modified since last save
+    - Turns start dirty (new) and become clean after save
+    - Modifications automatically set _dirty = True
     """
     role: str  # "user", "assistant", "tool", or "system"
     content_block: ContentBlock  # Single content block
@@ -538,6 +548,23 @@ class Turn:
     sentiment: Optional[Sentiment] = None  # User sentiment rating (assistant turns only)
     started_at: Optional[str] = None  # ISO timestamp when streaming began
     ended_at: Optional[str] = None  # ISO timestamp when streaming completed
+    # Persistent ID for incremental saves (generated once, stored in DB)
+    id: str = field(default_factory=_generate_turn_id)
+    # Dirty tracking - not persisted, used for incremental saves
+    _dirty: bool = field(default=True, repr=False, compare=False)
+
+    def mark_dirty(self) -> None:
+        """Mark this turn as modified, requiring save."""
+        self._dirty = True
+
+    def mark_clean(self) -> None:
+        """Mark this turn as saved (no longer dirty)."""
+        self._dirty = False
+
+    @property
+    def is_dirty(self) -> bool:
+        """Check if this turn needs to be saved."""
+        return self._dirty
 
     @property
     def duration_ms(self) -> Optional[int]:

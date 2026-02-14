@@ -32,7 +32,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, GoalTreeView, GoalTreeWidget, VerticalSplitter, HorizontalSplitter, TaskPane, ClickableSessionLink, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, ReviewMarker, ForkProposalMarker, MergeProposalMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, MessageStash, StashPopup, SlidesPane, PresentationScreen, MessageQueuePopup, EntityPane, ActionableToastRack, ActionableNotification, ActionableToast
+from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, GoalTreeView, GoalTreeWidget, VerticalSplitter, HorizontalSplitter, TaskPane, ClickableSessionLink, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, ReviewMarker, ForkProposalMarker, MergeProposalMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, BeginStreamingModal, BeginStreamingResult, MessageStash, StashPopup, SlidesPane, PresentationScreen, MessageQueuePopup, EntityPane, ActionableToastRack, ActionableNotification, ActionableToast
 from widgets.input_box import CompletionPopup
 from widgets.archive_marker import ArchiveMarker
 from claude_runner import ClaudeRunner
@@ -139,6 +139,7 @@ from core.fork import ForkManager, ForkResult, MergeResult, DeriveResult, Switch
 from core.command_executor import CommandExecutor, ArchiveResult, RehydrateResult, LinkResult, BackendResult, ShellResult
 from core.goal_commands import GoalCommandExecutor, check_priority_divergence, get_session_binding_info
 from core.tool_executor import parse_fork_proposal, parse_merge_proposal
+from core.goal_tools import parse_begin_streaming_todo_proposal, BeginStreamingTodoProposal
 from core.tree_state import TreeState, TreeEvent
 from core.goal_tree_state import GoalTreeState
 from core.goal_tree_sync import GoalTreeSyncManager
@@ -1140,6 +1141,19 @@ class BalloonsApp(App):
                         ctx,
                     )
                     # Don't show normal tool UI for propose_merge
+                    return
+
+            # Intercept begin_streaming_todo tool - show confirmation modal
+            if action.tool_name == "begin_streaming_todo" and is_active and action.tool_use_id.startswith("balloons-"):
+                proposal = await parse_begin_streaming_todo_proposal(action.tool_input)
+                if proposal and proposal.resolved_todos:
+                    await self._handle_begin_streaming_todo(
+                        proposal,
+                        action.tool_use_id,
+                        session_id,
+                        ctx,
+                    )
+                    # Don't show normal tool UI for begin_streaming_todo
                     return
 
             # Track tool names for post-result actions (like slides refresh)
@@ -3791,6 +3805,138 @@ class BalloonsApp(App):
         await breadcrumb.set_session(result.parent_session)
 
         self.notify(f"Merged from '{result.fork_name}'")
+
+    async def _handle_begin_streaming_todo(
+        self,
+        proposal: BeginStreamingTodoProposal,
+        tool_use_id: str,
+        session_id: str,
+        ctx: StreamingContext,
+    ) -> None:
+        """Handle a begin_streaming_todo tool call by showing a confirmation modal.
+
+        When the LLM calls begin_streaming_todo, we show a modal with checkboxes
+        for each todo. The user can select which todos to actually start.
+        """
+        chat_log = self.query_one("#chat-log", ChatLogView)
+
+        # Show the modal and get user selection
+        modal = BeginStreamingModal(proposal)
+        result = await self.push_screen_wait(modal)
+
+        if not result or not result.accepted or not result.todos_to_start:
+            # User cancelled or didn't select any todos
+            self.notify("Todo streaming cancelled")
+            # Remove the tool widget
+            chat_log.remove_streaming_tool(tool_use_id)
+            return
+
+        # Start sessions for each selected todo
+        started_count = 0
+        for todo_id, initial_prompt in result.todos_to_start:
+            try:
+                await self._start_todo_session(todo_id, initial_prompt)
+                started_count += 1
+            except Exception as e:
+                debug_log.error(f"Failed to start session for todo {todo_id}: {e}", category="goal")
+                self.notify(f"Failed to start session for todo: {e}", severity="error")
+
+        # Remove the tool widget
+        chat_log.remove_streaming_tool(tool_use_id)
+
+        if started_count > 0:
+            self.notify(f"Started {started_count} background session(s)")
+
+    async def _start_todo_session(self, todo_id: str, initial_prompt: str) -> None:
+        """Create a new session bound to a todo and start streaming.
+
+        Args:
+            todo_id: Full todo ID to bind to
+            initial_prompt: Initial prompt to send
+        """
+        from datetime import datetime
+        from storage_schema import SessionBinding
+        from core.async_storage import get_goal_storage
+
+        context_tree = self.query_one("#context-tree", ContextTreeView)
+
+        # Create new session
+        working_dir = self.session.working_directories[0] if self.session.working_directories else os.getcwd()
+        new_session = await self._manager.create_session(working_dir)
+
+        # Get todo for naming the session
+        storage = await get_goal_storage()
+        todo = await storage.load_todo(todo_id)
+        if todo:
+            new_session.title = f"Todo: {todo.title}"
+
+        # Bind session to todo with implementation role
+        binding = SessionBinding(
+            id=str(uuid.uuid4()),
+            session_id=new_session.id,
+            entity_type="todo",
+            entity_id=todo_id,
+            role="implementation",
+            created_at=datetime.now().isoformat(),
+            released_at=None,
+        )
+        await storage.save_session_binding(binding)
+
+        # Update todo status to in_progress
+        if todo and todo.status == "pending":
+            todo.status = "in_progress"
+            await storage.save_todo(todo)
+
+        # Save session
+        await new_session.save()
+
+        # Load in context tree
+        await context_tree.load_session(new_session, collapsed=True)
+
+        # Generate exchange ID
+        exchange_id = str(uuid.uuid4())
+
+        # Add user turn
+        user_blocks = [TextBlock(text=initial_prompt)]
+        new_session.add_message("user", initial_prompt, content_blocks=user_blocks, exchange_id=exchange_id)
+        await new_session.save()
+
+        # Create streaming context (not active since it's background)
+        stream_ctx = StreamingContext(
+            session_id=new_session.id,
+            user_turn_idx=0,
+            assistant_turn_idx=1,
+            prompt=initial_prompt,
+            is_active=False,
+            exchange_id=exchange_id,
+        )
+        self._streaming_contexts[new_session.id] = stream_ctx
+
+        # Update tree to show streaming
+        context_tree.set_session_streaming(new_session.id, True)
+        self._tree_state.start_streaming(new_session.id)
+        self._update_streaming_count()
+
+        # Start tree turn tracking
+        context_tree.start_turn(new_session.id, 0, "user", exchange_id=exchange_id)
+        await context_tree.finish_turn(new_session.id, 0, initial_prompt, TextBlock(text=initial_prompt), [])
+        context_tree.start_turn(new_session.id, 1, "assistant", exchange_id=exchange_id)
+
+        # Get runner and start background streaming
+        runner = self._manager.get_runner(new_session.id)
+        if runner:
+            allowed_tools = self._get_enabled_tools()
+            runner.start_background(
+                prompt=initial_prompt,
+                messages=new_session.turns,
+                allowed_tools=allowed_tools,
+            )
+
+        debug_log.info(
+            f"Started todo session",
+            category="goal",
+            details={"session_id": new_session.id[:8], "todo_id": todo_id[:8]},
+        )
 
     # ===== FORK/MERGE COMMANDS =====
 

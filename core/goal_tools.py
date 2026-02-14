@@ -63,6 +63,7 @@ GOAL_TOOL_NAMES = {
     "rebind_session",
     "bind_entity_to_sessions",
     "unbind_sessions",
+    "begin_streaming_todo",
 }
 
 # Tools that mutate goal data and require UI refresh
@@ -867,6 +868,44 @@ Can unbind specific sessions or clean up orphaned bindings
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "begin_streaming_todo",
+            "description": """Start background sessions to work on one or more todos.
+
+Creates new sessions bound to the specified todos and begins streaming in the
+background. The user will be shown a confirmation modal listing the todos
+before any sessions are started.
+
+Use this when:
+- You've planned work and want to parallelize execution across multiple todos
+- The user asks you to start working on specific todos
+- After creating a plan with todos, you're ready to begin implementation
+
+Each todo gets its own session with role: implementation. Sessions stream
+in the background so you can continue working in the current session.
+
+The user must confirm which todos to start - they can select/deselect
+individual todos from your proposed list.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "todo_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of todo IDs to start sessions for (can be prefixes)"
+                    },
+                    "initial_prompts": {
+                        "type": "object",
+                        "description": "Optional map of todo_id -> custom initial prompt. If not provided, a default prompt based on the todo title/description is used.",
+                        "additionalProperties": {"type": "string"}
+                    }
+                },
+                "required": ["todo_ids"]
+            }
+        }
+    },
 ]
 
 
@@ -929,6 +968,8 @@ async def execute_goal_tool(
         return await _bind_entity_to_sessions(args, storage)
     elif name == "unbind_sessions":
         return await _unbind_sessions(args, storage)
+    elif name == "begin_streaming_todo":
+        return await _begin_streaming_todo(args, storage)
     else:
         return f"Unknown goal tool: {name}", True
 
@@ -2477,3 +2518,109 @@ async def _unbind_sessions(args: dict, storage) -> tuple[str, bool]:
         return f"Released {len(to_release)} orphaned binding(s).", False
     else:
         return f"Released {len(to_release)} binding(s).", False
+
+
+async def _begin_streaming_todo(args: dict, storage) -> tuple[str, bool]:
+    """Validate and prepare begin_streaming_todo request.
+
+    This tool returns a special PENDING result that the app layer intercepts
+    to show a confirmation modal. The actual session creation happens in the
+    app after user confirmation.
+    """
+    todo_id_prefixes = args.get("todo_ids", [])
+    if not todo_id_prefixes:
+        return "Error: todo_ids is required (list of todo IDs)", True
+
+    initial_prompts = args.get("initial_prompts", {})
+
+    # Resolve todo IDs and validate they exist
+    todos = await storage.list_todos(include_spikes=True)
+    resolved_todos = []
+    not_found = []
+
+    for prefix in todo_id_prefixes:
+        prefix = prefix.strip()
+        found = None
+        for todo in todos:
+            if todo.id.startswith(prefix):
+                found = todo
+                break
+
+        if found:
+            # Check if todo is already done or abandoned
+            if found.status in ("done", "abandoned"):
+                return f"Error: Todo '{found.title}' is already {found.status}", True
+            resolved_todos.append(found)
+        else:
+            not_found.append(prefix)
+
+    if not_found:
+        return f"Error: Todos not found: {', '.join(not_found)}", True
+
+    if not resolved_todos:
+        return "Error: No valid todos to start", True
+
+    # Return pending result - app will intercept and show confirmation modal
+    # The actual execution happens in the app layer after user confirms
+    return "BEGIN_STREAMING_TODO_PENDING", False
+
+
+# =============================================================================
+# Data class for begin_streaming_todo proposal parsing
+# =============================================================================
+
+from dataclasses import dataclass, field
+from typing import Optional
+
+@dataclass
+class BeginStreamingTodoProposal:
+    """A proposal to start streaming sessions for todos.
+
+    Parsed from the begin_streaming_todo tool arguments by the app layer.
+    """
+    todo_ids: list[str] = field(default_factory=list)
+    initial_prompts: dict[str, str] = field(default_factory=dict)
+    # Resolved todo data (populated by parse function)
+    resolved_todos: list = field(default_factory=list)  # List of TodoData
+
+
+async def parse_begin_streaming_todo_proposal(args: dict) -> Optional[BeginStreamingTodoProposal]:
+    """Parse tool arguments into a BeginStreamingTodoProposal.
+
+    Called by the app layer when it intercepts a begin_streaming_todo tool call.
+    Resolves todo IDs to full TodoData objects for display in the confirmation modal.
+
+    Args:
+        args: Tool arguments from the model
+
+    Returns:
+        BeginStreamingTodoProposal object, or None if parsing fails
+    """
+    try:
+        todo_id_prefixes = args.get("todo_ids", [])
+        initial_prompts = args.get("initial_prompts", {})
+
+        if not todo_id_prefixes:
+            return None
+
+        # Resolve todos
+        storage = await get_goal_storage()
+        todos = await storage.list_todos(include_spikes=True)
+
+        resolved_todos = []
+        resolved_ids = []
+        for prefix in todo_id_prefixes:
+            prefix = prefix.strip()
+            for todo in todos:
+                if todo.id.startswith(prefix):
+                    resolved_todos.append(todo)
+                    resolved_ids.append(todo.id)
+                    break
+
+        return BeginStreamingTodoProposal(
+            todo_ids=resolved_ids,
+            initial_prompts=initial_prompts,
+            resolved_todos=resolved_todos,
+        )
+    except Exception:
+        return None

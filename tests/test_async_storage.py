@@ -394,4 +394,138 @@ async def test_session_metadata_update_preserves_turns(temp_db, sample_session):
     assert len(loaded.turns) == original_turn_count
 
 
+@pytest.mark.asyncio
+async def test_incremental_save_only_saves_dirty_turns(temp_db, sample_session):
+    """Test that incremental save only saves new/modified turns, not all turns."""
+    storage = AsyncStorage(temp_db)
+
+    # First save (full save)
+    await storage.save_session(sample_session)
+
+    # Verify session is clean after save
+    assert not sample_session._metadata_dirty
+    assert len(sample_session._saved_turn_order) == len(sample_session.turns)
+    assert all(not t.is_dirty for t in sample_session.turns)
+
+    # Add a new turn
+    sample_session.add_turn(
+        role="user",
+        content_block=TextBlock(text="New question"),
+        tokens=5,
+    )
+
+    # Verify only the new turn is dirty
+    dirty_turns = sample_session.get_dirty_turns()
+    assert len(dirty_turns) == 1
+    assert dirty_turns[0].content_block.text == "New question"
+
+    # Save (should be incremental)
+    await storage.save_session(sample_session)
+
+    # Verify clean again
+    assert all(not t.is_dirty for t in sample_session.turns)
+    assert len(sample_session._saved_turn_order) == len(sample_session.turns)
+
+    # Load and verify all turns are there
+    loaded = await storage.load_session(sample_session.id)
+    assert len(loaded.turns) == 5  # Original 4 + new one
+
+
+@pytest.mark.asyncio
+async def test_incremental_save_handles_turn_deletion(temp_db, sample_session):
+    """Test that incremental save handles deleted turns."""
+    storage = AsyncStorage(temp_db)
+
+    # First save
+    await storage.save_session(sample_session)
+    original_count = len(sample_session.turns)
+    deleted_turn_id = sample_session.turns[1].id
+
+    # Delete a turn
+    sample_session.delete_turn(1)
+
+    # Verify deletion is tracked
+    assert deleted_turn_id in sample_session._deleted_turn_ids
+    assert sample_session.needs_save()
+
+    # Save (incremental)
+    await storage.save_session(sample_session)
+
+    # Verify clean
+    assert len(sample_session._deleted_turn_ids) == 0
+
+    # Load and verify
+    loaded = await storage.load_session(sample_session.id)
+    assert len(loaded.turns) == original_count - 1
+    assert all(t.id != deleted_turn_id for t in loaded.turns)
+
+
+@pytest.mark.asyncio
+async def test_incremental_save_handles_turn_reorder(temp_db, sample_session):
+    """Test that incremental save handles turn reordering."""
+    storage = AsyncStorage(temp_db)
+
+    # First save
+    await storage.save_session(sample_session)
+    original_order = [t.id for t in sample_session.turns]
+
+    # Reverse the order
+    sample_session.turns = list(reversed(sample_session.turns))
+    new_order = [t.id for t in sample_session.turns]
+
+    # Verify reorder is detected
+    assert sample_session.has_turn_order_changed()
+    assert sample_session.needs_save()
+
+    # Save (incremental)
+    await storage.save_session(sample_session)
+
+    # Load and verify order
+    loaded = await storage.load_session(sample_session.id)
+    loaded_order = [t.id for t in loaded.turns]
+    assert loaded_order == new_order
+
+
+@pytest.mark.asyncio
+async def test_turn_id_persists_across_save_load(temp_db):
+    """Test that turn IDs are preserved when saving and loading."""
+    storage = AsyncStorage(temp_db)
+
+    session = Session()
+    session.add_turn(
+        role="user",
+        content_block=TextBlock(text="Hello"),
+        tokens=5,
+    )
+
+    original_id = session.turns[0].id
+    assert original_id  # ID should be set
+
+    # Save and load
+    await storage.save_session(session)
+    loaded = await storage.load_session(session.id)
+
+    # Turn ID should be preserved
+    assert loaded.turns[0].id == original_id
+
+
+@pytest.mark.asyncio
+async def test_loaded_session_is_clean(temp_db, sample_session):
+    """Test that a loaded session starts clean (no pending saves)."""
+    storage = AsyncStorage(temp_db)
+
+    # Save
+    await storage.save_session(sample_session)
+
+    # Load
+    loaded = await storage.load_session(sample_session.id)
+
+    # Verify clean state
+    assert not loaded._metadata_dirty
+    assert len(loaded._deleted_turn_ids) == 0
+    assert len(loaded._saved_turn_order) == len(loaded.turns)
+    assert all(not t.is_dirty for t in loaded.turns)
+    assert not loaded.needs_save()
+
+
 # GoalStorage tests are in test_goal_storage.py (file-based, no Rust required)

@@ -2,8 +2,9 @@
 
 import asyncio
 import json
+import time
 import pytest
-from core.debug_log import DebugLog, LogLevel, LogEntry, debug_log, dump_failed_json
+from core.debug_log import DebugLog, LogLevel, LogEntry, debug_log, dump_failed_json, perf_timed, perf_marker
 
 
 class TestLogEntry:
@@ -353,3 +354,96 @@ class TestAsyncFileLogging:
 
     # Removed test_no_event_loop_graceful_fallback - we no longer support
     # sync fallback behavior. All code must run in async context.
+
+
+class TestPerfTiming:
+    """Tests for performance timing utilities."""
+
+    def setup_method(self):
+        """Clear the debug log before each test."""
+        debug_log.clear()
+        debug_log._listeners = []
+
+    def test_perf_marker_logs_event(self):
+        """Test that perf_marker creates a PERF level entry."""
+        perf_marker("test.operation", elapsed_ms=42.5, session_id="abc123")
+
+        entries = debug_log.get_entries()
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry.level == LogLevel.PERF
+        assert "[test.operation]" in entry.message
+        assert entry.details["marker"] == "test.operation"
+        assert entry.details["elapsed_ms"] == 42.5
+        assert entry.details["session_id"] == "abc123"
+
+    def test_perf_marker_with_multiple_kwargs(self):
+        """Test that perf_marker accepts arbitrary keyword args."""
+        perf_marker(
+            "storage.save",
+            session_id="sess123",
+            turn_count=5,
+            elapsed_ms=15.3,
+        )
+
+        entries = debug_log.get_entries()
+        assert len(entries) == 1
+        details = entries[0].details
+        assert details["marker"] == "storage.save"
+        assert details["session_id"] == "sess123"
+        assert details["turn_count"] == 5
+        assert details["elapsed_ms"] == 15.3
+
+    def test_perf_timed_logs_duration(self):
+        """Test that perf_timed context manager logs operation duration."""
+        with perf_timed("test.sleep"):
+            time.sleep(0.01)  # 10ms
+
+        entries = debug_log.get_entries()
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry.level == LogLevel.PERF
+        assert "test.sleep:" in entry.message
+        assert entry.details["operation"] == "test.sleep"
+        assert entry.details["elapsed_ms"] >= 10  # At least 10ms
+
+    def test_perf_timed_with_threshold_warning(self):
+        """Test that perf_timed logs WARNING when threshold exceeded."""
+        with perf_timed("test.slow", threshold_ms=5):
+            time.sleep(0.02)  # 20ms - exceeds 5ms threshold
+
+        entries = debug_log.get_entries()
+        # Should have both PERF (always) and WARNING (threshold exceeded)
+        assert len(entries) == 2
+
+        perf_entry = [e for e in entries if e.level == LogLevel.PERF][0]
+        warning_entry = [e for e in entries if e.level == LogLevel.WARNING][0]
+
+        assert "test.slow:" in perf_entry.message
+        assert "SLOW" in warning_entry.message
+        assert warning_entry.details["threshold_ms"] == 5
+
+    def test_perf_timed_no_warning_under_threshold(self):
+        """Test that perf_timed doesn't warn when under threshold."""
+        with perf_timed("test.fast", threshold_ms=100):
+            time.sleep(0.005)  # 5ms - under 100ms threshold
+
+        entries = debug_log.get_entries()
+        # Should only have PERF, no WARNING
+        assert len(entries) == 1
+        assert entries[0].level == LogLevel.PERF
+
+    def test_perf_marker_visible_in_perf_mode(self):
+        """Test that perf_marker entries are visible when perf_mode is enabled."""
+        original_perf_mode = debug_log.perf_mode
+        try:
+            debug_log.perf_mode = True
+
+            perf_marker("test.marker", value=123)
+            debug_log.info("This should be filtered")  # Should NOT appear
+
+            entries = debug_log.get_entries()
+            assert len(entries) == 1
+            assert entries[0].level == LogLevel.PERF
+        finally:
+            debug_log.perf_mode = original_perf_mode

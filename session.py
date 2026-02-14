@@ -83,9 +83,61 @@ class Session:
     # The legacy `links` field has been removed - old sessions with links data
     # will have those links ignored (they were never actively used).
 
+    # Dirty tracking for incremental saves
+    # Tracks whether session metadata has changed since last save
+    _metadata_dirty: bool = field(default=True, repr=False, compare=False)
+    # Tracks turn IDs that have been deleted since last save
+    _deleted_turn_ids: set = field(default_factory=set, repr=False, compare=False)
+    # Snapshot of turn order at last save (for detecting reorder)
+    _saved_turn_order: list = field(default_factory=list, repr=False, compare=False)
+
     @property
     def total_tokens(self) -> int:
         return self.total_input_tokens + self.total_output_tokens
+
+    # =========================================================================
+    # Dirty Tracking for Incremental Saves
+    # =========================================================================
+
+    def mark_metadata_dirty(self) -> None:
+        """Mark session metadata as modified, requiring save."""
+        self._metadata_dirty = True
+
+    def get_dirty_turns(self) -> list[Turn]:
+        """Get all turns that have been modified since last save."""
+        return [t for t in self.turns if t.is_dirty]
+
+    def get_deleted_turn_ids(self) -> set[str]:
+        """Get IDs of turns that were deleted since last save."""
+        return self._deleted_turn_ids.copy()
+
+    def has_turn_order_changed(self) -> bool:
+        """Check if turn order changed since last save."""
+        current_order = [t.id for t in self.turns]
+        return current_order != self._saved_turn_order
+
+    def needs_save(self) -> bool:
+        """Check if anything needs to be saved."""
+        if self._metadata_dirty:
+            return True
+        if self._deleted_turn_ids:
+            return True
+        if self.has_turn_order_changed():
+            return True
+        if any(t.is_dirty for t in self.turns):
+            return True
+        return False
+
+    def mark_all_clean(self) -> None:
+        """Mark session and all turns as saved (clean).
+
+        Called after a successful save to reset dirty tracking.
+        """
+        self._metadata_dirty = False
+        self._deleted_turn_ids = set()
+        self._saved_turn_order = [t.id for t in self.turns]
+        for turn in self.turns:
+            turn.mark_clean()
 
     def add_turn(
         self,
@@ -167,6 +219,7 @@ class Session:
         self.total_cost += cost
         if context_window:
             self.context_window = context_window
+        self._metadata_dirty = True
 
     def add_child(self, child_id: str, prompt: str, return_condition: str = "manual", name: str = "", fork_point: int = -1) -> None:
         """Register a child session (fork) spawned from this session."""
@@ -179,6 +232,7 @@ class Session:
             "fork_point": fork_point,  # Turn index where fork was created
             "merge_point": -1,  # Will be set when merged
         })
+        self._metadata_dirty = True
 
     def mark_child_returned(self, child_id: str) -> None:
         """Mark a child session as returned. (Legacy - use mark_child_merged)"""
@@ -191,6 +245,7 @@ class Session:
                 child["status"] = "merged"
                 if merge_point >= 0:
                     child["merge_point"] = merge_point
+                self._metadata_dirty = True
                 break
 
     async def get_parent_async(self) -> Optional["Session"]:
@@ -270,6 +325,7 @@ class Session:
         self.fork_status = "merged"
         self.merge_message = message
         self.merge_point_turn = merge_turn
+        self._metadata_dirty = True
 
     def get_fork_display_name(self) -> str:
         """Get display name for this fork."""
@@ -295,8 +351,11 @@ class Session:
         """Delete a turn from the session history.
 
         Returns True if deleted, False if index invalid.
+        Tracks the deleted turn ID for incremental save.
         """
         if 0 <= turn_index < len(self.turns):
+            deleted_turn = self.turns[turn_index]
+            self._deleted_turn_ids.add(deleted_turn.id)
             del self.turns[turn_index]
             return True
         return False
@@ -305,6 +364,7 @@ class Session:
         """Delete multiple turns from the session history.
 
         Deletes in reverse order to preserve indices during deletion.
+        Tracks deleted turn IDs for incremental save.
 
         Args:
             turn_indices: List of turn indices to delete
@@ -317,6 +377,8 @@ class Session:
         deleted_count = 0
         for idx in sorted_indices:
             if 0 <= idx < len(self.turns):
+                deleted_turn = self.turns[idx]
+                self._deleted_turn_ids.add(deleted_turn.id)
                 del self.turns[idx]
                 deleted_count += 1
         return deleted_count
@@ -1151,7 +1213,11 @@ class Session:
 
     @classmethod
     def _deserialize_turn(cls, data: dict) -> Turn:
-        """Deserialize a turn from a dict."""
+        """Deserialize a turn from a dict.
+
+        Note: This is primarily used for JSON/legacy loading.
+        The main LMDB path uses core.async_storage._wire_to_turn.
+        """
         content_block = cls._deserialize_content_block(data.get("content_block", {"type": "text", "text": ""}))
 
         mode_str = data.get("context_mode", "compress")
@@ -1160,7 +1226,10 @@ class Session:
         except ValueError:
             context_mode = ContextMode.COMPRESS
 
-        return Turn(
+        # Get turn ID from data, or it will be auto-generated
+        turn_id = data.get("id")
+
+        turn = Turn(
             role=data["role"],
             content_block=content_block,
             tokens=data.get("tokens", 0),
@@ -1169,6 +1238,12 @@ class Session:
             summary=data.get("summary", ""),
             exchange_id=data.get("exchange_id"),
         )
+
+        # Set ID if present in data (otherwise use auto-generated UUID)
+        if turn_id:
+            turn.id = turn_id
+
+        return turn
 
     @classmethod
     def _build_session_from_data(cls, data: dict) -> "Session":

@@ -733,6 +733,31 @@ Triggers lifecycle hooks:
 ```
 Binding injects context about the entity into the system prompt.
 
+**begin_streaming_todo** - Start background sessions for todos
+```json
+{
+  "name": "begin_streaming_todo",
+  "args": {
+    "todo_ids": ["abc123", "def456"],  // Can be prefixes
+    "initial_prompts": {               // Optional: custom prompts per todo
+      "abc123": "Start by reviewing the API design..."
+    }
+  }
+}
+```
+Creates new sessions bound to the specified todos and begins streaming in the background.
+The user will see a confirmation modal with checkboxes to select which todos to start.
+
+Use this when:
+- You've planned work and want to parallelize execution across multiple todos
+- The user asks you to start working on specific todos
+- After creating a plan with todos, you're ready to begin implementation
+
+Each started session:
+- Is bound to the todo with `role: implementation`
+- Updates the todo status to `in_progress`
+- Streams in the background so you can continue in the current session
+
 ### Goal-Driven Session Workflow
 
 Goals integrate with the fork/merge workflow. Each phase uses a dedicated session:

@@ -213,6 +213,15 @@ Returns: goal info, related plans, related todos with status, dependencies (with
 
 **bind_session** - Bind session to goal/plan/todo with role
 
+**begin_streaming_todo** - Start background sessions for todos
+- `todo_ids` (required): List of todo IDs to start sessions for (can be prefixes)
+- `initial_prompts` (optional): Map of todo_id -> custom initial prompt
+
+Creates new sessions bound to the specified todos and begins streaming in the background.
+The user will see a confirmation modal with checkboxes to select which todos to start.
+Each started session is bound to the todo with `role: implementation` and the todo status
+is updated to `in_progress`.
+
 ### Session Binding Management
 
 Tools for reviewing and managing session bindings in bulk:

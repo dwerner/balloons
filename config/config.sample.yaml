@@ -11,6 +11,14 @@ default_backend: claude
 # Useful for postmortems when the in-memory log (500 entries) isn't enough.
 # debug_log_file: ~/.balloons/debug.log
 
+# Performance timing mode (optional)
+# When true, filters debug log to show only PERF-level entries (timing data).
+# This reduces noise and shows:
+#   - LLM API call duration (first token, stream complete)
+#   - Storage operation latency (save_session, load_session)
+#   - Turn rendering time (load_history)
+# debug_perf_mode: false
+
 # Editor for :edit-config and :edit-prompt commands
 # Falls back to $VISUAL, then $EDITOR, then vi
 # editor: nvim

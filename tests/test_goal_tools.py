@@ -11,6 +11,8 @@ from core.goal_tools import (
     execute_goal_tool,
     GOAL_TOOL_NAMES,
     GOAL_TOOLS,
+    parse_begin_streaming_todo_proposal,
+    BeginStreamingTodoProposal,
 )
 from core.async_storage import GoalStorage
 from storage_schema import GoalData, PlanData, TodoData, TodoPlanLink
@@ -3474,3 +3476,121 @@ class TestMergeTodos:
         # Verify binding was released
         updated_binding = await goal_storage.load_session_binding("binding-1")
         assert updated_binding.released_at is not None
+
+
+class TestBeginStreamingTodo:
+    """Tests for begin_streaming_todo tool."""
+
+    @pytest.mark.asyncio
+    async def test_begin_streaming_todo_validates_todos(self, goal_storage, mock_session, monkeypatch):
+        """Test that begin_streaming_todo validates todo IDs."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo = TodoData(
+            id="todo-stream-1", title="Streamable Todo", description="Test",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        # Valid todo should return PENDING
+        result, is_error = await execute_goal_tool(
+            "begin_streaming_todo",
+            {"todo_ids": ["todo-stream-1"]},
+            mock_session,
+        )
+
+        assert not is_error
+        assert result == "BEGIN_STREAMING_TODO_PENDING"
+
+    @pytest.mark.asyncio
+    async def test_begin_streaming_todo_missing_todo_ids(self, goal_storage, mock_session, monkeypatch):
+        """Test that begin_streaming_todo requires todo_ids."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "begin_streaming_todo",
+            {},
+            mock_session,
+        )
+
+        assert is_error
+        assert "todo_ids is required" in result
+
+    @pytest.mark.asyncio
+    async def test_begin_streaming_todo_not_found(self, goal_storage, mock_session, monkeypatch):
+        """Test that begin_streaming_todo errors for non-existent todos."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        result, is_error = await execute_goal_tool(
+            "begin_streaming_todo",
+            {"todo_ids": ["nonexistent"]},
+            mock_session,
+        )
+
+        assert is_error
+        assert "not found" in result
+
+    @pytest.mark.asyncio
+    async def test_begin_streaming_todo_rejects_done_todos(self, goal_storage, mock_session, monkeypatch):
+        """Test that begin_streaming_todo rejects done todos."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo = TodoData(
+            id="todo-done-1", title="Done Todo", description="",
+            status="done", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "begin_streaming_todo",
+            {"todo_ids": ["todo-done-1"]},
+            mock_session,
+        )
+
+        assert is_error
+        assert "already done" in result
+
+    @pytest.mark.asyncio
+    async def test_begin_streaming_todo_with_prefix(self, goal_storage, mock_session, monkeypatch):
+        """Test that begin_streaming_todo works with ID prefixes."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        todo = TodoData(
+            id="todo-prefix-test-123", title="Prefixable Todo", description="",
+            status="pending", is_spike=False, created_at=now, updated_at=now,
+        )
+        await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "begin_streaming_todo",
+            {"todo_ids": ["todo-prefix"]},  # Use prefix
+            mock_session,
+        )
+
+        assert not is_error
+        assert result == "BEGIN_STREAMING_TODO_PENDING"
+
+    @pytest.mark.asyncio
+    async def test_begin_streaming_todo_multiple(self, goal_storage, mock_session, monkeypatch):
+        """Test that begin_streaming_todo works with multiple todos."""
+        monkeypatch.setattr("core.goal_tools.get_goal_storage", make_async_storage_getter(goal_storage))
+
+        now = datetime.now().isoformat()
+        for i in range(3):
+            todo = TodoData(
+                id=f"todo-multi-{i}", title=f"Todo {i}", description="",
+                status="pending", is_spike=False, created_at=now, updated_at=now,
+            )
+            await goal_storage.save_todo(todo)
+
+        result, is_error = await execute_goal_tool(
+            "begin_streaming_todo",
+            {"todo_ids": ["todo-multi-0", "todo-multi-1", "todo-multi-2"]},
+            mock_session,
+        )
+
+        assert not is_error
+        assert result == "BEGIN_STREAMING_TODO_PENDING"

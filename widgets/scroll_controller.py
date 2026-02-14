@@ -156,37 +156,14 @@ class ScrollController:
     def on_scroll_changed(self, old_scroll_y: float | None = None) -> None:
         """Called when scroll position changes (from watch_scroll_y).
 
-        This is the main entry point for detecting user scrolls.
-        Programmatic scrolls are ignored.
+        Note: Follow mode is now manually controlled via toggle button.
+        This method just tracks scroll position for other purposes.
 
         Args:
-            old_scroll_y: Previous scroll position (optional, for direction detection)
+            old_scroll_y: Previous scroll position (optional, for tracking)
         """
-        if self._programmatic_scroll:
-            # Still track position for next comparison
-            self._last_scroll_y = self._container.scroll_y
-            return
-
-        if not self._container.is_mounted:
-            return
-
-        current_scroll_y = self._container.scroll_y
-
-        # Detect upward scroll - user is expressing intent to read history
-        # Any upward scroll should immediately exit follow mode
-        if self._following:
-            prev_y = old_scroll_y if old_scroll_y is not None else self._last_scroll_y
-            if prev_y is not None and current_scroll_y < prev_y:
-                self._log_debug(
-                    f"upward scroll detected: {prev_y:.0f} -> {current_scroll_y:.0f}, "
-                    f"exiting follow mode"
-                )
-                self.following = False
-                self._last_scroll_y = current_scroll_y
-                return
-
-        self._last_scroll_y = current_scroll_y
-        self._check_at_bottom_internal()
+        # Just track position for potential future use
+        self._last_scroll_y = self._container.scroll_y
 
     def check_at_bottom(self) -> None:
         """Check if we're at the bottom and update following state.
@@ -201,23 +178,14 @@ class ScrollController:
         self._check_at_bottom_internal()
 
     def _check_at_bottom_internal(self) -> None:
-        """Internal implementation of at-bottom check."""
-        max_y = self._container.max_scroll_y
-        scroll_y = self._container.scroll_y
+        """Internal implementation of at-bottom check.
 
-        # If max_scroll_y is 0 or very small, content fits in viewport - always following
-        if max_y <= 1:
-            at_bottom = True
-        else:
-            at_bottom = (max_y - scroll_y) < self.AT_BOTTOM_THRESHOLD
-
-        # Only update if changed to avoid callback spam
-        if self._following != at_bottom:
-            self._log_debug(
-                f"at_bottom check: {self._following} -> {at_bottom}, "
-                f"gap={max_y - scroll_y:.0f}px"
-            )
-            self.following = at_bottom
+        Note: Follow mode is now manually controlled via toggle.
+        This method no longer auto-enables follow when scrolling to bottom.
+        It only tracks position for other purposes (e.g., scroll_to_widget follow check).
+        """
+        # Follow mode is manually controlled - don't auto-enable/disable based on position
+        pass
 
     def smart_scroll(self) -> None:
         """Scroll to end only if user is following.
@@ -251,7 +219,7 @@ class ScrollController:
         at_top: bool = False,
         content_offset_y: float = 0,
     ) -> None:
-        """Scroll to show a widget, then check follow state.
+        """Scroll to show a widget.
 
         Args:
             widget_region: Region with y and height of the widget (virtual coordinates)
@@ -259,17 +227,13 @@ class ScrollController:
                    If False, use smart scroll that minimizes movement.
             content_offset_y: Content offset to subtract (for padding/borders)
 
-        Note: This is a user-initiated scroll (e.g., clicking a turn in the tree),
-        so it SHOULD update follow state based on final position.
+        Note: Follow mode is manually controlled, so scrolling to a widget
+        does not change the follow state.
         """
         if at_top:
             self._scroll_widget_to_top(widget_region, content_offset_y)
         else:
             self._scroll_widget_smart(widget_region)
-
-        # After scrolling, check if we're at the bottom
-        # Use call_later to let the scroll settle before checking
-        self._container.call_later(self._check_at_bottom_internal)
 
     def _scroll_widget_smart(self, widget_region: WidgetRegion) -> None:
         """Scroll to widget using minimal movement strategy.
