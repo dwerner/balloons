@@ -3,6 +3,7 @@
 //! Provides tools for migrating and recovering data between LMDB databases.
 
 use crate::storage::{LmdbEngine, StorageEngine};
+use crate::{TodoDependency, TodoPlanLink};
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -17,6 +18,18 @@ pub struct RecoveryResult {
     pub failed: usize,
     /// Session history entries recovered.
     pub history_entries: usize,
+    /// Number of goals recovered.
+    pub goals_recovered: usize,
+    /// Number of plans recovered.
+    pub plans_recovered: usize,
+    /// Number of todos recovered.
+    pub todos_recovered: usize,
+    /// Number of todo-plan links recovered.
+    pub links_recovered: usize,
+    /// Number of todo dependencies recovered.
+    pub dependencies_recovered: usize,
+    /// Number of session bindings recovered.
+    pub bindings_recovered: usize,
 }
 
 /// Recover all sessions from a source database to a target database.
@@ -109,6 +122,131 @@ where
         result.history_entries = history.len();
         if let Some(ref mut progress) = on_progress {
             progress(&format!("Recovered session history ({} entries)", history.len()));
+        }
+    }
+
+    // =========================================================================
+    // Recover Goal System Data
+    // =========================================================================
+
+    // Recover goals
+    let source_goals = source.list_goals().await?;
+    let target_goals = target.list_goals().await?;
+    let existing_goal_ids: HashSet<_> = target_goals.iter().map(|g| g.id.as_str()).collect();
+
+    for goal in &source_goals {
+        if !existing_goal_ids.contains(goal.id.as_str()) {
+            if let Err(e) = target.save_goal(goal).await {
+                if let Some(ref mut progress) = on_progress {
+                    progress(&format!("Failed to recover goal {}: {}", goal.title, e));
+                }
+            } else {
+                result.goals_recovered += 1;
+            }
+        }
+    }
+    if result.goals_recovered > 0 {
+        if let Some(ref mut progress) = on_progress {
+            progress(&format!("Recovered {} goals", result.goals_recovered));
+        }
+    }
+
+    // Recover plans
+    let source_plans = source.list_plans(None).await?;
+    let target_plans = target.list_plans(None).await?;
+    let existing_plan_ids: HashSet<_> = target_plans.iter().map(|p| p.id.as_str()).collect();
+
+    for plan in &source_plans {
+        if !existing_plan_ids.contains(plan.id.as_str()) {
+            if let Err(e) = target.save_plan(plan).await {
+                if let Some(ref mut progress) = on_progress {
+                    progress(&format!("Failed to recover plan {}: {}", plan.title, e));
+                }
+            } else {
+                result.plans_recovered += 1;
+            }
+        }
+    }
+    if result.plans_recovered > 0 {
+        if let Some(ref mut progress) = on_progress {
+            progress(&format!("Recovered {} plans", result.plans_recovered));
+        }
+    }
+
+    // Recover todos (includes links to plans via get_plans_for_todo)
+    let source_todos = source.list_todos(None).await?;
+    let target_todos = target.list_todos(None).await?;
+    let existing_todo_ids: HashSet<_> = target_todos.iter().map(|t| t.id.as_str()).collect();
+
+    for todo in &source_todos {
+        if !existing_todo_ids.contains(todo.id.as_str()) {
+            if let Err(e) = target.save_todo(todo).await {
+                if let Some(ref mut progress) = on_progress {
+                    progress(&format!("Failed to recover todo {}: {}", todo.title, e));
+                }
+            } else {
+                result.todos_recovered += 1;
+
+                // Recover todo-plan links for this todo
+                if let Ok(linked_plans) = source.get_plans_for_todo(&todo.id).await {
+                    for plan in linked_plans {
+                        let link = TodoPlanLink {
+                            todo_id: todo.id.clone(),
+                            plan_id: plan.id.clone(),
+                            created_at: todo.created_at.clone(),
+                        };
+                        if target.save_todo_plan_link(&link).await.is_ok() {
+                            result.links_recovered += 1;
+                        }
+                    }
+                }
+
+                // Recover dependencies for this todo
+                if let Ok(deps) = source.get_dependencies(&todo.id).await {
+                    for dep_todo in deps {
+                        let dependency = TodoDependency {
+                            todo_id: todo.id.clone(),
+                            depends_on_id: dep_todo.id.clone(),
+                            created_at: todo.created_at.clone(),
+                        };
+                        if target.save_todo_dependency(&dependency).await.is_ok() {
+                            result.dependencies_recovered += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if result.todos_recovered > 0 {
+        if let Some(ref mut progress) = on_progress {
+            progress(&format!(
+                "Recovered {} todos ({} links, {} dependencies)",
+                result.todos_recovered,
+                result.links_recovered,
+                result.dependencies_recovered
+            ));
+        }
+    }
+
+    // Recover session bindings
+    let source_bindings = source.list_bindings().await?;
+    let target_bindings = target.list_bindings().await?;
+    let existing_binding_ids: HashSet<_> = target_bindings.iter().map(|b| b.id.as_str()).collect();
+
+    for binding in &source_bindings {
+        if !existing_binding_ids.contains(binding.id.as_str()) {
+            if let Err(e) = target.save_session_binding(binding).await {
+                if let Some(ref mut progress) = on_progress {
+                    progress(&format!("Failed to recover binding {}: {}", binding.id, e));
+                }
+            } else {
+                result.bindings_recovered += 1;
+            }
+        }
+    }
+    if result.bindings_recovered > 0 {
+        if let Some(ref mut progress) = on_progress {
+            progress(&format!("Recovered {} session bindings", result.bindings_recovered));
         }
     }
 

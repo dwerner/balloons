@@ -1178,7 +1178,9 @@ impl Supervisor {
 ///     target_path: Path to the target LMDB database directory
 ///
 /// Returns:
-///     Dict with keys: recovered, skipped, failed, history_entries
+///     Dict with keys: recovered, skipped, failed, history_entries, goals_recovered,
+///     plans_recovered, todos_recovered, links_recovered, dependencies_recovered,
+///     bindings_recovered
 #[pyfunction]
 fn recover_database(py: Python<'_>, source_path: &str, target_path: &str) -> PyResult<PyObject> {
     let source = source_path.to_string();
@@ -1196,6 +1198,12 @@ fn recover_database(py: Python<'_>, source_path: &str, target_path: &str) -> PyR
             dict.set_item("skipped", result.skipped)?;
             dict.set_item("failed", result.failed)?;
             dict.set_item("history_entries", result.history_entries)?;
+            dict.set_item("goals_recovered", result.goals_recovered)?;
+            dict.set_item("plans_recovered", result.plans_recovered)?;
+            dict.set_item("todos_recovered", result.todos_recovered)?;
+            dict.set_item("links_recovered", result.links_recovered)?;
+            dict.set_item("dependencies_recovered", result.dependencies_recovered)?;
+            dict.set_item("bindings_recovered", result.bindings_recovered)?;
             Ok(dict.into())
         })
     })

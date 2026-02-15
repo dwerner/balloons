@@ -263,11 +263,17 @@ def cmd_recover(args):
         return
 
     print(f"Recovery complete!")
-    print(f"  Recovered: {result['recovered']} sessions")
-    print(f"  Skipped:   {result['skipped']} sessions (already existed)")
-    print(f"  Failed:    {result['failed']} sessions")
-    if result['history_entries'] > 0:
+    print(f"  Sessions:  {result['recovered']} recovered, {result['skipped']} skipped, {result['failed']} failed")
+    if result.get('history_entries', 0) > 0:
         print(f"  History:   {result['history_entries']} entries")
+    if result.get('goals_recovered', 0) > 0:
+        print(f"  Goals:     {result['goals_recovered']}")
+    if result.get('plans_recovered', 0) > 0:
+        print(f"  Plans:     {result['plans_recovered']}")
+    if result.get('todos_recovered', 0) > 0:
+        print(f"  Todos:     {result['todos_recovered']} ({result.get('links_recovered', 0)} links, {result.get('dependencies_recovered', 0)} deps)")
+    if result.get('bindings_recovered', 0) > 0:
+        print(f"  Bindings:  {result['bindings_recovered']}")
 
 
 def main():
