@@ -1,0 +1,266 @@
+/* =====================================================
+   AppLayout - Foundational Grid Layout
+   ===================================================== */
+
+/* ----- Layout CSS Variables ----- */
+:root {
+  /* Panel widths - can be overridden by LayoutContext */
+  --sidebar-width: 280px;
+  --sidebar-collapsed-width: 56px;
+  --min-sidebar-width: 200px;
+  --max-sidebar-width: 400px;
+
+  /* Layout transitions */
+  --layout-transition-duration: 0.3s;
+  --layout-transition-easing: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ----- Base Layout ----- */
+.app-layout {
+  display: grid;
+  height: 100vh;
+  height: 100dvh; /* Dynamic viewport height for mobile browsers */
+  overflow: hidden;
+  background: var(--color-bg-primary);
+  /* Default to mobile layout */
+  grid-template-columns: 1fr;
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "header"
+    "main";
+}
+
+/* ----- Mobile Layout ----- */
+.app-layout--mobile {
+  grid-template-columns: 1fr;
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "header"
+    "main";
+}
+
+/* ----- Desktop Layout ----- */
+.app-layout--desktop {
+  grid-template-columns: var(--sidebar-width) 1fr;
+  grid-template-rows: 0 1fr; /* Header row is 0 height on desktop */
+  grid-template-areas:
+    "sidebar header"
+    "sidebar main";
+}
+
+/* Desktop layout only kicks in at tablet+ via media query */
+@media (min-width: 768px) {
+  .app-layout--desktop {
+    grid-template-columns: var(--sidebar-width) 1fr;
+    grid-template-rows: 0 1fr;
+    grid-template-areas:
+      "sidebar header"
+      "sidebar main";
+  }
+
+  .app-layout--desktop .app-layout__header {
+    display: none;
+  }
+}
+
+/* Force mobile layout for narrow screens regardless of JS class */
+@media (max-width: 767px) {
+  .app-layout,
+  .app-layout--desktop {
+    grid-template-columns: 1fr !important;
+    grid-template-rows: auto 1fr !important;
+    grid-template-areas:
+      "header"
+      "main" !important;
+  }
+
+  .app-layout .app-layout__header,
+  .app-layout--desktop .app-layout__header {
+    display: flex !important;
+  }
+
+  .app-layout .app-layout__sidebar,
+  .app-layout--desktop .app-layout__sidebar {
+    position: fixed !important;
+    transform: translateX(-100%);
+  }
+}
+
+/* Collapsed sidebar on desktop */
+.app-layout--desktop .app-layout__sidebar--collapsed {
+  width: var(--sidebar-collapsed-width);
+}
+
+.app-layout--desktop:has(.app-layout__sidebar--collapsed) {
+  grid-template-columns: var(--sidebar-collapsed-width) 1fr;
+}
+
+/* =====================================================
+   Sidebar
+   ===================================================== */
+
+.app-layout__sidebar {
+  grid-area: sidebar;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-secondary);
+  border-right: 1px solid var(--color-border-primary);
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ----- Mobile Sidebar (Overlay) ----- */
+.app-layout--mobile .app-layout__sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: var(--sidebar-width);
+  max-width: 85vw;
+  z-index: 100;
+  transform: translateX(-100%);
+  transition: transform var(--layout-transition-duration) var(--layout-transition-easing);
+}
+
+.app-layout--mobile .app-layout__sidebar--visible {
+  transform: translateX(0);
+}
+
+/* ----- Desktop Sidebar ----- */
+.app-layout--desktop .app-layout__sidebar {
+  position: relative;
+  transform: none;
+  width: var(--sidebar-width);
+  transition: width var(--layout-transition-duration) var(--layout-transition-easing);
+}
+
+.app-layout--desktop .app-layout__sidebar--collapsed {
+  width: var(--sidebar-collapsed-width);
+}
+
+/* =====================================================
+   Sidebar Overlay (Mobile)
+   ===================================================== */
+
+.app-layout__sidebar-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--color-overlay, rgba(0, 0, 0, 0.5));
+  z-index: 99;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity var(--layout-transition-duration) var(--layout-transition-easing),
+    visibility var(--layout-transition-duration) var(--layout-transition-easing);
+}
+
+.app-layout__sidebar-overlay--visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* =====================================================
+   Main Content Area
+   ===================================================== */
+
+.app-layout__main {
+  grid-area: main;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--color-bg-primary);
+}
+
+/* =====================================================
+   Mobile Header
+   ===================================================== */
+
+.app-layout__header {
+  grid-area: header;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--color-bg-secondary);
+  border-bottom: 1px solid var(--color-border-primary);
+  min-height: 56px;
+}
+
+/* Hide header on desktop (it's in the grid area declaration) */
+.app-layout--desktop .app-layout__header {
+  display: none;
+}
+
+/* =====================================================
+   Safe Areas (for notched devices)
+   ===================================================== */
+
+/* Apply safe area padding on mobile */
+@supports (padding: env(safe-area-inset-top)) {
+  .app-layout--mobile .app-layout__header {
+    padding-top: calc(12px + env(safe-area-inset-top));
+    padding-left: calc(16px + env(safe-area-inset-left));
+    padding-right: calc(16px + env(safe-area-inset-right));
+  }
+
+  .app-layout--mobile .app-layout__sidebar {
+    padding-top: env(safe-area-inset-top);
+    padding-left: env(safe-area-inset-left);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .app-layout--mobile .app-layout__main {
+    /* Main content respects safe areas */
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+/* =====================================================
+   Keyboard Navigation
+   ===================================================== */
+
+/* Focus visible styles for keyboard navigation */
+.app-layout__sidebar:focus-visible,
+.app-layout__main:focus-visible {
+  outline: 2px solid var(--color-accent-green);
+  outline-offset: -2px;
+}
+
+/* =====================================================
+   Reduced Motion
+   ===================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  .app-layout__sidebar,
+  .app-layout__sidebar-overlay {
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* =====================================================
+   Print Styles
+   ===================================================== */
+
+@media print {
+  .app-layout {
+    display: block;
+    height: auto;
+    overflow: visible;
+  }
+
+  .app-layout__sidebar,
+  .app-layout__sidebar-overlay,
+  .app-layout__header {
+    display: none !important;
+  }
+
+  .app-layout__main {
+    display: block;
+    overflow: visible;
+  }
+}

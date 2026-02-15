@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, memo } from 'react';
 import { BalloonsClient } from '../../generated/balloons-client';
 import type { ConnectionState, SessionInfo, TurnInfo, TaskInfo, Unsubscribe, ToolUseStartedEvent, ToolInputDeltaEvent, ToolResultEvent, ContentDeltaEvent, TurnStartedEvent, TurnFinishedEvent } from '../../generated/balloons-client';
 import { MarkdownContent } from './MarkdownContent';
+import { AppLayout, useLayout, useTheme } from './components/layout';
 
 // Tool use state tracked during streaming
 interface ToolUseState {
@@ -150,6 +151,22 @@ const Turn = memo(function Turn({
     console.log('[Turn]', turn.idx, 'exchangeId:', turn.exchangeId?.slice(0, 8), 'total toolUses:', toolUses.length, 'for this turn:', turnToolUses.length);
   }
 
+  // Render tool results (role === 'tool') as a collapsible result block
+  if (turn.role === 'tool') {
+    return (
+      <div className={`turn tool ${turn.streaming ? 'streaming' : ''}`}>
+        <div className="turn-role">tool result</div>
+        <div className="turn-content">
+          <Collapsible title="Result" defaultExpanded={false}>
+            <pre className="tool-use-result">
+              <code>{turn.content}</code>
+            </pre>
+          </Collapsible>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`turn ${turn.role} ${turn.streaming ? 'streaming' : ''}`}>
       <div className="turn-role">{turn.role}</div>
@@ -221,7 +238,6 @@ export function App() {
   const [turns, setTurns] = useState<TurnInfo[]>([]);
   const [message, setMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [queuedMessageCount, setQueuedMessageCount] = useState(0);
   const [streamingTask, setStreamingTask] = useState<TaskInfo | null>(null);
   const [toolUses, setToolUses] = useState<ToolUseState[]>([]);
@@ -268,9 +284,7 @@ export function App() {
           if (currentId) {
             setSelectedSessionId(currentId);
             const sessionTurns = await client.tree.getTurns(currentId);
-            // Filter out tool turns - they're displayed inline via tool use events
-            const filteredTurns = sessionTurns.filter(t => t.role !== 'tool');
-            setTurns(filteredTurns);
+            setTurns(sessionTurns);
 
             // Load queue state for the current session
             const queueInfo = await client.queue.getQueue(currentId);
@@ -320,9 +334,7 @@ export function App() {
           // If this is the selected session, refresh turns too
           if (data.sessionId === selectedSessionId) {
             const sessionTurns = await client.tree.getTurns(data.sessionId);
-            // Filter out tool turns - they're displayed inline via tool use events
-            const filteredTurns = sessionTurns.filter(t => t.role !== 'tool');
-            setTurns(filteredTurns);
+            setTurns(sessionTurns);
           }
         })
       );
@@ -753,15 +765,12 @@ export function App() {
     if (!client || connectionState !== 'connected') return;
 
     setSelectedSessionId(sessionId);
-    setSidebarOpen(false); // Close sidebar on mobile after selection
     setError(null);
     setToolUses([]); // Clear tool uses when switching sessions
 
     try {
       const sessionTurns = await client.tree.getTurns(sessionId);
-      // Filter out tool turns - they're displayed inline via tool use events
-      const filteredTurns = sessionTurns.filter(t => t.role !== 'tool');
-      setTurns(filteredTurns);
+      setTurns(sessionTurns);
 
       // Load queue state for the session
       const queueInfo = await client.queue.getQueue(sessionId);
@@ -1011,73 +1020,25 @@ export function App() {
   console.log('Render - selectedSession:', selectedSession?.id?.slice(0,8), 'isStreaming:', selectedSession?.isStreaming);
 
   return (
-    <div className="app">
+    <AppLayout>
       {/* Mobile header */}
-      <header className="mobile-header">
-        <button className="menu-button" onClick={() => setSidebarOpen(true)} aria-label="Open menu">
-          ☰
-        </button>
-        <div className={`connection-status ${connectionState}`} title={connectionState} />
-        <h1>Balloons</h1>
-      </header>
+      <AppLayout.Header>
+        <MobileHeader connectionState={connectionState} />
+      </AppLayout.Header>
 
-      {/* Sidebar overlay for mobile */}
-      <div
-        className={`sidebar-overlay ${sidebarOpen ? 'visible' : ''}`}
-        onClick={() => setSidebarOpen(false)}
-      />
+      {/* Sidebar */}
+      <AppLayout.Sidebar>
+        <SidebarContent
+          connectionState={connectionState}
+          sessions={sessions}
+          selectedSessionId={selectedSessionId}
+          streamingTask={streamingTask}
+          onSelectSession={handleSelectSession}
+        />
+      </AppLayout.Sidebar>
 
-      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
-        <header className="sidebar-header">
-          <div className={`connection-status ${connectionState}`} title={connectionState} />
-          <h1>Balloons</h1>
-          <button className="close-button" onClick={() => setSidebarOpen(false)} aria-label="Close menu">
-            ✕
-          </button>
-        </header>
-
-        <div className="session-list">
-          {sessions.length === 0 && connectionState === 'connected' && (
-            <div style={{ padding: '16px', color: '#666', textAlign: 'center' }}>
-              No sessions
-            </div>
-          )}
-
-          {sessions.map(session => {
-            const isSelected = session.id === selectedSessionId;
-            const showStreamingDetails = isSelected && session.isStreaming && streamingTask;
-            return (
-              <div
-                key={session.id}
-                className={`session-item ${isSelected ? 'selected' : ''} ${session.isStreaming ? 'streaming' : ''}`}
-                onClick={() => handleSelectSession(session.id)}
-              >
-                <div className="session-title">
-                  {session.title || `Session ${session.id.slice(0, 8)}`}
-                </div>
-                <div className="session-meta">
-                  {session.messageCount} messages
-                  {session.isStreaming && !showStreamingDetails && ' • streaming'}
-                </div>
-                {showStreamingDetails && (
-                  <div className="session-streaming-info">
-                    <span className="streaming-badge">
-                      <span className="streaming-dot" />
-                      {streamingTask.toolName ? (
-                        <span>{streamingTask.toolName}</span>
-                      ) : (
-                        <span>{formatTokens(streamingTask.tokensStreamed)} tokens</span>
-                      )}
-                    </span>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </aside>
-
-      <main className="main-panel">
+      {/* Main content */}
+      <AppLayout.Main>
         {error && (
           <div className="error-message">
             {error}
@@ -1214,7 +1175,118 @@ export function App() {
             </div>
           </>
         )}
-      </main>
-    </div>
+      </AppLayout.Main>
+    </AppLayout>
+  );
+}
+
+// ============================================================================
+// Header and Sidebar Components (extracted to use layout context)
+// ============================================================================
+
+interface MobileHeaderProps {
+  connectionState: ConnectionState;
+}
+
+function MobileHeader({ connectionState }: MobileHeaderProps) {
+  const { openSidebar } = useLayout();
+
+  return (
+    <>
+      <button className="menu-button" onClick={openSidebar} aria-label="Open menu">
+        ☰
+      </button>
+      <div className={`connection-status ${connectionState}`} title={connectionState} />
+      <h1>Balloons</h1>
+    </>
+  );
+}
+
+interface SidebarContentProps {
+  connectionState: ConnectionState;
+  sessions: SessionInfo[];
+  selectedSessionId: string | null;
+  streamingTask: TaskInfo | null;
+  onSelectSession: (sessionId: string) => void;
+}
+
+function SidebarContent({
+  connectionState,
+  sessions,
+  selectedSessionId,
+  streamingTask,
+  onSelectSession,
+}: SidebarContentProps) {
+  const { closeSidebar, layoutMode } = useLayout();
+  const { resolvedTheme, toggleTheme } = useTheme();
+
+  const handleSelectSession = useCallback((sessionId: string) => {
+    onSelectSession(sessionId);
+    // Close sidebar on mobile after selection
+    if (layoutMode === 'mobile') {
+      closeSidebar();
+    }
+  }, [onSelectSession, closeSidebar, layoutMode]);
+
+  return (
+    <>
+      <header className="sidebar-header">
+        <div className={`connection-status ${connectionState}`} title={connectionState} />
+        <h1>Balloons</h1>
+        <button
+          className="theme-toggle"
+          onClick={toggleTheme}
+          aria-label={`Switch to ${resolvedTheme === 'dark' ? 'light' : 'dark'} theme`}
+          title={`Switch to ${resolvedTheme === 'dark' ? 'light' : 'dark'} theme`}
+        >
+          {resolvedTheme === 'dark' ? '☀️' : '🌙'}
+        </button>
+        {layoutMode === 'mobile' && (
+          <button className="close-button" onClick={closeSidebar} aria-label="Close menu">
+            ✕
+          </button>
+        )}
+      </header>
+
+      <div className="session-list">
+        {sessions.length === 0 && connectionState === 'connected' && (
+          <div style={{ padding: '16px', color: '#666', textAlign: 'center' }}>
+            No sessions
+          </div>
+        )}
+
+        {sessions.map(session => {
+          const isSelected = session.id === selectedSessionId;
+          const showStreamingDetails = isSelected && session.isStreaming && streamingTask;
+          return (
+            <div
+              key={session.id}
+              className={`session-item ${isSelected ? 'selected' : ''} ${session.isStreaming ? 'streaming' : ''}`}
+              onClick={() => handleSelectSession(session.id)}
+            >
+              <div className="session-title">
+                {session.title || `Session ${session.id.slice(0, 8)}`}
+              </div>
+              <div className="session-meta">
+                {session.messageCount} messages
+                {session.isStreaming && !showStreamingDetails && ' • streaming'}
+              </div>
+              {showStreamingDetails && (
+                <div className="session-streaming-info">
+                  <span className="streaming-badge">
+                    <span className="streaming-dot" />
+                    {streamingTask.toolName ? (
+                      <span>{streamingTask.toolName}</span>
+                    ) : (
+                      <span>{formatTokens(streamingTask.tokensStreamed)} tokens</span>
+                    )}
+                  </span>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </>
   );
 }

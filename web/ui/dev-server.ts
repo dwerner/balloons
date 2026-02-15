@@ -5,8 +5,14 @@ import { join, dirname } from "path";
 const projectDir = import.meta.dir;
 const webDir = dirname(projectDir); // web/
 
+// Build outputs
+interface BuildOutput {
+  js: string;
+  css: string;
+}
+
 // Build the app bundle
-async function buildApp(): Promise<string | null> {
+async function buildApp(): Promise<BuildOutput | null> {
   const entrypoint = join(projectDir, "src/main.tsx");
 
   const result = await Bun.build({
@@ -27,12 +33,23 @@ async function buildApp(): Promise<string | null> {
     return null;
   }
 
-  const output = result.outputs[0];
-  return output ? await output.text() : null;
+  let js = "";
+  let css = "";
+
+  for (const output of result.outputs) {
+    const text = await output.text();
+    if (output.kind === "entry-point") {
+      js = text;
+    } else if (output.kind === "asset" && output.path.endsWith(".css")) {
+      css = text;
+    }
+  }
+
+  return { js, css };
 }
 
 // Initial build
-let bundleCode = await buildApp();
+let buildOutput = await buildApp();
 
 // Watch for changes and rebuild
 const dirsToWatch = [
@@ -43,11 +60,11 @@ const dirsToWatch = [
 for (const dir of dirsToWatch) {
   try {
     watch(dir, { recursive: true }, async (event, filename) => {
-      if (filename?.endsWith(".ts") || filename?.endsWith(".tsx")) {
+      if (filename?.endsWith(".ts") || filename?.endsWith(".tsx") || filename?.endsWith(".css")) {
         console.log(`File changed: ${filename}, rebuilding...`);
-        const newBundle = await buildApp();
-        if (newBundle) {
-          bundleCode = newBundle;
+        const newBuild = await buildApp();
+        if (newBuild) {
+          buildOutput = newBuild;
           console.log("Rebuild complete");
         }
       }
@@ -72,8 +89,8 @@ const server = Bun.serve({
 
     // Serve the bundled JavaScript
     if (path === "/src/main.tsx" || path === "/bundle.js") {
-      if (bundleCode) {
-        return new Response(bundleCode, {
+      if (buildOutput?.js) {
+        return new Response(buildOutput.js, {
           headers: {
             "Content-Type": "application/javascript",
             "Cache-Control": "no-cache",
@@ -81,6 +98,21 @@ const server = Bun.serve({
         });
       }
       return new Response("Build failed", { status: 500 });
+    }
+
+    // Serve the bundled CSS
+    if (path === "/bundle.css") {
+      if (buildOutput?.css) {
+        return new Response(buildOutput.css, {
+          headers: {
+            "Content-Type": "text/css",
+            "Cache-Control": "no-cache",
+          },
+        });
+      }
+      return new Response("/* No CSS */", {
+        headers: { "Content-Type": "text/css" },
+      });
     }
 
     // Try to serve static files
