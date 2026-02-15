@@ -126,18 +126,78 @@ class ClaudeRunner(BaseRunner):
     def _parse_balloons_tools(self, text: str) -> list[tuple[str, str, dict]]:
         """Parse all <balloons-tool> blocks from text.
 
+        Only matches tool calls that appear to be actual invocations (not examples
+        in documentation or code blocks). A tool call is considered "real" if it
+        appears after the last code fence or is at the end of the response.
+
         Args:
             text: Text that may contain one or more balloons-tool blocks
 
         Returns:
             List of (tool_name, tool_id, args) tuples for each valid tool call found
         """
-        matches = BALLOONS_TOOL_RE.findall(text)
-        if not matches:
+        # Find all potential matches first
+        all_matches = list(BALLOONS_TOOL_RE.finditer(text))
+        if not all_matches:
+            debug_log.debug(
+                "No balloons-tool blocks found in text",
+                category="tool",
+                details={"text_len": len(text), "text_preview": text[-500:] if len(text) > 500 else text},
+                run_id=self._run_id,
+            )
             return []
 
+        debug_log.info(
+            f"Found {len(all_matches)} potential balloons-tool block(s)",
+            category="tool",
+            details={
+                "text_len": len(text),
+                "match_positions": [(m.start(), m.end()) for m in all_matches],
+            },
+            run_id=self._run_id,
+        )
+
+        # Filter out matches that are inside code fences (```...```)
+        # This prevents matching example tags in documentation
+        def is_inside_code_fence(pos: int) -> bool:
+            """Check if position is inside a code fence."""
+            # Count code fence markers before this position
+            text_before = text[:pos]
+            # Match both ``` and ~~~ style fences
+            fence_markers = len(re.findall(r'^```|^~~~', text_before, re.MULTILINE))
+            # If odd number of markers, we're inside a fence
+            return fence_markers % 2 == 1
+
+        # Filter matches - only keep those outside code fences
+        valid_matches = []
+        for match in all_matches:
+            if is_inside_code_fence(match.start()):
+                debug_log.debug(
+                    f"Skipping balloons-tool block inside code fence",
+                    category="tool",
+                    details={"position": match.start(), "content_preview": match.group(1)[:100]},
+                    run_id=self._run_id,
+                )
+                continue
+            valid_matches.append(match)
+
+        if not valid_matches:
+            debug_log.info(
+                f"All {len(all_matches)} balloons-tool blocks were inside code fences (examples)",
+                category="tool",
+                run_id=self._run_id,
+            )
+            return []
+
+        debug_log.info(
+            f"Processing {len(valid_matches)} valid balloons-tool block(s) (filtered {len(all_matches) - len(valid_matches)} in code fences)",
+            category="tool",
+            run_id=self._run_id,
+        )
+
         results = []
-        for captured in matches:
+        for match in valid_matches:
+            captured = match.group(1)
             try:
                 debug_log.info(
                     f"Parsing balloons-tool JSON",
@@ -157,11 +217,17 @@ class ClaudeRunner(BaseRunner):
                     )
                 tool_id = f"balloons-{uuid.uuid4().hex[:12]}"
                 results.append((tool_name, tool_id, tool_args))
+                debug_log.info(
+                    f"Successfully parsed balloons-tool: {tool_name}",
+                    category="tool",
+                    details={"tool_id": tool_id, "args_keys": list(tool_args.keys())},
+                    run_id=self._run_id,
+                )
             except json.JSONDecodeError as e:
                 debug_log.warning(
                     f"Failed to parse balloons-tool JSON: {e}",
                     category="tool",
-                    details={"captured": captured[:500]},
+                    details={"captured": captured[:500], "error_pos": e.pos if hasattr(e, 'pos') else None},
                     run_id=self._run_id,
                 )
                 # Continue to try other matches
@@ -618,18 +684,40 @@ class ClaudeRunner(BaseRunner):
                                 opening_count = self._text_buffer.count("<balloons-tool>")
                                 closing_count = self._text_buffer.count("</balloons-tool>")
 
+                                debug_log.debug(
+                                    f"Detected balloons-tool tags: {opening_count} open, {closing_count} close",
+                                    category="tool",
+                                    details={"buffer_len": len(self._text_buffer)},
+                                    run_id=self._run_id,
+                                )
+
                                 if opening_count == closing_count:
                                     debug_log.info(
-                                        f"Found {opening_count} complete balloons-tool block(s)",
+                                        f"Found {opening_count} complete balloons-tool block(s) - checking for real tool calls",
                                         category="tool",
                                         details={"buffer_len": len(self._text_buffer), "buffer_preview": self._text_buffer[:500]},
                                         run_id=self._run_id,
                                     )
-                                    async for event in self._handle_balloons_tools(self._text_buffer, working_dir):
-                                        yield event
+                                    # Parse and execute - _parse_balloons_tools filters out examples
+                                    tool_calls = self._parse_balloons_tools(self._text_buffer)
+                                    if tool_calls:
+                                        debug_log.info(
+                                            f"Executing {len(tool_calls)} real balloons-tool call(s)",
+                                            category="tool",
+                                            details={"tools": [tc[0] for tc in tool_calls]},
+                                            run_id=self._run_id,
+                                        )
+                                        async for event in self._handle_balloons_tools(self._text_buffer, working_dir):
+                                            yield event
+                                        # Mark that we're waiting for Claude to respond to the tool result
+                                        awaiting_balloons_tool_response = True
+                                    else:
+                                        debug_log.info(
+                                            f"All {opening_count} balloons-tool blocks were examples (in code fences), not executing",
+                                            category="tool",
+                                            run_id=self._run_id,
+                                        )
                                     self._text_buffer = ""
-                                    # Mark that we're waiting for Claude to respond to the tool result
-                                    awaiting_balloons_tool_response = True
 
                     elif block_type == "tool_use":
                         tool_use_id = block.get("id", "")

@@ -7,8 +7,9 @@ from textual.widgets import Static, LoadingIndicator
 from textual.containers import VerticalScroll, Center
 from textual.reactive import reactive
 from textual.message import Message
-from textual.events import Click, Key
+from textual.events import Click, Key, Resize
 from textual.scrollbar import ScrollBarRender, ScrollBar
+from textual.timer import Timer
 from rich.markdown import Markdown
 from rich.color import Color
 from rich.console import RenderableType, Group
@@ -936,7 +937,23 @@ class ChatLogView(VerticalScroll):
         color: $text-muted;
         margin-top: 1;
     }
+
+    /* When resizing, pause layout of children by not displaying them.
+       This prevents expensive relayout operations during resize drag.
+       After resize completes (debounced), children are shown again. */
+    ChatLogView.resizing > * {
+        display: none;
+    }
+    /* Keep header visible during resize for context */
+    ChatLogView.resizing > SessionHeader {
+        display: block;
+    }
     """
+
+    # Debounce delay for resize events (ms)
+    # Lower values = faster response but more frequent relayouts
+    # Higher values = longer blank period but smoother dragging
+    RESIZE_DEBOUNCE_MS = 80
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -964,6 +981,9 @@ class ChatLogView(VerticalScroll):
             get_children=lambda: iter(self.children),
             debug_log=debug_log,
         )
+        # Resize debounce timer - pauses layout during resize
+        self._resize_timer: Timer | None = None
+        self._last_size: tuple[int, int] | None = None
 
     async def _on_key(self, event: Key) -> None:
         """Handle key events - colon jumps to text entry."""
@@ -1012,6 +1032,62 @@ class ChatLogView(VerticalScroll):
         """Set up the custom scrollbar renderer when mounted."""
         # Use the marked scrollbar renderer for the vertical scrollbar
         self.vertical_scrollbar.renderer = MarkedScrollBarRender
+        # Initialize last size for resize detection
+        self._last_size = (self.size.width, self.size.height)
+
+    def on_resize(self, event: Resize) -> None:
+        """Handle resize events with debouncing to prevent layout lag.
+
+        During resize (e.g., dragging a splitter), we pause layout of children
+        by adding a 'resizing' CSS class. This prevents expensive relayout
+        operations for each intermediate resize. After the resize completes
+        (debounced), we remove the class and do a single relayout.
+        """
+        new_size = (event.size.width, event.size.height)
+
+        # Only handle width changes - height changes don't cause expensive relayout
+        # because children use full width but natural height
+        if self._last_size is not None and new_size[0] == self._last_size[0]:
+            self._last_size = new_size
+            return
+
+        self._last_size = new_size
+
+        # Cancel any existing debounce timer
+        if self._resize_timer is not None:
+            self._resize_timer.stop()
+            self._resize_timer = None
+
+        # Enter resizing state - children are hidden to skip layout
+        if not self.has_class("resizing"):
+            self.add_class("resizing")
+
+        # Start debounce timer - when it fires, we'll resume normal layout
+        self._resize_timer = self.set_timer(
+            self.RESIZE_DEBOUNCE_MS / 1000.0,
+            self._on_resize_complete,
+        )
+
+    def _on_resize_complete(self) -> None:
+        """Called when resize debounce timer fires - resume normal layout.
+
+        We remove the 'resizing' class which un-hides children, then force
+        a layout refresh. If the user was following (at bottom), we scroll
+        to end to maintain that position.
+        """
+        self._resize_timer = None
+
+        # Remember if we were following before resize
+        was_following = self.following
+
+        self.remove_class("resizing")
+
+        # Force a layout refresh now that resize is complete
+        self.refresh(layout=True)
+
+        # If user was following, scroll to end after layout settles
+        if was_following:
+            self.call_later(lambda: self.scroll_end(animate=False))
 
     def on_message_widget_sentiment_changed(self, event: MessageWidget.SentimentChanged) -> None:
         """Handle sentiment changes from MessageWidget and bubble up as ChatLogView message."""

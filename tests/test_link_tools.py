@@ -628,3 +628,77 @@ I'll analyze the results shortly.'''
         # Both should start with balloons-
         assert results[0][1].startswith("balloons-")
         assert results[1][1].startswith("balloons-")
+
+    def test_parse_balloons_tools_filters_code_fence_examples(self):
+        """Test that balloons-tool blocks inside code fences are ignored (examples)."""
+        runner = ClaudeRunner()
+        text = '''Here's how to use the tool:
+
+```
+<balloons-tool>
+{"name": "example_call", "args": {"this": "is an example"}}
+</balloons-tool>
+```
+
+Now I'll actually call it:
+
+<balloons-tool>
+{"name": "real_call", "args": {"value": 42}}
+</balloons-tool>'''
+
+        results = runner._parse_balloons_tools(text)
+
+        # Should only get the real call, not the example
+        assert len(results) == 1
+        tool_name, tool_id, tool_args = results[0]
+        assert tool_name == "real_call"
+        assert tool_args == {"value": 42}
+
+    def test_parse_balloons_tools_all_in_code_fence(self):
+        """Test that when all blocks are in code fences, nothing is parsed."""
+        runner = ClaudeRunner()
+        text = '''Here are some examples:
+
+```
+<balloons-tool>
+{"name": "example1", "args": {}}
+</balloons-tool>
+```
+
+```
+<balloons-tool>
+{"name": "example2", "args": {}}
+</balloons-tool>
+```'''
+
+        results = runner._parse_balloons_tools(text)
+
+        # No real calls, all examples
+        assert len(results) == 0
+
+    def test_parse_balloons_tools_multiple_in_one_fence(self):
+        """Test that multiple blocks in one code fence are all ignored."""
+        runner = ClaudeRunner()
+        text = '''Examples of multiple calls:
+
+```
+<balloons-tool>
+{"name": "example1", "args": {}}
+</balloons-tool>
+
+<balloons-tool>
+{"name": "example2", "args": {}}
+</balloons-tool>
+```
+
+Real call:
+
+<balloons-tool>
+{"name": "real_call", "args": {}}
+</balloons-tool>'''
+
+        results = runner._parse_balloons_tools(text)
+
+        # Should only get the real call
+        assert len(results) == 1
+        assert results[0][0] == "real_call"
