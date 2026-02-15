@@ -1896,6 +1896,8 @@ class ContextTreeView(Vertical):
         """Flush all pending streaming label updates.
 
         Called by the debounce timer to batch-update all dirty labels at once.
+        Also notifies TreeState of content updates so WebSocket clients receive
+        TURN_UPDATED events for streaming.
         """
         self._streaming_label_timer = None
 
@@ -1914,6 +1916,10 @@ class ContextTreeView(Vertical):
                 continue
 
             text = self._streaming_text.get(text_key, "")
+
+            # Notify TreeState of content update - emits TURN_UPDATED event for WebSocket clients
+            self._state.update_turn_content(session_id, turn_idx, text)
+
             preview = text[:30].replace("\n", " ")
             if len(text) > 30:
                 preview += "..."

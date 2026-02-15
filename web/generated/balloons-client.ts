@@ -259,5 +259,5 @@ export {
   SessionManagerServiceClient,
   GoalTreeStateServiceClient,
   TaskStateServiceClient,
-  Unsubscribe,
 } from './client';
+export type { Unsubscribe } from './client';

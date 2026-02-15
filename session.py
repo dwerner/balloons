@@ -351,11 +351,14 @@ class Session:
         """Delete a turn from the session history.
 
         Returns True if deleted, False if index invalid.
-        Tracks the deleted turn ID for incremental save.
+        Tracks the deleted turn ID for incremental save (only if turn was previously saved).
         """
         if 0 <= turn_index < len(self.turns):
             deleted_turn = self.turns[turn_index]
-            self._deleted_turn_ids.add(deleted_turn.id)
+            # Only track deletion if the turn was previously saved to storage.
+            # Turns created and deleted before any save don't need storage deletion.
+            if deleted_turn.id in self._saved_turn_order:
+                self._deleted_turn_ids.add(deleted_turn.id)
             del self.turns[turn_index]
             return True
         return False
@@ -364,7 +367,7 @@ class Session:
         """Delete multiple turns from the session history.
 
         Deletes in reverse order to preserve indices during deletion.
-        Tracks deleted turn IDs for incremental save.
+        Tracks deleted turn IDs for incremental save (only if turns were previously saved).
 
         Args:
             turn_indices: List of turn indices to delete
@@ -378,7 +381,10 @@ class Session:
         for idx in sorted_indices:
             if 0 <= idx < len(self.turns):
                 deleted_turn = self.turns[idx]
-                self._deleted_turn_ids.add(deleted_turn.id)
+                # Only track deletion if the turn was previously saved to storage.
+                # Turns created and deleted before any save don't need storage deletion.
+                if deleted_turn.id in self._saved_turn_order:
+                    self._deleted_turn_ids.add(deleted_turn.id)
                 del self.turns[idx]
                 deleted_count += 1
         return deleted_count

@@ -50,6 +50,7 @@ from core.stream_state import (
     StreamStatus,
     get_stream_state,
 )
+from core.tree_state import TreeState
 from models import TextBlock, ToolUseBlock, ToolResultBlock
 
 if TYPE_CHECKING:
@@ -180,6 +181,7 @@ class SessionManagerService:
         self._manager = session_manager
         self._stream_state = stream_state or get_stream_state()
         self._task_service = task_state_service
+        self._tree_state: TreeState | None = None
         self._event_handlers: list[Callable[[str, dict], None]] = []
 
         # Event pump state
@@ -215,6 +217,18 @@ class SessionManagerService:
         """
         self._task_service = task_service
 
+    def set_tree_state(self, tree_state: TreeState) -> None:
+        """Set the TreeState for updating turn data when messages are submitted.
+
+        This enables submit_message() to update TreeState so that React frontends
+        can see the new turns via getTurns(). Without this, turns would only be
+        saved to storage but not visible to WebSocket clients querying TreeState.
+
+        Args:
+            tree_state: The TreeState instance to update
+        """
+        self._tree_state = tree_state
+
     def start_event_pump(self) -> None:
         """Start the event pump for relaying streaming events.
 
@@ -239,6 +253,27 @@ class SessionManagerService:
         if self._pump_task and not self._pump_task.done():
             self._pump_task.cancel()
 
+    def release_streaming_context(self, session_id: str) -> bool:
+        """Release ownership of a streaming session to another component (e.g., TUI).
+
+        This removes the streaming context from this service, allowing another
+        component to poll events from the session without race conditions.
+
+        Call this when the TUI wants to take ownership of a session that was
+        submitted via React. The TUI will handle event dispatch and TaskStateService
+        emission.
+
+        Args:
+            session_id: Session to release
+
+        Returns:
+            True if a context was released, False if no context existed
+        """
+        if session_id in self._streaming_contexts:
+            del self._streaming_contexts[session_id]
+            return True
+        return False
+
     async def _event_pump_loop(self) -> None:
         """Main event pump loop - polls sessions and relays events."""
         while self._pump_running:
@@ -252,15 +287,28 @@ class SessionManagerService:
                 await asyncio.sleep(self._pump_interval)
 
     async def _pump_events(self) -> None:
-        """Poll all sessions and relay events to TaskStateService."""
+        """Poll sessions owned by this service and relay events to TaskStateService.
+
+        IMPORTANT: Only polls sessions that have streaming contexts in this service
+        (i.e., sessions where submit_message was called). This prevents stealing
+        events from the TUI's poll loop for sessions started via the TUI.
+        """
         if not self._task_service:
             return
 
-        for session_id, events in self._manager.poll_all():
+        # Only poll sessions we're tracking - don't steal events from TUI
+        for session_id in list(self._streaming_contexts.keys()):
+            runner = self._manager.get_runner(session_id)
+            if not runner:
+                continue
+
+            events = runner.drain_events()
+            if not events:
+                continue
+
             ctx = self._streaming_contexts.get(session_id)
-            if not ctx and events:
-                # Find the streaming context - should have been created by submit_message
-                # If not, skip these events (they're from TUI or other source)
+            if not ctx:
+                # Context was removed (race condition) - skip
                 continue
 
             for event in events:
@@ -885,6 +933,26 @@ class SessionManagerService:
         )
         await session.save()
 
+        # Update TreeState so WebSocket clients can see the new turns via getTurns()
+        if self._tree_state:
+            # Ensure session is loaded in TreeState (it might not be if TUI is viewing a different session)
+            if not self._tree_state.get_session(session_id):
+                self._tree_state.add_session(session, is_current=False)
+            if self._tree_state.get_session(session_id) and self._tree_state.get_session(session_id).turns is None:
+                self._tree_state.load_session(session_id, session)
+
+            # Add user turn to TreeState
+            self._tree_state.start_turn(session_id, turn_index, "user", exchange_id=exchange_id)
+            self._tree_state.update_turn_content(session_id, turn_index, content)
+            # Mark user turn as finished (user turns complete immediately)
+            # Note: We call finish_turn synchronously since user turns don't need async token counting
+            import asyncio
+            asyncio.create_task(self._tree_state.finish_turn(
+                session_id, turn_index, content, TextBlock(text=content), []
+            ))
+            # Start assistant turn (will be streaming)
+            self._tree_state.start_turn(session_id, turn_index + 1, "assistant", exchange_id=exchange_id)
+
         # Register the stream in StreamState for tracking
         self._stream_state.register_session_stream(
             session_id=session_id,
@@ -912,7 +980,7 @@ class SessionManagerService:
         self._emit_event(
             SessionManagerEvent.MESSAGE_SUBMITTED,
             session_id,
-            {"exchange_id": exchange_id, "turn_index": turn_index},
+            {"exchange_id": exchange_id, "turn_index": turn_index, "content": content},
         )
 
         return SubmitMessageResult(

@@ -84,6 +84,12 @@ def generate_client_header() -> str:
 
 import type * as Types from './types';
 
+// Simple request ID generator for JSON-RPC correlation
+let _requestId = 0;
+function generateRequestId(): string {{
+  return String(++_requestId);
+}}
+
 '''
 
 
@@ -264,7 +270,7 @@ def generate_client_class(service: ServiceSpec, registered_types: set[str] = Non
 
     # Call helper
     lines.append("  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {")
-    lines.append("    const id = crypto.randomUUID();")
+    lines.append("    const id = generateRequestId();")
     lines.append("    return new Promise((resolve, reject) => {")
     lines.append("      this.pending.set(id, { resolve, reject });")
     lines.append("      this.ws.send(JSON.stringify({ id, method, params }));")
@@ -309,8 +315,13 @@ def generate_client_class(service: ServiceSpec, registered_types: set[str] = Non
     for event in service.events:
         payload_type = python_to_ts_type(event.payload_type) if event.payload_type else "unknown"
         payload_type = _prefix_custom_types(payload_type, registered_types)
+        # The method name is e.g. "onTurnStarted" but the wire protocol event name is "turnStarted"
+        # Strip the "on" prefix and lowercase the first char to match the server's event names
+        subscribe_name = event.wire_name
+        if subscribe_name.startswith("on") and len(subscribe_name) > 2:
+            subscribe_name = subscribe_name[2].lower() + subscribe_name[3:]
         lines.append(f"  {event.wire_name}(callback: (data: {payload_type}) => void): Unsubscribe {{")
-        lines.append(f"    return this.subscribe('{event.wire_name}', callback);")
+        lines.append(f"    return this.subscribe('{subscribe_name}', callback);")
         lines.append("  }")
         lines.append("")
 

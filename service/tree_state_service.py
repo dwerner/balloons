@@ -111,6 +111,13 @@ class TreeStateService:
         # Map TreeEvent enum to camelCase wire name
         event_name = self._tree_event_to_wire_name(event)
 
+        # Debug: log event handling
+        from core.debug_log import debug_log
+        debug_log.debug(
+            f"TreeStateService relaying event: {event_name}, handlers: {len(self._event_handlers)}",
+            category="websocket",
+        )
+
         for handler in self._event_handlers:
             handler(event_name, data)
 

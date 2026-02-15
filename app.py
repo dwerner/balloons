@@ -378,6 +378,8 @@ class BalloonsApp(App):
         self._ws_server: WsServer | None = None
         # Task state service for emitting streaming events to WebSocket clients
         self._task_service: TaskStateService | None = None
+        # Session manager service for handling submit_message and event pump
+        self._session_service: SessionManagerService | None = None
 
     @property
     def session(self) -> Session | None:
@@ -674,14 +676,23 @@ class BalloonsApp(App):
             # Create and register services with shared state
             tree_service = TreeStateService(self._tree_state)
             queue_service = QueueStateService(self._queue_state)
-            session_service = SessionManagerService(self._manager)
+            self._session_service = SessionManagerService(self._manager)
             goal_service = GoalTreeStateService(self._goal_tree_state)
             # Store task_service as instance variable so we can emit streaming events from poll loop
             self._task_service = TaskStateService(get_stream_state())
 
+            # Wire up event pump: SessionManagerService emits streaming events via TaskStateService
+            self._session_service.set_task_state_service(self._task_service)
+            # Wire up TreeState so React can see turns via getTurns() after submitMessage()
+            self._session_service.set_tree_state(self._tree_state)
+            self._session_service.start_event_pump()
+
+            # Subscribe to MESSAGE_SUBMITTED events so TUI can track streams started by React frontend
+            self._session_service.add_event_handler(self._on_session_manager_event)
+
             self._ws_server.register_service(tree_service)
             self._ws_server.register_service(queue_service)
-            self._ws_server.register_service(session_service)
+            self._ws_server.register_service(self._session_service)
             self._ws_server.register_service(goal_service)
             self._ws_server.register_service(self._task_service)
 
@@ -699,13 +710,115 @@ class BalloonsApp(App):
         """Stop the WebSocket server if running."""
         if self._ws_server is not None:
             try:
+                # Stop event pump and remove event handler first
+                if self._session_service is not None:
+                    self._session_service.stop_event_pump()
+                    self._session_service.remove_event_handler(self._on_session_manager_event)
                 await self._ws_server.stop()
                 debug_log.info("WebSocket server stopped", category="websocket")
             except Exception as e:
                 debug_log.error(f"Error stopping WebSocket server: {e}", category="websocket")
             finally:
+                self._session_service = None
                 self._task_service = None
                 self._ws_server = None
+
+    def _on_session_manager_event(self, event_name: str, data: dict) -> None:
+        """Handle events from SessionManagerService (for React frontend integration).
+
+        When React frontend calls submitMessage(), we need to create a streaming
+        context in the TUI so the poll loop can dispatch events to update the UI.
+
+        IMPORTANT: We take ownership of the session from the event pump by removing
+        its streaming context. This prevents both the TUI and event pump from
+        polling the same runner and stealing each other's events.
+        """
+        if event_name == "messageSubmitted":
+            session_id = data.get("session_id")
+            exchange_id = data.get("exchange_id", "")
+            turn_index = data.get("turn_index", 0)
+            content = data.get("content", "")
+
+            # Only create context if we don't already have one (i.e., this came from React, not TUI)
+            if session_id and session_id not in self._streaming_contexts:
+                debug_log.info(
+                    f"Creating streaming context for external submission",
+                    category="websocket",
+                    session_id=session_id,
+                    details={"exchange_id": exchange_id[:8] if exchange_id else "", "turn_index": turn_index},
+                )
+
+                # Determine if this is the active session
+                is_active = self.session and self.session.id == session_id
+
+                # Create streaming context so poll loop can track this session
+                ctx = StreamingContext(
+                    session_id=session_id,
+                    user_turn_idx=turn_index,
+                    assistant_turn_idx=turn_index + 1,
+                    prompt=content,
+                    is_active=is_active,
+                    exchange_id=exchange_id,
+                )
+                self._streaming_contexts[session_id] = ctx
+
+                # Remove context from SessionManagerService event pump so TUI owns the events
+                # This prevents race condition where both poll the same runner
+                if self._session_service:
+                    self._session_service.release_streaming_context(session_id)
+
+                # Update UI state if this is the active session
+                if is_active:
+                    # Schedule UI updates asynchronously
+                    asyncio.create_task(
+                        self._setup_external_streaming_ui(session_id, content, exchange_id, turn_index)
+                    )
+
+    async def _setup_external_streaming_ui(self, session_id: str, content: str, exchange_id: str, turn_index: int) -> None:
+        """Set up UI for streaming that was started externally (from React).
+
+        This is called when React frontend submits a message. The session already
+        has the user message added by SessionManagerService, so we just need to
+        update the UI to reflect the current state.
+        """
+        try:
+            chat_log = self.query_one("#chat-log", ChatLogView)
+            context_tree = self.query_one("#context-tree", ContextTreeView)
+            input_box = self.query_one("#input-box", InputBox)
+            status_bar = self.query_one("#status-bar", StatusBar)
+
+            # Add the user turn to the context tree (message was added by SessionManagerService)
+            context_tree.start_turn(session_id, turn_index, "user", exchange_id=exchange_id)
+            await context_tree.finish_turn(
+                session_id, turn_index, content, TextBlock(text=content), []
+            )
+
+            # Start the assistant turn in tree (with same exchange_id)
+            assistant_turn_idx = turn_index + 1
+            context_tree.start_turn(session_id, assistant_turn_idx, "assistant", exchange_id=exchange_id)
+
+            # Mark session as streaming in tree
+            context_tree.set_session_streaming(session_id, True)
+            self._tree_state.start_streaming(session_id)
+            self._update_streaming_count()
+
+            # Set streaming mode in UI
+            input_box.set_streaming_mode(True)
+            status_bar.set_streaming(True)
+            self.streaming = True
+
+            # Add user message to chat display
+            chat_log.add_user_message(content)
+
+            # Start assistant message display
+            debug_event("add_assistant_message (external streaming starts)")
+            chat_log.add_assistant_message()
+        except Exception as e:
+            debug_log.error(
+                f"Failed to setup external streaming UI: {e}",
+                category="websocket",
+                session_id=session_id,
+            )
 
     def _on_tree_state_event(self, event: TreeEvent, data: dict) -> None:
         """Handle state changes from TreeState that affect token counts and UI."""

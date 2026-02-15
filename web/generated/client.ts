@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-14T11:37:46.677320
+// Generated: 2026-02-14T17:17:33.137477
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -9,6 +9,12 @@
 // To add new methods/events, add @ws_expose/@ws_event decorators in service modules.
 
 import type * as Types from './types';
+
+// Simple request ID generator for JSON-RPC correlation
+let _requestId = 0;
+function generateRequestId(): string {
+  return String(++_requestId);
+}
 
 export type Unsubscribe = () => void;
 
@@ -248,7 +254,7 @@ export class TreeStateServiceClient implements TreeStateService {
   }
 
   private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
-    const id = crypto.randomUUID();
+    const id = generateRequestId();
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       this.ws.send(JSON.stringify({ id, method, params }));
@@ -322,43 +328,43 @@ export class TreeStateServiceClient implements TreeStateService {
   }
 
   onContextModeChanged(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('onContextModeChanged', callback);
+    return this.subscribe('contextModeChanged', callback);
   }
 
   onSessionAdded(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('onSessionAdded', callback);
+    return this.subscribe('sessionAdded', callback);
   }
 
   onSessionRemoved(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('onSessionRemoved', callback);
+    return this.subscribe('sessionRemoved', callback);
   }
 
   onSessionSelected(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('onSessionSelected', callback);
+    return this.subscribe('sessionSelected', callback);
   }
 
   onSessionUpdated(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('onSessionUpdated', callback);
+    return this.subscribe('sessionUpdated', callback);
   }
 
   onStreamingStarted(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('onStreamingStarted', callback);
+    return this.subscribe('streamingStarted', callback);
   }
 
   onStreamingStopped(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('onStreamingStopped', callback);
+    return this.subscribe('streamingStopped', callback);
   }
 
   onTurnFinished(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('onTurnFinished', callback);
+    return this.subscribe('turnFinished', callback);
   }
 
   onTurnStarted(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('onTurnStarted', callback);
+    return this.subscribe('turnStarted', callback);
   }
 
   onTurnUpdated(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('onTurnUpdated', callback);
+    return this.subscribe('turnUpdated', callback);
   }
 
 }
@@ -594,7 +600,7 @@ export class QueueStateServiceClient implements QueueStateService {
   }
 
   private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
-    const id = crypto.randomUUID();
+    const id = generateRequestId();
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       this.ws.send(JSON.stringify({ id, method, params }));
@@ -668,35 +674,35 @@ export class QueueStateServiceClient implements QueueStateService {
   }
 
   onFullRebuild(callback: (data: Types.QueueEventData) => void): Unsubscribe {
-    return this.subscribe('onFullRebuild', callback);
+    return this.subscribe('fullRebuild', callback);
   }
 
   onMessageAdded(callback: (data: Types.QueueEventData) => void): Unsubscribe {
-    return this.subscribe('onMessageAdded', callback);
+    return this.subscribe('messageAdded', callback);
   }
 
   onMessageRemoved(callback: (data: Types.QueueEventData) => void): Unsubscribe {
-    return this.subscribe('onMessageRemoved', callback);
+    return this.subscribe('messageRemoved', callback);
   }
 
   onMessageUpdated(callback: (data: Types.QueueEventData) => void): Unsubscribe {
-    return this.subscribe('onMessageUpdated', callback);
+    return this.subscribe('messageUpdated', callback);
   }
 
   onPauseToggled(callback: (data: Types.QueueEventData) => void): Unsubscribe {
-    return this.subscribe('onPauseToggled', callback);
+    return this.subscribe('pauseToggled', callback);
   }
 
   onQueueCleared(callback: (data: Types.QueueEventData) => void): Unsubscribe {
-    return this.subscribe('onQueueCleared', callback);
+    return this.subscribe('queueCleared', callback);
   }
 
   onQueueDrained(callback: (data: Types.QueueEventData) => void): Unsubscribe {
-    return this.subscribe('onQueueDrained', callback);
+    return this.subscribe('queueDrained', callback);
   }
 
   onSessionChanged(callback: (data: Types.QueueEventData) => void): Unsubscribe {
-    return this.subscribe('onSessionChanged', callback);
+    return this.subscribe('sessionChanged', callback);
   }
 
 }
@@ -706,6 +712,10 @@ export class QueueStateServiceClient implements QueueStateService {
  * 
  * Provides operations for creating, switching, listing, and deleting sessions.
  * Also exposes streaming status for all sessions.
+ * 
+ * For frontend interaction, use submit_message() to send prompts and receive
+ * streaming events via the wired TaskStateService. The event pump automatically
+ * converts SessionRunner events to TaskStateService events.
  */
 export interface SessionManagerService {
   /**
@@ -799,6 +809,34 @@ export interface SessionManagerService {
   listSessions(): Promise<Types.ManagedSessionInfo[]>;
 
   /**
+   * Submit a message to a session and start streaming the response.
+   * 
+   * This is the primary way for frontends to interact with the LLM.
+   * The message is added to the session and streaming begins immediately
+   * (unless queue=True, in which case it waits for current stream to finish).
+   * 
+   * After calling this method, listen for streaming events on TaskStateService:
+   * - onContentDelta: Streaming text chunks
+   * - onToolUseStarted: Tool execution beginning
+   * - onToolResult: Tool execution completed
+   * - onTurnFinished: Exchange completed
+   * 
+   * Args:
+   * session_id: ID of the session to submit to
+   * content: The message content (user prompt)
+   * queue: If True, queue the message instead of starting immediately.
+   * If False and session is already streaming, returns error.
+   * allowed_tools: List of tool names to allow, or None for all tools
+   * 
+   * Returns:
+   * SubmitMessageResult with IDs for tracking the stream
+   * 
+   * Raises:
+   * ValueError: If session not found or already streaming (when queue=False)
+   */
+  submitMessage(sessionId: string, content: string, queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult>;
+
+  /**
    * Switch to a different session.
    * 
    * Args:
@@ -812,6 +850,11 @@ export interface SessionManagerService {
 }
 
 export interface SessionManagerEvents {
+  /**
+   * Emitted when a message is submitted and streaming begins.
+   */
+  onMessageSubmitted(callback: (data: Types.SubmitMessageResult) => void): Unsubscribe;
+
   /**
    * Emitted when a new session is created.
    */
@@ -873,7 +916,7 @@ export class SessionManagerServiceClient implements SessionManagerService {
   }
 
   private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
-    const id = crypto.randomUUID();
+    const id = generateRequestId();
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       this.ws.send(JSON.stringify({ id, method, params }));
@@ -926,32 +969,40 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.call('listSessions', {  });
   }
 
+  async submitMessage(sessionId: string, content: string, queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult> {
+    return this.call('submitMessage', { sessionId: sessionId, content: content, queue: queue, allowedTools: allowedTools });
+  }
+
   async switchSession(sessionId: string): Promise<boolean> {
     return this.call('switchSession', { sessionId: sessionId });
   }
 
+  onMessageSubmitted(callback: (data: Types.SubmitMessageResult) => void): Unsubscribe {
+    return this.subscribe('messageSubmitted', callback);
+  }
+
   onSessionCreated(callback: (data: Types.SessionEventData) => void): Unsubscribe {
-    return this.subscribe('onSessionCreated', callback);
+    return this.subscribe('sessionCreated', callback);
   }
 
   onSessionDeleted(callback: (data: Types.SessionEventData) => void): Unsubscribe {
-    return this.subscribe('onSessionDeleted', callback);
+    return this.subscribe('sessionDeleted', callback);
   }
 
   onSessionSwitched(callback: (data: Types.SessionEventData) => void): Unsubscribe {
-    return this.subscribe('onSessionSwitched', callback);
+    return this.subscribe('sessionSwitched', callback);
   }
 
   onSessionUpdated(callback: (data: Types.SessionEventData) => void): Unsubscribe {
-    return this.subscribe('onSessionUpdated', callback);
+    return this.subscribe('sessionUpdated', callback);
   }
 
   onStreamingStarted(callback: (data: Types.SessionEventData) => void): Unsubscribe {
-    return this.subscribe('onStreamingStarted', callback);
+    return this.subscribe('streamingStarted', callback);
   }
 
   onStreamingStopped(callback: (data: Types.SessionEventData) => void): Unsubscribe {
-    return this.subscribe('onStreamingStopped', callback);
+    return this.subscribe('streamingStopped', callback);
   }
 
 }
@@ -1397,7 +1448,7 @@ export class GoalTreeStateServiceClient implements GoalTreeStateService {
   }
 
   private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
-    const id = crypto.randomUUID();
+    const id = generateRequestId();
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       this.ws.send(JSON.stringify({ id, method, params }));
@@ -1559,59 +1610,59 @@ export class GoalTreeStateServiceClient implements GoalTreeStateService {
   }
 
   onEntitySelected(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('onEntitySelected', callback);
+    return this.subscribe('entitySelected', callback);
   }
 
   onFullRebuild(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('onFullRebuild', callback);
+    return this.subscribe('fullRebuild', callback);
   }
 
   onGoalAdded(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('onGoalAdded', callback);
+    return this.subscribe('goalAdded', callback);
   }
 
   onGoalRemoved(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('onGoalRemoved', callback);
+    return this.subscribe('goalRemoved', callback);
   }
 
   onGoalUpdated(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('onGoalUpdated', callback);
+    return this.subscribe('goalUpdated', callback);
   }
 
   onPlanAdded(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('onPlanAdded', callback);
+    return this.subscribe('planAdded', callback);
   }
 
   onPlanRemoved(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('onPlanRemoved', callback);
+    return this.subscribe('planRemoved', callback);
   }
 
   onPlanUpdated(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('onPlanUpdated', callback);
+    return this.subscribe('planUpdated', callback);
   }
 
   onSessionBound(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('onSessionBound', callback);
+    return this.subscribe('sessionBound', callback);
   }
 
   onSessionUnbound(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('onSessionUnbound', callback);
+    return this.subscribe('sessionUnbound', callback);
   }
 
   onSessionUpdated(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('onSessionUpdated', callback);
+    return this.subscribe('sessionUpdated', callback);
   }
 
   onTodoAdded(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('onTodoAdded', callback);
+    return this.subscribe('todoAdded', callback);
   }
 
   onTodoRemoved(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('onTodoRemoved', callback);
+    return this.subscribe('todoRemoved', callback);
   }
 
   onTodoUpdated(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('onTodoUpdated', callback);
+    return this.subscribe('todoUpdated', callback);
   }
 
 }
@@ -1861,6 +1912,14 @@ export interface TaskStateService {
 
 export interface TaskStateEvents {
   /**
+   * Emitted when new text content streams from the LLM.
+   * 
+   * Subscribe to this event to render streaming text in real-time.
+   * The `accumulated` field allows late-joining clients to catch up.
+   */
+  onContentDelta(callback: (data: Types.ContentDeltaEvent) => void): Unsubscribe;
+
+  /**
    * Emitted when a task is cancelled by the user.
    */
   onTaskCancelled(callback: (data: Types.TaskEventData) => void): Unsubscribe;
@@ -1884,6 +1943,48 @@ export interface TaskStateEvents {
    * Emitted when a task's status or progress changes.
    */
   onTaskUpdated(callback: (data: Types.TaskEventData) => void): Unsubscribe;
+
+  /**
+   * Emitted when tool input JSON streams from the LLM.
+   * 
+   * Use this to show tool input as it's being generated.
+   */
+  onToolInputDelta(callback: (data: Types.ToolInputDeltaEvent) => void): Unsubscribe;
+
+  /**
+   * Emitted when a tool execution completes.
+   * 
+   * Contains the tool's output or error.
+   */
+  onToolResult(callback: (data: Types.ToolResultEvent) => void): Unsubscribe;
+
+  /**
+   * Emitted when tool input is complete and execution begins.
+   * 
+   * The full tool input is now available.
+   */
+  onToolUse(callback: (data: Types.ToolUseEvent) => void): Unsubscribe;
+
+  /**
+   * Emitted when the LLM begins a tool call.
+   * 
+   * The tool input may still be streaming at this point.
+   */
+  onToolUseStarted(callback: (data: Types.ToolUseStartedEvent) => void): Unsubscribe;
+
+  /**
+   * Emitted when a turn completes.
+   * 
+   * Use this to finalize UI rendering for the turn.
+   */
+  onTurnFinished(callback: (data: Types.TurnFinishedEvent) => void): Unsubscribe;
+
+  /**
+   * Emitted when a new turn begins (user, assistant, or tool).
+   * 
+   * Use this to create UI elements for the new turn.
+   */
+  onTurnStarted(callback: (data: Types.TurnStartedEvent) => void): Unsubscribe;
 
 }
 
@@ -1916,7 +2017,7 @@ export class TaskStateServiceClient implements TaskStateService {
   }
 
   private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
-    const id = crypto.randomUUID();
+    const id = generateRequestId();
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       this.ws.send(JSON.stringify({ id, method, params }));
@@ -2017,24 +2118,52 @@ export class TaskStateServiceClient implements TaskStateService {
     return this.call('updateTaskProgress', { taskId: taskId, tokensStreamed: tokensStreamed, toolName: toolName, toolCount: toolCount, inputTokens: inputTokens, outputTokens: outputTokens, contextWindow: contextWindow, model: model });
   }
 
+  onContentDelta(callback: (data: Types.ContentDeltaEvent) => void): Unsubscribe {
+    return this.subscribe('contentDelta', callback);
+  }
+
   onTaskCancelled(callback: (data: Types.TaskEventData) => void): Unsubscribe {
-    return this.subscribe('onTaskCancelled', callback);
+    return this.subscribe('taskCancelled', callback);
   }
 
   onTaskCompleted(callback: (data: Types.TaskEventData) => void): Unsubscribe {
-    return this.subscribe('onTaskCompleted', callback);
+    return this.subscribe('taskCompleted', callback);
   }
 
   onTaskError(callback: (data: Types.TaskEventData) => void): Unsubscribe {
-    return this.subscribe('onTaskError', callback);
+    return this.subscribe('taskError', callback);
   }
 
   onTaskStarted(callback: (data: Types.TaskEventData) => void): Unsubscribe {
-    return this.subscribe('onTaskStarted', callback);
+    return this.subscribe('taskStarted', callback);
   }
 
   onTaskUpdated(callback: (data: Types.TaskEventData) => void): Unsubscribe {
-    return this.subscribe('onTaskUpdated', callback);
+    return this.subscribe('taskUpdated', callback);
+  }
+
+  onToolInputDelta(callback: (data: Types.ToolInputDeltaEvent) => void): Unsubscribe {
+    return this.subscribe('toolInputDelta', callback);
+  }
+
+  onToolResult(callback: (data: Types.ToolResultEvent) => void): Unsubscribe {
+    return this.subscribe('toolResult', callback);
+  }
+
+  onToolUse(callback: (data: Types.ToolUseEvent) => void): Unsubscribe {
+    return this.subscribe('toolUse', callback);
+  }
+
+  onToolUseStarted(callback: (data: Types.ToolUseStartedEvent) => void): Unsubscribe {
+    return this.subscribe('toolUseStarted', callback);
+  }
+
+  onTurnFinished(callback: (data: Types.TurnFinishedEvent) => void): Unsubscribe {
+    return this.subscribe('turnFinished', callback);
+  }
+
+  onTurnStarted(callback: (data: Types.TurnStartedEvent) => void): Unsubscribe {
+    return this.subscribe('turnStarted', callback);
   }
 
 }

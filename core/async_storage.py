@@ -34,7 +34,7 @@ try:
 except ImportError:
     RUST_STORAGE_AVAILABLE = False
 
-from .debug_log import perf_timed, perf_marker
+from .debug_log import perf_timed, perf_marker, debug_log
 
 if TYPE_CHECKING:
     from session import Session
@@ -206,10 +206,25 @@ class AsyncStorage:
         saved_metadata = True
 
         # 2. Delete removed turns
+        # Note: We catch "Turn not found" errors because the turn may have already
+        # been deleted (e.g., by a concurrent save or if the turn was never saved).
+        # This makes deletion idempotent - trying to delete an already-deleted turn
+        # is not an error.
         deleted_ids = session.get_deleted_turn_ids()
         for turn_id in deleted_ids:
-            await self._run_sync(self._storage.delete_turn, session.id, turn_id)
-            saved_turns = True
+            try:
+                await self._run_sync(self._storage.delete_turn, session.id, turn_id)
+                saved_turns = True
+            except Exception as e:
+                if "Turn not found" in str(e):
+                    # Turn already deleted or never saved - this is fine
+                    debug_log.debug(
+                        f"Turn {turn_id[:8]} already deleted or never saved, skipping",
+                        category="storage",
+                        session_id=session.id,
+                    )
+                else:
+                    raise  # Re-raise unexpected errors
 
         # 3. Save dirty turns (new or modified)
         dirty_turns = session.get_dirty_turns()

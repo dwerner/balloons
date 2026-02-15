@@ -235,8 +235,32 @@ class WsServer:
             event_name: Event name in camelCase (e.g., "sessionUpdated")
             data: Event payload data
         """
-        message = {"event": event_name, "data": data}
+        logger.debug(f"Service event: {event_name}, clients: {len(self._clients)}")
+        # Convert data keys to camelCase for consistency with RPC responses
+        camel_data = self._convert_keys_to_camel(data)
+        message = {"event": event_name, "data": camel_data}
         asyncio.create_task(self._broadcast(message))
+
+    def _convert_keys_to_camel(self, data: Any) -> Any:
+        """Convert dict keys from snake_case to camelCase recursively.
+
+        Args:
+            data: Dict, list, or primitive value
+
+        Returns:
+            Same structure with camelCase keys
+        """
+        from codegen.ws_expose import to_camel_case
+
+        if isinstance(data, dict):
+            return {
+                to_camel_case(k): self._convert_keys_to_camel(v)
+                for k, v in data.items()
+            }
+        elif isinstance(data, list):
+            return [self._convert_keys_to_camel(item) for item in data]
+        else:
+            return data
 
     async def _broadcast(self, message: dict) -> None:
         """Broadcast a message to all connected clients.

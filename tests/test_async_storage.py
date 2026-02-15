@@ -528,4 +528,84 @@ async def test_loaded_session_is_clean(temp_db, sample_session):
     assert not loaded.needs_save()
 
 
+@pytest.mark.asyncio
+async def test_delete_unsaved_turn_does_not_cause_error(temp_db):
+    """Test that deleting a turn that was never saved doesn't cause errors.
+
+    Regression test for: turns created and deleted before save were being
+    tracked in _deleted_turn_ids, causing "Turn not found" errors during save.
+    """
+    storage = AsyncStorage(temp_db)
+
+    # Create and save a session with one turn
+    session = Session()
+    session.add_turn(
+        role="user",
+        content_block=TextBlock(text="Original turn"),
+        tokens=5,
+    )
+    await storage.save_session(session)
+    original_turn_id = session.turns[0].id
+
+    # Add a new turn (not saved yet)
+    session.add_turn(
+        role="assistant",
+        content_block=TextBlock(text="New turn that will be deleted"),
+        tokens=10,
+    )
+    new_turn_id = session.turns[1].id
+    assert new_turn_id not in session._saved_turn_order  # Not saved yet
+
+    # Delete the new turn before saving
+    session.delete_turn(1)
+
+    # The new turn should NOT be in _deleted_turn_ids since it was never saved
+    assert new_turn_id not in session._deleted_turn_ids
+
+    # Save should succeed without "Turn not found" error
+    await storage.save_session(session)
+
+    # Verify session state
+    loaded = await storage.load_session(session.id)
+    assert len(loaded.turns) == 1
+    assert loaded.turns[0].id == original_turn_id
+
+
+@pytest.mark.asyncio
+async def test_delete_saved_turn_is_tracked(temp_db):
+    """Test that deleting a previously saved turn is properly tracked."""
+    storage = AsyncStorage(temp_db)
+
+    # Create and save a session with two turns
+    session = Session()
+    session.add_turn(
+        role="user",
+        content_block=TextBlock(text="Turn 1"),
+        tokens=5,
+    )
+    session.add_turn(
+        role="assistant",
+        content_block=TextBlock(text="Turn 2"),
+        tokens=10,
+    )
+    await storage.save_session(session)
+
+    turn_to_delete_id = session.turns[1].id
+    assert turn_to_delete_id in session._saved_turn_order  # Was saved
+
+    # Delete the second turn
+    session.delete_turn(1)
+
+    # The turn SHOULD be in _deleted_turn_ids since it was saved
+    assert turn_to_delete_id in session._deleted_turn_ids
+
+    # Save should work
+    await storage.save_session(session)
+
+    # Verify session state
+    loaded = await storage.load_session(session.id)
+    assert len(loaded.turns) == 1
+    assert loaded.turns[0].content_block.text == "Turn 1"
+
+
 # GoalStorage tests are in test_goal_storage.py (file-based, no Rust required)

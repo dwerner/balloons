@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-14T11:37:46.676426
+// Generated: 2026-02-14T17:17:33.136319
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -97,6 +97,13 @@ export interface SessionEventData {
   eventType: string;
   sessionId: string;
   data?: Record<string, unknown>;
+}
+
+export interface SubmitMessageResult {
+  sessionId: string;
+  exchangeId: string;
+  turnIndex: number;
+  status: string;
 }
 
 export interface GoalInfo {
@@ -232,5 +239,65 @@ export interface TaskEventData {
 export interface BackendSummary {
   backendName: string;
   activeCount: number;
+}
+
+export interface ContentDeltaEvent {
+  sessionId: string;
+  exchangeId: string;
+  turnIndex: number;
+  delta: string;
+  accumulated: string;
+}
+
+export interface TurnStartedEvent {
+  sessionId: string;
+  exchangeId: string;
+  turnIndex: number;
+  role: string;
+}
+
+export interface TurnFinishedEvent {
+  sessionId: string;
+  exchangeId: string;
+  turnIndex: number;
+  role: string;
+  content: string;
+}
+
+export interface ToolUseStartedEvent {
+  sessionId: string;
+  exchangeId: string;
+  turnIndex: number;
+  toolUseId: string;
+  toolName: string;
+  toolIndex: number;
+}
+
+export interface ToolInputDeltaEvent {
+  sessionId: string;
+  exchangeId: string;
+  toolUseId: string;
+  partialJson: string;
+}
+
+export interface ToolUseEvent {
+  sessionId: string;
+  exchangeId: string;
+  turnIndex: number;
+  toolUseId: string;
+  toolName: string;
+  toolInput: Record<string, unknown>;
+  toolIndex: number;
+}
+
+export interface ToolResultEvent {
+  sessionId: string;
+  exchangeId: string;
+  turnIndex: number;
+  toolUseId: string;
+  toolName: string;
+  result: string;
+  isError: boolean;
+  toolIndex: number;
 }
 
