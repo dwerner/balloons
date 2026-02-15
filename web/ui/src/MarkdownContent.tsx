@@ -72,6 +72,30 @@ const markdownComponents = {
 // remarkPlugins array - defined outside component to maintain referential equality
 const remarkPlugins = [remarkGfm];
 
+/**
+ * Strip internal protocol markup from content before rendering.
+ *
+ * This removes:
+ * - <balloons-tool>...</balloons-tool> blocks (tool invocations)
+ * - <balloons-tool-result>...</balloons-tool-result> blocks (tool results)
+ *
+ * These are internal protocol elements that should not be visible to users.
+ * The regex handles multiline content within the tags.
+ */
+function stripInternalMarkup(content: string): string {
+  // Remove <balloons-tool>...</balloons-tool> blocks (multiline, non-greedy)
+  let cleaned = content.replace(/<balloons-tool>[\s\S]*?<\/balloons-tool>/g, '');
+
+  // Remove <balloons-tool-result ...>...</balloons-tool-result> blocks (multiline, non-greedy)
+  // The opening tag may have attributes like tool="..." id="..."
+  cleaned = cleaned.replace(/<balloons-tool-result[^>]*>[\s\S]*?<\/balloons-tool-result>/g, '');
+
+  // Clean up any resulting multiple blank lines (more than 2 newlines in a row)
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+
+  return cleaned.trim();
+}
+
 // Memoize the entire component to prevent re-renders when parent state changes
 // (e.g., when typing in the input field)
 export const MarkdownContent = React.memo(function MarkdownContent({ content }: MarkdownContentProps) {
@@ -80,12 +104,20 @@ export const MarkdownContent = React.memo(function MarkdownContent({ content }: 
     return <span className="empty-content">{'\u00A0'}</span>;
   }
 
+  // Strip internal protocol markup before rendering
+  const cleanedContent = stripInternalMarkup(content);
+
+  // If stripping leaves empty content, show non-breaking space
+  if (!cleanedContent) {
+    return <span className="empty-content">{'\u00A0'}</span>;
+  }
+
   return (
     <ReactMarkdown
       remarkPlugins={remarkPlugins}
       components={markdownComponents}
     >
-      {content}
+      {cleanedContent}
     </ReactMarkdown>
   );
 });

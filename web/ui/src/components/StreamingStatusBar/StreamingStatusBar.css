@@ -1,0 +1,267 @@
+/* =====================================================
+   StreamingStatusBar Component Styles
+   ===================================================== */
+
+.streaming-status-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: rgba(74, 222, 128, 0.08);
+  border: 1px solid rgba(74, 222, 128, 0.2);
+  border-radius: 8px;
+  font-size: 13px;
+
+  /* Smooth entry/exit transitions */
+  animation: streaming-status-bar-enter 0.2s ease-out;
+}
+
+@keyframes streaming-status-bar-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ----- Header Row: Model, Duration, Stop ----- */
+.streaming-status-bar__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.streaming-status-bar__model {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.streaming-status-bar__indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-accent-green);
+  animation: pulse 1s infinite;
+  flex-shrink: 0;
+}
+
+.streaming-status-bar__model-name {
+  font-weight: 600;
+  color: var(--color-accent-green);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.streaming-status-bar__timer {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.streaming-status-bar__stop {
+  padding: 4px 12px;
+  background: var(--color-accent-red);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+  flex-shrink: 0;
+}
+
+.streaming-status-bar__stop:hover:not(:disabled) {
+  background: var(--color-accent-red-hover);
+}
+
+.streaming-status-bar__stop:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ----- Details Row: Tokens/Tool + Queue ----- */
+.streaming-status-bar__details {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-left: 16px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.streaming-status-bar__tokens {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.streaming-status-bar__token-count {
+  color: var(--color-text-secondary);
+}
+
+.streaming-status-bar__token-rate {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.streaming-status-bar__tool {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-accent-yellow);
+  font-weight: 500;
+}
+
+.streaming-status-bar__tool-icon {
+  animation: spin 2s linear infinite;
+}
+
+.streaming-status-bar__tool-name {
+  max-width: 150px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.streaming-status-bar__tool-count {
+  color: var(--color-text-muted);
+  font-weight: 400;
+}
+
+.streaming-status-bar__waiting {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.streaming-status-bar__queue-badge {
+  margin-left: auto;
+  background: rgba(250, 204, 21, 0.2);
+  color: var(--color-accent-yellow);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* ----- Context Usage Row ----- */
+.streaming-status-bar__context {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 16px;
+}
+
+.streaming-status-bar__context-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.streaming-status-bar__context-text {
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.streaming-status-bar__context-values {
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.streaming-status-bar__context-percent {
+  margin-left: 4px;
+  color: var(--color-text-muted);
+}
+
+.streaming-status-bar__context-track {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.streaming-status-bar__context-bar {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease-out, background-color 0.3s ease;
+}
+
+/* Context bar color states */
+.streaming-status-bar__context-bar.context-bar--healthy {
+  background: var(--color-accent-green);
+}
+
+.streaming-status-bar__context-bar.context-bar--moderate {
+  background: var(--color-accent-blue);
+}
+
+.streaming-status-bar__context-bar.context-bar--warning {
+  background: var(--color-accent-yellow);
+}
+
+.streaming-status-bar__context-bar.context-bar--critical {
+  background: var(--color-accent-red);
+  animation: context-critical-pulse 1s infinite;
+}
+
+@keyframes context-critical-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+/* ----- Desktop Layout ----- */
+@media (min-width: 768px) {
+  .streaming-status-bar {
+    padding: 12px 16px;
+  }
+
+  .streaming-status-bar__header {
+    gap: 16px;
+  }
+
+  .streaming-status-bar__details {
+    padding-left: 24px;
+  }
+
+  .streaming-status-bar__context {
+    padding-left: 24px;
+  }
+
+  .streaming-status-bar__tool-name {
+    max-width: 200px;
+  }
+
+  .streaming-status-bar__stop {
+    padding: 5px 16px;
+  }
+}
+
+/* ----- Ready State (when not streaming) ----- */
+.streaming-status-bar--ready {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--color-border-secondary);
+}
+
+.streaming-status-bar--ready .streaming-status-bar__indicator {
+  background: var(--color-text-muted);
+  animation: none;
+}
+
+.streaming-status-bar--ready .streaming-status-bar__model-name {
+  color: var(--color-text-secondary);
+}

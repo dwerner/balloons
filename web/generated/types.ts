@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-14T21:33:54.098824
+// Generated: 2026-02-15T09:27:31.238853
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -33,6 +33,18 @@ export interface TurnImageInfo {
   height?: number;
 }
 
+export interface ToolUseInfo {
+  toolUseId: string;
+  toolName: string;
+  toolInput?: Record<string, unknown>;
+}
+
+export interface ToolResultInfo {
+  toolUseId: string;
+  content: string;
+  isError?: boolean;
+}
+
 export interface TurnInfo {
   idx: number;
   role: string;
@@ -41,8 +53,11 @@ export interface TurnInfo {
   viewed: boolean;
   tokens: number;
   contextMode: string;
+  contentBlockType?: string;
   exchangeId?: string | null;
   images?: TurnImageInfo[];
+  toolUse?: ToolUseInfo | null;
+  toolResult?: ToolResultInfo | null;
 }
 
 export interface TreeEventData {

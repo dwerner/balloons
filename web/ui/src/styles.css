@@ -99,16 +99,20 @@
   padding: 0;
 }
 
+html, body {
+  height: 100%;
+  overflow: hidden;
+  background: var(--color-bg-primary);
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-  background: var(--color-bg-primary);
   color: var(--color-text-primary);
-  height: 100vh;
-  overflow: hidden;
 }
 
 #root {
   height: 100%;
+  overflow: hidden;
 }
 
 /* ----- App Layout ----- */
@@ -195,6 +199,37 @@ body {
   font-size: 18px;
   font-weight: 600;
   flex: 1;
+}
+
+/* ----- View Toggle ----- */
+.view-toggle {
+  display: flex;
+  gap: 2px;
+  background: var(--color-bg-tertiary);
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.view-toggle-btn {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  line-height: 1;
+  transition: all 0.15s;
+}
+
+.view-toggle-btn:hover {
+  color: var(--color-text-secondary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.view-toggle-btn.active {
+  color: var(--color-text-primary);
+  background: var(--color-bg-secondary);
 }
 
 /* ----- Theme Toggle Button ----- */
@@ -370,7 +405,7 @@ body {
   flex: 1;
   overflow-y: auto;
   padding: 12px;
-  padding-bottom: 80px; /* Extra space at bottom for input area visibility */
+  padding-bottom: 16px; /* Small padding at bottom */
   min-height: 0;
 }
 
@@ -442,6 +477,43 @@ body {
   font-style: italic;
 }
 
+/* System block type-specific colors */
+.turn.system.system-fork .turn-role,
+.turn.system.system-fork-proposal .turn-role {
+  color: #60a5fa; /* blue for fork */
+}
+
+.turn.system.system-merge .turn-role,
+.turn.system.system-merged-to .turn-role,
+.turn.system.system-merge-proposal .turn-role {
+  color: #34d399; /* green for merge */
+}
+
+.turn.system.system-link .turn-role {
+  color: #a78bfa; /* purple for links */
+}
+
+.turn.system.system-error .turn-role,
+.turn.system.system-interruption .turn-role {
+  color: #f87171; /* red for errors */
+}
+
+.turn.system.system-image .turn-role {
+  color: #fbbf24; /* yellow for images */
+}
+
+.turn.system.system-slide .turn-role {
+  color: #38bdf8; /* cyan for slides */
+}
+
+.turn.system.system-review .turn-role {
+  color: #c084fc; /* violet for reviews */
+}
+
+.turn.system.system-archive .turn-role {
+  color: #6b7280; /* gray for archives */
+}
+
 /* ----- Turn Content ----- */
 .turn-content .empty-content {
   display: inline-block;
@@ -474,6 +546,15 @@ body {
   border-top: 1px solid var(--color-border-primary);
   padding: 12px;
   background: var(--color-bg-secondary);
+  margin-top: auto; /* Push to bottom of flex container */
+  flex-shrink: 0; /* Don't shrink the input area */
+}
+
+/* Safe area padding for notched devices - only add what's needed */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .input-area {
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
 }
 
 .input-form {

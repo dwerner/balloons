@@ -3,6 +3,8 @@ import { BalloonsClient } from '../../generated/balloons-client';
 import type { ConnectionState, SessionInfo, TurnInfo, TaskInfo, Unsubscribe, ToolUseStartedEvent, ToolInputDeltaEvent, ToolResultEvent, ContentDeltaEvent, TurnStartedEvent, TurnFinishedEvent } from '../../generated/balloons-client';
 import { MarkdownContent } from './MarkdownContent';
 import { AppLayout, useLayout, useTheme } from './components/layout';
+import { SessionTreeView } from './components/SessionTreeView';
+import { StreamingStatusBar } from './components/StreamingStatusBar';
 
 // Tool use state tracked during streaming
 interface ToolUseState {
@@ -64,8 +66,22 @@ const Collapsible = memo(function Collapsible({
   );
 });
 
-// Tool use component for displaying individual tool calls
-const ToolUseDisplay = memo(function ToolUseDisplay({ toolUse }: { toolUse: ToolUseState }) {
+// Format JSON for display (shared utility)
+const formatJson = (json: string | Record<string, unknown>) => {
+  try {
+    if (typeof json === 'string') {
+      const parsed = JSON.parse(json);
+      return JSON.stringify(parsed, null, 2);
+    }
+    return JSON.stringify(json, null, 2);
+  } catch {
+    // If not valid JSON yet (streaming), just return as-is
+    return typeof json === 'string' ? json : JSON.stringify(json);
+  }
+};
+
+// Tool use component for displaying individual tool calls (streaming)
+const StreamingToolUseDisplay = memo(function StreamingToolUseDisplay({ toolUse }: { toolUse: ToolUseState }) {
   const duration = toolUse.endTime
     ? ((toolUse.endTime - toolUse.startTime) / 1000).toFixed(1)
     : null;
@@ -78,17 +94,6 @@ const ToolUseDisplay = memo(function ToolUseDisplay({ toolUse }: { toolUse: Tool
   }[toolUse.status];
 
   const statusClass = toolUse.status;
-
-  // Format JSON for display
-  const formatJson = (json: string) => {
-    try {
-      const parsed = JSON.parse(json);
-      return JSON.stringify(parsed, null, 2);
-    } catch {
-      // If not valid JSON yet (streaming), just return as-is
-      return json;
-    }
-  };
 
   return (
     <div className={`tool-use ${statusClass}`}>
@@ -125,48 +130,18 @@ const ToolUseDisplay = memo(function ToolUseDisplay({ toolUse }: { toolUse: Tool
   );
 });
 
-// Memoized Turn component to prevent re-renders when other state changes (e.g., typing)
-const Turn = memo(function Turn({
+// ============================================================================
+// Content Block Type-Specific Turn Renderers
+// ============================================================================
+
+// TextTurn: Renders text content blocks
+const TextTurn = memo(function TextTurn({
   turn,
-  toolUses,
-  exchangeId
+  streamingToolUses = []
 }: {
   turn: TurnInfo;
-  toolUses?: ToolUseState[];
-  exchangeId?: string;
+  streamingToolUses?: ToolUseState[];
 }) {
-  // Filter tool uses for this turn
-  // First try to match by exchange ID (more reliable), then fall back to turn index
-  const turnToolUses = toolUses?.filter(tu => {
-    // If we have an exchange ID on the turn, use that for matching
-    if (turn.exchangeId) {
-      return tu.exchangeId === turn.exchangeId;
-    }
-    // Fall back to turn index matching
-    return tu.turnIndex === turn.idx;
-  }) || [];
-
-  // Debug: log when we have tool uses
-  if (turn.role === 'assistant' && toolUses && toolUses.length > 0) {
-    console.log('[Turn]', turn.idx, 'exchangeId:', turn.exchangeId?.slice(0, 8), 'total toolUses:', toolUses.length, 'for this turn:', turnToolUses.length);
-  }
-
-  // Render tool results (role === 'tool') as a collapsible result block
-  if (turn.role === 'tool') {
-    return (
-      <div className={`turn tool ${turn.streaming ? 'streaming' : ''}`}>
-        <div className="turn-role">tool result</div>
-        <div className="turn-content">
-          <Collapsible title="Result" defaultExpanded={false}>
-            <pre className="tool-use-result">
-              <code>{turn.content}</code>
-            </pre>
-          </Collapsible>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className={`turn ${turn.role} ${turn.streaming ? 'streaming' : ''}`}>
       <div className="turn-role">{turn.role}</div>
@@ -177,17 +152,168 @@ const Turn = memo(function Turn({
           <MarkdownContent content={turn.content} />
         )}
       </div>
-      {/* Display tool uses for assistant turns */}
-      {turn.role === 'assistant' && turnToolUses.length > 0 && (
+      {/* Display streaming tool uses for assistant text turns */}
+      {turn.role === 'assistant' && streamingToolUses.length > 0 && (
         <div className="turn-tool-uses">
-          {turnToolUses.map(tu => (
-            <ToolUseDisplay key={tu.toolUseId} toolUse={tu} />
+          {streamingToolUses.map(tu => (
+            <StreamingToolUseDisplay key={tu.toolUseId} toolUse={tu} />
           ))}
         </div>
       )}
     </div>
   );
 });
+
+// ToolUseTurn: Renders tool_use content blocks (from loaded history)
+// Includes the matching tool_result if available, to match streaming display
+const ToolUseTurn = memo(function ToolUseTurn({
+  turn,
+  toolResult
+}: {
+  turn: TurnInfo;
+  toolResult?: TurnInfo | null;
+}) {
+  const toolUse = turn.toolUse;
+  if (!toolUse) {
+    // Fallback if toolUse info not available
+    return (
+      <div className={`turn assistant tool-use-turn ${turn.streaming ? 'streaming' : ''}`}>
+        <div className="turn-role">tool use</div>
+        <div className="turn-content">{turn.content}</div>
+      </div>
+    );
+  }
+
+  const result = toolResult?.toolResult;
+  const isError = result?.isError ?? false;
+
+  return (
+    <div className={`turn assistant tool-use-turn ${turn.streaming ? 'streaming' : ''}`}>
+      <div className={`tool-use ${result ? 'completed' : 'executing'}`}>
+        <div className="tool-use-header">
+          <span className={`tool-use-status ${result ? (isError ? 'error' : 'completed') : 'executing'}`}>
+            {result ? (isError ? '✗' : '✓') : '⚙️'}
+          </span>
+          <span className="tool-use-name">{toolUse.toolName}</span>
+        </div>
+        {toolUse.toolInput && Object.keys(toolUse.toolInput).length > 0 && (
+          <Collapsible title="Input" defaultExpanded={false}>
+            <pre className="tool-use-json">
+              <code>{formatJson(toolUse.toolInput)}</code>
+            </pre>
+          </Collapsible>
+        )}
+        {result && (
+          <Collapsible title={isError ? "Error" : "Result"} defaultExpanded={false}>
+            <pre className={`tool-use-result ${isError ? 'error' : ''}`}>
+              <code>{result.content}</code>
+            </pre>
+          </Collapsible>
+        )}
+      </div>
+    </div>
+  );
+});
+
+// SystemTurn: Renders system-level content blocks (fork, merge, link, etc.)
+const SystemTurn = memo(function SystemTurn({ turn, blockType }: { turn: TurnInfo; blockType: string }) {
+  // Map block types to display info
+  const displayInfo: Record<string, { label: string; className: string }> = {
+    'fork': { label: '⑂ fork', className: 'system-fork' },
+    'merge': { label: '⤴ merge', className: 'system-merge' },
+    'merged_to': { label: '⤴ merged', className: 'system-merged-to' },
+    'link': { label: '🔗 link', className: 'system-link' },
+    'interruption': { label: '⚠ interrupted', className: 'system-interruption' },
+    'error': { label: '✗ error', className: 'system-error' },
+    'image': { label: '🖼 image', className: 'system-image' },
+    'slide': { label: '📊 slide', className: 'system-slide' },
+    'review': { label: '📋 review', className: 'system-review' },
+    'fork_proposal': { label: '⑂ fork proposal', className: 'system-fork-proposal' },
+    'merge_proposal': { label: '⤴ merge proposal', className: 'system-merge-proposal' },
+    'archive': { label: '📦 archive', className: 'system-archive' },
+  };
+
+  const info = displayInfo[blockType] || { label: blockType, className: 'system-unknown' };
+
+  return (
+    <div className={`turn system ${info.className}`}>
+      <div className="turn-role">{info.label}</div>
+      <div className="turn-content">
+        <MarkdownContent content={turn.content} />
+      </div>
+    </div>
+  );
+});
+
+// Memoized Turn component - dispatches to appropriate renderer based on content_block_type
+const Turn = memo(function Turn({
+  turn,
+  toolUses,
+  allTurns,
+  exchangeId
+}: {
+  turn: TurnInfo;
+  toolUses?: ToolUseState[];
+  allTurns?: TurnInfo[];
+  exchangeId?: string;
+}) {
+  // Get content block type (default to 'text' for backwards compat)
+  const blockType = turn.contentBlockType ?? 'text';
+
+  // Filter streaming tool uses for this turn (only used for text assistant turns)
+  const turnToolUses = toolUses?.filter(tu => {
+    if (turn.exchangeId) {
+      return tu.exchangeId === turn.exchangeId;
+    }
+    return tu.turnIndex === turn.idx;
+  }) || [];
+
+  // Dispatch to appropriate renderer based on content block type
+  switch (blockType) {
+    case 'tool_use': {
+      // Find matching tool_result turn by toolUseId
+      const toolUseId = turn.toolUse?.toolUseId;
+      const matchingResult = toolUseId
+        ? allTurns?.find(t => t.contentBlockType === 'tool_result' && t.toolResult?.toolUseId === toolUseId)
+        : null;
+      return <ToolUseTurn turn={turn} toolResult={matchingResult} />;
+    }
+
+    case 'tool_result':
+      // Skip tool_result turns - they're rendered as part of tool_use turns
+      return null;
+
+    // System-level block types (fork, merge, link, etc.)
+    case 'fork':
+    case 'merge':
+    case 'merged_to':
+    case 'link':
+    case 'interruption':
+    case 'error':
+    case 'image':
+    case 'slide':
+    case 'review':
+    case 'fork_proposal':
+    case 'merge_proposal':
+    case 'archive':
+      return <SystemTurn turn={turn} blockType={blockType} />;
+
+    case 'text':
+    default:
+      // Skip empty text turns (assistant turns with no content and no streaming tool uses)
+      if (turn.role === 'assistant' && !turn.content?.trim() && turnToolUses.length === 0 && !turn.streaming) {
+        return null;
+      }
+      // For text blocks (and unknown types), use text renderer
+      // Streaming tool uses are displayed inline with text assistant turns
+      return <TextTurn turn={turn} streamingToolUses={turnToolUses} />;
+  }
+});
+
+// Sort turns by index to maintain correct display order
+function sortTurnsByIdx(turns: TurnInfo[]): TurnInfo[] {
+  return [...turns].sort((a, b) => a.idx - b.idx);
+}
 
 // Format duration in seconds to a human-readable string
 function formatDuration(seconds: number): string {
@@ -242,10 +368,13 @@ export function App() {
   const [streamingTask, setStreamingTask] = useState<TaskInfo | null>(null);
   const [toolUses, setToolUses] = useState<ToolUseState[]>([]);
   const [imageAttachments, setImageAttachments] = useState<ImageAttachment[]>([]);
+  const [isLoadingTurns, setIsLoadingTurns] = useState(false);
 
   const clientRef = useRef<BalloonsClient | null>(null);
   const turnsEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Track the session we're currently loading to handle race conditions
+  const loadingSessionRef = useRef<string | null>(null);
 
   // Auto-scroll to bottom when turns update
   // Use a small delay to allow markdown/syntax highlighting to render first
@@ -283,16 +412,19 @@ export function App() {
           const currentId = await client.tree.getCurrentSessionId();
           if (currentId) {
             setSelectedSessionId(currentId);
-            const sessionTurns = await client.tree.getTurns(currentId);
+            setIsLoadingTurns(true);
+
+            // Load all session data in parallel
+            const [sessionTurns, queueInfo, task] = await Promise.all([
+              client.tree.getTurns(currentId),
+              client.queue.getQueue(currentId),
+              client.tasks.getSessionTask(currentId),
+            ]);
+
             setTurns(sessionTurns);
-
-            // Load queue state for the current session
-            const queueInfo = await client.queue.getQueue(currentId);
             setQueuedMessageCount(queueInfo.messageCount);
-
-            // Load streaming task if session is already streaming
-            const task = await client.tasks.getSessionTask(currentId);
             setStreamingTask(task);
+            setIsLoadingTurns(false);
           }
         } catch (err) {
           console.error('Failed to load sessions:', err);
@@ -331,11 +463,12 @@ export function App() {
           const sessionList = await client.tree.getAllSessions();
           setSessions(sessionList);
 
-          // If this is the selected session, refresh turns too
-          if (data.sessionId === selectedSessionId) {
-            const sessionTurns = await client.tree.getTurns(data.sessionId);
-            setTurns(sessionTurns);
-          }
+          // NOTE: Do NOT refetch turns here for the selected session.
+          // Turn updates during streaming are handled by TaskStateService events
+          // (onTurnStarted, onContentDelta, onTurnFinished) which provide
+          // incremental updates without duplicating turns.
+          // Refetching here would cause duplicate turns because both event
+          // sources would be populating the turns state simultaneously.
         })
       );
 
@@ -356,6 +489,13 @@ export function App() {
       // Note: We only create visible turns for 'user' and primary 'assistant' turns.
       // Tool-related turns (additional assistant turns for tool_use, and 'tool' role for results)
       // are handled inline within the main assistant turn via tool use events.
+      //
+      // IMPORTANT: These handlers check data.sessionId === selectedSessionId to filter events.
+      // When switching sessions:
+      // 1. handleSelectSession clears turns[] and sets isLoadingTurns=true
+      // 2. The useEffect re-runs (due to selectedSessionId dependency), unsubscribing old handlers
+      // 3. New handlers are subscribed with the new selectedSessionId
+      // This ensures events for the wrong session are ignored during the transition.
       unsubscribers.push(
         client.tasks.onTurnStarted((data: TurnStartedEvent) => {
           if (data.sessionId === selectedSessionId) {
@@ -410,7 +550,7 @@ export function App() {
                 contextMode: 'COPY',
                 exchangeId: data.exchangeId,
               };
-              return [...prev, placeholderTurn];
+              return sortTurnsByIdx([...prev, placeholderTurn]);
             });
           }
         })
@@ -466,7 +606,7 @@ export function App() {
                 contextMode: 'COPY',
                 exchangeId: data.exchangeId,
               };
-              return [...prev, newTurn];
+              return sortTurnsByIdx([...prev, newTurn]);
             });
           }
         })
@@ -522,7 +662,7 @@ export function App() {
                 contextMode: 'COPY',
                 exchangeId: data.exchangeId,
               };
-              return [...prev, newTurn];
+              return sortTurnsByIdx([...prev, newTurn]);
             });
           }
           // Also refresh session list to update streaming indicator
@@ -555,7 +695,8 @@ export function App() {
                     } else {
                       newTurns.push(updatedTurn);
                     }
-                    return newTurns;
+                    // Sort to ensure correct order after adding/updating
+                    return sortTurnsByIdx(newTurns);
                   });
                 }
               });
@@ -760,30 +901,57 @@ export function App() {
   }, [connectionState, selectedSessionId]);
 
   // Select a session
+  // Note: We clear state BEFORE setting the new session ID to prevent race conditions
+  // where streaming events for the old session could pollute the new session's state.
+  // The loading state prevents rendering partial/stale data during the transition.
   const handleSelectSession = useCallback(async (sessionId: string) => {
     const client = clientRef.current;
     if (!client || connectionState !== 'connected') return;
 
-    setSelectedSessionId(sessionId);
+    // Skip if already selected (prevents unnecessary refetches)
+    if (sessionId === selectedSessionId) return;
+
+    // Track which session we're loading (for race condition detection)
+    loadingSessionRef.current = sessionId;
+
+    // Clear state immediately to prevent stale data display
+    setIsLoadingTurns(true);
+    setTurns([]);
+    setToolUses([]);
+    setStreamingTask(null);
+    setQueuedMessageCount(0);
     setError(null);
-    setToolUses([]); // Clear tool uses when switching sessions
+
+    // Now set the new session ID - this triggers the event subscription useEffect
+    // to re-subscribe with the new session ID
+    setSelectedSessionId(sessionId);
 
     try {
-      const sessionTurns = await client.tree.getTurns(sessionId);
+      // Fetch all session data in parallel for faster loading
+      const [sessionTurns, queueInfo, task] = await Promise.all([
+        client.tree.getTurns(sessionId),
+        client.queue.getQueue(sessionId),
+        client.tasks.getSessionTask(sessionId),
+      ]);
+
+      // Verify this is still the session we're supposed to load
+      // (user might have switched again during the async fetch)
+      if (loadingSessionRef.current !== sessionId) {
+        console.log('Session switch detected, discarding stale data for:', sessionId.slice(0, 8));
+        return;
+      }
+
+      // Apply the loaded data
       setTurns(sessionTurns);
-
-      // Load queue state for the session
-      const queueInfo = await client.queue.getQueue(sessionId);
       setQueuedMessageCount(queueInfo.messageCount);
-
-      // Load streaming task if session is streaming
-      const task = await client.tasks.getSessionTask(sessionId);
       setStreamingTask(task);
+      setIsLoadingTurns(false);
     } catch (err) {
       console.error('Failed to load turns:', err);
       setError(`Failed to load turns: ${err}`);
+      setIsLoadingTurns(false);
     }
-  }, [connectionState]);
+  }, [connectionState, selectedSessionId]);
 
   // Generate unique ID for image attachments
   const generateImageId = () => `img-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
@@ -1032,8 +1200,10 @@ export function App() {
           connectionState={connectionState}
           sessions={sessions}
           selectedSessionId={selectedSessionId}
+          turns={turns}
           streamingTask={streamingTask}
           onSelectSession={handleSelectSession}
+          isLoadingTurns={isLoadingTurns}
         />
       </AppLayout.Sidebar>
 
@@ -1053,47 +1223,33 @@ export function App() {
         ) : (
           <>
             <div className="turns-container">
-              {turns.length === 0 && (
+              {isLoadingTurns ? (
+                <div className="empty-state">
+                  <h2>Loading...</h2>
+                  <p>Loading session messages.</p>
+                </div>
+              ) : turns.length === 0 ? (
                 <div className="empty-state">
                   <h2>No Messages Yet</h2>
                   <p>Send a message to start the conversation.</p>
                 </div>
-              )}
+              ) : null}
 
               {turns.map(turn => (
-                <Turn key={turn.idx} turn={turn} toolUses={toolUses} />
+                <Turn key={turn.idx} turn={turn} toolUses={toolUses} allTurns={turns} />
               ))}
               <div ref={turnsEndRef} />
             </div>
 
             <div className={`input-area ${selectedSession?.isStreaming ? 'queue-mode' : ''}`}>
               {selectedSession?.isStreaming && streamingTask && (
-                <div className="streaming-status">
-                  <div className="streaming-status-main">
-                    <span className="streaming-indicator" />
-                    <span className="streaming-model">{streamingTask.model || 'Streaming'}</span>
-                    <span className="streaming-duration">{formatDuration(streamingTask.durationSeconds)}</span>
-                  </div>
-                  <div className="streaming-status-details">
-                    {streamingTask.toolName ? (
-                      <span className="streaming-tool" title={`Running tool: ${streamingTask.toolName}`}>
-                        <span className="tool-icon">⚙</span>
-                        {streamingTask.toolName}
-                        {streamingTask.toolCount > 1 && ` (${streamingTask.toolCount})`}
-                      </span>
-                    ) : (
-                      <span className="streaming-tokens">
-                        {formatTokens(streamingTask.tokensStreamed)} tokens
-                        {streamingTask.currentTokenRate > 0 && (
-                          <span className="token-rate"> ({Math.round(streamingTask.currentTokenRate)}/s)</span>
-                        )}
-                      </span>
-                    )}
-                    {queuedMessageCount > 0 && (
-                      <span className="queue-badge">{queuedMessageCount} queued</span>
-                    )}
-                  </div>
-                </div>
+                <StreamingStatusBar
+                  task={streamingTask}
+                  queuedMessageCount={queuedMessageCount}
+                  onStop={handleStopStreaming}
+                  stopDisabled={connectionState !== 'connected'}
+                  sessionContextTokens={selectedSession.cachedContextTokens}
+                />
               )}
               {/* Image preview area */}
               {imageAttachments.length > 0 && (
@@ -1145,23 +1301,13 @@ export function App() {
                   rows={1}
                 />
                 {selectedSession?.isStreaming ? (
-                  <>
-                    <button
-                      type="submit"
-                      className="queue-button"
-                      disabled={connectionState !== 'connected' || !message.trim()}
-                    >
-                      Queue
-                    </button>
-                    <button
-                      type="button"
-                      className="stop-button"
-                      onClick={handleStopStreaming}
-                      disabled={connectionState !== 'connected'}
-                    >
-                      Stop
-                    </button>
-                  </>
+                  <button
+                    type="submit"
+                    className="queue-button"
+                    disabled={connectionState !== 'connected' || !message.trim()}
+                  >
+                    Queue
+                  </button>
                 ) : (
                   <button
                     type="submit"
@@ -1202,23 +1348,45 @@ function MobileHeader({ connectionState }: MobileHeaderProps) {
   );
 }
 
+// Sidebar view mode
+type SidebarView = 'list' | 'tree';
+
 interface SidebarContentProps {
   connectionState: ConnectionState;
   sessions: SessionInfo[];
   selectedSessionId: string | null;
+  turns: TurnInfo[];
   streamingTask: TaskInfo | null;
   onSelectSession: (sessionId: string) => void;
+  isLoadingTurns?: boolean;
 }
 
 function SidebarContent({
   connectionState,
   sessions,
   selectedSessionId,
+  turns,
   streamingTask,
   onSelectSession,
+  isLoadingTurns = false,
 }: SidebarContentProps) {
   const { closeSidebar, layoutMode } = useLayout();
   const { resolvedTheme, toggleTheme } = useTheme();
+
+  // View mode state (persisted in localStorage)
+  const [viewMode, setViewMode] = useState<SidebarView>(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('balloons:sidebar-view');
+      return (stored === 'tree' || stored === 'list') ? stored : 'list';
+    }
+    return 'list';
+  });
+
+  // Persist view mode changes
+  const handleViewModeChange = useCallback((mode: SidebarView) => {
+    setViewMode(mode);
+    localStorage.setItem('balloons:sidebar-view', mode);
+  }, []);
 
   const handleSelectSession = useCallback((sessionId: string) => {
     onSelectSession(sessionId);
@@ -1233,6 +1401,27 @@ function SidebarContent({
       <header className="sidebar-header">
         <div className={`connection-status ${connectionState}`} title={connectionState} />
         <h1>Balloons</h1>
+
+        {/* View mode toggle */}
+        <div className="view-toggle">
+          <button
+            className={`view-toggle-btn ${viewMode === 'list' ? 'active' : ''}`}
+            onClick={() => handleViewModeChange('list')}
+            title="List view"
+            aria-label="List view"
+          >
+            ☰
+          </button>
+          <button
+            className={`view-toggle-btn ${viewMode === 'tree' ? 'active' : ''}`}
+            onClick={() => handleViewModeChange('tree')}
+            title="Tree view"
+            aria-label="Tree view"
+          >
+            🌲
+          </button>
+        </div>
+
         <button
           className="theme-toggle"
           onClick={toggleTheme}
@@ -1248,45 +1437,55 @@ function SidebarContent({
         )}
       </header>
 
-      <div className="session-list">
-        {sessions.length === 0 && connectionState === 'connected' && (
-          <div style={{ padding: '16px', color: '#666', textAlign: 'center' }}>
-            No sessions
-          </div>
-        )}
-
-        {sessions.map(session => {
-          const isSelected = session.id === selectedSessionId;
-          const showStreamingDetails = isSelected && session.isStreaming && streamingTask;
-          return (
-            <div
-              key={session.id}
-              className={`session-item ${isSelected ? 'selected' : ''} ${session.isStreaming ? 'streaming' : ''}`}
-              onClick={() => handleSelectSession(session.id)}
-            >
-              <div className="session-title">
-                {session.title || `Session ${session.id.slice(0, 8)}`}
-              </div>
-              <div className="session-meta">
-                {session.messageCount} messages
-                {session.isStreaming && !showStreamingDetails && ' • streaming'}
-              </div>
-              {showStreamingDetails && (
-                <div className="session-streaming-info">
-                  <span className="streaming-badge">
-                    <span className="streaming-dot" />
-                    {streamingTask.toolName ? (
-                      <span>{streamingTask.toolName}</span>
-                    ) : (
-                      <span>{formatTokens(streamingTask.tokensStreamed)} tokens</span>
-                    )}
-                  </span>
-                </div>
-              )}
+      {viewMode === 'tree' ? (
+        <SessionTreeView
+          sessions={sessions}
+          selectedSessionId={selectedSessionId}
+          turns={turns}
+          onSelectSession={handleSelectSession}
+          isLoading={isLoadingTurns}
+        />
+      ) : (
+        <div className="session-list">
+          {sessions.length === 0 && connectionState === 'connected' && (
+            <div style={{ padding: '16px', color: '#666', textAlign: 'center' }}>
+              No sessions
             </div>
-          );
-        })}
-      </div>
+          )}
+
+          {sessions.map(session => {
+            const isSelected = session.id === selectedSessionId;
+            const showStreamingDetails = isSelected && session.isStreaming && streamingTask;
+            return (
+              <div
+                key={session.id}
+                className={`session-item ${isSelected ? 'selected' : ''} ${session.isStreaming ? 'streaming' : ''}`}
+                onClick={() => handleSelectSession(session.id)}
+              >
+                <div className="session-title">
+                  {session.title || `Session ${session.id.slice(0, 8)}`}
+                </div>
+                <div className="session-meta">
+                  {session.messageCount} messages
+                  {session.isStreaming && !showStreamingDetails && ' • streaming'}
+                </div>
+                {showStreamingDetails && (
+                  <div className="session-streaming-info">
+                    <span className="streaming-badge">
+                      <span className="streaming-dot" />
+                      {streamingTask.toolName ? (
+                        <span>{streamingTask.toolName}</span>
+                      ) : (
+                        <span>{formatTokens(streamingTask.tokensStreamed)} tokens</span>
+                      )}
+                    </span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </>
   );
 }

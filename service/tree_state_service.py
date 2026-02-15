@@ -20,7 +20,7 @@ from typing import Callable, Any, Awaitable, TYPE_CHECKING
 
 from codegen import ws_service, ws_expose, ws_event, ws_type
 from core.tree_state import TreeState, TreeEvent, SessionData, TurnData
-from models import ContextMode, ImageBlock
+from models import ContextMode, ImageBlock, ToolUseBlock, ToolResultBlock
 
 if TYPE_CHECKING:
     from session import Session
@@ -68,8 +68,37 @@ class TurnImageInfo:
 
 @ws_type
 @dataclass
+class ToolUseInfo:
+    """Tool use information for display."""
+
+    tool_use_id: str
+    tool_name: str
+    tool_input: dict = field(default_factory=dict)
+
+
+@ws_type
+@dataclass
+class ToolResultInfo:
+    """Tool result information for display."""
+
+    tool_use_id: str
+    content: str
+    is_error: bool = False
+
+
+@ws_type
+@dataclass
 class TurnInfo:
-    """Turn information for display."""
+    """Turn information for display.
+
+    Each turn has exactly ONE content_block. The content_block_type field
+    indicates what kind of content this turn contains:
+    - "text": Plain text content (content field has the text)
+    - "tool_use": Tool invocation (tool_use field has details)
+    - "tool_result": Tool result (tool_result field has details)
+    - "image": Image content (images field has image info)
+    - Other block types: "fork", "merge", "link", "archive", etc.
+    """
 
     idx: int
     role: str
@@ -78,8 +107,11 @@ class TurnInfo:
     viewed: bool
     tokens: int
     context_mode: str  # "copy", "compress", "drop"
+    content_block_type: str = "text"  # Type of content block: "text", "tool_use", "tool_result", etc.
     exchange_id: str | None = None
     images: list["TurnImageInfo"] = field(default_factory=list)  # Images in this turn
+    tool_use: "ToolUseInfo | None" = None  # Present when content_block_type == "tool_use"
+    tool_result: "ToolResultInfo | None" = None  # Present when content_block_type == "tool_result"
 
 
 @ws_type
@@ -240,19 +272,53 @@ class TreeStateService:
 
     # --- Turn Operations ---
 
-    def _extract_images(self, turn) -> list[TurnImageInfo]:
-        """Extract image info from a turn's content_block."""
-        images = []
-        if hasattr(turn, 'content_block') and isinstance(turn.content_block, ImageBlock):
-            img = turn.content_block
-            images.append(TurnImageInfo(
-                file_path=img.file_path,
-                filename=img.filename,
-                media_type=img.media_type,
-                width=img.width,
-                height=img.height,
-            ))
-        return images
+    def _turn_to_info(self, t: TurnData, session_id: str) -> TurnInfo:
+        """Convert a TurnData to TurnInfo with full content block information."""
+        # Extract content block type and related info
+        content_block_type = "text"  # default
+        images: list[TurnImageInfo] = []
+        tool_use: ToolUseInfo | None = None
+        tool_result: ToolResultInfo | None = None
+
+        if hasattr(t, 'content_block') and t.content_block is not None:
+            block = t.content_block
+            content_block_type = getattr(block, 'type', 'text')
+
+            if isinstance(block, ImageBlock):
+                images.append(TurnImageInfo(
+                    file_path=block.file_path,
+                    filename=block.filename,
+                    media_type=block.media_type,
+                    width=block.width,
+                    height=block.height,
+                ))
+            elif isinstance(block, ToolUseBlock):
+                tool_use = ToolUseInfo(
+                    tool_use_id=block.id,
+                    tool_name=block.name,
+                    tool_input=block.input,
+                )
+            elif isinstance(block, ToolResultBlock):
+                tool_result = ToolResultInfo(
+                    tool_use_id=block.tool_use_id,
+                    content=block.content,
+                    is_error=block.is_error,
+                )
+
+        return TurnInfo(
+            idx=t.idx,
+            role=t.role,
+            content=t.content,
+            streaming=t.streaming,
+            viewed=t.viewed,
+            tokens=t.tokens,
+            context_mode=self._state.get_context_mode(session_id, t.idx).value,
+            content_block_type=content_block_type,
+            exchange_id=t.exchange_id,
+            images=images,
+            tool_use=tool_use,
+            tool_result=tool_result,
+        )
 
     @ws_expose
     async def get_turns(self, session_id: str) -> list[TurnInfo]:
@@ -279,20 +345,7 @@ class TreeStateService:
         if not session_data or session_data.turns is None:
             return []
 
-        return [
-            TurnInfo(
-                idx=t.idx,
-                role=t.role,
-                content=t.content,
-                streaming=t.streaming,
-                viewed=t.viewed,
-                tokens=t.tokens,
-                context_mode=self._state.get_context_mode(session_id, t.idx).value,
-                exchange_id=t.exchange_id,
-                images=self._extract_images(t),
-            )
-            for t in session_data.turns
-        ]
+        return [self._turn_to_info(t, session_id) for t in session_data.turns]
 
     @ws_expose
     async def get_turn(self, session_id: str, turn_idx: int) -> TurnInfo | None:
@@ -309,17 +362,7 @@ class TreeStateService:
         if not turn:
             return None
 
-        return TurnInfo(
-            idx=turn.idx,
-            role=turn.role,
-            content=turn.content,
-            streaming=turn.streaming,
-            viewed=turn.viewed,
-            tokens=turn.tokens,
-            context_mode=self._state.get_context_mode(session_id, turn_idx).value,
-            exchange_id=turn.exchange_id,
-            images=self._extract_images(turn),
-        )
+        return self._turn_to_info(turn, session_id)
 
     # --- Context Mode Operations ---
 
