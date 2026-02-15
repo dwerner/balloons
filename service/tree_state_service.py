@@ -16,11 +16,17 @@ Example usage:
 """
 
 from dataclasses import dataclass, field
-from typing import Callable, Any
+from typing import Callable, Any, Awaitable, TYPE_CHECKING
 
 from codegen import ws_service, ws_expose, ws_event, ws_type
 from core.tree_state import TreeState, TreeEvent, SessionData, TurnData
-from models import ContextMode
+from models import ContextMode, ImageBlock
+
+if TYPE_CHECKING:
+    from session import Session
+
+# Type for session loader callback: takes session_id, returns Session or None
+SessionLoaderCallback = Callable[[str], Awaitable["Session | None"]]
 
 
 # Re-export existing types with @ws_type to include in TypeScript codegen
@@ -50,6 +56,18 @@ class SessionInfo:
 
 @ws_type
 @dataclass
+class TurnImageInfo:
+    """Image information for display in a turn."""
+
+    file_path: str
+    filename: str
+    media_type: str
+    width: int = 0
+    height: int = 0
+
+
+@ws_type
+@dataclass
 class TurnInfo:
     """Turn information for display."""
 
@@ -61,6 +79,7 @@ class TurnInfo:
     tokens: int
     context_mode: str  # "copy", "compress", "drop"
     exchange_id: str | None = None
+    images: list["TurnImageInfo"] = field(default_factory=list)  # Images in this turn
 
 
 @ws_type
@@ -82,13 +101,20 @@ class TreeStateService:
     and real-time event subscriptions for state changes.
     """
 
-    def __init__(self, tree_state: TreeState):
+    def __init__(
+        self,
+        tree_state: TreeState,
+        session_loader: SessionLoaderCallback | None = None,
+    ):
         """Initialize service with a TreeState instance.
 
         Args:
             tree_state: The TreeState to expose via WebSocket
+            session_loader: Optional callback to load sessions on demand.
+                           If provided, get_turns will auto-load sessions.
         """
         self._state = tree_state
+        self._session_loader = session_loader
         self._event_handlers: list[Callable[[str, dict], None]] = []
 
         # Wire up TreeState observer to emit WebSocket events
@@ -214,9 +240,26 @@ class TreeStateService:
 
     # --- Turn Operations ---
 
+    def _extract_images(self, turn) -> list[TurnImageInfo]:
+        """Extract image info from a turn's content_block."""
+        images = []
+        if hasattr(turn, 'content_block') and isinstance(turn.content_block, ImageBlock):
+            img = turn.content_block
+            images.append(TurnImageInfo(
+                file_path=img.file_path,
+                filename=img.filename,
+                media_type=img.media_type,
+                width=img.width,
+                height=img.height,
+            ))
+        return images
+
     @ws_expose
     async def get_turns(self, session_id: str) -> list[TurnInfo]:
         """Get all turns for a session.
+
+        If the session exists but turns aren't loaded, and a session_loader
+        callback was provided, the session will be loaded automatically.
 
         Args:
             session_id: The session to get turns for
@@ -225,6 +268,14 @@ class TreeStateService:
             List of turn info objects, empty if session not found/loaded
         """
         session_data = self._state.get_session(session_id)
+
+        # Auto-load session if turns not loaded and we have a loader
+        if session_data and session_data.turns is None and self._session_loader:
+            session = await self._session_loader(session_id)
+            if session:
+                self._state.load_session(session_id, session)
+                session_data = self._state.get_session(session_id)
+
         if not session_data or session_data.turns is None:
             return []
 
@@ -238,6 +289,7 @@ class TreeStateService:
                 tokens=t.tokens,
                 context_mode=self._state.get_context_mode(session_id, t.idx).value,
                 exchange_id=t.exchange_id,
+                images=self._extract_images(t),
             )
             for t in session_data.turns
         ]
@@ -266,6 +318,7 @@ class TreeStateService:
             tokens=turn.tokens,
             context_mode=self._state.get_context_mode(session_id, turn_idx).value,
             exchange_id=turn.exchange_id,
+            images=self._extract_images(turn),
         )
 
     # --- Context Mode Operations ---

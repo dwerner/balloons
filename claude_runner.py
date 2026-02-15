@@ -6,10 +6,12 @@ import signal
 import uuid
 from typing import AsyncIterator, TYPE_CHECKING
 
+import base64
+
 from models import (
     Message, TextDelta, ResultEvent, InitEvent, RawEvent,
     ToolUseStartEvent, ToolUseEvent, ToolResultEvent,
-    TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock, ContextMode,
+    TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock, ContextMode,
 )
 from core.debug_log import debug_log, dump_failed_json
 from core.base_runner import BaseRunner, RunnerEvent
@@ -119,6 +121,7 @@ class ClaudeRunner(BaseRunner):
         self._json_errors: list[tuple[str, str | None]] = []  # Track (error_detail, dump_path) tuples
         self._current_session: "Session | None" = None  # Session for tool execution
         self._text_buffer: str = ""  # Buffer for detecting balloons-tool blocks
+        self._pending_images: list[ImageBlock] = []  # Images to send with next message
 
     def _parse_balloons_tools(self, text: str) -> list[tuple[str, str, dict]]:
         """Parse all <balloons-tool> blocks from text.
@@ -232,7 +235,62 @@ class ClaudeRunner(BaseRunner):
         }
         await self._send_message(continuation_msg)
 
-    def build_message_content(self, messages: list[Message], new_prompt: str) -> list[dict]:
+    def _load_image_as_base64(self, file_path: str) -> tuple[str, str] | None:
+        """Load an image file and return base64-encoded data with media type.
+
+        Args:
+            file_path: Path to the image file
+
+        Returns:
+            Tuple of (base64_data, media_type) or None if file not found/invalid
+        """
+        from pathlib import Path
+
+        path = Path(file_path)
+        if not path.exists():
+            debug_log.warning(
+                f"Image file not found: {file_path}",
+                category="image",
+                run_id=self._run_id,
+            )
+            return None
+
+        # Determine media type from extension
+        ext_to_mime = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".webp": "image/webp",
+        }
+        ext = path.suffix.lower()
+        media_type = ext_to_mime.get(ext)
+        if not media_type:
+            debug_log.warning(
+                f"Unsupported image format: {ext}",
+                category="image",
+                run_id=self._run_id,
+            )
+            return None
+
+        try:
+            data = path.read_bytes()
+            b64_data = base64.standard_b64encode(data).decode("ascii")
+            return (b64_data, media_type)
+        except Exception as e:
+            debug_log.error(
+                f"Failed to read image: {e}",
+                category="image",
+                run_id=self._run_id,
+            )
+            return None
+
+    def build_message_content(
+        self,
+        messages: list[Message],
+        new_prompt: str,
+        images: list[ImageBlock] | None = None,
+    ) -> list[dict]:
         """Build content blocks for the user message.
 
         Converts message history into a content array that Claude can understand.
@@ -242,6 +300,7 @@ class ClaudeRunner(BaseRunner):
         Args:
             messages: Message history
             new_prompt: New user prompt to append
+            images: Optional list of ImageBlock objects to include with the prompt
 
         Returns:
             List of content blocks for the user message
@@ -287,6 +346,13 @@ class ClaudeRunner(BaseRunner):
                 for block in msg.content_blocks:
                     if isinstance(block, TextBlock) and block.text:
                         block_texts.append(block.text)
+                    elif isinstance(block, ImageBlock):
+                        # Images in history are represented as placeholders
+                        # (Claude can't see past images, only current ones)
+                        img_info = f"[Image: {block.filename or 'image'}]"
+                        if block.width and block.height:
+                            img_info = f"[Image: {block.filename or 'image'} ({block.width}x{block.height})]"
+                        block_texts.append(img_info)
                     elif isinstance(block, ToolUseBlock):
                         tool_info = f"<tool_use name=\"{block.name}\" id=\"{block.id}\">\n{json.dumps(block.input, indent=2)}\n</tool_use>"
                         block_texts.append(tool_info)
@@ -321,6 +387,26 @@ class ClaudeRunner(BaseRunner):
         if history_parts:
             history_text = "<conversation_history>\n" + "\n\n".join(history_parts) + "\n</conversation_history>"
             content.append({"type": "text", "text": history_text})
+
+        # Add images for the current message (Claude can see these)
+        if images:
+            for img_block in images:
+                img_data = self._load_image_as_base64(img_block.file_path)
+                if img_data:
+                    b64_data, media_type = img_data
+                    content.append({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": b64_data,
+                        }
+                    })
+                    debug_log.info(
+                        f"Added image to message: {img_block.filename}",
+                        category="image",
+                        run_id=self._run_id,
+                    )
 
         # Add the new prompt
         content.append({"type": "text", "text": new_prompt})
@@ -405,8 +491,10 @@ class ClaudeRunner(BaseRunner):
         )
 
         try:
-            # Build and send initial message with conversation history
-            content = self.build_message_content(messages, prompt)
+            # Build and send initial message with conversation history and any pending images
+            images = self._pending_images if self._pending_images else None
+            self._pending_images = []  # Clear pending images after use
+            content = self.build_message_content(messages, prompt, images=images)
             initial_msg = {
                 "type": "user",
                 "message": {
@@ -732,6 +820,22 @@ class ClaudeRunner(BaseRunner):
             session: The current Session object
         """
         self._current_session = session
+
+    def set_pending_images(self, images: list[ImageBlock]) -> None:
+        """Set images to be included with the next message.
+
+        These images will be sent to Claude with the next prompt and then cleared.
+
+        Args:
+            images: List of ImageBlock objects to include
+        """
+        self._pending_images = images
+        if images:
+            debug_log.info(
+                f"Set {len(images)} pending images for next message",
+                category="image",
+                run_id=self._run_id,
+            )
 
     @staticmethod
     def build_context(messages: list[Message], new_prompt: str) -> str:

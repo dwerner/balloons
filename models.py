@@ -39,6 +39,25 @@ class TextBlock:
 
 
 @dataclass
+class ImageBlock:
+    """Image content - stores reference to uploaded image.
+
+    Images can be:
+    - Pasted from clipboard (screenshot, copied image)
+    - Uploaded via file picker
+
+    The image is stored on disk and referenced by file_path.
+    media_type is the MIME type (e.g., "image/png", "image/jpeg").
+    """
+    type: str = "image"
+    file_path: str = ""  # Path to stored image file
+    media_type: str = ""  # MIME type: image/png, image/jpeg, image/gif, image/webp
+    filename: str = ""  # Original filename (for uploads) or generated name
+    width: int = 0  # Image dimensions (optional, for display)
+    height: int = 0
+
+
+@dataclass
 class ToolUseBlock:
     """Tool invocation by the assistant."""
     type: str = "tool_use"
@@ -287,7 +306,7 @@ class ArchiveBlock:
 
 
 # Union type for all content block types
-ContentBlock = Union[TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, SlideBlock, ReviewBlock, ForkProposalBlock, MergeProposalBlock]
+ContentBlock = Union[TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, SlideBlock, ReviewBlock, ForkProposalBlock, MergeProposalBlock]
 
 
 @dataclass

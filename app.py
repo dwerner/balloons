@@ -156,6 +156,7 @@ from service import (
     SessionManagerService,
     GoalTreeStateService,
     TaskStateService,
+    ImageService,
 )
 
 
@@ -673,13 +674,22 @@ class BalloonsApp(App):
             # Create the WebSocket server with config
             self._ws_server = WsServer(config=config.websocket)
 
+            # Create session loader callback for auto-loading sessions in TreeStateService
+            async def load_session_for_tree(session_id: str):
+                """Load a session from storage for TreeStateService."""
+                return await self._manager.load_session(session_id)
+
             # Create and register services with shared state
-            tree_service = TreeStateService(self._tree_state)
+            tree_service = TreeStateService(
+                self._tree_state,
+                session_loader=load_session_for_tree,
+            )
             queue_service = QueueStateService(self._queue_state)
             self._session_service = SessionManagerService(self._manager)
             goal_service = GoalTreeStateService(self._goal_tree_state)
             # Store task_service as instance variable so we can emit streaming events from poll loop
             self._task_service = TaskStateService(get_stream_state())
+            image_service = ImageService()
 
             # Wire up event pump: SessionManagerService emits streaming events via TaskStateService
             self._session_service.set_task_state_service(self._task_service)
@@ -695,6 +705,7 @@ class BalloonsApp(App):
             self._ws_server.register_service(self._session_service)
             self._ws_server.register_service(goal_service)
             self._ws_server.register_service(self._task_service)
+            self._ws_server.register_service(image_service)
 
             # Start the server
             await self._ws_server.start()

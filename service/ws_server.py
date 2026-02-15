@@ -438,6 +438,7 @@ class WsServer:
             ping_interval=self.ping_interval,
             ping_timeout=self.ping_timeout,
             ssl=self._ssl_context,
+            max_size=50 * 1024 * 1024,  # 50MB max message size for image uploads
         )
         self._running = True
 

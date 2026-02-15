@@ -10,7 +10,7 @@ from typing import Optional, AsyncIterator
 
 import aiofiles
 
-from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, ArchiveSummary, SlideBlock, ReviewBlock, ContentBlock, ContextMode, QueuedMessage, MessageQueue, Turn, ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData
+from models import Message, TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, ArchiveSummary, SlideBlock, ReviewBlock, ContentBlock, ContextMode, QueuedMessage, MessageQueue, Turn, ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData
 
 # Rust storage availability (checked lazily to avoid circular imports)
 _rust_storage_checked = False
@@ -970,6 +970,16 @@ class Session:
         """Serialize a content block to a dict."""
         if isinstance(block, TextBlock):
             return {"type": "text", "text": block.text}
+        elif isinstance(block, ImageBlock):
+            # Store only file_path reference - actual image data stays on disk
+            return {
+                "type": "image",
+                "file_path": block.file_path,
+                "media_type": block.media_type,
+                "filename": block.filename,
+                "width": block.width,
+                "height": block.height,
+            }
         elif isinstance(block, ToolUseBlock):
             return {"type": "tool_use", "id": block.id, "name": block.name, "input": block.input}
         elif isinstance(block, ToolResultBlock):
@@ -1146,6 +1156,15 @@ class Session:
         block_type = data.get("type", "text")
         if block_type == "text":
             return TextBlock(text=data.get("text", ""))
+        elif block_type == "image":
+            # Image data stays on disk - we only store the file_path reference
+            return ImageBlock(
+                file_path=data.get("file_path", ""),
+                media_type=data.get("media_type", ""),
+                filename=data.get("filename", ""),
+                width=data.get("width", 0),
+                height=data.get("height", 0),
+            )
         elif block_type == "tool_use":
             return ToolUseBlock(
                 id=data.get("id", ""),

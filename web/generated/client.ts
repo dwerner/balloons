@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-14T17:26:22.243832
+// Generated: 2026-02-14T21:33:54.100036
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -94,6 +94,9 @@ export interface TreeStateService {
 
   /**
    * Get all turns for a session.
+   * 
+   * If the session exists but turns aren't loaded, and a session_loader
+   * callback was provided, the session will be loaded automatically.
    * 
    * Args:
    * session_id: The session to get turns for
@@ -837,6 +840,32 @@ export interface SessionManagerService {
   submitMessage(sessionId: string, content: string, queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult>;
 
   /**
+   * Submit a message with image attachments to a session.
+   * 
+   * Similar to submit_message but includes images that Claude can see.
+   * Images should be uploaded first via ImageService.upload_image().
+   * 
+   * Args:
+   * session_id: ID of the session to submit to
+   * content: The message content (user prompt)
+   * images: List of image attachment dicts with keys:
+   * - file_path: Path to uploaded image file
+   * - media_type: MIME type (image/png, image/jpeg, etc.)
+   * - filename: Optional display filename
+   * - width: Optional image width
+   * - height: Optional image height
+   * queue: If True, queue the message instead of starting immediately.
+   * allowed_tools: List of tool names to allow, or None for all tools
+   * 
+   * Returns:
+   * SubmitMessageResult with IDs for tracking the stream
+   * 
+   * Raises:
+   * ValueError: If session not found or already streaming (when queue=False)
+   */
+  submitMessageWithImages(sessionId: string, content: string, images: Record<string, unknown>[], queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult>;
+
+  /**
    * Switch to a different session.
    * 
    * Args:
@@ -971,6 +1000,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   async submitMessage(sessionId: string, content: string, queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult> {
     return this.call('submitMessage', { sessionId: sessionId, content: content, queue: queue, allowedTools: allowedTools });
+  }
+
+  async submitMessageWithImages(sessionId: string, content: string, images: Record<string, unknown>[], queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult> {
+    return this.call('submitMessageWithImages', { sessionId: sessionId, content: content, images: images, queue: queue, allowedTools: allowedTools });
   }
 
   async switchSession(sessionId: string): Promise<boolean> {
@@ -2164,6 +2197,186 @@ export class TaskStateServiceClient implements TaskStateService {
 
   onTurnStarted(callback: (data: Types.TurnStartedEvent) => void): Unsubscribe {
     return this.subscribe('turnStarted', callback);
+  }
+
+}
+
+/**
+ * WebSocket-exposed service for image management.
+ * 
+ * Handles image upload, storage, retrieval, and cleanup.
+ * Images are stored on disk with unique filenames based on content hash.
+ */
+export interface ImageService {
+  /**
+   * Clean up images older than the retention period.
+   * 
+   * Args:
+   * max_age_hours: Max age in hours (defaults to service retention setting)
+   * 
+   * Returns:
+   * Number of images deleted
+   */
+  cleanupOldImages(maxAgeHours?: number | null): Promise<number>;
+
+  /**
+   * Delete an uploaded image.
+   * 
+   * Args:
+   * file_path: Path to the image file
+   * 
+   * Returns:
+   * True if deleted, False if not found
+   */
+  deleteImage(filePath: string): Promise<boolean>;
+
+  /**
+   * Get information about a stored image.
+   * 
+   * Args:
+   * file_path: Path to the image file
+   * 
+   * Returns:
+   * ImageInfo if found, None otherwise
+   */
+  getImageInfo(filePath: string): Promise<Types.ImageInfo | null>;
+
+  /**
+   * Get all image paths uploaded by a session.
+   * 
+   * Args:
+   * session_id: The session ID
+   * 
+   * Returns:
+   * List of file paths
+   */
+  getSessionImages(sessionId: string): Promise<string[]>;
+
+  /**
+   * Get the upload directory path.
+   * 
+   * Returns:
+   * Absolute path to upload directory
+   */
+  getUploadDir(): Promise<string>;
+
+  /**
+   * Upload an image from base64 data.
+   * 
+   * Args:
+   * data_base64: Base64-encoded image data
+   * media_type: MIME type (image/png, image/jpeg, etc.)
+   * session_id: Optional session ID to associate with this image
+   * original_filename: Optional original filename
+   * 
+   * Returns:
+   * ImageUploadResult with file path and metadata
+   * 
+   * Raises:
+   * ValueError: If media type is not supported or data is invalid
+   */
+  uploadImage(dataBase64: string, mediaType: string, sessionId?: string | null, originalFilename?: string | null): Promise<Types.ImageUploadResult>;
+
+}
+
+export interface ImageEvents {
+  /**
+   * Emitted when cleanup completes.
+   */
+  onCleanupCompleted(callback: (data: Types.ImageEventData) => void): Unsubscribe;
+
+  /**
+   * Emitted when an image is deleted.
+   */
+  onImageDeleted(callback: (data: Types.ImageEventData) => void): Unsubscribe;
+
+  /**
+   * Emitted when an image is uploaded.
+   */
+  onImageUploaded(callback: (data: Types.ImageEventData) => void): Unsubscribe;
+
+}
+
+export class ImageServiceClient implements ImageService {
+  private ws: WebSocket;
+  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
+  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
+
+  constructor(ws: WebSocket) {
+    this.ws = ws;
+    this.ws.addEventListener('message', this.handleMessage.bind(this));
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    const msg = JSON.parse(event.data);
+    if (msg.id && this.pending.has(msg.id)) {
+      const { resolve, reject } = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      if (msg.error) {
+        reject(new Error(msg.error.message));
+      } else {
+        resolve(msg.result);
+      }
+    } else if (msg.event) {
+      const handlers = this.eventHandlers.get(msg.event);
+      if (handlers) {
+        handlers.forEach(h => h(msg.data));
+      }
+    }
+  }
+
+  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const id = generateRequestId();
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, new Set());
+    }
+    this.eventHandlers.get(event)!.add(callback);
+    return () => {
+      this.eventHandlers.get(event)?.delete(callback);
+    };
+  }
+
+  async cleanupOldImages(maxAgeHours?: number | null): Promise<number> {
+    return this.call('cleanupOldImages', { maxAgeHours: maxAgeHours });
+  }
+
+  async deleteImage(filePath: string): Promise<boolean> {
+    return this.call('deleteImage', { filePath: filePath });
+  }
+
+  async getImageInfo(filePath: string): Promise<Types.ImageInfo | null> {
+    return this.call('getImageInfo', { filePath: filePath });
+  }
+
+  async getSessionImages(sessionId: string): Promise<string[]> {
+    return this.call('getSessionImages', { sessionId: sessionId });
+  }
+
+  async getUploadDir(): Promise<string> {
+    return this.call('getUploadDir', {  });
+  }
+
+  async uploadImage(dataBase64: string, mediaType: string, sessionId?: string | null, originalFilename?: string | null): Promise<Types.ImageUploadResult> {
+    return this.call('uploadImage', { dataBase64: dataBase64, mediaType: mediaType, sessionId: sessionId, originalFilename: originalFilename });
+  }
+
+  onCleanupCompleted(callback: (data: Types.ImageEventData) => void): Unsubscribe {
+    return this.subscribe('cleanupCompleted', callback);
+  }
+
+  onImageDeleted(callback: (data: Types.ImageEventData) => void): Unsubscribe {
+    return this.subscribe('imageDeleted', callback);
+  }
+
+  onImageUploaded(callback: (data: Types.ImageEventData) => void): Unsubscribe {
+    return this.subscribe('imageUploaded', callback);
   }
 
 }

@@ -36,7 +36,7 @@ from typing import Callable, Any, Protocol
 from enum import Enum
 
 from models import (
-    ContextMode, ContentBlock, TextBlock, ToolUseBlock, ToolResultBlock,
+    ContextMode, ContentBlock, TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock,
     InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock, ForkBlock, MergeBlock, ReviewBlock
 )
 from core.context import ContextBuilder
@@ -532,6 +532,9 @@ class TreeState:
         elif isinstance(block, ReviewBlock):
             status = f"[{block.status}]" if block.status != "active" else ""
             return f"Review: {block.model_under_review} {status}"
+        elif isinstance(block, ImageBlock):
+            dims = f" ({block.width}x{block.height})" if block.width and block.height else ""
+            return f"[Image: {block.filename}{dims}]"
         return fallback
 
     def is_session_loaded(self, session_id: str) -> bool:

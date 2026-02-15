@@ -70,6 +70,7 @@ from service.queue_state_service import QueueStateService
 from service.session_manager_service import SessionManagerService
 from service.goal_tree_state_service import GoalTreeStateService
 from service.task_state_service import TaskStateService
+from service.image_service import ImageService
 from service.ws_server import WsServer, create_server
 from service.jwt_auth import JWTAuth, JWTConfig, TokenClaims
 
@@ -79,6 +80,7 @@ __all__ = [
     "SessionManagerService",
     "GoalTreeStateService",
     "TaskStateService",
+    "ImageService",
     "WsServer",
     "create_server",
     "JWTAuth",

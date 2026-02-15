@@ -616,6 +616,60 @@ class TestSubmitMessage:
         assert call_args[1]["session_id"] == mock_session.id
         assert call_args[1]["exchange_id"] == result.exchange_id
 
+    @pytest.mark.asyncio
+    async def test_submit_message_emits_user_turn_events(self, mock_manager, mock_session, mock_runner, stream_state):
+        """Test that submit_message emits turnStarted and turnFinished for user turn.
+
+        This is critical for web clients that rely on TaskStateService events
+        to render turns. Without these events, the user message won't appear.
+        """
+        from service.task_state_service import TaskStateService
+
+        mock_session.turns = []
+        mock_session.add_message = MagicMock()
+        mock_session.save = AsyncMock()
+        mock_runner.is_streaming = False
+        mock_runner.start_background = MagicMock()
+
+        # Set up task service with event handler
+        task_service = TaskStateService(stream_state)
+        events = []
+
+        def event_handler(event_name: str, data: dict):
+            events.append((event_name, data))
+
+        task_service.add_event_handler(event_handler)
+
+        # Create service with task service wired up
+        service = SessionManagerService(mock_manager, stream_state, task_state_service=task_service)
+
+        result = await service.submit_message(
+            session_id=mock_session.id,
+            content="Hello from user",
+        )
+
+        # Verify user turn events were emitted
+        turn_started_events = [e for e in events if e[0] == "turnStarted"]
+        turn_finished_events = [e for e in events if e[0] == "turnFinished"]
+
+        assert len(turn_started_events) == 1, "Should emit exactly one turnStarted event for user turn"
+        assert len(turn_finished_events) == 1, "Should emit exactly one turnFinished event for user turn"
+
+        # Verify turnStarted event data
+        started_data = turn_started_events[0][1]
+        assert started_data["session_id"] == mock_session.id
+        assert started_data["exchange_id"] == result.exchange_id
+        assert started_data["turn_index"] == 0
+        assert started_data["role"] == "user"
+
+        # Verify turnFinished event data
+        finished_data = turn_finished_events[0][1]
+        assert finished_data["session_id"] == mock_session.id
+        assert finished_data["exchange_id"] == result.exchange_id
+        assert finished_data["turn_index"] == 0
+        assert finished_data["role"] == "user"
+        assert finished_data["content"] == "Hello from user"
+
 
 class TestEventPump:
     """Tests for the event pump functionality."""

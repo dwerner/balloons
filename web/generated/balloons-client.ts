@@ -25,6 +25,7 @@ import {
   SessionManagerServiceClient,
   GoalTreeStateServiceClient,
   TaskStateServiceClient,
+  ImageServiceClient,
 } from './client';
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -60,6 +61,7 @@ export class BalloonsClient {
   private _sessions: SessionManagerServiceClient | null = null;
   private _goals: GoalTreeStateServiceClient | null = null;
   private _tasks: TaskStateServiceClient | null = null;
+  private _images: ImageServiceClient | null = null;
 
   constructor(url: string, options: BalloonsClientOptions = {}) {
     this.url = url;
@@ -121,6 +123,14 @@ export class BalloonsClient {
       throw new Error('Not connected. Call connect() first.');
     }
     return this._tasks;
+  }
+
+  /** Image service (upload images for chat) */
+  get images(): ImageServiceClient {
+    if (!this._images) {
+      throw new Error('Not connected. Call connect() first.');
+    }
+    return this._images;
   }
 
   // --- Connection Management ---
@@ -227,6 +237,7 @@ export class BalloonsClient {
     this._sessions = new SessionManagerServiceClient(this.ws);
     this._goals = new GoalTreeStateServiceClient(this.ws);
     this._tasks = new TaskStateServiceClient(this.ws);
+    this._images = new ImageServiceClient(this.ws);
   }
 
   private clearClients(): void {
@@ -235,6 +246,7 @@ export class BalloonsClient {
     this._sessions = null;
     this._goals = null;
     this._tasks = null;
+    this._images = null;
   }
 
   private scheduleReconnect(): void {
@@ -259,5 +271,6 @@ export {
   SessionManagerServiceClient,
   GoalTreeStateServiceClient,
   TaskStateServiceClient,
+  ImageServiceClient,
 } from './client';
 export type { Unsubscribe } from './client';

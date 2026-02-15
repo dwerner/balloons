@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-14T17:26:22.242756
+// Generated: 2026-02-14T21:33:54.098824
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -25,6 +25,14 @@ export interface SessionInfo {
   bindingIndicator?: string;
 }
 
+export interface TurnImageInfo {
+  filePath: string;
+  filename: string;
+  mediaType: string;
+  width?: number;
+  height?: number;
+}
+
 export interface TurnInfo {
   idx: number;
   role: string;
@@ -34,6 +42,7 @@ export interface TurnInfo {
   tokens: number;
   contextMode: string;
   exchangeId?: string | null;
+  images?: TurnImageInfo[];
 }
 
 export interface TreeEventData {
@@ -104,6 +113,14 @@ export interface SubmitMessageResult {
   exchangeId: string;
   turnIndex: number;
   status: string;
+}
+
+export interface ImageAttachment {
+  filePath: string;
+  mediaType: string;
+  filename?: string;
+  width?: number;
+  height?: number;
 }
 
 export interface GoalInfo {
@@ -299,5 +316,29 @@ export interface ToolResultEvent {
   result: string;
   isError: boolean;
   toolIndex: number;
+}
+
+export interface ImageUploadResult {
+  filePath: string;
+  filename: string;
+  mediaType: string;
+  sizeBytes: number;
+  width?: number;
+  height?: number;
+}
+
+export interface ImageInfo {
+  filePath: string;
+  filename: string;
+  mediaType: string;
+  sizeBytes: number;
+  createdAt: string;
+  sessionId?: string | null;
+}
+
+export interface ImageEventData {
+  eventType: string;
+  filePath: string;
+  data?: Record<string, unknown>;
 }
 

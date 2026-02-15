@@ -51,7 +51,7 @@ from core.stream_state import (
     get_stream_state,
 )
 from core.tree_state import TreeState
-from models import TextBlock, ToolUseBlock, ToolResultBlock
+from models import TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock
 
 if TYPE_CHECKING:
     from service.task_state_service import TaskStateService
@@ -130,6 +130,22 @@ class SubmitMessageResult:
     exchange_id: str  # UUID grouping user prompt + assistant response
     turn_index: int  # Index of the user turn just created
     status: str  # "started" or "queued"
+
+
+@ws_type
+@dataclass
+class ImageAttachment:
+    """Image attachment for a message.
+
+    Used when submitting messages with images via WebSocket.
+    The file_path should point to an already-uploaded image.
+    """
+
+    file_path: str  # Path to uploaded image file
+    media_type: str  # MIME type: image/png, image/jpeg, etc.
+    filename: str = ""  # Display filename
+    width: int = 0  # Image dimensions (optional)
+    height: int = 0
 
 
 @dataclass
@@ -372,8 +388,10 @@ class SessionManagerService:
             )
 
         elif event_type == "text_turn_started":
-            # Text turn started - emit turn_started
+            # Text turn started - update context and emit turn_started
             turn_idx = data.get("turn_index", ctx.assistant_turn_idx) if isinstance(data, dict) else ctx.assistant_turn_idx
+            ctx.assistant_turn_idx = turn_idx  # Update for subsequent content deltas
+            ctx.content = ""  # Reset accumulated content for new turn
             self._task_service.emit_turn_started(
                 session_id=session_id,
                 exchange_id=ctx.exchange_id,
@@ -383,6 +401,7 @@ class SessionManagerService:
 
         elif event_type == "tool_use_start":
             # Tool use started - update context and emit
+            # The turnIndex here is the main assistant turn; tool uses are shown there
             tool_use_id = data.get("tool_use_id", "")
             tool_name = data.get("tool_name", "")
             tool_idx = data.get("tool_index", ctx.tool_count)
@@ -398,6 +417,8 @@ class SessionManagerService:
                 tool_count=ctx.tool_count,
             )
 
+            # Emit toolUseStarted with the main assistant turn index
+            # This shows tool uses alongside the text response
             self._task_service.emit_tool_use_started(
                 session_id=session_id,
                 exchange_id=ctx.exchange_id,
@@ -423,6 +444,8 @@ class SessionManagerService:
             turn_idx = data.get("turn_index", ctx.assistant_turn_idx) if isinstance(data, dict) else ctx.assistant_turn_idx
             tool_use_id = data.get("tool_use_id", "")
             ctx.tool_turn_indices[(tool_use_id, "tool_use")] = turn_idx
+
+            # Emit turn started for the tool use turn
             self._task_service.emit_turn_started(
                 session_id=session_id,
                 exchange_id=ctx.exchange_id,
@@ -970,6 +993,23 @@ class SessionManagerService:
             # Mark session as streaming so React frontend shows stop button
             self._tree_state.start_streaming(session_id)
 
+        # Emit user turn events to TaskStateService so web clients display the user message
+        # This is critical for web clients that rely on these events for turn rendering
+        if self._task_service:
+            self._task_service.emit_turn_started(
+                session_id=session_id,
+                exchange_id=exchange_id,
+                turn_index=turn_index,
+                role="user",
+            )
+            self._task_service.emit_turn_finished(
+                session_id=session_id,
+                exchange_id=exchange_id,
+                turn_index=turn_index,
+                role="user",
+                content=content,
+            )
+
         # Register the stream in StreamState for tracking
         self._stream_state.register_session_stream(
             session_id=session_id,
@@ -998,6 +1038,170 @@ class SessionManagerService:
             SessionManagerEvent.MESSAGE_SUBMITTED,
             session_id,
             {"exchange_id": exchange_id, "turn_index": turn_index, "content": content},
+        )
+
+        return SubmitMessageResult(
+            session_id=session_id,
+            exchange_id=exchange_id,
+            turn_index=turn_index,
+            status="started",
+        )
+
+    @ws_expose
+    async def submit_message_with_images(
+        self,
+        session_id: str,
+        content: str,
+        images: list[dict],
+        queue: bool = False,
+        allowed_tools: list[str] | None = None,
+    ) -> SubmitMessageResult:
+        """Submit a message with image attachments to a session.
+
+        Similar to submit_message but includes images that Claude can see.
+        Images should be uploaded first via ImageService.upload_image().
+
+        Args:
+            session_id: ID of the session to submit to
+            content: The message content (user prompt)
+            images: List of image attachment dicts with keys:
+                - file_path: Path to uploaded image file
+                - media_type: MIME type (image/png, image/jpeg, etc.)
+                - filename: Optional display filename
+                - width: Optional image width
+                - height: Optional image height
+            queue: If True, queue the message instead of starting immediately.
+            allowed_tools: List of tool names to allow, or None for all tools
+
+        Returns:
+            SubmitMessageResult with IDs for tracking the stream
+
+        Raises:
+            ValueError: If session not found or already streaming (when queue=False)
+        """
+        # Get or load session
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                raise ValueError(f"Session {session_id} not found")
+
+        # Get runner
+        runner = self._manager.get_runner(session_id)
+        if not runner:
+            raise ValueError(f"No runner for session {session_id}")
+
+        # Check if already streaming
+        if runner.is_streaming:
+            if not queue:
+                raise ValueError(
+                    f"Session {session_id} is already streaming. "
+                    "Use queue=True to queue this message."
+                )
+            raise ValueError("Message queueing not yet implemented")
+
+        # Generate exchange ID for this user prompt + assistant response
+        exchange_id = str(uuid.uuid4())
+
+        # Convert image dicts to ImageBlock objects
+        image_blocks: list[ImageBlock] = []
+        for img in images:
+            image_blocks.append(ImageBlock(
+                file_path=img.get("file_path", ""),
+                media_type=img.get("media_type", ""),
+                filename=img.get("filename", ""),
+                width=img.get("width", 0),
+                height=img.get("height", 0),
+            ))
+
+        # Build user message content blocks (text + images)
+        user_blocks: list = [TextBlock(text=content)]
+        user_blocks.extend(image_blocks)
+
+        # Build display content for the turn (text with image placeholders)
+        display_content = content
+        if image_blocks:
+            img_count = len(image_blocks)
+            img_text = f" [+{img_count} image{'s' if img_count > 1 else ''}]"
+            display_content += img_text
+
+        # Add user message to session (persists immediately)
+        turn_index = len(session.turns)
+        session.add_message(
+            "user", display_content, content_blocks=user_blocks, exchange_id=exchange_id
+        )
+        await session.save()
+
+        # Update TreeState so WebSocket clients can see the new turns via getTurns()
+        if self._tree_state:
+            if not self._tree_state.get_session(session_id):
+                self._tree_state.add_session(session, is_current=False)
+            if self._tree_state.get_session(session_id) and self._tree_state.get_session(session_id).turns is None:
+                self._tree_state.load_session(session_id, session)
+
+            self._tree_state.start_turn(session_id, turn_index, "user", exchange_id=exchange_id)
+            self._tree_state.update_turn_content(session_id, turn_index, display_content)
+            import asyncio as aio
+            aio.create_task(self._tree_state.finish_turn(
+                session_id, turn_index, display_content, TextBlock(text=content), []
+            ))
+            self._tree_state.start_turn(session_id, turn_index + 1, "assistant", exchange_id=exchange_id)
+            self._tree_state.start_streaming(session_id)
+
+        # Emit user turn events to TaskStateService
+        if self._task_service:
+            self._task_service.emit_turn_started(
+                session_id=session_id,
+                exchange_id=exchange_id,
+                turn_index=turn_index,
+                role="user",
+            )
+            self._task_service.emit_turn_finished(
+                session_id=session_id,
+                exchange_id=exchange_id,
+                turn_index=turn_index,
+                role="user",
+                content=display_content,
+            )
+
+        # Register the stream in StreamState for tracking
+        self._stream_state.register_session_stream(
+            session_id=session_id,
+            exchange_id=exchange_id,
+            prompt=content,
+            backend_name=runner._runner.__class__.__name__ if hasattr(runner, '_runner') else "unknown",
+        )
+
+        # Create streaming context for event pump
+        self._streaming_contexts[session_id] = _StreamingContext(
+            session_id=session_id,
+            exchange_id=exchange_id,
+            user_turn_idx=turn_index,
+            assistant_turn_idx=turn_index + 1,
+        )
+
+        # Start background streaming with images
+        # Note: The runner's underlying ClaudeRunner needs to handle images
+        # We pass images via an extended interface
+        if hasattr(runner._runner, 'set_pending_images'):
+            runner._runner.set_pending_images(image_blocks)
+
+        runner.start_background(
+            prompt=content,
+            messages=session.turns,
+            allowed_tools=allowed_tools,
+        )
+
+        # Emit message submitted event
+        self._emit_event(
+            SessionManagerEvent.MESSAGE_SUBMITTED,
+            session_id,
+            {
+                "exchange_id": exchange_id,
+                "turn_index": turn_index,
+                "content": content,
+                "image_count": len(image_blocks),
+            },
         )
 
         return SubmitMessageResult(
