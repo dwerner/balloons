@@ -83,3 +83,20 @@ backends:
   #   api_key: ollama  # ollama requires some value
   #   model: llama3.2  # or any model you've pulled
   #   system_prompt: ~/.balloons/prompts/minimal.md
+
+# WebSocket server for web UI and external integrations
+# Enables the React web UI (web/ui/) to connect to the running TUI
+# websocket:
+#   enabled: false        # Set to true to start WebSocket server
+#   host: localhost       # Bind address (use 0.0.0.0 for LAN access)
+#   port: 8765            # WebSocket port
+#   # TLS configuration (optional, for wss://)
+#   # tls:
+#   #   enabled: false
+#   #   cert_file: ~/.balloons/certs/cert.pem
+#   #   key_file: ~/.balloons/certs/key.pem
+#   # JWT authentication (optional)
+#   # jwt:
+#   #   enabled: false
+#   #   secret: your-secret-key
+#   #   expiration_seconds: 86400

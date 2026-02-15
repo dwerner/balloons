@@ -120,6 +120,37 @@ Sessions are stored in `~/.balloons/sessions/` as JSON files.
 - [CONTEXT-MANAGEMENT.md](CONTEXT-MANAGEMENT.md) - Context system details
 - [prompt-samples/](prompt-samples/) - Example system prompts
 
+## Web UI (Experimental)
+
+Balloons includes an experimental React web interface that connects to the TUI via WebSocket.
+
+### Enabling the WebSocket Server
+
+Add to `~/.balloons/config.yaml`:
+
+```yaml
+websocket:
+  enabled: true
+  host: localhost  # Use 0.0.0.0 for LAN access
+  port: 8765
+```
+
+### Running the Web UI
+
+```bash
+# Terminal 1: Start the TUI (with WebSocket server)
+python main.py
+
+# Terminal 2: Start the web dev server
+cd web/ui
+bun install
+bun run dev
+```
+
+Open http://localhost:3000 in your browser. The UI auto-detects the WebSocket server.
+
+See [web/ui/README.md](web/ui/README.md) for more details.
+
 ## Development
 
 ```bash
@@ -128,6 +159,9 @@ pytest
 
 # Hot reload during development
 python main.py --reload
+
+# Regenerate TypeScript client from Python services
+python -m codegen.generate_typescript
 ```
 
 ## License

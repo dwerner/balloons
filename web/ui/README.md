@@ -1,31 +1,44 @@
 # Balloons Web UI
 
-Minimal React/TypeScript web UI prototype for Balloons.
+React/TypeScript web interface for Balloons that connects via WebSocket to a running TUI instance.
 
 ## Requirements
 
-- Bun >= 1.0
-- Balloons WebSocket server running on ws://localhost:8765
+- [Bun](https://bun.sh/) >= 1.0
+- Balloons TUI with WebSocket server enabled
 
 ## Quick Start
 
-```bash
-# From this directory
-bun install
-bun run dev
-```
+1. **Enable WebSocket server** in `~/.balloons/config.yaml`:
+   ```yaml
+   websocket:
+     enabled: true
+     host: localhost  # Use 0.0.0.0 for LAN access
+     port: 8765
+   ```
 
-Then open http://localhost:3000 in your browser.
+2. **Start the TUI** (in one terminal):
+   ```bash
+   python main.py
+   ```
 
-## Features (Spike)
+3. **Start the web UI** (in another terminal):
+   ```bash
+   cd web/ui
+   bun install
+   bun run dev
+   ```
 
-This is a proof-of-concept demonstrating:
+4. **Open** http://localhost:3000 in your browser.
 
-- [x] WebSocket connection to Balloons backend
-- [x] Session list display (from TreeStateService)
-- [x] Turn display for selected session
-- [x] Message submission (queued via QueueStateService)
-- [x] Real-time streaming updates via event subscriptions
+## Features
+
+- [x] WebSocket connection with auto-reconnect
+- [x] Session list display with streaming indicators
+- [x] Real-time streaming of LLM responses
+- [x] Message submission with Enter key
+- [x] Event-driven updates (session/turn changes)
+- [x] Responsive mobile layout with slide-out sidebar
 
 ## Architecture
 
@@ -56,13 +69,33 @@ window.BALLOONS_WS_URL = 'ws://your-server:port';
 - `bun run dev` - Start dev server with hot reload
 - `bun run typecheck` - Run TypeScript type checking
 
+## Mobile Support
+
+The UI is responsive and works on mobile devices:
+- **Desktop (≥768px)**: Fixed sidebar with chat panel
+- **Mobile (<768px)**: Hamburger menu with slide-out sidebar overlay
+
+Access from your phone by binding to `0.0.0.0` in the websocket config and using your machine's LAN IP.
+
 ## Notes
 
-This is a spike/prototype. For production:
+This is an experimental UI. Future enhancements may include:
 
-- Add proper error boundaries
-- Implement virtualized scrolling for large conversations
-- Add authentication UI
-- Style with a proper design system
-- Add keyboard shortcuts
-- Implement context mode toggling UI
+- Error boundaries for better crash recovery
+- Virtualized scrolling for large conversations
+- Authentication UI (TLS/JWT support exists in backend)
+- Proper design system
+- Keyboard shortcuts
+- Context mode toggling (COPY/COMPRESS/DROP)
+- Fork/merge UI
+
+## Regenerating the TypeScript Client
+
+If the Python WebSocket API changes, regenerate the client:
+
+```bash
+cd /path/to/balloons
+python -m codegen.generate_typescript
+```
+
+This updates `web/generated/` from Python `@ws_expose` decorators.

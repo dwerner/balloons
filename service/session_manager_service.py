@@ -518,6 +518,9 @@ class SessionManagerService:
                 )
             # Complete the stream
             self._stream_state.complete_stream(ctx.exchange_id)
+            # Mark session as no longer streaming so React frontend hides stop button
+            if self._tree_state:
+                self._tree_state.stop_streaming(session_id)
             # Clean up context
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
@@ -526,6 +529,9 @@ class SessionManagerService:
             # Error - mark stream as failed
             error_msg = data if isinstance(data, str) else str(data)
             self._stream_state.fail_stream(ctx.exchange_id, error_msg)
+            # Mark session as no longer streaming
+            if self._tree_state:
+                self._tree_state.stop_streaming(session_id)
             # Clean up context
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
@@ -534,12 +540,18 @@ class SessionManagerService:
             # Rate limit error - mark stream as failed
             error_msg = data if isinstance(data, str) else str(data)
             self._stream_state.fail_stream(ctx.exchange_id, f"Rate limit: {error_msg}")
+            # Mark session as no longer streaming
+            if self._tree_state:
+                self._tree_state.stop_streaming(session_id)
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
 
         elif event_type == "cancelled":
             # Cancelled - mark stream as cancelled
             self._stream_state.cancel_stream(ctx.exchange_id)
+            # Mark session as no longer streaming
+            if self._tree_state:
+                self._tree_state.stop_streaming(session_id)
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
 
@@ -555,6 +567,9 @@ class SessionManagerService:
                     content=ctx.content,
                 )
             self._stream_state.complete_stream(ctx.exchange_id)
+            # Mark session as no longer streaming
+            if self._tree_state:
+                self._tree_state.stop_streaming(session_id)
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
 
@@ -952,6 +967,8 @@ class SessionManagerService:
             ))
             # Start assistant turn (will be streaming)
             self._tree_state.start_turn(session_id, turn_index + 1, "assistant", exchange_id=exchange_id)
+            # Mark session as streaming so React frontend shows stop button
+            self._tree_state.start_streaming(session_id)
 
         # Register the stream in StreamState for tracking
         self._stream_state.register_session_stream(

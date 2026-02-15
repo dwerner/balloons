@@ -1,11 +1,28 @@
-# Codegen: Python to Rust Schema Generation
+# Codegen: Code Generation from Python
+
+This module generates code from Python definitions for use in other languages.
+
+## Available Generators
+
+### TypeScript Client (Web UI)
+
+Generates TypeScript types and WebSocket client from Python `@ws_expose` decorators.
+
+```bash
+python -m codegen.generate_typescript
+```
+
+**Output:**
+- `web/generated/types.ts` - TypeScript interfaces for exposed types
+- `web/generated/client.ts` - TypeScript client for WebSocket RPC
+
+Used by the React web UI in `web/ui/`.
+
+### Rust Schema (Rust Storage)
 
 Generates Rust struct definitions from Python dataclasses.
 
-## Usage
-
 ```bash
-cd /path/to/balloons
 python -m codegen.generate_rust
 ```
 

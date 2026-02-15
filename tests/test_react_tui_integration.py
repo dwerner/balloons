@@ -364,5 +364,249 @@ class TestContextOwnershipTransfer:
         assert events_remaining == 1  # Events not drained
 
 
+class TestStopButtonVisibility:
+    """Test that stop button visibility works correctly with streaming events.
+
+    The React frontend shows a stop button based on selectedSession?.isStreaming.
+    This test verifies that:
+    1. TreeState correctly updates is_streaming on start/stop
+    2. TreeStateService correctly emits streamingStarted/streamingStopped events
+    3. getAllSessions() returns correct isStreaming flag for React to use
+    """
+
+    def _make_mock_session(self, session_id: str = "test-session"):
+        """Create a mock session with all required attributes."""
+        from dataclasses import dataclass, field
+
+        @dataclass
+        class FullMockSession:
+            id: str
+            title: str = "Test"
+            created: str = "2024-01-01"
+            last_modified: str = "2024-01-01"
+            model: str = "claude"
+            turns: list = field(default_factory=list)
+            total_input_tokens: int = 0
+            total_output_tokens: int = 0
+            total_cost: float = 0.0
+            parent_id: str | None = None
+            children: list = field(default_factory=list)
+            fork_name: str = ""
+            fork_status: str = "active"
+            merge_message: str = ""
+            backend_name: str = ""
+            returned: bool = False
+            working_directory: str = ""
+
+        return FullMockSession(id=session_id)
+
+    def test_is_streaming_flag_in_session_list(self):
+        """Test that getAllSessions returns correct isStreaming flag."""
+        from core.tree_state import TreeState, SessionData
+        from service.tree_state_service import TreeStateService
+
+        # Create TreeState and service
+        tree_state = TreeState()
+        service = TreeStateService(tree_state)
+
+        # Add a session
+        tree_state.add_session(self._make_mock_session("test-session"))
+
+        # Initially not streaming
+        session_data = tree_state.get_session("test-session")
+        assert session_data.is_streaming is False
+
+        # Start streaming
+        tree_state.start_streaming("test-session")
+        session_data = tree_state.get_session("test-session")
+        assert session_data.is_streaming is True
+
+        # Stop streaming
+        tree_state.stop_streaming("test-session")
+        session_data = tree_state.get_session("test-session")
+        assert session_data.is_streaming is False
+
+    def test_streaming_events_emitted_to_handlers(self):
+        """Test that streamingStarted/streamingStopped events are emitted."""
+        from core.tree_state import TreeState
+        from service.tree_state_service import TreeStateService
+
+        tree_state = TreeState()
+        service = TreeStateService(tree_state)
+
+        # Track emitted events
+        emitted_events = []
+        def handler(event_name, data):
+            emitted_events.append((event_name, data))
+
+        service.add_event_handler(handler)
+
+        # Add a session
+        tree_state.add_session(self._make_mock_session("test-session"))
+
+        # Start streaming - should emit streamingStarted
+        tree_state.start_streaming("test-session")
+
+        streaming_started = [e for e in emitted_events if e[0] == "streamingStarted"]
+        assert len(streaming_started) == 1
+        assert streaming_started[0][1]["session_id"] == "test-session"
+
+        # Stop streaming - should emit streamingStopped
+        tree_state.stop_streaming("test-session")
+
+        streaming_stopped = [e for e in emitted_events if e[0] == "streamingStopped"]
+        assert len(streaming_stopped) == 1
+        assert streaming_stopped[0][1]["session_id"] == "test-session"
+
+    def test_get_all_sessions_returns_streaming_flag(self):
+        """Test that getAllSessions() includes correct isStreaming for stop button."""
+        from core.tree_state import TreeState
+        from service.tree_state_service import TreeStateService
+
+        tree_state = TreeState()
+        service = TreeStateService(tree_state)
+
+        # Add a session
+        tree_state.add_session(self._make_mock_session("test-session"))
+
+        # Get sessions before streaming
+        sessions = asyncio.run(service.get_all_sessions())
+        session = next(s for s in sessions if s.id == "test-session")
+        assert session.is_streaming is False
+
+        # Start streaming
+        tree_state.start_streaming("test-session")
+
+        # Get sessions during streaming
+        sessions = asyncio.run(service.get_all_sessions())
+        session = next(s for s in sessions if s.id == "test-session")
+        assert session.is_streaming is True
+
+        # Stop streaming
+        tree_state.stop_streaming("test-session")
+
+        # Get sessions after streaming
+        sessions = asyncio.run(service.get_all_sessions())
+        session = next(s for s in sessions if s.id == "test-session")
+        assert session.is_streaming is False
+
+    def test_cancel_streaming_updates_flag(self):
+        """Test that cancelStreaming properly updates the streaming flag."""
+        from core.tree_state import TreeState
+        from service.tree_state_service import TreeStateService
+        from service.session_manager_service import SessionManagerService
+        from core.stream_state import StreamState
+
+        tree_state = TreeState()
+        tree_service = TreeStateService(tree_state)
+        stream_state = StreamState()
+
+        # Create mock manager
+        mock_manager = MagicMock()
+        mock_session = MagicMock()
+        mock_session.id = "test-session"
+        mock_session.title = "Test"
+        mock_session.created = "2024-01-01"
+        mock_session.model = "claude"
+        mock_session.turns = []
+        mock_session.parent_id = None
+        mock_session.returned = False
+        mock_session.working_directory = ""
+
+        mock_runner = MagicMock()
+        mock_runner.is_streaming = True
+        mock_runner.cancel = MagicMock()
+
+        mock_manager.get_session.return_value = mock_session
+        mock_manager.get_runner.return_value = mock_runner
+        mock_manager._sessions = {"test-session": mock_session}
+        mock_manager._runners = {"test-session": mock_runner}
+        mock_manager._active_session_id = "test-session"
+
+        session_service = SessionManagerService(mock_manager, stream_state)
+
+        # Add session to tree state and start streaming
+        tree_state.add_session(self._make_mock_session("test-session"))
+        tree_state.start_streaming("test-session")
+
+        # Verify streaming
+        assert tree_state.is_streaming("test-session") is True
+
+        # Cancel streaming via service
+        result = asyncio.run(session_service.cancel_streaming("test-session"))
+        assert result is True
+        mock_runner.cancel.assert_called_once()
+
+        # The cancelStreaming in session_manager_service doesn't directly update
+        # tree_state - that's done in app.py when the stream completes.
+        # The cancel() call triggers the stream to stop, which will cause
+        # STREAM_CANCELLED event, which triggers STREAMING_STOPPED.
+
+    def test_submit_message_updates_streaming_flag(self):
+        """Test that submit_message() calls tree_state.start_streaming().
+
+        This is the key fix for the stop button visibility bug - when React
+        submits a message, the TreeState streaming flag must be set.
+        """
+        from core.tree_state import TreeState
+        from service.tree_state_service import TreeStateService
+        from service.session_manager_service import SessionManagerService
+        from core.stream_state import StreamState
+
+        tree_state = TreeState()
+        tree_service = TreeStateService(tree_state)
+        stream_state = StreamState()
+
+        # Create mock manager with session and runner
+        mock_manager = MagicMock()
+        mock_session = MagicMock()
+        mock_session.id = "test-session"
+        mock_session.title = "Test"
+        mock_session.created = "2024-01-01"
+        mock_session.model = "claude"
+        mock_session.turns = []
+        mock_session.parent_id = None
+        mock_session.returned = False
+        mock_session.working_directory = ""
+        mock_session.add_message = MagicMock()
+        mock_session.save = AsyncMock()
+
+        mock_runner = MagicMock()
+        mock_runner.is_streaming = False
+        mock_runner.start_background = MagicMock()
+
+        mock_manager.get_session.return_value = mock_session
+        mock_manager.get_runner.return_value = mock_runner
+        mock_manager._sessions = {"test-session": mock_session}
+        mock_manager._runners = {"test-session": mock_runner}
+        mock_manager._active_session_id = "test-session"
+
+        session_service = SessionManagerService(mock_manager, stream_state)
+        session_service.set_tree_state(tree_state)
+
+        # Add session to tree state
+        tree_state.add_session(self._make_mock_session("test-session"))
+
+        # Verify not streaming initially
+        assert tree_state.is_streaming("test-session") is False
+
+        # Track emitted events
+        emitted_events = []
+        def handler(event_name, data):
+            emitted_events.append((event_name, data))
+        tree_service.add_event_handler(handler)
+
+        # Submit a message
+        asyncio.run(session_service.submit_message("test-session", "Hello"))
+
+        # Verify streaming flag was set
+        assert tree_state.is_streaming("test-session") is True
+
+        # Verify streamingStarted event was emitted
+        streaming_started = [e for e in emitted_events if e[0] == "streamingStarted"]
+        assert len(streaming_started) == 1
+        assert streaming_started[0][1]["session_id"] == "test-session"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

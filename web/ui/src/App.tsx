@@ -33,6 +33,8 @@ export function App() {
   const [turns, setTurns] = useState<TurnInfo[]>([]);
   const [message, setMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [queuedMessageCount, setQueuedMessageCount] = useState(0);
 
   const clientRef = useRef<BalloonsClient | null>(null);
   const turnsEndRef = useRef<HTMLDivElement>(null);
@@ -71,6 +73,10 @@ export function App() {
             setSelectedSessionId(currentId);
             const sessionTurns = await client.tree.getTurns(currentId);
             setTurns(sessionTurns);
+
+            // Load queue state for the current session
+            const queueInfo = await client.queue.getQueue(currentId);
+            setQueuedMessageCount(queueInfo.messageCount);
           }
         } catch (err) {
           console.error('Failed to load sessions:', err);
@@ -175,16 +181,61 @@ export function App() {
 
       // Streaming events
       unsubscribers.push(
-        client.tree.onStreamingStarted(async () => {
+        client.tree.onStreamingStarted(async (data) => {
+          console.log('streamingStarted event received:', data);
           const sessionList = await client.tree.getAllSessions();
+          console.log('Sessions after streamingStarted:', sessionList.map(s => ({ id: s.id.slice(0,8), isStreaming: s.isStreaming })));
           setSessions(sessionList);
         })
       );
 
       unsubscribers.push(
-        client.tree.onStreamingStopped(async () => {
+        client.tree.onStreamingStopped(async (data) => {
+          console.log('streamingStopped event received:', data);
           const sessionList = await client.tree.getAllSessions();
+          console.log('Sessions after streamingStopped:', sessionList.map(s => ({ id: s.id.slice(0,8), isStreaming: s.isStreaming })));
           setSessions(sessionList);
+        })
+      );
+
+      // Queue events - track queued messages for the selected session
+      unsubscribers.push(
+        client.queue.onMessageAdded(async (data) => {
+          console.log('Queue messageAdded event:', data);
+          if (data.sessionId === selectedSessionId) {
+            const queueInfo = await client.queue.getQueue(data.sessionId);
+            setQueuedMessageCount(queueInfo.messageCount);
+          }
+        })
+      );
+
+      unsubscribers.push(
+        client.queue.onMessageRemoved(async (data) => {
+          console.log('Queue messageRemoved event:', data);
+          if (data.sessionId === selectedSessionId) {
+            const queueInfo = await client.queue.getQueue(data.sessionId);
+            setQueuedMessageCount(queueInfo.messageCount);
+          }
+        })
+      );
+
+      unsubscribers.push(
+        client.queue.onQueueDrained(async (data) => {
+          console.log('Queue drained event:', data);
+          if (data.sessionId === selectedSessionId) {
+            // Queue was drained - messages are being processed
+            const queueInfo = await client.queue.getQueue(data.sessionId);
+            setQueuedMessageCount(queueInfo.messageCount);
+          }
+        })
+      );
+
+      unsubscribers.push(
+        client.queue.onQueueCleared(async (data) => {
+          console.log('Queue cleared event:', data);
+          if (data.sessionId === selectedSessionId) {
+            setQueuedMessageCount(0);
+          }
         })
       );
     } catch (err) {
@@ -202,11 +253,16 @@ export function App() {
     if (!client || connectionState !== 'connected') return;
 
     setSelectedSessionId(sessionId);
+    setSidebarOpen(false); // Close sidebar on mobile after selection
     setError(null);
 
     try {
       const sessionTurns = await client.tree.getTurns(sessionId);
       setTurns(sessionTurns);
+
+      // Load queue state for the session
+      const queueInfo = await client.queue.getQueue(sessionId);
+      setQueuedMessageCount(queueInfo.messageCount);
     } catch (err) {
       console.error('Failed to load turns:', err);
       setError(`Failed to load turns: ${err}`);
@@ -226,17 +282,27 @@ export function App() {
     setMessage('');
     setError(null);
 
+    // Check if session is currently streaming
+    const session = sessions.find(s => s.id === selectedSessionId);
+    const isStreaming = session?.isStreaming ?? false;
+
     try {
-      // Submit the message using SessionManagerService
-      // This starts streaming immediately and emits events via TaskStateService
-      const result = await client.sessions.submitMessage(selectedSessionId, content);
-      console.log('Message submitted:', result.exchangeId, content.substring(0, 50));
+      if (isStreaming) {
+        // Session is streaming - add to queue instead of submitting directly
+        const messageId = await client.queue.addMessage(selectedSessionId, content);
+        console.log('Message queued:', messageId, content.substring(0, 50));
+        // Queue state will be updated via onMessageAdded event
+      } else {
+        // Session is not streaming - submit directly
+        const result = await client.sessions.submitMessage(selectedSessionId, content);
+        console.log('Message submitted:', result.exchangeId, content.substring(0, 50));
+      }
     } catch (err) {
       console.error('Failed to send message:', err);
       setError(`Failed to send message: ${err}`);
       setMessage(content); // Restore the message on failure
     }
-  }, [connectionState, selectedSessionId, message]);
+  }, [connectionState, selectedSessionId, message, sessions]);
 
   // Handle Enter key in textarea
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -246,14 +312,51 @@ export function App() {
     }
   }, [handleSubmit]);
 
+  // Stop streaming
+  const handleStopStreaming = useCallback(async () => {
+    const client = clientRef.current;
+    if (!client || connectionState !== 'connected' || !selectedSessionId) {
+      return;
+    }
+
+    try {
+      await client.sessions.cancelStreaming(selectedSessionId);
+      console.log('Streaming cancelled');
+    } catch (err) {
+      console.error('Failed to stop streaming:', err);
+      setError(`Failed to stop streaming: ${err}`);
+    }
+  }, [connectionState, selectedSessionId]);
+
   const selectedSession = sessions.find(s => s.id === selectedSessionId);
+
+  // Debug: log when selectedSession.isStreaming changes
+  console.log('Render - selectedSession:', selectedSession?.id?.slice(0,8), 'isStreaming:', selectedSession?.isStreaming);
 
   return (
     <div className="app">
-      <aside className="sidebar">
+      {/* Mobile header */}
+      <header className="mobile-header">
+        <button className="menu-button" onClick={() => setSidebarOpen(true)} aria-label="Open menu">
+          ☰
+        </button>
+        <div className={`connection-status ${connectionState}`} title={connectionState} />
+        <h1>Balloons</h1>
+      </header>
+
+      {/* Sidebar overlay for mobile */}
+      <div
+        className={`sidebar-overlay ${sidebarOpen ? 'visible' : ''}`}
+        onClick={() => setSidebarOpen(false)}
+      />
+
+      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <header className="sidebar-header">
           <div className={`connection-status ${connectionState}`} title={connectionState} />
           <h1>Balloons</h1>
+          <button className="close-button" onClick={() => setSidebarOpen(false)} aria-label="Close menu">
+            ✕
+          </button>
         </header>
 
         <div className="session-list">
@@ -315,24 +418,52 @@ export function App() {
               <div ref={turnsEndRef} />
             </div>
 
-            <div className="input-area">
+            <div className={`input-area ${selectedSession?.isStreaming ? 'queue-mode' : ''}`}>
+              {selectedSession?.isStreaming && (
+                <div className="queue-indicator">
+                  <span className="queue-dot" />
+                  {queuedMessageCount > 0 ? `${queuedMessageCount} queued` : 'Queue mode'}
+                </div>
+              )}
               <form className="input-form" onSubmit={handleSubmit}>
                 <textarea
                   className="input-field"
-                  placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
+                  placeholder={selectedSession?.isStreaming
+                    ? "Type to queue... (messages will be sent after streaming completes)"
+                    : "Type a message... (Enter to send, Shift+Enter for newline)"}
                   value={message}
                   onChange={e => setMessage(e.target.value)}
                   onKeyDown={handleKeyDown}
                   disabled={connectionState !== 'connected'}
                   rows={1}
                 />
-                <button
-                  type="submit"
-                  className="send-button"
-                  disabled={connectionState !== 'connected' || !message.trim() || selectedSession?.isStreaming}
-                >
-                  Send
-                </button>
+                {selectedSession?.isStreaming ? (
+                  <>
+                    <button
+                      type="submit"
+                      className="queue-button"
+                      disabled={connectionState !== 'connected' || !message.trim()}
+                    >
+                      Queue
+                    </button>
+                    <button
+                      type="button"
+                      className="stop-button"
+                      onClick={handleStopStreaming}
+                      disabled={connectionState !== 'connected'}
+                    >
+                      Stop
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="submit"
+                    className="send-button"
+                    disabled={connectionState !== 'connected' || !message.trim()}
+                  >
+                    Send
+                  </button>
+                )}
               </form>
             </div>
           </>

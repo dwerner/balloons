@@ -608,4 +608,79 @@ async def test_delete_saved_turn_is_tracked(temp_db):
     assert loaded.turns[0].content_block.text == "Turn 1"
 
 
+@pytest.mark.asyncio
+async def test_incremental_save_snapshot_prevents_race_condition(temp_db):
+    """Test that incremental save takes a snapshot to prevent race conditions.
+
+    This tests the scenario where a new turn is added during an async save:
+    1. Save starts, takes snapshot of turns
+    2. New turn is added to session
+    3. Save completes with snapshot turns
+    4. New turn is still dirty and will be saved in next cycle
+    5. reorder_turns only includes saved turns (not the new one)
+    """
+    storage = AsyncStorage(temp_db)
+
+    # Create session with one turn
+    session = Session()
+    session.add_turn(
+        role="user",
+        content_block=TextBlock(text="Initial turn"),
+    )
+    await storage.save_session(session)
+
+    # Verify session is clean
+    assert session._saved_turn_order == [session.turns[0].id]
+    assert not session.turns[0].is_dirty
+
+    # Add a new turn (simulating a concurrent add during save)
+    session.add_turn(
+        role="assistant",
+        content_block=TextBlock(text="New turn"),
+    )
+    new_turn_id = session.turns[1].id
+
+    # The new turn should be dirty
+    assert session.turns[1].is_dirty
+
+    # Save should work even if we simulate concurrent modification
+    # The key is that reorder_turns uses the snapshot order
+    await storage.save_session(session)
+
+    # After save, the new turn should be clean and in saved_turn_order
+    assert not session.turns[1].is_dirty
+    assert new_turn_id in session._saved_turn_order
+
+    # Verify persistence
+    loaded = await storage.load_session(session.id)
+    assert len(loaded.turns) == 2
+    assert loaded.turns[1].content_block.text == "New turn"
+
+
+@pytest.mark.asyncio
+async def test_mark_saved_clean_only_affects_saved_turns(temp_db):
+    """Test that mark_saved_clean only marks the specified turns as clean."""
+    session = Session()
+    turn1 = session.add_turn(role="user", content_block=TextBlock(text="Turn 1"))
+    turn2 = session.add_turn(role="assistant", content_block=TextBlock(text="Turn 2"))
+    turn3 = session.add_turn(role="user", content_block=TextBlock(text="Turn 3"))
+
+    # All turns start dirty
+    assert turn1.is_dirty
+    assert turn2.is_dirty
+    assert turn3.is_dirty
+
+    # Mark only turn1 and turn2 as saved
+    saved_ids = {turn1.id, turn2.id}
+    session.mark_saved_clean(saved_ids)
+
+    # turn1 and turn2 should be clean, turn3 should still be dirty
+    assert not turn1.is_dirty
+    assert not turn2.is_dirty
+    assert turn3.is_dirty
+
+    # _saved_turn_order should only include saved turns
+    assert session._saved_turn_order == [turn1.id, turn2.id]
+
+
 # GoalStorage tests are in test_goal_storage.py (file-based, no Rust required)

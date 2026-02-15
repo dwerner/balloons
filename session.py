@@ -139,6 +139,32 @@ class Session:
         for turn in self.turns:
             turn.mark_clean()
 
+    def mark_saved_clean(self, saved_turn_ids: set[str] | None = None) -> None:
+        """Mark specific turns as saved (clean).
+
+        Used after incremental saves to only mark the turns that were actually
+        saved to storage, avoiding race conditions with turns added during save.
+
+        Args:
+            saved_turn_ids: Set of turn IDs that were saved. If None, marks all
+                           turns as clean (same as mark_all_clean).
+        """
+        self._metadata_dirty = False
+        self._deleted_turn_ids = set()
+
+        if saved_turn_ids is None:
+            # Full save - mark everything clean
+            self._saved_turn_order = [t.id for t in self.turns]
+            for turn in self.turns:
+                turn.mark_clean()
+        else:
+            # Incremental save - only mark saved turns as clean
+            # Update _saved_turn_order to match what's actually in storage
+            self._saved_turn_order = [t.id for t in self.turns if t.id in saved_turn_ids]
+            for turn in self.turns:
+                if turn.id in saved_turn_ids:
+                    turn.mark_clean()
+
     def add_turn(
         self,
         role: str,

@@ -143,12 +143,15 @@ class AsyncStorage:
             # New session: use full save (atomic batch)
             await self._full_save_session(session)
             save_type = "full"
+            saved_turn_ids = None  # Full save handles all turns
         else:
             # Existing session: use incremental save
-            save_type = await self._incremental_save_session(session)
+            save_type, saved_turn_ids = await self._incremental_save_session(session)
 
-        # Mark everything as clean after successful save
-        session.mark_all_clean()
+        # Mark saved items as clean
+        # For incremental saves, only mark the turns that were actually saved
+        # to avoid race conditions with turns added during the async save
+        session.mark_saved_clean(saved_turn_ids)
 
         elapsed_ms = (time.perf_counter() - start) * 1000
         dirty_count = sum(1 for t in session.turns if t._dirty) if not is_new_session else len(session.turns)
@@ -186,17 +189,34 @@ class AsyncStorage:
         # Atomically replace all turns (handles deletes, upserts, and ordering)
         await self._run_sync(self._storage.replace_session_turns, session.id, turns_json)
 
-    async def _incremental_save_session(self, session: Session) -> str:
+    async def _incremental_save_session(self, session: Session) -> tuple[str, set[str]]:
         """Incremental save: only write what changed.
 
-        Returns a string indicating what was saved: "none", "metadata", "turns", "both"
+        Returns a tuple of:
+        - save_type: "none", "metadata", "turns", or "both"
+        - saved_turn_ids: Set of turn IDs that were saved (for cleanup tracking)
 
         Note: We always save metadata since it's small and direct attribute
         assignments (like session.title = "x") don't trigger dirty tracking.
         The real performance win is from incremental turn saves.
+
+        IMPORTANT: We take a snapshot of turns at the start to avoid race conditions.
+        If new turns are added during the async save operations, they'll be picked up
+        in the next save cycle. The snapshot ensures reorder_turns only references
+        turns that were actually saved.
         """
         saved_metadata = False
         saved_turns = False
+
+        # Take a snapshot of turn state at the start to avoid race conditions
+        # This prevents reorder_turns from referencing turns added during save
+        turns_snapshot = list(session.turns)
+        dirty_turns = [t for t in turns_snapshot if t.is_dirty]
+        deleted_ids = session.get_deleted_turn_ids()
+        saved_turn_order = session._saved_turn_order.copy()
+
+        # Track which turns we actually save
+        saved_turn_ids = {t.id for t in turns_snapshot}
 
         # 1. Always save session metadata (small, and direct attribute changes
         # don't trigger dirty tracking without property setters)
@@ -210,7 +230,6 @@ class AsyncStorage:
         # been deleted (e.g., by a concurrent save or if the turn was never saved).
         # This makes deletion idempotent - trying to delete an already-deleted turn
         # is not an error.
-        deleted_ids = session.get_deleted_turn_ids()
         for turn_id in deleted_ids:
             try:
                 await self._run_sync(self._storage.delete_turn, session.id, turn_id)
@@ -227,7 +246,6 @@ class AsyncStorage:
                     raise  # Re-raise unexpected errors
 
         # 3. Save dirty turns (new or modified)
-        dirty_turns = session.get_dirty_turns()
         for turn in dirty_turns:
             turn_data = self._turn_to_wire(turn)
             turn_json = json.dumps(turn_data)
@@ -235,20 +253,23 @@ class AsyncStorage:
             saved_turns = True
 
         # 4. Reorder turns if order changed
-        if session.has_turn_order_changed():
-            current_order = [t.id for t in session.turns]
-            order_json = json.dumps(current_order)
+        # Use snapshot order to only include turns that were saved above
+        snapshot_order = [t.id for t in turns_snapshot]
+        if snapshot_order != saved_turn_order:
+            order_json = json.dumps(snapshot_order)
             await self._run_sync(self._storage.reorder_turns, session.id, order_json)
             saved_turns = True
 
         if saved_metadata and saved_turns:
-            return "both"
+            save_type = "both"
         elif saved_metadata:
-            return "metadata"
+            save_type = "metadata"
         elif saved_turns:
-            return "turns"
+            save_type = "turns"
         else:
-            return "none"
+            save_type = "none"
+
+        return save_type, saved_turn_ids
 
     async def load_session(self, session_id: str) -> Optional[Session]:
         """Load a session from storage.

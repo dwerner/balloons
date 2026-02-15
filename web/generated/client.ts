@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-14T17:17:33.137477
+// Generated: 2026-02-14T17:26:22.243832
 //
 // To regenerate:
 //     python -m codegen.generate_typescript

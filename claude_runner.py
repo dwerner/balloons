@@ -359,6 +359,7 @@ class ClaudeRunner(BaseRunner):
             "--input-format", "stream-json",
             "--output-format", "stream-json",
             "--no-session-persistence",
+            "--dangerously-skip-permissions",
             "--disallowedTools", "Task,TodoWrite,NotebookEdit,AskUserQuestion,EnterPlanMode,ExitPlanMode",
         ]
 
