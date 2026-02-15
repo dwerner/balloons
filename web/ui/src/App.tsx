@@ -4,7 +4,9 @@ import type { ConnectionState, SessionInfo, TurnInfo, TaskInfo, Unsubscribe, Too
 import { MarkdownContent } from './MarkdownContent';
 import { AppLayout, useLayout, useTheme } from './components/layout';
 import { SessionTreeView } from './components/SessionTreeView';
+import { SessionStatusBar } from './components/SessionStatusBar';
 import { StreamingStatusBar } from './components/StreamingStatusBar';
+import { useWakeLock } from './hooks';
 
 // Tool use state tracked during streaming
 interface ToolUseState {
@@ -39,7 +41,7 @@ interface ImageAttachment {
 const Collapsible = memo(function Collapsible({
   title,
   children,
-  defaultExpanded = false
+  defaultExpanded = true  // Default to expanded now
 }: {
   title: string;
   children: React.ReactNode;
@@ -66,6 +68,38 @@ const Collapsible = memo(function Collapsible({
   );
 });
 
+// File extension to language mapping for syntax highlighting
+const EXT_TO_LANGUAGE: Record<string, string> = {
+  '.py': 'python',
+  '.js': 'javascript',
+  '.ts': 'typescript',
+  '.tsx': 'tsx',
+  '.jsx': 'jsx',
+  '.rs': 'rust',
+  '.go': 'go',
+  '.rb': 'ruby',
+  '.java': 'java',
+  '.c': 'c',
+  '.cpp': 'cpp',
+  '.h': 'c',
+  '.hpp': 'cpp',
+  '.css': 'css',
+  '.html': 'html',
+  '.json': 'json',
+  '.yaml': 'yaml',
+  '.yml': 'yaml',
+  '.md': 'markdown',
+  '.sh': 'bash',
+  '.bash': 'bash',
+  '.sql': 'sql',
+};
+
+// Guess language from file path
+const guessLanguage = (filePath: string): string => {
+  const ext = filePath.slice(filePath.lastIndexOf('.')).toLowerCase();
+  return EXT_TO_LANGUAGE[ext] || 'text';
+};
+
 // Format JSON for display (shared utility)
 const formatJson = (json: string | Record<string, unknown>) => {
   try {
@@ -79,6 +113,204 @@ const formatJson = (json: string | Record<string, unknown>) => {
     return typeof json === 'string' ? json : JSON.stringify(json);
   }
 };
+
+// Generate unified diff between two strings
+const generateDiff = (oldStr: string, newStr: string, filePath: string): string[] => {
+  const oldLines = oldStr.split('\n');
+  const newLines = newStr.split('\n');
+  const fileName = filePath.split('/').pop() || filePath;
+
+  const result: string[] = [];
+  result.push(`--- a/${fileName}`);
+  result.push(`+++ b/${fileName}`);
+
+  // Simple diff algorithm - find changes
+  let oldIdx = 0;
+  let newIdx = 0;
+
+  while (oldIdx < oldLines.length || newIdx < newLines.length) {
+    if (oldIdx >= oldLines.length) {
+      // Rest are additions
+      result.push(`+${newLines[newIdx]}`);
+      newIdx++;
+    } else if (newIdx >= newLines.length) {
+      // Rest are deletions
+      result.push(`-${oldLines[oldIdx]}`);
+      oldIdx++;
+    } else if (oldLines[oldIdx] === newLines[newIdx]) {
+      // Context line
+      result.push(` ${oldLines[oldIdx]}`);
+      oldIdx++;
+      newIdx++;
+    } else {
+      // Changed - show deletion then addition
+      result.push(`-${oldLines[oldIdx]}`);
+      oldIdx++;
+      // Look ahead to see if this is a replacement or just deletion
+      if (newIdx < newLines.length && (oldIdx >= oldLines.length || newLines[newIdx] !== oldLines[oldIdx])) {
+        result.push(`+${newLines[newIdx]}`);
+        newIdx++;
+      }
+    }
+  }
+
+  return result;
+};
+
+// Component for displaying formatted tool input
+const FormattedToolInput = memo(function FormattedToolInput({
+  toolName,
+  toolInput
+}: {
+  toolName: string;
+  toolInput: Record<string, unknown> | string;
+}) {
+  const input = typeof toolInput === 'string' ? JSON.parse(toolInput || '{}') : toolInput;
+
+  if (toolName === 'Edit') {
+    const filePath = (input.file_path || '') as string;
+    const oldString = (input.old_string || '') as string;
+    const newString = (input.new_string || '') as string;
+    const diffLines = generateDiff(oldString, newString, filePath);
+
+    return (
+      <div className="tool-input-formatted">
+        <div className="tool-input-header">
+          <span className="tool-input-label">Edit</span>
+          <code className="tool-input-path">{filePath}</code>
+        </div>
+        <div className="diff-view">
+          {diffLines.map((line, idx) => {
+            let className = 'diff-line diff-context';
+            if (line.startsWith('+++') || line.startsWith('---')) {
+              className = 'diff-line diff-header';
+            } else if (line.startsWith('+')) {
+              className = 'diff-line diff-add';
+            } else if (line.startsWith('-')) {
+              className = 'diff-line diff-remove';
+            }
+            return <div key={idx} className={className}>{line}</div>;
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  if (toolName === 'Write') {
+    const filePath = (input.file_path || '') as string;
+    const content = (input.content || '') as string;
+    const language = guessLanguage(filePath);
+    const truncated = content.length > 1000;
+    const displayContent = truncated ? content.slice(0, 1000) + '\n... [truncated]' : content;
+
+    return (
+      <div className="tool-input-formatted">
+        <div className="tool-input-header">
+          <span className="tool-input-label">Write</span>
+          <code className="tool-input-path">{filePath}</code>
+        </div>
+        <pre className="tool-code-block" data-language={language}>
+          <code>{displayContent}</code>
+        </pre>
+      </div>
+    );
+  }
+
+  if (toolName === 'Read') {
+    const filePath = (input.file_path || '') as string;
+    const offset = input.offset as number | undefined;
+    const limit = input.limit as number | undefined;
+    let rangeInfo = '';
+    if (offset || limit) {
+      const start = offset || 1;
+      if (limit) {
+        rangeInfo = ` (lines ${start}-${(offset || 0) + limit})`;
+      } else {
+        rangeInfo = ` (from line ${start})`;
+      }
+    }
+    return (
+      <div className="tool-input-formatted">
+        <div className="tool-input-header">
+          <span className="tool-input-label">Read</span>
+          <code className="tool-input-path">{filePath}{rangeInfo}</code>
+        </div>
+      </div>
+    );
+  }
+
+  if (toolName === 'Bash') {
+    const command = (input.command || '') as string;
+    const description = (input.description || '') as string;
+    return (
+      <div className="tool-input-formatted">
+        <div className="tool-input-header">
+          <span className="tool-input-label">Bash</span>
+          {description && <span className="tool-input-desc">{description}</span>}
+        </div>
+        <pre className="tool-code-block" data-language="bash">
+          <code>{command}</code>
+        </pre>
+      </div>
+    );
+  }
+
+  if (toolName === 'Glob') {
+    const pattern = (input.pattern || '') as string;
+    const path = (input.path || '.') as string;
+    return (
+      <div className="tool-input-formatted">
+        <div className="tool-input-header">
+          <span className="tool-input-label">Glob</span>
+          <code className="tool-input-path">{pattern}</code>
+          <span className="tool-input-in">in</span>
+          <code className="tool-input-path">{path}</code>
+        </div>
+      </div>
+    );
+  }
+
+  if (toolName === 'Grep') {
+    const pattern = (input.pattern || '') as string;
+    const path = (input.path || '.') as string;
+    return (
+      <div className="tool-input-formatted">
+        <div className="tool-input-header">
+          <span className="tool-input-label">Grep</span>
+          <code className="tool-input-path">{pattern}</code>
+          <span className="tool-input-in">in</span>
+          <code className="tool-input-path">{path}</code>
+        </div>
+      </div>
+    );
+  }
+
+  // Default: show formatted JSON
+  return (
+    <pre className="tool-use-json">
+      <code>{formatJson(input)}</code>
+    </pre>
+  );
+});
+
+// Component for displaying formatted tool result
+const FormattedToolResult = memo(function FormattedToolResult({
+  result,
+  isError
+}: {
+  result: string;
+  isError?: boolean;
+}) {
+  // Truncate very long results
+  const truncated = result.length > 5000;
+  const displayResult = truncated ? result.slice(0, 5000) + '\n... [truncated]' : result;
+
+  return (
+    <pre className={`tool-use-result ${isError ? 'error' : ''}`}>
+      <code>{displayResult}</code>
+    </pre>
+  );
+});
 
 // Tool use component for displaying individual tool calls (streaming)
 const StreamingToolUseDisplay = memo(function StreamingToolUseDisplay({ toolUse }: { toolUse: ToolUseState }) {
@@ -94,6 +326,16 @@ const StreamingToolUseDisplay = memo(function StreamingToolUseDisplay({ toolUse 
   }[toolUse.status];
 
   const statusClass = toolUse.status;
+
+  // Parse the input JSON for formatting
+  let parsedInput: Record<string, unknown> | null = null;
+  if (toolUse.inputJson) {
+    try {
+      parsedInput = JSON.parse(toolUse.inputJson);
+    } catch {
+      // Still streaming, JSON incomplete
+    }
+  }
 
   return (
     <div className={`tool-use ${statusClass}`}>
@@ -112,18 +354,20 @@ const StreamingToolUseDisplay = memo(function StreamingToolUseDisplay({ toolUse 
       </div>
 
       {toolUse.inputJson && (
-        <Collapsible title="Input" defaultExpanded={toolUse.status === 'streaming'}>
-          <pre className="tool-use-json">
-            <code>{formatJson(toolUse.inputJson)}</code>
-          </pre>
+        <Collapsible title="Input" defaultExpanded={true}>
+          {parsedInput ? (
+            <FormattedToolInput toolName={toolUse.toolName} toolInput={parsedInput} />
+          ) : (
+            <pre className="tool-use-json">
+              <code>{toolUse.inputJson}</code>
+            </pre>
+          )}
         </Collapsible>
       )}
 
       {toolUse.result !== undefined && (
-        <Collapsible title={toolUse.isError ? "Error" : "Result"}>
-          <pre className={`tool-use-result ${toolUse.isError ? 'error' : ''}`}>
-            <code>{toolUse.result}</code>
-          </pre>
+        <Collapsible title={toolUse.isError ? "Error" : "Result"} defaultExpanded={true}>
+          <FormattedToolResult result={toolUse.result} isError={toolUse.isError} />
         </Collapsible>
       )}
     </div>
@@ -189,25 +433,21 @@ const ToolUseTurn = memo(function ToolUseTurn({
 
   return (
     <div className={`turn assistant tool-use-turn ${turn.streaming ? 'streaming' : ''}`}>
-      <div className={`tool-use ${result ? 'completed' : 'executing'}`}>
+      <div className={`tool-use completed`}>
         <div className="tool-use-header">
-          <span className={`tool-use-status ${result ? (isError ? 'error' : 'completed') : 'executing'}`}>
-            {result ? (isError ? '✗' : '✓') : '⚙️'}
+          <span className={`tool-use-status ${isError ? 'error' : 'completed'}`}>
+            {isError ? '✗' : '✓'}
           </span>
           <span className="tool-use-name">{toolUse.toolName}</span>
         </div>
         {toolUse.toolInput && Object.keys(toolUse.toolInput).length > 0 && (
-          <Collapsible title="Input" defaultExpanded={false}>
-            <pre className="tool-use-json">
-              <code>{formatJson(toolUse.toolInput)}</code>
-            </pre>
+          <Collapsible title="Input" defaultExpanded={true}>
+            <FormattedToolInput toolName={toolUse.toolName} toolInput={toolUse.toolInput} />
           </Collapsible>
         )}
         {result && (
-          <Collapsible title={isError ? "Error" : "Result"} defaultExpanded={false}>
-            <pre className={`tool-use-result ${isError ? 'error' : ''}`}>
-              <code>{result.content}</code>
-            </pre>
+          <Collapsible title={isError ? "Error" : "Result"} defaultExpanded={true}>
+            <FormattedToolResult result={result.content} isError={isError} />
           </Collapsible>
         )}
       </div>
@@ -1242,7 +1482,7 @@ export function App() {
             </div>
 
             <div className={`input-area ${selectedSession?.isStreaming ? 'queue-mode' : ''}`}>
-              {selectedSession?.isStreaming && streamingTask && (
+              {selectedSession?.isStreaming && streamingTask ? (
                 <StreamingStatusBar
                   task={streamingTask}
                   queuedMessageCount={queuedMessageCount}
@@ -1250,6 +1490,8 @@ export function App() {
                   stopDisabled={connectionState !== 'connected'}
                   sessionContextTokens={selectedSession.cachedContextTokens}
                 />
+              ) : selectedSession && (
+                <SessionStatusBar session={selectedSession} />
               )}
               {/* Image preview area */}
               {imageAttachments.length > 0 && (
@@ -1372,6 +1614,7 @@ function SidebarContent({
 }: SidebarContentProps) {
   const { closeSidebar, layoutMode } = useLayout();
   const { resolvedTheme, toggleTheme } = useTheme();
+  const { isActive: wakeLockActive, isSupported: wakeLockSupported, toggle: toggleWakeLock } = useWakeLock();
 
   // View mode state (persisted in localStorage)
   const [viewMode, setViewMode] = useState<SidebarView>(() => {
@@ -1421,6 +1664,18 @@ function SidebarContent({
             🌲
           </button>
         </div>
+
+        {/* Wake lock toggle - keeps screen awake on mobile */}
+        {wakeLockSupported && (
+          <button
+            className={`wake-lock-toggle ${wakeLockActive ? 'active' : ''}`}
+            onClick={toggleWakeLock}
+            aria-label={wakeLockActive ? 'Allow screen to sleep' : 'Keep screen awake'}
+            title={wakeLockActive ? 'Screen: staying awake' : 'Screen: can sleep'}
+          >
+            {wakeLockActive ? '☀️' : '💤'}
+          </button>
+        )}
 
         <button
           className="theme-toggle"

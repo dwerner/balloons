@@ -51,6 +51,7 @@ class SessionInfo:
     fork_status: str
     parent_id: str | None = None
     cached_context_tokens: int = 0
+    context_window: int = 200000
     binding_indicator: str = ""
 
 
@@ -215,6 +216,7 @@ class TreeStateService:
             fork_status=session_data.fork_status,
             parent_id=session_data.parent_id,
             cached_context_tokens=session_data.cached_context_tokens,
+            context_window=session_data.context_window,
             binding_indicator=session_data.binding_indicator,
         )
 
@@ -241,6 +243,7 @@ class TreeStateService:
                 fork_status=s.fork_status,
                 parent_id=s.parent_id,
                 cached_context_tokens=s.cached_context_tokens,
+                context_window=s.context_window,
                 binding_indicator=s.binding_indicator,
             )
             for s in sessions.values()

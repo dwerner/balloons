@@ -1,0 +1,88 @@
+/* =====================================================
+   SessionStatusBar Component Styles
+   Persistent context usage display (shown when not streaming)
+   ===================================================== */
+
+.session-status-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+/* ----- Header Row: Model + Context Values ----- */
+.session-status-bar__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.session-status-bar__model {
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.session-status-bar__context-values {
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+
+.session-status-bar__context-percent {
+  margin-left: 4px;
+  color: var(--color-text-muted);
+}
+
+/* ----- Context Progress Bar ----- */
+.session-status-bar__context-track {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.session-status-bar__context-bar {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease-out, background-color 0.3s ease;
+}
+
+/* Context bar color states */
+.session-status-bar__context-bar.context-bar--healthy {
+  background: var(--color-accent-green);
+}
+
+.session-status-bar__context-bar.context-bar--moderate {
+  background: var(--color-accent-blue);
+}
+
+.session-status-bar__context-bar.context-bar--warning {
+  background: var(--color-accent-yellow);
+}
+
+.session-status-bar__context-bar.context-bar--critical {
+  background: var(--color-accent-red);
+  animation: context-critical-pulse 1s infinite;
+}
+
+@keyframes context-critical-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+/* ----- Desktop Layout ----- */
+@media (min-width: 768px) {
+  .session-status-bar {
+    padding: 10px 16px;
+  }
+}

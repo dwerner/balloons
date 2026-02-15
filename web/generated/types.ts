@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-15T09:27:31.238853
+// Generated: 2026-02-15T11:54:01.108814
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -22,6 +22,7 @@ export interface SessionInfo {
   forkStatus: string;
   parentId?: string | null;
   cachedContextTokens?: number;
+  contextWindow?: number;
   bindingIndicator?: string;
 }
 

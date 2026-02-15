@@ -105,6 +105,7 @@ class SessionData:
     fork_status: str
     backend_name: str = ""  # Name of backend to use (empty = default)
     cached_context_tokens: int = 0  # Cached token count from compiled context
+    context_window: int = 200000  # Context window size for the model
 
     # Runtime state
     is_current: bool = False
@@ -224,6 +225,7 @@ class TreeState:
     def add_session(self, session: SessionProtocol, is_current: bool = False) -> None:
         """Add or update a session in the state."""
         cached_tokens = session.cached_context_tokens if hasattr(session, 'cached_context_tokens') else 0
+        context_window = session.context_window if hasattr(session, 'context_window') else 200000
         session_data = SessionData(
             id=session.id,
             created=session.created,
@@ -240,6 +242,7 @@ class TreeState:
             fork_status=session.fork_status,
             backend_name=session.backend_name,
             cached_context_tokens=cached_tokens,
+            context_window=context_window,
             is_current=is_current,
             session_ref=session,
         )
@@ -298,6 +301,7 @@ class TreeState:
             fork_status=metadata.get("fork_status", "active"),
             backend_name=metadata.get("backend_name", ""),
             cached_context_tokens=metadata.get("cached_context_tokens", 0),
+            context_window=metadata.get("context_window", 200000),
             is_current=is_current,
         )
 
