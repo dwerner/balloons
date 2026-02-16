@@ -162,6 +162,12 @@ class DebugPauseCommand(Command):
 
 
 @dataclass
+class DebugFpsCommand(Command):
+    """Toggle the frame rate monitor overlay."""
+    is_global: bool = True  # UI-only
+
+
+@dataclass
 class BackendCommand(Command):
     """Set or show the backend for this session."""
     # Not global - changing backend mid-stream would be confusing
@@ -529,6 +535,7 @@ COMMAND_DOCS = [
     (":debug", "Toggle debug log pane visibility"),
     (":debug-pause", "Toggle debug logging on/off"),
     (":debug-clear", "Clear all debug log entries"),
+    (":debug-fps", "Toggle frame rate monitor overlay"),
     (":reindex", "Rebuild session index from disk"),
     (":follow", "Toggle auto-scroll to follow new content"),
     (":clear-all-sessions", "Delete ALL sessions (requires confirmation)"),
@@ -692,6 +699,10 @@ class CommandParser:
         # Handle :debug-clear
         if text == ":debug-clear":
             return DebugClearCommand()
+
+        # Handle :debug-fps
+        if text == ":debug-fps":
+            return DebugFpsCommand()
 
         # Handle :backend [name]
         if text == ":backend" or text.startswith(":backend "):

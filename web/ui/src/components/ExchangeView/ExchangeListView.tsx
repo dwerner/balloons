@@ -2,6 +2,7 @@ import React, { memo, useMemo } from 'react';
 import type { TurnInfo } from '../../../../generated/balloons-client';
 import { ExchangeView } from './ExchangeView';
 import type { ToolUseState } from './ExchangeView';
+import { ForkProposalTurn } from '../ForkProposalTurn';
 
 interface ExchangeListViewProps {
   turns: TurnInfo[];
@@ -59,23 +60,27 @@ function groupTurnsByExchange(turns: TurnInfo[]): TurnGroup[] {
 const StandaloneTurn = memo(function StandaloneTurn({ turn }: { turn: TurnInfo }) {
   const blockType = turn.contentBlockType ?? 'text';
 
+  // Fork proposals get special interactive component
+  if (blockType === 'fork_proposal') {
+    return <ForkProposalTurn turn={turn} />;
+  }
+
   // System-level block types get special treatment
-  const systemTypes = ['fork', 'merge', 'merged_to', 'link', 'interruption', 'error', 'image', 'slide', 'review', 'fork_proposal', 'merge_proposal', 'archive'];
+  const systemTypes = ['fork', 'merge', 'merged_to', 'link', 'interruption', 'error', 'image', 'slide', 'review', 'merge_proposal', 'archive'];
 
   if (systemTypes.includes(blockType)) {
     const labels: Record<string, string> = {
-      'fork': '⑂ fork',
-      'merge': '⤴ merge',
-      'merged_to': '⤴ merged',
-      'link': '🔗 link',
-      'interruption': '⚠ interrupted',
-      'error': '✗ error',
-      'image': '🖼 image',
-      'slide': '📊 slide',
-      'review': '📋 review',
-      'fork_proposal': '⑂ fork proposal',
-      'merge_proposal': '⤴ merge proposal',
-      'archive': '📦 archive',
+      'fork': '\u2442 fork',
+      'merge': '\u2934 merge',
+      'merged_to': '\u2934 merged',
+      'link': '\uD83D\uDD17 link',
+      'interruption': '\u26A0 interrupted',
+      'error': '\u2717 error',
+      'image': '\uD83D\uDDBC image',
+      'slide': '\uD83D\uDCCA slide',
+      'review': '\uD83D\uDCCB review',
+      'merge_proposal': '\u2934 merge proposal',
+      'archive': '\uD83D\uDCE6 archive',
     };
 
     return (
@@ -119,7 +124,7 @@ export const ExchangeListView = memo(function ExchangeListView({
   }, [toolUses]);
 
   // Debug mode - show exchange grouping info visually
-  const showDebug = false;
+  const showDebug = true;
 
   return (
     <div className="exchange-list-view">

@@ -1,0 +1,363 @@
+/**
+ * Modal CSS
+ *
+ * Styling for the reusable modal component:
+ * - Overlay with backdrop blur
+ * - Dialog with responsive sizing
+ * - Header, body, and footer sections
+ * - Animation for open/close
+ * - Mobile-first responsive design
+ *
+ * Matches design patterns from TUI ModalScreen widgets.
+ */
+
+/* ===== Overlay (backdrop) ===== */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+
+  /* Flex centering */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  /* Backdrop styling */
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+
+  /* Animation */
+  animation: modal-overlay-fade-in 0.15s ease-out;
+}
+
+@keyframes modal-overlay-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ===== Dialog container ===== */
+.modal-dialog {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 32px);
+  max-width: calc(100vw - 32px);
+
+  /* Appearance */
+  background: var(--color-surface, #1e1e1e);
+  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.1));
+  border-radius: 8px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+
+  /* Animation */
+  animation: modal-dialog-slide-in 0.15s ease-out;
+}
+
+@keyframes modal-dialog-slide-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* Focus outline for accessibility */
+.modal-dialog:focus {
+  outline: none;
+}
+
+.modal-dialog:focus-visible {
+  outline: 2px solid var(--color-accent-primary, #22d3ee);
+  outline-offset: 2px;
+}
+
+/* ===== Size variants ===== */
+.modal-dialog--small {
+  width: 100%;
+  max-width: 400px;
+}
+
+.modal-dialog--medium {
+  width: 100%;
+  max-width: 560px;
+}
+
+.modal-dialog--large {
+  width: 100%;
+  max-width: 800px;
+}
+
+.modal-dialog--full {
+  width: calc(100vw - 64px);
+  height: calc(100vh - 64px);
+  max-width: none;
+  max-height: none;
+}
+
+/* ===== Header ===== */
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--color-border, rgba(255, 255, 255, 0.1));
+  flex-shrink: 0;
+}
+
+.modal-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-text-primary, #fff);
+  line-height: 1.4;
+}
+
+/* ===== Close button ===== */
+.modal-close-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin: -4px -8px -4px 8px;
+
+  /* Reset button styles */
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+
+  /* Icon color */
+  color: var(--color-text-muted, #888);
+
+  /* Transition */
+  transition: background-color 0.1s ease, color 0.1s ease;
+}
+
+.modal-close-button:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--color-text-primary, #fff);
+}
+
+.modal-close-button:focus-visible {
+  outline: 2px solid var(--color-accent-primary, #22d3ee);
+  outline-offset: 2px;
+}
+
+.modal-close-button svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* ===== Body ===== */
+.modal-body {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
+
+  /* Scrollbar styling */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+.modal-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.modal-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.modal-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
+.modal-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* ===== Footer ===== */
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--color-border, rgba(255, 255, 255, 0.1));
+  flex-shrink: 0;
+}
+
+/* ===== Common button styles for modal actions ===== */
+.modal-footer .btn,
+.modal-footer button {
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.1s ease, opacity 0.1s ease;
+}
+
+.modal-footer .btn:disabled,
+.modal-footer button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Primary button */
+.modal-footer .btn-primary,
+.modal-footer button[type="submit"] {
+  background: var(--color-accent-primary, #22d3ee);
+  color: #000;
+  border: none;
+}
+
+.modal-footer .btn-primary:hover:not(:disabled),
+.modal-footer button[type="submit"]:hover:not(:disabled) {
+  background: var(--color-accent-primary-hover, #0ea5e9);
+}
+
+/* Secondary button */
+.modal-footer .btn-secondary {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--color-text-primary, #fff);
+  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.2));
+}
+
+.modal-footer .btn-secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* Success button */
+.modal-footer .btn-success {
+  background: var(--color-accent-green, #4ade80);
+  color: #000;
+  border: none;
+}
+
+.modal-footer .btn-success:hover:not(:disabled) {
+  background: var(--color-accent-green-hover, #22c55e);
+}
+
+/* Danger button */
+.modal-footer .btn-danger {
+  background: var(--color-accent-red, #f87171);
+  color: #000;
+  border: none;
+}
+
+.modal-footer .btn-danger:hover:not(:disabled) {
+  background: var(--color-accent-red-hover, #ef4444);
+}
+
+/* ===== Mobile responsive ===== */
+@media (max-width: 767px) {
+  .modal-overlay {
+    /* Full screen on mobile */
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .modal-dialog {
+    /* Bottom sheet style on mobile */
+    max-height: 90vh;
+    max-width: 100%;
+    width: 100%;
+    border-radius: 16px 16px 0 0;
+    margin: 0;
+
+    /* Adjust animation for bottom sheet */
+    animation: modal-dialog-slide-up 0.2s ease-out;
+  }
+
+  @keyframes modal-dialog-slide-up {
+    from {
+      opacity: 0;
+      transform: translateY(100%);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* Full size on mobile ignores constraints */
+  .modal-dialog--full {
+    max-height: 100vh;
+    height: 100vh;
+    border-radius: 0;
+  }
+
+  .modal-header {
+    padding: 16px;
+  }
+
+  .modal-body {
+    padding: 16px;
+  }
+
+  .modal-footer {
+    padding: 16px;
+    /* Stack buttons on very narrow screens */
+    flex-wrap: wrap;
+  }
+
+  .modal-title {
+    font-size: 16px;
+  }
+}
+
+/* ===== Reduced motion ===== */
+@media (prefers-reduced-motion: reduce) {
+  .modal-overlay,
+  .modal-dialog {
+    animation: none;
+  }
+}
+
+/* ===== Light theme support ===== */
+[data-theme="light"] .modal-overlay {
+  background: rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="light"] .modal-dialog {
+  background: var(--color-surface, #fff);
+  border-color: rgba(0, 0, 0, 0.1);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+}
+
+[data-theme="light"] .modal-close-button:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="light"] .modal-body::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="light"] .modal-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* ===== High contrast mode ===== */
+@media (prefers-contrast: high) {
+  .modal-dialog {
+    border-width: 2px;
+  }
+
+  .modal-header,
+  .modal-footer {
+    border-width: 2px;
+  }
+
+  .modal-close-button:focus-visible {
+    outline-width: 3px;
+  }
+}

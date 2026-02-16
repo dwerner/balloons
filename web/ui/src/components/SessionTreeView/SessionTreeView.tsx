@@ -62,14 +62,14 @@ function TurnNode({ turn }: { turn: TurnInfo }) {
   return (
     <li className="tree-node tree-node--turn">
       <div className="tree-node__content">
-        <span className="tree-node__spacer" />
-        <span className="tree-node__icon">{icon}</span>
-        <span className="tree-node__label tree-node__label--muted">
+        <span key="spacer" className="tree-node__spacer" />
+        <span key="icon" className="tree-node__icon">{icon}</span>
+        <span key="label" className="tree-node__label tree-node__label--muted">
           {preview || '\u00A0'}
           {(turn.content || '').length > 60 ? '...' : ''}
         </span>
         {tokenStr && (
-          <span className="tree-node__meta tree-node__meta--green">
+          <span key="meta" className="tree-node__meta tree-node__meta--green">
             {tokenStr}
           </span>
         )}
@@ -108,6 +108,7 @@ function SessionNode({
         style={{ borderLeftColor: sessionColor }}
       >
         <span
+          key="toggle"
           className="tree-node__toggle"
           onClick={(e) => { e.stopPropagation(); onToggle(); }}
         >
@@ -115,18 +116,18 @@ function SessionNode({
         </span>
 
         {session.isStreaming && (
-          <span className="tree-node__badge tree-node__badge--streaming">⟳</span>
+          <span key="streaming-badge" className="tree-node__badge tree-node__badge--streaming">⟳</span>
         )}
 
         {session.parentId && (
-          <span className="tree-node__badge tree-node__badge--fork">
+          <span key="fork-badge" className="tree-node__badge tree-node__badge--fork">
             {session.forkStatus === 'merged' ? '✓' : '↳'}
           </span>
         )}
 
-        <span className="tree-node__id">{session.id.slice(0, 8)}</span>
-        <span className="tree-node__label">{sessionName}</span>
-        <span className="tree-node__meta">({session.messageCount}msg)</span>
+        <span key="id" className="tree-node__id">{session.id.slice(0, 8)}</span>
+        <span key="label" className="tree-node__label">{sessionName}</span>
+        <span key="meta" className="tree-node__meta">({session.messageCount}msg)</span>
       </div>
 
       {isExpanded && hasTurns && (

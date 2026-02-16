@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-15T11:54:01.108814
+// Generated: 2026-02-16T14:26:25.317226
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -225,6 +225,17 @@ export interface GoalTreeEventData {
   entityType?: string | null;
   entityId?: string | null;
   data?: Record<string, unknown>;
+}
+
+export interface SmartTodoResult {
+  success: boolean;
+  message: string;
+  todoId?: string | null;
+  todoTitle?: string | null;
+  planId?: string | null;
+  planTitle?: string | null;
+  goalId?: string | null;
+  goalTitle?: string | null;
 }
 
 export interface TaskInfo {

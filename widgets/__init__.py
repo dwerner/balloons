@@ -39,6 +39,10 @@ from .actionable_toast import (
     ActionableToastHolder,
     ActionableNotification,
 )
+from .frame_monitor import (
+    FrameMonitorWidget,
+    get_frame_monitor,
+)
 
 # Backwards compatibility aliases
 ContextTree = ContextTreeView
@@ -108,4 +112,6 @@ __all__ = [
     "ActionableToastRack",
     "ActionableToastHolder",
     "ActionableNotification",
+    "FrameMonitorWidget",
+    "get_frame_monitor",
 ]

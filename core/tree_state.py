@@ -669,7 +669,10 @@ class TreeState:
 
         for turn in session_data.turns:
             if turn.idx == turn_idx:
-                turn.content = content
+                # Extract display content from content_block if provided content is empty
+                # This ensures tool_use/tool_result turns show meaningful labels
+                display_content = content if content else self._content_from_block(content_block, content)
+                turn.content = display_content
                 turn.content_block = content_block
                 turn.events = events or []
                 turn.streaming = False
@@ -685,7 +688,7 @@ class TreeState:
                 self._notify(TreeEvent.TURN_FINISHED, {
                     "session_id": session_id,
                     "turn_idx": turn_idx,
-                    "content": content,
+                    "content": display_content,
                     "content_block": content_block,
                 })
                 break

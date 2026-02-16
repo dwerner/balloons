@@ -28,6 +28,7 @@ from core.goal_tree_state import (
     SessionNodeData,
 )
 from storage_schema import GoalData, PlanData, TodoData
+from core.smart_todo import create_todo_with_llm_placement
 
 
 # =============================================================================
@@ -155,6 +156,21 @@ class GoalTreeEventData:
     data: dict = field(default_factory=dict)
 
 
+@ws_type
+@dataclass
+class SmartTodoResult:
+    """Result from creating a todo with LLM-assisted plan placement."""
+
+    success: bool
+    message: str
+    todo_id: str | None = None
+    todo_title: str | None = None
+    plan_id: str | None = None
+    plan_title: str | None = None
+    goal_id: str | None = None
+    goal_title: str | None = None
+
+
 # =============================================================================
 # Service Class
 # =============================================================================
@@ -168,17 +184,28 @@ class GoalTreeStateService:
     with real-time event subscriptions for state changes.
     """
 
-    def __init__(self, goal_tree_state: GoalTreeState):
+    def __init__(self, goal_tree_state: GoalTreeState, llm_runner=None):
         """Initialize service with a GoalTreeState instance.
 
         Args:
             goal_tree_state: The GoalTreeState to expose via WebSocket
+            llm_runner: Optional LLM runner for smart todo placement.
+                       Can be set later via set_llm_runner().
         """
         self._state = goal_tree_state
+        self._llm_runner = llm_runner
         self._event_handlers: list[Callable[[str, dict], None]] = []
 
         # Wire up GoalTreeState observer to emit WebSocket events
         goal_tree_state.add_observer(self._on_tree_event)
+
+    def set_llm_runner(self, runner) -> None:
+        """Set the LLM runner for smart todo placement.
+
+        Args:
+            runner: A runner implementing stream_response for LLM calls
+        """
+        self._llm_runner = runner
 
     def add_event_handler(self, handler: Callable[[str, dict], None]) -> None:
         """Register a handler for WebSocket events.
@@ -499,6 +526,81 @@ class GoalTreeStateService:
             priority: The priority value
         """
         self._state.set_todo_priority(todo_id, priority)
+
+    @ws_expose
+    async def create_smart_todo(
+        self,
+        title: str,
+        description: str = "",
+        is_spike: bool = False,
+        timebox_minutes: int | None = None,
+    ) -> SmartTodoResult:
+        """Create a todo with LLM-assisted plan placement.
+
+        Uses an LLM to analyze the todo's title and description and automatically
+        place it under the most appropriate plan based on existing goals and plans.
+
+        This is useful for quick todo creation from web/mobile where the user
+        doesn't need to manually select a plan - the LLM figures out where it belongs.
+
+        Args:
+            title: Todo title (required, max 80 chars)
+            description: Todo description (optional)
+            is_spike: Whether this is a timeboxed exploration task
+            timebox_minutes: For spikes, the maximum time to spend
+
+        Returns:
+            SmartTodoResult with success status, created todo info, and placement details
+        """
+        if not self._llm_runner:
+            return SmartTodoResult(
+                success=False,
+                message="LLM runner not available. Cannot determine plan placement.",
+            )
+
+        try:
+            todo, plan, message = await create_todo_with_llm_placement(
+                title=title,
+                description=description,
+                is_spike=is_spike,
+                timebox_minutes=timebox_minutes,
+                llm_runner=self._llm_runner,
+            )
+
+            if todo is None:
+                return SmartTodoResult(
+                    success=False,
+                    message=message,
+                )
+
+            # Also add to in-memory state for immediate UI update
+            if plan:
+                self._state.add_todo(todo, [plan.id])
+
+            # Get goal info
+            goal_id = plan.goal_id if plan else None
+            goal_title = None
+            if goal_id:
+                goal_node = self._state.get_goal(goal_id)
+                if goal_node:
+                    goal_title = goal_node.title
+
+            return SmartTodoResult(
+                success=True,
+                message=message,
+                todo_id=todo.id,
+                todo_title=todo.title,
+                plan_id=plan.id if plan else None,
+                plan_title=plan.title if plan else None,
+                goal_id=goal_id,
+                goal_title=goal_title,
+            )
+
+        except Exception as e:
+            return SmartTodoResult(
+                success=False,
+                message=f"Error creating todo: {e}",
+            )
 
     # --- Session Binding Operations ---
 

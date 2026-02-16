@@ -32,7 +32,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, GoalTreeView, GoalTreeWidget, VerticalSplitter, HorizontalSplitter, TaskPane, ClickableSessionLink, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, ReviewMarker, ForkProposalMarker, MergeProposalMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, BeginStreamingModal, BeginStreamingResult, MessageStash, StashPopup, SlidesPane, PresentationScreen, MessageQueuePopup, EntityPane, ActionableToastRack, ActionableNotification, ActionableToast
+from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, GoalTreeView, GoalTreeWidget, VerticalSplitter, HorizontalSplitter, TaskPane, ClickableSessionLink, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, ReviewMarker, ForkProposalMarker, MergeProposalMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, BeginStreamingModal, BeginStreamingResult, MessageStash, StashPopup, SlidesPane, PresentationScreen, MessageQueuePopup, EntityPane, ActionableToastRack, ActionableNotification, ActionableToast, FrameMonitorWidget, get_frame_monitor
 from widgets.input_box import CompletionPopup
 from widgets.archive_marker import ArchiveMarker
 from claude_runner import ClaudeRunner
@@ -75,6 +75,7 @@ from core import (
     DebugToggleCommand,
     DebugClearCommand,
     DebugPauseCommand,
+    DebugFpsCommand,
     ArchiveCommand,
     RehydrateCommand,
     ReindexCommand,
@@ -285,6 +286,12 @@ class BalloonsApp(App):
         width: 100%;
         margin: 0;
         padding: 0 1;
+    }
+
+
+
+    Screen {
+        layers: below default above _fps_overlay;
     }
     """
 
@@ -623,6 +630,7 @@ class BalloonsApp(App):
                 yield StashPopup(id="stash-popup")
                 yield InputBox(id="input-box")
             yield ActionableToastRack(id="actionable-toast-rack")
+            yield FrameMonitorWidget(id="frame-monitor")
 
     async def on_mount(self) -> None:
         """Initialize the app after mounting."""
@@ -687,6 +695,8 @@ class BalloonsApp(App):
             queue_service = QueueStateService(self._queue_state)
             self._session_service = SessionManagerService(self._manager)
             goal_service = GoalTreeStateService(self._goal_tree_state)
+            # Set LLM runner for smart todo placement
+            goal_service.set_llm_runner(self._helper_runner)
             # Store task_service as instance variable so we can emit streaming events from poll loop
             self._task_service = TaskStateService(get_stream_state())
             image_service = ImageService()
@@ -1443,7 +1453,9 @@ class BalloonsApp(App):
             play_done_sound()
 
             # Emit turn finished event for the final assistant turn
-            if self._task_service is not None and ctx.content:
+            # Always emit turnFinished to finalize the turn state (even if content is empty)
+            # This ensures the web client properly clears streaming state
+            if self._task_service is not None:
                 self._task_service.emit_turn_finished(
                     session_id=session_id,
                     exchange_id=ctx.exchange_id,
@@ -2582,6 +2594,8 @@ class BalloonsApp(App):
             self._handle_debug_clear()
         elif isinstance(cmd, DebugPauseCommand):
             self._handle_debug_pause()
+        elif isinstance(cmd, DebugFpsCommand):
+            self._handle_debug_fps_toggle()
         elif isinstance(cmd, ArchiveCommand):
             await self._handle_archive_command(cmd.prompt)
         elif isinstance(cmd, RehydrateCommand):
@@ -6637,6 +6651,16 @@ class BalloonsApp(App):
         debug_log.enabled = not debug_log.enabled
         state = "enabled" if debug_log.enabled else "paused"
         self.notify(f"Debug logging {state}")
+
+    def _handle_debug_fps_toggle(self) -> None:
+        """Toggle the frame rate monitor overlay."""
+        try:
+            frame_monitor = self.query_one("#frame-monitor", FrameMonitorWidget)
+            frame_monitor.toggle()
+            state = "enabled" if frame_monitor.has_class("visible") else "disabled"
+            self.notify(f"Frame rate monitor {state}")
+        except Exception as e:
+            self.notify(f"Frame monitor error: {e}", severity="error")
 
     def on_debug_pane_log_line_selected(self, event: DebugPane.LogLineSelected) -> None:
         """Handle Ctrl+click on a debug log line - insert into input."""

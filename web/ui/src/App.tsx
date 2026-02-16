@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useCallback, useRef, memo, useMemo } from 'react';
 import { BalloonsClient } from '../../generated/balloons-client';
-import type { ConnectionState, SessionInfo, TurnInfo, TaskInfo, Unsubscribe, ToolUseStartedEvent, ToolInputDeltaEvent, ToolResultEvent, ContentDeltaEvent, TurnStartedEvent, TurnFinishedEvent } from '../../generated/balloons-client';
+import type { ConnectionState, SessionInfo, TurnInfo, TaskInfo, Unsubscribe, ToolUseStartedEvent, ToolInputDeltaEvent, ToolResultEvent, ContentDeltaEvent, TurnStartedEvent, TurnFinishedEvent, GoalTreeStateServiceClient } from '../../generated/balloons-client';
 import { MarkdownContent } from './MarkdownContent';
 import { AppLayout, useLayout, useTheme } from './components/layout';
 import { SessionTreeView } from './components/SessionTreeView';
+import { GoalTreeView } from './components/GoalTreeView';
 import { SessionStatusBar } from './components/SessionStatusBar';
 import { StreamingStatusBar } from './components/StreamingStatusBar';
 import { ExchangeListView } from './components/ExchangeView';
+import { ForkProposalTurn } from './components/ForkProposalTurn';
+import { CreateTodoModal, type CreateTodoResult } from './components/CreateTodoModal';
 import { useWakeLock } from './hooks';
 
 // View mode for conversation display
@@ -534,6 +537,10 @@ const Turn = memo(function Turn({
       // Skip tool_result turns - they're rendered as part of tool_use turns
       return null;
 
+    // Fork proposal gets special interactive component
+    case 'fork_proposal':
+      return <ForkProposalTurn turn={turn} />;
+
     // System-level block types (fork, merge, link, etc.)
     case 'fork':
     case 'merge':
@@ -544,7 +551,6 @@ const Turn = memo(function Turn({
     case 'image':
     case 'slide':
     case 'review':
-    case 'fork_proposal':
     case 'merge_proposal':
     case 'archive':
       return <SystemTurn turn={turn} blockType={blockType} />;
@@ -747,6 +753,14 @@ export function App() {
   const [toolUses, setToolUses] = useState<ToolUseState[]>([]);
   const [imageAttachments, setImageAttachments] = useState<ImageAttachment[]>([]);
   const [isLoadingTurns, setIsLoadingTurns] = useState(false);
+
+  // Modal state for CreateTodoModal
+  const [createTodoModalState, setCreateTodoModalState] = useState<{
+    isOpen: boolean;
+    planId: string;
+    planTitle: string;
+  }>({ isOpen: false, planId: '', planTitle: '' });
+
   const [conversationViewMode, setConversationViewMode] = useState<ConversationViewMode>(() => {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('balloons:conversation-view');
@@ -1555,6 +1569,22 @@ export function App() {
           streamingTask={streamingTask}
           onSelectSession={handleSelectSession}
           isLoadingTurns={isLoadingTurns}
+          goalsClient={connectionState === 'connected' ? clientRef.current?.goals : undefined}
+          onOpenCreateTodoModal={(planId, planTitle) => {
+            setCreateTodoModalState({ isOpen: true, planId, planTitle });
+          }}
+          onNewBareSession={async () => {
+            const sessionsClient = clientRef.current?.sessions;
+            if (!sessionsClient || connectionState !== 'connected') return;
+            try {
+              const newSession = await sessionsClient.createSession();
+              if (newSession) {
+                handleSelectSession(newSession.id);
+              }
+            } catch (error) {
+              console.error('Failed to create new session:', error);
+            }
+          }}
         />
       </AppLayout.Sidebar>
 
@@ -1701,6 +1731,69 @@ export function App() {
           </>
         )}
       </AppLayout.Main>
+
+      {/* CreateTodoModal - rendered at App level for portal */}
+      <CreateTodoModal
+        isOpen={createTodoModalState.isOpen}
+        onClose={() => setCreateTodoModalState({ isOpen: false, planId: '', planTitle: '' })}
+        planId={createTodoModalState.planId}
+        planTitle={createTodoModalState.planTitle}
+        goalsClient={connectionState === 'connected' ? clientRef.current?.goals : undefined}
+        onSubmit={(result) => {
+          console.log('Todo created:', result);
+        }}
+        onBeginSession={async (todoId, todoTitle, todoDescription, planId, planTitle, isSpike, timeboxMinutes) => {
+          const client = clientRef.current;
+          const goalsClient = client?.goals;
+          if (!client || !goalsClient || connectionState !== 'connected') {
+            console.error('Cannot create session: client not connected');
+            return;
+          }
+
+          try {
+            // Determine role: exploration for spikes, implementation for normal todos
+            const role = isSpike ? 'exploration' : 'implementation';
+
+            // Create a new session
+            const newSession = await client.sessions.createSession();
+
+            // Bind the session to the todo with appropriate role
+            await goalsClient.bindSession(
+              'todo',
+              todoId,
+              newSession.id,
+              todoTitle,
+              role,
+              0,      // tokenCount
+              false,  // isCurrent
+              false,  // isStreaming
+              undefined // forkStatus
+            );
+
+            // Generate initial prompt matching Python's generate_initial_prompt()
+            // Include plan context and spike note if applicable
+            let context = `Plan: ${planTitle}`;
+            let spikeNote = '';
+            if (isSpike) {
+              const timebox = timeboxMinutes ? ` (${timeboxMinutes} minutes)` : '';
+              spikeNote = `\n\n*Note: This is a spike${timebox} - focus on learning, not production code.*`;
+            }
+
+            const initialPrompt = `Let's implement this task:\n\n**${todoTitle}**\n\n${todoDescription || '(No description provided)'}\n\n${context}${spikeNote}\n\nI'm ready to start. Please begin the implementation.`;
+            await client.sessions.submitMessage(newSession.id, initialPrompt);
+
+            // Refresh the session list to include the new session
+            const sessionList = await client.tree.getAllSessions();
+            setSessions(sessionList);
+
+            // Switch to the new session
+            handleSelectSession(newSession.id);
+          } catch (err) {
+            console.error('Failed to create session:', err);
+            setError(`Failed to create session: ${err}`);
+          }
+        }}
+      />
     </AppLayout>
   );
 }
@@ -1728,7 +1821,7 @@ function MobileHeader({ connectionState }: MobileHeaderProps) {
 }
 
 // Sidebar view mode
-type SidebarView = 'list' | 'tree';
+type SidebarView = 'list' | 'tree' | 'goals';
 
 interface SidebarContentProps {
   connectionState: ConnectionState;
@@ -1738,6 +1831,9 @@ interface SidebarContentProps {
   streamingTask: TaskInfo | null;
   onSelectSession: (sessionId: string) => void;
   isLoadingTurns?: boolean;
+  goalsClient?: GoalTreeStateServiceClient;
+  onOpenCreateTodoModal?: (planId: string, planTitle: string) => void;
+  onNewBareSession?: () => void;
 }
 
 function SidebarContent({
@@ -1748,6 +1844,9 @@ function SidebarContent({
   streamingTask,
   onSelectSession,
   isLoadingTurns = false,
+  goalsClient,
+  onOpenCreateTodoModal,
+  onNewBareSession,
 }: SidebarContentProps) {
   const { closeSidebar, layoutMode } = useLayout();
   const { resolvedTheme, toggleTheme } = useTheme();
@@ -1757,7 +1856,7 @@ function SidebarContent({
   const [viewMode, setViewMode] = useState<SidebarView>(() => {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('balloons:sidebar-view');
-      return (stored === 'tree' || stored === 'list') ? stored : 'list';
+      return (stored === 'tree' || stored === 'list' || stored === 'goals') ? stored : 'list';
     }
     return 'list';
   });
@@ -1809,6 +1908,14 @@ function SidebarContent({
           >
             🌲
           </button>
+          <button
+            className={`view-toggle-btn ${viewMode === 'goals' ? 'active' : ''}`}
+            onClick={() => handleViewModeChange('goals')}
+            title="Goals view"
+            aria-label="Goals view"
+          >
+            🎯
+          </button>
         </div>
 
         {/* Wake lock toggle - keeps screen awake on mobile */}
@@ -1838,7 +1945,74 @@ function SidebarContent({
         )}
       </header>
 
-      {viewMode === 'tree' ? (
+      {viewMode === 'goals' ? (
+        <GoalTreeView
+          goalsClient={goalsClient}
+          onSelectSession={handleSelectSession}
+          onSelectEntity={(entityType, entityId) => {
+            // TODO: Update detail pane with entity info
+            console.log('Selected entity:', entityType, entityId);
+          }}
+          onNewPlan={(goalId) => {
+            goalsClient?.addPlan({ goalId, title: 'New Plan', status: 'draft' });
+          }}
+          onNewTodo={(planId) => {
+            // Fetch plan title and open the modal via App-level callback
+            if (onOpenCreateTodoModal && goalsClient) {
+              goalsClient.getPlan(planId).then(plan => {
+                onOpenCreateTodoModal(planId, plan?.title || 'Unknown Plan');
+              }).catch(() => {
+                // Still open modal with fallback title
+                onOpenCreateTodoModal(planId, 'Unknown Plan');
+              });
+            } else if (onOpenCreateTodoModal) {
+              // No goalsClient, open modal anyway with fallback
+              onOpenCreateTodoModal(planId, 'Unknown Plan');
+            }
+          }}
+          onNewSession={(entityType, entityId) => {
+            // TODO: Create new session bound to entity
+            console.log('New session for:', entityType, entityId);
+          }}
+          onMarkTodoDone={(todoId) => {
+            // Update todo status to completed
+            goalsClient?.getTodo(todoId).then(todo => {
+              if (todo) {
+                const now = new Date().toISOString();
+                goalsClient?.addTodo({ ...todo, status: 'completed', updated_at: now, completed_at: now }, todo.planIds);
+              }
+            });
+          }}
+          onMarkTodoUndone={(todoId) => {
+            // Update todo status back to pending
+            goalsClient?.getTodo(todoId).then(todo => {
+              if (todo) {
+                const now = new Date().toISOString();
+                goalsClient?.addTodo({ ...todo, status: 'pending', updated_at: now, completed_at: undefined }, todo.planIds);
+              }
+            });
+          }}
+          onMoveSession={(sessionId) => {
+            // TODO: Show entity picker to move session
+            console.log('Move session:', sessionId);
+          }}
+          onUnbindSession={(sessionId) => {
+            // Get current binding and unbind
+            goalsClient?.getSessionBinding(sessionId).then(binding => {
+              if (binding) {
+                const [, entityId] = binding;
+                goalsClient?.unbindSession(entityId, sessionId);
+              }
+            });
+          }}
+          onRollup={(scopeType, scopeId) => {
+            // TODO: Trigger rollup generation
+            console.log('Generate rollup for:', scopeType, scopeId);
+          }}
+          onNewBareSession={onNewBareSession}
+          isLoading={connectionState !== 'connected'}
+        />
+      ) : viewMode === 'tree' ? (
         <SessionTreeView
           sessions={sessions}
           selectedSessionId={selectedSessionId}

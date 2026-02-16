@@ -531,14 +531,15 @@ class SessionManagerService:
 
         elif event_type == "done":
             # Stream complete - emit final turn_finished and clean up
-            if ctx.content:
-                self._task_service.emit_turn_finished(
-                    session_id=session_id,
-                    exchange_id=ctx.exchange_id,
-                    turn_index=ctx.assistant_turn_idx,
-                    role="assistant",
-                    content=ctx.content,
-                )
+            # Always emit turnFinished to finalize the turn state (even if content is empty)
+            # This ensures the web client properly clears streaming state
+            self._task_service.emit_turn_finished(
+                session_id=session_id,
+                exchange_id=ctx.exchange_id,
+                turn_index=ctx.assistant_turn_idx,
+                role="assistant",
+                content=ctx.content,
+            )
             # Complete the stream
             self._stream_state.complete_stream(ctx.exchange_id)
             # Mark session as no longer streaming so React frontend hides stop button

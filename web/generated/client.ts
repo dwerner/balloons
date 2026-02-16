@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-15T11:54:01.110095
+// Generated: 2026-02-16T14:26:25.318606
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -1112,6 +1112,26 @@ export interface GoalTreeStateService {
   clear(): Promise<null>;
 
   /**
+   * Create a todo with LLM-assisted plan placement.
+   * 
+   * Uses an LLM to analyze the todo's title and description and automatically
+   * place it under the most appropriate plan based on existing goals and plans.
+   * 
+   * This is useful for quick todo creation from web/mobile where the user
+   * doesn't need to manually select a plan - the LLM figures out where it belongs.
+   * 
+   * Args:
+   * title: Todo title (required, max 80 chars)
+   * description: Todo description (optional)
+   * is_spike: Whether this is a timeboxed exploration task
+   * timebox_minutes: For spikes, the maximum time to spend
+   * 
+   * Returns:
+   * SmartTodoResult with success status, created todo info, and placement details
+   */
+  createSmartTodo(title: string, description?: string, isSpike?: boolean, timeboxMinutes?: number | null): Promise<Types.SmartTodoResult>;
+
+  /**
    * End batch loading mode and trigger a full rebuild.
    */
   endBatchLoading(): Promise<null>;
@@ -1524,6 +1544,10 @@ export class GoalTreeStateServiceClient implements GoalTreeStateService {
 
   async clear(): Promise<null> {
     return this.call('clear', {  });
+  }
+
+  async createSmartTodo(title: string, description?: string, isSpike?: boolean, timeboxMinutes?: number | null): Promise<Types.SmartTodoResult> {
+    return this.call('createSmartTodo', { title: title, description: description, isSpike: isSpike, timeboxMinutes: timeboxMinutes });
   }
 
   async endBatchLoading(): Promise<null> {
