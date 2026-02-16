@@ -428,8 +428,11 @@ const ToolUseTurn = memo(function ToolUseTurn({
     );
   }
 
-  const result = toolResult?.toolResult;
-  const isError = result?.isError ?? false;
+  // Get result content - prefer structured toolResult, fall back to turn content
+  const structuredResult = toolResult?.toolResult;
+  const resultContent = structuredResult?.content || toolResult?.content || '';
+  const isError = structuredResult?.isError ?? false;
+  const hasResult = resultContent.length > 0;
 
   return (
     <div className={`turn assistant tool-use-turn ${turn.streaming ? 'streaming' : ''}`}>
@@ -445,9 +448,9 @@ const ToolUseTurn = memo(function ToolUseTurn({
             <FormattedToolInput toolName={toolUse.toolName} toolInput={toolUse.toolInput} />
           </Collapsible>
         )}
-        {result && (
+        {hasResult && (
           <Collapsible title={isError ? "Error" : "Result"} defaultExpanded={true}>
-            <FormattedToolResult result={result.content} isError={isError} />
+            <FormattedToolResult result={resultContent} isError={isError} />
           </Collapsible>
         )}
       </div>
@@ -512,9 +515,13 @@ const Turn = memo(function Turn({
   switch (blockType) {
     case 'tool_use': {
       // Find matching tool_result turn by toolUseId
+      // Check both contentBlockType and role='tool' for compatibility with older sessions
       const toolUseId = turn.toolUse?.toolUseId;
       const matchingResult = toolUseId
-        ? allTurns?.find(t => t.contentBlockType === 'tool_result' && t.toolResult?.toolUseId === toolUseId)
+        ? allTurns?.find(t =>
+            (t.contentBlockType === 'tool_result' || t.role === 'tool') &&
+            (t.toolResult?.toolUseId === toolUseId)
+          )
         : null;
       return <ToolUseTurn turn={turn} toolResult={matchingResult} />;
     }
@@ -540,6 +547,38 @@ const Turn = memo(function Turn({
 
     case 'text':
     default:
+      // Handle tool result turns that might have role='tool' but blockType='text'
+      // (backwards compatibility with older sessions)
+      if (turn.role === 'tool') {
+        // Check if there's a matching tool_use turn that will render this
+        const hasMatchingToolUse = turn.toolResult?.toolUseId
+          ? allTurns?.some(t =>
+              (t.contentBlockType === 'tool_use' || t.toolUse) &&
+              t.toolUse?.toolUseId === turn.toolResult?.toolUseId
+            )
+          : false;
+
+        if (hasMatchingToolUse) {
+          // Will be rendered as part of tool_use turn
+          return null;
+        }
+
+        // Standalone tool result - render it with FormattedToolResult
+        return (
+          <div className="turn assistant tool-use-turn">
+            <div className="tool-use completed">
+              <div className="tool-use-header">
+                <span className="tool-use-status completed">✓</span>
+                <span className="tool-use-name">Tool Result</span>
+              </div>
+              <Collapsible title={turn.toolResult?.isError ? "Error" : "Result"} defaultExpanded={true}>
+                <FormattedToolResult result={turn.content || turn.toolResult?.content || ''} isError={turn.toolResult?.isError} />
+              </Collapsible>
+            </div>
+          </div>
+        );
+      }
+
       // Skip empty text turns (assistant turns with no content and no streaming tool uses)
       if (turn.role === 'assistant' && !turn.content?.trim() && turnToolUses.length === 0 && !turn.streaming) {
         return null;
