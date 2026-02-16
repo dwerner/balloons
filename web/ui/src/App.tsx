@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, memo } from 'react';
+import React, { useState, useEffect, useCallback, useRef, memo, useMemo } from 'react';
 import { BalloonsClient } from '../../generated/balloons-client';
 import type { ConnectionState, SessionInfo, TurnInfo, TaskInfo, Unsubscribe, ToolUseStartedEvent, ToolInputDeltaEvent, ToolResultEvent, ContentDeltaEvent, TurnStartedEvent, TurnFinishedEvent } from '../../generated/balloons-client';
 import { MarkdownContent } from './MarkdownContent';
@@ -6,7 +6,11 @@ import { AppLayout, useLayout, useTheme } from './components/layout';
 import { SessionTreeView } from './components/SessionTreeView';
 import { SessionStatusBar } from './components/SessionStatusBar';
 import { StreamingStatusBar } from './components/StreamingStatusBar';
+import { ExchangeListView } from './components/ExchangeView';
 import { useWakeLock } from './hooks';
+
+// View mode for conversation display
+type ConversationViewMode = 'turns' | 'exchange';
 
 // Tool use state tracked during streaming
 interface ToolUseState {
@@ -589,9 +593,98 @@ const Turn = memo(function Turn({
   }
 });
 
-// Sort turns by index to maintain correct display order
+// Simple turn component for flat turn list view (no exchange grouping, no tool use/result merging)
+const SimpleTurn = memo(function SimpleTurn({ turn }: { turn: TurnInfo }) {
+  const blockType = turn.contentBlockType ?? 'text';
+  const role = turn.role;
+
+  // Render based on role and block type
+  if (role === 'user') {
+    return (
+      <div className={`turn user`}>
+        <div className="turn-role">user</div>
+        <div className="turn-content">{turn.content || '\u00A0'}</div>
+      </div>
+    );
+  }
+
+  if (role === 'assistant') {
+    // Tool use turn
+    if (blockType === 'tool_use' || turn.toolUse) {
+      const toolName = turn.toolUse?.toolName || 'Tool';
+      return (
+        <div className={`turn assistant tool-use-turn ${turn.streaming ? 'streaming' : ''}`}>
+          <div className={`tool-use ${turn.streaming ? 'executing' : 'completed'}`}>
+            <div className="tool-use-header">
+              <span className={`tool-use-status ${turn.streaming ? 'executing' : 'completed'}`}>
+                {turn.streaming ? '⚙️' : '✓'}
+              </span>
+              <span className="tool-use-name">{toolName}</span>
+            </div>
+            {turn.toolUse?.toolInput && Object.keys(turn.toolUse.toolInput).length > 0 && (
+              <Collapsible title="Input" defaultExpanded={true}>
+                <FormattedToolInput toolName={toolName} toolInput={turn.toolUse.toolInput} />
+              </Collapsible>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // Text turn
+    return (
+      <div className={`turn assistant ${turn.streaming ? 'streaming' : ''}`}>
+        <div className="turn-role">assistant</div>
+        <div className="turn-content">
+          <MarkdownContent content={turn.content} />
+        </div>
+      </div>
+    );
+  }
+
+  if (role === 'tool') {
+    // Tool result turn
+    const isError = turn.toolResult?.isError ?? false;
+    const content = turn.toolResult?.content || turn.content || '';
+    return (
+      <div className={`turn assistant tool-use-turn`}>
+        <div className={`tool-use ${isError ? 'error' : 'completed'}`}>
+          <div className="tool-use-header">
+            <span className={`tool-use-status ${isError ? 'error' : 'completed'}`}>
+              {isError ? '✗' : '✓'}
+            </span>
+            <span className="tool-use-name">Tool Result</span>
+          </div>
+          <Collapsible title={isError ? "Error" : "Result"} defaultExpanded={true}>
+            <FormattedToolResult result={content} isError={isError} />
+          </Collapsible>
+        </div>
+      </div>
+    );
+  }
+
+  // System turns (fork, merge, etc.)
+  if (['fork', 'merge', 'merged_to', 'link', 'interruption', 'error', 'image', 'slide', 'review', 'fork_proposal', 'merge_proposal', 'archive'].includes(blockType)) {
+    return <SystemTurn turn={turn} blockType={blockType} />;
+  }
+
+  // Fallback
+  return (
+    <div className={`turn ${role}`}>
+      <div className="turn-role">{role || blockType}</div>
+      <div className="turn-content">{turn.content || '\u00A0'}</div>
+    </div>
+  );
+});
+
+// Sort turns by index and deduplicate (keep latest version of each turn by idx)
 function sortTurnsByIdx(turns: TurnInfo[]): TurnInfo[] {
-  return [...turns].sort((a, b) => a.idx - b.idx);
+  // Dedupe by idx - keep the last occurrence (most recent update)
+  const byIdx = new Map<number, TurnInfo>();
+  for (const turn of turns) {
+    byIdx.set(turn.idx, turn);
+  }
+  return Array.from(byIdx.values()).sort((a, b) => a.idx - b.idx);
 }
 
 // Format duration in seconds to a human-readable string
@@ -639,7 +732,13 @@ const WS_URL = getWsUrl();
 export function App() {
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(() => {
+    // Restore persisted session ID on load
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('balloons:selected-session');
+    }
+    return null;
+  });
   const [turns, setTurns] = useState<TurnInfo[]>([]);
   const [message, setMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -648,6 +747,13 @@ export function App() {
   const [toolUses, setToolUses] = useState<ToolUseState[]>([]);
   const [imageAttachments, setImageAttachments] = useState<ImageAttachment[]>([]);
   const [isLoadingTurns, setIsLoadingTurns] = useState(false);
+  const [conversationViewMode, setConversationViewMode] = useState<ConversationViewMode>(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('balloons:conversation-view');
+      return (stored === 'exchange' || stored === 'turns') ? stored : 'exchange';
+    }
+    return 'exchange';
+  });
 
   const clientRef = useRef<BalloonsClient | null>(null);
   const turnsEndRef = useRef<HTMLDivElement>(null);
@@ -664,6 +770,13 @@ export function App() {
     return () => clearTimeout(timeoutId);
   }, [turns]);
 
+  // Persist selected session ID to localStorage
+  useEffect(() => {
+    if (selectedSessionId) {
+      localStorage.setItem('balloons:selected-session', selectedSessionId);
+    }
+  }, [selectedSessionId]);
+
   // Initialize client and connect
   useEffect(() => {
     const client = new BalloonsClient(WS_URL, {
@@ -679,7 +792,6 @@ export function App() {
     // Connect
     client.connect()
       .then(async () => {
-        console.log('Connected to Balloons backend');
         setError(null);
 
         // Load initial session list
@@ -687,17 +799,31 @@ export function App() {
           const sessionList = await client.tree.getAllSessions();
           setSessions(sessionList);
 
-          // If there's a current session, select it
-          const currentId = await client.tree.getCurrentSessionId();
-          if (currentId) {
-            setSelectedSessionId(currentId);
+          // Determine which session to select:
+          // 1. Check for persisted session ID in localStorage
+          // 2. Fall back to current session from backend
+          const persistedId = localStorage.getItem('balloons:selected-session');
+          const persistedSessionExists = persistedId && sessionList.some(s => s.id === persistedId);
+
+          let sessionIdToLoad: string | null = null;
+
+          if (persistedSessionExists) {
+            // Use persisted session if it still exists
+            sessionIdToLoad = persistedId;
+          } else {
+            // Fall back to current session from backend
+            sessionIdToLoad = await client.tree.getCurrentSessionId();
+          }
+
+          if (sessionIdToLoad) {
+            setSelectedSessionId(sessionIdToLoad);
             setIsLoadingTurns(true);
 
             // Load all session data in parallel
             const [sessionTurns, queueInfo, task] = await Promise.all([
-              client.tree.getTurns(currentId),
-              client.queue.getQueue(currentId),
-              client.tasks.getSessionTask(currentId),
+              client.tree.getTurns(sessionIdToLoad),
+              client.queue.getQueue(sessionIdToLoad),
+              client.tasks.getSessionTask(sessionIdToLoad),
             ]);
 
             setTurns(sessionTurns);
@@ -782,12 +908,11 @@ export function App() {
             // Tool uses are tracked separately and displayed inline in the assistant turn
             // The 'tool' role turns are for tool results which we display as part of the tool use
             if (data.role === 'tool') {
-              console.log('[TurnStarted] Skipping tool result turn:', data.turnIndex);
               return;
             }
 
             setTurns(prev => {
-              // Check if turn already exists
+              // Check if turn already exists by its index
               const existing = prev.find(t => t.idx === data.turnIndex);
               if (existing) {
                 // Update existing turn to streaming state
@@ -803,22 +928,11 @@ export function App() {
                 } : t);
               }
 
-              // For assistant turns, check if this might be a tool_use turn
-              // (a subsequent assistant turn in the same exchange)
-              // We only want to create a turn if there's no existing assistant turn
-              // for this exchange, OR if this is genuinely a new assistant response segment
-              if (data.role === 'assistant' && data.exchangeId) {
-                const existingAssistantInExchange = prev.find(
-                  t => t.role === 'assistant' && t.exchangeId === data.exchangeId
-                );
-                if (existingAssistantInExchange) {
-                  console.log('[TurnStarted] Skipping duplicate assistant turn for exchange:', data.exchangeId?.slice(0, 8), 'existing turn:', existingAssistantInExchange.idx, 'new turn:', data.turnIndex);
-                  // Don't create a new turn, tool uses will be displayed in the existing turn
-                  return prev;
-                }
-              }
-
-              // Create placeholder turn
+              // Create new turn for this index
+              // Note: We used to skip creating assistant turns if one already existed
+              // in the same exchange, but this was wrong - each turn has a unique index
+              // and should be tracked separately. Tool_use turns (which are also role=assistant)
+              // have different indices than text turns.
               const placeholderTurn: TurnInfo = {
                 idx: data.turnIndex,
                 role: data.role,
@@ -856,25 +970,8 @@ export function App() {
                 } : t);
               }
 
-              // Check if there's already an assistant turn for this exchange
-              // (Content deltas might come after tool uses for continued response)
-              if (data.exchangeId) {
-                const existingAssistantInExchange = prev.find(
-                  t => t.role === 'assistant' && t.exchangeId === data.exchangeId
-                );
-                if (existingAssistantInExchange) {
-                  // Update the existing assistant turn in this exchange
-                  return prev.map(t =>
-                    (t.role === 'assistant' && t.exchangeId === data.exchangeId) ? {
-                      ...t,
-                      content: data.accumulated,
-                      streaming: true,
-                    } : t
-                  );
-                }
-              }
-
-              // Turn doesn't exist yet - create it (shouldn't normally happen if onTurnStarted fires first)
+              // Turn doesn't exist yet - create it
+              // This can happen if onContentDelta arrives before onTurnStarted
               const newTurn: TurnInfo = {
                 idx: turnIdx,
                 role: 'assistant',
@@ -897,7 +994,6 @@ export function App() {
           if (data.sessionId === selectedSessionId) {
             // Skip tool result turns - they're displayed inline via tool use events
             if (data.role === 'tool') {
-              console.log('[TurnFinished] Skipping tool result turn:', data.turnIndex);
               return;
             }
 
@@ -918,19 +1014,8 @@ export function App() {
                 } : t);
               }
 
-              // For assistant turns without content, check if there's already an assistant turn
-              // for this exchange (this could be a tool_use turn finishing)
-              if (data.role === 'assistant' && data.exchangeId) {
-                const existingAssistantInExchange = prev.find(
-                  t => t.role === 'assistant' && t.exchangeId === data.exchangeId
-                );
-                if (existingAssistantInExchange && !data.content) {
-                  console.log('[TurnFinished] Skipping empty assistant turn for exchange:', data.exchangeId?.slice(0, 8));
-                  return prev;
-                }
-              }
-
               // Turn doesn't exist - create it with final content
+              // This can happen if events arrive out of order
               const newTurn: TurnInfo = {
                 idx: turnIdx,
                 role: data.role,
@@ -988,13 +1073,11 @@ export function App() {
       // Streaming events
       unsubscribers.push(
         client.tree.onStreamingStarted(async (data) => {
-          console.log('[StreamingStarted]', data.sessionId?.slice(0,8));
           const sessionList = await client.tree.getAllSessions();
           setSessions(sessionList);
 
           // Clear tool uses when a new streaming session starts
           if (data.sessionId === selectedSessionId) {
-            console.log('[StreamingStarted] Clearing tool uses for session:', data.sessionId?.slice(0,8));
             setToolUses([]);
           }
         })
@@ -1002,9 +1085,7 @@ export function App() {
 
       unsubscribers.push(
         client.tree.onStreamingStopped(async (data) => {
-          console.log('streamingStopped event received:', data);
           const sessionList = await client.tree.getAllSessions();
-          console.log('Sessions after streamingStopped:', sessionList.map(s => ({ id: s.id.slice(0,8), isStreaming: s.isStreaming })));
           setSessions(sessionList);
         })
       );
@@ -1012,7 +1093,6 @@ export function App() {
       // Queue events - track queued messages for the selected session
       unsubscribers.push(
         client.queue.onMessageAdded(async (data) => {
-          console.log('Queue messageAdded event:', data);
           if (data.sessionId === selectedSessionId) {
             const queueInfo = await client.queue.getQueue(data.sessionId);
             setQueuedMessageCount(queueInfo.messageCount);
@@ -1022,7 +1102,6 @@ export function App() {
 
       unsubscribers.push(
         client.queue.onMessageRemoved(async (data) => {
-          console.log('Queue messageRemoved event:', data);
           if (data.sessionId === selectedSessionId) {
             const queueInfo = await client.queue.getQueue(data.sessionId);
             setQueuedMessageCount(queueInfo.messageCount);
@@ -1032,7 +1111,6 @@ export function App() {
 
       unsubscribers.push(
         client.queue.onQueueDrained(async (data) => {
-          console.log('Queue drained event:', data);
           if (data.sessionId === selectedSessionId) {
             // Queue was drained - messages are being processed
             const queueInfo = await client.queue.getQueue(data.sessionId);
@@ -1043,7 +1121,6 @@ export function App() {
 
       unsubscribers.push(
         client.queue.onQueueCleared(async (data) => {
-          console.log('Queue cleared event:', data);
           if (data.sessionId === selectedSessionId) {
             setQueuedMessageCount(0);
           }
@@ -1073,26 +1150,35 @@ export function App() {
         })
       );
 
+      // Helper to reload turns after task ends (completion, cancel, error)
+      // This ensures web UI matches TUI by discarding incremental streaming state
+      const reloadTurnsAfterTaskEnd = async (sessionId: string) => {
+        setStreamingTask(null);
+        const sessionTurns = await client.tree.getTurns(sessionId);
+        setTurns(sessionTurns);
+        setToolUses([]);
+      };
+
       unsubscribers.push(
         client.tasks.onTaskCompleted(async (data) => {
-          if (data.sessionId === selectedSessionId) {
-            setStreamingTask(null);
+          if (data.sessionId && data.sessionId === selectedSessionId) {
+            await reloadTurnsAfterTaskEnd(data.sessionId);
           }
         })
       );
 
       unsubscribers.push(
         client.tasks.onTaskCancelled(async (data) => {
-          if (data.sessionId === selectedSessionId) {
-            setStreamingTask(null);
+          if (data.sessionId && data.sessionId === selectedSessionId) {
+            await reloadTurnsAfterTaskEnd(data.sessionId);
           }
         })
       );
 
       unsubscribers.push(
         client.tasks.onTaskError(async (data) => {
-          if (data.sessionId === selectedSessionId) {
-            setStreamingTask(null);
+          if (data.sessionId && data.sessionId === selectedSessionId) {
+            await reloadTurnsAfterTaskEnd(data.sessionId);
           }
         })
       );
@@ -1100,7 +1186,6 @@ export function App() {
       // Tool use events - for visualizing tool calls during streaming
       unsubscribers.push(
         client.tasks.onToolUseStarted((data: ToolUseStartedEvent) => {
-          console.log('[ToolUseStarted]', data.toolName, 'turn:', data.turnIndex, 'exchange:', data.exchangeId?.slice(0,8), 'session:', data.sessionId?.slice(0,8));
           if (data.sessionId === selectedSessionId) {
             setToolUses(prev => {
               // Check if this tool use already exists
@@ -1124,7 +1209,6 @@ export function App() {
 
       unsubscribers.push(
         client.tasks.onToolInputDelta((data: ToolInputDeltaEvent) => {
-          console.log('[ToolInputDelta]', data.toolUseId?.slice(0,8), 'partial:', data.partialJson?.slice(0,30));
           if (data.sessionId === selectedSessionId) {
             setToolUses(prev => prev.map(tu =>
               tu.toolUseId === data.toolUseId
@@ -1137,7 +1221,6 @@ export function App() {
 
       unsubscribers.push(
         client.tasks.onToolUse((data) => {
-          console.log('[ToolUse]', data.toolName, 'executing');
           if (data.sessionId === selectedSessionId) {
             setToolUses(prev => prev.map(tu =>
               tu.toolUseId === data.toolUseId
@@ -1154,7 +1237,6 @@ export function App() {
 
       unsubscribers.push(
         client.tasks.onToolResult((data: ToolResultEvent) => {
-          console.log('[ToolResult]', data.toolName, 'isError:', data.isError, 'result length:', data.result?.length);
           if (data.sessionId === selectedSessionId) {
             setToolUses(prev => prev.map(tu =>
               tu.toolUseId === data.toolUseId
@@ -1216,7 +1298,6 @@ export function App() {
       // Verify this is still the session we're supposed to load
       // (user might have switched again during the async fetch)
       if (loadingSessionRef.current !== sessionId) {
-        console.log('Session switch detected, discarding stale data for:', sessionId.slice(0, 8));
         return;
       }
 
@@ -1378,8 +1459,7 @@ export function App() {
           setImageAttachments(currentImages);
           return;
         }
-        const messageId = await client.queue.addMessage(selectedSessionId, content);
-        console.log('Message queued:', messageId, content.substring(0, 50));
+        await client.queue.addMessage(selectedSessionId, content);
       } else if (hasImages) {
         // Submit with images - need to upload images first
         // Convert images to base64 and upload
@@ -1392,14 +1472,12 @@ export function App() {
 
             // Upload via images service
             try {
-              console.log('Uploading image:', img.file.name, 'mediaType:', img.mediaType, 'base64 length:', base64.length);
               const result = await client.images.uploadImage(
                 base64,
                 img.mediaType,
                 selectedSessionId,
                 img.file.name
               );
-              console.log('Upload result:', result);
               return {
                 file_path: result.filePath,
                 media_type: result.mediaType,
@@ -1415,19 +1493,17 @@ export function App() {
         );
 
         // Submit message with uploaded images
-        const result = await client.sessions.submitMessageWithImages(
+        await client.sessions.submitMessageWithImages(
           selectedSessionId,
           content || 'Please analyze this image.',
           imageData
         );
-        console.log('Message with images submitted:', result.exchangeId);
 
         // Clean up preview URLs
         currentImages.forEach(img => URL.revokeObjectURL(img.previewUrl));
       } else {
         // Session is not streaming - submit directly (text only)
-        const result = await client.sessions.submitMessage(selectedSessionId, content);
-        console.log('Message submitted:', result.exchangeId, content.substring(0, 50));
+        await client.sessions.submitMessage(selectedSessionId, content);
       }
     } catch (err) {
       console.error('Failed to send message:', err);
@@ -1454,7 +1530,6 @@ export function App() {
 
     try {
       await client.sessions.cancelStreaming(selectedSessionId);
-      console.log('Streaming cancelled');
     } catch (err) {
       console.error('Failed to stop streaming:', err);
       setError(`Failed to stop streaming: ${err}`);
@@ -1462,9 +1537,6 @@ export function App() {
   }, [connectionState, selectedSessionId]);
 
   const selectedSession = sessions.find(s => s.id === selectedSessionId);
-
-  // Debug: log when selectedSession.isStreaming changes
-  console.log('Render - selectedSession:', selectedSession?.id?.slice(0,8), 'isStreaming:', selectedSession?.isStreaming);
 
   return (
     <AppLayout>
@@ -1501,6 +1573,30 @@ export function App() {
           </div>
         ) : (
           <>
+            {/* View mode toggle */}
+            <div className="conversation-view-toggle">
+              <button
+                className={`view-toggle-btn ${conversationViewMode === 'exchange' ? 'active' : ''}`}
+                onClick={() => {
+                  setConversationViewMode('exchange');
+                  localStorage.setItem('balloons:conversation-view', 'exchange');
+                }}
+                title="Exchange view - grouped by conversation exchange"
+              >
+                Exchange
+              </button>
+              <button
+                className={`view-toggle-btn ${conversationViewMode === 'turns' ? 'active' : ''}`}
+                onClick={() => {
+                  setConversationViewMode('turns');
+                  localStorage.setItem('balloons:conversation-view', 'turns');
+                }}
+                title="Turn list view - flat list of all turns"
+              >
+                Turns
+              </button>
+            </div>
+
             <div className="turns-container">
               {isLoadingTurns ? (
                 <div className="empty-state">
@@ -1512,11 +1608,13 @@ export function App() {
                   <h2>No Messages Yet</h2>
                   <p>Send a message to start the conversation.</p>
                 </div>
-              ) : null}
-
-              {turns.map(turn => (
-                <Turn key={turn.idx} turn={turn} toolUses={toolUses} allTurns={turns} />
-              ))}
+              ) : conversationViewMode === 'exchange' ? (
+                <ExchangeListView turns={turns} toolUses={toolUses} />
+              ) : (
+                turns.map(turn => (
+                  <SimpleTurn key={`simple-${turn.idx}`} turn={turn} />
+                ))
+              )}
               <div ref={turnsEndRef} />
             </div>
 
@@ -1678,6 +1776,15 @@ function SidebarContent({
     }
   }, [onSelectSession, closeSidebar, layoutMode]);
 
+  // Sort sessions: current first, then by last modified (most recent first)
+  const sortedSessions = useMemo(() => {
+    return [...sessions].sort((a, b) => {
+      if (a.isCurrent) return -1;
+      if (b.isCurrent) return 1;
+      return new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime();
+    });
+  }, [sessions]);
+
   return (
     <>
       <header className="sidebar-header">
@@ -1741,13 +1848,13 @@ function SidebarContent({
         />
       ) : (
         <div className="session-list">
-          {sessions.length === 0 && connectionState === 'connected' && (
+          {sortedSessions.length === 0 && connectionState === 'connected' && (
             <div style={{ padding: '16px', color: '#666', textAlign: 'center' }}>
               No sessions
             </div>
           )}
 
-          {sessions.map(session => {
+          {sortedSessions.map(session => {
             const isSelected = session.id === selectedSessionId;
             const showStreamingDetails = isSelected && session.isStreaming && streamingTask;
             return (

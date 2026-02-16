@@ -1,5 +1,6 @@
 """Tests for the fork manager."""
 
+import asyncio
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 
@@ -683,3 +684,1267 @@ class TestParseMergeProposal:
         proposal = parse_merge_proposal({})
         assert proposal is not None
         assert proposal.summary == ""
+
+
+class TestContextGrouper:
+    """Tests for group_messages_by_context_mode function."""
+
+    def test_empty_list(self):
+        """Empty input should return empty groups."""
+        from core.context_grouper import group_messages_by_context_mode
+
+        result = group_messages_by_context_mode([])
+
+        assert result.copy_items == []
+        assert result.compress_groups == []
+        assert not result.needs_compression
+
+    def test_all_copy_messages(self):
+        """All COPY messages should go to copy_items, no compression needed."""
+        from core.context_grouper import group_messages_by_context_mode
+
+        msg1 = Message(role="user", content="Hello", context_mode=ContextMode.COPY)
+        msg2 = Message(role="assistant", content="Hi", context_mode=ContextMode.COPY)
+
+        result = group_messages_by_context_mode([(msg1, 0), (msg2, 1)])
+
+        assert len(result.copy_items) == 2
+        assert result.compress_groups == []
+        assert not result.needs_compression
+
+    def test_all_compress_messages(self):
+        """All COMPRESS messages should form one group."""
+        from core.context_grouper import group_messages_by_context_mode
+
+        msg1 = Message(role="user", content="Hello", context_mode=ContextMode.COMPRESS)
+        msg2 = Message(role="assistant", content="Hi", context_mode=ContextMode.COMPRESS)
+
+        result = group_messages_by_context_mode([(msg1, 0), (msg2, 1)])
+
+        assert result.copy_items == []
+        assert len(result.compress_groups) == 1
+        assert len(result.compress_groups[0]) == 2
+        assert result.needs_compression
+
+    def test_drop_messages_excluded(self):
+        """DROP messages should be completely excluded."""
+        from core.context_grouper import group_messages_by_context_mode
+
+        msg1 = Message(role="user", content="Hello", context_mode=ContextMode.COPY)
+        msg2 = Message(role="assistant", content="Secret", context_mode=ContextMode.DROP)
+        msg3 = Message(role="user", content="Bye", context_mode=ContextMode.COPY)
+
+        result = group_messages_by_context_mode([(msg1, 0), (msg2, 1), (msg3, 2)])
+
+        assert len(result.copy_items) == 2
+        assert result.compress_groups == []
+        # Only indices 0 and 2, not 1
+        indices = [idx for _, idx in result.copy_items]
+        assert 1 not in indices
+
+    def test_mixed_copy_compress_creates_separate_groups(self):
+        """COPY message between COMPRESS messages creates separate groups."""
+        from core.context_grouper import group_messages_by_context_mode
+
+        msg1 = Message(role="user", content="Q1", context_mode=ContextMode.COMPRESS)
+        msg2 = Message(role="assistant", content="A1", context_mode=ContextMode.COMPRESS)
+        msg3 = Message(role="user", content="Important", context_mode=ContextMode.COPY)
+        msg4 = Message(role="assistant", content="Q2", context_mode=ContextMode.COMPRESS)
+        msg5 = Message(role="user", content="A2", context_mode=ContextMode.COMPRESS)
+
+        result = group_messages_by_context_mode([
+            (msg1, 0), (msg2, 1), (msg3, 2), (msg4, 3), (msg5, 4)
+        ])
+
+        # Should have 1 copy item and 2 compress groups
+        assert len(result.copy_items) == 1
+        assert len(result.compress_groups) == 2
+        # First group: indices 0, 1
+        assert len(result.compress_groups[0]) == 2
+        # Second group: indices 3, 4
+        assert len(result.compress_groups[1]) == 2
+        assert result.needs_compression
+
+    def test_compress_group_positions(self):
+        """compress_group_positions should return first index of each group."""
+        from core.context_grouper import group_messages_by_context_mode
+
+        msg1 = Message(role="user", content="Q1", context_mode=ContextMode.COMPRESS)
+        msg2 = Message(role="assistant", content="A1", context_mode=ContextMode.COMPRESS)
+        msg3 = Message(role="user", content="Important", context_mode=ContextMode.COPY)
+        msg4 = Message(role="assistant", content="Q2", context_mode=ContextMode.COMPRESS)
+
+        result = group_messages_by_context_mode([
+            (msg1, 0), (msg2, 1), (msg3, 2), (msg4, 3)
+        ])
+
+        # First group starts at 0, second at 3
+        assert result.compress_group_positions == [0, 3]
+
+    def test_summarize_mode_treated_as_compress(self):
+        """SUMMARIZE mode (legacy alias) should be treated as COMPRESS."""
+        from core.context_grouper import group_messages_by_context_mode
+
+        msg1 = Message(role="user", content="Hello", context_mode=ContextMode.SUMMARIZE)
+
+        result = group_messages_by_context_mode([(msg1, 0)])
+
+        assert len(result.compress_groups) == 1
+        assert result.needs_compression
+
+    def test_out_of_order_indices_sorted(self):
+        """Messages passed out of order should be sorted by index."""
+        from core.context_grouper import group_messages_by_context_mode
+
+        msg1 = Message(role="user", content="First", context_mode=ContextMode.COMPRESS)
+        msg2 = Message(role="assistant", content="Second", context_mode=ContextMode.COMPRESS)
+        msg3 = Message(role="user", content="Third", context_mode=ContextMode.COMPRESS)
+
+        # Pass out of order
+        result = group_messages_by_context_mode([
+            (msg3, 2), (msg1, 0), (msg2, 1)
+        ])
+
+        # Should all be in one group, sorted
+        assert len(result.compress_groups) == 1
+        group = result.compress_groups[0]
+        indices = [idx for _, idx in group]
+        assert indices == [0, 1, 2]
+
+
+class TestTreeStateContextModeForFork:
+    """Tests for TreeState context mode operations in fork scenarios."""
+
+    def test_set_context_mode_multiple_turns(self):
+        """Setting context modes for multiple turns should all be stored."""
+        from core.tree_state import TreeState
+
+        state = TreeState()
+
+        state.set_context_mode("s1", 0, ContextMode.COPY)
+        state.set_context_mode("s1", 1, ContextMode.COMPRESS)
+        state.set_context_mode("s1", 2, ContextMode.DROP)
+
+        assert state.get_context_mode("s1", 0).value == "copy"
+        assert state.get_context_mode("s1", 1).value == "compress"
+        assert state.get_context_mode("s1", 2).value == "drop"
+
+    def test_get_context_modes_for_session(self):
+        """get_context_modes_for_session should return all modes for a session."""
+        from core.tree_state import TreeState
+
+        state = TreeState()
+
+        state.set_context_mode("s1", 0, ContextMode.COPY)
+        state.set_context_mode("s1", 1, ContextMode.COMPRESS)
+        state.set_context_mode("s2", 0, ContextMode.DROP)  # Different session
+
+        modes = state.get_context_modes_for_session("s1")
+
+        assert len(modes) == 2
+        assert modes[0].value == "copy"
+        assert modes[1].value == "compress"
+        # s2 modes should not be included
+        assert 2 not in modes
+
+    def test_context_mode_overwrite(self):
+        """Setting context mode twice should overwrite the first value."""
+        from core.tree_state import TreeState
+
+        state = TreeState()
+
+        state.set_context_mode("s1", 0, ContextMode.COPY)
+        state.set_context_mode("s1", 0, ContextMode.COMPRESS)
+
+        assert state.get_context_mode("s1", 0).value == "compress"
+
+    def test_clear_context_modes_for_session(self):
+        """clear_context_modes_for_session should remove all modes for that session."""
+        from core.tree_state import TreeState
+
+        state = TreeState()
+
+        state.set_context_mode("s1", 0, ContextMode.COPY)
+        state.set_context_mode("s1", 1, ContextMode.COMPRESS)
+        state.set_context_mode("s2", 0, ContextMode.COPY)
+
+        state.clear_context_modes_for_session("s1")
+
+        # s1 modes should be cleared (back to default DROP)
+        assert state.get_context_mode("s1", 0).value == "drop"
+        assert state.get_context_mode("s1", 1).value == "drop"
+        # s2 modes should be unchanged
+        assert state.get_context_mode("s2", 0).value == "copy"
+
+
+class TestPrepareForkWithCompression:
+    """Tests for ForkManager.prepare_fork when compression is needed."""
+
+    def create_mock_session(self, **kwargs):
+        """Create a mock session with default attributes."""
+        session = MagicMock()
+        session.id = kwargs.get("id", "test-session-123")
+        session.turns = kwargs.get("turns", [])
+        session.is_read_only = MagicMock(return_value=kwargs.get("read_only", False))
+        session.is_fork = MagicMock(return_value=kwargs.get("is_fork", False))
+        session.is_merged = MagicMock(return_value=kwargs.get("is_merged", False))
+        session.get_parent = MagicMock(return_value=kwargs.get("parent", None))
+        session.get_parent_async = AsyncMock(return_value=kwargs.get("parent", None))
+        session.get_fork_display_name = MagicMock(return_value=kwargs.get("fork_name", "test-fork"))
+        session.get_all_forks = MagicMock(return_value=kwargs.get("forks", []))
+        session.add_child = MagicMock()
+        session.add_message = MagicMock()
+        session.add_fork_turn = MagicMock()
+        session.get_last_exchange_id = MagicMock(return_value="ex-123")
+        session.save = AsyncMock()
+        session.mark_merged = MagicMock()
+        session.mark_child_merged = MagicMock()
+        return session
+
+    def create_mock_context_builder(self):
+        """Create a mock context builder."""
+        builder = MagicMock()
+        builder.build_context_summary_prompt = MagicMock(
+            return_value="Please summarize this context..."
+        )
+        return builder
+
+    @pytest.mark.asyncio
+    @patch("core.fork.Session")
+    @patch("core.fork.copy_session_bindings")
+    async def test_prepare_fork_with_compress_messages(self, mock_copy_bindings, mock_session_class):
+        """Fork with COMPRESS messages should return needs_compression=True."""
+        context_builder = self.create_mock_context_builder()
+        manager = ForkManager(context_builder)
+
+        parent = self.create_mock_session(id="parent-123")
+        child = self.create_mock_session(id="child-456")
+        mock_session_class.return_value = child
+        mock_copy_bindings.return_value = 0
+
+        # Create messages with COMPRESS mode
+        msg1 = Message(
+            role="user",
+            content="Old context",
+            content_blocks=[TextBlock(text="Old context")],
+            context_mode=ContextMode.COMPRESS,
+        )
+        msg2 = Message(
+            role="assistant",
+            content="Old response",
+            content_blocks=[TextBlock(text="Old response")],
+            context_mode=ContextMode.COMPRESS,
+        )
+
+        result = await manager.prepare_fork(
+            current_session=parent,
+            indexed_messages=[(msg1, 0), (msg2, 1)],
+            prompt="Continue",
+            allowed_tools=["read"],
+            name="test-fork",
+        )
+
+        assert result.success
+        assert result.needs_compression
+        assert result.compression_prompt is not None
+        assert result.helper_id is not None
+        assert result.fork_data is not None
+        context_builder.build_context_summary_prompt.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("core.fork.Session")
+    @patch("core.fork.copy_session_bindings")
+    async def test_prepare_fork_mixed_copy_and_compress(self, mock_copy_bindings, mock_session_class):
+        """Fork with mixed COPY and COMPRESS should need compression."""
+        context_builder = self.create_mock_context_builder()
+        manager = ForkManager(context_builder)
+
+        parent = self.create_mock_session(id="parent-123")
+        child = self.create_mock_session(id="child-456")
+        mock_session_class.return_value = child
+        mock_copy_bindings.return_value = 0
+
+        msg1 = Message(
+            role="user",
+            content="Requirements",
+            content_blocks=[TextBlock(text="Requirements")],
+            context_mode=ContextMode.COPY,  # Keep verbatim
+        )
+        msg2 = Message(
+            role="assistant",
+            content="Background",
+            content_blocks=[TextBlock(text="Background")],
+            context_mode=ContextMode.COMPRESS,  # Summarize
+        )
+
+        result = await manager.prepare_fork(
+            current_session=parent,
+            indexed_messages=[(msg1, 0), (msg2, 1)],
+            prompt="Continue",
+            allowed_tools=["read"],
+        )
+
+        assert result.success
+        assert result.needs_compression
+        # Fork data should separate copy and compress items
+        assert result.fork_data is not None
+        assert len(result.fork_data.copy_items) == 1
+        assert len(result.fork_data.compress_group_positions) == 1
+
+    @pytest.mark.asyncio
+    @patch("core.fork.Session")
+    @patch("core.fork.copy_session_bindings")
+    async def test_prepare_fork_all_drop_returns_empty(self, mock_copy_bindings, mock_session_class):
+        """Fork with all DROP messages should not need compression but have no content."""
+        context_builder = self.create_mock_context_builder()
+        manager = ForkManager(context_builder)
+
+        parent = self.create_mock_session(id="parent-123")
+        child = self.create_mock_session(id="child-456")
+        mock_session_class.return_value = child
+        mock_copy_bindings.return_value = 0
+
+        msg1 = Message(
+            role="user",
+            content="Dropped",
+            content_blocks=[TextBlock(text="Dropped")],
+            context_mode=ContextMode.DROP,
+        )
+
+        result = await manager.prepare_fork(
+            current_session=parent,
+            indexed_messages=[(msg1, 0)],
+            prompt="Continue",
+            allowed_tools=["read"],
+        )
+
+        # Should succeed but no compression needed (nothing to compress)
+        assert result.success
+        assert not result.needs_compression
+
+
+class TestForkProposalContextModeIntegration:
+    """Integration tests for the full fork proposal context mode flow.
+
+    These tests verify the end-to-end flow:
+    1. ForkProposal.resolve_exchange_indices maps proposal to exchange indices
+    2. Context modes are stored in TreeState
+    3. get_selected_messages_with_indices reads modes correctly
+    4. group_messages_by_context_mode separates COPY/COMPRESS
+    5. prepare_fork handles compression correctly
+    """
+
+    def test_full_flow_proposal_to_grouped_messages(self):
+        """Test full flow from proposal to grouped messages."""
+        from core.tree_state import TreeState, TurnData
+        from core.context_grouper import group_messages_by_context_mode
+        from dataclasses import dataclass, field
+
+        # Step 1: Create a fork proposal with context plan
+        proposal = ForkProposal(
+            name="implement-feature",
+            description="Implement the feature",
+            context_plan=[
+                ContextAssignment(exchange_range="0", mode="copy"),
+                ContextAssignment(exchange_range="1-2", mode="compress"),
+                ContextAssignment(exchange_range="last", mode="copy"),
+            ],
+        )
+
+        # Step 2: Resolve to exchange indices (simulating 4 exchanges)
+        exchange_modes = proposal.resolve_exchange_indices(4, exclude_current=False)
+
+        # Verify resolution
+        assert exchange_modes == {
+            0: ContextMode.COPY,
+            1: ContextMode.COMPRESS,
+            2: ContextMode.COMPRESS,
+            3: ContextMode.COPY,
+        }
+
+        # Step 3: Apply to TreeState (simulate what app does)
+        state = TreeState()
+
+        # Simulate 4 exchanges with 2 turns each (user + assistant)
+        for exchange_idx in range(4):
+            turn_idx_user = exchange_idx * 2
+            turn_idx_assistant = exchange_idx * 2 + 1
+            mode = exchange_modes.get(exchange_idx, ContextMode.DROP)
+            state.set_context_mode("s1", turn_idx_user, mode)
+            state.set_context_mode("s1", turn_idx_assistant, mode)
+
+        # Step 4: Verify modes were stored correctly
+        assert state.get_context_mode("s1", 0).value == "copy"  # Exchange 0, user
+        assert state.get_context_mode("s1", 1).value == "copy"  # Exchange 0, assistant
+        assert state.get_context_mode("s1", 2).value == "compress"  # Exchange 1, user
+        assert state.get_context_mode("s1", 3).value == "compress"  # Exchange 1, assistant
+        assert state.get_context_mode("s1", 4).value == "compress"  # Exchange 2, user
+        assert state.get_context_mode("s1", 5).value == "compress"  # Exchange 2, assistant
+        assert state.get_context_mode("s1", 6).value == "copy"  # Exchange 3, user
+        assert state.get_context_mode("s1", 7).value == "copy"  # Exchange 3, assistant
+
+        # Step 5: Create messages with modes from TreeState
+        messages = []
+        for i in range(8):
+            mode = state.get_context_mode("s1", i)
+            msg = Message(
+                role="user" if i % 2 == 0 else "assistant",
+                content=f"Content {i}",
+                content_blocks=[TextBlock(text=f"Content {i}")],
+                context_mode=mode,
+            )
+            messages.append((msg, i))
+
+        # Step 6: Group by context mode
+        groups = group_messages_by_context_mode(messages)
+
+        # Should have 4 COPY items (indices 0, 1, 6, 7)
+        assert len(groups.copy_items) == 4
+        copy_indices = [idx for _, idx in groups.copy_items]
+        assert sorted(copy_indices) == [0, 1, 6, 7]
+
+        # Should have 1 compress group with 4 items (indices 2, 3, 4, 5)
+        assert len(groups.compress_groups) == 1
+        assert len(groups.compress_groups[0]) == 4
+        compress_indices = [idx for _, idx in groups.compress_groups[0]]
+        assert sorted(compress_indices) == [2, 3, 4, 5]
+
+        # Should need compression
+        assert groups.needs_compression
+
+    def test_proposal_with_drop_excludes_exchanges(self):
+        """Exchanges marked DROP should be excluded from context."""
+        from core.context_grouper import group_messages_by_context_mode
+
+        proposal = ForkProposal(
+            name="focused-fork",
+            description="Only keep relevant exchanges",
+            context_plan=[
+                ContextAssignment(exchange_range="all", mode="drop"),  # Drop all first
+                ContextAssignment(exchange_range="0", mode="copy"),  # Keep first
+                ContextAssignment(exchange_range="last", mode="copy"),  # Keep last
+            ],
+        )
+
+        # 5 exchanges
+        exchange_modes = proposal.resolve_exchange_indices(5, exclude_current=False)
+
+        # Only 0 and 4 should be COPY, rest DROP
+        assert exchange_modes[0].value == "copy"
+        assert exchange_modes[1].value == "drop"
+        assert exchange_modes[2].value == "drop"
+        assert exchange_modes[3].value == "drop"
+        assert exchange_modes[4].value == "copy"
+
+        # Create messages
+        messages = []
+        for i in range(5):
+            mode = exchange_modes[i]
+            msg = Message(
+                role="user",
+                content=f"Content {i}",
+                context_mode=mode,
+            )
+            messages.append((msg, i))
+
+        # Group - only COPY items, no compression
+        groups = group_messages_by_context_mode(messages)
+
+        assert len(groups.copy_items) == 2
+        assert len(groups.compress_groups) == 0
+        assert not groups.needs_compression
+
+    def test_context_modes_preserved_through_message_creation(self):
+        """Messages created from TreeState modes should preserve the mode attribute."""
+        from core.tree_state import TreeState
+
+        state = TreeState()
+
+        # Set context modes
+        state.set_context_mode("s1", 0, ContextMode.COPY)
+        state.set_context_mode("s1", 1, ContextMode.COMPRESS)
+        state.set_context_mode("s1", 2, ContextMode.DROP)
+
+        # Create messages with modes from TreeState (simulating get_selected_messages_with_indices)
+        messages = []
+        for i in range(3):
+            mode = state.get_context_mode("s1", i)
+            if mode != ContextMode.DROP:
+                msg = Message(
+                    role="user" if i % 2 == 0 else "assistant",
+                    content=f"Content {i}",
+                    context_mode=mode,
+                )
+                messages.append((msg, i))
+
+        # Should only have 2 messages (DROP excluded)
+        assert len(messages) == 2
+
+        # Verify modes on messages
+        assert messages[0][0].context_mode.value == "copy"
+        assert messages[0][1] == 0
+        assert messages[1][0].context_mode.value == "compress"
+        assert messages[1][1] == 1
+
+    def test_end_to_end_fork_proposal_creates_compression_data(self):
+        """End-to-end test: fork proposal with compress mode creates ForkData for compression."""
+        from core.tree_state import TreeState
+        from core.context_grouper import group_messages_by_context_mode
+
+        # Step 1: Create proposal
+        proposal = ForkProposal(
+            name="compress-test",
+            description="Test compression flow",
+            context_plan=[
+                ContextAssignment(exchange_range="0", mode="copy"),
+                ContextAssignment(exchange_range="1", mode="compress"),
+            ],
+        )
+
+        # Step 2: Resolve (2 exchanges)
+        exchange_modes = proposal.resolve_exchange_indices(2, exclude_current=False)
+
+        # Step 3: Apply to TreeState
+        state = TreeState()
+        for exchange_idx, mode in exchange_modes.items():
+            state.set_context_mode("s1", exchange_idx, mode)
+
+        # Step 4: Build messages from TreeState modes
+        indexed_messages = []
+        for i in range(2):
+            mode = state.get_context_mode("s1", i)
+            if mode != ContextMode.DROP:
+                msg = Message(
+                    role="user",
+                    content=f"Exchange {i}",
+                    content_blocks=[TextBlock(text=f"Exchange {i}")],
+                    context_mode=mode,
+                )
+                indexed_messages.append((msg, i))
+
+        # Step 5: Group by context mode
+        groups = group_messages_by_context_mode(indexed_messages)
+
+        # Verify the data needed for ForkManager
+        assert len(groups.copy_items) == 1
+        assert groups.copy_items[0][1] == 0  # Index 0 is COPY
+        assert len(groups.compress_groups) == 1
+        assert groups.compress_groups[0][0][1] == 1  # Index 1 is COMPRESS
+        assert groups.needs_compression
+        assert groups.compress_group_positions == [1]
+
+    def test_session_id_mismatch_modes_still_found(self):
+        """Context modes should be found even when session_id differs from current_session_id.
+
+        This tests the fix for the bug where:
+        1. _execute_fork_proposal sets modes on session_id parameter
+        2. get_selected_messages_with_indices was looking up modes on current_session_id
+        3. If these differed, modes would default to COPY instead of proposal modes
+
+        The fix is to pass session_id explicitly to get_selected_messages_with_indices.
+        """
+        from core.tree_state import TreeState
+
+        state = TreeState()
+
+        # Simulate setting modes on a specific session (like _execute_fork_proposal does)
+        target_session_id = "session-with-proposal"
+        state.set_context_mode(target_session_id, 0, ContextMode.COPY)
+        state.set_context_mode(target_session_id, 1, ContextMode.COMPRESS)
+        state.set_context_mode(target_session_id, 2, ContextMode.DROP)
+
+        # Set a different current session (simulating user switched sessions)
+        different_session_id = "different-session"
+        state.add_session_from_metadata({"id": different_session_id, "title": "Other"}, is_current=True)
+
+        # Verify current session is different from target
+        assert state.get_current_session_id() == different_session_id
+        assert state.get_current_session_id() != target_session_id
+
+        # The fix: looking up modes by target_session_id should work
+        assert state.get_context_mode(target_session_id, 0).value == "copy"
+        assert state.get_context_mode(target_session_id, 1).value == "compress"
+        assert state.get_context_mode(target_session_id, 2).value == "drop"
+
+        # Bug scenario: looking up by current_session_id would return defaults
+        # (DROP for non-current sessions, or COPY for current session)
+        assert state.get_context_mode(different_session_id, 0).value == "copy"  # Default COPY for current
+        assert state.get_context_mode(different_session_id, 1).value == "copy"  # Default COPY for current
+
+
+class TestBuildContextMessages:
+    """Tests for build_context_messages function."""
+
+    def test_empty_inputs(self):
+        """Empty inputs should return empty list."""
+        from core.context_grouper import build_context_messages
+
+        result = build_context_messages([], [])
+
+        assert result == []
+
+    def test_only_copy_items(self):
+        """Only copy items should be returned in order."""
+        from core.context_grouper import build_context_messages
+
+        msg1 = Message(role="user", content="First")
+        msg2 = Message(role="assistant", content="Second")
+
+        result = build_context_messages(
+            copy_items=[(msg1, 0), (msg2, 1)],
+            summary_items=[],
+        )
+
+        assert len(result) == 2
+        assert result[0].content == "First"
+        assert result[1].content == "Second"
+
+    def test_only_summary_items(self):
+        """Only summary items should be returned in order."""
+        from core.context_grouper import build_context_messages
+
+        summary = Message(role="user", content="[Summary] Combined context")
+
+        result = build_context_messages(
+            copy_items=[],
+            summary_items=[(summary, 0)],
+        )
+
+        assert len(result) == 1
+        assert "[Summary]" in result[0].content
+
+    def test_interleaved_copy_and_summary(self):
+        """Copy and summary items should be sorted by index."""
+        from core.context_grouper import build_context_messages
+
+        msg1 = Message(role="user", content="First")  # index 0
+        summary = Message(role="user", content="[Summary]")  # index 1 (replacing compressed)
+        msg3 = Message(role="assistant", content="Last")  # index 2
+
+        result = build_context_messages(
+            copy_items=[(msg1, 0), (msg3, 2)],
+            summary_items=[(summary, 1)],
+        )
+
+        assert len(result) == 3
+        assert result[0].content == "First"
+        assert "[Summary]" in result[1].content
+        assert result[2].content == "Last"
+
+    def test_out_of_order_inputs_sorted(self):
+        """Items passed out of order should be sorted by index."""
+        from core.context_grouper import build_context_messages
+
+        msg1 = Message(role="user", content="First")
+        msg2 = Message(role="assistant", content="Second")
+        msg3 = Message(role="user", content="Third")
+
+        # Pass in reverse order
+        result = build_context_messages(
+            copy_items=[(msg3, 2), (msg1, 0)],
+            summary_items=[(msg2, 1)],
+        )
+
+        assert len(result) == 3
+        assert result[0].content == "First"
+        assert result[1].content == "Second"
+        assert result[2].content == "Third"
+
+
+class TestCompressionHelperFlow:
+    """Tests for the compression helper flow.
+
+    Verifies the end-to-end flow when COMPRESS mode is used:
+    1. prepare_fork returns needs_compression=True with helper_id and compression_prompt
+    2. HelperRunner is created and started correctly
+    3. Helper completion triggers complete_fork_after_compression
+    4. Compressed summary is inserted at correct position in child session
+    """
+
+    def create_mock_session(self, **kwargs):
+        """Create a mock session with default attributes."""
+        session = MagicMock()
+        session.id = kwargs.get("id", "test-session-123")
+        session.turns = kwargs.get("turns", [])
+        session.is_read_only = MagicMock(return_value=kwargs.get("read_only", False))
+        session.is_fork = MagicMock(return_value=kwargs.get("is_fork", False))
+        session.is_merged = MagicMock(return_value=kwargs.get("is_merged", False))
+        session.get_parent = MagicMock(return_value=kwargs.get("parent", None))
+        session.get_parent_async = AsyncMock(return_value=kwargs.get("parent", None))
+        session.get_fork_display_name = MagicMock(return_value=kwargs.get("fork_name", "test-fork"))
+        session.get_all_forks = MagicMock(return_value=kwargs.get("forks", []))
+        session.add_child = MagicMock()
+        session.add_message = MagicMock()
+        session.add_fork_turn = MagicMock()
+        session.save = AsyncMock()
+        session.mark_merged = MagicMock()
+        session.mark_child_merged = MagicMock()
+        session.get_last_exchange_id = MagicMock(return_value="exchange-123")
+        return session
+
+    def create_mock_context_builder(self):
+        """Create a mock context builder."""
+        builder = MagicMock()
+        builder.build_context_summary_prompt = MagicMock(
+            return_value="Please summarize this context..."
+        )
+        return builder
+
+    @pytest.mark.asyncio
+    @patch("core.fork.Session")
+    @patch("core.fork.copy_session_bindings")
+    async def test_prepare_fork_returns_valid_compression_prompt(self, mock_copy_bindings, mock_session_class):
+        """prepare_fork should return a valid compression_prompt when COMPRESS messages exist."""
+        context_builder = self.create_mock_context_builder()
+        manager = ForkManager(context_builder)
+
+        parent = self.create_mock_session(id="parent-123")
+        child = self.create_mock_session(id="child-456")
+        mock_session_class.return_value = child
+        mock_copy_bindings.return_value = 0
+
+        msg1 = Message(
+            role="user",
+            content="Context to compress",
+            content_blocks=[TextBlock(text="Context to compress")],
+            context_mode=ContextMode.COMPRESS,
+        )
+
+        result = await manager.prepare_fork(
+            current_session=parent,
+            indexed_messages=[(msg1, 0)],
+            prompt="Continue",
+            allowed_tools=["read"],
+        )
+
+        assert result.success
+        assert result.needs_compression
+        assert result.compression_prompt is not None
+        assert "summarize" in result.compression_prompt.lower() or "Please" in result.compression_prompt
+        assert result.helper_id is not None
+        assert len(result.helper_id) > 0
+
+    @pytest.mark.asyncio
+    @patch("core.fork.Session")
+    @patch("core.fork.copy_session_bindings")
+    async def test_fork_data_contains_correct_info(self, mock_copy_bindings, mock_session_class):
+        """ForkData should contain all necessary info for completing the fork."""
+        from core.fork import ForkData
+
+        context_builder = self.create_mock_context_builder()
+        manager = ForkManager(context_builder)
+
+        parent = self.create_mock_session(id="parent-123")
+        child = self.create_mock_session(id="child-456")
+        mock_session_class.return_value = child
+        mock_copy_bindings.return_value = 0
+
+        msg1 = Message(
+            role="user",
+            content="Copy this",
+            content_blocks=[TextBlock(text="Copy this")],
+            context_mode=ContextMode.COPY,
+        )
+        msg2 = Message(
+            role="assistant",
+            content="Compress this",
+            content_blocks=[TextBlock(text="Compress this")],
+            context_mode=ContextMode.COMPRESS,
+        )
+
+        result = await manager.prepare_fork(
+            current_session=parent,
+            indexed_messages=[(msg1, 0), (msg2, 1)],
+            prompt="Continue",
+            allowed_tools=["read", "write"],
+            name="test-fork",
+            background=True,
+        )
+
+        assert result.success
+        assert result.needs_compression
+        assert result.fork_data is not None
+        assert isinstance(result.fork_data, ForkData)
+
+        # Verify ForkData contents
+        fork_data = result.fork_data
+        assert fork_data.child_session == child
+        assert fork_data.parent_session == parent
+        assert fork_data.prompt == "Continue"
+        assert fork_data.name == "test-fork"
+        assert fork_data.background is True
+        assert fork_data.allowed_tools == ["read", "write"]
+        assert len(fork_data.copy_items) == 1
+        assert len(fork_data.compress_group_positions) == 1
+
+    @pytest.mark.asyncio
+    @patch("core.fork.copy_session_bindings")
+    async def test_complete_fork_after_compression_inserts_summary(self, mock_copy_bindings):
+        """complete_fork_after_compression should insert summary at correct position."""
+        from core.fork import ForkData
+
+        context_builder = self.create_mock_context_builder()
+        manager = ForkManager(context_builder)
+        mock_copy_bindings.return_value = 0
+
+        parent = self.create_mock_session(id="parent-123")
+        child = self.create_mock_session(id="child-456")
+
+        msg1 = Message(
+            role="user",
+            content="Copy this",
+            content_blocks=[TextBlock(text="Copy this")],
+            context_mode=ContextMode.COPY,
+        )
+
+        fork_data = ForkData(
+            child_session=child,
+            parent_session=parent,
+            prompt="Continue",
+            name="test-fork",
+            background=False,
+            allowed_tools=["read"],
+            copy_items=[(msg1, 0)],
+            compress_group_positions=[1],  # Summary should go at position 1
+            fork_point=0,
+        )
+
+        compressed_summary = "This is the compressed context summary."
+
+        result = await manager.complete_fork_after_compression(fork_data, compressed_summary)
+
+        assert result.success
+        assert not result.needs_compression  # Should be done with compression
+
+        # Verify child.add_message was called correctly
+        calls = child.add_message.call_args_list
+        assert len(calls) == 2  # One for copy, one for summary
+
+        # First call should be the copy item (index 0)
+        first_call = calls[0]
+        assert first_call[0][0] == "user"  # role
+        assert first_call[0][1] == "Copy this"  # content
+
+        # Second call should be the summary (index 1)
+        second_call = calls[1]
+        assert second_call[0][0] == "user"  # role
+        assert "[Context Summary]" in second_call[0][1]
+        assert compressed_summary in second_call[0][1]
+
+    @pytest.mark.asyncio
+    @patch("core.fork.copy_session_bindings")
+    async def test_complete_fork_registers_child_with_parent(self, mock_copy_bindings):
+        """complete_fork_after_compression should register child with parent."""
+        from core.fork import ForkData
+
+        context_builder = self.create_mock_context_builder()
+        manager = ForkManager(context_builder)
+        mock_copy_bindings.return_value = 0
+
+        parent = self.create_mock_session(id="parent-123")
+        child = self.create_mock_session(id="child-456")
+
+        fork_data = ForkData(
+            child_session=child,
+            parent_session=parent,
+            prompt="Continue",
+            name="my-fork",
+            background=False,
+            allowed_tools=["read"],
+            copy_items=[],
+            compress_group_positions=[],
+            fork_point=5,
+        )
+
+        await manager.complete_fork_after_compression(fork_data, "Summary")
+
+        # Verify parent.add_child was called
+        parent.add_child.assert_called_once_with(
+            child.id,
+            "Continue",
+            name="my-fork",
+            fork_point=5,
+        )
+
+        # Verify parent.add_fork_turn was called
+        parent.add_fork_turn.assert_called_once()
+        call_kwargs = parent.add_fork_turn.call_args[1]
+        assert call_kwargs["child_session_id"] == child.id
+        assert call_kwargs["fork_name"] == "my-fork"
+        assert call_kwargs["prompt"] == "Continue"
+
+    @pytest.mark.asyncio
+    @patch("core.fork.copy_session_bindings")
+    async def test_complete_fork_saves_sessions(self, mock_copy_bindings):
+        """complete_fork_after_compression should save both sessions."""
+        from core.fork import ForkData
+
+        context_builder = self.create_mock_context_builder()
+        manager = ForkManager(context_builder)
+        mock_copy_bindings.return_value = 0
+
+        parent = self.create_mock_session(id="parent-123")
+        child = self.create_mock_session(id="child-456")
+
+        fork_data = ForkData(
+            child_session=child,
+            parent_session=parent,
+            prompt="Continue",
+            name="test-fork",
+            background=False,
+            allowed_tools=[],
+            copy_items=[],
+            compress_group_positions=[],
+            fork_point=0,
+        )
+
+        await manager.complete_fork_after_compression(fork_data, "Summary")
+
+        child.save.assert_called_once()
+        parent.save.assert_called_once()
+
+
+class TestHelperRunner:
+    """Tests for HelperRunner used in compression flow."""
+
+    @pytest.mark.asyncio
+    async def test_helper_runner_starts_background_task(self):
+        """HelperRunner.start_background should start streaming."""
+        from core.runner import HelperRunner, RunnerStatus
+        from models import TextDelta
+
+        # Create a mock runner that yields text
+        mock_runner = MagicMock()
+
+        async def mock_stream(*args, **kwargs):
+            yield TextDelta(text="Part 1")
+            yield TextDelta(text=" Part 2")
+
+        mock_runner.stream_response = mock_stream
+
+        helper = HelperRunner("helper-123", runner=mock_runner)
+
+        assert helper.status == RunnerStatus.IDLE
+
+        helper.start_background("Compress this context")
+
+        # Give async task time to run
+        await asyncio.sleep(0.05)
+
+        # Should have transitioned through STREAMING to IDLE
+        assert helper.is_done
+        assert helper.get_result() == "Part 1 Part 2"
+
+    @pytest.mark.asyncio
+    async def test_helper_runner_queues_events(self):
+        """HelperRunner should queue text events for polling."""
+        from core.runner import HelperRunner
+        from models import TextDelta
+
+        mock_runner = MagicMock()
+
+        async def mock_stream(*args, **kwargs):
+            yield TextDelta(text="Chunk1")
+            yield TextDelta(text="Chunk2")
+
+        mock_runner.stream_response = mock_stream
+
+        helper = HelperRunner("helper-123", runner=mock_runner)
+        helper.start_background("Compress")
+
+        # Give async task time to run
+        await asyncio.sleep(0.05)
+
+        events = helper.drain_events()
+
+        # Should have text events and done event
+        text_events = [e for e in events if e.event_type == "text"]
+        done_events = [e for e in events if e.event_type == "done"]
+
+        assert len(text_events) == 2
+        assert text_events[0].data == "Chunk1"
+        assert text_events[1].data == "Chunk2"
+        assert len(done_events) == 1
+        assert done_events[0].data == "Chunk1Chunk2"
+
+    @pytest.mark.asyncio
+    async def test_helper_runner_handles_error(self):
+        """HelperRunner should emit error event on exception."""
+        from core.runner import HelperRunner, RunnerStatus
+
+        mock_runner = MagicMock()
+
+        async def mock_stream(*args, **kwargs):
+            raise RuntimeError("API error")
+            yield  # Make it a generator
+
+        mock_runner.stream_response = mock_stream
+
+        helper = HelperRunner("helper-123", runner=mock_runner)
+        helper.start_background("Compress")
+
+        # Give async task time to run
+        await asyncio.sleep(0.05)
+
+        assert helper.status == RunnerStatus.ERROR
+
+        events = helper.drain_events()
+        error_events = [e for e in events if e.event_type == "error"]
+
+        assert len(error_events) == 1
+        assert "API error" in error_events[0].data
+
+    @pytest.mark.asyncio
+    async def test_helper_runner_cancel(self):
+        """HelperRunner.cancel should stop streaming."""
+        from core.runner import HelperRunner, RunnerStatus
+        from models import TextDelta
+
+        mock_runner = MagicMock()
+        mock_runner.terminate = MagicMock()
+
+        async def mock_stream(*args, **kwargs):
+            yield TextDelta(text="Start")
+            await asyncio.sleep(10)  # Long wait to be cancelled
+            yield TextDelta(text="Never reached")
+
+        mock_runner.stream_response = mock_stream
+
+        helper = HelperRunner("helper-123", runner=mock_runner)
+        helper.start_background("Compress")
+
+        # Give task time to start
+        await asyncio.sleep(0.01)
+
+        helper.cancel()
+
+        # Give cancel time to propagate
+        await asyncio.sleep(0.05)
+
+        assert helper.status == RunnerStatus.CANCELLED
+        mock_runner.terminate.assert_called_once()
+
+
+class TestStreamingContextForkData:
+    """Tests for StreamingContext.fork_data handling in compression flow."""
+
+    def test_streaming_context_stores_fork_data(self):
+        """StreamingContext should store ForkData for compression helpers."""
+        from core.streaming import StreamingContext
+        from core.fork import ForkData
+        from session import Session
+        from unittest.mock import MagicMock
+
+        # Create mock sessions
+        parent = MagicMock(spec=Session)
+        child = MagicMock(spec=Session)
+
+        fork_data = ForkData(
+            child_session=child,
+            parent_session=parent,
+            prompt="Continue",
+            name="test",
+            background=False,
+            allowed_tools=[],
+            copy_items=[],
+            compress_group_positions=[0],
+            fork_point=0,
+        )
+
+        ctx = StreamingContext(
+            session_id="helper-123",
+            user_turn_idx=-1,
+            assistant_turn_idx=-1,
+            prompt="",
+            is_helper=True,
+            helper_type="compress",
+            fork_data=fork_data,
+        )
+
+        assert ctx.fork_data is fork_data
+        assert ctx.helper_type == "compress"
+        assert ctx.is_helper is True
+
+    def test_streaming_context_accumulates_content(self):
+        """StreamingContext should accumulate content from text events."""
+        from core.streaming import StreamingContext
+
+        ctx = StreamingContext(
+            session_id="helper-123",
+            user_turn_idx=-1,
+            assistant_turn_idx=-1,
+            prompt="",
+            is_helper=True,
+            helper_type="compress",
+        )
+
+        # Initially empty
+        assert ctx.content == ""
+
+        # Accumulate content
+        ctx.content += "Part 1"
+        ctx.content += " Part 2"
+
+        assert ctx.content == "Part 1 Part 2"
+
+
+class TestCompressionHelperIntegration:
+    """Integration tests that verify the complete compression helper flow.
+
+    These tests verify that:
+    1. Helper events are properly dispatched
+    2. HelperDoneAction contains the accumulated content
+    3. The fork_data is preserved through the flow
+    """
+
+    @pytest.mark.asyncio
+    async def test_helper_event_dispatch_accumulates_content(self):
+        """Text events should accumulate in ctx.content via StreamingCoordinator."""
+        from core.streaming import StreamingCoordinator, StreamingContext
+        from core.runner import StreamEvent
+
+        coordinator = StreamingCoordinator()
+        ctx = StreamingContext(
+            session_id="helper-123",
+            user_turn_idx=-1,
+            assistant_turn_idx=-1,
+            prompt="",
+            is_helper=True,
+            helper_type="compress",
+        )
+
+        # Simulate multiple text events
+        event1 = StreamEvent(event_type="text", data="First chunk.")
+        event2 = StreamEvent(event_type="text", data=" Second chunk.")
+        event3 = StreamEvent(event_type="text", data=" Third chunk.")
+
+        action1 = coordinator.dispatch_helper_event(event1, ctx)
+        action2 = coordinator.dispatch_helper_event(event2, ctx)
+        action3 = coordinator.dispatch_helper_event(event3, ctx)
+
+        # All should return TextAction
+        from core.streaming import TextAction
+        assert isinstance(action1, TextAction)
+        assert isinstance(action2, TextAction)
+        assert isinstance(action3, TextAction)
+
+        # Content should accumulate
+        assert ctx.content == "First chunk. Second chunk. Third chunk."
+
+    @pytest.mark.asyncio
+    async def test_helper_done_event_preserves_fork_data(self):
+        """Done event should include accumulated content and fork_data."""
+        from core.streaming import StreamingCoordinator, StreamingContext, HelperDoneAction
+        from core.runner import StreamEvent
+        from core.fork import ForkData
+
+        # Create fork_data
+        parent = MagicMock()
+        child = MagicMock()
+        fork_data = ForkData(
+            child_session=child,
+            parent_session=parent,
+            prompt="Continue",
+            name="test",
+            background=False,
+            allowed_tools=[],
+            copy_items=[],
+            compress_group_positions=[0],
+            fork_point=0,
+        )
+
+        coordinator = StreamingCoordinator()
+        ctx = StreamingContext(
+            session_id="helper-123",
+            user_turn_idx=-1,
+            assistant_turn_idx=-1,
+            prompt="",
+            is_helper=True,
+            helper_type="compress",
+            fork_data=fork_data,
+        )
+
+        # Simulate text events
+        coordinator.dispatch_helper_event(StreamEvent(event_type="text", data="Summary: "), ctx)
+        coordinator.dispatch_helper_event(StreamEvent(event_type="text", data="The conversation covered X and Y."), ctx)
+
+        # Simulate done event
+        action = coordinator.dispatch_helper_event(StreamEvent(event_type="done", data=""), ctx)
+
+        assert isinstance(action, HelperDoneAction)
+        assert action.helper_type == "compress"
+        assert action.content == "Summary: The conversation covered X and Y."
+        assert action.fork_data is fork_data
+        assert action.error is None
+        assert action.cancelled is False
+
+    @pytest.mark.asyncio
+    async def test_full_helper_flow_end_to_end(self):
+        """Test the complete helper flow from start to completion."""
+        from core.runner import HelperRunner, StreamEvent
+        from core.streaming import StreamingCoordinator, StreamingContext, HelperDoneAction
+        from core.fork import ForkData
+        from models import TextDelta
+
+        # Create mock runner that yields a summary
+        mock_runner = MagicMock()
+
+        async def mock_stream(*args, **kwargs):
+            yield TextDelta(text="This is a ")
+            yield TextDelta(text="compressed summary ")
+            yield TextDelta(text="of the context.")
+
+        mock_runner.stream_response = mock_stream
+
+        # Create fork_data
+        parent = MagicMock()
+        child = MagicMock()
+        fork_data = ForkData(
+            child_session=child,
+            parent_session=parent,
+            prompt="Continue",
+            name="test",
+            background=False,
+            allowed_tools=[],
+            copy_items=[],
+            compress_group_positions=[0],
+            fork_point=0,
+        )
+
+        # Create helper runner and streaming context
+        helper = HelperRunner("helper-123", runner=mock_runner)
+        coordinator = StreamingCoordinator()
+        ctx = StreamingContext(
+            session_id="helper-123",
+            user_turn_idx=-1,
+            assistant_turn_idx=-1,
+            prompt="",
+            is_helper=True,
+            helper_type="compress",
+            fork_data=fork_data,
+        )
+
+        # Start helper
+        helper.start_background("Please compress this context...")
+
+        # Wait for completion
+        await asyncio.sleep(0.1)
+
+        assert helper.is_done
+
+        # Drain events and dispatch them
+        events = helper.drain_events()
+        assert len(events) > 0
+
+        final_action = None
+        for event in events:
+            action = coordinator.dispatch_helper_event(event, ctx)
+            if isinstance(action, HelperDoneAction):
+                final_action = action
+
+        # Verify final action
+        assert final_action is not None
+        assert final_action.helper_type == "compress"
+        assert final_action.content == "This is a compressed summary of the context."
+        assert final_action.fork_data is fork_data
+        assert ctx.content == "This is a compressed summary of the context."

@@ -2660,8 +2660,14 @@ class ContextTreeView(Vertical):
         indexed = self.get_selected_messages_with_indices()
         return [msg for msg, _idx in indexed]
 
-    def get_selected_messages_with_indices(self) -> list[tuple]:
+    def get_selected_messages_with_indices(self, session_id: str | None = None) -> list[tuple]:
         """Get included messages with their original indices for context building.
+
+        Args:
+            session_id: Optional session ID to get messages from. If not provided,
+                        uses the current session from TreeState. Pass explicitly
+                        when context modes were set for a specific session (e.g.,
+                        during fork proposal execution).
 
         Returns list of (Message, original_index) tuples, sorted by original index.
         This preserves positioning information for proper context reconstruction
@@ -2673,13 +2679,13 @@ class ContextTreeView(Vertical):
         from models import Message, TextBlock
         results = []
 
-        # Only process the current session if it's loaded
-        current_session_id = self._state.get_current_session_id()
-        if not current_session_id:
+        # Use provided session_id or fall back to current session
+        target_session_id = session_id or self._state.get_current_session_id()
+        if not target_session_id:
             return results
 
         # Use TreeState for turns (authoritative source during streaming)
-        session_data = self._state.get_session(current_session_id)
+        session_data = self._state.get_session(target_session_id)
         if not session_data or not session_data.is_loaded or session_data.turns is None:
             return results
 
@@ -2690,9 +2696,22 @@ class ContextTreeView(Vertical):
 
         included_items = []  # Will hold both turns and merge markers
 
+        # Diagnostic logging for context mode debugging
+        debug_log.info(
+            f"get_selected_messages_with_indices: starting collection",
+            category="fork",
+            details={"target_session_id": target_session_id, "turn_count": len(session_data.turns)},
+        )
+
         # Collect turns from TreeState (includes streaming turns)
         for turn in session_data.turns:
-            mode = self._state.get_context_mode(current_session_id, turn.idx)
+            mode = self._state.get_context_mode(target_session_id, turn.idx)
+            # Log each turn's mode for debugging
+            debug_log.debug(
+                f"get_selected_messages_with_indices: turn mode lookup",
+                category="fork",
+                details={"turn_idx": turn.idx, "mode": mode.name if mode else "None"},
+            )
             if mode != ContextMode.DROP:
                 # Get original turn from session if available
                 orig_turn = None
@@ -2780,6 +2799,17 @@ class ContextTreeView(Vertical):
                     context_mode=item["mode"],
                 )
             results.append((msg, item["turn_idx"]))
+
+        # Summary logging for debugging mode distribution
+        mode_counts = {}
+        for msg, _ in results:
+            mode_name = msg.context_mode.name if msg.context_mode else "None"
+            mode_counts[mode_name] = mode_counts.get(mode_name, 0) + 1
+        debug_log.info(
+            f"get_selected_messages_with_indices: finished",
+            category="fork",
+            details={"result_count": len(results), "mode_distribution": mode_counts},
+        )
 
         return results
 

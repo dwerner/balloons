@@ -3821,14 +3821,29 @@ class BalloonsApp(App):
         # Get exchange groups to map exchange indices to turn indices
         groups = self._tree_state.get_turns_grouped_by_exchange(session_id)
         total_exchanges = len(groups)
-        debug_log.info(f"_execute_fork_proposal: got {total_exchanges} exchange groups", category="fork")
+        # Log session_id vs current session for debugging mode loss
+        current_session_id = self._tree_state.get_current_session_id()
+        debug_log.info(
+            f"_execute_fork_proposal: session comparison",
+            category="fork",
+            details={
+                "param_session_id": session_id,
+                "current_session_id": current_session_id,
+                "match": session_id == current_session_id,
+                "total_exchanges": total_exchanges,
+            },
+        )
 
         # Resolve the proposal's context plan to exchange indices.
         # exclude_current=True because the proposal was made during the current
         # exchange, so "last" should refer to the previous exchange (the one
         # before Claude's response containing the proposal).
         exchange_modes = proposal.resolve_exchange_indices(total_exchanges, exclude_current=True)
-        debug_log.info(f"_execute_fork_proposal: resolved {len(exchange_modes)} exchange modes", category="fork")
+        debug_log.info(
+            f"_execute_fork_proposal: resolved exchange_modes",
+            category="fork",
+            details={"exchange_modes": {k: v.name for k, v in exchange_modes.items()}, "total_exchanges": total_exchanges},
+        )
 
         # Apply context modes to all turns in each exchange
         # Use batch mode to suppress per-turn token recalculation (huge perf win)
@@ -3888,12 +3903,13 @@ class BalloonsApp(App):
         debug_log.info(
             f"_execute_fork_proposal calling _handle_fork_command",
             category="fork",
-            details={"proposal_name": proposal.name},
+            details={"proposal_name": proposal.name, "session_id": session_id},
         )
         await self._handle_fork_command(
             prompt=prompt,
             name=proposal.name,
             background=False,
+            session_id=session_id,  # Pass explicitly to ensure modes are read from correct session
         )
         debug_log.info(
             f"_execute_fork_proposal completed",
@@ -4171,7 +4187,9 @@ class BalloonsApp(App):
 
     # ===== FORK/MERGE COMMANDS =====
 
-    async def _handle_fork_command(self, prompt: str, name: str = "", background: bool = False) -> None:
+    async def _handle_fork_command(
+        self, prompt: str, name: str = "", background: bool = False, session_id: str | None = None
+    ) -> None:
         """Fork a child session from current session.
 
         Uses context modes from tree selection:
@@ -4186,11 +4204,14 @@ class BalloonsApp(App):
             prompt: Initial prompt for the fork
             name: Optional name for easy reference (e.g., "auth-bug")
             background: If True, run in background and stay in parent
+            session_id: Optional session ID to get context modes from. If provided,
+                        uses this session's modes instead of current session. This is
+                        important when fork proposals set modes on a specific session.
         """
         debug_log.info(
             f"_handle_fork_command started",
             category="fork",
-            details={"name": name, "background": background},
+            details={"name": name, "background": background, "session_id": session_id},
         )
         chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
@@ -4198,7 +4219,8 @@ class BalloonsApp(App):
         status_bar = self.query_one("#status-bar", StatusBar)
 
         # Get selected messages and tools from UI
-        indexed_messages = context_tree.get_selected_messages_with_indices()
+        # Pass session_id explicitly when context modes were set for a specific session
+        indexed_messages = context_tree.get_selected_messages_with_indices(session_id=session_id)
         allowed_tools = self._get_enabled_tools()
 
         # Count messages by context mode for debugging

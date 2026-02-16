@@ -193,6 +193,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0; /* Don't shrink header in flex column */
 }
 
 .sidebar-header h1 {
@@ -430,6 +431,37 @@ body {
   background: var(--color-bg-primary);
   overflow: hidden;
   min-height: 0;
+}
+
+/* ----- Conversation View Toggle ----- */
+.conversation-view-toggle {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px;
+  background: var(--color-bg-secondary);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.conversation-view-toggle .view-toggle-btn {
+  padding: 4px 12px;
+  font-size: 0.85em;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.conversation-view-toggle .view-toggle-btn:hover {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+}
+
+.conversation-view-toggle .view-toggle-btn.active {
+  background: var(--color-accent);
+  color: white;
+  border-color: var(--color-accent);
 }
 
 /* ----- Turns Container ----- */

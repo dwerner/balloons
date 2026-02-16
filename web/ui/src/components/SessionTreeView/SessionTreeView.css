@@ -1,466 +1,211 @@
-/* =====================================================
-   SessionTreeView - Tree view for sessions/exchanges/turns
-   ===================================================== */
+/**
+ * SessionTreeView CSS
+ *
+ * Following standard tree view patterns:
+ * - Semantic list styling (remove default bullets)
+ * - Visual hierarchy through padding
+ * - Arrow rotation for expand/collapse state
+ */
 
-/* ----- Container ----- */
-.tree-view-container {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
+/* ===== Root container ===== */
+.tree-view {
+  /* Fill remaining space in flex parent */
+  flex: 1 1 0;
+  min-height: 0;
+
+  /* Scrolling */
   overflow-y: auto;
   overflow-x: hidden;
+
+  /* Reset list defaults */
+  margin: 0;
   padding: 8px;
+  list-style: none;
+
+  /* Typography */
   font-size: 13px;
   line-height: 1.4;
-  -webkit-overflow-scrolling: touch;
+  color: var(--color-text-primary, #e0e0e0); /* Explicit text color */
 }
 
-/* ----- Loading State ----- */
-.tree-loading,
-.tree-empty {
+.tree-view--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #888;
+  padding: 20px;
+}
+
+/* ===== Child list (nested) ===== */
+.tree-children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  padding-left: 20px; /* Creates visual hierarchy */
+}
+
+/* ===== Node (base) ===== */
+.tree-node {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  gap: 8px;
-  color: var(--color-text-muted);
-  font-size: 14px;
+  margin: 0;
+  padding: 0;
 }
 
-.tree-loading-spinner {
-  animation: tree-spin 1s linear infinite;
-  font-size: 24px;
-}
-
-@keyframes tree-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-/* =====================================================
-   Session Node
-   ===================================================== */
-
-.tree-session-node {
-  margin-bottom: 4px;
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.tree-session-node.selected > .tree-session-header {
-  background: var(--color-bg-tertiary);
-}
-
-.tree-session-node.streaming > .tree-session-header {
-  border-left: 3px solid var(--color-accent-green);
-}
-
-.tree-session-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 10px;
-  cursor: pointer;
-  border-radius: 6px;
-  transition: background 0.15s;
-  min-height: 40px;
-  flex-wrap: wrap;
-}
-
-.tree-session-header:hover {
-  background: rgba(255, 255, 255, 0.05);
-}
-
-.tree-session-header:active {
-  background: rgba(255, 255, 255, 0.08);
-}
-
-/* ----- Expand/Collapse Icon ----- */
-.tree-expand-icon {
-  font-size: 10px;
-  width: 16px;
-  height: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  transition: transform 0.15s;
-  cursor: pointer;
-  border-radius: 4px;
-}
-
-.tree-expand-icon:hover {
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.tree-expand-icon.expanded {
-  /* transform is handled by the icon change */
-}
-
-/* ----- Streaming Indicator ----- */
-.tree-streaming-indicator {
-  color: var(--color-accent-green);
-  font-size: 14px;
-  animation: tree-spin 1s linear infinite;
-  flex-shrink: 0;
-}
-
-/* ----- Fork Indicator ----- */
-.tree-fork-indicator {
-  color: #c084fc;
-  font-size: 12px;
-  flex-shrink: 0;
-}
-
-.tree-fork-indicator.merged {
-  color: var(--color-accent-green);
-}
-
-/* ----- Model Icon ----- */
-.tree-model-icon {
-  font-size: 12px;
-  flex-shrink: 0;
-}
-
-/* ----- Session ID ----- */
-.tree-session-id {
-  color: var(--color-text-muted);
-  font-family: 'SF Mono', 'Monaco', 'Inconsolata', monospace;
-  font-size: 11px;
-  flex-shrink: 0;
-}
-
-/* ----- Session Name ----- */
-.tree-session-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 500;
-}
-
-/* ----- Binding Indicator ----- */
-.tree-binding-indicator {
-  color: #c084fc;
-  font-size: 11px;
-  flex-shrink: 0;
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* ----- Session Meta ----- */
-.tree-session-meta {
-  color: var(--color-text-muted);
-  font-size: 11px;
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-
-/* ----- Session Children (turns/groups) ----- */
-.tree-session-children {
-  padding-left: 16px;
-  margin-top: 4px;
-  border-left: 1px solid var(--color-border-tertiary);
-  margin-left: 10px;
-}
-
-/* =====================================================
-   Exchange Group Node
-   ===================================================== */
-
-.tree-exchange-group {
-  margin-bottom: 2px;
-}
-
-.tree-exchange-header {
+/* ===== Node content row ===== */
+.tree-node__content {
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 6px 8px;
-  cursor: pointer;
+  margin: 1px 0;
   border-radius: 4px;
-  transition: background 0.15s;
-  min-height: 32px;
+  cursor: pointer;
+  user-select: none;
+  border-left: 3px solid transparent;
 }
 
-.tree-exchange-header:hover {
-  background: rgba(255, 255, 255, 0.04);
+.tree-node__content:hover {
+  background: rgba(255, 255, 255, 0.05);
 }
 
-.tree-exchange-header:active {
-  background: rgba(255, 255, 255, 0.06);
+.tree-node__content--selected {
+  background: rgba(255, 255, 255, 0.1);
 }
 
-/* ----- Group Tokens ----- */
-.tree-group-tokens {
-  font-size: 11px;
-  font-weight: 500;
-  flex-shrink: 0;
-}
-
-/* ----- Group Mode Indicator ----- */
-.tree-group-mode {
-  font-size: 14px;
-  flex-shrink: 0;
-}
-
-/* ----- Group Icon ----- */
-.tree-group-icon {
-  font-size: 12px;
-  flex-shrink: 0;
-}
-
-/* ----- Group Preview ----- */
-.tree-group-preview {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--color-text-secondary);
-}
-
-/* ----- Group Count ----- */
-.tree-group-count {
-  color: var(--color-text-muted);
-  font-size: 11px;
-  flex-shrink: 0;
-}
-
-/* ----- Exchange Children ----- */
-.tree-exchange-children {
-  padding-left: 16px;
-  margin-top: 2px;
-  border-left: 1px solid var(--color-border-tertiary);
-  margin-left: 8px;
-}
-
-/* =====================================================
-   Turn Node
-   ===================================================== */
-
-.tree-turn-node {
-  margin-bottom: 2px;
-}
-
-.tree-turn-node.selected .tree-turn-content {
-  background: var(--color-bg-tertiary);
-}
-
-.tree-turn-node.streaming .tree-turn-content::after {
-  content: '|';
-  animation: blink 1s step-end infinite;
-  margin-left: 4px;
-}
-
-.tree-turn-content {
+/* ===== Toggle button (arrow container) ===== */
+.tree-node__toggle {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 8px;
-  cursor: pointer;
-  border-radius: 4px;
-  transition: background 0.15s;
-  min-height: 28px;
-}
-
-.tree-turn-content:hover {
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.tree-turn-content:active {
-  background: rgba(255, 255, 255, 0.06);
-}
-
-/* ----- Mode Selector ----- */
-.tree-mode-selector {
-  appearance: none;
-  background: transparent;
-  border: 1px solid transparent;
-  padding: 2px 4px;
-  font-size: 14px;
-  cursor: pointer;
-  border-radius: 4px;
-  transition: border-color 0.15s, background 0.15s;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
-  width: 28px;
-  text-align: center;
+  cursor: pointer;
 }
 
-.tree-mode-selector:hover {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: var(--color-border-secondary);
+.tree-node__toggle:hover {
+  opacity: 0.8;
 }
 
-.tree-mode-selector:focus {
-  outline: none;
-  border-color: var(--color-accent-green);
+/* Spacer for items without children */
+.tree-node__spacer {
+  display: inline-block;
+  width: 12px;
+  flex-shrink: 0;
 }
 
-.tree-mode-selector option {
-  background: var(--color-bg-secondary);
-  color: var(--color-text-primary);
+/* ===== Arrow icon ===== */
+.tree-arrow {
+  transition: transform 0.15s ease;
 }
 
-/* ----- Turn Icon ----- */
-.tree-turn-icon {
+.tree-arrow--open {
+  transform: rotate(90deg);
+}
+
+/* ===== Node parts ===== */
+.tree-node__icon {
+  flex-shrink: 0;
   font-size: 12px;
+}
+
+.tree-node__id {
+  font-family: ui-monospace, 'SF Mono', Monaco, monospace;
+  font-size: 11px;
+  color: #888;
   flex-shrink: 0;
 }
 
-/* ----- Turn Preview ----- */
-.tree-turn-preview {
+.tree-node__label {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--color-text-secondary);
+  color: var(--color-text-primary, #fff); /* Explicit text color */
+}
+
+.tree-node__label--muted {
+  color: #aaa;
   font-size: 12px;
 }
 
-/* ----- Turn Tokens ----- */
-.tree-turn-tokens {
-  font-size: 10px;
-  font-weight: 500;
+.tree-node__meta {
+  font-size: 11px;
+  color: #888;
   flex-shrink: 0;
 }
 
-/* =====================================================
-   Mobile Optimizations
-   ===================================================== */
+.tree-node__meta--green {
+  color: #4ade80;
+  font-size: 10px;
+}
 
+/* ===== Badges ===== */
+.tree-node__badge {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.tree-node__badge--streaming {
+  color: #4ade80;
+  animation: spin 1s linear infinite;
+}
+
+.tree-node__badge--fork {
+  color: #c084fc;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ===== Session-specific styles ===== */
+.tree-node--session > .tree-node__content {
+  border-left-width: 3px;
+  border-left-style: solid;
+}
+
+/* ===== Turn-specific styles ===== */
+.tree-node--turn > .tree-node__content {
+  padding: 4px 8px;
+  border-left: none;
+}
+
+/* ===== Mobile adjustments ===== */
 @media (max-width: 767px) {
-  .tree-view-container {
+  .tree-view {
     padding: 6px;
     font-size: 14px;
   }
 
-  .tree-session-header {
-    padding: 10px 12px;
-    min-height: 48px;
-    gap: 8px;
+  .tree-node__content {
+    padding: 10px 8px;
   }
 
-  .tree-exchange-header {
-    padding: 8px 10px;
-    min-height: 40px;
-  }
-
-  .tree-turn-content {
-    padding: 8px 10px;
-    min-height: 36px;
-  }
-
-  .tree-expand-icon {
-    width: 24px;
-    height: 24px;
-    font-size: 12px;
-  }
-
-  .tree-mode-selector {
-    width: 36px;
-    height: 32px;
-    font-size: 16px;
-  }
-
-  /* Larger touch targets */
-  .tree-session-children,
-  .tree-exchange-children {
-    padding-left: 12px;
-  }
-
-  /* Better contrast for mobile readability */
-  .tree-session-name {
-    font-size: 15px;
-  }
-
-  .tree-turn-preview {
-    font-size: 13px;
+  .tree-children {
+    padding-left: 16px;
   }
 }
 
-/* =====================================================
-   Touch Interactions
-   ===================================================== */
-
-/* Disable text selection during touch */
-.tree-view-container {
-  -webkit-user-select: none;
-  user-select: none;
-}
-
-/* Enable text selection on content */
-.tree-turn-preview,
-.tree-session-name,
-.tree-group-preview {
-  -webkit-user-select: text;
-  user-select: text;
-}
-
-/* Momentum scrolling on iOS */
-.tree-view-container {
-  -webkit-overflow-scrolling: touch;
-}
-
-/* =====================================================
-   Animations
-   ===================================================== */
-
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
-}
-
-/* =====================================================
-   Focus States (Keyboard Navigation)
-   ===================================================== */
-
-.tree-session-header:focus-visible,
-.tree-exchange-header:focus-visible,
-.tree-turn-content:focus-visible {
-  outline: 2px solid var(--color-accent-green);
-  outline-offset: 1px;
-}
-
-/* =====================================================
-   Dark/Light Theme Support
-   ===================================================== */
-
-[data-theme="light"] .tree-session-header:hover,
-[data-theme="light"] .tree-exchange-header:hover,
-[data-theme="light"] .tree-turn-content:hover {
-  background: rgba(0, 0, 0, 0.05);
-}
-
-[data-theme="light"] .tree-session-header:active,
-[data-theme="light"] .tree-exchange-header:active,
-[data-theme="light"] .tree-turn-content:active {
-  background: rgba(0, 0, 0, 0.08);
-}
-
-[data-theme="light"] .tree-mode-selector:hover {
-  background: rgba(0, 0, 0, 0.05);
-}
-
-/* =====================================================
-   Reduced Motion
-   ===================================================== */
-
+/* ===== Reduced motion ===== */
 @media (prefers-reduced-motion: reduce) {
-  .tree-streaming-indicator,
-  .tree-loading-spinner {
-    animation: none;
-  }
-
-  .tree-expand-icon,
-  .tree-session-header,
-  .tree-exchange-header,
-  .tree-turn-content {
+  .tree-arrow {
     transition: none;
   }
+
+  .tree-node__badge--streaming {
+    animation: none;
+  }
+}
+
+/* ===== Light theme support ===== */
+[data-theme="light"] .tree-node__content:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="light"] .tree-node__content--selected {
+  background: rgba(0, 0, 0, 0.1);
 }

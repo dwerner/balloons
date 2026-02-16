@@ -9,6 +9,7 @@ Extracted from app.py to enable unit testing without the UI.
 from dataclasses import dataclass
 
 from models import Message, ContextMode
+from core.debug_log import debug_log
 
 
 @dataclass
@@ -53,6 +54,17 @@ def group_messages_by_context_mode(
     copy_items: list[tuple[Message, int]] = []
     compress_items: list[tuple[Message, int]] = []
 
+    # Diagnostic logging: what modes do incoming messages have?
+    incoming_modes = {}
+    for msg, idx in indexed_messages:
+        mode_name = msg.context_mode.name if msg.context_mode else "None"
+        incoming_modes[mode_name] = incoming_modes.get(mode_name, 0) + 1
+    debug_log.info(
+        f"group_messages_by_context_mode: incoming message modes",
+        category="fork",
+        details={"message_count": len(indexed_messages), "mode_distribution": incoming_modes},
+    )
+
     for msg, idx in indexed_messages:
         if msg.context_mode == ContextMode.COPY:
             copy_items.append((msg, idx))
@@ -84,6 +96,17 @@ def group_messages_by_context_mode(
                 current_group.append((msg, idx))
 
         compress_groups.append(current_group)
+
+    # Log the result
+    debug_log.info(
+        f"group_messages_by_context_mode: result",
+        category="fork",
+        details={
+            "copy_count": len(copy_items),
+            "compress_group_count": len(compress_groups),
+            "total_compress_items": sum(len(g) for g in compress_groups),
+        },
+    )
 
     return ContextGroups(copy_items=copy_items, compress_groups=compress_groups)
 

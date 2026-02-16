@@ -544,6 +544,13 @@ class SessionManagerService:
             # Mark session as no longer streaming so React frontend hides stop button
             if self._tree_state:
                 self._tree_state.stop_streaming(session_id)
+                # Reload TreeState from Session to pick up all turns that were added
+                # during streaming (tool_use, tool_result, text turns after tools, etc.)
+                # The SessionRunner adds turns directly to session.turns, but the event
+                # pump only emitted WebSocket events without updating TreeState.
+                session = self._manager.get_session(session_id)
+                if session:
+                    self._tree_state.load_session(session_id, session)
             # Clean up context
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
@@ -552,9 +559,12 @@ class SessionManagerService:
             # Error - mark stream as failed
             error_msg = data if isinstance(data, str) else str(data)
             self._stream_state.fail_stream(ctx.exchange_id, error_msg)
-            # Mark session as no longer streaming
+            # Mark session as no longer streaming and reload turns
             if self._tree_state:
                 self._tree_state.stop_streaming(session_id)
+                session = self._manager.get_session(session_id)
+                if session:
+                    self._tree_state.load_session(session_id, session)
             # Clean up context
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
@@ -563,18 +573,24 @@ class SessionManagerService:
             # Rate limit error - mark stream as failed
             error_msg = data if isinstance(data, str) else str(data)
             self._stream_state.fail_stream(ctx.exchange_id, f"Rate limit: {error_msg}")
-            # Mark session as no longer streaming
+            # Mark session as no longer streaming and reload turns
             if self._tree_state:
                 self._tree_state.stop_streaming(session_id)
+                session = self._manager.get_session(session_id)
+                if session:
+                    self._tree_state.load_session(session_id, session)
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
 
         elif event_type == "cancelled":
             # Cancelled - mark stream as cancelled
             self._stream_state.cancel_stream(ctx.exchange_id)
-            # Mark session as no longer streaming
+            # Mark session as no longer streaming and reload turns
             if self._tree_state:
                 self._tree_state.stop_streaming(session_id)
+                session = self._manager.get_session(session_id)
+                if session:
+                    self._tree_state.load_session(session_id, session)
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
 
@@ -590,9 +606,12 @@ class SessionManagerService:
                     content=ctx.content,
                 )
             self._stream_state.complete_stream(ctx.exchange_id)
-            # Mark session as no longer streaming
+            # Mark session as no longer streaming and reload turns
             if self._tree_state:
                 self._tree_state.stop_streaming(session_id)
+                session = self._manager.get_session(session_id)
+                if session:
+                    self._tree_state.load_session(session_id, session)
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
 
