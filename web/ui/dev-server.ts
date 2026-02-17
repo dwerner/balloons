@@ -75,12 +75,41 @@ for (const dir of dirsToWatch) {
   }
 }
 
+// Debug log file for browser logs
+const debugLogPath = join(projectDir, "browser-debug.log");
+
 const server = Bun.serve({
   port: 3000,
   hostname: "0.0.0.0", // Bind to all interfaces for LAN access
   async fetch(req) {
     const url = new URL(req.url);
     let path = url.pathname;
+
+    // Debug log endpoint - receives logs from browser
+    if (path === "/debug-log" && req.method === "POST") {
+      try {
+        const body = await req.json();
+        const timestamp = new Date().toISOString();
+        const logLine = `[${timestamp}] ${JSON.stringify(body)}\n`;
+        await Bun.write(debugLogPath, await Bun.file(debugLogPath).text().catch(() => "") + logLine);
+        console.log("[Browser Log]", body.message || body);
+        return new Response("OK", { status: 200 });
+      } catch (e) {
+        return new Response("Error", { status: 500 });
+      }
+    }
+
+    // Clear debug log
+    if (path === "/debug-log" && req.method === "DELETE") {
+      await Bun.write(debugLogPath, "");
+      return new Response("Cleared", { status: 200 });
+    }
+
+    // Read debug log
+    if (path === "/debug-log" && req.method === "GET") {
+      const content = await Bun.file(debugLogPath).text().catch(() => "No logs yet");
+      return new Response(content, { headers: { "Content-Type": "text/plain" } });
+    }
 
     // Serve index.html for root
     if (path === "/") {

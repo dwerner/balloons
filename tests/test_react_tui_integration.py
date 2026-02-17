@@ -327,15 +327,18 @@ class TestContextOwnershipTransfer:
         asyncio.run(service.submit_message("test-session", "Hello"))
         assert "test-session" in service._streaming_contexts
 
-        # Release removes it
+        # Release removes it and returns state dict
         result = service.release_streaming_context("test-session")
-        assert result is True
+        assert result is not None  # Returns dict with state
+        assert isinstance(result, dict)
+        assert "content" in result
+        assert "assistant_turn_idx" in result
         assert "test-session" not in service._streaming_contexts
 
-    def test_release_streaming_context_returns_false_if_no_context(self, service):
-        """Test that release_streaming_context returns False if no context exists."""
+    def test_release_streaming_context_returns_none_if_no_context(self, service):
+        """Test that release_streaming_context returns None if no context exists."""
         result = service.release_streaming_context("nonexistent")
-        assert result is False
+        assert result is None
 
     def test_event_pump_skips_released_sessions(self, service, mock_manager):
         """Test that event pump doesn't poll sessions after they're released."""

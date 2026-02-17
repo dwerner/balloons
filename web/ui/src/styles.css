@@ -287,6 +287,29 @@ body {
   background: rgba(250, 204, 21, 0.25);
 }
 
+/* ----- New Session Row Button ----- */
+.new-session-row {
+  display: block;
+  width: calc(100% - 24px);
+  margin: 8px 12px;
+  padding: 10px 16px;
+  background: none;
+  border: 1px dashed var(--color-border-secondary);
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.2s;
+}
+
+.new-session-row:hover {
+  color: var(--color-accent-green);
+  border-color: var(--color-accent-green);
+  border-style: solid;
+  background: rgba(74, 222, 128, 0.1);
+}
+
 .close-button {
   background: none;
   border: none;

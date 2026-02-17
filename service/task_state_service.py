@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from codegen import ws_service, ws_expose, ws_event, ws_type
+from core.debug_log import debug_log
 from core.stream_state import (
     StreamState as TaskState,
     Stream as Task,
@@ -126,6 +127,7 @@ class TurnStartedEvent:
     exchange_id: str
     turn_index: int
     role: str  # "user", "assistant", or "tool"
+    turn_type: str | None = None  # "text_turn", "tool_use", "tool_result", or None
 
 
 @ws_type
@@ -267,6 +269,9 @@ class TaskStateService:
         """
         self._state = task_state
         self._event_handlers: list[Callable[[str, dict], None]] = []
+        # Track finished turns to prevent duplicate turn_finished events
+        # Key: (session_id, turn_index), Value: content length (for debugging)
+        self._finished_turns: dict[tuple[str, int], int] = {}
 
         # Wire up TaskState observer to emit WebSocket events
         # Note: TaskState uses async observers, so we create an async wrapper
@@ -698,6 +703,7 @@ class TaskStateService:
         exchange_id: str,
         turn_index: int,
         role: str,
+        turn_type: str | None = None,
     ) -> None:
         """Emit a turn started event.
 
@@ -708,12 +714,21 @@ class TaskStateService:
             exchange_id: Exchange ID
             turn_index: Index of the new turn
             role: Turn role ("user", "assistant", or "tool")
+            turn_type: Content block type ("text_turn", "tool_use", "tool_result", or None)
         """
+        # Clear finished turns tracking for this session when a new user turn starts
+        # This prevents memory leak and ensures fresh tracking for each exchange
+        if role == "user":
+            keys_to_remove = [k for k in self._finished_turns if k[0] == session_id]
+            for k in keys_to_remove:
+                del self._finished_turns[k]
+
         event_data = TurnStartedEvent(
             session_id=session_id,
             exchange_id=exchange_id,
             turn_index=turn_index,
             role=role,
+            turn_type=turn_type,
         )
         for handler in self._event_handlers:
             handler("turnStarted", event_data.__dict__)
@@ -737,6 +752,24 @@ class TaskStateService:
             role: Turn role
             content: Final content of the turn
         """
+        content_len = len(content) if content else 0
+        turn_key = (session_id, turn_index)
+
+        # Check for duplicate turn_finished events (race condition between SessionManagerService and TUI)
+        if turn_key in self._finished_turns:
+            prev_len = self._finished_turns[turn_key]
+            # Allow re-emit if new content is longer (incremental update)
+            if content_len <= prev_len:
+                debug_log.debug(
+                    f"emit_turn_finished: SKIP duplicate idx={turn_index}, prev_len={prev_len}, new_len={content_len}",
+                    category="websocket",
+                    session_id=session_id,
+                )
+                return
+
+        # Track this turn as finished
+        self._finished_turns[turn_key] = content_len
+
         event_data = TurnFinishedEvent(
             session_id=session_id,
             exchange_id=exchange_id,

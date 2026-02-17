@@ -277,6 +277,8 @@ class TreeStateService:
 
     def _turn_to_info(self, t: TurnData, session_id: str) -> TurnInfo:
         """Convert a TurnData to TurnInfo with full content block information."""
+        from core.debug_log import debug_log
+
         # Extract content block type and related info
         content_block_type = "text"  # default
         images: list[TurnImageInfo] = []
@@ -285,6 +287,17 @@ class TreeStateService:
 
         if hasattr(t, 'content_block') and t.content_block is not None:
             block = t.content_block
+        else:
+            # Log warning only for tool turns missing content_block (indicates a bug)
+            if t.role == "tool":
+                debug_log.warning(
+                    f"_turn_to_info: tool turn {t.idx} missing content_block",
+                    category="websocket",
+                    session_id=session_id,
+                )
+            block = None
+
+        if block is not None:
             content_block_type = getattr(block, 'type', 'text')
 
             if isinstance(block, ImageBlock):

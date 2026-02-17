@@ -113,6 +113,12 @@ class StreamingContext:
     link_data: Optional["LinkData"] = None
     # For return summary generation
     return_data: Optional["ReturnData"] = None
+    # Track the final text turn for emit on done
+    # -1 means no final text turn to emit (already flushed via TextFlushAction)
+    final_turn_idx: int = -1
+    final_text_content: str = ""
+    # Track total tool count for this exchange
+    tool_count: int = 0
 
     def __post_init__(self):
         if self.tool_events is None:
@@ -314,6 +320,8 @@ class StreamingCoordinator:
 
         elif event.event_type == "text_turn_started":
             # Text segment flushed before tool use - create a new turn node
+            # Reset accumulated content for the new turn (same as SessionManagerService does)
+            ctx.content = ""
             data = event.data
             return TurnStartedAction(
                 session_id=session_id,

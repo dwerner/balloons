@@ -772,21 +772,28 @@ class BalloonsApp(App):
                 # Determine if this is the active session
                 is_active = self.session and self.session.id == session_id
 
+                # Remove context from SessionManagerService event pump so TUI owns the events
+                # This prevents race condition where both poll the same runner
+                # Get the accumulated state so we can continue from where SessionManagerService left off
+                prior_state = None
+                if self._session_service:
+                    prior_state = self._session_service.release_streaming_context(session_id)
+
                 # Create streaming context so poll loop can track this session
+                # Use state from SessionManagerService if available (content already accumulated)
                 ctx = StreamingContext(
                     session_id=session_id,
                     user_turn_idx=turn_index,
-                    assistant_turn_idx=turn_index + 1,
+                    assistant_turn_idx=prior_state.get("assistant_turn_idx", turn_index + 1) if prior_state else turn_index + 1,
                     prompt=content,
                     is_active=is_active,
                     exchange_id=exchange_id,
+                    content=prior_state.get("content", "") if prior_state else "",
                 )
+                # Carry over tool count if available
+                if prior_state and prior_state.get("tool_count"):
+                    ctx.tool_count = prior_state["tool_count"]
                 self._streaming_contexts[session_id] = ctx
-
-                # Remove context from SessionManagerService event pump so TUI owns the events
-                # This prevents race condition where both poll the same runner
-                if self._session_service:
-                    self._session_service.release_streaming_context(session_id)
 
                 # Update UI state if this is the active session
                 if is_active:
@@ -817,6 +824,23 @@ class BalloonsApp(App):
             # Start the assistant turn in tree (with same exchange_id)
             assistant_turn_idx = turn_index + 1
             context_tree.start_turn(session_id, assistant_turn_idx, "assistant", exchange_id=exchange_id)
+
+            # Emit turn started events for WebSocket clients
+            if self._task_service is not None:
+                self._task_service.emit_turn_started(
+                    session_id=session_id,
+                    exchange_id=exchange_id,
+                    turn_index=turn_index,
+                    role="user",
+                    turn_type="text_turn",
+                )
+                self._task_service.emit_turn_started(
+                    session_id=session_id,
+                    exchange_id=exchange_id,
+                    turn_index=assistant_turn_idx,
+                    role="assistant",
+                    turn_type="text_turn",
+                )
 
             # Mark session as streaming in tree
             context_tree.set_session_streaming(session_id, True)
@@ -1127,6 +1151,9 @@ class BalloonsApp(App):
 
             # Track accumulated content for token estimation
             ctx.content += action.text
+            # Track the final text turn for emission on done
+            ctx.final_turn_idx = ctx.assistant_turn_idx
+            ctx.final_text_content += action.text
 
             # Update task state with approximate token count (rough estimate: 4 chars per token)
             approx_tokens = len(ctx.content) // 4
@@ -1174,6 +1201,10 @@ class BalloonsApp(App):
                     content=action.text,
                 )
 
+            # Reset final turn tracking - this text segment is already emitted
+            ctx.final_turn_idx = -1
+            ctx.final_text_content = ""
+
         elif isinstance(action, TurnStartedAction):
             # New turn started during streaming (text_turn, tool_use, or tool_result)
             # Create a new turn node in the context tree with turn_type info
@@ -1192,6 +1223,12 @@ class BalloonsApp(App):
             # We need the turn_type in the key because tool_use and tool_result share the same tool_use_id
             if action.tool_use_id and action.turn_type in ("tool_use", "tool_result"):
                 ctx.tool_turn_indices[(action.tool_use_id, action.turn_type)] = action.turn_idx
+            # Update assistant_turn_idx when a new text turn starts (after tool results)
+            if action.turn_type in ("text", "text_turn") and action.role == "assistant":
+                ctx.assistant_turn_idx = action.turn_idx
+                # Reset final text tracking for the new turn
+                ctx.final_turn_idx = action.turn_idx
+                ctx.final_text_content = ""
             if action.turn_type == "tool_use":
                 debug_log.debug(
                     f"Tool use turn started: {action.tool_name}",
@@ -1212,6 +1249,7 @@ class BalloonsApp(App):
                     exchange_id=action.exchange_id,
                     turn_index=action.turn_idx,
                     role=action.role,
+                    turn_type=action.turn_type,
                 )
 
         elif isinstance(action, InitAction):
@@ -1453,15 +1491,16 @@ class BalloonsApp(App):
             play_done_sound()
 
             # Emit turn finished event for the final assistant turn
-            # Always emit turnFinished to finalize the turn state (even if content is empty)
-            # This ensures the web client properly clears streaming state
-            if self._task_service is not None:
+            # ONLY emit if the final_turn_idx is valid and matches the current turn
+            # This prevents double-emitting for text turns that were already finished via TextFlushAction
+            if self._task_service is not None and ctx.final_turn_idx >= 0:
+                # Only emit if the final turn is a text turn that wasn't already flushed
                 self._task_service.emit_turn_finished(
                     session_id=session_id,
                     exchange_id=ctx.exchange_id,
-                    turn_index=ctx.assistant_turn_idx,
+                    turn_index=ctx.final_turn_idx,
                     role="assistant",
-                    content=ctx.content,
+                    content=ctx.final_text_content,
                 )
 
             await self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar)
@@ -1691,6 +1730,23 @@ class BalloonsApp(App):
                 child_session.id, turn_idx, prompt, TextBlock(text=prompt), []
             )
             context_tree.start_turn(child_session.id, turn_idx + 1, "assistant", exchange_id=exchange_id)
+
+            # Emit turn started events for WebSocket clients
+            if self._task_service is not None:
+                self._task_service.emit_turn_started(
+                    session_id=child_session.id,
+                    exchange_id=exchange_id,
+                    turn_index=turn_idx,
+                    role="user",
+                    turn_type="text_turn",
+                )
+                self._task_service.emit_turn_started(
+                    session_id=child_session.id,
+                    exchange_id=exchange_id,
+                    turn_index=turn_idx + 1,
+                    role="assistant",
+                    turn_type="text_turn",
+                )
 
             # Add user message to child session before streaming starts
             # This ensures it's persisted even if we crash mid-exchange
@@ -2490,6 +2546,23 @@ class BalloonsApp(App):
         # Start the assistant turn in tree (with same exchange_id)
         assistant_turn_idx = turn_idx + 1
         context_tree.start_turn(self.session.id, assistant_turn_idx, "assistant", exchange_id=exchange_id)
+
+        # Emit turn started events for WebSocket clients
+        if self._task_service is not None:
+            self._task_service.emit_turn_started(
+                session_id=self.session.id,
+                exchange_id=exchange_id,
+                turn_index=turn_idx,
+                role="user",
+                turn_type="text_turn",
+            )
+            self._task_service.emit_turn_started(
+                session_id=self.session.id,
+                exchange_id=exchange_id,
+                turn_index=assistant_turn_idx,
+                role="assistant",
+                turn_type="text_turn",
+            )
 
         # Create streaming context for this session
         ctx = StreamingContext(
@@ -3496,6 +3569,16 @@ class BalloonsApp(App):
         # Start assistant turn in tree (no user turn for query_with)
         context_tree.start_turn(new_session.id, 0, "assistant", exchange_id=exchange_id)
 
+        # Emit turn started event for WebSocket clients (no user turn for query_with)
+        if self._task_service is not None:
+            self._task_service.emit_turn_started(
+                session_id=new_session.id,
+                exchange_id=exchange_id,
+                turn_index=0,
+                role="assistant",
+                turn_type="text_turn",
+            )
+
         # Start background streaming - poll timer will handle events
         self._session_runner.start_background(prompt, selected_messages, allowed_tools)
 
@@ -4183,6 +4266,23 @@ class BalloonsApp(App):
         await context_tree.finish_turn(new_session.id, 0, initial_prompt, TextBlock(text=initial_prompt), [])
         context_tree.start_turn(new_session.id, 1, "assistant", exchange_id=exchange_id)
 
+        # Emit turn started events for WebSocket clients
+        if self._task_service is not None:
+            self._task_service.emit_turn_started(
+                session_id=new_session.id,
+                exchange_id=exchange_id,
+                turn_index=0,
+                role="user",
+                turn_type="text_turn",
+            )
+            self._task_service.emit_turn_started(
+                session_id=new_session.id,
+                exchange_id=exchange_id,
+                turn_index=1,
+                role="assistant",
+                turn_type="text_turn",
+            )
+
         # Get runner and start background streaming
         runner = self._manager.get_runner(new_session.id)
         if runner:
@@ -4362,6 +4462,23 @@ class BalloonsApp(App):
                 child_session.id, turn_idx, result.prompt, TextBlock(text=result.prompt), []
             )
             context_tree.start_turn(child_session.id, turn_idx + 1, "assistant", exchange_id=exchange_id)
+
+            # Emit turn started events for WebSocket clients
+            if self._task_service is not None:
+                self._task_service.emit_turn_started(
+                    session_id=child_session.id,
+                    exchange_id=exchange_id,
+                    turn_index=turn_idx,
+                    role="user",
+                    turn_type="text_turn",
+                )
+                self._task_service.emit_turn_started(
+                    session_id=child_session.id,
+                    exchange_id=exchange_id,
+                    turn_index=turn_idx + 1,
+                    role="assistant",
+                    turn_type="text_turn",
+                )
 
             # Add user message to child session before streaming starts
             # This ensures it's persisted even if we crash mid-exchange

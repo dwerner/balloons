@@ -350,6 +350,34 @@ class TestStreamingCoordinator:
         assert action.exchange_id == "exchange-abc"
         assert action.turn_type == "text"
 
+    def test_text_turn_started_resets_content(self):
+        """text_turn_started event should reset ctx.content for the new turn.
+
+        This is critical for correct accumulated values in content_delta events.
+        Without this reset, content from previous turns would be included in
+        the accumulated value, causing duplicate content in the web UI.
+        """
+        coordinator = StreamingCoordinator()
+        ctx = StreamingContext(
+            session_id="test-123",
+            user_turn_idx=0,
+            assistant_turn_idx=1,
+            prompt="Hello",
+        )
+
+        # Simulate text from previous turn
+        ctx.content = "Previous turn content"
+
+        event = StreamEvent(event_type="text_turn_started", data={
+            "turn_index": 2,
+            "exchange_id": "exchange-abc",
+            "role": "assistant",
+        })
+        coordinator.dispatch_event(event, ctx)
+
+        # Content should be reset for the new turn
+        assert ctx.content == ""
+
     def test_tool_use_turn_started_event(self):
         """tool_use_turn_started event should return TurnStartedAction with tool info."""
         coordinator = StreamingCoordinator()

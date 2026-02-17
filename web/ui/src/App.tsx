@@ -10,10 +10,12 @@ import { StreamingStatusBar } from './components/StreamingStatusBar';
 import { ExchangeListView } from './components/ExchangeView';
 import { ForkProposalTurn } from './components/ForkProposalTurn';
 import { CreateTodoModal, type CreateTodoResult } from './components/CreateTodoModal';
+import { SimpleTurnsView } from './components/SimpleTurnsView';
+import { StreamingCompareView } from './components/StreamingCompareView';
 import { useWakeLock } from './hooks';
 
 // View mode for conversation display
-type ConversationViewMode = 'turns' | 'exchange';
+type ConversationViewMode = 'turns' | 'exchange' | 'simple' | 'compare';
 
 // Tool use state tracked during streaming
 interface ToolUseState {
@@ -589,10 +591,6 @@ const Turn = memo(function Turn({
         );
       }
 
-      // Skip empty text turns (assistant turns with no content and no streaming tool uses)
-      if (turn.role === 'assistant' && !turn.content?.trim() && turnToolUses.length === 0 && !turn.streaming) {
-        return null;
-      }
       // For text blocks (and unknown types), use text renderer
       // Streaming tool uses are displayed inline with text assistant turns
       return <TextTurn turn={turn} streamingToolUses={turnToolUses} />;
@@ -764,7 +762,7 @@ export function App() {
   const [conversationViewMode, setConversationViewMode] = useState<ConversationViewMode>(() => {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('balloons:conversation-view');
-      return (stored === 'exchange' || stored === 'turns') ? stored : 'exchange';
+      return (stored === 'exchange' || stored === 'turns' || stored === 'simple') ? stored : 'exchange';
     }
     return 'exchange';
   });
@@ -918,6 +916,11 @@ export function App() {
       unsubscribers.push(
         client.tasks.onTurnStarted((data: TurnStartedEvent) => {
           if (data.sessionId === selectedSessionId) {
+            // Skip events with undefined turnIndex (server bug)
+            if (data.turnIndex === undefined || data.turnIndex === null) {
+              return;
+            }
+
             // Skip creating separate turns for tool-related events
             // Tool uses are tracked separately and displayed inline in the assistant turn
             // The 'tool' role turns are for tool results which we display as part of the tool use
@@ -947,6 +950,12 @@ export function App() {
               // in the same exchange, but this was wrong - each turn has a unique index
               // and should be tracked separately. Tool_use turns (which are also role=assistant)
               // have different indices than text turns.
+              // Map turn_type to contentBlockType for proper rendering
+              const contentBlockType = data.turnType === 'tool_use' ? 'tool_use'
+                : data.turnType === 'tool_result' ? 'tool_result'
+                : data.turnType === 'text_turn' ? 'text'
+                : undefined;
+
               const placeholderTurn: TurnInfo = {
                 idx: data.turnIndex,
                 role: data.role,
@@ -956,6 +965,7 @@ export function App() {
                 tokens: 0,
                 contextMode: 'COPY',
                 exchangeId: data.exchangeId,
+                contentBlockType,
               };
               return sortTurnsByIdx([...prev, placeholderTurn]);
             });
@@ -1201,6 +1211,23 @@ export function App() {
       unsubscribers.push(
         client.tasks.onToolUseStarted((data: ToolUseStartedEvent) => {
           if (data.sessionId === selectedSessionId) {
+            // Update the turn to have toolUse info so it renders correctly
+            // This fixes the "empty turn" issue during streaming - the turn now
+            // has contentBlockType and toolUse set, so filtering logic works
+            setTurns(prev => prev.map(t =>
+              t.idx === data.turnIndex
+                ? {
+                    ...t,
+                    contentBlockType: 'tool_use',
+                    toolUse: {
+                      toolUseId: data.toolUseId,
+                      toolName: data.toolName,
+                      toolInput: {},  // Will be populated by toolInputDelta/toolUse events
+                    },
+                  }
+                : t
+            ));
+
             setToolUses(prev => {
               // Check if this tool use already exists
               if (prev.some(tu => tu.toolUseId === data.toolUseId)) {
@@ -1236,6 +1263,19 @@ export function App() {
       unsubscribers.push(
         client.tasks.onToolUse((data) => {
           if (data.sessionId === selectedSessionId) {
+            // Update the turn's toolInput with the complete parsed input
+            setTurns(prev => prev.map(t =>
+              t.idx === data.turnIndex && t.toolUse?.toolUseId === data.toolUseId
+                ? {
+                    ...t,
+                    toolUse: {
+                      ...t.toolUse,
+                      toolInput: data.toolInput,
+                    },
+                  }
+                : t
+            ));
+
             setToolUses(prev => prev.map(tu =>
               tu.toolUseId === data.toolUseId
                 ? {
@@ -1625,10 +1665,38 @@ export function App() {
               >
                 Turns
               </button>
+              <button
+                className={`view-toggle-btn ${conversationViewMode === 'simple' ? 'active' : ''}`}
+                onClick={() => {
+                  setConversationViewMode('simple');
+                  localStorage.setItem('balloons:conversation-view', 'simple');
+                }}
+                title="Simple view - fresh implementation"
+              >
+                Simple
+              </button>
+              <button
+                className={`view-toggle-btn ${conversationViewMode === 'compare' ? 'active' : ''}`}
+                onClick={() => {
+                  setConversationViewMode('compare');
+                  localStorage.setItem('balloons:conversation-view', 'compare');
+                }}
+                title="Compare view - debug streaming vs server state"
+              >
+                Compare
+              </button>
             </div>
 
             <div className="turns-container">
-              {isLoadingTurns ? (
+              {conversationViewMode === 'compare' && clientRef.current && connectionState === 'connected' ? (
+                <StreamingCompareView
+                  sessionId={selectedSessionId}
+                  client={clientRef.current}
+                  onCopyToInput={(content) => setMessage(content)}
+                />
+              ) : conversationViewMode === 'simple' && clientRef.current && connectionState === 'connected' ? (
+                <SimpleTurnsView sessionId={selectedSessionId} client={clientRef.current} />
+              ) : isLoadingTurns ? (
                 <div className="empty-state">
                   <h2>Loading...</h2>
                   <p>Loading session messages.</p>
@@ -1944,6 +2012,17 @@ function SidebarContent({
           </button>
         )}
       </header>
+
+      {onNewBareSession && (
+        <button
+          className="new-session-row"
+          onClick={onNewBareSession}
+          aria-label="New session"
+          title="Start new session"
+        >
+          + New Session
+        </button>
+      )}
 
       {viewMode === 'goals' ? (
         <GoalTreeView

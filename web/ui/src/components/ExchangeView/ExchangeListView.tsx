@@ -123,43 +123,8 @@ export const ExchangeListView = memo(function ExchangeListView({
     return map;
   }, [toolUses]);
 
-  // Debug mode - show exchange grouping info visually
-  const showDebug = true;
-
   return (
     <div className="exchange-list-view">
-      {showDebug && (
-        <div style={{
-          padding: '8px 12px',
-          background: '#ffe0b2',
-          fontSize: '11px',
-          fontFamily: 'monospace',
-          marginBottom: '8px',
-          borderRadius: '4px',
-          maxHeight: '200px',
-          overflow: 'auto',
-          color: '#333'
-        }}>
-          <strong>DEBUG:</strong> {groups.length} exchanges, {turns.length} turns total
-          {groups.map((g, i) => (
-            <div key={g.exchangeId ?? `group-${i}`} style={{ marginTop: '4px', borderTop: '1px solid #ccc', paddingTop: '4px' }}>
-              <strong>Exchange {i}:</strong> <code style={{ background: '#fff', padding: '2px 4px' }}>{g.exchangeId?.slice(0, 8) || 'NULL'}</code>
-              <div style={{ marginLeft: '8px' }}>
-                {g.turns.map(t => (
-                  <div key={`debug-turn-${t.idx}`} style={{
-                    color: t.streaming ? '#d32f2f' : '#333',
-                    fontWeight: t.streaming ? 'bold' : 'normal'
-                  }}>
-                    Turn {t.idx}: {t.role} {t.streaming ? '⏳' : '✓'}
-                    {t.contentBlockType ? ` [${t.contentBlockType}]` : ''}
-                    {t.content ? ` "${t.content.slice(0, 30)}${t.content.length > 30 ? '...' : ''}"` : ' (empty)'}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
       {groups.map((group, idx) => {
         if (group.exchangeId) {
           // Grouped exchange

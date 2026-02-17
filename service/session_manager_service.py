@@ -269,7 +269,7 @@ class SessionManagerService:
         if self._pump_task and not self._pump_task.done():
             self._pump_task.cancel()
 
-    def release_streaming_context(self, session_id: str) -> bool:
+    def release_streaming_context(self, session_id: str) -> dict | None:
         """Release ownership of a streaming session to another component (e.g., TUI).
 
         This removes the streaming context from this service, allowing another
@@ -283,12 +283,25 @@ class SessionManagerService:
             session_id: Session to release
 
         Returns:
-            True if a context was released, False if no context existed
+            Dict with context state (content, assistant_turn_idx) if released, None otherwise
         """
+        from core.debug_log import debug_log
         if session_id in self._streaming_contexts:
+            ctx = self._streaming_contexts[session_id]
+            # Capture state to return to caller so they can continue from where we left off
+            state = {
+                "content": ctx.content,
+                "assistant_turn_idx": ctx.assistant_turn_idx,
+                "tool_count": ctx.tool_count,
+            }
+            debug_log.debug(
+                f"release_streaming_context: turn_idx={ctx.assistant_turn_idx}, content_len={len(ctx.content)}",
+                category="websocket",
+                session_id=session_id,
+            )
             del self._streaming_contexts[session_id]
-            return True
-        return False
+            return state
+        return None
 
     async def _event_pump_loop(self) -> None:
         """Main event pump loop - polls sessions and relays events."""
@@ -362,6 +375,12 @@ class SessionManagerService:
             # Text delta - accumulate and emit
             text = data if isinstance(data, str) else str(data)
             ctx.content += text
+
+            # Update TreeState so TUI can observe streaming content
+            if self._tree_state:
+                self._tree_state.update_turn_content(
+                    session_id, ctx.assistant_turn_idx, ctx.content
+                )
 
             # Update stream state with approximate token count
             approx_tokens = len(ctx.content) // 4
@@ -635,6 +654,16 @@ class SessionManagerService:
             StreamStateEvent.STREAM_ERROR,
             StreamStateEvent.STREAM_CANCELLED,
         ):
+            # Reload TreeState from Session so web clients see all turns via getTurns()
+            # This is critical regardless of who drove the streaming (SessionManagerService or TUI)
+            # because the session's turns are updated by the runner, and TreeState needs to
+            # pick up those changes for the web UI to display them correctly
+            if self._tree_state:
+                self._tree_state.stop_streaming(stream.session_id)
+                session = self._manager.get_session(stream.session_id)
+                if session:
+                    self._tree_state.load_session(stream.session_id, session)
+
             self._emit_event(
                 SessionManagerEvent.STREAMING_STOPPED,
                 stream.session_id,
@@ -1046,18 +1075,19 @@ class SessionManagerService:
             assistant_turn_idx=turn_index + 1,  # Next turn will be assistant
         )
 
+        # Emit message submitted event BEFORE starting the runner
+        # This allows TUI to call release_streaming_context before any events are processed
+        self._emit_event(
+            SessionManagerEvent.MESSAGE_SUBMITTED,
+            session_id,
+            {"exchange_id": exchange_id, "turn_index": turn_index, "content": content},
+        )
+
         # Start background streaming
         runner.start_background(
             prompt=content,
             messages=session.turns,
             allowed_tools=allowed_tools,
-        )
-
-        # Emit message submitted event
-        self._emit_event(
-            SessionManagerEvent.MESSAGE_SUBMITTED,
-            session_id,
-            {"exchange_id": exchange_id, "turn_index": turn_index, "content": content},
         )
 
         return SubmitMessageResult(
@@ -1200,6 +1230,19 @@ class SessionManagerService:
             assistant_turn_idx=turn_index + 1,
         )
 
+        # Emit message submitted event BEFORE starting the runner
+        # This allows TUI to call release_streaming_context before any events are processed
+        self._emit_event(
+            SessionManagerEvent.MESSAGE_SUBMITTED,
+            session_id,
+            {
+                "exchange_id": exchange_id,
+                "turn_index": turn_index,
+                "content": content,
+                "image_count": len(image_blocks),
+            },
+        )
+
         # Start background streaming with images
         # Note: The runner's underlying ClaudeRunner needs to handle images
         # We pass images via an extended interface
@@ -1210,18 +1253,6 @@ class SessionManagerService:
             prompt=content,
             messages=session.turns,
             allowed_tools=allowed_tools,
-        )
-
-        # Emit message submitted event
-        self._emit_event(
-            SessionManagerEvent.MESSAGE_SUBMITTED,
-            session_id,
-            {
-                "exchange_id": exchange_id,
-                "turn_index": turn_index,
-                "content": content,
-                "image_count": len(image_blocks),
-            },
         )
 
         return SubmitMessageResult(

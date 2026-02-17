@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-16T14:26:25.317226
+// Generated: 2026-02-16T15:21:26.941809
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -298,6 +298,7 @@ export interface TurnStartedEvent {
   exchangeId: string;
   turnIndex: number;
   role: string;
+  turnType?: string | null;
 }
 
 export interface TurnFinishedEvent {

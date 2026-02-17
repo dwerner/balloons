@@ -41,6 +41,7 @@ from models import (
 )
 from core.context import ContextBuilder
 from core.async_tokenizer import get_async_tokenizer
+from core.debug_log import debug_log
 
 # Module-level context builder for token counting (used for synchronous counting in load_session)
 _context_builder = ContextBuilder()

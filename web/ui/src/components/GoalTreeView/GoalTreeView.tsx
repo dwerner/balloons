@@ -1105,15 +1105,6 @@ export const GoalTreeView = memo(function GoalTreeView({
     <div className="goal-tree-view">
       <div className="goal-tree-header">
         <span className="goal-tree-header__label">{rootLabel}</span>
-        {onNewBareSession && (
-          <button
-            className="goal-tree-header__new-session"
-            onClick={onNewBareSession}
-            title="Start new session"
-          >
-            + New
-          </button>
-        )}
       </div>
       <ul className="goal-tree-root">
         {goals.map((goal) => {
