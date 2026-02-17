@@ -1290,6 +1290,7 @@ class BalloonsApp(App):
                     session_id=session_id,
                     turn_id=action.turn_id or str(action.turn_idx),
                     role=action.role,
+                    order=action.turn_idx,
                     exchange_id=action.exchange_id,
                     content_block_type=action.turn_type or "text",
                 )
@@ -2652,6 +2653,7 @@ class BalloonsApp(App):
                 session_id=self.session.id,
                 turn_id=user_turn.id,
                 role="user",
+                order=turn_idx,
                 exchange_id=exchange_id,
                 content_block_type="text",
             )
@@ -2661,14 +2663,8 @@ class BalloonsApp(App):
                 final_content=prompt,
                 tokens=0,  # User turns don't have token counts
             )
-            # Also emit turn_created for assistant turn (streaming will fill content)
-            self._session_data_service.emit_turn_created(
-                session_id=self.session.id,
-                turn_id=assistant_turn_id,
-                role="assistant",
-                exchange_id=exchange_id,
-                content_block_type="text",
-            )
+            # Note: Don't pre-create assistant turn - it will be created when
+            # TurnStartedAction arrives from the runner with the actual turn_id
 
         # Create streaming context for this session
         ctx = StreamingContext(

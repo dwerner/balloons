@@ -54,10 +54,11 @@ class TurnSnapshot:
     """Complete snapshot of a single turn.
 
     Used in SessionSnapshot to provide full turn state.
+    Turns are ordered by array position - no separate idx field needed.
+    turn_id is the stable identifier for targeting updates.
     """
 
-    turn_id: str  # Stable UUID for the turn
-    idx: int
+    turn_id: str  # Stable UUID for the turn (primary identifier)
     role: str  # "user", "assistant", "tool"
     content: str
     streaming: bool
@@ -75,6 +76,9 @@ class SessionSnapshot:
 
     Sent when a client subscribes to provide full initial state.
     After receiving a snapshot, clients receive incremental TurnDeltas.
+
+    Turns are ordered by array position (storage order).
+    streaming_turn_ids identifies which turns are actively streaming.
     """
 
     session_id: str
@@ -82,7 +86,6 @@ class SessionSnapshot:
     model: str
     is_streaming: bool
     turns: list[TurnSnapshot] = field(default_factory=list)
-    current_turn_idx: int | None = None  # Index of currently streaming turn
     streaming_turn_ids: list[str] = field(default_factory=list)  # Turn IDs currently streaming
 
 
@@ -119,6 +122,7 @@ class SessionTurnCreatedEvent:
     session_id: str
     turn_id: str  # Stable UUID for the turn
     role: str
+    order: int  # Position in turn list (for display ordering)
     exchange_id: str | None = None
     content_block_type: str = "text"
 
@@ -365,32 +369,31 @@ class SessionDataService:
             return None
 
         # Convert TreeState turns to TurnSnapshot format
+        # Turns are ordered by array position - no separate idx needed
         turn_snapshots: list[TurnSnapshot] = []
         streaming_turn_ids: list[str] = []
-        current_turn_idx: int | None = None
 
         if session_data.turns is not None:
-            for turn in session_data.turns:
+            for idx, turn in enumerate(session_data.turns):
                 # Determine content_block_type from content_block
                 content_block_type = "text"
                 if turn.content_block is not None:
                     content_block_type = turn.content_block.type
 
-                # Get context mode for this turn
+                # Get context mode for this turn (still uses idx internally)
                 context_mode = self._tree_state.get_context_mode(session_id, turn.idx)
 
                 # Get turn_id from the session_ref if available (Turn has .id field)
                 turn_id = ""
                 if session_data.session_ref and hasattr(session_data.session_ref, 'turns'):
                     session_turns = session_data.session_ref.turns
-                    if turn.idx < len(session_turns):
-                        session_turn = session_turns[turn.idx]
+                    if idx < len(session_turns):
+                        session_turn = session_turns[idx]
                         if hasattr(session_turn, 'id'):
                             turn_id = session_turn.id
 
                 turn_snapshot = TurnSnapshot(
                     turn_id=turn_id,
-                    idx=turn.idx,
                     role=turn.role,
                     content=turn.content,
                     streaming=turn.streaming,
@@ -402,10 +405,9 @@ class SessionDataService:
                 )
                 turn_snapshots.append(turn_snapshot)
 
-                # Track streaming turns
-                if turn.streaming:
+                # Track streaming turns by turn_id
+                if turn.streaming and turn_id:
                     streaming_turn_ids.append(turn_id)
-                    current_turn_idx = turn.idx
 
         return SessionSnapshot(
             session_id=session_id,
@@ -413,7 +415,6 @@ class SessionDataService:
             model=session_data.model,
             is_streaming=session_data.is_streaming,
             turns=turn_snapshots,
-            current_turn_idx=current_turn_idx,
             streaming_turn_ids=streaming_turn_ids,
         )
 
@@ -484,6 +485,7 @@ class SessionDataService:
         session_id: str,
         turn_id: str,
         role: str,
+        order: int,
         exchange_id: str | None = None,
         content_block_type: str = "text",
     ) -> None:
@@ -495,6 +497,7 @@ class SessionDataService:
             session_id: The session where the turn was created
             turn_id: Stable UUID for the turn
             role: Turn role ("user", "assistant", "tool")
+            order: Position in turn list (for display ordering)
             exchange_id: Exchange ID grouping related turns
             content_block_type: Type of content block
         """
@@ -502,7 +505,7 @@ class SessionDataService:
         subscribers = self._session_subscribers.get(session_id)
         debug_log.debug(
             f"emit_turn_created: session={session_id[:8]}, turn={turn_id[:8] if turn_id else 'none'}, "
-            f"role={role}, subscribers={len(subscribers) if subscribers else 0}",
+            f"role={role}, order={order}, subscribers={len(subscribers) if subscribers else 0}",
             category="websocket",
         )
         if not subscribers:
@@ -512,6 +515,7 @@ class SessionDataService:
             session_id=session_id,
             turn_id=turn_id,
             role=role,
+            order=order,
             exchange_id=exchange_id,
             content_block_type=content_block_type,
         )

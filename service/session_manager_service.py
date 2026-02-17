@@ -413,6 +413,7 @@ class SessionManagerService:
                     session_id=session_id,
                     turn_id=ctx.assistant_turn_id,
                     role="assistant",
+                    order=ctx.assistant_turn_idx,
                     exchange_id=ctx.exchange_id,
                 )
 
@@ -487,6 +488,7 @@ class SessionManagerService:
                     session_id=session_id,
                     turn_id=turn_id,
                     role="assistant",
+                    order=turn_idx,
                     exchange_id=ctx.exchange_id,
                 )
 
@@ -556,6 +558,7 @@ class SessionManagerService:
                     session_id=session_id,
                     turn_id=turn_id,
                     role="assistant",
+                    order=turn_idx,
                     exchange_id=ctx.exchange_id,
                     content_block_type="tool_use",
                 )
@@ -613,6 +616,7 @@ class SessionManagerService:
                     session_id=session_id,
                     turn_id=turn_id,
                     role="tool",
+                    order=turn_idx,
                     exchange_id=ctx.exchange_id,
                     content_block_type="tool_result",
                 )
@@ -1202,6 +1206,7 @@ class SessionManagerService:
                 session_id=session_id,
                 turn_id=user_turn.id,
                 role="user",
+                order=turn_index,
                 exchange_id=exchange_id,
                 content_block_type="text",
             )
@@ -1214,16 +1219,10 @@ class SessionManagerService:
 
         # Generate assistant turn ID for tracking streaming events
         assistant_turn_id = str(uuid.uuid4())
+        assistant_turn_idx = turn_index + 1
 
-        # Emit assistant turn_created so streaming view can show it
-        if self._session_data_service:
-            self._session_data_service.emit_turn_created(
-                session_id=session_id,
-                turn_id=assistant_turn_id,
-                role="assistant",
-                exchange_id=exchange_id,
-                content_block_type="text",
-            )
+        # Note: Don't pre-create assistant turn - it will be created when
+        # turn_started event arrives from the runner with the actual turn_id
 
         # Register the stream in StreamState for tracking
         self._stream_state.register_session_stream(
@@ -1240,7 +1239,7 @@ class SessionManagerService:
             user_turn_idx=turn_index,
             user_turn_id=user_turn.id,
             assistant_turn_idx=turn_index + 1,  # Next turn will be assistant
-            assistant_turn_id=assistant_turn_id,  # Track for streaming events
+            assistant_turn_id=assistant_turn_id,  # Track for streaming events (may be updated by runner)
         )
 
         # Emit message submitted event BEFORE starting the runner
@@ -1388,6 +1387,7 @@ class SessionManagerService:
                 session_id=session_id,
                 turn_id=user_turn.id,
                 role="user",
+                order=turn_index,
                 exchange_id=exchange_id,
                 content_block_type="text",
             )
@@ -1400,16 +1400,10 @@ class SessionManagerService:
 
         # Generate assistant turn ID for tracking streaming events
         assistant_turn_id = str(uuid.uuid4())
+        assistant_turn_idx = turn_index + 1
 
-        # Emit assistant turn_created so streaming view can show it
-        if self._session_data_service:
-            self._session_data_service.emit_turn_created(
-                session_id=session_id,
-                turn_id=assistant_turn_id,
-                role="assistant",
-                exchange_id=exchange_id,
-                content_block_type="text",
-            )
+        # Note: Don't pre-create assistant turn - it will be created when
+        # turn_started event arrives from the runner with the actual turn_id
 
         # Register the stream in StreamState for tracking
         self._stream_state.register_session_stream(
@@ -1426,7 +1420,7 @@ class SessionManagerService:
             user_turn_idx=turn_index,
             user_turn_id=user_turn.id,
             assistant_turn_idx=turn_index + 1,
-            assistant_turn_id=assistant_turn_id,
+            assistant_turn_id=assistant_turn_id,  # Track for streaming events (may be updated by runner)
         )
 
         # Emit message submitted event BEFORE starting the runner

@@ -57,7 +57,6 @@ export function StreamingTurnsView({ sessionId, client }: StreamingTurnsViewProp
 interface TurnCardProps {
   turn: {
     turnId: string;
-    idx: number;
     role: string;
     content: string;
     streaming: boolean;

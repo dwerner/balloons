@@ -38,10 +38,10 @@ function debugLog(message: string, data?: unknown): void {
  * Uses turn_id (UUID) as the key, not turn index.
  */
 export interface SessionDataTurn {
-  /** Stable UUID for this turn */
+  /** Stable UUID for this turn (primary identifier) */
   turnId: string;
-  /** Turn index (for ordering) */
-  idx: number;
+  /** Insertion order (for display ordering) - derived from array position */
+  order: number;
   /** Turn role: "user", "assistant", "tool" */
   role: string;
   /** Content accumulated so far */
@@ -65,7 +65,7 @@ export interface SessionDataTurn {
 export interface UseSessionDataState {
   /** Map of turn_id -> turn data */
   turnsById: Map<string, SessionDataTurn>;
-  /** Sorted array of turns (by idx) */
+  /** Sorted array of turns (by order) */
   turns: SessionDataTurn[];
   /** Whether initial snapshot is loading */
   isLoading: boolean;
@@ -131,9 +131,9 @@ export function useSessionData(
   const unsubscribersRef = useRef<Unsubscribe[]>([]);
   const currentSessionRef = useRef<string | null>(null);
 
-  // Derive sorted turns array from map
+  // Derive sorted turns array from map (sorted by insertion order)
   const turns = useMemo(() => {
-    return Array.from(turnsById.values()).sort((a, b) => a.idx - b.idx);
+    return Array.from(turnsById.values()).sort((a, b) => a.order - b.order);
   }, [turnsById]);
 
   // Get a turn by ID
@@ -219,14 +219,15 @@ export function useSessionData(
         console.log(`[useSessionData] Subscription successful, snapshot has ${result.snapshot?.turns?.length ?? 0} turns`);
 
         // Convert snapshot turns to our format (snapshot is included in subscribe result)
+        // Turns come in array order - use array index for ordering
         const initialTurns = new Map<string, SessionDataTurn>();
         if (result.snapshot?.turns) {
-          result.snapshot.turns.forEach((turn: TurnSnapshot) => {
-            // Use the real turn_id from the snapshot (or fall back to index-based ID)
-            const turnId = turn.turnId || `snapshot-${newSessionId}-${turn.idx}`;
+          result.snapshot.turns.forEach((turn: TurnSnapshot, arrayIndex: number) => {
+            // Use the real turn_id from the snapshot (or fall back to generated ID)
+            const turnId = turn.turnId || `snapshot-${newSessionId}-${arrayIndex}`;
             initialTurns.set(turnId, {
               turnId,
-              idx: turn.idx,
+              order: arrayIndex,  // Use array position for ordering
               role: turn.role,
               content: turn.content || '',
               streaming: turn.streaming || false,
@@ -277,13 +278,12 @@ export function useSessionData(
               }
 
               const next = new Map(prev);
-              // Determine idx - for new turns, use highest idx + 1
-              const maxIdx = Math.max(-1, ...Array.from(prev.values()).map((t) => t.idx));
-              const newIdx = maxIdx + 1;
+              // Use the order from the server (authoritative)
+              const serverOrder = event.order ?? 0;
 
               next.set(turnId, {
                 turnId: turnId,
-                idx: newIdx,
+                order: serverOrder,
                 role: event.role ?? 'assistant',
                 content: '',
                 streaming: true,
@@ -329,14 +329,16 @@ export function useSessionData(
             setTurnsById((prev) => {
               const existing = prev.get(turnId);
               if (!existing) {
-                // Turn not found - create it
-                const maxIdx = Math.max(-1, ...Array.from(prev.values()).map((t) => t.idx));
-                const newIdx = maxIdx + 1;
+                // Turn not found - create it (turnCreated should have arrived first)
+                // Use maxOrder+1 as fallback - may cause ordering issues
+                console.warn(`[useSessionData] turnDelta for unknown turn ${turnId}, creating with fallback order`);
+                const maxOrder = Math.max(-1, ...Array.from(prev.values()).map((t) => t.order));
+                const newOrder = maxOrder + 1;
 
                 const next = new Map(prev);
                 next.set(turnId, {
                   turnId: turnId,
-                  idx: newIdx,
+                  order: newOrder,
                   role: 'assistant',
                   content: delta,
                   streaming: true,
@@ -400,14 +402,16 @@ export function useSessionData(
             setTurnsById((prev) => {
               const existing = prev.get(turnId);
               if (!existing) {
-                // Create the turn if it doesn't exist
-                const maxIdx = Math.max(-1, ...Array.from(prev.values()).map((t) => t.idx));
-                const newIdx = maxIdx + 1;
+                // Create the turn if it doesn't exist (turnCreated should have arrived first)
+                // Use maxOrder+1 as fallback - may cause ordering issues
+                console.warn(`[useSessionData] turnFinished for unknown turn ${turnId}, creating with fallback order`);
+                const maxOrder = Math.max(-1, ...Array.from(prev.values()).map((t) => t.order));
+                const newOrder = maxOrder + 1;
 
                 const next = new Map(prev);
                 next.set(turnId, {
                   turnId: turnId,
-                  idx: newIdx,
+                  order: newOrder,
                   role: 'assistant',
                   content: finalContent,
                   streaming: false,

@@ -177,7 +177,7 @@ class TestEventFiltering:
         await service.subscribe_session("session-1", "client-a")
         await service.subscribe_session("session-1", "client-b")
 
-        service.emit_turn_created("session-1", "turn-uuid-1", "user")
+        service.emit_turn_created("session-1", "turn-uuid-1", "user", order=0)
 
         assert len(events) == 1
         assert events[0]["event_name"] == "sessionDataTurnCreated"
@@ -225,7 +225,7 @@ class TestEventFiltering:
         service.add_event_handler(handler)
 
         # No subscribers for session-1
-        service.emit_turn_created("session-1", "turn-uuid-1", "user")
+        service.emit_turn_created("session-1", "turn-uuid-1", "user", order=0)
         service.emit_turn_delta("session-1", "turn-uuid-1", "Hello", 5)
         service.emit_turn_finished("session-1", "turn-uuid-1", "Hello", 5)
 
@@ -242,7 +242,7 @@ class TestEventFiltering:
         await service.subscribe_session("session-1", "client-a")
         await service.subscribe_session("session-2", "client-b")
 
-        service.emit_turn_created("session-1", "turn-uuid-1", "user")
+        service.emit_turn_created("session-1", "turn-uuid-1", "user", order=0)
 
         assert len(events) == 1
         # Only client-a is subscribed to session-1
@@ -293,7 +293,7 @@ class TestEventHandlers:
         service.add_event_handler(handler2)
 
         await service.subscribe_session("session-1", "client-a")
-        service.emit_turn_created("session-1", "turn-uuid-1", "user")
+        service.emit_turn_created("session-1", "turn-uuid-1", "user", order=0)
 
         assert len(handler1_calls) == 1
         assert len(handler2_calls) == 1
@@ -321,6 +321,7 @@ class TestEventData:
             "session-1",
             turn_id="turn-uuid-5",
             role="assistant",
+            order=5,
             exchange_id="exchange-123",
             content_block_type="code",
         )
@@ -329,6 +330,7 @@ class TestEventData:
             "session_id": "session-1",
             "turn_id": "turn-uuid-5",
             "role": "assistant",
+            "order": 5,
             "exchange_id": "exchange-123",
             "content_block_type": "code",
         }
@@ -500,9 +502,8 @@ class TestSessionSnapshot:
         assert snapshot.model == mock_session.model
         assert len(snapshot.turns) == 5
 
-        # Check first turn
+        # Check first turn (idx removed - order is from array position)
         assert snapshot.turns[0].turn_id == "turn-uuid-1"
-        assert snapshot.turns[0].idx == 0
         assert snapshot.turns[0].role == "user"
         assert snapshot.turns[0].content == "Hello"
         assert snapshot.turns[0].content_block_type == "text"
@@ -554,7 +555,7 @@ class TestSessionSnapshot:
         snapshot = await service_with_tree_state.get_session_snapshot(mock_session.id)
 
         assert snapshot.is_streaming is True
-        assert snapshot.current_turn_idx == 4
+        # current_turn_idx removed - use streaming_turn_ids instead
         assert "turn-uuid-5" in snapshot.streaming_turn_ids
 
     @pytest.mark.asyncio
@@ -800,8 +801,8 @@ class TestTurnSnapshotFields:
         turn = snapshot.turns[0]
 
         # Verify all required fields per acceptance criteria
+        # Note: idx removed - order is from array position
         assert hasattr(turn, 'turn_id')
-        assert hasattr(turn, 'idx')
         assert hasattr(turn, 'role')
         assert hasattr(turn, 'content')
         assert hasattr(turn, 'streaming')
@@ -813,7 +814,6 @@ class TestTurnSnapshotFields:
 
         # Verify correct values
         assert turn.turn_id == "turn-id-abc"
-        assert turn.idx == 0
         assert turn.role == "user"
         assert turn.content == "test"
         assert turn.content_block_type == "text"

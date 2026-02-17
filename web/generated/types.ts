@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-17T13:09:25.716903
+// Generated: 2026-02-17T14:27:03.181883
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -356,7 +356,6 @@ export interface TurnDelta {
 
 export interface TurnSnapshot {
   turnId: string;
-  idx: number;
   role: string;
   content: string;
   streaming: boolean;
@@ -373,7 +372,6 @@ export interface SessionSnapshot {
   model: string;
   isStreaming: boolean;
   turns?: TurnSnapshot[];
-  currentTurnIdx?: number | null;
   streamingTurnIds?: string[];
 }
 
@@ -394,6 +392,7 @@ export interface SessionTurnCreatedEvent {
   sessionId: string;
   turnId: string;
   role: string;
+  order: number;
   exchangeId?: string | null;
   contentBlockType?: string;
 }
