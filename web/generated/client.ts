@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-17T12:24:13.408550
+// Generated: 2026-02-17T13:09:25.718532
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -2316,7 +2316,7 @@ export interface SessionDataEvents {
    * 
    * Clients should create UI elements for the new turn.
    */
-  onTurnCreated(callback: (data: Types.SessionTurnCreatedEvent) => void): Unsubscribe;
+  sessionDataTurnCreated(callback: (data: Types.SessionTurnCreatedEvent) => void): Unsubscribe;
 
   /**
    * Emitted when content is added to a streaming turn.
@@ -2324,14 +2324,14 @@ export interface SessionDataEvents {
    * Clients should append the delta to their accumulated content.
    * Use accumulated_length to verify sync.
    */
-  onTurnDelta(callback: (data: Types.SessionTurnDeltaEvent) => void): Unsubscribe;
+  sessionDataTurnDelta(callback: (data: Types.SessionTurnDeltaEvent) => void): Unsubscribe;
 
   /**
    * Emitted when a turn finishes streaming.
    * 
    * Clients should finalize the turn display and update token counts.
    */
-  onTurnFinished(callback: (data: Types.SessionTurnFinishedEvent) => void): Unsubscribe;
+  sessionDataTurnFinished(callback: (data: Types.SessionTurnFinishedEvent) => void): Unsubscribe;
 
 }
 
@@ -2401,16 +2401,16 @@ export class SessionDataServiceClient implements SessionDataService {
     return this.call('unsubscribeSession', { sessionId: sessionId, clientId: clientId });
   }
 
-  onTurnCreated(callback: (data: Types.SessionTurnCreatedEvent) => void): Unsubscribe {
-    return this.subscribe('turnCreated', callback);
+  sessionDataTurnCreated(callback: (data: Types.SessionTurnCreatedEvent) => void): Unsubscribe {
+    return this.subscribe('sessionDataTurnCreated', callback);
   }
 
-  onTurnDelta(callback: (data: Types.SessionTurnDeltaEvent) => void): Unsubscribe {
-    return this.subscribe('turnDelta', callback);
+  sessionDataTurnDelta(callback: (data: Types.SessionTurnDeltaEvent) => void): Unsubscribe {
+    return this.subscribe('sessionDataTurnDelta', callback);
   }
 
-  onTurnFinished(callback: (data: Types.SessionTurnFinishedEvent) => void): Unsubscribe {
-    return this.subscribe('turnFinished', callback);
+  sessionDataTurnFinished(callback: (data: Types.SessionTurnFinishedEvent) => void): Unsubscribe {
+    return this.subscribe('sessionDataTurnFinished', callback);
   }
 
 }

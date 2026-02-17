@@ -282,6 +282,13 @@ class SessionDataService:
             self._session_subscribers[session_id] = set()
         self._session_subscribers[session_id].add(client_id)
 
+        from core.debug_log import debug_log
+        debug_log.info(
+            f"subscribe_session: session={session_id[:8]}, client={client_id}, "
+            f"total_subscribers={len(self._session_subscribers.get(session_id, set()))}",
+            category="websocket",
+        )
+
         return SubscribeSessionResult(
             session_id=session_id,
             subscribed=True,
@@ -508,7 +515,7 @@ class SessionDataService:
             exchange_id=exchange_id,
             content_block_type=content_block_type,
         )
-        self._emit_event("turnCreated", event_data.__dict__, subscribers)
+        self._emit_event("sessionDataTurnCreated", event_data.__dict__, subscribers)
 
     def emit_turn_delta(
         self,
@@ -543,7 +550,7 @@ class SessionDataService:
             delta=delta,
             accumulated_length=accumulated_length,
         )
-        self._emit_event("turnDelta", event_data.__dict__, subscribers)
+        self._emit_event("sessionDataTurnDelta", event_data.__dict__, subscribers)
 
     def emit_turn_finished(
         self,
@@ -578,20 +585,22 @@ class SessionDataService:
             f"tokens={tokens}, subscribers={len(subscribers)}",
             category="websocket",
         )
-        self._emit_event("turnFinished", event_data.__dict__, subscribers)
+        self._emit_event("sessionDataTurnFinished", event_data.__dict__, subscribers)
 
     # --- Events (for TypeScript generation) ---
+    # Event names are prefixed with "sessionData" to avoid collisions with
+    # TaskStateService and TreeStateService which also have turn events.
 
-    @ws_event
-    async def on_turn_created(self) -> SessionTurnCreatedEvent:
+    @ws_event(name="sessionDataTurnCreated")
+    async def on_session_data_turn_created(self) -> SessionTurnCreatedEvent:
         """Emitted when a new turn is created in a subscribed session.
 
         Clients should create UI elements for the new turn.
         """
         ...
 
-    @ws_event
-    async def on_turn_delta(self) -> SessionTurnDeltaEvent:
+    @ws_event(name="sessionDataTurnDelta")
+    async def on_session_data_turn_delta(self) -> SessionTurnDeltaEvent:
         """Emitted when content is added to a streaming turn.
 
         Clients should append the delta to their accumulated content.
@@ -599,8 +608,8 @@ class SessionDataService:
         """
         ...
 
-    @ws_event
-    async def on_turn_finished(self) -> SessionTurnFinishedEvent:
+    @ws_event(name="sessionDataTurnFinished")
+    async def on_session_data_turn_finished(self) -> SessionTurnFinishedEvent:
         """Emitted when a turn finishes streaming.
 
         Clients should finalize the turn display and update token counts.

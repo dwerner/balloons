@@ -42,7 +42,7 @@ export function StreamingTurnsView({ sessionId, client }: StreamingTurnsViewProp
   return (
     <div className="streaming-turns-view" ref={scrollRef}>
       <div className="streaming-turns-header">
-        SessionDataService View ({turns.length} turns)
+        Session: {sessionId?.substring(0, 8)}... ({turns.length} turns)
         {isSubscribed && <span className="subscribed-badge">● subscribed</span>}
       </div>
       <div className="streaming-turns-list">

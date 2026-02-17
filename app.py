@@ -2598,7 +2598,7 @@ class BalloonsApp(App):
         # Add user message to session immediately (before tool loops start)
         # This ensures the user prompt is persisted even if we crash mid-exchange
         user_blocks = [TextBlock(text=prompt)]
-        self.session.add_message("user", prompt, content_blocks=user_blocks, exchange_id=exchange_id)
+        user_turn = self.session.add_message("user", prompt, content_blocks=user_blocks, exchange_id=exchange_id)
         asyncio.create_task(self.session.save())
 
         # Start the assistant turn in tree (with same exchange_id)
@@ -2622,6 +2622,34 @@ class BalloonsApp(App):
                 turn_type="text_turn",
             )
 
+        # Generate assistant turn ID for tracking (will be used for streaming events)
+        assistant_turn_id = str(uuid.uuid4())
+
+        # Emit user turn events to SessionDataService (for streaming view)
+        if self._session_data_service is not None:
+            # User turn is complete immediately (no streaming)
+            self._session_data_service.emit_turn_created(
+                session_id=self.session.id,
+                turn_id=user_turn.id,
+                role="user",
+                exchange_id=exchange_id,
+                content_block_type="text",
+            )
+            self._session_data_service.emit_turn_finished(
+                session_id=self.session.id,
+                turn_id=user_turn.id,
+                final_content=prompt,
+                tokens=0,  # User turns don't have token counts
+            )
+            # Also emit turn_created for assistant turn (streaming will fill content)
+            self._session_data_service.emit_turn_created(
+                session_id=self.session.id,
+                turn_id=assistant_turn_id,
+                role="assistant",
+                exchange_id=exchange_id,
+                content_block_type="text",
+            )
+
         # Create streaming context for this session
         ctx = StreamingContext(
             session_id=self.session.id,
@@ -2630,6 +2658,8 @@ class BalloonsApp(App):
             prompt=prompt,
             is_active=is_active,
             exchange_id=exchange_id,
+            final_turn_idx=assistant_turn_idx,  # Track from the start
+            final_turn_id=assistant_turn_id,  # Use generated ID
         )
         self._streaming_contexts[self.session.id] = ctx
 

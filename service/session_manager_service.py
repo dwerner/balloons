@@ -1137,7 +1137,7 @@ class SessionManagerService:
         # Add user message to session (persists immediately)
         turn_index = len(session.turns)
         user_blocks = [TextBlock(text=content)]
-        session.add_message(
+        user_turn = session.add_message(
             "user", content, content_blocks=user_blocks, exchange_id=exchange_id
         )
         await session.save()
@@ -1179,6 +1179,22 @@ class SessionManagerService:
                 turn_index=turn_index,
                 role="user",
                 content=content,
+            )
+
+        # Emit user turn events to SessionDataService for streaming view
+        if self._session_data_service:
+            self._session_data_service.emit_turn_created(
+                session_id=session_id,
+                turn_id=user_turn.id,
+                role="user",
+                exchange_id=exchange_id,
+                content_block_type="text",
+            )
+            self._session_data_service.emit_turn_finished(
+                session_id=session_id,
+                turn_id=user_turn.id,
+                final_content=content,
+                tokens=0,  # User turns don't have token counts
             )
 
         # Register the stream in StreamState for tracking
@@ -1299,7 +1315,7 @@ class SessionManagerService:
 
         # Add user message to session (persists immediately)
         turn_index = len(session.turns)
-        session.add_message(
+        user_turn = session.add_message(
             "user", display_content, content_blocks=user_blocks, exchange_id=exchange_id
         )
         await session.save()
@@ -1334,6 +1350,22 @@ class SessionManagerService:
                 turn_index=turn_index,
                 role="user",
                 content=display_content,
+            )
+
+        # Emit user turn events to SessionDataService for streaming view
+        if self._session_data_service:
+            self._session_data_service.emit_turn_created(
+                session_id=session_id,
+                turn_id=user_turn.id,
+                role="user",
+                exchange_id=exchange_id,
+                content_block_type="text",
+            )
+            self._session_data_service.emit_turn_finished(
+                session_id=session_id,
+                turn_id=user_turn.id,
+                final_content=display_content,
+                tokens=0,  # User turns don't have token counts
             )
 
         # Register the stream in StreamState for tracking

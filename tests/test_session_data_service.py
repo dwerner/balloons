@@ -180,7 +180,7 @@ class TestEventFiltering:
         service.emit_turn_created("session-1", "turn-uuid-1", "user")
 
         assert len(events) == 1
-        assert events[0]["event_name"] == "turnCreated"
+        assert events[0]["event_name"] == "sessionDataTurnCreated"
         assert events[0]["target_clients"] == {"client-a", "client-b"}
 
     @pytest.mark.asyncio
@@ -196,7 +196,7 @@ class TestEventFiltering:
         service.emit_turn_delta("session-1", "turn-uuid-1", "Hello", 5)
 
         assert len(events) == 1
-        assert events[0]["event_name"] == "turnDelta"
+        assert events[0]["event_name"] == "sessionDataTurnDelta"
         assert events[0]["target_clients"] == {"client-a"}
 
     @pytest.mark.asyncio
@@ -213,7 +213,7 @@ class TestEventFiltering:
         service.emit_turn_finished("session-1", "turn-uuid-1", "Hello, world!", 100)
 
         assert len(events) == 1
-        assert events[0]["event_name"] == "turnFinished"
+        assert events[0]["event_name"] == "sessionDataTurnFinished"
         assert events[0]["target_clients"] == {"client-a", "client-b"}
 
     @pytest.mark.asyncio

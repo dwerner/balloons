@@ -22,6 +22,17 @@ import type {
   TurnSnapshot,
 } from '../../../generated/types';
 
+// Debug logging to server
+function debugLog(message: string, data?: unknown): void {
+  const payload = { message, data, timestamp: Date.now() };
+  console.log('[useSessionData]', message, data);
+  fetch('/debug-log', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).catch(() => {}); // Ignore errors
+}
+
 /**
  * Internal turn state maintained by the hook.
  * Uses turn_id (UUID) as the key, not turn index.
@@ -77,10 +88,9 @@ export interface UseSessionDataReturn extends UseSessionDataState {
   clear: () => void;
 }
 
-// Generate a unique client ID for this hook instance
-function generateClientId(): string {
-  return `web-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-}
+// Note: Client ID is now injected by the ws_server, not generated client-side.
+// This ensures the client_id used for subscription matches the WebSocket client_id
+// for proper event targeting.
 
 /**
  * Hook for subscribing to session data via SessionDataService
@@ -118,7 +128,6 @@ export function useSessionData(
   const [sessionId, setSessionId] = useState<string | null>(null);
 
   // Refs for cleanup
-  const clientIdRef = useRef<string>(generateClientId());
   const unsubscribersRef = useRef<Unsubscribe[]>([]);
   const currentSessionRef = useRef<string | null>(null);
 
@@ -151,15 +160,17 @@ export function useSessionData(
     unsubscribersRef.current.forEach((unsub) => unsub());
     unsubscribersRef.current = [];
 
-    // Unsubscribe from session on server
-    if (client && currentSessionRef.current) {
+    // Unsubscribe from session on server (only if client is still connected)
+    // Note: Don't pass clientId - let ws_server inject the real client ID
+    if (client && client.isConnected && currentSessionRef.current) {
       try {
         await client.sessionData.unsubscribeSession(
-          currentSessionRef.current,
-          clientIdRef.current
+          currentSessionRef.current
         );
       } catch (err) {
-        console.warn('Failed to unsubscribe from session:', err);
+        // Ignore unsubscribe errors during disconnect - this is expected
+        // when the component unmounts after the client disconnects
+        console.debug('[useSessionData] Unsubscribe skipped (disconnected):', err);
       }
     }
 
@@ -191,15 +202,21 @@ export function useSessionData(
       currentSessionRef.current = newSessionId;
 
       try {
+        console.log(`[useSessionData] Subscribing to session ${newSessionId}`);
+
         // Subscribe to session - returns snapshot atomically with subscription
+        // Note: Don't pass clientId - let ws_server inject the real client ID
         const result = await client.sessionData.subscribeSession(
-          newSessionId,
-          clientIdRef.current
+          newSessionId
         );
+
+        console.log(`[useSessionData] Subscribe result:`, result);
 
         if (!result.subscribed) {
           throw new Error(result.error || 'Subscription failed');
         }
+
+        console.log(`[useSessionData] Subscription successful, snapshot has ${result.snapshot?.turns?.length ?? 0} turns`);
 
         // Convert snapshot turns to our format (snapshot is included in subscribe result)
         const initialTurns = new Map<string, SessionDataTurn>();
@@ -231,15 +248,21 @@ export function useSessionData(
         const handlers: Unsubscribe[] = [];
 
         // Turn created - add new turn
+        debugLog('Setting up sessionDataTurnCreated handler');
         handlers.push(
-          client.sessionData.onTurnCreated((event: SessionTurnCreatedEvent) => {
+          client.sessionData.sessionDataTurnCreated((event: SessionTurnCreatedEvent) => {
+            debugLog('sessionDataTurnCreated received', event);
+
             // Defensive: check if event is valid
             if (!event || typeof event !== 'object') {
               console.warn('[useSessionData] turnCreated received invalid event:', event);
               return;
             }
 
-            if (event.sessionId !== newSessionId) return;
+            if (event.sessionId !== newSessionId) {
+              console.log(`[useSessionData] turnCreated for different session: ${event.sessionId} vs ${newSessionId}`);
+              return;
+            }
 
             const turnId = event.turnId ?? '';
             if (!turnId) {
@@ -278,15 +301,21 @@ export function useSessionData(
         );
 
         // Turn delta - update content
+        debugLog('Setting up sessionDataTurnDelta handler');
         handlers.push(
-          client.sessionData.onTurnDelta((event: SessionTurnDeltaEvent) => {
+          client.sessionData.sessionDataTurnDelta((event: SessionTurnDeltaEvent) => {
+            debugLog('sessionDataTurnDelta received', event);
+
             // Defensive: check if event is valid
             if (!event || typeof event !== 'object') {
-              console.warn('[useSessionData] turnDelta received invalid event:', event);
+              debugLog('turnDelta received invalid event', event);
               return;
             }
 
-            if (event.sessionId !== newSessionId) return;
+            if (event.sessionId !== newSessionId) {
+              debugLog(`turnDelta for different session: ${event.sessionId} vs ${newSessionId}`);
+              return;
+            }
 
             const delta = event.delta ?? '';
             const turnId = event.turnId ?? '';
@@ -345,7 +374,7 @@ export function useSessionData(
 
         // Turn finished - finalize turn
         handlers.push(
-          client.sessionData.onTurnFinished((event: SessionTurnFinishedEvent) => {
+          client.sessionData.sessionDataTurnFinished((event: SessionTurnFinishedEvent) => {
             // Debug: log raw event to understand what we're receiving
             console.log('[useSessionData] turnFinished raw event:', event);
 
