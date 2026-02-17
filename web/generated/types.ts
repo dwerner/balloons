@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-16T15:21:26.941809
+// Generated: 2026-02-17T12:24:13.406367
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -344,6 +344,72 @@ export interface ToolResultEvent {
   result: string;
   isError: boolean;
   toolIndex: number;
+}
+
+export interface TurnDelta {
+  sessionId: string;
+  turnId: string;
+  delta: string;
+  accumulatedLength: number;
+  exchangeId?: string | null;
+}
+
+export interface TurnSnapshot {
+  turnId: string;
+  idx: number;
+  role: string;
+  content: string;
+  streaming: boolean;
+  viewed: boolean;
+  tokens: number;
+  contextMode: string;
+  contentBlockType?: string;
+  exchangeId?: string | null;
+}
+
+export interface SessionSnapshot {
+  sessionId: string;
+  title: string;
+  model: string;
+  isStreaming: boolean;
+  turns?: TurnSnapshot[];
+  currentTurnIdx?: number | null;
+  streamingTurnIds?: string[];
+}
+
+export interface SubscriptionResult {
+  sessionId: string;
+  subscribed: boolean;
+  error?: string | null;
+}
+
+export interface SubscribeSessionResult {
+  sessionId: string;
+  subscribed: boolean;
+  snapshot?: SessionSnapshot | null;
+  error?: string | null;
+}
+
+export interface SessionTurnCreatedEvent {
+  sessionId: string;
+  turnId: string;
+  role: string;
+  exchangeId?: string | null;
+  contentBlockType?: string;
+}
+
+export interface SessionTurnDeltaEvent {
+  sessionId: string;
+  turnId: string;
+  delta: string;
+  accumulatedLength: number;
+}
+
+export interface SessionTurnFinishedEvent {
+  sessionId: string;
+  turnId: string;
+  finalContent: string;
+  tokens: number;
 }
 
 export interface ImageUploadResult {

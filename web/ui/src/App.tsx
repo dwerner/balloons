@@ -7,15 +7,16 @@ import { SessionTreeView } from './components/SessionTreeView';
 import { GoalTreeView } from './components/GoalTreeView';
 import { SessionStatusBar } from './components/SessionStatusBar';
 import { StreamingStatusBar } from './components/StreamingStatusBar';
-import { ExchangeListView } from './components/ExchangeView';
 import { ForkProposalTurn } from './components/ForkProposalTurn';
 import { CreateTodoModal, type CreateTodoResult } from './components/CreateTodoModal';
 import { SimpleTurnsView } from './components/SimpleTurnsView';
-import { StreamingCompareView } from './components/StreamingCompareView';
+import { StreamingTurnsView } from './components/StreamingTurnsView';
 import { useWakeLock } from './hooks';
 
 // View mode for conversation display
-type ConversationViewMode = 'turns' | 'exchange' | 'simple' | 'compare';
+// 'simple' uses TreeStateService (server-side state)
+// 'streaming' will use SessionDataService (real-time streaming)
+type ConversationViewMode = 'simple' | 'streaming';
 
 // Tool use state tracked during streaming
 interface ToolUseState {
@@ -751,6 +752,7 @@ export function App() {
   const [toolUses, setToolUses] = useState<ToolUseState[]>([]);
   const [imageAttachments, setImageAttachments] = useState<ImageAttachment[]>([]);
   const [isLoadingTurns, setIsLoadingTurns] = useState(false);
+  const [creatingSessionFor, setCreatingSessionFor] = useState<string | null>(null); // "entityType:entityId" when creating bound session
 
   // Modal state for CreateTodoModal
   const [createTodoModalState, setCreateTodoModalState] = useState<{
@@ -759,12 +761,13 @@ export function App() {
     planTitle: string;
   }>({ isOpen: false, planId: '', planTitle: '' });
 
+  // Conversation view mode - 'simple' (TreeStateService) or 'streaming' (SessionDataService)
   const [conversationViewMode, setConversationViewMode] = useState<ConversationViewMode>(() => {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('balloons:conversation-view');
-      return (stored === 'exchange' || stored === 'turns' || stored === 'simple') ? stored : 'exchange';
+      return stored === 'streaming' ? 'streaming' : 'simple';
     }
-    return 'exchange';
+    return 'simple';
   });
 
   const clientRef = useRef<BalloonsClient | null>(null);
@@ -1613,6 +1616,7 @@ export function App() {
           onOpenCreateTodoModal={(planId, planTitle) => {
             setCreateTodoModalState({ isOpen: true, planId, planTitle });
           }}
+          creatingSessionFor={creatingSessionFor}
           onNewBareSession={async () => {
             const sessionsClient = clientRef.current?.sessions;
             if (!sessionsClient || connectionState !== 'connected') return;
@@ -1623,6 +1627,120 @@ export function App() {
               }
             } catch (error) {
               console.error('Failed to create new session:', error);
+            }
+          }}
+          onNewBoundSession={async (entityType, entityId) => {
+            const client = clientRef.current;
+            const goalsClient = client?.goals;
+            if (!client || !goalsClient || connectionState !== 'connected') {
+              console.error('Cannot create session: client not connected');
+              return;
+            }
+
+            // Set loading state
+            const loadingKey = `${entityType}:${entityId}`;
+            setCreatingSessionFor(loadingKey);
+
+            try {
+              // Determine default role based on entity type
+              const defaultRole = entityType === 'todo' ? 'implementation' : 'planning';
+
+              // Load entity data for naming and initial prompt
+              let entityTitle = '';
+              let entityDescription = '';
+              let parentGoalTitle = '';
+              let parentPlanTitle = '';
+
+              if (entityType === 'goal') {
+                const goal = await goalsClient.getGoal(entityId);
+                entityTitle = goal?.title || 'Unknown Goal';
+                entityDescription = goal?.description || '';
+              } else if (entityType === 'plan') {
+                const plan = await goalsClient.getPlan(entityId);
+                entityTitle = plan?.title || 'Unknown Plan';
+                entityDescription = plan?.description || '';
+                if (plan?.goalId) {
+                  const parentGoal = await goalsClient.getGoal(plan.goalId);
+                  parentGoalTitle = parentGoal?.title || '';
+                }
+              } else if (entityType === 'todo') {
+                const todo = await goalsClient.getTodo(entityId);
+                entityTitle = todo?.title || 'Unknown Todo';
+                entityDescription = todo?.description || '';
+                // Get parent plan for context
+                if (todo?.planIds && todo.planIds.length > 0) {
+                  const firstPlanId = todo.planIds[0];
+                  if (firstPlanId) {
+                    const plan = await goalsClient.getPlan(firstPlanId);
+                    parentPlanTitle = plan?.title || '';
+                    if (plan?.goalId) {
+                      const parentGoal = await goalsClient.getGoal(plan.goalId);
+                      parentGoalTitle = parentGoal?.title || '';
+                    }
+                  }
+                }
+              }
+
+              // Create a new session
+              const newSession = await client.sessions.createSession();
+
+              // Generate session title: "[role-abbrev] Entity Title"
+              const roleAbbrev: Record<string, string> = {
+                implementation: 'impl',
+                planning: 'plan',
+                interview: 'int',
+                postmortem: 'post',
+                exploration: 'exp',
+              };
+              const abbrev = roleAbbrev[defaultRole] || defaultRole.slice(0, 4);
+              let sessionTitle = `[${abbrev}] ${entityTitle}`;
+              if (sessionTitle.length > 60) {
+                sessionTitle = sessionTitle.slice(0, 57) + '...';
+              }
+
+              // Bind the session to the entity
+              await goalsClient.bindSession(
+                entityType,
+                entityId,
+                newSession.id,
+                sessionTitle,
+                defaultRole,
+                0,      // tokenCount
+                false,  // isCurrent
+                false,  // isStreaming
+                undefined // forkStatus
+              );
+
+              // Generate initial prompt based on entity type and role
+              let initialPrompt = '';
+              const context = parentPlanTitle
+                ? `Plan: ${parentPlanTitle}${parentGoalTitle ? `\nGoal: ${parentGoalTitle}` : ''}`
+                : parentGoalTitle
+                  ? `Goal: ${parentGoalTitle}`
+                  : '';
+
+              if (defaultRole === 'implementation') {
+                initialPrompt = `Let's implement this task:\n\n**${entityTitle}**\n\n${entityDescription || '(No description provided)'}\n\n${context}\n\nI'm ready to start. Please begin the implementation.`;
+              } else if (defaultRole === 'planning') {
+                initialPrompt = `Let's create a plan for this ${entityType}:\n\n**${entityTitle}**\n\n${entityDescription || '(No description provided)'}\n\n${context}\n\nPlease help me break this down into concrete steps.`;
+              }
+
+              // Submit the initial prompt to start the conversation
+              if (initialPrompt) {
+                await client.sessions.submitMessage(newSession.id, initialPrompt);
+              }
+
+              // Refresh the session list
+              const sessionList = await client.tree.getAllSessions();
+              setSessions(sessionList);
+
+              // Switch to the new session
+              handleSelectSession(newSession.id);
+            } catch (err) {
+              console.error('Failed to create bound session:', err);
+              setError(`Failed to create session: ${err}`);
+            } finally {
+              setCreatingSessionFor(null);
             }
           }}
         />
@@ -1646,72 +1764,37 @@ export function App() {
             {/* View mode toggle */}
             <div className="conversation-view-toggle">
               <button
-                className={`view-toggle-btn ${conversationViewMode === 'exchange' ? 'active' : ''}`}
-                onClick={() => {
-                  setConversationViewMode('exchange');
-                  localStorage.setItem('balloons:conversation-view', 'exchange');
-                }}
-                title="Exchange view - grouped by conversation exchange"
-              >
-                Exchange
-              </button>
-              <button
-                className={`view-toggle-btn ${conversationViewMode === 'turns' ? 'active' : ''}`}
-                onClick={() => {
-                  setConversationViewMode('turns');
-                  localStorage.setItem('balloons:conversation-view', 'turns');
-                }}
-                title="Turn list view - flat list of all turns"
-              >
-                Turns
-              </button>
-              <button
                 className={`view-toggle-btn ${conversationViewMode === 'simple' ? 'active' : ''}`}
                 onClick={() => {
                   setConversationViewMode('simple');
                   localStorage.setItem('balloons:conversation-view', 'simple');
                 }}
-                title="Simple view - fresh implementation"
+                title="Simple view - uses TreeStateService"
               >
                 Simple
               </button>
               <button
-                className={`view-toggle-btn ${conversationViewMode === 'compare' ? 'active' : ''}`}
+                className={`view-toggle-btn ${conversationViewMode === 'streaming' ? 'active' : ''}`}
                 onClick={() => {
-                  setConversationViewMode('compare');
-                  localStorage.setItem('balloons:conversation-view', 'compare');
+                  setConversationViewMode('streaming');
+                  localStorage.setItem('balloons:conversation-view', 'streaming');
                 }}
-                title="Compare view - debug streaming vs server state"
+                title="Streaming view - uses SessionDataService (WIP)"
               >
-                Compare
+                Streaming
               </button>
             </div>
 
             <div className="turns-container">
-              {conversationViewMode === 'compare' && clientRef.current && connectionState === 'connected' ? (
-                <StreamingCompareView
-                  sessionId={selectedSessionId}
-                  client={clientRef.current}
-                  onCopyToInput={(content) => setMessage(content)}
-                />
-              ) : conversationViewMode === 'simple' && clientRef.current && connectionState === 'connected' ? (
+              {conversationViewMode === 'simple' && clientRef.current && connectionState === 'connected' ? (
                 <SimpleTurnsView sessionId={selectedSessionId} client={clientRef.current} />
-              ) : isLoadingTurns ? (
-                <div className="empty-state">
-                  <h2>Loading...</h2>
-                  <p>Loading session messages.</p>
-                </div>
-              ) : turns.length === 0 ? (
-                <div className="empty-state">
-                  <h2>No Messages Yet</h2>
-                  <p>Send a message to start the conversation.</p>
-                </div>
-              ) : conversationViewMode === 'exchange' ? (
-                <ExchangeListView turns={turns} toolUses={toolUses} />
+              ) : conversationViewMode === 'streaming' && clientRef.current && connectionState === 'connected' ? (
+                <StreamingTurnsView sessionId={selectedSessionId} client={clientRef.current} />
               ) : (
-                turns.map(turn => (
-                  <SimpleTurn key={`simple-${turn.idx}`} turn={turn} />
-                ))
+                <div className="empty-state">
+                  <h2>Connecting...</h2>
+                  <p>Waiting for connection.</p>
+                </div>
               )}
               <div ref={turnsEndRef} />
             </div>
@@ -1902,6 +1985,8 @@ interface SidebarContentProps {
   goalsClient?: GoalTreeStateServiceClient;
   onOpenCreateTodoModal?: (planId: string, planTitle: string) => void;
   onNewBareSession?: () => void;
+  onNewBoundSession?: (entityType: string, entityId: string) => Promise<void>;
+  creatingSessionFor?: string | null; // "entityType:entityId" when creating bound session
 }
 
 function SidebarContent({
@@ -1915,6 +2000,8 @@ function SidebarContent({
   goalsClient,
   onOpenCreateTodoModal,
   onNewBareSession,
+  onNewBoundSession,
+  creatingSessionFor = null,
 }: SidebarContentProps) {
   const { closeSidebar, layoutMode } = useLayout();
   const { resolvedTheme, toggleTheme } = useTheme();
@@ -2050,8 +2137,9 @@ function SidebarContent({
             }
           }}
           onNewSession={(entityType, entityId) => {
-            // TODO: Create new session bound to entity
-            console.log('New session for:', entityType, entityId);
+            if (onNewBoundSession) {
+              onNewBoundSession(entityType, entityId);
+            }
           }}
           onMarkTodoDone={(todoId) => {
             // Update todo status to completed
@@ -2090,6 +2178,7 @@ function SidebarContent({
           }}
           onNewBareSession={onNewBareSession}
           isLoading={connectionState !== 'connected'}
+          creatingSessionFor={creatingSessionFor}
         />
       ) : viewMode === 'tree' ? (
         <SessionTreeView

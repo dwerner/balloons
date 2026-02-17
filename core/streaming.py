@@ -98,6 +98,8 @@ class StreamingContext:
     tool_events: dict = None
     # Track tool_use_id -> turn_idx mapping for finish_turn calls
     tool_turn_indices: dict = None
+    # Track (tool_use_id, turn_type) -> turn_id mapping for emit calls
+    tool_turn_ids: dict = None
     # Track tool_use_id -> tool_name for tools that need post-result actions
     tool_names: dict = None
     # Helper task tracking (for context compression, merge summaries, archives, links)
@@ -116,6 +118,7 @@ class StreamingContext:
     # Track the final text turn for emit on done
     # -1 means no final text turn to emit (already flushed via TextFlushAction)
     final_turn_idx: int = -1
+    final_turn_id: str = ""  # Stable UUID for the final text turn
     final_text_content: str = ""
     # Track total tool count for this exchange
     tool_count: int = 0
@@ -125,6 +128,8 @@ class StreamingContext:
             self.tool_events = {}
         if self.tool_turn_indices is None:
             self.tool_turn_indices = {}
+        if self.tool_turn_ids is None:
+            self.tool_turn_ids = {}
         if self.tool_names is None:
             self.tool_names = {}
 
@@ -150,6 +155,7 @@ class TextFlushAction(StreamingAction):
     """Text segment complete (before tool use). Commit accumulated text as a visible node."""
     text: str
     turn_idx: int  # The turn index to finish
+    turn_id: str = ""  # Stable UUID for the turn
 
 
 @dataclass
@@ -198,6 +204,7 @@ class ToolResultAction(StreamingAction):
     tool_use_id: str
     result: str
     tool_index: int
+    turn_id: str = ""  # Stable UUID for the turn
 
 
 @dataclass
@@ -265,6 +272,7 @@ class TurnStartedAction(StreamingAction):
     turns (tool_use, tool_result) need their own TurnStartedAction.
     """
     turn_idx: int
+    turn_id: str  # Stable UUID for the turn
     role: str  # "assistant" for tool_use, "tool" for tool_result
     exchange_id: str
     turn_type: str  # "text", "tool_use", "tool_result"
@@ -326,6 +334,7 @@ class StreamingCoordinator:
             return TurnStartedAction(
                 session_id=session_id,
                 turn_idx=data.get("turn_index", 0),
+                turn_id=data.get("turn_id", ""),
                 role=data.get("role", "assistant"),
                 exchange_id=data.get("exchange_id", ""),
                 turn_type="text",
@@ -337,6 +346,7 @@ class StreamingCoordinator:
             return TurnStartedAction(
                 session_id=session_id,
                 turn_idx=data.get("turn_index", 0),
+                turn_id=data.get("turn_id", ""),
                 role=data.get("role", "assistant"),
                 exchange_id=data.get("exchange_id", ""),
                 turn_type="tool_use",
@@ -350,6 +360,7 @@ class StreamingCoordinator:
             return TurnStartedAction(
                 session_id=session_id,
                 turn_idx=data.get("turn_index", 0),
+                turn_id=data.get("turn_id", ""),
                 role=data.get("role", "tool"),
                 exchange_id=data.get("exchange_id", ""),
                 turn_type="tool_result",
@@ -366,7 +377,8 @@ class StreamingCoordinator:
             # Text segment complete (before tool use) - commit as visible node
             text = event.data.get("text", "")
             turn_idx = event.data.get("turn_index", 0)
-            return TextFlushAction(session_id=session_id, text=text, turn_idx=turn_idx)
+            turn_id = event.data.get("turn_id", "")
+            return TextFlushAction(session_id=session_id, text=text, turn_idx=turn_idx, turn_id=turn_id)
 
         elif event.event_type == "init":
             return InitAction(
@@ -448,6 +460,7 @@ class StreamingCoordinator:
             tool_use_id = data.get("tool_use_id")
             result = data.get("result", "")
             tool_index = data.get("tool_index", 0)
+            turn_id = data.get("turn_id", "")
 
             # Track tool result for session resume
             if tool_use_id in ctx.tool_events:
@@ -458,6 +471,7 @@ class StreamingCoordinator:
                 tool_use_id=tool_use_id,
                 result=result,
                 tool_index=tool_index,
+                turn_id=turn_id,
             )
 
         elif event.event_type == "done":

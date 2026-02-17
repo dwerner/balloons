@@ -157,6 +157,7 @@ from service import (
     SessionManagerService,
     GoalTreeStateService,
     TaskStateService,
+    SessionDataService,
     ImageService,
 )
 
@@ -386,6 +387,8 @@ class BalloonsApp(App):
         self._ws_server: WsServer | None = None
         # Task state service for emitting streaming events to WebSocket clients
         self._task_service: TaskStateService | None = None
+        # Session data service for subscription-based streaming (new path)
+        self._session_data_service: SessionDataService | None = None
         # Session manager service for handling submit_message and event pump
         self._session_service: SessionManagerService | None = None
 
@@ -699,12 +702,16 @@ class BalloonsApp(App):
             goal_service.set_llm_runner(self._helper_runner)
             # Store task_service as instance variable so we can emit streaming events from poll loop
             self._task_service = TaskStateService(get_stream_state())
+            # SessionDataService for subscription-based streaming (new path, runs parallel to TaskStateService)
+            self._session_data_service = SessionDataService()
             image_service = ImageService()
 
             # Wire up event pump: SessionManagerService emits streaming events via TaskStateService
             self._session_service.set_task_state_service(self._task_service)
             # Wire up TreeState so React can see turns via getTurns() after submitMessage()
             self._session_service.set_tree_state(self._tree_state)
+            # Wire up SessionDataService to SessionManagerService (enables TreeState for snapshots)
+            self._session_service.set_session_data_service(self._session_data_service)
             self._session_service.start_event_pump()
 
             # Subscribe to MESSAGE_SUBMITTED events so TUI can track streams started by React frontend
@@ -715,6 +722,7 @@ class BalloonsApp(App):
             self._ws_server.register_service(self._session_service)
             self._ws_server.register_service(goal_service)
             self._ws_server.register_service(self._task_service)
+            self._ws_server.register_service(self._session_data_service)
             self._ws_server.register_service(image_service)
 
             # Start the server
@@ -742,6 +750,7 @@ class BalloonsApp(App):
             finally:
                 self._session_service = None
                 self._task_service = None
+                self._session_data_service = None
                 self._ws_server = None
 
     def _on_session_manager_event(self, event_name: str, data: dict) -> None:
@@ -1159,7 +1168,7 @@ class BalloonsApp(App):
             approx_tokens = len(ctx.content) // 4
             get_stream_state().update_stream(ctx.exchange_id, tokens_streamed=approx_tokens)
 
-            # Emit content delta event for WebSocket clients
+            # Emit content delta event for WebSocket clients (TaskStateService - old path)
             if self._task_service is not None:
                 self._task_service.emit_content_delta(
                     session_id=session_id,
@@ -1167,6 +1176,14 @@ class BalloonsApp(App):
                     turn_index=ctx.assistant_turn_idx,
                     delta=action.text,
                     accumulated=ctx.content,
+                )
+            # Emit turn delta event for WebSocket clients (SessionDataService - new path)
+            if self._session_data_service is not None:
+                self._session_data_service.emit_turn_delta(
+                    session_id=session_id,
+                    turn_id=ctx.final_turn_id or str(ctx.assistant_turn_idx),
+                    delta=action.text,
+                    accumulated_length=len(ctx.content),
                 )
 
             if is_active:
@@ -1191,7 +1208,7 @@ class BalloonsApp(App):
                 session_id, action.turn_idx, action.text, content_block, []
             )
 
-            # Emit turn finished event for WebSocket clients
+            # Emit turn finished event for WebSocket clients (TaskStateService - old path)
             if self._task_service is not None:
                 self._task_service.emit_turn_finished(
                     session_id=session_id,
@@ -1200,9 +1217,19 @@ class BalloonsApp(App):
                     role="assistant",
                     content=action.text,
                 )
+            # Emit turn finished event for WebSocket clients (SessionDataService - new path)
+            if self._session_data_service is not None:
+                approx_tokens = len(action.text) // 4
+                self._session_data_service.emit_turn_finished(
+                    session_id=session_id,
+                    turn_id=action.turn_id or str(action.turn_idx),
+                    final_content=action.text,
+                    tokens=approx_tokens,
+                )
 
             # Reset final turn tracking - this text segment is already emitted
             ctx.final_turn_idx = -1
+            ctx.final_turn_id = ""
             ctx.final_text_content = ""
 
         elif isinstance(action, TurnStartedAction):
@@ -1223,11 +1250,13 @@ class BalloonsApp(App):
             # We need the turn_type in the key because tool_use and tool_result share the same tool_use_id
             if action.tool_use_id and action.turn_type in ("tool_use", "tool_result"):
                 ctx.tool_turn_indices[(action.tool_use_id, action.turn_type)] = action.turn_idx
+                ctx.tool_turn_ids[(action.tool_use_id, action.turn_type)] = action.turn_id
             # Update assistant_turn_idx when a new text turn starts (after tool results)
             if action.turn_type in ("text", "text_turn") and action.role == "assistant":
                 ctx.assistant_turn_idx = action.turn_idx
                 # Reset final text tracking for the new turn
                 ctx.final_turn_idx = action.turn_idx
+                ctx.final_turn_id = action.turn_id
                 ctx.final_text_content = ""
             if action.turn_type == "tool_use":
                 debug_log.debug(
@@ -1242,7 +1271,7 @@ class BalloonsApp(App):
                     category="stream",
                 )
 
-            # Emit turn started event for WebSocket clients
+            # Emit turn started event for WebSocket clients (TaskStateService - old path)
             if self._task_service is not None:
                 self._task_service.emit_turn_started(
                     session_id=session_id,
@@ -1250,6 +1279,15 @@ class BalloonsApp(App):
                     turn_index=action.turn_idx,
                     role=action.role,
                     turn_type=action.turn_type,
+                )
+            # Emit turn created event for WebSocket clients (SessionDataService - new path)
+            if self._session_data_service is not None:
+                self._session_data_service.emit_turn_created(
+                    session_id=session_id,
+                    turn_id=action.turn_id or str(action.turn_idx),
+                    role=action.role,
+                    exchange_id=action.exchange_id,
+                    content_block_type=action.turn_type or "text",
                 )
 
         elif isinstance(action, InitAction):
@@ -1441,7 +1479,7 @@ class BalloonsApp(App):
                 tool_name=None,
             )
 
-            # Emit tool result event for WebSocket clients
+            # Emit tool result event for WebSocket clients (TaskStateService - old path)
             if self._task_service is not None:
                 tool_turn_idx = turn_idx if turn_idx is not None else ctx.assistant_turn_idx
                 tool_name = ctx.tool_names.get(action.tool_use_id, "")
@@ -1454,6 +1492,17 @@ class BalloonsApp(App):
                     result=action.result,
                     is_error=False,  # ToolResultAction doesn't track errors separately
                     tool_index=action.tool_index,
+                )
+            # Emit turn finished event for WebSocket clients (SessionDataService - new path)
+            if self._session_data_service is not None and turn_idx is not None:
+                approx_tokens = len(action.result) // 4 if action.result else 0
+                # Get turn_id from action, stored mapping, or fallback to turn_idx
+                turn_id = action.turn_id or ctx.tool_turn_ids.get((action.tool_use_id, "tool_result"), "") or str(turn_idx)
+                self._session_data_service.emit_turn_finished(
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    final_content=action.result,
+                    tokens=approx_tokens,
                 )
 
             # Refresh slides pane when create_slide tool completes
@@ -1501,6 +1550,15 @@ class BalloonsApp(App):
                     turn_index=ctx.final_turn_idx,
                     role="assistant",
                     content=ctx.final_text_content,
+                )
+            # Emit turn finished event for WebSocket clients (SessionDataService - new path)
+            if self._session_data_service is not None and ctx.final_turn_idx >= 0:
+                approx_tokens = len(ctx.final_text_content) // 4
+                self._session_data_service.emit_turn_finished(
+                    session_id=session_id,
+                    turn_id=ctx.final_turn_id or str(ctx.final_turn_idx),
+                    final_content=ctx.final_text_content,
+                    tokens=approx_tokens,
                 )
 
             await self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar)

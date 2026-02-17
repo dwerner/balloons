@@ -16,7 +16,9 @@ Example usage:
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Callable, Any, Optional
+import uuid
 
 from codegen import ws_service, ws_expose, ws_event, ws_type
 from core.goal_tree_state import (
@@ -27,8 +29,9 @@ from core.goal_tree_state import (
     TodoNodeData,
     SessionNodeData,
 )
-from storage_schema import GoalData, PlanData, TodoData
+from storage_schema import GoalData, PlanData, TodoData, SessionBinding
 from core.smart_todo import create_todo_with_llm_placement
+from core.async_storage import get_goal_storage
 
 
 # =============================================================================
@@ -630,6 +633,7 @@ class GoalTreeStateService:
             is_streaming: Whether the session is streaming
             fork_status: Fork status of the session
         """
+        # Update UI state
         session = SessionNodeData(
             session_id=session_id,
             name=name,
@@ -640,6 +644,18 @@ class GoalTreeStateService:
             binding_role=binding_role,
         )
         self._state.bind_session(entity_type, entity_id, session)
+
+        # Persist binding to storage
+        storage = await get_goal_storage()
+        binding = SessionBinding(
+            id=str(uuid.uuid4()),
+            session_id=session_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            role=binding_role or "implementation",
+            created_at=datetime.now().isoformat(),
+        )
+        await storage.save_session_binding(binding)
 
     @ws_expose
     async def unbind_session(self, entity_id: str, session_id: str) -> None:

@@ -115,20 +115,27 @@ function ActionButton({
   label,
   onClick,
   variant = 'default',
+  isLoading = false,
+  disabled = false,
 }: {
   label: string;
   onClick: (e: React.MouseEvent) => void;
   variant?: 'default' | 'success' | 'warning' | 'danger' | 'cyan' | 'magenta' | 'yellow';
+  isLoading?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <button
-      className={`goal-tree-action goal-tree-action--${variant}`}
+      className={`goal-tree-action goal-tree-action--${variant}${isLoading ? ' goal-tree-action--loading' : ''}`}
       onClick={(e) => {
         e.stopPropagation();
-        onClick(e);
+        if (!isLoading && !disabled) {
+          onClick(e);
+        }
       }}
+      disabled={isLoading || disabled}
     >
-      {label}
+      {isLoading ? '...' : label}
     </button>
   );
 }
@@ -212,6 +219,7 @@ interface TodoNodeProps {
   onUnbindSession?: (sessionId: string) => void;
   hoveredNodeId: string | null;
   setHoveredNodeId: (id: string | null) => void;
+  creatingSessionFor?: string | null;
 }
 
 const TodoNode = memo(function TodoNode({
@@ -229,7 +237,9 @@ const TodoNode = memo(function TodoNode({
   onUnbindSession,
   hoveredNodeId,
   setHoveredNodeId,
+  creatingSessionFor = null,
 }: TodoNodeProps) {
+  const isCreatingSession = creatingSessionFor === `todo:${todo.id}`;
   const hasSessions = sessions.length > 0;
 
   return (
@@ -267,7 +277,7 @@ const TodoNode = memo(function TodoNode({
             {todo.status === 'completed' && onMarkUndone && (
               <ActionButton label="[!done]" onClick={() => onMarkUndone()} variant="warning" />
             )}
-            {onNewSession && <ActionButton label="[+session]" onClick={() => onNewSession()} variant="success" />}
+            {onNewSession && <ActionButton label="[+session]" onClick={() => onNewSession()} variant="success" isLoading={isCreatingSession} />}
           </span>
         )}
       </div>
@@ -310,6 +320,7 @@ interface PlanNodeProps {
   onUnbindSession?: (sessionId: string) => void;
   hoveredNodeId: string | null;
   setHoveredNodeId: (id: string | null) => void;
+  creatingSessionFor?: string | null;
 }
 
 const PlanNode = memo(function PlanNode({
@@ -331,7 +342,9 @@ const PlanNode = memo(function PlanNode({
   onUnbindSession,
   hoveredNodeId,
   setHoveredNodeId,
+  creatingSessionFor = null,
 }: PlanNodeProps) {
+  const isCreatingSession = creatingSessionFor === `plan:${plan.id}`;
   const hasChildren = todos.length > 0 || planSessions.length > 0;
   const isExpanded = expandedIds.has(plan.id);
   const isHovered = hoveredNodeId === `plan:${plan.id}`;
@@ -364,7 +377,7 @@ const PlanNode = memo(function PlanNode({
           <span className="goal-tree-node__actions">
             {onNewTodo && <ActionButton label="[+todo]" onClick={() => onNewTodo()} variant="magenta" />}
             {onRollup && <ActionButton label="[+rollup]" onClick={() => onRollup()} variant="yellow" />}
-            {onNewSession && <ActionButton label="[+session]" onClick={() => onNewSession()} variant="success" />}
+            {onNewSession && <ActionButton label="[+session]" onClick={() => onNewSession()} variant="success" isLoading={isCreatingSession} />}
           </span>
         )}
       </div>
@@ -388,6 +401,7 @@ const PlanNode = memo(function PlanNode({
               onUnbindSession={onUnbindSession}
               hoveredNodeId={hoveredNodeId}
               setHoveredNodeId={setHoveredNodeId}
+              creatingSessionFor={creatingSessionFor}
             />
           ))}
           {planSessions.map((session) => (
@@ -442,6 +456,7 @@ interface GoalNodeProps {
   onUnbindSession?: (sessionId: string) => void;
   hoveredNodeId: string | null;
   setHoveredNodeId: (id: string | null) => void;
+  creatingSessionFor?: string | null;
   renderGoalNode: (
     goal: GoalInfo,
     data: {
@@ -483,8 +498,10 @@ const GoalNode = memo(function GoalNode({
   onUnbindSession,
   hoveredNodeId,
   setHoveredNodeId,
+  creatingSessionFor = null,
   renderGoalNode,
 }: GoalNodeProps) {
+  const isCreatingSession = creatingSessionFor === `goal:${goal.id}`;
   const hasChildren = plans.length > 0 || goalSessions.length > 0 || childGoals.length > 0;
   const isExpanded = expandedIds.has(goal.id);
   const isHovered = hoveredNodeId === `goal:${goal.id}`;
@@ -521,7 +538,7 @@ const GoalNode = memo(function GoalNode({
           <span className="goal-tree-node__actions">
             {onNewPlan && <ActionButton label="[+plan]" onClick={() => onNewPlan()} variant="cyan" />}
             {onRollup && <ActionButton label="[+rollup]" onClick={() => onRollup()} variant="yellow" />}
-            {onNewSession && <ActionButton label="[+session]" onClick={() => onNewSession()} variant="success" />}
+            {onNewSession && <ActionButton label="[+session]" onClick={() => onNewSession()} variant="success" isLoading={isCreatingSession} />}
           </span>
         )}
       </div>
@@ -557,6 +574,7 @@ const GoalNode = memo(function GoalNode({
               onUnbindSession={onUnbindSession}
               hoveredNodeId={hoveredNodeId}
               setHoveredNodeId={setHoveredNodeId}
+              creatingSessionFor={creatingSessionFor}
             />
           ))}
 
@@ -650,6 +668,9 @@ export interface GoalTreeViewProps {
 
   /** Loading state */
   isLoading?: boolean;
+
+  /** Currently creating a bound session for this entity ("entityType:entityId") */
+  creatingSessionFor?: string | null;
 }
 
 // Main component
@@ -669,6 +690,7 @@ export const GoalTreeView = memo(function GoalTreeView({
   onUnbindSession,
   onRollup,
   isLoading = false,
+  creatingSessionFor = null,
 }: GoalTreeViewProps) {
   // State for tree data
   const [goals, setGoals] = useState<GoalInfo[]>(initialGoals);
@@ -1017,6 +1039,7 @@ export const GoalTreeView = memo(function GoalTreeView({
           onUnbindSession={onUnbindSession}
           hoveredNodeId={hoveredNodeId}
           setHoveredNodeId={setHoveredNodeId}
+          creatingSessionFor={creatingSessionFor}
           renderGoalNode={renderGoalNode}
         />
       );
@@ -1039,6 +1062,7 @@ export const GoalTreeView = memo(function GoalTreeView({
       onRollup,
       onSelectSession,
       hoveredNodeId,
+      creatingSessionFor,
     ]
   );
 

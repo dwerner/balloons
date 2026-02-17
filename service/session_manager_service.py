@@ -55,6 +55,7 @@ from models import TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock
 
 if TYPE_CHECKING:
     from service.task_state_service import TaskStateService
+    from service.session_data_service import SessionDataService
 
 
 class SessionManagerEvent(Enum):
@@ -152,19 +153,22 @@ class ImageAttachment:
 class _StreamingContext:
     """Internal context for tracking streaming state per session.
 
-    Used by the event pump to accumulate content and track turn indices.
+    Used by the event pump to accumulate content and track turn indices/IDs.
     """
 
     session_id: str
     exchange_id: str
     # Turn tracking
     user_turn_idx: int  # Index of the user message turn
+    user_turn_id: str = ""  # Stable UUID for the user turn
     assistant_turn_idx: int = -1  # Index of current assistant turn (text or tool_use)
+    assistant_turn_id: str = ""  # Stable UUID for the assistant turn
     # Content accumulation
     content: str = ""  # Accumulated text content for current assistant turn
     # Tool tracking
     tool_count: int = 0
     tool_turn_indices: dict = field(default_factory=dict)  # (tool_use_id, turn_type) -> turn_idx
+    tool_turn_ids: dict = field(default_factory=dict)  # (tool_use_id, turn_type) -> turn_id
     tool_names: dict = field(default_factory=dict)  # tool_use_id -> tool_name
 
 
@@ -185,6 +189,7 @@ class SessionManagerService:
         session_manager: SessionManager,
         stream_state: StreamState | None = None,
         task_state_service: "TaskStateService | None" = None,
+        session_data_service: "SessionDataService | None" = None,
     ):
         """Initialize service with a SessionManager instance.
 
@@ -193,10 +198,13 @@ class SessionManagerService:
             stream_state: Optional StreamState for tracking streaming. Uses global if not provided.
             task_state_service: Optional TaskStateService for emitting streaming events.
                                If provided, the event pump will relay events to frontends.
+            session_data_service: Optional SessionDataService for emitting session data events.
+                                 If provided, events will be emitted in parallel with TaskStateService.
         """
         self._manager = session_manager
         self._stream_state = stream_state or get_stream_state()
         self._task_service = task_state_service
+        self._session_data_service = session_data_service
         self._tree_state: TreeState | None = None
         self._event_handlers: list[Callable[[str, dict], None]] = []
 
@@ -233,6 +241,26 @@ class SessionManagerService:
         """
         self._task_service = task_service
 
+    def set_session_data_service(self, session_data_service: "SessionDataService") -> None:
+        """Set the SessionDataService for emitting session data events.
+
+        This enables the event pump to relay events to SessionDataService in parallel
+        with TaskStateService. SessionDataService provides subscription-based filtering
+        so only subscribed clients receive events.
+
+        Also wires the TreeState and session loader to SessionDataService,
+        enabling get_session_snapshot() to return full turn history.
+
+        Args:
+            session_data_service: The SessionDataService to emit events through
+        """
+        self._session_data_service = session_data_service
+        # Wire TreeState if already set
+        if self._tree_state:
+            session_data_service.set_tree_state(self._tree_state)
+        # Wire session loader so SessionDataService can load sessions from storage
+        session_data_service.set_session_loader(self._manager.load_session)
+
     def set_tree_state(self, tree_state: TreeState) -> None:
         """Set the TreeState for updating turn data when messages are submitted.
 
@@ -240,10 +268,16 @@ class SessionManagerService:
         can see the new turns via getTurns(). Without this, turns would only be
         saved to storage but not visible to WebSocket clients querying TreeState.
 
+        Also wires TreeState to SessionDataService if configured, enabling
+        get_session_snapshot() to return full turn history.
+
         Args:
             tree_state: The TreeState instance to update
         """
         self._tree_state = tree_state
+        # Also wire to SessionDataService for snapshot loading
+        if self._session_data_service:
+            self._session_data_service.set_tree_state(tree_state)
 
     def start_event_pump(self) -> None:
         """Start the event pump for relaying streaming events.
@@ -346,16 +380,17 @@ class SessionManagerService:
     async def _dispatch_event(
         self, session_id: str, event: Any, ctx: _StreamingContext
     ) -> None:
-        """Dispatch a single streaming event to TaskStateService.
+        """Dispatch a single streaming event to TaskStateService and SessionDataService.
 
-        Converts SessionRunner events to TaskStateService emit calls.
+        Converts SessionRunner events to service emit calls. Both services receive
+        events in parallel when available.
 
         Args:
             session_id: The session this event belongs to
             event: StreamEvent from the SessionRunner
             ctx: Streaming context for tracking state
         """
-        if not self._task_service:
+        if not self._task_service and not self._session_data_service:
             return
 
         event_type = event.event_type
@@ -364,12 +399,21 @@ class SessionManagerService:
         if event_type == "turn_started":
             # Initial turn_started event - update context with turn info
             ctx.assistant_turn_idx = data.get("turn_index", ctx.user_turn_idx + 1)
-            self._task_service.emit_turn_started(
-                session_id=session_id,
-                exchange_id=ctx.exchange_id,
-                turn_index=ctx.assistant_turn_idx,
-                role="assistant",
-            )
+            ctx.assistant_turn_id = data.get("turn_id", "")
+            if self._task_service:
+                self._task_service.emit_turn_started(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    turn_index=ctx.assistant_turn_idx,
+                    role="assistant",
+                )
+            if self._session_data_service:
+                self._session_data_service.emit_turn_created(
+                    session_id=session_id,
+                    turn_id=ctx.assistant_turn_id,
+                    role="assistant",
+                    exchange_id=ctx.exchange_id,
+                )
 
         elif event_type == "text":
             # Text delta - accumulate and emit
@@ -386,37 +430,64 @@ class SessionManagerService:
             approx_tokens = len(ctx.content) // 4
             self._stream_state.update_stream(ctx.exchange_id, tokens_streamed=approx_tokens)
 
-            self._task_service.emit_content_delta(
-                session_id=session_id,
-                exchange_id=ctx.exchange_id,
-                turn_index=ctx.assistant_turn_idx,
-                delta=text,
-                accumulated=ctx.content,
-            )
+            if self._task_service:
+                self._task_service.emit_content_delta(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    turn_index=ctx.assistant_turn_idx,
+                    delta=text,
+                    accumulated=ctx.content,
+                )
+            if self._session_data_service:
+                self._session_data_service.emit_turn_delta(
+                    session_id=session_id,
+                    turn_id=ctx.assistant_turn_id,
+                    delta=text,
+                    accumulated_length=len(ctx.content),
+                )
 
         elif event_type == "text_flush":
             # Text segment complete before tool use
             text = data.get("text", "") if isinstance(data, dict) else ""
             turn_idx = data.get("turn_index", ctx.assistant_turn_idx) if isinstance(data, dict) else ctx.assistant_turn_idx
-            self._task_service.emit_turn_finished(
-                session_id=session_id,
-                exchange_id=ctx.exchange_id,
-                turn_index=turn_idx,
-                role="assistant",
-                content=text,
-            )
+            turn_id = data.get("turn_id", ctx.assistant_turn_id) if isinstance(data, dict) else ctx.assistant_turn_id
+            if self._task_service:
+                self._task_service.emit_turn_finished(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    turn_index=turn_idx,
+                    role="assistant",
+                    content=text,
+                )
+            if self._session_data_service:
+                self._session_data_service.emit_turn_finished(
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    final_content=text,
+                    tokens=len(text) // 4,  # Approximate token count
+                )
 
         elif event_type == "text_turn_started":
             # Text turn started - update context and emit turn_started
             turn_idx = data.get("turn_index", ctx.assistant_turn_idx) if isinstance(data, dict) else ctx.assistant_turn_idx
+            turn_id = data.get("turn_id", "") if isinstance(data, dict) else ""
             ctx.assistant_turn_idx = turn_idx  # Update for subsequent content deltas
+            ctx.assistant_turn_id = turn_id  # Update turn_id for subsequent events
             ctx.content = ""  # Reset accumulated content for new turn
-            self._task_service.emit_turn_started(
-                session_id=session_id,
-                exchange_id=ctx.exchange_id,
-                turn_index=turn_idx,
-                role="assistant",
-            )
+            if self._task_service:
+                self._task_service.emit_turn_started(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    turn_index=turn_idx,
+                    role="assistant",
+                )
+            if self._session_data_service:
+                self._session_data_service.emit_turn_created(
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    role="assistant",
+                    exchange_id=ctx.exchange_id,
+                )
 
         elif event_type == "tool_use_start":
             # Tool use started - update context and emit
@@ -438,39 +509,55 @@ class SessionManagerService:
 
             # Emit toolUseStarted with the main assistant turn index
             # This shows tool uses alongside the text response
-            self._task_service.emit_tool_use_started(
-                session_id=session_id,
-                exchange_id=ctx.exchange_id,
-                turn_index=ctx.assistant_turn_idx,
-                tool_use_id=tool_use_id,
-                tool_name=tool_name,
-                tool_index=tool_idx,
-            )
+            if self._task_service:
+                self._task_service.emit_tool_use_started(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    turn_index=ctx.assistant_turn_idx,
+                    tool_use_id=tool_use_id,
+                    tool_name=tool_name,
+                    tool_index=tool_idx,
+                )
+            # Note: SessionDataService doesn't have a tool_use_started event
+            # Tool events are specific to TaskStateService's granular streaming model
 
         elif event_type == "tool_input_delta":
             # Tool input JSON streaming
             tool_use_id = data.get("tool_use_id", "")
             partial_json = data.get("partial_json", "")
-            self._task_service.emit_tool_input_delta(
-                session_id=session_id,
-                exchange_id=ctx.exchange_id,
-                tool_use_id=tool_use_id,
-                partial_json=partial_json,
-            )
+            if self._task_service:
+                self._task_service.emit_tool_input_delta(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    tool_use_id=tool_use_id,
+                    partial_json=partial_json,
+                )
+            # Note: SessionDataService doesn't have tool_input_delta - it focuses on turn content
 
         elif event_type == "tool_use_turn_started":
-            # Tool use turn started - track turn index
+            # Tool use turn started - track turn index and ID
             turn_idx = data.get("turn_index", ctx.assistant_turn_idx) if isinstance(data, dict) else ctx.assistant_turn_idx
+            turn_id = data.get("turn_id", "") if isinstance(data, dict) else ""
             tool_use_id = data.get("tool_use_id", "")
             ctx.tool_turn_indices[(tool_use_id, "tool_use")] = turn_idx
+            ctx.tool_turn_ids[(tool_use_id, "tool_use")] = turn_id
 
             # Emit turn started for the tool use turn
-            self._task_service.emit_turn_started(
-                session_id=session_id,
-                exchange_id=ctx.exchange_id,
-                turn_index=turn_idx,
-                role="assistant",
-            )
+            if self._task_service:
+                self._task_service.emit_turn_started(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    turn_index=turn_idx,
+                    role="assistant",
+                )
+            if self._session_data_service:
+                self._session_data_service.emit_turn_created(
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    role="assistant",
+                    exchange_id=ctx.exchange_id,
+                    content_block_type="tool_use",
+                )
 
         elif event_type == "tool_use":
             # Tool input complete - emit tool_use event
@@ -480,27 +567,40 @@ class SessionManagerService:
             tool_idx = data.get("tool_index", 0)
             turn_idx = data.get("turn_index", ctx.assistant_turn_idx)
 
-            self._task_service.emit_tool_use(
-                session_id=session_id,
-                exchange_id=ctx.exchange_id,
-                turn_index=turn_idx,
-                tool_use_id=tool_use_id,
-                tool_name=tool_name,
-                tool_input=tool_input,
-                tool_index=tool_idx,
-            )
+            if self._task_service:
+                self._task_service.emit_tool_use(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    turn_index=turn_idx,
+                    tool_use_id=tool_use_id,
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                    tool_index=tool_idx,
+                )
+            # Note: SessionDataService doesn't have tool_use event - it focuses on turn content
 
         elif event_type == "tool_result_turn_started":
-            # Tool result turn started - track turn index
+            # Tool result turn started - track turn index and ID
             turn_idx = data.get("turn_index", ctx.assistant_turn_idx) if isinstance(data, dict) else ctx.assistant_turn_idx
+            turn_id = data.get("turn_id", "") if isinstance(data, dict) else ""
             tool_use_id = data.get("tool_use_id", "")
             ctx.tool_turn_indices[(tool_use_id, "tool_result")] = turn_idx
-            self._task_service.emit_turn_started(
-                session_id=session_id,
-                exchange_id=ctx.exchange_id,
-                turn_index=turn_idx,
-                role="tool",
-            )
+            ctx.tool_turn_ids[(tool_use_id, "tool_result")] = turn_id
+            if self._task_service:
+                self._task_service.emit_turn_started(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    turn_index=turn_idx,
+                    role="tool",
+                )
+            if self._session_data_service:
+                self._session_data_service.emit_turn_created(
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    role="tool",
+                    exchange_id=ctx.exchange_id,
+                    content_block_type="tool_result",
+                )
 
         elif event_type == "tool_result":
             # Tool execution complete
@@ -508,6 +608,7 @@ class SessionManagerService:
             result = data.get("result", "")
             tool_idx = data.get("tool_index", 0)
             turn_idx = data.get("turn_index", ctx.assistant_turn_idx)
+            turn_id = data.get("turn_id", ctx.tool_turn_ids.get((tool_use_id, "tool_result"), ""))
             tool_name = ctx.tool_names.get(tool_use_id, "")
 
             # Update stream state - back to streaming
@@ -517,19 +618,30 @@ class SessionManagerService:
                 tool_name=None,
             )
 
-            self._task_service.emit_tool_result(
-                session_id=session_id,
-                exchange_id=ctx.exchange_id,
-                turn_index=turn_idx,
-                tool_use_id=tool_use_id,
-                tool_name=tool_name,
-                result=result,
-                is_error=False,
-                tool_index=tool_idx,
-            )
+            if self._task_service:
+                self._task_service.emit_tool_result(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    turn_index=turn_idx,
+                    tool_use_id=tool_use_id,
+                    tool_name=tool_name,
+                    result=result,
+                    is_error=False,
+                    tool_index=tool_idx,
+                )
+            if self._session_data_service:
+                # Emit turn_finished for the tool result turn
+                result_str = result if isinstance(result, str) else str(result)
+                self._session_data_service.emit_turn_finished(
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    final_content=result_str,
+                    tokens=len(result_str) // 4,  # Approximate token count
+                )
 
         elif event_type == "init":
             # Model info - update stream state
+            # Note: No SessionDataService equivalent - this is metadata only
             model = data.get("model", "")
             context_window = data.get("context_window", 0)
             self._stream_state.update_stream(
@@ -540,6 +652,7 @@ class SessionManagerService:
 
         elif event_type == "result":
             # Usage stats - update stream state
+            # Note: No SessionDataService equivalent - this is metadata only
             input_tokens = data.get("input_tokens", 0)
             output_tokens = data.get("output_tokens", 0)
             self._stream_state.update_stream(
@@ -552,13 +665,21 @@ class SessionManagerService:
             # Stream complete - emit final turn_finished and clean up
             # Always emit turnFinished to finalize the turn state (even if content is empty)
             # This ensures the web client properly clears streaming state
-            self._task_service.emit_turn_finished(
-                session_id=session_id,
-                exchange_id=ctx.exchange_id,
-                turn_index=ctx.assistant_turn_idx,
-                role="assistant",
-                content=ctx.content,
-            )
+            if self._task_service:
+                self._task_service.emit_turn_finished(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    turn_index=ctx.assistant_turn_idx,
+                    role="assistant",
+                    content=ctx.content,
+                )
+            if self._session_data_service:
+                self._session_data_service.emit_turn_finished(
+                    session_id=session_id,
+                    turn_id=ctx.assistant_turn_id,
+                    final_content=ctx.content,
+                    tokens=len(ctx.content) // 4,  # Approximate token count
+                )
             # Complete the stream
             self._stream_state.complete_stream(ctx.exchange_id)
             # Mark session as no longer streaming so React frontend hides stop button
@@ -577,6 +698,7 @@ class SessionManagerService:
 
         elif event_type == "error":
             # Error - mark stream as failed
+            # Note: No SessionDataService equivalent for error events
             error_msg = data if isinstance(data, str) else str(data)
             self._stream_state.fail_stream(ctx.exchange_id, error_msg)
             # Mark session as no longer streaming and reload turns

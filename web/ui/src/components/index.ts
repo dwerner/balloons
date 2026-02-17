@@ -10,7 +10,7 @@ export * from './SessionStatusBar';
 export * from './StreamingStatusBar';
 
 // Conversation view components
-export * from './ExchangeView';
+export * from './SimpleTurnsView';
 
 // Debug components
 export * from './DebugPane';

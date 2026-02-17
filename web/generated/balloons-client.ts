@@ -25,6 +25,7 @@ import {
   SessionManagerServiceClient,
   GoalTreeStateServiceClient,
   TaskStateServiceClient,
+  SessionDataServiceClient,
   ImageServiceClient,
 } from './client';
 
@@ -61,6 +62,7 @@ export class BalloonsClient {
   private _sessions: SessionManagerServiceClient | null = null;
   private _goals: GoalTreeStateServiceClient | null = null;
   private _tasks: TaskStateServiceClient | null = null;
+  private _sessionData: SessionDataServiceClient | null = null;
   private _images: ImageServiceClient | null = null;
 
   constructor(url: string, options: BalloonsClientOptions = {}) {
@@ -123,6 +125,14 @@ export class BalloonsClient {
       throw new Error('Not connected. Call connect() first.');
     }
     return this._tasks;
+  }
+
+  /** Session data service (subscription-based streaming) */
+  get sessionData(): SessionDataServiceClient {
+    if (!this._sessionData) {
+      throw new Error('Not connected. Call connect() first.');
+    }
+    return this._sessionData;
   }
 
   /** Image service (upload images for chat) */
@@ -237,6 +247,7 @@ export class BalloonsClient {
     this._sessions = new SessionManagerServiceClient(this.ws);
     this._goals = new GoalTreeStateServiceClient(this.ws);
     this._tasks = new TaskStateServiceClient(this.ws);
+    this._sessionData = new SessionDataServiceClient(this.ws);
     this._images = new ImageServiceClient(this.ws);
   }
 
@@ -246,6 +257,7 @@ export class BalloonsClient {
     this._sessions = null;
     this._goals = null;
     this._tasks = null;
+    this._sessionData = null;
     this._images = null;
   }
 
@@ -271,6 +283,7 @@ export {
   SessionManagerServiceClient,
   GoalTreeStateServiceClient,
   TaskStateServiceClient,
+  SessionDataServiceClient,
   ImageServiceClient,
 } from './client';
 export type { Unsubscribe } from './client';

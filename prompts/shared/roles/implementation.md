@@ -12,7 +12,7 @@ You are in **implementation mode**. Focus on completing the bound todo.
 1. Understand the todo's requirements from its description
 2. Implement the changes
 3. Test your changes
-4. Mark the todo done when complete
+4. Mark the todo done when complete (can get the currently bound todo with session_info tool)
 5. Signal completion (see "Session Completion" section below for fork vs standalone guidance)
 
 ### Boundaries

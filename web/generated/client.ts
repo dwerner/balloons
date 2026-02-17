@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-16T15:21:26.943240
+// Generated: 2026-02-17T12:24:13.408550
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -2221,6 +2221,196 @@ export class TaskStateServiceClient implements TaskStateService {
 
   onTurnStarted(callback: (data: Types.TurnStartedEvent) => void): Unsubscribe {
     return this.subscribe('turnStarted', callback);
+  }
+
+}
+
+/**
+ * WebSocket-exposed service for session data streaming.
+ * 
+ * Provides subscription-based access to session content with efficient
+ * delta streaming. Clients subscribe to sessions they want to observe
+ * and receive real-time updates.
+ * 
+ * Key features:
+ * - Per-session subscriptions (only receive events for subscribed sessions)
+ * - Delta streaming for efficient bandwidth usage
+ * - Snapshots for late-joining clients
+ * - Turn lifecycle events (created, delta, finished)
+ */
+export interface SessionDataService {
+  /**
+   * Get a complete snapshot of the session's current state.
+   * 
+   * Use this when subscribing to get the initial state before
+   * receiving incremental deltas.
+   * 
+   * Args:
+   * session_id: The session to snapshot
+   * 
+   * Returns:
+   * SessionSnapshot with full turn history, or None if session not found
+   */
+  getSessionSnapshot(sessionId: string): Promise<Types.SessionSnapshot | null>;
+
+  /**
+   * Get the number of clients subscribed to a session.
+   * 
+   * Args:
+   * session_id: The session to check
+   * 
+   * Returns:
+   * Number of subscribed clients
+   */
+  getSessionSubscriberCount(sessionId: string): Promise<number>;
+
+  /**
+   * Get list of sessions a client is subscribed to.
+   * 
+   * Args:
+   * client_id: The client's unique identifier
+   * 
+   * Returns:
+   * List of session IDs the client is subscribed to
+   */
+  getSubscribedSessions(clientId: string): Promise<string[]>;
+
+  /**
+   * Subscribe to receive updates for a session.
+   * 
+   * Returns the full session snapshot atomically with the subscription,
+   * ensuring the client has complete initial state before receiving any
+   * incremental events.
+   * 
+   * When subscribed, the client will receive:
+   * - turnCreated: When a new turn starts
+   * - turnDelta: As content streams in
+   * - turnFinished: When a turn completes
+   * 
+   * Args:
+   * session_id: The session to subscribe to
+   * client_id: Unique identifier for the subscribing client
+   * 
+   * Returns:
+   * SubscribeSessionResult with snapshot if session found
+   */
+  subscribeSession(sessionId: string, clientId?: string): Promise<Types.SubscribeSessionResult>;
+
+  /**
+   * Unsubscribe from session updates.
+   * 
+   * Args:
+   * session_id: The session to unsubscribe from
+   * client_id: The client's unique identifier
+   * 
+   * Returns:
+   * SubscriptionResult indicating the unsubscription
+   */
+  unsubscribeSession(sessionId: string, clientId?: string): Promise<Types.SubscriptionResult>;
+
+}
+
+export interface SessionDataEvents {
+  /**
+   * Emitted when a new turn is created in a subscribed session.
+   * 
+   * Clients should create UI elements for the new turn.
+   */
+  onTurnCreated(callback: (data: Types.SessionTurnCreatedEvent) => void): Unsubscribe;
+
+  /**
+   * Emitted when content is added to a streaming turn.
+   * 
+   * Clients should append the delta to their accumulated content.
+   * Use accumulated_length to verify sync.
+   */
+  onTurnDelta(callback: (data: Types.SessionTurnDeltaEvent) => void): Unsubscribe;
+
+  /**
+   * Emitted when a turn finishes streaming.
+   * 
+   * Clients should finalize the turn display and update token counts.
+   */
+  onTurnFinished(callback: (data: Types.SessionTurnFinishedEvent) => void): Unsubscribe;
+
+}
+
+export class SessionDataServiceClient implements SessionDataService {
+  private ws: WebSocket;
+  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
+  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
+
+  constructor(ws: WebSocket) {
+    this.ws = ws;
+    this.ws.addEventListener('message', this.handleMessage.bind(this));
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    const msg = JSON.parse(event.data);
+    if (msg.id && this.pending.has(msg.id)) {
+      const { resolve, reject } = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      if (msg.error) {
+        reject(new Error(msg.error.message));
+      } else {
+        resolve(msg.result);
+      }
+    } else if (msg.event) {
+      const handlers = this.eventHandlers.get(msg.event);
+      if (handlers) {
+        handlers.forEach(h => h(msg.data));
+      }
+    }
+  }
+
+  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const id = generateRequestId();
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, new Set());
+    }
+    this.eventHandlers.get(event)!.add(callback);
+    return () => {
+      this.eventHandlers.get(event)?.delete(callback);
+    };
+  }
+
+  async getSessionSnapshot(sessionId: string): Promise<Types.SessionSnapshot | null> {
+    return this.call('getSessionSnapshot', { sessionId: sessionId });
+  }
+
+  async getSessionSubscriberCount(sessionId: string): Promise<number> {
+    return this.call('getSessionSubscriberCount', { sessionId: sessionId });
+  }
+
+  async getSubscribedSessions(clientId: string): Promise<string[]> {
+    return this.call('getSubscribedSessions', { clientId: clientId });
+  }
+
+  async subscribeSession(sessionId: string, clientId?: string): Promise<Types.SubscribeSessionResult> {
+    return this.call('subscribeSession', { sessionId: sessionId, clientId: clientId });
+  }
+
+  async unsubscribeSession(sessionId: string, clientId?: string): Promise<Types.SubscriptionResult> {
+    return this.call('unsubscribeSession', { sessionId: sessionId, clientId: clientId });
+  }
+
+  onTurnCreated(callback: (data: Types.SessionTurnCreatedEvent) => void): Unsubscribe {
+    return this.subscribe('turnCreated', callback);
+  }
+
+  onTurnDelta(callback: (data: Types.SessionTurnDeltaEvent) => void): Unsubscribe {
+    return this.subscribe('turnDelta', callback);
+  }
+
+  onTurnFinished(callback: (data: Types.SessionTurnFinishedEvent) => void): Unsubscribe {
+    return this.subscribe('turnFinished', callback);
   }
 
 }

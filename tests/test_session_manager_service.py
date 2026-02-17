@@ -984,7 +984,7 @@ class TestEventDispatch:
 
     @pytest.mark.asyncio
     async def test_dispatch_without_task_service(self, mock_manager, stream_state, ctx, mock_event):
-        """Test that dispatch does nothing without task service."""
+        """Test that dispatch does nothing without any service."""
         service = SessionManagerService(mock_manager, stream_state)
 
         # Should not raise
@@ -993,5 +993,217 @@ class TestEventDispatch:
 
         # Context should not be modified (no handler was called)
         # But we still accumulate content locally
-        # Actually no - without task_service we return early
+        # Actually no - without any service we return early
         assert ctx.content == ""  # Nothing happened
+
+
+class TestSessionDataServiceIntegration:
+    """Tests for SessionDataService integration."""
+
+    @pytest.fixture
+    def session_data_service(self):
+        """Create a SessionDataService for testing."""
+        from service.session_data_service import SessionDataService
+        return SessionDataService()
+
+    @pytest.fixture
+    def service_with_data_service(self, mock_manager, stream_state, session_data_service):
+        """Create a SessionManagerService with SessionDataService."""
+        return SessionManagerService(
+            mock_manager,
+            stream_state,
+            session_data_service=session_data_service,
+        )
+
+    @pytest.fixture
+    def ctx(self):
+        """Create a test streaming context."""
+        return _StreamingContext(
+            session_id="test-123",
+            exchange_id="exchange-456",
+            user_turn_idx=0,
+            assistant_turn_idx=1,
+        )
+
+    @pytest.fixture
+    def mock_event(self):
+        """Create a mock event."""
+        class MockEvent:
+            def __init__(self, event_type, data=None):
+                self.event_type = event_type
+                self.data = data
+        return MockEvent
+
+    def test_set_session_data_service(self, mock_manager, stream_state, session_data_service):
+        """Test setting the session data service."""
+        service = SessionManagerService(mock_manager, stream_state)
+        assert service._session_data_service is None
+        service.set_session_data_service(session_data_service)
+        assert service._session_data_service == session_data_service
+
+    def test_init_with_session_data_service(self, mock_manager, stream_state, session_data_service):
+        """Test initializing with session_data_service parameter."""
+        service = SessionManagerService(
+            mock_manager,
+            stream_state,
+            session_data_service=session_data_service,
+        )
+        assert service._session_data_service == session_data_service
+
+    @pytest.mark.asyncio
+    async def test_dispatch_text_to_session_data_service(
+        self, service_with_data_service, session_data_service, ctx, mock_event
+    ):
+        """Test that text events are dispatched to SessionDataService."""
+        # Subscribe a client to get events
+        await session_data_service.subscribe_session("test-123", "client-1")
+
+        events = []
+        def handler(event_name: str, data: dict, target_clients):
+            events.append((event_name, data, target_clients))
+        session_data_service.add_event_handler(handler)
+
+        event = mock_event("text", "Hello")
+        await service_with_data_service._dispatch_event("test-123", event, ctx)
+
+        # Verify event was emitted to SessionDataService
+        assert len(events) == 1
+        assert events[0][0] == "turnDelta"
+        assert events[0][1]["session_id"] == "test-123"
+        assert events[0][1]["turn_id"] == ""  # Empty because ctx.assistant_turn_id is empty
+        assert events[0][1]["delta"] == "Hello"
+        assert events[0][1]["accumulated_length"] == 5
+
+    @pytest.mark.asyncio
+    async def test_dispatch_turn_started_to_session_data_service(
+        self, service_with_data_service, session_data_service, ctx, mock_event
+    ):
+        """Test that turn_started events are dispatched to SessionDataService."""
+        # Subscribe a client to get events
+        await session_data_service.subscribe_session("test-123", "client-1")
+
+        events = []
+        def handler(event_name: str, data: dict, target_clients):
+            events.append((event_name, data, target_clients))
+        session_data_service.add_event_handler(handler)
+
+        event = mock_event("turn_started", {"turn_index": 5})
+        await service_with_data_service._dispatch_event("test-123", event, ctx)
+
+        # Verify event was emitted to SessionDataService
+        assert len(events) == 1
+        assert events[0][0] == "turnCreated"
+        assert events[0][1]["session_id"] == "test-123"
+        assert events[0][1]["turn_id"] == ""  # Empty because event doesn't contain turn_id
+        assert events[0][1]["role"] == "assistant"
+
+    @pytest.mark.asyncio
+    async def test_dispatch_done_to_session_data_service(
+        self, service_with_data_service, session_data_service, ctx, mock_event
+    ):
+        """Test that done events emit turn_finished to SessionDataService."""
+        # Subscribe a client to get events
+        await session_data_service.subscribe_session("test-123", "client-1")
+
+        # Set up context
+        ctx.content = "Final response"
+        service_with_data_service._streaming_contexts["test-123"] = ctx
+
+        events = []
+        def handler(event_name: str, data: dict, target_clients):
+            events.append((event_name, data, target_clients))
+        session_data_service.add_event_handler(handler)
+
+        event = mock_event("done", {"result": {}})
+        await service_with_data_service._dispatch_event("test-123", event, ctx)
+
+        # Verify turnFinished was emitted
+        turn_finished = [e for e in events if e[0] == "turnFinished"]
+        assert len(turn_finished) == 1
+        assert turn_finished[0][1]["session_id"] == "test-123"
+        assert turn_finished[0][1]["final_content"] == "Final response"
+
+    @pytest.mark.asyncio
+    async def test_dispatch_with_both_services(
+        self, mock_manager, stream_state, session_data_service, ctx, mock_event
+    ):
+        """Test that events are dispatched to both TaskStateService and SessionDataService."""
+        from service.task_state_service import TaskStateService
+
+        task_service = TaskStateService(stream_state)
+        service = SessionManagerService(
+            mock_manager,
+            stream_state,
+            task_state_service=task_service,
+            session_data_service=session_data_service,
+        )
+
+        # Subscribe to both services
+        await session_data_service.subscribe_session("test-123", "client-1")
+
+        task_events = []
+        def task_handler(event_name: str, data: dict):
+            task_events.append((event_name, data))
+        task_service.add_event_handler(task_handler)
+
+        data_events = []
+        def data_handler(event_name: str, data: dict, target_clients):
+            data_events.append((event_name, data, target_clients))
+        session_data_service.add_event_handler(data_handler)
+
+        # Dispatch a text event
+        event = mock_event("text", "Hello")
+        await service._dispatch_event("test-123", event, ctx)
+
+        # Verify both services received events
+        assert len(task_events) == 1
+        assert task_events[0][0] == "contentDelta"
+
+        assert len(data_events) == 1
+        assert data_events[0][0] == "turnDelta"
+
+    @pytest.mark.asyncio
+    async def test_dispatch_only_session_data_service(
+        self, service_with_data_service, session_data_service, ctx, mock_event
+    ):
+        """Test dispatching with only SessionDataService (no TaskStateService)."""
+        # Subscribe a client to get events
+        await session_data_service.subscribe_session("test-123", "client-1")
+
+        events = []
+        def handler(event_name: str, data: dict, target_clients):
+            events.append((event_name, data, target_clients))
+        session_data_service.add_event_handler(handler)
+
+        # Dispatch a text event - should work with only SessionDataService
+        event = mock_event("text", "Hello")
+        await service_with_data_service._dispatch_event("test-123", event, ctx)
+
+        # Verify content was accumulated and event was emitted
+        assert ctx.content == "Hello"
+        assert len(events) == 1
+        assert events[0][0] == "turnDelta"
+
+    @pytest.mark.asyncio
+    async def test_tool_result_turn_started_emits_to_session_data_service(
+        self, service_with_data_service, session_data_service, ctx, mock_event
+    ):
+        """Test that tool_result_turn_started emits turnCreated to SessionDataService."""
+        await session_data_service.subscribe_session("test-123", "client-1")
+
+        events = []
+        def handler(event_name: str, data: dict, target_clients):
+            events.append((event_name, data, target_clients))
+        session_data_service.add_event_handler(handler)
+
+        event = mock_event("tool_result_turn_started", {
+            "turn_index": 3,
+            "tool_use_id": "tool-123",
+        })
+        await service_with_data_service._dispatch_event("test-123", event, ctx)
+
+        # Verify turnCreated was emitted with role="tool"
+        assert len(events) == 1
+        assert events[0][0] == "turnCreated"
+        assert events[0][1]["role"] == "tool"
+        assert events[0][1]["content_block_type"] == "tool_result"

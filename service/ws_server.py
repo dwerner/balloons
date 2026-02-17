@@ -225,21 +225,47 @@ class WsServer:
             f"{list(methods.keys())}"
         )
 
-    def _on_service_event(self, event_name: str, data: dict) -> None:
+    def _notify_client_disconnected(self, client_id: str) -> None:
+        """Notify all services that a client has disconnected.
+
+        This allows services to clean up any client-specific state (e.g., subscriptions).
+
+        Args:
+            client_id: The disconnected client's ID
+        """
+        for registration in self._services.values():
+            if hasattr(registration.instance, "client_disconnected"):
+                try:
+                    registration.instance.client_disconnected(client_id)
+                except Exception as e:
+                    logger.error(
+                        f"Error notifying {registration.service_name} of client "
+                        f"disconnect: {e}"
+                    )
+
+    def _on_service_event(
+        self, event_name: str, data: dict, target_clients: set[str] | None = None
+    ) -> None:
         """Handle events from services and broadcast to clients.
 
         This is called by services when they emit events. The event is
-        formatted and broadcast to all connected clients.
+        formatted and sent to targeted clients (or all clients if no target specified).
 
         Args:
             event_name: Event name in camelCase (e.g., "sessionUpdated")
             data: Event payload data
+            target_clients: Optional set of client_ids to send to. If None,
+                broadcasts to all clients.
         """
-        logger.debug(f"Service event: {event_name}, clients: {len(self._clients)}")
+        logger.debug(
+            f"Service event: {event_name}, "
+            f"targets: {len(target_clients) if target_clients else 'all'}, "
+            f"clients: {len(self._clients)}"
+        )
         # Convert data keys to camelCase for consistency with RPC responses
         camel_data = self._convert_keys_to_camel(data)
         message = {"event": event_name, "data": camel_data}
-        asyncio.create_task(self._broadcast(message))
+        asyncio.create_task(self._broadcast(message, target_clients))
 
     def _convert_keys_to_camel(self, data: Any) -> Any:
         """Convert dict keys from snake_case to camelCase recursively.
@@ -262,20 +288,33 @@ class WsServer:
         else:
             return data
 
-    async def _broadcast(self, message: dict) -> None:
-        """Broadcast a message to all connected clients.
+    async def _broadcast(
+        self, message: dict, target_clients: set[str] | None = None
+    ) -> None:
+        """Broadcast a message to connected clients.
 
         Args:
             message: Message dict to JSON-encode and send
+            target_clients: Optional set of client_ids to send to. If None,
+                broadcasts to all clients. If provided, only sends to clients
+                whose client_id is in the set.
         """
         if not self._clients:
             return
 
         message_str = json.dumps(message)
 
-        # Send to all clients concurrently
+        # Send to target clients (or all if no target specified)
         tasks = []
         for websocket in list(self._clients):
+            client_info = self._client_info.get(websocket)
+            if client_info is None:
+                continue
+
+            # If target_clients is specified, only send to those clients
+            if target_clients is not None and client_info.client_id not in target_clients:
+                continue
+
             tasks.append(self._send_to_client(websocket, message_str))
 
         if tasks:
@@ -524,6 +563,8 @@ class WsServer:
             # Cleanup
             self._clients.discard(websocket)
             self._client_info.pop(websocket, None)
+            # Notify services about client disconnection
+            self._notify_client_disconnected(client.client_id)
 
     async def _handle_message(
         self, message: str, client: ConnectedClient
@@ -568,7 +609,7 @@ class WsServer:
 
         # Dispatch to service
         try:
-            result = await self._dispatch_method(method, params or {})
+            result = await self._dispatch_method(method, params or {}, client)
             return self._success_response(request_id, result)
         except MethodNotFoundError as e:
             return self._error_response(request_id, METHOD_NOT_FOUND, str(e))
@@ -578,12 +619,15 @@ class WsServer:
             logger.exception(f"Error dispatching method {method}")
             return self._error_response(request_id, INTERNAL_ERROR, str(e))
 
-    async def _dispatch_method(self, method_name: str, params: dict) -> Any:
+    async def _dispatch_method(
+        self, method_name: str, params: dict, client: ConnectedClient
+    ) -> Any:
         """Dispatch a method call to the appropriate service.
 
         Args:
             method_name: Method name (qualified or short)
             params: Method parameters (wire names, camelCase)
+            client: The connected client making the request
 
         Returns:
             Method result
@@ -612,6 +656,14 @@ class WsServer:
         for wire_name, value in params.items():
             python_name = to_snake_case(wire_name)
             python_params[python_name] = value
+
+        # Inject client_id for methods that accept it (if not already provided)
+        # This allows subscription methods to know which client is subscribing
+        if "client_id" not in python_params:
+            for param_spec in method_spec.params:
+                if param_spec.name == "client_id":
+                    python_params["client_id"] = client.client_id
+                    break
 
         # Validate required params
         for param_spec in method_spec.params:

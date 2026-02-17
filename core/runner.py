@@ -652,6 +652,7 @@ class SessionRunner:
                 # Emit turn_started for this text turn so UI creates a new node
                 events.append(self._make_event("text_turn_started", {
                     "turn_index": text_turn_idx,
+                    "turn_id": turn.id,
                     "exchange_id": self._exchange_id,
                     "role": "assistant",
                     "turn_type": "text",
@@ -660,6 +661,7 @@ class SessionRunner:
                 events.append(self._make_event("text_flush", {
                     "text": flushed_text,
                     "turn_index": text_turn_idx,
+                    "turn_id": turn.id,
                 }))
         return events
 
@@ -755,6 +757,7 @@ class SessionRunner:
                 # Emit turn_started for this tool_use turn so UI creates a new node
                 events.append(self._make_event("tool_use_turn_started", {
                     "turn_index": tool_use_turn_idx,
+                    "turn_id": turn.id,
                     "exchange_id": self._exchange_id,
                     "role": "assistant",
                     "turn_type": "tool_use",
@@ -768,6 +771,7 @@ class SessionRunner:
                     "tool_index": tool_idx,
                     "tool_block": tool_block,
                     "turn_index": tool_use_turn_idx,
+                    "turn_id": turn.id,
                 }))
                 return events
 
@@ -821,6 +825,7 @@ class SessionRunner:
                 # Emit turn_started for this tool_result turn so UI creates a new node
                 events.append(self._make_event("tool_result_turn_started", {
                     "turn_index": tool_result_turn_idx,
+                    "turn_id": turn.id,
                     "exchange_id": self._exchange_id,
                     "role": "tool",
                     "turn_type": "tool_result",
@@ -833,6 +838,7 @@ class SessionRunner:
                     "tool_index": tool_idx,
                     "result_block": result_block,
                     "turn_index": tool_result_turn_idx,
+                    "turn_id": turn.id,
                 }))
                 return events
 

@@ -189,53 +189,59 @@ class TestMethodDispatch:
         server.register_service(ExampleService())
         return server
 
+    @pytest.fixture
+    def mock_client(self):
+        """Create a mock ConnectedClient for testing dispatch."""
+        mock_ws = MagicMock()
+        return ConnectedClient(websocket=mock_ws, client_id="test-client-123")
+
     @pytest.mark.asyncio
-    async def test_dispatch_simple_method(self, server):
-        result = await server._dispatch_method("echo", {"message": "hello"})
+    async def test_dispatch_simple_method(self, server, mock_client):
+        result = await server._dispatch_method("echo", {"message": "hello"}, mock_client)
         assert result == "hello"
 
     @pytest.mark.asyncio
-    async def test_dispatch_with_camel_case_params(self, server):
+    async def test_dispatch_with_camel_case_params(self, server, mock_client):
         # Wire format uses camelCase, should convert to snake_case
         result = await server._dispatch_method(
-            "createItem", {"name": "test", "value": 42}
+            "createItem", {"name": "test", "value": 42}, mock_client
         )
         assert result["name"] == "test"
         assert result["value"] == 42
 
     @pytest.mark.asyncio
-    async def test_dispatch_with_default_params(self, server):
+    async def test_dispatch_with_default_params(self, server, mock_client):
         # value has default of 0
-        result = await server._dispatch_method("createItem", {"name": "test"})
+        result = await server._dispatch_method("createItem", {"name": "test"}, mock_client)
         assert result["value"] == 0
 
     @pytest.mark.asyncio
-    async def test_dispatch_method_not_found(self, server):
+    async def test_dispatch_method_not_found(self, server, mock_client):
         with pytest.raises(MethodNotFoundError) as exc_info:
-            await server._dispatch_method("nonExistent", {})
+            await server._dispatch_method("nonExistent", {}, mock_client)
 
         assert "nonExistent" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_dispatch_missing_required_param(self, server):
+    async def test_dispatch_missing_required_param(self, server, mock_client):
         with pytest.raises(InvalidParamsError) as exc_info:
-            await server._dispatch_method("echo", {})
+            await server._dispatch_method("echo", {}, mock_client)
 
         assert "message" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_dispatch_qualified_method(self, server):
-        result = await server._dispatch_method("ExampleService.echo", {"message": "qualified"})
+    async def test_dispatch_qualified_method(self, server, mock_client):
+        result = await server._dispatch_method("ExampleService.echo", {"message": "qualified"}, mock_client)
         assert result == "qualified"
 
     @pytest.mark.asyncio
-    async def test_dispatch_returns_none(self, server):
-        result = await server._dispatch_method("getItem", {"itemId": "nonexistent"})
+    async def test_dispatch_returns_none(self, server, mock_client):
+        result = await server._dispatch_method("getItem", {"itemId": "nonexistent"}, mock_client)
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_dispatch_sync_method(self, server):
-        result = await server._dispatch_method("syncMethod", {})
+    async def test_dispatch_sync_method(self, server, mock_client):
+        result = await server._dispatch_method("syncMethod", {}, mock_client)
         assert result == "sync result"
 
 
@@ -412,7 +418,7 @@ class TestEventBroadcasting:
         # Track broadcast calls
         broadcast_messages = []
 
-        async def mock_broadcast(message):
+        async def mock_broadcast(message, target_clients=None):
             broadcast_messages.append(message)
 
         server._broadcast = mock_broadcast
@@ -434,8 +440,14 @@ class TestEventBroadcasting:
         mock_ws1 = AsyncMock()
         mock_ws2 = AsyncMock()
 
+        # Need to add client info for the broadcast to work
+        client1 = ConnectedClient(websocket=mock_ws1, client_id="client-1")
+        client2 = ConnectedClient(websocket=mock_ws2, client_id="client-2")
+
         server._clients.add(mock_ws1)
         server._clients.add(mock_ws2)
+        server._client_info[mock_ws1] = client1
+        server._client_info[mock_ws2] = client2
 
         await server._broadcast({"event": "testEvent", "data": {}})
 
@@ -446,6 +458,36 @@ class TestEventBroadcasting:
     async def test_broadcast_to_no_clients(self, server):
         # Should not raise when no clients
         await server._broadcast({"event": "testEvent", "data": {}})
+
+    @pytest.mark.asyncio
+    async def test_broadcast_to_targeted_clients(self, server):
+        """Test that targeted broadcast only sends to specified clients."""
+        # Create mock websockets
+        mock_ws1 = AsyncMock()
+        mock_ws2 = AsyncMock()
+        mock_ws3 = AsyncMock()
+
+        # Set up client info
+        client1 = ConnectedClient(websocket=mock_ws1, client_id="client-1")
+        client2 = ConnectedClient(websocket=mock_ws2, client_id="client-2")
+        client3 = ConnectedClient(websocket=mock_ws3, client_id="client-3")
+
+        server._clients.add(mock_ws1)
+        server._clients.add(mock_ws2)
+        server._clients.add(mock_ws3)
+        server._client_info[mock_ws1] = client1
+        server._client_info[mock_ws2] = client2
+        server._client_info[mock_ws3] = client3
+
+        # Broadcast to only clients 1 and 3
+        await server._broadcast(
+            {"event": "testEvent", "data": {}},
+            target_clients={"client-1", "client-3"}
+        )
+
+        mock_ws1.send.assert_called_once()
+        mock_ws2.send.assert_not_called()
+        mock_ws3.send.assert_called_once()
 
 
 class TestClientManagement:
