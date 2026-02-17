@@ -326,6 +326,7 @@ class SessionManagerService:
             state = {
                 "content": ctx.content,
                 "assistant_turn_idx": ctx.assistant_turn_idx,
+                "assistant_turn_id": ctx.assistant_turn_id,
                 "tool_count": ctx.tool_count,
             }
             debug_log.debug(
@@ -577,7 +578,21 @@ class SessionManagerService:
                     tool_input=tool_input,
                     tool_index=tool_idx,
                 )
-            # Note: SessionDataService doesn't have tool_use event - it focuses on turn content
+            # Emit turn_finished for the tool_use turn with its content
+            if self._session_data_service:
+                turn_id = ctx.tool_turn_ids.get((tool_use_id, "tool_use"), "")
+                # Format tool_use content as JSON for display
+                import json
+                tool_content = json.dumps({
+                    "tool": tool_name,
+                    "input": tool_input,
+                }, indent=2)
+                self._session_data_service.emit_turn_finished(
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    final_content=tool_content,
+                    tokens=len(tool_content) // 4,
+                )
 
         elif event_type == "tool_result_turn_started":
             # Tool result turn started - track turn index and ID
@@ -1197,6 +1212,19 @@ class SessionManagerService:
                 tokens=0,  # User turns don't have token counts
             )
 
+        # Generate assistant turn ID for tracking streaming events
+        assistant_turn_id = str(uuid.uuid4())
+
+        # Emit assistant turn_created so streaming view can show it
+        if self._session_data_service:
+            self._session_data_service.emit_turn_created(
+                session_id=session_id,
+                turn_id=assistant_turn_id,
+                role="assistant",
+                exchange_id=exchange_id,
+                content_block_type="text",
+            )
+
         # Register the stream in StreamState for tracking
         self._stream_state.register_session_stream(
             session_id=session_id,
@@ -1210,7 +1238,9 @@ class SessionManagerService:
             session_id=session_id,
             exchange_id=exchange_id,
             user_turn_idx=turn_index,
+            user_turn_id=user_turn.id,
             assistant_turn_idx=turn_index + 1,  # Next turn will be assistant
+            assistant_turn_id=assistant_turn_id,  # Track for streaming events
         )
 
         # Emit message submitted event BEFORE starting the runner
@@ -1368,6 +1398,19 @@ class SessionManagerService:
                 tokens=0,  # User turns don't have token counts
             )
 
+        # Generate assistant turn ID for tracking streaming events
+        assistant_turn_id = str(uuid.uuid4())
+
+        # Emit assistant turn_created so streaming view can show it
+        if self._session_data_service:
+            self._session_data_service.emit_turn_created(
+                session_id=session_id,
+                turn_id=assistant_turn_id,
+                role="assistant",
+                exchange_id=exchange_id,
+                content_block_type="text",
+            )
+
         # Register the stream in StreamState for tracking
         self._stream_state.register_session_stream(
             session_id=session_id,
@@ -1381,7 +1424,9 @@ class SessionManagerService:
             session_id=session_id,
             exchange_id=exchange_id,
             user_turn_idx=turn_index,
+            user_turn_id=user_turn.id,
             assistant_turn_idx=turn_index + 1,
+            assistant_turn_id=assistant_turn_id,
         )
 
         # Emit message submitted event BEFORE starting the runner

@@ -93,8 +93,10 @@ function TurnCard({ turn }: TurnCardProps) {
         {role === 'assistant' ? (
           content ? (
             <MarkdownContent content={content} />
-          ) : streaming ? (
+          ) : streaming && contentBlockType === 'text' ? (
             <span className="thinking">Thinking...</span>
+          ) : contentBlockType === 'tool_use' ? (
+            <span className="tool-use-placeholder">Tool call...</span>
           ) : null
         ) : (
           content || (streaming ? <span className="thinking">...</span> : null)

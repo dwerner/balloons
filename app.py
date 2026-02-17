@@ -790,14 +790,18 @@ class BalloonsApp(App):
 
                 # Create streaming context so poll loop can track this session
                 # Use state from SessionManagerService if available (content already accumulated)
+                assistant_turn_idx = prior_state.get("assistant_turn_idx", turn_index + 1) if prior_state else turn_index + 1
+                assistant_turn_id = prior_state.get("assistant_turn_id", "") if prior_state else ""
                 ctx = StreamingContext(
                     session_id=session_id,
                     user_turn_idx=turn_index,
-                    assistant_turn_idx=prior_state.get("assistant_turn_idx", turn_index + 1) if prior_state else turn_index + 1,
+                    assistant_turn_idx=assistant_turn_idx,
                     prompt=content,
                     is_active=is_active,
                     exchange_id=exchange_id,
                     content=prior_state.get("content", "") if prior_state else "",
+                    final_turn_idx=assistant_turn_idx,  # Track from the start
+                    final_turn_id=assistant_turn_id,  # Carry over from SessionManagerService
                 )
                 # Carry over tool count if available
                 if prior_state and prior_state.get("tool_count"):
@@ -1392,6 +1396,22 @@ class BalloonsApp(App):
                     tool_name=action.tool_name,
                     tool_input=action.tool_input,
                     tool_index=action.tool_index,
+                )
+
+            # Emit turn_finished for the tool_use turn to SessionDataService
+            if self._session_data_service is not None:
+                turn_id = ctx.tool_turn_ids.get((action.tool_use_id, "tool_use"), "")
+                # Format tool_use content as JSON for display
+                import json
+                tool_content = json.dumps({
+                    "tool": action.tool_name,
+                    "input": action.tool_input,
+                }, indent=2)
+                self._session_data_service.emit_turn_finished(
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    final_content=tool_content,
+                    tokens=len(tool_content) // 4,
                 )
 
             # Intercept propose_fork tool - show modal before execution

@@ -1068,7 +1068,7 @@ class TestSessionDataServiceIntegration:
 
         # Verify event was emitted to SessionDataService
         assert len(events) == 1
-        assert events[0][0] == "turnDelta"
+        assert events[0][0] == "sessionDataTurnDelta"
         assert events[0][1]["session_id"] == "test-123"
         assert events[0][1]["turn_id"] == ""  # Empty because ctx.assistant_turn_id is empty
         assert events[0][1]["delta"] == "Hello"
@@ -1092,7 +1092,7 @@ class TestSessionDataServiceIntegration:
 
         # Verify event was emitted to SessionDataService
         assert len(events) == 1
-        assert events[0][0] == "turnCreated"
+        assert events[0][0] == "sessionDataTurnCreated"
         assert events[0][1]["session_id"] == "test-123"
         assert events[0][1]["turn_id"] == ""  # Empty because event doesn't contain turn_id
         assert events[0][1]["role"] == "assistant"
@@ -1118,7 +1118,7 @@ class TestSessionDataServiceIntegration:
         await service_with_data_service._dispatch_event("test-123", event, ctx)
 
         # Verify turnFinished was emitted
-        turn_finished = [e for e in events if e[0] == "turnFinished"]
+        turn_finished = [e for e in events if e[0] == "sessionDataTurnFinished"]
         assert len(turn_finished) == 1
         assert turn_finished[0][1]["session_id"] == "test-123"
         assert turn_finished[0][1]["final_content"] == "Final response"
@@ -1160,7 +1160,7 @@ class TestSessionDataServiceIntegration:
         assert task_events[0][0] == "contentDelta"
 
         assert len(data_events) == 1
-        assert data_events[0][0] == "turnDelta"
+        assert data_events[0][0] == "sessionDataTurnDelta"
 
     @pytest.mark.asyncio
     async def test_dispatch_only_session_data_service(
@@ -1182,7 +1182,7 @@ class TestSessionDataServiceIntegration:
         # Verify content was accumulated and event was emitted
         assert ctx.content == "Hello"
         assert len(events) == 1
-        assert events[0][0] == "turnDelta"
+        assert events[0][0] == "sessionDataTurnDelta"
 
     @pytest.mark.asyncio
     async def test_tool_result_turn_started_emits_to_session_data_service(
@@ -1204,6 +1204,6 @@ class TestSessionDataServiceIntegration:
 
         # Verify turnCreated was emitted with role="tool"
         assert len(events) == 1
-        assert events[0][0] == "turnCreated"
+        assert events[0][0] == "sessionDataTurnCreated"
         assert events[0][1]["role"] == "tool"
         assert events[0][1]["content_block_type"] == "tool_result"
