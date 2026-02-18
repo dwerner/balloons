@@ -3,12 +3,18 @@
  *
  * This component displays turns using the new SessionDataService subscription
  * model (turn_id based) rather than TaskStateService (turn_index based).
+ *
+ * Uses specialized card components for different content block types:
+ * - TextCard: User and assistant text messages
+ * - ToolUseCard: Tool calls with formatted input
+ * - ToolResultCard: Tool results (or paired with ToolUseCard)
+ * - SystemCard: Fork, merge, link, and other system events
  */
 
 import React, { useRef, useEffect } from 'react';
 import type { BalloonsClient } from '../../../../generated/balloons-client';
 import { useSessionData } from '../../hooks/useSessionData';
-import { MarkdownContent } from '../../MarkdownContent';
+import { TurnCard } from './cards';
 import './StreamingTurnsView.css';
 
 interface StreamingTurnsViewProps {
@@ -47,59 +53,8 @@ export function StreamingTurnsView({ sessionId, client }: StreamingTurnsViewProp
       </div>
       <div className="streaming-turns-list">
         {turns.map((turn) => (
-          <TurnCard key={turn.turnId} turn={turn} />
+          <TurnCard key={turn.turnId} turn={turn} allTurns={turns} />
         ))}
-      </div>
-    </div>
-  );
-}
-
-interface TurnCardProps {
-  turn: {
-    turnId: string;
-    role: string;
-    content: string;
-    streaming: boolean;
-    tokens: number;
-    contentBlockType?: string;
-  };
-}
-
-function TurnCard({ turn }: TurnCardProps) {
-  const { role, content, streaming, tokens, contentBlockType } = turn;
-
-  // Determine icon and label based on role
-  const roleConfig = {
-    user: { icon: '👤', label: 'User', className: 'user' },
-    assistant: { icon: '🤖', label: 'Assistant', className: 'assistant' },
-    tool: { icon: '🔧', label: 'Tool', className: 'tool' },
-  }[role] || { icon: '📄', label: role, className: 'other' };
-
-  return (
-    <div className={`streaming-turn-card ${roleConfig.className} ${streaming ? 'streaming' : ''}`}>
-      <div className="streaming-turn-header">
-        <span className="turn-icon">{roleConfig.icon}</span>
-        <span className="turn-label">{roleConfig.label}</span>
-        {contentBlockType && contentBlockType !== 'text' && (
-          <span className="turn-type">{contentBlockType}</span>
-        )}
-        {streaming && <span className="streaming-indicator">●</span>}
-        {!streaming && tokens > 0 && (
-          <span className="turn-tokens">{tokens} tokens</span>
-        )}
-      </div>
-      <div className="streaming-turn-body">
-        {role === 'assistant' ? (
-          content ? (
-            <MarkdownContent content={content} />
-          ) : streaming && contentBlockType === 'text' ? (
-            <span className="thinking">Thinking...</span>
-          ) : contentBlockType === 'tool_use' ? (
-            <span className="tool-use-placeholder">Tool call...</span>
-          ) : null
-        ) : (
-          content || (streaming ? <span className="thinking">...</span> : null)
-        )}
       </div>
     </div>
   );

@@ -1,0 +1,444 @@
+/**
+ * Card styles for StreamingTurnsView
+ */
+
+/* ============================================================================
+ * Base Card Styles
+ * ============================================================================ */
+
+.turn-card {
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border-color, #333);
+  background: var(--bg-primary, #1e1e1e);
+}
+
+.turn-card.streaming {
+  border-color: var(--color-primary, #4dabf7);
+  box-shadow: 0 0 0 1px var(--color-primary, #4dabf7);
+}
+
+.turn-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-secondary, #2d2d2d);
+  border-bottom: 1px solid var(--border-color, #333);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.turn-icon {
+  font-size: 14px;
+}
+
+.turn-label {
+  flex: 1;
+  color: var(--text-primary, #e0e0e0);
+}
+
+.turn-tokens {
+  font-size: 11px;
+  color: var(--text-tertiary, #666);
+  margin-left: auto;
+}
+
+.streaming-indicator {
+  color: var(--color-primary, #4dabf7);
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.turn-card-body {
+  padding: 12px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-primary, #e0e0e0);
+}
+
+.turn-card-body .thinking {
+  color: var(--text-secondary, #888);
+  font-style: italic;
+}
+
+/* ============================================================================
+ * Text Card Styles
+ * ============================================================================ */
+
+.text-card.user {
+  border-color: var(--accent-user, #69db7c);
+}
+
+.text-card.user .turn-card-header {
+  background: rgba(105, 219, 124, 0.1);
+  color: var(--accent-user, #69db7c);
+}
+
+.text-card.assistant {
+  border-color: var(--accent, #4dabf7);
+}
+
+.text-card.assistant .turn-card-header {
+  background: rgba(77, 171, 247, 0.1);
+  color: var(--accent, #4dabf7);
+}
+
+.text-card.assistant.streaming {
+  border-color: var(--accent-active, #74c0fc);
+}
+
+/* ============================================================================
+ * Tool Use Card Styles
+ * ============================================================================ */
+
+.tool-use-card {
+  border-color: var(--accent-tool, #ffd43b);
+}
+
+.tool-use-card .turn-card-header {
+  background: rgba(255, 212, 59, 0.1);
+}
+
+.tool-use-card .tool-name {
+  color: var(--accent-tool, #ffd43b);
+  font-family: var(--font-mono, monospace);
+}
+
+.tool-use-card.streaming .turn-card-header {
+  background: rgba(255, 212, 59, 0.15);
+}
+
+.tool-use-card.error {
+  border-color: var(--error, #ff6b6b);
+}
+
+.tool-use-card.error .turn-card-header {
+  background: rgba(255, 107, 107, 0.1);
+}
+
+.tool-use-status {
+  font-size: 12px;
+  width: 20px;
+  text-align: center;
+}
+
+.tool-use-status.executing {
+  color: var(--accent-tool, #ffd43b);
+}
+
+.tool-use-status.completed {
+  color: var(--accent-success, #51cf66);
+}
+
+.tool-use-status.error {
+  color: var(--error, #ff6b6b);
+}
+
+.tool-spinner {
+  animation: spin 1s linear infinite;
+  display: inline-block;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ============================================================================
+ * Tool Result Card Styles
+ * ============================================================================ */
+
+.tool-result-card {
+  border-color: var(--accent-success, #51cf66);
+}
+
+.tool-result-card .turn-card-header {
+  background: rgba(81, 207, 102, 0.1);
+  color: var(--accent-success, #51cf66);
+}
+
+.tool-result-card.error {
+  border-color: var(--error, #ff6b6b);
+}
+
+.tool-result-card.error .turn-card-header {
+  background: rgba(255, 107, 107, 0.1);
+  color: var(--error, #ff6b6b);
+}
+
+.tool-result-output {
+  margin: 0;
+  padding: 8px;
+  background: var(--bg-tertiary, #252525);
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.tool-result-output.error {
+  color: var(--error, #ff6b6b);
+}
+
+/* ============================================================================
+ * System Card Styles
+ * ============================================================================ */
+
+.system-card {
+  border-color: var(--border-muted, #404040);
+  opacity: 0.9;
+}
+
+.system-card .turn-card-header {
+  background: var(--bg-tertiary, #252525);
+  color: var(--text-secondary, #888);
+}
+
+.system-card.system-fork,
+.system-card.system-fork-proposal {
+  border-color: var(--accent-fork, #be4bdb);
+}
+
+.system-card.system-fork .turn-card-header,
+.system-card.system-fork-proposal .turn-card-header {
+  background: rgba(190, 75, 219, 0.1);
+  color: var(--accent-fork, #be4bdb);
+}
+
+.system-card.system-merge,
+.system-card.system-merged-to,
+.system-card.system-merge-proposal {
+  border-color: var(--accent-merge, #15aabf);
+}
+
+.system-card.system-merge .turn-card-header,
+.system-card.system-merged-to .turn-card-header,
+.system-card.system-merge-proposal .turn-card-header {
+  background: rgba(21, 170, 191, 0.1);
+  color: var(--accent-merge, #15aabf);
+}
+
+.system-card.system-error,
+.system-card.system-interruption {
+  border-color: var(--error, #ff6b6b);
+}
+
+.system-card.system-error .turn-card-header,
+.system-card.system-interruption .turn-card-header {
+  background: rgba(255, 107, 107, 0.1);
+  color: var(--error, #ff6b6b);
+}
+
+.system-card.system-link {
+  border-color: var(--accent-link, #20c997);
+}
+
+.system-card.system-link .turn-card-header {
+  background: rgba(32, 201, 151, 0.1);
+  color: var(--accent-link, #20c997);
+}
+
+/* ============================================================================
+ * Collapsible Component
+ * ============================================================================ */
+
+.collapsible {
+  margin-top: 8px;
+}
+
+.collapsible-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--bg-tertiary, #252525);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  color: var(--text-secondary, #888);
+  font-size: 12px;
+  transition: background-color 0.15s ease;
+}
+
+.collapsible-header:hover {
+  background: var(--bg-hover, #333);
+}
+
+.collapsible-icon {
+  font-size: 10px;
+  width: 12px;
+}
+
+.collapsible-title {
+  font-weight: 500;
+}
+
+.collapsible-content {
+  margin-top: 8px;
+}
+
+/* ============================================================================
+ * Formatted Tool Input
+ * ============================================================================ */
+
+.tool-input-formatted {
+  font-size: 13px;
+}
+
+.tool-input-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--bg-tertiary, #252525);
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+
+.tool-input-label {
+  font-weight: 500;
+  color: var(--accent-tool, #ffd43b);
+  font-size: 12px;
+}
+
+.tool-input-path {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--text-primary, #e0e0e0);
+  background: var(--bg-code, #1a1a1a);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.tool-input-in {
+  font-size: 11px;
+  color: var(--text-tertiary, #666);
+}
+
+.tool-input-desc {
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+  font-style: italic;
+}
+
+.tool-code-block {
+  margin: 0;
+  padding: 8px;
+  background: var(--bg-code, #1a1a1a);
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.tool-use-json {
+  margin: 0;
+  padding: 8px;
+  background: var(--bg-code, #1a1a1a);
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* ============================================================================
+ * Diff View
+ * ============================================================================ */
+
+.diff-view {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  background: var(--bg-code, #1a1a1a);
+  border-radius: 4px;
+  overflow-x: auto;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.diff-line {
+  padding: 1px 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diff-header {
+  color: var(--text-secondary, #888);
+  font-weight: 500;
+}
+
+.diff-add {
+  background: rgba(81, 207, 102, 0.15);
+  color: var(--accent-success, #51cf66);
+}
+
+.diff-remove {
+  background: rgba(255, 107, 107, 0.15);
+  color: var(--error, #ff6b6b);
+}
+
+.diff-context {
+  color: var(--text-primary, #e0e0e0);
+}
+
+/* ============================================================================
+ * Light Mode Overrides
+ * ============================================================================ */
+
+:root[data-theme="light"] .turn-card,
+[data-theme="light"] .turn-card {
+  background: var(--bg-primary, #ffffff);
+  border-color: var(--border-color, #e0e0e0);
+}
+
+:root[data-theme="light"] .turn-card-header,
+[data-theme="light"] .turn-card-header {
+  background: var(--bg-secondary, #f5f5f5);
+  border-color: var(--border-color, #e0e0e0);
+}
+
+:root[data-theme="light"] .turn-label,
+[data-theme="light"] .turn-label,
+:root[data-theme="light"] .turn-card-body,
+[data-theme="light"] .turn-card-body {
+  color: var(--text-primary, #333);
+}
+
+:root[data-theme="light"] .tool-result-output,
+[data-theme="light"] .tool-result-output,
+:root[data-theme="light"] .tool-code-block,
+[data-theme="light"] .tool-code-block,
+:root[data-theme="light"] .tool-use-json,
+[data-theme="light"] .tool-use-json,
+:root[data-theme="light"] .diff-view,
+[data-theme="light"] .diff-view {
+  background: var(--bg-code, #f8f8f8);
+}
+
+:root[data-theme="light"] .collapsible-header,
+[data-theme="light"] .collapsible-header {
+  background: var(--bg-tertiary, #eee);
+}
+
+:root[data-theme="light"] .collapsible-header:hover,
+[data-theme="light"] .collapsible-header:hover {
+  background: var(--bg-hover, #ddd);
+}
