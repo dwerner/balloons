@@ -7,6 +7,7 @@
 
 import React, { useState, useMemo } from 'react';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
+import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
 import './cards.css';
 
 interface ToolUseCardProps {
@@ -126,14 +127,12 @@ function FormattedToolInput({
   toolInput,
 }: {
   toolName: string;
-  toolInput: Record<string, unknown> | string;
+  toolInput: Record<string, unknown>;
 }) {
-  const input = typeof toolInput === 'string' ? JSON.parse(toolInput || '{}') : toolInput;
-
   if (toolName === 'Edit') {
-    const filePath = (input.file_path || '') as string;
-    const oldString = (input.old_string || '') as string;
-    const newString = (input.new_string || '') as string;
+    const filePath = (toolInput.file_path || '') as string;
+    const oldString = (toolInput.old_string || '') as string;
+    const newString = (toolInput.new_string || '') as string;
     const diffLines = generateDiff(oldString, newString, filePath);
 
     return (
@@ -164,8 +163,8 @@ function FormattedToolInput({
   }
 
   if (toolName === 'Write') {
-    const filePath = (input.file_path || '') as string;
-    const content = (input.content || '') as string;
+    const filePath = (toolInput.file_path || '') as string;
+    const content = (toolInput.content || '') as string;
     const language = guessLanguage(filePath);
     const truncated = content.length > 1000;
     const displayContent = truncated ? content.slice(0, 1000) + '\n... [truncated]' : content;
@@ -184,9 +183,9 @@ function FormattedToolInput({
   }
 
   if (toolName === 'Read') {
-    const filePath = (input.file_path || '') as string;
-    const offset = input.offset as number | undefined;
-    const limit = input.limit as number | undefined;
+    const filePath = (toolInput.file_path || '') as string;
+    const offset = toolInput.offset as number | undefined;
+    const limit = toolInput.limit as number | undefined;
     let rangeInfo = '';
     if (offset || limit) {
       const start = offset || 1;
@@ -210,8 +209,8 @@ function FormattedToolInput({
   }
 
   if (toolName === 'Bash') {
-    const command = (input.command || '') as string;
-    const description = (input.description || '') as string;
+    const command = (toolInput.command || '') as string;
+    const description = (toolInput.description || '') as string;
     return (
       <div className="tool-input-formatted">
         <div className="tool-input-header">
@@ -226,8 +225,8 @@ function FormattedToolInput({
   }
 
   if (toolName === 'Glob') {
-    const pattern = (input.pattern || '') as string;
-    const path = (input.path || '.') as string;
+    const pattern = (toolInput.pattern || '') as string;
+    const path = (toolInput.path || '.') as string;
     return (
       <div className="tool-input-formatted">
         <div className="tool-input-header">
@@ -241,8 +240,8 @@ function FormattedToolInput({
   }
 
   if (toolName === 'Grep') {
-    const pattern = (input.pattern || '') as string;
-    const path = (input.path || '.') as string;
+    const pattern = (toolInput.pattern || '') as string;
+    const path = (toolInput.path || '.') as string;
     return (
       <div className="tool-input-formatted">
         <div className="tool-input-header">
@@ -258,7 +257,7 @@ function FormattedToolInput({
   // Default: show formatted JSON
   return (
     <pre className="tool-use-json">
-      <code>{formatJson(input)}</code>
+      <code>{formatJson(toolInput)}</code>
     </pre>
   );
 }
@@ -282,34 +281,24 @@ function FormattedToolResult({
 }
 
 export function ToolUseCard({ turn, result }: ToolUseCardProps) {
-  const { content, streaming, tokens } = turn;
+  const { contentBlock, streaming, tokens } = turn;
 
-  // Parse tool info from content or structured data
-  // The streaming view stores tool info in the turn content as JSON during streaming
-  const toolInfo = useMemo(() => {
-    // First, check if we have structured tool info in the content
-    if (!content) {
-      return { toolName: 'Tool', toolInput: {} };
-    }
+  // Extract tool info from contentBlock
+  const toolUseBlock = contentBlock?.type === 'tool_use'
+    ? (contentBlock as ToolUseBlock)
+    : null;
 
-    try {
-      // Try to parse as JSON (tool input being streamed)
-      const parsed = JSON.parse(content);
-      if (parsed.name && parsed.input) {
-        return { toolName: parsed.name, toolInput: parsed.input };
-      }
-      // Just raw input
-      return { toolName: 'Tool', toolInput: parsed };
-    } catch {
-      // Not JSON, might be a tool name or raw content
-      return { toolName: content.slice(0, 50) || 'Tool', toolInput: {} };
-    }
-  }, [content]);
-
-  const { toolName, toolInput } = toolInfo;
+  const toolName = toolUseBlock?.name || 'Tool';
+  const toolInput = toolUseBlock?.input || {};
   const hasInput = Object.keys(toolInput).length > 0;
-  const hasResult = result && result.content;
-  const isError = result?.contentBlockType === 'tool_result' && result.content?.startsWith('Error');
+
+  // Get result info if available
+  const resultBlock = result?.contentBlock?.type === 'tool_result'
+    ? (result.contentBlock as ToolResultBlock)
+    : null;
+  const hasResult = !!resultBlock;
+  const resultContent = resultBlock?.content || '';
+  const isError = resultBlock?.isError || false;
 
   const statusIcon = streaming ? '⏳' : hasResult ? (isError ? '✗' : '✓') : '✓';
   const statusClass = streaming ? 'executing' : isError ? 'error' : 'completed';
@@ -332,7 +321,7 @@ export function ToolUseCard({ turn, result }: ToolUseCardProps) {
 
       {hasResult && (
         <Collapsible title={isError ? 'Error' : 'Result'} defaultExpanded={true}>
-          <FormattedToolResult result={result.content} isError={isError} />
+          <FormattedToolResult result={resultContent} isError={isError} />
         </Collapsible>
       )}
     </div>

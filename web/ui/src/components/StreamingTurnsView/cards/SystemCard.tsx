@@ -8,6 +8,20 @@
 import React from 'react';
 import { MarkdownContent } from '../../../MarkdownContent';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
+import type {
+  ForkBlock,
+  MergeBlock,
+  MergedToBlock,
+  LinkBlock,
+  ErrorBlock,
+  InterruptionBlock,
+  ArchiveBlock,
+  SlideBlock,
+  ReviewBlock,
+  ForkProposalBlock,
+  MergeProposalBlock,
+  ImageBlock,
+} from '../../../../../generated/types';
 import './cards.css';
 
 interface SystemCardProps {
@@ -30,15 +44,79 @@ const SYSTEM_CONFIG: Record<string, { icon: string; label: string; className: st
   archive: { icon: '📦', label: 'Archive', className: 'system-archive' },
 };
 
+// Extract display content from different block types
+function getDisplayContent(block: SessionDataTurn['contentBlock']): string {
+  if (!block) return '';
+
+  switch (block.type) {
+    case 'fork': {
+      const b = block as ForkBlock;
+      return `**${b.forkName || 'Fork'}**\n\n${b.prompt || ''}`;
+    }
+    case 'merge': {
+      const b = block as MergeBlock;
+      let content = `**${b.forkName || 'Merge'}**\n\n${b.message || ''}`;
+      if (b.filesChanged?.length) {
+        content += `\n\n**Files changed:** ${b.filesChanged.join(', ')}`;
+      }
+      return content;
+    }
+    case 'merged_to': {
+      const b = block as MergedToBlock;
+      return `Merged to **${b.parentName}**\n\n${b.message || ''}`;
+    }
+    case 'link': {
+      const b = block as LinkBlock;
+      return b.summary || 'Linked session';
+    }
+    case 'error': {
+      const b = block as ErrorBlock;
+      return `**${b.reason}**\n\n${b.details || ''}`;
+    }
+    case 'interruption': {
+      const b = block as InterruptionBlock;
+      return b.reason || 'User cancelled';
+    }
+    case 'archive': {
+      const b = block as ArchiveBlock;
+      return b.summary || `Archived ${b.messageCount} messages`;
+    }
+    case 'slide': {
+      const b = block as SlideBlock;
+      return `## ${b.title || 'Slide'}\n\n${b.content || ''}`;
+    }
+    case 'review': {
+      const b = block as ReviewBlock;
+      return `Review of **${b.modelUnderReview}** (${b.status})`;
+    }
+    case 'fork_proposal': {
+      const b = block as ForkProposalBlock;
+      return `**${b.name || 'Fork'}** (${b.status})\n\n${b.description || ''}`;
+    }
+    case 'merge_proposal': {
+      const b = block as MergeProposalBlock;
+      return `Merge proposal (${b.status})\n\n${b.summary || ''}`;
+    }
+    case 'image': {
+      const b = block as ImageBlock;
+      return `![${b.filename || 'Image'}](${b.filePath})`;
+    }
+    default:
+      return '';
+  }
+}
+
 export function SystemCard({ turn }: SystemCardProps) {
-  const { content, contentBlockType, streaming } = turn;
-  const blockType = contentBlockType || 'unknown';
+  const { contentBlock, streaming } = turn;
+  const blockType = contentBlock?.type || 'unknown';
 
   const config = SYSTEM_CONFIG[blockType] || {
     icon: '📄',
     label: blockType,
     className: 'system-unknown',
   };
+
+  const displayContent = getDisplayContent(contentBlock);
 
   return (
     <div className={`turn-card system-card ${config.className} ${streaming ? 'streaming' : ''}`}>
@@ -47,9 +125,9 @@ export function SystemCard({ turn }: SystemCardProps) {
         <span className="turn-label">{config.label}</span>
         {streaming && <span className="streaming-indicator">●</span>}
       </div>
-      {content && (
+      {displayContent && (
         <div className="turn-card-body">
-          <MarkdownContent content={content} />
+          <MarkdownContent content={displayContent} />
         </div>
       )}
     </div>

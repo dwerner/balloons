@@ -1,12 +1,172 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-17T14:27:03.181883
+// Generated: 2026-02-17T16:45:40.098635
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
 //
 // To add new types, add @ws_type decorator to dataclasses in your service modules.
+
+export interface TextBlock {
+  type?: string;
+  text?: string;
+}
+
+export interface ImageBlock {
+  type?: string;
+  filePath?: string;
+  mediaType?: string;
+  filename?: string;
+  width?: number;
+  height?: number;
+}
+
+export interface ToolUseBlock {
+  type?: string;
+  id?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+}
+
+export interface ToolResultBlock {
+  type?: string;
+  toolUseId?: string;
+  content?: string;
+  isError?: boolean;
+}
+
+export interface InterruptionBlock {
+  type?: string;
+  reason?: string;
+}
+
+export interface ErrorBlock {
+  type?: string;
+  reason?: string;
+  partialToolName?: string;
+  partialToolInput?: string;
+  details?: string;
+  dumpFile?: string;
+}
+
+export interface LinkBlock {
+  type?: string;
+  linkId?: string;
+  linkedSessionId?: string;
+  summary?: string;
+  isOrphaned?: boolean;
+}
+
+export interface ForkBlock {
+  type?: string;
+  forkId?: string;
+  childSessionId?: string;
+  forkName?: string;
+  prompt?: string;
+  status?: string;
+}
+
+export interface MergeBlock {
+  type?: string;
+  mergeId?: string;
+  childSessionId?: string;
+  forkName?: string;
+  message?: string;
+  filesChanged?: string[];
+  keyAccomplishments?: string[];
+  reason?: string;
+}
+
+export interface MergedToBlock {
+  type?: string;
+  mergeId?: string;
+  parentSessionId?: string;
+  parentName?: string;
+  parentTurn?: number;
+  message?: string;
+  filesChanged?: string[];
+  keyAccomplishments?: string[];
+  reason?: string;
+}
+
+export interface SlideBlock {
+  type?: string;
+  title?: string;
+  content?: string;
+  notes?: string;
+}
+
+export interface ReviewBlock {
+  type?: string;
+  reviewId?: string;
+  childSessionId?: string;
+  modelUnderReview?: string;
+  status?: string;
+  overallScore?: number;
+  taskCategory?: string;
+  taskDescription?: string;
+  notes?: string;
+}
+
+export interface ContextAssignmentData {
+  exchangeRange?: string;
+  mode?: string;
+  reason?: string;
+}
+
+export interface ExchangeInfo {
+  index?: number;
+  summary?: string;
+  mode?: string;
+}
+
+export interface ForkBindingData {
+  entityType?: string;
+  entityId?: string;
+  role?: string;
+}
+
+export interface ForkProposalBlock {
+  type?: string;
+  proposalId?: string;
+  name?: string;
+  description?: string;
+  contextPlan?: ContextAssignmentData[];
+  initialPrompt?: string;
+  bindTo?: ForkBindingData | null;
+  bindToInherit?: boolean;
+  status?: string;
+  allExchanges?: ExchangeInfo[];
+}
+
+export interface MergeProposalBlock {
+  type?: string;
+  proposalId?: string;
+  summary?: string;
+  reason?: string;
+  filesChanged?: string[];
+  keyAccomplishments?: string[];
+  status?: string;
+}
+
+export interface ArchiveSummary {
+  filesModified?: string[];
+  workDone?: string;
+  keyDecisions?: string[];
+}
+
+export interface ArchiveBlock {
+  type?: string;
+  archiveId?: string;
+  filePath?: string;
+  summary?: string;
+  structuredSummary?: ArchiveSummary | null;
+  turnStart?: number;
+  turnEnd?: number;
+  messageCount?: number;
+  tokenEstimate?: number;
+}
 
 export interface SessionInfo {
   id: string;
@@ -357,12 +517,11 @@ export interface TurnDelta {
 export interface TurnSnapshot {
   turnId: string;
   role: string;
-  content: string;
   streaming: boolean;
   viewed: boolean;
   tokens: number;
   contextMode: string;
-  contentBlockType?: string;
+  contentBlock: TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock | InterruptionBlock | ErrorBlock | LinkBlock | ForkBlock | MergeBlock | MergedToBlock | ArchiveBlock | SlideBlock | ReviewBlock | ForkProposalBlock | MergeProposalBlock;
   exchangeId?: string | null;
 }
 
@@ -407,8 +566,9 @@ export interface SessionTurnDeltaEvent {
 export interface SessionTurnFinishedEvent {
   sessionId: string;
   turnId: string;
-  finalContent: string;
   tokens: number;
+  contentBlock?: TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock | InterruptionBlock | ErrorBlock | LinkBlock | ForkBlock | MergeBlock | MergedToBlock | ArchiveBlock | SlideBlock | ReviewBlock | ForkProposalBlock | MergeProposalBlock | null;
+  finalContent?: string;
 }
 
 export interface ImageUploadResult {

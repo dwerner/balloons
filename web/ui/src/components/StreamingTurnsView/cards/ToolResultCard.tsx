@@ -7,6 +7,7 @@
 
 import React from 'react';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
+import type { ToolResultBlock } from '../../../../../generated/types';
 import './cards.css';
 
 interface ToolResultCardProps {
@@ -14,18 +15,20 @@ interface ToolResultCardProps {
 }
 
 export function ToolResultCard({ turn }: ToolResultCardProps) {
-  const { content, streaming } = turn;
+  const { contentBlock, streaming } = turn;
 
-  // Detect if this is an error result
-  const isError = content?.toLowerCase().startsWith('error') ||
-    content?.includes('Error:') ||
-    content?.includes('failed');
+  // Extract content from tool_result block
+  const resultBlock = contentBlock?.type === 'tool_result'
+    ? (contentBlock as ToolResultBlock)
+    : null;
+  const content = resultBlock?.content || '';
+  const isError = resultBlock?.isError || false;
 
   // Truncate long results
-  const truncated = content && content.length > 5000;
+  const truncated = content.length > 5000;
   const displayContent = truncated
     ? content.slice(0, 5000) + '\n... [truncated]'
-    : content || '';
+    : content;
 
   return (
     <div className={`turn-card tool-result-card ${isError ? 'error' : ''} ${streaming ? 'streaming' : ''}`}>

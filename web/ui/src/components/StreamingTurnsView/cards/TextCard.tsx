@@ -5,6 +5,7 @@
 import React from 'react';
 import { MarkdownContent } from '../../../MarkdownContent';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
+import type { TextBlock } from '../../../../../generated/types';
 import './cards.css';
 
 interface TextCardProps {
@@ -12,9 +13,14 @@ interface TextCardProps {
 }
 
 export function TextCard({ turn }: TextCardProps) {
-  const { role, content, streaming, tokens } = turn;
+  const { role, contentBlock, streaming, tokens } = turn;
   const isUser = role === 'user';
   const isAssistant = role === 'assistant';
+
+  // Extract text from content block
+  const content = contentBlock?.type === 'text'
+    ? (contentBlock as TextBlock).text ?? ''
+    : '';
 
   const roleConfig = {
     user: { icon: '👤', label: 'User', className: 'user' },

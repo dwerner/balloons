@@ -20,7 +20,42 @@ import type {
   SessionTurnDeltaEvent,
   SessionTurnFinishedEvent,
   TurnSnapshot,
+  TextBlock,
+  ToolUseBlock,
+  ToolResultBlock,
+  ImageBlock,
+  InterruptionBlock,
+  ErrorBlock,
+  LinkBlock,
+  ForkBlock,
+  MergeBlock,
+  MergedToBlock,
+  ArchiveBlock,
+  SlideBlock,
+  ReviewBlock,
+  ForkProposalBlock,
+  MergeProposalBlock,
 } from '../../../generated/types';
+
+/**
+ * Union of all content block types
+ */
+export type ContentBlock =
+  | TextBlock
+  | ImageBlock
+  | ToolUseBlock
+  | ToolResultBlock
+  | InterruptionBlock
+  | ErrorBlock
+  | LinkBlock
+  | ForkBlock
+  | MergeBlock
+  | MergedToBlock
+  | ArchiveBlock
+  | SlideBlock
+  | ReviewBlock
+  | ForkProposalBlock
+  | MergeProposalBlock;
 
 // Debug logging to server
 function debugLog(message: string, data?: unknown): void {
@@ -42,10 +77,10 @@ export interface SessionDataTurn {
   turnId: string;
   /** Insertion order (for display ordering) - derived from array position */
   order: number;
-  /** Turn role: "user", "assistant", "tool" */
+  /** Turn role: "user", "assistant", "tool", "system" */
   role: string;
-  /** Content accumulated so far */
-  content: string;
+  /** Full structured content block - source of truth for turn content */
+  contentBlock: ContentBlock;
   /** Whether this turn is currently streaming */
   streaming: boolean;
   /** Whether this turn has been viewed */
@@ -54,12 +89,8 @@ export interface SessionDataTurn {
   tokens: number;
   /** Context mode: "copy", "compress", "drop" */
   contextMode: string;
-  /** Content block type */
-  contentBlockType?: string;
   /** Exchange ID for grouping related turns */
   exchangeId?: string;
-  /** Accumulated content length for validation */
-  accumulatedLength: number;
 }
 
 export interface UseSessionDataState {
@@ -88,33 +119,81 @@ export interface UseSessionDataReturn extends UseSessionDataState {
   clear: () => void;
 }
 
-// Note: Client ID is now injected by the ws_server, not generated client-side.
-// This ensures the client_id used for subscription matches the WebSocket client_id
-// for proper event targeting.
+/**
+ * Extract display text from a content block.
+ * Used for streaming accumulation and display.
+ */
+function getTextFromBlock(block: ContentBlock): string {
+  if (!block) return '';
+  switch (block.type) {
+    case 'text':
+      return (block as TextBlock).text ?? '';
+    case 'tool_result':
+      return (block as ToolResultBlock).content ?? '';
+    default:
+      return '';
+  }
+}
+
+/**
+ * Create an initial content block for a streaming turn.
+ */
+function createInitialBlock(contentBlockType: string): ContentBlock {
+  switch (contentBlockType) {
+    case 'text':
+      return { type: 'text', text: '' } as TextBlock;
+    case 'tool_use':
+      return { type: 'tool_use', id: '', name: '', input: {} } as ToolUseBlock;
+    case 'tool_result':
+      return { type: 'tool_result', toolUseId: '', content: '', isError: false } as ToolResultBlock;
+    case 'image':
+      return { type: 'image', filePath: '', mediaType: '', filename: '' } as ImageBlock;
+    case 'fork':
+      return { type: 'fork', forkId: '', childSessionId: '', forkName: '', prompt: '', status: 'active' } as ForkBlock;
+    case 'merge':
+      return { type: 'merge', mergeId: '', childSessionId: '', forkName: '', message: '' } as MergeBlock;
+    case 'merged_to':
+      return { type: 'merged_to', mergeId: '', parentSessionId: '', parentName: '', message: '' } as MergedToBlock;
+    case 'link':
+      return { type: 'link', linkId: '', linkedSessionId: '', summary: '' } as LinkBlock;
+    case 'interruption':
+      return { type: 'interruption', reason: 'user_cancelled' } as InterruptionBlock;
+    case 'error':
+      return { type: 'error', reason: 'stream_error', details: '' } as ErrorBlock;
+    case 'archive':
+      return { type: 'archive', archiveId: '', filePath: '', summary: '' } as ArchiveBlock;
+    case 'slide':
+      return { type: 'slide', title: '', content: '', notes: '' } as SlideBlock;
+    case 'review':
+      return { type: 'review', reviewId: '', childSessionId: '', status: 'active' } as ReviewBlock;
+    case 'fork_proposal':
+      return { type: 'fork_proposal', proposalId: '', name: '', description: '', status: 'pending' } as ForkProposalBlock;
+    case 'merge_proposal':
+      return { type: 'merge_proposal', proposalId: '', summary: '', status: 'pending' } as MergeProposalBlock;
+    default:
+      // Default to text block for unknown types
+      return { type: 'text', text: '' } as TextBlock;
+  }
+}
+
+/**
+ * Update a text block with a delta.
+ */
+function appendTextDelta(block: ContentBlock, delta: string): ContentBlock {
+  if (block.type === 'text') {
+    const textBlock = block as TextBlock;
+    return { ...textBlock, text: (textBlock.text ?? '') + delta };
+  }
+  // For non-text blocks during streaming, we can't really append
+  // This shouldn't happen normally - tool input streams via separate events
+  return block;
+}
 
 /**
  * Hook for subscribing to session data via SessionDataService
  *
  * @param client - BalloonsClient instance
  * @param autoSubscribe - Session ID to automatically subscribe to (optional)
- *
- * @example
- * ```tsx
- * function MyComponent({ sessionId, client }) {
- *   const { turns, isLoading, isSubscribed, error } = useSessionData(client, sessionId);
- *
- *   if (isLoading) return <div>Loading...</div>;
- *   if (error) return <div>Error: {error}</div>;
- *
- *   return (
- *     <div>
- *       {turns.map(turn => (
- *         <TurnCard key={turn.turnId} turn={turn} />
- *       ))}
- *     </div>
- *   );
- * }
- * ```
  */
 export function useSessionData(
   client: BalloonsClient | null,
@@ -161,15 +240,13 @@ export function useSessionData(
     unsubscribersRef.current = [];
 
     // Unsubscribe from session on server (only if client is still connected)
-    // Note: Don't pass clientId - let ws_server inject the real client ID
     if (client && client.isConnected && currentSessionRef.current) {
       try {
         await client.sessionData.unsubscribeSession(
           currentSessionRef.current
         );
       } catch (err) {
-        // Ignore unsubscribe errors during disconnect - this is expected
-        // when the component unmounts after the client disconnects
+        // Ignore unsubscribe errors during disconnect
         console.debug('[useSessionData] Unsubscribe skipped (disconnected):', err);
       }
     }
@@ -205,10 +282,7 @@ export function useSessionData(
         console.log(`[useSessionData] Subscribing to session ${newSessionId}`);
 
         // Subscribe to session - returns snapshot atomically with subscription
-        // Note: Don't pass clientId - let ws_server inject the real client ID
-        const result = await client.sessionData.subscribeSession(
-          newSessionId
-        );
+        const result = await client.sessionData.subscribeSession(newSessionId);
 
         console.log(`[useSessionData] Subscribe result:`, result);
 
@@ -218,25 +292,21 @@ export function useSessionData(
 
         console.log(`[useSessionData] Subscription successful, snapshot has ${result.snapshot?.turns?.length ?? 0} turns`);
 
-        // Convert snapshot turns to our format (snapshot is included in subscribe result)
-        // Turns come in array order - use array index for ordering
+        // Convert snapshot turns to our format
         const initialTurns = new Map<string, SessionDataTurn>();
         if (result.snapshot?.turns) {
           result.snapshot.turns.forEach((turn: TurnSnapshot, arrayIndex: number) => {
-            // Use the real turn_id from the snapshot (or fall back to generated ID)
             const turnId = turn.turnId || `snapshot-${newSessionId}-${arrayIndex}`;
             initialTurns.set(turnId, {
               turnId,
-              order: arrayIndex,  // Use array position for ordering
+              order: arrayIndex,
               role: turn.role,
-              content: turn.content || '',
+              contentBlock: turn.contentBlock,
               streaming: turn.streaming || false,
               viewed: turn.viewed || false,
               tokens: turn.tokens || 0,
               contextMode: turn.contextMode || 'copy',
-              contentBlockType: turn.contentBlockType,
               exchangeId: turn.exchangeId ?? undefined,
-              accumulatedLength: turn.content?.length || 0,
             });
           });
         }
@@ -254,14 +324,12 @@ export function useSessionData(
           client.sessionData.sessionDataTurnCreated((event: SessionTurnCreatedEvent) => {
             debugLog('sessionDataTurnCreated received', event);
 
-            // Defensive: check if event is valid
             if (!event || typeof event !== 'object') {
               console.warn('[useSessionData] turnCreated received invalid event:', event);
               return;
             }
 
             if (event.sessionId !== newSessionId) {
-              console.log(`[useSessionData] turnCreated for different session: ${event.sessionId} vs ${newSessionId}`);
               return;
             }
 
@@ -272,27 +340,24 @@ export function useSessionData(
             }
 
             setTurnsById((prev) => {
-              // Skip if turn already exists
               if (prev.has(turnId)) {
                 return prev;
               }
 
               const next = new Map(prev);
-              // Use the order from the server (authoritative)
               const serverOrder = event.order ?? 0;
+              const contentBlockType = event.contentBlockType ?? 'text';
 
               next.set(turnId, {
-                turnId: turnId,
+                turnId,
                 order: serverOrder,
                 role: event.role ?? 'assistant',
-                content: '',
+                contentBlock: createInitialBlock(contentBlockType),
                 streaming: true,
                 viewed: false,
                 tokens: 0,
                 contextMode: 'copy',
-                contentBlockType: event.contentBlockType,
                 exchangeId: event.exchangeId ?? undefined,
-                accumulatedLength: 0,
               });
 
               return next;
@@ -300,26 +365,22 @@ export function useSessionData(
           })
         );
 
-        // Turn delta - update content
+        // Turn delta - update content (for text blocks)
         debugLog('Setting up sessionDataTurnDelta handler');
         handlers.push(
           client.sessionData.sessionDataTurnDelta((event: SessionTurnDeltaEvent) => {
             debugLog('sessionDataTurnDelta received', event);
 
-            // Defensive: check if event is valid
             if (!event || typeof event !== 'object') {
-              debugLog('turnDelta received invalid event', event);
               return;
             }
 
             if (event.sessionId !== newSessionId) {
-              debugLog(`turnDelta for different session: ${event.sessionId} vs ${newSessionId}`);
               return;
             }
 
             const delta = event.delta ?? '';
             const turnId = event.turnId ?? '';
-            const accumulatedLength = event.accumulatedLength ?? 0;
 
             if (!turnId) {
               console.warn('[useSessionData] turnDelta missing turnId:', event);
@@ -329,44 +390,29 @@ export function useSessionData(
             setTurnsById((prev) => {
               const existing = prev.get(turnId);
               if (!existing) {
-                // Turn not found - create it (turnCreated should have arrived first)
-                // Use maxOrder+1 as fallback - may cause ordering issues
-                console.warn(`[useSessionData] turnDelta for unknown turn ${turnId}, creating with fallback order`);
+                // Turn not found - create it with text block
+                console.warn(`[useSessionData] turnDelta for unknown turn ${turnId}, creating`);
                 const maxOrder = Math.max(-1, ...Array.from(prev.values()).map((t) => t.order));
-                const newOrder = maxOrder + 1;
 
                 const next = new Map(prev);
                 next.set(turnId, {
-                  turnId: turnId,
-                  order: newOrder,
+                  turnId,
+                  order: maxOrder + 1,
                   role: 'assistant',
-                  content: delta,
+                  contentBlock: { type: 'text', text: delta } as TextBlock,
                   streaming: true,
                   viewed: false,
                   tokens: 0,
                   contextMode: 'copy',
-                  accumulatedLength: accumulatedLength,
                 });
                 return next;
               }
 
-              // Validate accumulated length matches (only if delta is non-empty)
-              if (delta.length > 0) {
-                const expectedLength = existing.accumulatedLength + delta.length;
-                if (accumulatedLength !== expectedLength) {
-                  console.warn(
-                    `[useSessionData] Length mismatch for turn ${turnId}: ` +
-                      `expected ${expectedLength}, got ${accumulatedLength}`
-                  );
-                }
-              }
-
-              // Update existing turn
+              // Append delta to existing turn's content block
               const next = new Map(prev);
               next.set(turnId, {
                 ...existing,
-                content: existing.content + delta,
-                accumulatedLength: accumulatedLength,
+                contentBlock: appendTextDelta(existing.contentBlock, delta),
                 streaming: true,
               });
               return next;
@@ -374,24 +420,17 @@ export function useSessionData(
           })
         );
 
-        // Turn finished - finalize turn
+        // Turn finished - finalize turn with complete content block
         handlers.push(
           client.sessionData.sessionDataTurnFinished((event: SessionTurnFinishedEvent) => {
-            // Debug: log raw event to understand what we're receiving
             console.log('[useSessionData] turnFinished raw event:', event);
 
-            // Defensive: check if event is valid
             if (!event || typeof event !== 'object') {
               console.warn('[useSessionData] turnFinished received invalid event:', event);
               return;
             }
 
             if (event.sessionId !== newSessionId) return;
-
-            // Handle potentially undefined finalContent (defensive - use || for falsy values too)
-            const finalContent = (event.finalContent !== undefined && event.finalContent !== null)
-              ? String(event.finalContent)
-              : '';
 
             const turnId = event.turnId || '';
             if (!turnId) {
@@ -401,24 +440,34 @@ export function useSessionData(
 
             setTurnsById((prev) => {
               const existing = prev.get(turnId);
+
+              // Get the final content block from the event
+              // Prefer contentBlock, fall back to finalContent as TextBlock, fall back to existing
+              let finalContentBlock: ContentBlock;
+              if (event.contentBlock) {
+                finalContentBlock = event.contentBlock;
+              } else if (event.finalContent) {
+                finalContentBlock = { type: 'text', text: event.finalContent } as TextBlock;
+              } else if (existing?.contentBlock) {
+                finalContentBlock = existing.contentBlock;
+              } else {
+                finalContentBlock = { type: 'text', text: '' } as TextBlock;
+              }
+
               if (!existing) {
-                // Create the turn if it doesn't exist (turnCreated should have arrived first)
-                // Use maxOrder+1 as fallback - may cause ordering issues
-                console.warn(`[useSessionData] turnFinished for unknown turn ${turnId}, creating with fallback order`);
+                console.warn(`[useSessionData] turnFinished for unknown turn ${turnId}, creating`);
                 const maxOrder = Math.max(-1, ...Array.from(prev.values()).map((t) => t.order));
-                const newOrder = maxOrder + 1;
 
                 const next = new Map(prev);
                 next.set(turnId, {
-                  turnId: turnId,
-                  order: newOrder,
+                  turnId,
+                  order: maxOrder + 1,
                   role: 'assistant',
-                  content: finalContent,
+                  contentBlock: finalContentBlock,
                   streaming: false,
                   viewed: false,
                   tokens: event.tokens ?? 0,
                   contextMode: 'copy',
-                  accumulatedLength: finalContent.length,
                 });
                 return next;
               }
@@ -426,10 +475,9 @@ export function useSessionData(
               const next = new Map(prev);
               next.set(turnId, {
                 ...existing,
-                content: finalContent,
+                contentBlock: finalContentBlock,
                 tokens: event.tokens ?? 0,
                 streaming: false,
-                accumulatedLength: finalContent.length,
               });
               return next;
             });
@@ -451,17 +499,14 @@ export function useSessionData(
   // Auto-subscribe when autoSubscribe changes
   useEffect(() => {
     if (!client || !autoSubscribe) {
-      // If no auto-subscribe session and we're subscribed, unsubscribe
       if (isSubscribed && !autoSubscribe) {
         unsubscribe();
       }
       return;
     }
 
-    // Subscribe to the new session
     subscribe(autoSubscribe);
 
-    // Cleanup on unmount or session change
     return () => {
       unsubscribe();
     };

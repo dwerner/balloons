@@ -1,7 +1,7 @@
 /**
  * TurnCard - Main dispatcher component for turn rendering
  *
- * Routes to the appropriate card component based on contentBlockType and role.
+ * Routes to the appropriate card component based on contentBlock.type.
  * Also handles pairing tool_use turns with their matching tool_result.
  */
 
@@ -36,21 +36,18 @@ const SYSTEM_TYPES = new Set([
 ]);
 
 export function TurnCard({ turn, allTurns = [] }: TurnCardProps) {
-  const { role, contentBlockType } = turn;
-  const blockType = contentBlockType || 'text';
+  const { role, contentBlock } = turn;
+  const blockType = contentBlock?.type || 'text';
 
   // Find matching tool_result for tool_use turns
-  // We match by looking for a tool_result turn that follows this turn
-  // (in the same exchange if available, or by order proximity)
   const matchingResult = useMemo(() => {
     if (blockType !== 'tool_use') return null;
 
     // Look for a tool_result turn that matches
-    // We use a simple heuristic: the next tool_result turn after this one
     const turnOrder = turn.order;
     const results = allTurns.filter(
       (t) =>
-        t.contentBlockType === 'tool_result' &&
+        t.contentBlock?.type === 'tool_result' &&
         t.order > turnOrder &&
         // Same exchange if available
         (turn.exchangeId ? t.exchangeId === turn.exchangeId : true)
@@ -69,7 +66,7 @@ export function TurnCard({ turn, allTurns = [] }: TurnCardProps) {
     // Check if there's a matching tool_use that will render this result
     const hasMatchingToolUse = allTurns.some(
       (t) =>
-        t.contentBlockType === 'tool_use' &&
+        t.contentBlock?.type === 'tool_use' &&
         t.order < turn.order &&
         (turn.exchangeId ? t.exchangeId === turn.exchangeId : true)
     );

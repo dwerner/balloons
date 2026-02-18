@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, memo, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useRef, memo, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { BalloonsClient } from '../../generated/balloons-client';
 import type { ConnectionState, SessionInfo, TurnInfo, TaskInfo, Unsubscribe, ToolUseStartedEvent, ToolInputDeltaEvent, ToolResultEvent, ContentDeltaEvent, TurnStartedEvent, TurnFinishedEvent, GoalTreeStateServiceClient } from '../../generated/balloons-client';
 import { MarkdownContent } from './MarkdownContent';
@@ -734,6 +734,105 @@ function getWsUrl(): string {
 
 const WS_URL = getWsUrl();
 
+// ============================================================================
+// Fast Input Component - uses uncontrolled input to avoid re-renders
+// ============================================================================
+
+interface MessageInputHandle {
+  getValue: () => string;
+  setValue: (value: string) => void;
+  focus: () => void;
+}
+
+interface MessageInputProps {
+  placeholder: string;
+  disabled: boolean;
+  onSubmit: (message: string) => void;
+  onPaste: (e: React.ClipboardEvent) => void;
+}
+
+/**
+ * MessageInput - An uncontrolled textarea that doesn't trigger re-renders on typing.
+ *
+ * This fixes input lag by:
+ * 1. Using defaultValue instead of value (uncontrolled)
+ * 2. Storing the current value in a ref, not state
+ * 3. Only reading the value when needed (submit, clear)
+ * 4. Using memo to prevent re-renders from parent state changes
+ */
+/**
+ * MessageInput - An uncontrolled textarea that doesn't trigger re-renders on typing.
+ *
+ * Performance optimizations:
+ * 1. Uses defaultValue instead of value (uncontrolled) - React doesn't manage the DOM value
+ * 2. Stores current value in a ref, not state - no re-renders on typing
+ * 3. Stores callbacks in refs - allows stable internal handlers even when parent callbacks change
+ * 4. Custom memo comparison - only re-renders for placeholder/disabled changes, not callback changes
+ */
+const MessageInputInner = forwardRef<MessageInputHandle, MessageInputProps>(
+  function MessageInput({ placeholder, disabled, onSubmit, onPaste }, ref) {
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const valueRef = useRef('');
+    // Store callbacks in refs to avoid re-creating handlers when they change
+    const onSubmitRef = useRef(onSubmit);
+    const onPasteRef = useRef(onPaste);
+    onSubmitRef.current = onSubmit;
+    onPasteRef.current = onPaste;
+
+    // Expose imperative handle for parent to get/set value
+    useImperativeHandle(ref, () => ({
+      getValue: () => valueRef.current,
+      setValue: (value: string) => {
+        valueRef.current = value;
+        if (textareaRef.current) {
+          textareaRef.current.value = value;
+        }
+      },
+      focus: () => textareaRef.current?.focus(),
+    }), []);
+
+    const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      // Just update the ref, no state change = no re-render
+      valueRef.current = e.target.value;
+    }, []);
+
+    const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        const value = valueRef.current.trim();
+        if (value) {
+          onSubmitRef.current(value);
+        }
+      }
+    }, []); // No dependencies - uses ref
+
+    const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      onPasteRef.current(e);
+    }, []); // No dependencies - uses ref
+
+    return (
+      <textarea
+        ref={textareaRef}
+        className="input-field"
+        placeholder={placeholder}
+        defaultValue=""
+        onChange={handleChange}
+        onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
+        disabled={disabled}
+        rows={1}
+      />
+    );
+  }
+);
+
+// Custom comparison - only re-render for visual/functional changes, not callback identity
+const MessageInput = memo(MessageInputInner, (prevProps, nextProps) => {
+  return prevProps.placeholder === nextProps.placeholder &&
+         prevProps.disabled === nextProps.disabled;
+  // Intentionally ignore onSubmit and onPaste - we use refs for those
+});
+
 export function App() {
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
@@ -745,7 +844,6 @@ export function App() {
     return null;
   });
   const [turns, setTurns] = useState<TurnInfo[]>([]);
-  const [message, setMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [queuedMessageCount, setQueuedMessageCount] = useState(0);
   const [streamingTask, setStreamingTask] = useState<TaskInfo | null>(null);
@@ -773,6 +871,7 @@ export function App() {
   const clientRef = useRef<BalloonsClient | null>(null);
   const turnsEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const messageInputRef = useRef<MessageInputHandle>(null);
   // Track the session we're currently loading to handle race conditions
   const loadingSessionRef = useRef<string | null>(null);
 
@@ -1478,27 +1577,37 @@ export function App() {
     });
   }, []);
 
-  // Send a message
-  const handleSubmit = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Send a message - called from MessageInput component or form submit
+  // Note: messageContent is passed directly when called from MessageInput's onSubmit
+  const handleSubmit = useCallback(async (eOrMessage: React.FormEvent | string) => {
+    // Handle both form event and direct message string
+    const isFormEvent = typeof eOrMessage !== 'string';
+    if (isFormEvent) {
+      eOrMessage.preventDefault();
+    }
 
     const client = clientRef.current;
     if (!client || connectionState !== 'connected' || !selectedSessionId) {
       return;
     }
 
+    // Get message either from direct param or from ref
+    const message = typeof eOrMessage === 'string'
+      ? eOrMessage
+      : (messageInputRef.current?.getValue() || '').trim();
+
     // Allow sending with just images (no text) or just text (no images)
-    const hasText = message.trim().length > 0;
+    const hasText = message.length > 0;
     const hasImages = imageAttachments.length > 0;
     if (!hasText && !hasImages) {
       return;
     }
 
-    const content = message.trim();
+    const content = message;
     const currentImages = [...imageAttachments];
 
     // Clear input state
-    setMessage('');
+    messageInputRef.current?.setValue('');
     setImageAttachments([]);
     setError(null);
 
@@ -1512,7 +1621,7 @@ export function App() {
         // Note: Image queueing not yet supported
         if (hasImages) {
           setError('Cannot queue messages with images while streaming. Please wait.');
-          setMessage(content);
+          messageInputRef.current?.setValue(content);
           setImageAttachments(currentImages);
           return;
         }
@@ -1565,18 +1674,10 @@ export function App() {
     } catch (err) {
       console.error('Failed to send message:', err);
       setError(`Failed to send message: ${err}`);
-      setMessage(content);
+      messageInputRef.current?.setValue(content);
       setImageAttachments(currentImages);
     }
-  }, [connectionState, selectedSessionId, message, sessions, imageAttachments]);
-
-  // Handle Enter key in textarea
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSubmit(e);
-    }
-  }, [handleSubmit]);
+  }, [connectionState, selectedSessionId, sessions, imageAttachments]);
 
   // Stop streaming
   const handleStopStreaming = useCallback(async () => {
@@ -1848,23 +1949,20 @@ export function App() {
                 >
                   📎
                 </button>
-                <textarea
-                  className="input-field"
+                <MessageInput
+                  ref={messageInputRef}
                   placeholder={selectedSession?.isStreaming
                     ? "Type to queue... (messages will be sent after streaming completes)"
                     : "Type a message... (Enter to send, Shift+Enter for newline, Ctrl+V to paste image)"}
-                  value={message}
-                  onChange={e => setMessage(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  onPaste={handlePaste}
                   disabled={connectionState !== 'connected'}
-                  rows={1}
+                  onSubmit={handleSubmit}
+                  onPaste={handlePaste}
                 />
                 {selectedSession?.isStreaming ? (
                   <button
                     type="submit"
                     className="queue-button"
-                    disabled={connectionState !== 'connected' || !message.trim()}
+                    disabled={connectionState !== 'connected'}
                   >
                     Queue
                   </button>
@@ -1872,7 +1970,7 @@ export function App() {
                   <button
                     type="submit"
                     className="send-button"
-                    disabled={connectionState !== 'connected' || (!message.trim() && imageAttachments.length === 0)}
+                    disabled={connectionState !== 'connected'}
                   >
                     Send
                   </button>
