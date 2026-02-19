@@ -13,6 +13,23 @@ import { SimpleTurnsView } from './components/SimpleTurnsView';
 import { StreamingTurnsView } from './components/StreamingTurnsView';
 import { useWakeLock } from './hooks';
 
+// Module-level client reference for debug logging
+// Set when client connects, cleared on disconnect
+let globalClient: BalloonsClient | null = null;
+
+// Debug logger that sends to TUI's debug pane via WebSocket
+// Falls back to console.log if not connected
+function debugLog(message: string, data?: Record<string, unknown>) {
+  console.log('[App]', message, data);
+
+  // Try to send to TUI debug pane via WebSocket
+  if (globalClient?.isConnected) {
+    globalClient.debugLog.info(message, 'web', '', data ?? null).catch(() => {
+      // Silently ignore - don't want to spam console with connection errors
+    });
+  }
+}
+
 // View mode for conversation display
 // 'simple' uses TreeStateService (server-side state)
 // 'streaming' will use SessionDataService (real-time streaming)
@@ -907,6 +924,8 @@ export function App() {
     client.connect()
       .then(async () => {
         setError(null);
+        // Set global client for debug logging
+        globalClient = client;
 
         // Load initial session list
         try {
@@ -957,6 +976,7 @@ export function App() {
 
     return () => {
       unsubState();
+      globalClient = null;
       client.disconnect();
     };
   }, []);
@@ -1669,9 +1689,11 @@ export function App() {
         currentImages.forEach(img => URL.revokeObjectURL(img.previewUrl));
       } else {
         // Session is not streaming - submit directly (text only)
+        debugLog('Submitting message', { sessionId: selectedSessionId, contentLength: content.length });
         await client.sessions.submitMessage(selectedSessionId, content);
       }
     } catch (err) {
+      debugLog('Failed to send message', { sessionId: selectedSessionId, error: String(err) });
       console.error('Failed to send message:', err);
       setError(`Failed to send message: ${err}`);
       messageInputRef.current?.setValue(content);
@@ -1722,11 +1744,15 @@ export function App() {
             const sessionsClient = clientRef.current?.sessions;
             if (!sessionsClient || connectionState !== 'connected') return;
             try {
+              debugLog('Creating new session', { currentSelectedSessionId: selectedSessionId });
               const newSession = await sessionsClient.createSession();
+              debugLog('New session created', { newSessionId: newSession?.id, oldSessionId: selectedSessionId });
               if (newSession) {
+                debugLog('Switching to new session', { newSessionId: newSession.id });
                 handleSelectSession(newSession.id);
               }
             } catch (error) {
+              debugLog('Failed to create new session', { error: String(error) });
               console.error('Failed to create new session:', error);
             }
           }}
@@ -1910,7 +1936,11 @@ export function App() {
                   sessionContextTokens={selectedSession.cachedContextTokens}
                 />
               ) : selectedSession && (
-                <SessionStatusBar session={selectedSession} />
+                <SessionStatusBar
+                  session={selectedSession}
+                  isStreaming={selectedSession.isStreaming}
+                  client={clientRef.current}
+                />
               )}
               {/* Image preview area */}
               {imageAttachments.length > 0 && (

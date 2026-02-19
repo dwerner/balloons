@@ -878,7 +878,8 @@ class SessionRunner:
     async def _finalize_stream(self) -> None:
         """Finalize stream and create result."""
         # Flush remaining text as turn (also adds to legacy content_blocks)
-        self._flush_text_as_turn()
+        # Use save_now=True to ensure the final text turn is scheduled for save
+        self._flush_text_as_turn(save_now=True)
 
         # Check for stream errors (truncated response, JSON decode errors)
         error_block = self._check_stream_errors()

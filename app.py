@@ -119,7 +119,7 @@ from core import (
 from core.summarizer import Summarizer
 from core.exceptions import BackendNotFoundError
 from core.context_grouper import group_messages_by_context_mode, build_context_messages
-from core.fork import ForkManager, ForkResult, MergeResult, DeriveResult, SwitchResult, ForkProposal, MergeProposal, ForkData, DeriveData, ForkBindingSpec
+from core.fork import ForkResult, MergeResult, DeriveResult, SwitchResult, ForkProposal, MergeProposal, ForkData, DeriveData, ForkBindingSpec
 from core.command_executor import CommandExecutor, ArchiveResult, RehydrateResult, LinkResult, BackendResult, ShellResult
 from core.goal_commands import GoalCommandExecutor, check_priority_divergence, get_session_binding_info
 from core.tool_executor import parse_fork_proposal, parse_merge_proposal
@@ -142,6 +142,7 @@ from service import (
     TaskStateService,
     SessionDataService,
     ImageService,
+    DebugLogService,
 )
 from service.session_events import (
     TurnCreatedEvent,
@@ -355,8 +356,6 @@ class BalloonsApp(App):
         self._streaming_contexts: dict[str, StreamingContext] = {}
         # Streaming coordinator for dispatching events to actions
         self._streaming_coordinator = StreamingCoordinator()
-        # Fork manager for fork/merge/derive operations
-        self._fork_manager = ForkManager(self._context_builder)
         # Command executor for archive/link/backend commands
         self._command_executor = CommandExecutor()
         # Tool preferences per backend (backend_name -> ToolPreferences)
@@ -705,6 +704,7 @@ class BalloonsApp(App):
             # SessionDataService for subscription-based streaming
             self._session_data_service = SessionDataService()
             image_service = ImageService()
+            debug_log_service = DebugLogService()
 
             # Wire up TaskStateService for legacy WebSocket events
             self._session_service.set_task_state_service(self._task_service)
@@ -721,6 +721,7 @@ class BalloonsApp(App):
             self._ws_server.register_service(self._task_service)
             self._ws_server.register_service(self._session_data_service)
             self._ws_server.register_service(image_service)
+            self._ws_server.register_service(debug_log_service)
 
             # Start the server
             await self._ws_server.start()
@@ -764,15 +765,15 @@ class BalloonsApp(App):
 
             # Only create context if we don't already have one (i.e., this came from React, not TUI)
             if session_id and session_id not in self._streaming_contexts:
+                # Determine if this is the active session
+                active_session_id = self.session.id if self.session else None
+                is_active = self.session and self.session.id == session_id
+
                 debug_log.info(
-                    f"Creating streaming context for external submission",
+                    f"External messageSubmitted: event_session={session_id[:8]}, active_session={active_session_id[:8] if active_session_id else 'None'}, is_active={is_active}",
                     category="websocket",
-                    session_id=session_id,
                     details={"exchange_id": exchange_id[:8] if exchange_id else "", "turn_index": turn_index},
                 )
-
-                # Determine if this is the active session
-                is_active = self.session and self.session.id == session_id
 
                 # Create TUI-specific streaming context
                 # SessionManagerService owns event pumping - we receive events via observer pattern
@@ -861,21 +862,60 @@ class BalloonsApp(App):
     # The TUI receives events and updates its local context and UI accordingly.
 
     async def on_stream_started(self, event: StreamStartedEvent) -> None:
-        """Handle stream started event from SessionManagerService."""
+        """Handle stream started event from SessionManagerService.
+
+        The TUI is now just an observer - it receives this event for ALL streams,
+        whether initiated by the TUI itself or by the web UI. The TUI updates
+        its local tracking and UI state accordingly.
+        """
         session_id = event.session_id
-        # If we don't have a context yet, this is a TUI-initiated stream
-        # Create the context here (external streams create context in _on_session_manager_event)
-        if session_id not in self._streaming_contexts:
-            is_active = self.session and self.session.id == session_id
-            ctx = StreamingContext(
-                session_id=session_id,
-                user_turn_idx=-1,  # Will be set later
-                assistant_turn_idx=-1,
-                prompt=event.prompt,
-                is_active=is_active,
-                exchange_id=event.exchange_id,
-            )
-            self._streaming_contexts[session_id] = ctx
+        active_session_id = self.session.id if self.session else None
+        is_active = self.session and self.session.id == session_id
+
+        # Log session routing for debugging crosstalk issues
+        # Log FULL session IDs to catch partial match bugs
+        debug_log.warning(
+            f"CROSSTALK DEBUG on_stream_started: event={session_id}, active={active_session_id}, match={is_active}",
+            category="stream",
+        )
+
+        # Create streaming context for local tracking
+        # (SessionManagerService owns the authoritative context, this is for UI state)
+        ctx = StreamingContext(
+            session_id=session_id,
+            user_turn_idx=-1,  # Will be set by on_turn_created
+            assistant_turn_idx=-1,
+            prompt=event.prompt,
+            is_active=is_active,
+            exchange_id=event.exchange_id,
+        )
+        self._streaming_contexts[session_id] = ctx
+
+        # Update UI for the active session
+        if is_active:
+            try:
+                chat_log = self.query_one("#chat-log", ChatLogView)
+                input_box = self.query_one("#input-box", InputBox)
+                status_bar = self.query_one("#status-bar", StatusBar)
+                context_tree = self.query_one("#context-tree", ContextTreeView)
+
+                # Add user message to chat log
+                chat_log.add_user_message(event.prompt)
+
+                # Enter streaming mode
+                input_box.set_streaming_mode(True)
+                status_bar.set_streaming(True)
+                self.streaming = True
+
+                # Start assistant message placeholder
+                debug_event("add_assistant_message (on_stream_started)")
+                chat_log.add_assistant_message()
+
+                # Update streaming indicators
+                context_tree.set_session_streaming(session_id, True)
+                self._update_streaming_count()
+            except Exception as e:
+                debug_log.error(f"Failed to update UI for stream start: {e}", category="stream")
 
     async def on_turn_created(self, event: TurnCreatedEvent) -> None:
         """Handle turn created event from SessionManagerService.
@@ -1177,6 +1217,31 @@ class BalloonsApp(App):
                 )
             return
 
+        # For regular tools, finalize the streaming tool use widget with formatted input
+        # This ensures the tool input is displayed before the result arrives
+        if is_active:
+            chat_log = self.query_one("#chat-log", ChatLogView)
+            debug_log.info(
+                f"on_tool_use: formatting tool use",
+                category="stream",
+                details={
+                    "tool_name": tool_name,
+                    "tool_input_keys": list(tool_input.keys()) if tool_input else [],
+                    "tool_input_preview": str(tool_input)[:100] if tool_input else "empty",
+                },
+            )
+            formatted = self._format_tool_use(event)
+            if isinstance(formatted, tuple):
+                content, full_content = formatted
+            else:
+                content, full_content = formatted, None
+            chat_log.finish_streaming_tool(
+                tool_use_id,
+                content,
+                full_content=full_content,
+                tool_name=tool_name,
+            )
+
     async def on_tool_result(self, event: SessionToolResultEvent) -> None:
         """Handle tool result event from SessionManagerService.
 
@@ -1216,11 +1281,11 @@ class BalloonsApp(App):
             else:
                 content, full_content = formatted, None
 
-            chat_log.finish_streaming_tool(
-                tool_use_id,
+            # Add tool result as a separate widget (tool use widget was finalized in on_tool_use)
+            chat_log.add_tool_result(
                 content,
+                tool_use_id=tool_use_id,
                 full_content=full_content,
-                tool_name=tool_name,
             )
 
         # Refresh slides pane when create_slide tool completes
@@ -1515,6 +1580,7 @@ class BalloonsApp(App):
         # Clean up streaming context
         if helper_id in self._streaming_contexts:
             del self._streaming_contexts[helper_id]
+            self._update_streaming_count()
 
         if error or cancelled:
             # Helper failed - clean up
@@ -1553,16 +1619,18 @@ class BalloonsApp(App):
         """Complete a fork after context compression finishes.
 
         The compression result is in ctx.content, and fork_data has the original params.
+        Delegates business logic to the service, then updates UI.
         """
         debug_log.info(
             f"_complete_fork_after_compression called",
             category="fork",
             details={"content_len": len(ctx.content), "has_fork_data": ctx.fork_data is not None},
         )
+
+        # Validate we have fork_data for UI updates
         fork_data = ctx.fork_data
         if not fork_data or not isinstance(fork_data, ForkData):
             debug_log.error("No fork_data in context after compression", category="stream")
-            # Clean up UI state
             status_bar.set_streaming(False)
             self.streaming = False
             self.notify("Fork failed: missing context data", severity="error")
@@ -1570,141 +1638,55 @@ class BalloonsApp(App):
 
         context_tree = self.query_one("#context-tree", ContextTreeView)
 
-        # Extract fork params from typed dataclass
-        child_session = fork_data.child_session
+        # Extract params needed for UI updates
         prompt = fork_data.prompt
         name = fork_data.name
         background = fork_data.background
         allowed_tools = fork_data.allowed_tools
-        copy_items = fork_data.copy_items
-        compress_group_positions = fork_data.compress_group_positions
 
-        # Build the summary items from compression result
-        # For now, we only support one compress group streaming at a time
-        summary_text = ctx.content.strip()
-        summary_items = []
-        if summary_text and compress_group_positions:
-            first_idx = compress_group_positions[0]
-            summary_msg = Message(
-                role="user",
-                content=f"[Context Summary]\n{summary_text}",
-                content_blocks=[TextBlock(text=f"[Context Summary]\n{summary_text}")],
-            )
-            summary_items.append((summary_msg, first_idx))
+        # The helper_id is stored as the session_id in the streaming context
+        helper_id = ctx.session_id
+        compressed_summary = ctx.content.strip()
 
-        # Combine COPY messages and summaries, sorted by original index
-        context_messages = build_context_messages(copy_items, summary_items)
-
-        # Add all context messages to the child session
-        for msg in context_messages:
-            child_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
-
-        asyncio.create_task(child_session.save())
-
-        # Register child in parent and add fork turn marker
-        parent_session = fork_data.parent_session
-        fork_point = fork_data.fork_point
-        parent_session.add_child(
-            child_session.id,
-            prompt,
-            name=name,
-            fork_point=fork_point,
-        )
-        # Add fork turn marker to parent session (part of the fork proposal exchange)
-        parent_session.add_fork_turn(
-            fork_id=str(uuid.uuid4()),
-            child_session_id=child_session.id,
-            fork_name=name or "fork",
-            prompt=prompt,
-            exchange_id=parent_session.get_last_exchange_id(),
-        )
-        asyncio.create_task(parent_session.save())
-
-        # Add fork marker to parent's chat log
-        chat_log.add_fork_marker(
-            prompt=prompt,
-            child_session_id=child_session.id,
-            fork_name=name or child_session.id[:8],
-            status="active" if not background else "background",
+        # Complete fork via service (handles business logic: messages, parent/child registration)
+        # Don't auto-start streaming - we handle that based on background flag
+        result = await self._session_service.complete_fork_after_compression(
+            helper_id=helper_id,
+            compressed_summary=compressed_summary,
+            start_streaming=False,  # We handle streaming ourselves for background mode
         )
 
-        # Register child session with manager
-        self._manager._sessions[child_session.id] = child_session
-        self._manager._runners[child_session.id] = self._create_session_runner(child_session)
-
-        if background:
-            # Background mode - stay in parent
-            turn_idx = len(child_session.turns)
-            exchange_id = str(uuid.uuid4())  # Group user + assistant turns
-            new_ctx = StreamingContext(
-                session_id=child_session.id,
-                user_turn_idx=turn_idx,
-                assistant_turn_idx=turn_idx + 1,
-                prompt=prompt,
-                is_active=False,
-                exchange_id=exchange_id,
-            )
-            self._streaming_contexts[child_session.id] = new_ctx
-
-            # Add child session to TreeState so it appears in the tree
-            # This must happen before set_session_streaming so the node exists
-            self._tree_state.add_session(child_session, is_current=False)
-            self._tree_state.load_session(child_session.id, child_session)
-
-            # Update tree streaming indicator and status bar count
-            context_tree.set_session_streaming(child_session.id, True)
-            self._update_streaming_count()
-
-            # Start tree turns for child (with exchange_id for grouping)
-            context_tree.start_turn(child_session.id, turn_idx, "user", exchange_id=exchange_id)
-            await context_tree.finish_turn(
-                child_session.id, turn_idx, prompt, TextBlock(text=prompt), []
-            )
-            context_tree.start_turn(child_session.id, turn_idx + 1, "assistant", exchange_id=exchange_id)
-
-            # Emit turn started events for WebSocket clients
-            if self._task_service is not None:
-                self._task_service.emit_turn_started(
-                    session_id=child_session.id,
-                    exchange_id=exchange_id,
-                    turn_index=turn_idx,
-                    role="user",
-                    turn_type="text_turn",
-                )
-                self._task_service.emit_turn_started(
-                    session_id=child_session.id,
-                    exchange_id=exchange_id,
-                    turn_index=turn_idx + 1,
-                    role="assistant",
-                    turn_type="text_turn",
-                )
-
-            # Add user message to child session before streaming starts
-            # This ensures it's persisted even if we crash mid-exchange
-            user_blocks = [TextBlock(text=prompt)]
-            child_session.add_message("user", prompt, content_blocks=user_blocks, exchange_id=exchange_id)
-            asyncio.create_task(child_session.save())
-
-            # Start background streaming
-            child_runner = self._manager._runners[child_session.id]
-            child_runner.start_background(
-                prompt=prompt,
-                messages=child_session.turns,
-                allowed_tools=allowed_tools,
-            )
-            self.notify(f"Fork '{name or child_session.id[:8]}' started in background")
+        if not result.success:
+            debug_log.error(f"Fork completion failed: {result.error}", category="fork")
+            status_bar.set_streaming(False)
             self.streaming = False
-        else:
-            # Foreground mode - switch to child
-            breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
-            await self._manager.set_active(child_session.id)
-            chat_log.clear()
-            await chat_log.load_history(child_session.turns, session=child_session)
-            await context_tree.load_all_sessions(child_session)
-            await breadcrumb.set_session(child_session)
+            self.notify(f"Fork failed: {result.error}", severity="error")
+            return
 
-            # Start streaming the actual prompt
-            await self._start_streaming(prompt)
+        # Get the child session for UI updates
+        child_session = self._manager.get_session(result.child_session_id)
+        if not child_session:
+            child_session = await self._manager.load_session(result.child_session_id)
+
+        if not child_session:
+            debug_log.error(f"Child session not found after fork completion", category="fork")
+            status_bar.set_streaming(False)
+            self.streaming = False
+            self.notify("Fork failed: child session not found", severity="error")
+            return
+
+        # Complete UI updates using the same helper as non-compression path
+        await self._complete_fork_ui_from_result(
+            child_session=child_session,
+            parent_session=self.session,
+            prompt=prompt,
+            name=name or result.fork_name,
+            background=background,
+            allowed_tools=allowed_tools,
+            chat_log=chat_log,
+            context_tree=context_tree,
+            status_bar=status_bar,
+        )
 
     async def _complete_derive_after_compression(
         self,
@@ -1715,7 +1697,15 @@ class BalloonsApp(App):
         """Complete a derive after context compression finishes.
 
         Similar to fork completion but simpler - no parent/child relationship.
+        Delegates business logic to the service, then updates UI.
         """
+        debug_log.info(
+            f"_complete_derive_after_compression called",
+            category="derive",
+            details={"content_len": len(ctx.content), "has_derive_data": ctx.fork_data is not None},
+        )
+
+        # Validate we have derive_data for UI updates
         derive_data = ctx.fork_data
         if not derive_data or not isinstance(derive_data, DeriveData):
             debug_log.error("No derive_data in context after derive compression", category="stream")
@@ -1726,47 +1716,48 @@ class BalloonsApp(App):
 
         context_tree = self.query_one("#context-tree", ContextTreeView)
 
-        # Extract params from typed dataclass
-        new_session = derive_data.new_session
+        # Extract params needed for UI updates
         prompt = derive_data.prompt
-        allowed_tools = derive_data.allowed_tools
-        copy_items = derive_data.copy_items
-        compress_group_positions = derive_data.compress_group_positions
 
-        # Build the summary items from compression result
-        summary_text = ctx.content.strip()
-        summary_items = []
-        if summary_text and compress_group_positions:
-            first_idx = compress_group_positions[0]
-            summary_msg = Message(
-                role="user",
-                content=f"[Context Summary]\n{summary_text}",
-                content_blocks=[TextBlock(text=f"[Context Summary]\n{summary_text}")],
-            )
-            summary_items.append((summary_msg, first_idx))
+        # The helper_id is stored as the session_id in the streaming context
+        helper_id = ctx.session_id
+        compressed_summary = ctx.content.strip()
 
-        # Combine COPY messages and summaries, sorted by original index
-        context_messages = build_context_messages(copy_items, summary_items)
+        # Complete derive via service (handles business logic: messages, session setup)
+        # Don't auto-start streaming - we handle that ourselves
+        result = await self._session_service.complete_derive_after_compression(
+            helper_id=helper_id,
+            compressed_summary=compressed_summary,
+            start_streaming=False,  # We handle streaming ourselves
+        )
 
-        # Add all context messages to the new session
-        for msg in context_messages:
-            new_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
+        if not result.success:
+            debug_log.error(f"Derive completion failed: {result.error}", category="derive")
+            status_bar.set_streaming(False)
+            self.streaming = False
+            self.notify(f"Derive failed: {result.error}", severity="error")
+            return
 
-        asyncio.create_task(new_session.save())
+        # Get the new session for UI updates
+        new_session = self._manager.get_session(result.new_session_id)
+        if not new_session:
+            new_session = await self._manager.load_session(result.new_session_id)
 
-        # Register and switch to new session
-        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
-        self._manager._sessions[new_session.id] = new_session
-        self._manager._runners[new_session.id] = self._create_session_runner(new_session)
-        await self._manager.set_active(new_session.id)
+        if not new_session:
+            debug_log.error(f"New session not found after derive completion", category="derive")
+            status_bar.set_streaming(False)
+            self.streaming = False
+            self.notify("Derive failed: new session not found", severity="error")
+            return
 
-        chat_log.clear()
-        await chat_log.load_history(new_session.turns, session=new_session)
-        await context_tree.load_all_sessions(new_session)
-        await breadcrumb.set_session(new_session)
-
-        # Start streaming the actual prompt
-        await self._start_streaming(prompt)
+        # Complete UI updates and start streaming
+        await self._complete_derive_ui_from_result(
+            new_session=new_session,
+            prompt=prompt,
+            chat_log=chat_log,
+            context_tree=context_tree,
+            start_streaming=True,  # Start streaming after compression completes
+        )
 
     async def _complete_archive_after_summary(
         self,
@@ -1800,7 +1791,7 @@ class BalloonsApp(App):
         )
 
         # Get the session we're archiving from
-        session = self._manager._sessions.get(archive_data.session_id)
+        session = self._manager.get_session(archive_data.session_id)
         if not session:
             debug_log.error(f"Session {archive_data.session_id} not found", category="archive")
             status_bar.set_streaming(False)
@@ -1873,8 +1864,8 @@ class BalloonsApp(App):
         )
 
         # Get the sessions
-        fork_session = self._manager._sessions.get(merge_data.fork_session_id)
-        parent_session = self._manager._sessions.get(merge_data.parent_session_id)
+        fork_session = self._manager.get_session(merge_data.fork_session_id)
+        parent_session = self._manager.get_session(merge_data.parent_session_id)
 
         if not fork_session or not parent_session:
             debug_log.error("Session not found for merge", category="merge")
@@ -1883,25 +1874,32 @@ class BalloonsApp(App):
             self.notify("Merge failed: session not found", severity="error")
             return
 
-        # Complete the merge
-        result = await self._fork_manager.complete_merge(
-            fork_session=fork_session,
-            parent_session=parent_session,
-            merge_message=merge_message,
+        # Complete the merge via service
+        result = await self._session_service.merge_session(
+            fork_session_id=fork_session.id,
+            merge_summary=merge_message,
         )
 
+        if not result.success:
+            debug_log.error(f"Merge failed: {result.error}", category="merge")
+            status_bar.set_streaming(False)
+            self.streaming = False
+            self.notify(f"Merge failed: {result.error}", severity="error")
+            return
+
+        # Reload parent session after merge (it has new turns)
+        parent_session = await self._manager.load_session(result.parent_session_id)
+
         # Switch to parent
-        self._manager._sessions[result.parent_session.id] = result.parent_session
-        self._manager._runners[result.parent_session.id] = self._create_session_runner(result.parent_session)
-        await self._manager.set_active(result.parent_session.id)
+        await self._manager.set_active(result.parent_session_id)
         chat_log.clear()
-        await chat_log.load_history(result.parent_session.turns, session=result.parent_session)
-        await context_tree.load_all_sessions(result.parent_session)
-        await breadcrumb.set_session(result.parent_session)
+        await chat_log.load_history(parent_session.turns, session=parent_session)
+        await context_tree.load_all_sessions(parent_session)
+        await breadcrumb.set_session(parent_session)
 
         status_bar.set_streaming(False)
         self.streaming = False
-        self.notify(f"Merged from '{result.fork_name}'")
+        self.notify(f"Merged from '{merge_data.fork_name}'")
 
     async def _continue_link_after_summary(
         self,
@@ -1986,8 +1984,8 @@ class BalloonsApp(App):
         )
 
         # Get the sessions
-        child_session = self._manager._sessions.get(return_data.child_session_id)
-        parent_session = self._manager._sessions.get(return_data.parent_session_id)
+        child_session = self._manager.get_session(return_data.child_session_id)
+        parent_session = self._manager.get_session(return_data.parent_session_id)
 
         # If parent not in manager, try to load it
         if not parent_session:
@@ -2011,8 +2009,7 @@ class BalloonsApp(App):
         child_id = child_session.id
 
         # Switch to parent session through manager
-        self._manager._sessions[parent_session.id] = parent_session
-        self._manager._runners[parent_session.id] = self._create_session_runner(parent_session)
+        self._manager.register_session(parent_session, self._create_session_runner(parent_session))
         await self._manager.set_active(parent_session.id)
         chat_log.clear()
         await chat_log.load_history(parent_session.turns, session=parent_session)
@@ -2052,8 +2049,8 @@ class BalloonsApp(App):
             session_id=session_id,
         )
         try:
-            session = self._manager._sessions.get(session_id)
-            runner = self._manager._runners.get(session_id)
+            session = self._manager.get_session(session_id)
+            runner = self._manager.get_runner(session_id)
 
             if ctx.is_active:
                 # Finish the message display
@@ -2288,8 +2285,7 @@ class BalloonsApp(App):
 
         if self._initial_session is not None:
             # Load initial session into manager (passed via --resume)
-            self._manager._sessions[self._initial_session.id] = self._initial_session
-            self._manager._runners[self._initial_session.id] = self._create_session_runner(self._initial_session)
+            self._manager.register_session(self._initial_session, self._create_session_runner(self._initial_session))
             await self._manager.set_active(self._initial_session.id)
             self._initial_session = None  # Clear so we don't reload on subsequent calls
         elif self.session is None:
@@ -2436,121 +2432,53 @@ class BalloonsApp(App):
         await self._start_streaming(prompt)
 
     async def _start_streaming(self, prompt: str, is_active: bool = True) -> None:
-        """Start a streaming response in background mode.
+        """Start a streaming response by delegating to SessionManagerService.
 
-        This is the event-driven approach: start the background stream,
-        then the poll timer picks up events and updates the UI.
+        The TUI acts as a client of the service, just like the web UI.
+        All session/turn management, event emission, and runner coordination
+        is handled by SessionManagerService. The TUI receives events via
+        the observer pattern and updates its UI accordingly.
 
         Args:
             prompt: User prompt to send
             is_active: True if this is the active/foreground session
         """
-        chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
-        input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
 
-        # Use only selected messages for context
+        # Use only selected messages for context (TUI-specific context selection)
         selected_messages = context_tree.get_selected_messages()
 
-        # Get enabled tools
+        # Get enabled tools (TUI-specific tool configuration)
         allowed_tools = self._get_enabled_tools()
 
-        # Track the turn index for tree updates
-        turn_idx = len(self.session.turns)  # Next turn will be at this index
-
-        # Generate exchange_id to group user prompt + all assistant responses
-        exchange_id = str(uuid.uuid4())
-
-        # Start the user turn in tree immediately (with exchange_id for grouping)
-        context_tree.start_turn(self.session.id, turn_idx, "user", exchange_id=exchange_id)
-        await context_tree.finish_turn(
-            self.session.id, turn_idx, prompt, TextBlock(text=prompt), []
-        )
-
-        # Add user message to session immediately (before tool loops start)
-        # This ensures the user prompt is persisted even if we crash mid-exchange
-        user_blocks = [TextBlock(text=prompt)]
-        user_turn = self.session.add_message("user", prompt, content_blocks=user_blocks, exchange_id=exchange_id)
-        asyncio.create_task(self.session.save())
-
-        # Start the assistant turn in tree (with same exchange_id)
-        assistant_turn_idx = turn_idx + 1
-        context_tree.start_turn(self.session.id, assistant_turn_idx, "assistant", exchange_id=exchange_id)
-
-        # Emit turn started events for WebSocket clients
-        if self._task_service is not None:
-            self._task_service.emit_turn_started(
-                session_id=self.session.id,
-                exchange_id=exchange_id,
-                turn_index=turn_idx,
-                role="user",
-                turn_type="text_turn",
-            )
-            self._task_service.emit_turn_started(
-                session_id=self.session.id,
-                exchange_id=exchange_id,
-                turn_index=assistant_turn_idx,
-                role="assistant",
-                turn_type="text_turn",
-            )
-
-        # Generate assistant turn ID for tracking (will be used for streaming events)
-        assistant_turn_id = str(uuid.uuid4())
-
-        # Note: User turn events are emitted by SessionManagerService via the observer
-        # pattern when it polls the session. The service creates turn events for both
-        # web-initiated streams (submit_message) and TUI-initiated streams (poll_all).
-
-        # Create streaming context for this session
-        ctx = StreamingContext(
-            session_id=self.session.id,
-            user_turn_idx=turn_idx,
-            assistant_turn_idx=assistant_turn_idx,
-            prompt=prompt,
-            is_active=is_active,
-            exchange_id=exchange_id,
-            final_turn_idx=assistant_turn_idx,  # Track from the start
-            final_turn_id=assistant_turn_id,  # Use generated ID
-        )
-        self._streaming_contexts[self.session.id] = ctx
-
-        # Update tree streaming indicator and status bar count
-        context_tree.set_session_streaming(self.session.id, True)
-        self._tree_state.start_streaming(self.session.id)
-        self._update_streaming_count()
-
-        # Register task for task pane with context info
-        backend_name = self.session.backend_name or self._backend_config.name
+        # Calculate context tokens for status bar display (before submit)
+        # This is TUI-specific - we show what we're about to send
         overhead_tokens, context_tokens = self._calculate_context_tokens(prompt)
-        context_window = self._backend_config.context_window
-        task = get_stream_state().register_session_stream(
-            session_id=self.session.id,
-            exchange_id=exchange_id,
-            prompt=prompt,
-            backend_name=backend_name,
-        )
-        # Set initial context info (total tokens for task tracking)
-        task.input_tokens = overhead_tokens + context_tokens
-        task.context_window = context_window
-
         if is_active:
-            # Add user message to display
-            chat_log.add_user_message(prompt)
-
-            # Enable streaming mode (allows queueing prompts)
-            input_box.set_streaming_mode(True)
-            status_bar.set_streaming(True)
-            # Update status bar to show context tokens being sent for this request
             status_bar.update_stats(overhead_tokens=overhead_tokens, context_tokens=context_tokens)
-            self.streaming = True
 
-            # Start assistant message
-            debug_event("add_assistant_message (streaming starts)")
-            chat_log.add_assistant_message()
-
-        # Start background streaming - poll timer will pick up events
-        self._session_runner.start_background(prompt, selected_messages, allowed_tools)
+        # Delegate to SessionManagerService - it handles:
+        # - Adding user message to session
+        # - Saving session
+        # - Updating TreeState
+        # - Emitting observer events (on_stream_started, on_turn_created, etc.)
+        # - Starting the background runner
+        #
+        # The TUI will receive events via on_stream_started, on_turn_delta, etc.
+        # and update the UI accordingly (chat_log, input_box, context_tree, etc.)
+        try:
+            await self._session_service.submit_message(
+                session_id=self.session.id,
+                content=prompt,
+                messages=selected_messages,
+                queue=False,
+                allowed_tools=allowed_tools,
+            )
+        except ValueError as e:
+            # Handle errors (e.g., already streaming, session not found)
+            debug_log.error(f"Failed to submit message: {e}", category="stream")
+            self.notify(str(e), severity="error")
 
     async def _execute_command(self, cmd) -> None:
         """Execute a parsed command."""
@@ -2694,7 +2622,7 @@ class BalloonsApp(App):
         """
         # Find the last tool use for context from SessionRunner's content blocks
         last_tool_use = None
-        runner = self._manager._runners.get(session_id) if session_id else self._session_runner
+        runner = self._manager.get_runner(session_id) if session_id else self._session_runner
         if runner:
             for block in reversed(runner._content_blocks):
                 if isinstance(block, ToolUseBlock):
@@ -2724,7 +2652,7 @@ class BalloonsApp(App):
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
 
         # Background old session (mark streaming as inactive, sync queue)
-        old_session_id = self._manager._active_session_id
+        old_session_id = self._manager.active_session_id
         self._background_old_session(old_session_id)
 
         # Show loading indicator while creating session
@@ -2846,8 +2774,9 @@ class BalloonsApp(App):
         asyncio.create_task(self.session.save())
 
         backend_config = config.get_backend(result.new_backend)
-        self._manager._runners[self.session.id] = SessionRunner(
-            self.session, runner=create_runner(backend_config)
+        self._manager.update_runner(
+            self.session.id,
+            SessionRunner(self.session, runner=create_runner(backend_config))
         )
 
         # Update status bar with new backend and model
@@ -2903,7 +2832,7 @@ class BalloonsApp(App):
         # Find the first target needing a summary
         first_idx = next(i for i, (_, s) in enumerate(targets) if s is None)
         first_session_id = targets[first_idx][0]
-        first_session = self._manager._sessions.get(first_session_id)
+        first_session = self._manager.get_session(first_session_id)
 
         if not first_session:
             self.notify(f"Session {first_session_id} not found", severity="error")
@@ -2985,7 +2914,7 @@ class BalloonsApp(App):
                 if linked_targets[i].session.id == session_id:
                     linked_targets[i].summary = summary or ""
                     # Also update the session's summary
-                    session = self._manager._sessions.get(session_id)
+                    session = self._manager.get_session(session_id)
                     if session and not session.summary:
                         session.summary = summary or ""
 
@@ -2996,7 +2925,7 @@ class BalloonsApp(App):
 
         # Start next summary generation
         session_id = targets[next_idx][0]
-        session = self._manager._sessions.get(session_id)
+        session = self._manager.get_session(session_id)
 
         if not session:
             # Skip missing session
@@ -3484,8 +3413,7 @@ class BalloonsApp(App):
         # Switch to new session through manager
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
         chat_log.clear()
-        self._manager._sessions[new_session.id] = new_session
-        self._manager._runners[new_session.id] = self._create_session_runner(new_session)
+        self._manager.register_session(new_session, self._create_session_runner(new_session))
         await self._manager.set_active(new_session.id)
         await context_tree.load_all_sessions(new_session)
         await chat_log.load_history(new_session.turns, session=new_session)
@@ -3683,7 +3611,7 @@ class BalloonsApp(App):
         proposal_id = str(uuid.uuid4())
 
         # Get the current session (need full Session object with methods, not SessionData)
-        session = self._manager._sessions.get(session_id)
+        session = self._manager.get_session(session_id)
         if not session:
             self.notify("Session not found for proposal", severity="error")
             return
@@ -3697,7 +3625,7 @@ class BalloonsApp(App):
             details={
                 "session_id": session_id,
                 "all_exchanges_count": len(all_exchanges),
-                "session_in_tree_state": session_id in self._tree_state._sessions,
+                "session_in_tree_state": self._tree_state.has_session(session_id),
             },
         )
 
@@ -4084,35 +4012,32 @@ class BalloonsApp(App):
         """Execute an accepted merge proposal with the given summary."""
         chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
-        status_bar = self.query_one("#status-bar", StatusBar)
 
-        # Validate merge via ForkManager
-        prep_result = await self._fork_manager.prepare_merge(self.session)
-        if not prep_result.success:
-            self.notify(prep_result.error, severity="error")
-            return
-
-        # Complete the merge with the provided summary and metadata
-        result = await self._fork_manager.complete_merge(
-            fork_session=prep_result.fork_session,
-            parent_session=prep_result.parent_session,
-            merge_message=summary,
+        # Complete the merge via service
+        result = await self._session_service.merge_session(
+            fork_session_id=self.session.id,
+            merge_summary=summary,
             files_changed=files_changed,
             key_accomplishments=key_accomplishments,
             reason=reason,
         )
 
+        if not result.success:
+            self.notify(result.error, severity="error")
+            return
+
+        # Reload parent session after merge (it has new turns)
+        parent_session = await self._manager.load_session(result.parent_session_id)
+
         # Switch to parent
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
-        self._manager._sessions[result.parent_session.id] = result.parent_session
-        self._manager._runners[result.parent_session.id] = self._create_session_runner(result.parent_session)
-        await self._manager.set_active(result.parent_session.id)
+        await self._manager.set_active(result.parent_session_id)
         chat_log.clear()
-        await chat_log.load_history(result.parent_session.turns, session=result.parent_session)
-        await context_tree.load_all_sessions(result.parent_session)
-        await breadcrumb.set_session(result.parent_session)
+        await chat_log.load_history(parent_session.turns, session=parent_session)
+        await context_tree.load_all_sessions(parent_session)
+        await breadcrumb.set_session(parent_session)
 
-        self.notify(f"Merged from '{result.fork_name}'")
+        self.notify(f"Merged from '{self.session.get_fork_display_name()}'")
 
     async def _handle_begin_streaming_todo(
         self,
@@ -4283,7 +4208,7 @@ class BalloonsApp(App):
     ) -> None:
         """Fork a child session from current session.
 
-        Uses context modes from tree selection:
+        Uses context modes from tree selection (via TreeState):
         - COPY: Include verbatim
         - COMPRESS: LLM summarizes first (with summaries at original positions)
         - DROP: Exclude
@@ -4306,42 +4231,33 @@ class BalloonsApp(App):
         )
         chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
-        input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
 
-        # Get selected messages and tools from UI
-        # Pass session_id explicitly when context modes were set for a specific session
-        indexed_messages = context_tree.get_selected_messages_with_indices(session_id=session_id)
+        # Get allowed tools from UI
         allowed_tools = self._get_enabled_tools()
+        parent_session_id = session_id or self.session.id
 
-        # Count messages by context mode for debugging
-        mode_counts = {"copy": 0, "compress": 0}
-        for msg, _ in indexed_messages:
-            if hasattr(msg, 'context_mode') and msg.context_mode:
-                mode_name = msg.context_mode.name.lower()
-                if mode_name in mode_counts:
-                    mode_counts[mode_name] += 1
-
-        # Prepare fork via ForkManager (handles validation and session creation)
+        # Fork via SessionManagerService (reads context modes from TreeState)
         debug_log.info(
-            f"_handle_fork_command calling prepare_fork",
+            f"_handle_fork_command calling fork_session",
             category="fork",
-            details={"name": name, "indexed_messages_count": len(indexed_messages), "mode_counts": mode_counts},
+            details={"name": name, "parent_session_id": parent_session_id},
         )
-        result = await self._fork_manager.prepare_fork(
-            current_session=self.session,
-            indexed_messages=indexed_messages,
+        result = await self._session_service.fork_session(
+            parent_session_id=parent_session_id,
             prompt=prompt,
-            allowed_tools=allowed_tools,
             name=name,
             background=background,
+            allowed_tools=allowed_tools,
+            start_streaming=not background,  # Don't auto-start for background forks
         )
         debug_log.info(
-            f"_handle_fork_command prepare_fork returned",
+            f"_handle_fork_command fork_session returned",
             category="fork",
             details={
                 "success": result.success,
                 "needs_compression": result.needs_compression,
+                "child_session_id": result.child_session_id,
                 "error": result.error,
             },
         )
@@ -4350,13 +4266,13 @@ class BalloonsApp(App):
             self.notify(result.error, severity="error")
             return
 
-        if not result.needs_compression:
-            # No compression - proceed with UI updates
-            debug_log.info(f"_handle_fork_command calling _complete_fork_ui", category="fork")
-            await self._complete_fork_ui(result, chat_log, context_tree, status_bar)
-            debug_log.info(f"_handle_fork_command _complete_fork_ui returned", category="fork")
-        else:
-            # Compression needed - start helper streaming
+        # Get the child session for UI updates
+        child_session = self._manager.get_session(result.child_session_id)
+        if not child_session:
+            child_session = await self._manager.load_session(result.child_session_id)
+
+        if result.needs_compression:
+            # Compression needed - set up UI for helper streaming
             debug_log.info(
                 f"_handle_fork_command starting compression helper",
                 category="fork",
@@ -4364,6 +4280,7 @@ class BalloonsApp(App):
             )
 
             # Create streaming context for the helper (TUI state)
+            # The service already started the helper, we just track it locally
             ctx = StreamingContext(
                 session_id=result.helper_id,
                 user_turn_idx=-1,
@@ -4372,7 +4289,18 @@ class BalloonsApp(App):
                 is_active=True,
                 is_helper=True,
                 helper_type="compress",
-                fork_data=result.fork_data,
+                # Store fork info for UI updates after compression completes
+                fork_data=ForkData(
+                    child_session=child_session,
+                    parent_session=self.session,
+                    prompt=prompt,
+                    name=name,
+                    background=background,
+                    allowed_tools=allowed_tools,
+                    copy_items=[],
+                    compress_group_positions=[],
+                    fork_point=len(self.session.turns),
+                ),
             )
             self._streaming_contexts[result.helper_id] = ctx
 
@@ -4383,18 +4311,25 @@ class BalloonsApp(App):
             chat_log.add_user_message("[Compressing context for fork...]")
             chat_log.add_assistant_message()
             debug_log.info(
-                f"_handle_fork_command compression helper started",
+                f"_handle_fork_command compression helper tracking started",
                 category="fork",
                 details={"helper_id": result.helper_id},
             )
-
-            # Start helper via service (uses session's backend)
-            self._session_service.start_helper(
-                helper_id=result.helper_id,
-                helper_type="compress",
-                prompt=result.compression_prompt,
-                session_id=self.session.id,
+        else:
+            # No compression - complete UI updates
+            debug_log.info(f"_handle_fork_command completing UI updates", category="fork")
+            await self._complete_fork_ui_from_result(
+                child_session=child_session,
+                parent_session=self.session,
+                prompt=prompt,
+                name=name or result.fork_name,
+                background=background,
+                allowed_tools=allowed_tools,
+                chat_log=chat_log,
+                context_tree=context_tree,
+                status_bar=status_bar,
             )
+            debug_log.info(f"_handle_fork_command UI updates complete", category="fork")
 
     async def _complete_fork_ui(self, result: ForkResult, chat_log: ChatLogView, context_tree: ContextTreeView, status_bar: StatusBar) -> None:
         """Complete fork UI updates after business logic is done.
@@ -4413,8 +4348,7 @@ class BalloonsApp(App):
         )
 
         # Register child session with manager
-        self._manager._sessions[child_session.id] = child_session
-        self._manager._runners[child_session.id] = self._create_session_runner(child_session)
+        self._manager.register_session(child_session, self._create_session_runner(child_session))
 
         if result.background:
             # Background mode - stay in parent
@@ -4467,7 +4401,7 @@ class BalloonsApp(App):
             child_session.add_message("user", result.prompt, content_blocks=user_blocks, exchange_id=exchange_id)
             asyncio.create_task(child_session.save())
 
-            child_runner = self._manager._runners[child_session.id]
+            child_runner = self._manager.get_runner(child_session.id)
             child_runner.start_background(
                 prompt=result.prompt,
                 messages=child_session.turns,
@@ -4489,6 +4423,78 @@ class BalloonsApp(App):
             await breadcrumb.set_session(child_session)
 
             await self._start_streaming(result.prompt)
+
+    async def _complete_fork_ui_from_result(
+        self,
+        child_session: "Session",
+        parent_session: "Session",
+        prompt: str,
+        name: str,
+        background: bool,
+        allowed_tools: list[str],
+        chat_log: ChatLogView,
+        context_tree: ContextTreeView,
+        status_bar: StatusBar,
+    ) -> None:
+        """Complete fork UI updates using service result data.
+
+        This is the new version that works with SessionManagerService.fork_session().
+        The service has already registered the session and updated TreeState.
+        """
+        # Add fork marker to parent's chat log
+        chat_log.add_fork_marker(
+            prompt=prompt,
+            child_session_id=child_session.id,
+            fork_name=name or child_session.id[:8],
+            status="active" if not background else "background",
+        )
+
+        if background:
+            # Background mode - stay in parent
+            # The service handles streaming for background forks via submit_message
+            # We just need to update local tracking
+
+            # Set up streaming context for tracking
+            turn_idx = len(child_session.turns)
+            exchange_id = str(uuid.uuid4())
+            ctx = StreamingContext(
+                session_id=child_session.id,
+                user_turn_idx=turn_idx,
+                assistant_turn_idx=turn_idx + 1,
+                prompt=prompt,
+                is_active=False,
+                exchange_id=exchange_id,
+            )
+            self._streaming_contexts[child_session.id] = ctx
+
+            # Update UI indicators
+            context_tree.set_session_streaming(child_session.id, True)
+            self._update_streaming_count()
+
+            # Start streaming via service (background fork)
+            await self._session_service.submit_message(
+                session_id=child_session.id,
+                content=prompt,
+                messages=child_session.turns,
+                allowed_tools=allowed_tools,
+            )
+
+            self.notify(f"Fork '{name or child_session.id[:8]}' started in background")
+        else:
+            # Foreground mode - switch to child and start streaming
+            # Apply pending binding if any
+            await self._apply_pending_fork_binding(name, child_session, parent_session)
+
+            breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
+            await self._manager.set_active(child_session.id)
+            chat_log.clear()
+            await chat_log.load_history(child_session.turns, session=child_session)
+            await context_tree.load_all_sessions(child_session)
+            await breadcrumb.set_session(child_session)
+
+            # Streaming was already started by the service if start_streaming=True
+            # If we passed start_streaming=False, we'd call _start_streaming here
+            # But since we pass start_streaming=True for foreground forks, the stream is already going
 
     async def _apply_pending_fork_binding(
         self,
@@ -4600,10 +4606,10 @@ class BalloonsApp(App):
         context_tree = self.query_one("#context-tree", ContextTreeView)
         status_bar = self.query_one("#status-bar", StatusBar)
 
-        # Validate merge via ForkManager
-        prep_result = await self._fork_manager.prepare_merge(self.session)
-        if not prep_result.success:
-            self.notify(prep_result.error, severity="error")
+        # Validate merge via service
+        validate_result = await self._session_service.validate_merge(self.session.id)
+        if not validate_result.success:
+            self.notify(validate_result.error, severity="error")
             return
 
         # Build the summary prompt (non-blocking)
@@ -4622,9 +4628,9 @@ class BalloonsApp(App):
             is_helper=True,
             helper_type="merge",
             merge_data=MergeData(
-                fork_session_id=prep_result.fork_session.id,
-                parent_session_id=prep_result.parent_session.id,
-                fork_name=prep_result.fork_session.get_fork_display_name(),
+                fork_session_id=self.session.id,
+                parent_session_id=validate_result.parent_session_id,
+                fork_name=self.session.get_fork_display_name(),
             ),
         )
         self._streaming_contexts[helper_id] = ctx
@@ -4656,29 +4662,53 @@ class BalloonsApp(App):
         """
         chat_log = self.query_one("#chat-log", ChatLogView)
         context_tree = self.query_one("#context-tree", ContextTreeView)
-        input_box = self.query_one("#input-box", InputBox)
         status_bar = self.query_one("#status-bar", StatusBar)
 
-        # Get selected messages and tools from UI
-        indexed_messages = context_tree.get_selected_messages_with_indices()
+        # Get allowed tools from UI
         allowed_tools = self._get_enabled_tools()
+        source_session_id = self.session.id if self.session else ""
 
-        # Prepare derive via ForkManager
-        result = await self._fork_manager.prepare_derive(
-            indexed_messages=indexed_messages,
+        # Derive via SessionManagerService (reads context modes from TreeState)
+        debug_log.info(
+            f"_handle_derive_command calling derive_session",
+            category="derive",
+            details={"source_session_id": source_session_id},
+        )
+        result = await self._session_service.derive_session(
+            source_session_id=source_session_id,
             prompt=prompt,
             allowed_tools=allowed_tools,
+            start_streaming=True,
+        )
+        debug_log.info(
+            f"_handle_derive_command derive_session returned",
+            category="derive",
+            details={
+                "success": result.success,
+                "needs_compression": result.needs_compression,
+                "new_session_id": result.new_session_id,
+                "error": result.error,
+            },
         )
 
         if not result.success:
             self.notify(result.error, severity="error")
             return
 
-        if not result.needs_compression:
-            # No compression - proceed with UI updates
-            await self._complete_derive_ui(result, chat_log, context_tree)
-        else:
-            # Compression needed - start helper streaming
+        # Get the new session for UI updates
+        new_session = self._manager.get_session(result.new_session_id)
+        if not new_session:
+            new_session = await self._manager.load_session(result.new_session_id)
+
+        if result.needs_compression:
+            # Compression needed - set up UI for helper streaming
+            debug_log.info(
+                f"_handle_derive_command starting compression helper",
+                category="derive",
+                details={"helper_id": result.helper_id},
+            )
+
+            # The service already started the helper, we just track it locally
             ctx = StreamingContext(
                 session_id=result.helper_id,
                 user_turn_idx=-1,
@@ -4687,7 +4717,14 @@ class BalloonsApp(App):
                 is_active=True,
                 is_helper=True,
                 helper_type="derive",
-                fork_data=result.derive_data,
+                # Store derive info for UI updates after compression completes
+                derive_data=DeriveData(
+                    new_session=new_session,
+                    prompt=prompt,
+                    allowed_tools=allowed_tools,
+                    copy_items=[],
+                    compress_group_positions=[],
+                ),
             )
             self._streaming_contexts[result.helper_id] = ctx
 
@@ -4696,14 +4733,21 @@ class BalloonsApp(App):
 
             chat_log.add_user_message("[Compressing context for new session...]")
             chat_log.add_assistant_message()
-
-            # Start helper via service (uses session's backend)
-            self._session_service.start_helper(
-                helper_id=result.helper_id,
-                helper_type="derive",
-                prompt=result.compression_prompt,
-                session_id=self.session.id if self.session else None,
+            debug_log.info(
+                f"_handle_derive_command compression helper tracking started",
+                category="derive",
+                details={"helper_id": result.helper_id},
             )
+        else:
+            # No compression - complete UI updates
+            debug_log.info(f"_handle_derive_command completing UI updates", category="derive")
+            await self._complete_derive_ui_from_result(
+                new_session=new_session,
+                prompt=prompt,
+                chat_log=chat_log,
+                context_tree=context_tree,
+            )
+            debug_log.info(f"_handle_derive_command UI updates complete", category="derive")
 
     async def _complete_derive_ui(self, result: DeriveResult, chat_log: ChatLogView, context_tree: ContextTreeView) -> None:
         """Complete derive UI updates after business logic is done."""
@@ -4711,8 +4755,7 @@ class BalloonsApp(App):
 
         # Register and switch to new session
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
-        self._manager._sessions[new_session.id] = new_session
-        self._manager._runners[new_session.id] = self._create_session_runner(new_session)
+        self._manager.register_session(new_session, self._create_session_runner(new_session))
         await self._manager.set_active(new_session.id)
 
         chat_log.clear()
@@ -4722,16 +4765,50 @@ class BalloonsApp(App):
 
         await self._start_streaming(result.prompt)
 
+    async def _complete_derive_ui_from_result(
+        self,
+        new_session: "Session",
+        prompt: str,
+        chat_log: ChatLogView,
+        context_tree: ContextTreeView,
+        start_streaming: bool = False,
+    ) -> None:
+        """Complete derive UI updates using service result data.
+
+        This is the new version that works with SessionManagerService.derive_session().
+        The service has already registered the session and updated TreeState.
+
+        Args:
+            new_session: The newly created session
+            prompt: The prompt to use for streaming (if start_streaming is True)
+            chat_log: The chat log view to update
+            context_tree: The context tree view to update
+            start_streaming: If True, start streaming the prompt after UI updates
+        """
+        # Switch to new session
+        breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
+        await self._manager.set_active(new_session.id)
+
+        chat_log.clear()
+        await chat_log.load_history(new_session.turns, session=new_session)
+        await context_tree.load_all_sessions(new_session)
+        await breadcrumb.set_session(new_session)
+
+        # Start streaming if requested (e.g., after compression completes)
+        if start_streaming and prompt:
+            await self._start_streaming(prompt)
+
     async def _handle_switch_command(self, name: str = "") -> None:
         """Switch view to a different session or fork.
 
         Args:
             name: Fork name or session ID prefix. Empty shows picker.
         """
-        status_bar = self.query_one("#status-bar", StatusBar)
-
-        # Use ForkManager to find target
-        result = await self._fork_manager.find_switch_target(self.session, name)
+        # Use service to find target (searches forks and parent forks)
+        result = await self._session_service.find_switch_target(
+            session_id=self.session.id,
+            name=name,
+        )
 
         if not name:
             # List available forks
@@ -4746,7 +4823,13 @@ class BalloonsApp(App):
             return
 
         if result.success:
-            await self._switch_to_session(result.target_session)
+            target_session = self._manager.get_session(result.target_session_id)
+            if not target_session:
+                target_session = await self._manager.load_session(result.target_session_id)
+            if target_session:
+                await self._switch_to_session(target_session)
+            else:
+                self.notify("Target session not found", severity="error")
         else:
             self.notify(result.error, severity="error")
 
@@ -4911,7 +4994,7 @@ class BalloonsApp(App):
 
     async def on_clickable_session_link_clicked(self, event: ClickableSessionLink.Clicked) -> None:
         """Handle clicking on a session link in task pane to navigate to that session."""
-        session = self._manager._sessions.get(event.session_id)
+        session = self._manager.get_session(event.session_id)
         if not session:
             # Try to load it
             session = await Session.load(event.session_id)
@@ -4980,7 +5063,7 @@ class BalloonsApp(App):
             ctx = proposal_data.get("ctx")
 
         # Update the proposal status in the session (need full Session object with methods)
-        session = self._manager._sessions.get(session_id)
+        session = self._manager.get_session(session_id)
         if session:
             session.update_fork_proposal_status(event.proposal_id, "accepted")
             await session.save()
@@ -5140,7 +5223,7 @@ class BalloonsApp(App):
             )
 
         # Sync queue state to old session's message_queue before switching
-        old_session = self._manager._sessions.get(old_session_id)
+        old_session = self._manager.get_session(old_session_id)
         if old_session:
             self._queue_state.sync_to_message_queue(old_session_id, old_session.message_queue)
             # Save async to persist the queue (safe even while streaming - only saving queue)
@@ -5158,7 +5241,7 @@ class BalloonsApp(App):
             session: The session to switch to
             target_turn_index: Optional turn index to scroll to (0-based)
         """
-        old_session_id = self._manager._active_session_id
+        old_session_id = self._manager.active_session_id
         debug_log.info(
             f"Switching session: {old_session_id[:8] if old_session_id else 'none'}... → {session.id[:8]}...",
             category="session",
@@ -5184,9 +5267,8 @@ class BalloonsApp(App):
         chat_log.show_loading("Switching session...")
 
         # Register session with manager if not already known
-        if session.id not in self._manager._sessions:
-            self._manager._sessions[session.id] = session
-            self._manager._runners[session.id] = self._create_session_runner(session)
+        if self._manager.get_session(session.id) is None:
+            self._manager.register_session(session, self._create_session_runner(session))
         await self._manager.set_active(session.id)
 
         # Pre-seed TreeState with cached token count before switching
@@ -5274,7 +5356,7 @@ class BalloonsApp(App):
         # The SessionManager always creates runners with the default backend, so we need
         # to recreate the runner if the session specifies a different backend
         if session.backend_name and session.backend_name != self._backend_config.name:
-            self._manager._runners[session.id] = self._create_session_runner(session)
+            self._manager.update_runner(session.id, self._create_session_runner(session))
 
         # Update header with session title
         chat_log.set_session_title(session.title)
@@ -6403,7 +6485,7 @@ class BalloonsApp(App):
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
 
         # Background old session
-        old_session_id = self._manager._active_session_id
+        old_session_id = self._manager.active_session_id
         self._background_old_session(old_session_id)
 
         # Show loading indicator
@@ -6493,7 +6575,7 @@ class BalloonsApp(App):
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
 
         # Background old session
-        old_session_id = self._manager._active_session_id
+        old_session_id = self._manager.active_session_id
         self._background_old_session(old_session_id)
 
         # Show loading indicator
@@ -6578,7 +6660,7 @@ class BalloonsApp(App):
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
 
         # Background old session
-        old_session_id = self._manager._active_session_id
+        old_session_id = self._manager.active_session_id
         self._background_old_session(old_session_id)
 
         # Show loading indicator
@@ -6898,14 +6980,13 @@ class BalloonsApp(App):
         )
         await self.session.save()
 
-        # Register review session with manager
-        self._manager._sessions[review_session.id] = review_session
-        # Create runner with review backend and custom system prompt
-        self._manager._runners[review_session.id] = self._create_session_runner(
+        # Register review session with manager (with custom runner for review backend)
+        review_runner = self._create_session_runner(
             review_session,
             backend_config=review_backend_config,
             system_prompt=review_system_prompt,
         )
+        self._manager.register_session(review_session, review_runner)
 
         # Switch to review session
         await self._manager.set_active(review_session.id)
@@ -6940,7 +7021,7 @@ class BalloonsApp(App):
         breadcrumb = self.query_one("#breadcrumb", Breadcrumb)
 
         # Background old session
-        old_session_id = self._manager._active_session_id
+        old_session_id = self._manager.active_session_id
         self._background_old_session(old_session_id)
 
         # Show loading indicator
@@ -7362,8 +7443,7 @@ class BalloonsApp(App):
             pass
 
         # Clear manager state
-        self._manager._sessions.clear()
-        self._manager._runners.clear()
+        self._manager.clear_all()
 
         # Clear streaming contexts
         self._streaming_contexts.clear()
@@ -7872,7 +7952,7 @@ class BalloonsApp(App):
         if action == "switch_session":
             session_id = event.action_data.get("session_id")
             if session_id:
-                session = self._manager._sessions.get(session_id)
+                session = self._manager.get_session(session_id)
                 if not session:
                     # Try to load it
                     session = await Session.load(session_id)

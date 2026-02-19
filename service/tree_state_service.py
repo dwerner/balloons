@@ -53,6 +53,7 @@ class SessionInfo:
     cached_context_tokens: int = 0
     context_window: int = 200000
     binding_indicator: str = ""
+    backend_name: str = ""  # Name of the backend (empty = default)
 
 
 @ws_type
@@ -169,14 +170,6 @@ class TreeStateService:
         """Convert TreeState events to WebSocket events."""
         # Map TreeEvent enum to camelCase wire name
         event_name = self._tree_event_to_wire_name(event)
-
-        # Debug: log event handling
-        from core.debug_log import debug_log
-        debug_log.debug(
-            f"TreeStateService relaying event: {event_name}, handlers: {len(self._event_handlers)}",
-            category="websocket",
-        )
-
         for handler in self._event_handlers:
             handler(event_name, data)
 
@@ -218,6 +211,7 @@ class TreeStateService:
             cached_context_tokens=session_data.cached_context_tokens,
             context_window=session_data.context_window,
             binding_indicator=session_data.binding_indicator,
+            backend_name=session_data.backend_name,
         )
 
     @ws_expose
@@ -245,6 +239,7 @@ class TreeStateService:
                 cached_context_tokens=s.cached_context_tokens,
                 context_window=s.context_window,
                 binding_indicator=s.binding_indicator,
+                backend_name=s.backend_name,
             )
             for s in sessions.values()
         ]

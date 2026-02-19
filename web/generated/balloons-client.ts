@@ -27,6 +27,7 @@ import {
   TaskStateServiceClient,
   SessionDataServiceClient,
   ImageServiceClient,
+  DebugLogServiceClient,
 } from './client';
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -64,6 +65,7 @@ export class BalloonsClient {
   private _tasks: TaskStateServiceClient | null = null;
   private _sessionData: SessionDataServiceClient | null = null;
   private _images: ImageServiceClient | null = null;
+  private _debugLog: DebugLogServiceClient | null = null;
 
   constructor(url: string, options: BalloonsClientOptions = {}) {
     this.url = url;
@@ -141,6 +143,14 @@ export class BalloonsClient {
       throw new Error('Not connected. Call connect() first.');
     }
     return this._images;
+  }
+
+  /** Debug log service (logging from web to TUI debug pane) */
+  get debugLog(): DebugLogServiceClient {
+    if (!this._debugLog) {
+      throw new Error('Not connected. Call connect() first.');
+    }
+    return this._debugLog;
   }
 
   // --- Connection Management ---
@@ -249,6 +259,7 @@ export class BalloonsClient {
     this._tasks = new TaskStateServiceClient(this.ws);
     this._sessionData = new SessionDataServiceClient(this.ws);
     this._images = new ImageServiceClient(this.ws);
+    this._debugLog = new DebugLogServiceClient(this.ws);
   }
 
   private clearClients(): void {
@@ -259,6 +270,7 @@ export class BalloonsClient {
     this._tasks = null;
     this._sessionData = null;
     this._images = null;
+    this._debugLog = null;
   }
 
   private scheduleReconnect(): void {
@@ -285,5 +297,6 @@ export {
   TaskStateServiceClient,
   SessionDataServiceClient,
   ImageServiceClient,
+  DebugLogServiceClient,
 } from './client';
 export type { Unsubscribe } from './client';

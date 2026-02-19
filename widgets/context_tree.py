@@ -2696,22 +2696,9 @@ class ContextTreeView(Vertical):
 
         included_items = []  # Will hold both turns and merge markers
 
-        # Diagnostic logging for context mode debugging
-        debug_log.info(
-            f"get_selected_messages_with_indices: starting collection",
-            category="fork",
-            details={"target_session_id": target_session_id, "turn_count": len(session_data.turns)},
-        )
-
         # Collect turns from TreeState (includes streaming turns)
         for turn in session_data.turns:
             mode = self._state.get_context_mode(target_session_id, turn.idx)
-            # Log each turn's mode for debugging
-            debug_log.debug(
-                f"get_selected_messages_with_indices: turn mode lookup",
-                category="fork",
-                details={"turn_idx": turn.idx, "mode": mode.name if mode else "None"},
-            )
             if mode != ContextMode.DROP:
                 # Get original turn from session if available
                 orig_turn = None
@@ -2805,11 +2792,6 @@ class ContextTreeView(Vertical):
         for msg, _ in results:
             mode_name = msg.context_mode.name if msg.context_mode else "None"
             mode_counts[mode_name] = mode_counts.get(mode_name, 0) + 1
-        debug_log.info(
-            f"get_selected_messages_with_indices: finished",
-            category="fork",
-            details={"result_count": len(results), "mode_distribution": mode_counts},
-        )
 
         return results
 

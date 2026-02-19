@@ -178,6 +178,8 @@ class SessionTurnFinishedEvent:
     session_id: str
     turn_id: str  # Stable UUID for the turn
     tokens: int
+    order: int = 0  # Turn index for ordering (critical for tool_result turns)
+    role: str = "assistant"  # Turn role
     content_block: ContentBlock | None = None  # Full structured content block (optional for backwards compat)
     final_content: str = ""  # Deprecated: use content_block instead
 
@@ -678,6 +680,8 @@ class SessionDataService:
         turn_id: str,
         final_content: str,
         tokens: int,
+        order: int = 0,
+        role: str = "assistant",
         content_block: ContentBlock | None = None,
     ) -> None:
         """Emit a turn finished event to subscribed clients.
@@ -689,6 +693,8 @@ class SessionDataService:
             turn_id: Stable UUID for the turn
             final_content: Complete content of the turn (deprecated, use content_block)
             tokens: Token count for the turn
+            order: Turn index for ordering
+            role: Turn role ("user", "assistant", "tool")
             content_block: Full structured content block (optional, preferred over final_content)
         """
         subscribers = self._session_subscribers.get(session_id)
@@ -699,6 +705,8 @@ class SessionDataService:
             session_id=session_id,
             turn_id=turn_id,
             tokens=tokens,
+            order=order,
+            role=role,
             content_block=content_block,
             final_content=final_content,
         )
@@ -820,6 +828,8 @@ class SessionDataService:
             turn_id=event.turn_id,
             final_content=event.content,
             tokens=event.tokens,
+            order=event.turn_index,
+            role=event.role,
             content_block=event.content_block,
         )
 

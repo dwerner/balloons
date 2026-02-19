@@ -1669,7 +1669,9 @@ class ChatLogView(VerticalScroll):
                 widget_count += 1
 
         self._turn_counter = result.final_turn_id
-        self.scroll_end(animate=False)
+        # Defer scroll to after layout is calculated - immediate scroll doesn't work
+        # because widget sizes aren't known yet
+        self.call_after_refresh(lambda: self.scroll_end(animate=False))
 
         elapsed_ms = (time.perf_counter() - start) * 1000
         mount_ms = (time.perf_counter() - mount_start) * 1000
@@ -1696,6 +1698,17 @@ class ChatLogView(VerticalScroll):
 
         elif isinstance(instr, RenderToolUse):
             # Format using Formatter for display
+            from core.debug_log import debug_log
+            debug_log.info(
+                f"_instruction_to_widget: RenderToolUse",
+                category="chat_log",
+                details={
+                    "tool_name": instr.tool_name,
+                    "tool_use_id": instr.tool_use_id[:20] if instr.tool_use_id else "",
+                    "tool_input_keys": list(instr.tool_input.keys()) if instr.tool_input else [],
+                    "tool_input_preview": str(instr.tool_input)[:100] if instr.tool_input else "empty",
+                },
+            )
             block = ToolUseBlock(id=instr.tool_use_id, name=instr.tool_name, input=instr.tool_input)
             formatted = self._format_tool_use(block)
             if isinstance(formatted, tuple):

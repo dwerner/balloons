@@ -69,6 +69,11 @@ class SessionManager:
         self._runner_factory = runner_factory
 
     @property
+    def active_session_id(self) -> Optional[str]:
+        """Get the ID of the currently active session."""
+        return self._active_session_id
+
+    @property
     def active_session(self) -> Optional[Session]:
         """Get the currently active session."""
         if self._active_session_id:
@@ -164,6 +169,66 @@ class SessionManager:
             SessionRunner if session exists
         """
         return self._runners.get(session_id)
+
+    def register_session(
+        self,
+        session: Session,
+        runner: SessionRunner | None = None,
+    ) -> SessionRunner:
+        """Register a session with the manager.
+
+        DEPRECATED: Prefer using SessionManagerService.fork_session() or
+        SessionManagerService.create_session() instead. External session
+        creation bypasses service-level event emission and tracking.
+
+        This method is kept for backward compatibility during the transition
+        to service-owned session lifecycle.
+
+        Args:
+            session: Session to register
+            runner: Optional runner for the session. If not provided,
+                   one will be created using the runner factory.
+
+        Returns:
+            The session's runner (created or provided)
+        """
+        self._sessions[session.id] = session
+        if runner is not None:
+            self._runners[session.id] = runner
+        else:
+            self._runners[session.id] = self._create_runner(session)
+        return self._runners[session.id]
+
+    def update_runner(self, session_id: str, runner: SessionRunner) -> None:
+        """Update the runner for a session.
+
+        Use this when you need to replace a session's runner (e.g., after
+        changing the backend).
+
+        Args:
+            session_id: Session ID
+            runner: New runner for the session
+        """
+        if session_id not in self._sessions:
+            raise ValueError(f"Session {session_id} not registered")
+        self._runners[session_id] = runner
+
+    def unregister_session(self, session_id: str) -> None:
+        """Unregister a session from the manager.
+
+        Args:
+            session_id: Session ID to unregister
+        """
+        self._sessions.pop(session_id, None)
+        self._runners.pop(session_id, None)
+
+    def clear_all(self) -> None:
+        """Clear all sessions and runners.
+
+        Use this for cleanup (e.g., after loading a fresh session list).
+        """
+        self._sessions.clear()
+        self._runners.clear()
 
     async def fork_session(
         self,

@@ -3,15 +3,14 @@ import type { BalloonsClient } from '../../../../generated/balloons-client';
 import { MarkdownContent } from '../../MarkdownContent';
 import './SimpleTurnsView.css';
 
-// Debug logger that sends to server (v2 - focused on getTurns vs streaming reconciliation)
-function debugLog(message: string, data?: Record<string, unknown>) {
-  const logData = { message, ...data, timestamp: new Date().toISOString() };
-  console.log('[SimpleTurnsView]', message, data);
-  fetch('/debug-log', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(logData),
-  }).catch(() => { /* ignore */ });
+// Create a debug logger that uses the client's WebSocket connection
+function createDebugLogger(client: BalloonsClient) {
+  return (message: string, data?: Record<string, unknown>) => {
+    console.log('[SimpleTurnsView]', message, data);
+    if (client.isConnected) {
+      client.debugLog.info(message, 'web.SimpleTurnsView', '', data ?? null).catch(() => {});
+    }
+  };
 }
 
 interface SimpleTurnsViewProps {
@@ -48,6 +47,9 @@ interface StreamingTurn {
  * 4. Keep it simple - no complex filtering or transformation
  */
 export function SimpleTurnsView({ sessionId, client }: SimpleTurnsViewProps) {
+  // Create debug logger using the client's WebSocket connection
+  const debugLog = createDebugLogger(client);
+
   // Turns loaded from server (source of truth)
   const [turns, setTurns] = useState<StreamingTurn[]>([]);
   const [isLoading, setIsLoading] = useState(false);

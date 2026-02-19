@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-18T17:53:22.059356
+// Generated: 2026-02-19T10:51:59.605893
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -733,6 +733,35 @@ export interface SessionManagerService {
   cancelStreaming(sessionId: string): Promise<boolean>;
 
   /**
+   * Complete a derive after context compression finishes.
+   * 
+   * Args:
+   * helper_id: ID of the compression helper
+   * compressed_summary: LLM-generated summary of compressed context
+   * start_streaming: If True, start streaming after derive is ready
+   * 
+   * Returns:
+   * DeriveSessionResult with the completed derive info
+   */
+  completeDeriveAfterCompression(helperId: string, compressedSummary: string, startStreaming?: boolean): Promise<Types.DeriveSessionResult>;
+
+  /**
+   * Complete a fork after context compression finishes.
+   * 
+   * Called when the compression helper completes. Inserts the summary
+   * at the correct position and finalizes the fork.
+   * 
+   * Args:
+   * helper_id: ID of the compression helper
+   * compressed_summary: LLM-generated summary of compressed context
+   * start_streaming: If True, start streaming after fork is ready
+   * 
+   * Returns:
+   * ForkSessionResult with the completed fork info
+   */
+  completeForkAfterCompression(helperId: string, compressedSummary: string, startStreaming?: boolean): Promise<Types.ForkSessionResult>;
+
+  /**
    * Create a new session.
    * 
    * Args:
@@ -756,6 +785,65 @@ export interface SessionManagerService {
    * True if session was deleted, False if not found
    */
   deleteSession(sessionId: string): Promise<boolean>;
+
+  /**
+   * Derive a new independent session from selected context.
+   * 
+   * Unlike fork, derive creates a session with no parent relationship.
+   * The new session is completely independent.
+   * 
+   * Args:
+   * source_session_id: ID of the session to derive from
+   * prompt: Optional initial prompt for the derived session
+   * context_modes: List of {turn_index, mode} dicts. Mode is "copy", "compress", or "drop".
+   * If not provided, all turns are copied.
+   * allowed_tools: List of tool names to allow, or None for all tools
+   * start_streaming: If True and prompt provided, start streaming after creation
+   * 
+   * Returns:
+   * DeriveSessionResult with new session info
+   */
+  deriveSession(sourceSessionId: string, prompt?: string, contextModes?: Record<string, unknown>[] | null, allowedTools?: string[] | null, startStreaming?: boolean): Promise<Types.DeriveSessionResult>;
+
+  /**
+   * Find a session to switch to.
+   * 
+   * Searches forks of current session, then parent's forks if in a fork.
+   * 
+   * Args:
+   * session_id: Current session ID
+   * name: Fork name or session ID prefix, or "parent"/".."
+   * 
+   * Returns:
+   * SwitchTargetResult with target session or available forks
+   */
+  findSwitchTarget(sessionId: string, name: string): Promise<Types.SwitchTargetResult>;
+
+  /**
+   * Fork a new session from an existing parent session.
+   * 
+   * Creates a child session with selected context from the parent.
+   * Context can be copied verbatim, compressed via LLM, or dropped.
+   * 
+   * If compression is needed, returns immediately with needs_compression=True
+   * and helper_id. The client should then listen for helper events and call
+   * complete_fork_after_compression() when done.
+   * 
+   * Args:
+   * parent_session_id: ID of the session to fork from
+   * prompt: Initial prompt for the fork
+   * name: Optional name for the fork (e.g., "auth-bug")
+   * background: If True, run in background and stay in parent session
+   * context_modes: List of {turn_index, mode} dicts. Mode is "copy", "compress", or "drop".
+   * If not provided, all turns are copied.
+   * allowed_tools: List of tool names to allow, or None for all tools
+   * start_streaming: If True, start streaming after fork creation. Set False
+   * if you want to handle streaming separately.
+   * 
+   * Returns:
+   * ForkSessionResult with child session info and streaming state
+   */
+  forkSession(parentSessionId: string, prompt: string, name?: string, background?: boolean, contextModes?: Record<string, unknown>[] | null, allowedTools?: string[] | null, startStreaming?: boolean): Promise<Types.ForkSessionResult>;
 
   /**
    * Get the ID of the currently active session.
@@ -785,6 +873,17 @@ export interface SessionManagerService {
   getSession(sessionId: string): Promise<Types.ManagedSessionInfo | null>;
 
   /**
+   * Get the backend name for a session.
+   * 
+   * Args:
+   * session_id: ID of the session
+   * 
+   * Returns:
+   * Effective backend name (explicit or default), or None if session not found
+   */
+  getSessionBackend(sessionId: string): Promise<string | null>;
+
+  /**
    * Get streaming information for a session.
    * 
    * Args:
@@ -804,12 +903,53 @@ export interface SessionManagerService {
   getStreamingSessions(): Promise<string[]>;
 
   /**
+   * List all available backend names.
+   * 
+   * Returns:
+   * List of backend name strings
+   */
+  listBackends(): Promise<string[]>;
+
+  /**
    * List all available sessions.
    * 
    * Returns:
    * List of session info objects
    */
   listSessions(): Promise<Types.ManagedSessionInfo[]>;
+
+  /**
+   * Merge a fork session back to its parent.
+   * 
+   * Creates a merge marker in both the fork and parent sessions,
+   * recording what was accomplished in the fork.
+   * 
+   * Args:
+   * fork_session_id: ID of the fork session to merge
+   * merge_summary: Summary of what was accomplished in the fork
+   * files_changed: List of key files that were modified
+   * key_accomplishments: List of what was done
+   * reason: Why the merge is happening now
+   * 
+   * Returns:
+   * MergeSessionResult with merge info
+   */
+  mergeSession(forkSessionId: string, mergeSummary: string, filesChanged?: string[] | null, keyAccomplishments?: string[] | null, reason?: string): Promise<Types.MergeSessionResult>;
+
+  /**
+   * Set the backend for a session.
+   * 
+   * The new backend will be used for the next streaming request.
+   * Cannot change backend while streaming.
+   * 
+   * Args:
+   * session_id: ID of the session to update
+   * backend_name: Name of the backend to use
+   * 
+   * Returns:
+   * True if successful, False if session not found or invalid backend
+   */
+  setSessionBackend(sessionId: string, backendName: string): Promise<boolean>;
 
   /**
    * Submit a message to a session and start streaming the response.
@@ -877,6 +1017,20 @@ export interface SessionManagerService {
    * True if switch was successful, False if session not found
    */
   switchSession(sessionId: string): Promise<boolean>;
+
+  /**
+   * Validate that a merge is possible for a fork session.
+   * 
+   * Use this to check if merge is valid before generating a summary.
+   * Returns the parent session ID if valid.
+   * 
+   * Args:
+   * fork_session_id: ID of the fork session to validate
+   * 
+   * Returns:
+   * MergeSessionResult with success=True if valid, otherwise error
+   */
+  validateMerge(forkSessionId: string): Promise<Types.MergeSessionResult>;
 
 }
 
@@ -968,12 +1122,32 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.call('cancelStreaming', { sessionId: sessionId });
   }
 
+  async completeDeriveAfterCompression(helperId: string, compressedSummary: string, startStreaming?: boolean): Promise<Types.DeriveSessionResult> {
+    return this.call('completeDeriveAfterCompression', { helperId: helperId, compressedSummary: compressedSummary, startStreaming: startStreaming });
+  }
+
+  async completeForkAfterCompression(helperId: string, compressedSummary: string, startStreaming?: boolean): Promise<Types.ForkSessionResult> {
+    return this.call('completeForkAfterCompression', { helperId: helperId, compressedSummary: compressedSummary, startStreaming: startStreaming });
+  }
+
   async createSession(workingDirectory?: string | null): Promise<Types.ManagedSessionInfo> {
     return this.call('createSession', { workingDirectory: workingDirectory });
   }
 
   async deleteSession(sessionId: string): Promise<boolean> {
     return this.call('deleteSession', { sessionId: sessionId });
+  }
+
+  async deriveSession(sourceSessionId: string, prompt?: string, contextModes?: Record<string, unknown>[] | null, allowedTools?: string[] | null, startStreaming?: boolean): Promise<Types.DeriveSessionResult> {
+    return this.call('deriveSession', { sourceSessionId: sourceSessionId, prompt: prompt, contextModes: contextModes, allowedTools: allowedTools, startStreaming: startStreaming });
+  }
+
+  async findSwitchTarget(sessionId: string, name: string): Promise<Types.SwitchTargetResult> {
+    return this.call('findSwitchTarget', { sessionId: sessionId, name: name });
+  }
+
+  async forkSession(parentSessionId: string, prompt: string, name?: string, background?: boolean, contextModes?: Record<string, unknown>[] | null, allowedTools?: string[] | null, startStreaming?: boolean): Promise<Types.ForkSessionResult> {
+    return this.call('forkSession', { parentSessionId: parentSessionId, prompt: prompt, name: name, background: background, contextModes: contextModes, allowedTools: allowedTools, startStreaming: startStreaming });
   }
 
   async getActiveSessionId(): Promise<string | null> {
@@ -988,6 +1162,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.call('getSession', { sessionId: sessionId });
   }
 
+  async getSessionBackend(sessionId: string): Promise<string | null> {
+    return this.call('getSessionBackend', { sessionId: sessionId });
+  }
+
   async getStreamingInfo(sessionId: string): Promise<Types.StreamingInfo | null> {
     return this.call('getStreamingInfo', { sessionId: sessionId });
   }
@@ -996,8 +1174,20 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.call('getStreamingSessions', {  });
   }
 
+  async listBackends(): Promise<string[]> {
+    return this.call('listBackends', {  });
+  }
+
   async listSessions(): Promise<Types.ManagedSessionInfo[]> {
     return this.call('listSessions', {  });
+  }
+
+  async mergeSession(forkSessionId: string, mergeSummary: string, filesChanged?: string[] | null, keyAccomplishments?: string[] | null, reason?: string): Promise<Types.MergeSessionResult> {
+    return this.call('mergeSession', { forkSessionId: forkSessionId, mergeSummary: mergeSummary, filesChanged: filesChanged, keyAccomplishments: keyAccomplishments, reason: reason });
+  }
+
+  async setSessionBackend(sessionId: string, backendName: string): Promise<boolean> {
+    return this.call('setSessionBackend', { sessionId: sessionId, backendName: backendName });
   }
 
   async submitMessage(sessionId: string, content: string, messages?: unknown[] | null, queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult> {
@@ -1010,6 +1200,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   async switchSession(sessionId: string): Promise<boolean> {
     return this.call('switchSession', { sessionId: sessionId });
+  }
+
+  async validateMerge(forkSessionId: string): Promise<Types.MergeSessionResult> {
+    return this.call('validateMerge', { forkSessionId: forkSessionId });
   }
 
   onMessageSubmitted(callback: (data: Types.SubmitMessageResult) => void): Unsubscribe {
@@ -2656,6 +2850,135 @@ export class ImageServiceClient implements ImageService {
 
   onImageUploaded(callback: (data: Types.ImageEventData) => void): Unsubscribe {
     return this.subscribe('imageUploaded', callback);
+  }
+
+}
+
+/**
+ * WebSocket-exposed service for debug logging.
+ * 
+ * Provides a way for web clients to send log entries to the shared
+ * debug log, making them visible in the TUI's debug pane.
+ */
+export interface DebugLogService {
+  /**
+   * Convenience method to log a debug message.
+   */
+  debug(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult>;
+
+  /**
+   * Convenience method to log an error.
+   */
+  error(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult>;
+
+  /**
+   * Convenience method to log an info message.
+   */
+  info(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult>;
+
+  /**
+   * Log a message from a web client.
+   * 
+   * The log entry will appear in the TUI's debug pane with the specified
+   * level, message, and category. Category defaults to "web" for web
+   * client logs.
+   * 
+   * Args:
+   * entry: The log entry to add
+   * 
+   * Returns:
+   * LogResult with success status and sequence number
+   */
+  log(entry: Types.LogEntryInput): Promise<Types.LogResult>;
+
+  /**
+   * Log multiple messages at once.
+   * 
+   * Useful for flushing buffered logs from the web client.
+   * 
+   * Args:
+   * entries: List of log entries to add
+   * 
+   * Returns:
+   * LogResult with success status and last sequence number
+   */
+  logBatch(entries: Types.LogEntryInput[]): Promise<Types.LogResult>;
+
+  /**
+   * Convenience method to log a warning.
+   */
+  warning(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult>;
+
+}
+
+export class DebugLogServiceClient implements DebugLogService {
+  private ws: WebSocket;
+  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
+  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
+
+  constructor(ws: WebSocket) {
+    this.ws = ws;
+    this.ws.addEventListener('message', this.handleMessage.bind(this));
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    const msg = JSON.parse(event.data);
+    if (msg.id && this.pending.has(msg.id)) {
+      const { resolve, reject } = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      if (msg.error) {
+        reject(new Error(msg.error.message));
+      } else {
+        resolve(msg.result);
+      }
+    } else if (msg.event) {
+      const handlers = this.eventHandlers.get(msg.event);
+      if (handlers) {
+        handlers.forEach(h => h(msg.data));
+      }
+    }
+  }
+
+  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const id = generateRequestId();
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, new Set());
+    }
+    this.eventHandlers.get(event)!.add(callback);
+    return () => {
+      this.eventHandlers.get(event)?.delete(callback);
+    };
+  }
+
+  async debug(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
+    return this.call('debug', { message: message, category: category, sessionId: sessionId, details: details });
+  }
+
+  async error(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
+    return this.call('error', { message: message, category: category, sessionId: sessionId, details: details });
+  }
+
+  async info(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
+    return this.call('info', { message: message, category: category, sessionId: sessionId, details: details });
+  }
+
+  async log(entry: Types.LogEntryInput): Promise<Types.LogResult> {
+    return this.call('log', { entry: entry });
+  }
+
+  async logBatch(entries: Types.LogEntryInput[]): Promise<Types.LogResult> {
+    return this.call('logBatch', { entries: entries });
+  }
+
+  async warning(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
+    return this.call('warning', { message: message, category: category, sessionId: sessionId, details: details });
   }
 
 }

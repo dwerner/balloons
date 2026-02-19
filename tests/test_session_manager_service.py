@@ -1789,3 +1789,595 @@ class TestHelperRunnerManagement:
         result = service.get_helper_result("nonexistent")
 
         assert result is None
+
+
+class TestForkSessionService:
+    """Tests for fork_session service method."""
+
+    @pytest.fixture
+    def mock_parent_session(self):
+        """Create a mock parent session."""
+        session = MagicMock()
+        session.id = "parent-123"
+        session.turns = [
+            MagicMock(role="user", content="Hello", content_blocks=[]),
+            MagicMock(role="assistant", content="Hi there", content_blocks=[]),
+        ]
+        session.is_read_only = MagicMock(return_value=False)
+        session.save = AsyncMock()
+        return session
+
+    @pytest.fixture
+    def mock_child_session(self):
+        """Create a mock child session."""
+        session = MagicMock()
+        session.id = "child-456"
+        session.turns = []
+        session.save = AsyncMock()
+        session.add_message = MagicMock()
+        return session
+
+    @pytest.fixture
+    def mock_fork_manager(self, mock_child_session, mock_parent_session):
+        """Create a mock ForkManager."""
+        from core.fork import ForkResult
+
+        fork_manager = MagicMock()
+        fork_manager.prepare_fork = AsyncMock(
+            return_value=ForkResult(
+                success=True,
+                child_session=mock_child_session,
+                parent_session=mock_parent_session,
+                prompt="Test prompt",
+                name="test-fork",
+                allowed_tools=[],
+                needs_compression=False,
+            )
+        )
+        return fork_manager
+
+    @pytest.fixture
+    def service_with_fork_manager(self, mock_manager, stream_state, mock_fork_manager, mock_parent_session):
+        """Create a service with a mocked ForkManager."""
+        # Configure manager to return parent session
+        mock_manager.get_session = MagicMock(return_value=mock_parent_session)
+        mock_manager.register_session = MagicMock()
+
+        service = SessionManagerService(mock_manager, stream_state)
+        service._fork_manager = mock_fork_manager
+        service._tree_state = MagicMock()
+        service._tree_state.get_context_modes_for_session = MagicMock(return_value={})
+        service._tree_state.add_session = MagicMock()
+        service._tree_state.load_session = MagicMock()
+        return service
+
+    @pytest.mark.asyncio
+    async def test_fork_session_parent_not_found(self, mock_manager, stream_state):
+        """Test fork_session returns error when parent not found."""
+        mock_manager.get_session = MagicMock(return_value=None)
+        mock_manager.load_session = AsyncMock(return_value=None)
+
+        service = SessionManagerService(mock_manager, stream_state)
+
+        result = await service.fork_session(
+            parent_session_id="nonexistent",
+            prompt="Test prompt",
+        )
+
+        assert not result.success
+        assert "not found" in result.error
+
+    @pytest.mark.asyncio
+    async def test_fork_session_success_no_compression(
+        self,
+        service_with_fork_manager,
+        mock_child_session,
+    ):
+        """Test successful fork without compression."""
+        result = await service_with_fork_manager.fork_session(
+            parent_session_id="parent-123",
+            prompt="Test prompt",
+            name="test-fork",
+            start_streaming=False,  # Don't try to submit message
+        )
+
+        assert result.success
+        assert result.child_session_id == "child-456"
+        assert result.parent_session_id == "parent-123"
+        assert result.fork_name == "test-fork"
+        assert not result.needs_compression
+
+    @pytest.mark.asyncio
+    async def test_fork_session_with_context_modes(
+        self,
+        service_with_fork_manager,
+        mock_fork_manager,
+    ):
+        """Test fork_session with explicit context modes."""
+        context_modes = [
+            {"turn_index": 0, "mode": "copy"},
+            {"turn_index": 1, "mode": "drop"},
+        ]
+
+        await service_with_fork_manager.fork_session(
+            parent_session_id="parent-123",
+            prompt="Test prompt",
+            context_modes=context_modes,
+            start_streaming=False,
+        )
+
+        # Verify prepare_fork was called
+        mock_fork_manager.prepare_fork.assert_called_once()
+        call_args = mock_fork_manager.prepare_fork.call_args
+
+        # Verify indexed_messages excludes dropped turns
+        indexed_messages = call_args.kwargs["indexed_messages"]
+        # Only turn 0 should be included (turn 1 was dropped)
+        assert len(indexed_messages) == 1
+        assert indexed_messages[0][1] == 0  # original index
+
+    @pytest.mark.asyncio
+    async def test_fork_session_needs_compression(
+        self,
+        service_with_fork_manager,
+        mock_fork_manager,
+        mock_child_session,
+        mock_parent_session,
+    ):
+        """Test fork_session when compression is needed."""
+        from core.fork import ForkResult, ForkData
+
+        # Configure to need compression
+        mock_fork_manager.prepare_fork = AsyncMock(
+            return_value=ForkResult(
+                success=True,
+                child_session=mock_child_session,
+                parent_session=mock_parent_session,
+                prompt="Test prompt",
+                name="test-fork",
+                allowed_tools=[],
+                needs_compression=True,
+                helper_id="compress-abc123",
+                compression_prompt="Summarize this context...",
+                fork_data=ForkData(
+                    child_session=mock_child_session,
+                    parent_session=mock_parent_session,
+                    prompt="Test prompt",
+                    name="test-fork",
+                    background=False,
+                    allowed_tools=[],
+                    copy_items=[],
+                    compress_group_positions=[0, 1],
+                    fork_point=2,
+                ),
+            )
+        )
+
+        # Mock start_helper
+        service_with_fork_manager.start_helper = MagicMock()
+
+        result = await service_with_fork_manager.fork_session(
+            parent_session_id="parent-123",
+            prompt="Test prompt",
+            name="test-fork",
+        )
+
+        assert result.success
+        assert result.needs_compression
+        assert result.helper_id == "compress-abc123"
+
+        # Verify helper was started
+        service_with_fork_manager.start_helper.assert_called_once()
+
+
+class TestMergeSessionService:
+    """Tests for merge_session and validate_merge service methods."""
+
+    @pytest.fixture
+    def mock_fork_session(self):
+        """Create a mock fork session."""
+        session = MagicMock()
+        session.id = "fork-123"
+        session.turns = [
+            MagicMock(role="user", content="Do the task", content_blocks=[]),
+            MagicMock(role="assistant", content="Done!", content_blocks=[]),
+        ]
+        session.is_fork = MagicMock(return_value=True)
+        session.is_merged = MagicMock(return_value=False)
+        session.save = AsyncMock()
+        session.mark_merged = MagicMock()
+        return session
+
+    @pytest.fixture
+    def mock_parent_session(self):
+        """Create a mock parent session for merge."""
+        session = MagicMock()
+        session.id = "parent-456"
+        session.turns = []
+        session.save = AsyncMock()
+        session.mark_child_merged = MagicMock()
+        session.add_merge_turn = MagicMock()
+        return session
+
+    @pytest.fixture
+    def mock_fork_manager_for_merge(self, mock_fork_session, mock_parent_session):
+        """Create a mock ForkManager configured for merge operations."""
+        from core.fork import MergeResult
+
+        fork_manager = MagicMock()
+        fork_manager.prepare_merge = AsyncMock(
+            return_value=MergeResult(
+                success=True,
+                fork_session=mock_fork_session,
+                parent_session=mock_parent_session,
+            )
+        )
+        fork_manager.complete_merge = AsyncMock(
+            return_value=MergeResult(
+                success=True,
+                fork_session=mock_fork_session,
+                parent_session=mock_parent_session,
+                fork_name="test-fork",
+                merge_message="Test merge summary",
+                merge_id="merge-abc",
+                merge_point=5,
+            )
+        )
+        return fork_manager
+
+    @pytest.fixture
+    def service_with_merge(self, mock_manager, stream_state, mock_fork_manager_for_merge, mock_fork_session):
+        """Create a service configured for merge tests."""
+        mock_manager.get_session = MagicMock(return_value=mock_fork_session)
+        mock_manager.load_session = AsyncMock(return_value=mock_fork_session)
+
+        service = SessionManagerService(mock_manager, stream_state)
+        service._fork_manager = mock_fork_manager_for_merge
+        return service
+
+    @pytest.mark.asyncio
+    async def test_validate_merge_success(self, service_with_merge):
+        """Test validate_merge returns success for valid fork."""
+        result = await service_with_merge.validate_merge(fork_session_id="fork-123")
+
+        assert result.success
+        assert result.fork_session_id == "fork-123"
+        assert result.parent_session_id == "parent-456"
+
+    @pytest.mark.asyncio
+    async def test_validate_merge_session_not_found(self, mock_manager, stream_state):
+        """Test validate_merge returns error when fork not found."""
+        mock_manager.get_session = MagicMock(return_value=None)
+        mock_manager.load_session = AsyncMock(return_value=None)
+
+        service = SessionManagerService(mock_manager, stream_state)
+
+        result = await service.validate_merge(fork_session_id="nonexistent")
+
+        assert not result.success
+        assert "not found" in result.error
+
+    @pytest.mark.asyncio
+    async def test_validate_merge_not_a_fork(self, mock_manager, stream_state, mock_fork_manager_for_merge):
+        """Test validate_merge returns error when session is not a fork."""
+        from core.fork import MergeResult
+
+        # Create a session that's not a fork
+        session = MagicMock()
+        session.id = "regular-session"
+        session.is_fork = MagicMock(return_value=False)
+
+        mock_manager.get_session = MagicMock(return_value=session)
+
+        # Configure fork manager to return error
+        mock_fork_manager_for_merge.prepare_merge = AsyncMock(
+            return_value=MergeResult(
+                success=False,
+                error="Not a fork session",
+            )
+        )
+
+        service = SessionManagerService(mock_manager, stream_state)
+        service._fork_manager = mock_fork_manager_for_merge
+
+        result = await service.validate_merge(fork_session_id="regular-session")
+
+        assert not result.success
+        assert "Not a" in result.error or "not" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_merge_session_success(self, service_with_merge):
+        """Test successful merge_session."""
+        result = await service_with_merge.merge_session(
+            fork_session_id="fork-123",
+            merge_summary="Completed the task successfully",
+            files_changed=["file1.py", "file2.py"],
+            key_accomplishments=["Implemented feature X"],
+        )
+
+        assert result.success
+        assert result.fork_session_id == "fork-123"
+        assert result.parent_session_id == "parent-456"
+        assert result.merge_id == "merge-abc"
+        assert result.merge_point == 5
+
+    @pytest.mark.asyncio
+    async def test_merge_session_session_not_found(self, mock_manager, stream_state):
+        """Test merge_session returns error when fork not found."""
+        mock_manager.get_session = MagicMock(return_value=None)
+        mock_manager.load_session = AsyncMock(return_value=None)
+
+        service = SessionManagerService(mock_manager, stream_state)
+
+        result = await service.merge_session(
+            fork_session_id="nonexistent",
+            merge_summary="Summary",
+        )
+
+        assert not result.success
+        assert "not found" in result.error
+
+
+class TestDeriveSessionService:
+    """Tests for derive_session service method."""
+
+    @pytest.fixture
+    def mock_source_session(self):
+        """Create a mock source session."""
+        session = MagicMock()
+        session.id = "source-123"
+        session.turns = [
+            MagicMock(role="user", content="Initial context", content_blocks=[]),
+            MagicMock(role="assistant", content="Some response", content_blocks=[]),
+        ]
+        session.save = AsyncMock()
+        return session
+
+    @pytest.fixture
+    def mock_new_session(self):
+        """Create a mock new session for derive."""
+        session = MagicMock()
+        session.id = "derived-456"
+        session.turns = []
+        session.save = AsyncMock()
+        session.add_message = MagicMock()
+        return session
+
+    @pytest.fixture
+    def mock_fork_manager_for_derive(self, mock_new_session, mock_source_session):
+        """Create a mock ForkManager configured for derive operations."""
+        from core.fork import DeriveResult
+
+        fork_manager = MagicMock()
+        fork_manager.prepare_derive = AsyncMock(
+            return_value=DeriveResult(
+                success=True,
+                new_session=mock_new_session,
+                prompt="Continue here",
+                allowed_tools=[],
+                needs_compression=False,
+            )
+        )
+        return fork_manager
+
+    @pytest.fixture
+    def service_with_derive(self, mock_manager, stream_state, mock_fork_manager_for_derive, mock_source_session):
+        """Create a service configured for derive tests."""
+        mock_manager.get_session = MagicMock(return_value=mock_source_session)
+        mock_manager.register_session = MagicMock()
+
+        service = SessionManagerService(mock_manager, stream_state)
+        service._fork_manager = mock_fork_manager_for_derive
+        service._tree_state = MagicMock()
+        service._tree_state.get_context_modes_for_session = MagicMock(return_value={})
+        service._tree_state.add_session = MagicMock()
+        service._tree_state.load_session = MagicMock()
+        return service
+
+    @pytest.mark.asyncio
+    async def test_derive_session_source_not_found(self, mock_manager, stream_state):
+        """Test derive_session returns error when source not found."""
+        mock_manager.get_session = MagicMock(return_value=None)
+        mock_manager.load_session = AsyncMock(return_value=None)
+
+        service = SessionManagerService(mock_manager, stream_state)
+
+        result = await service.derive_session(
+            source_session_id="nonexistent",
+            prompt="Test prompt",
+        )
+
+        assert not result.success
+        assert "not found" in result.error
+
+    @pytest.mark.asyncio
+    async def test_derive_session_success_no_compression(
+        self,
+        service_with_derive,
+        mock_new_session,
+    ):
+        """Test successful derive without compression."""
+        result = await service_with_derive.derive_session(
+            source_session_id="source-123",
+            prompt="Continue here",
+            start_streaming=False,
+        )
+
+        assert result.success
+        assert result.new_session_id == "derived-456"
+        assert result.source_session_id == "source-123"
+        assert not result.needs_compression
+
+    @pytest.mark.asyncio
+    async def test_derive_session_with_context_modes(
+        self,
+        service_with_derive,
+        mock_fork_manager_for_derive,
+    ):
+        """Test derive_session with explicit context modes."""
+        context_modes = [
+            {"turn_index": 0, "mode": "copy"},
+            {"turn_index": 1, "mode": "compress"},
+        ]
+
+        await service_with_derive.derive_session(
+            source_session_id="source-123",
+            prompt="Continue here",
+            context_modes=context_modes,
+            start_streaming=False,
+        )
+
+        # Verify prepare_derive was called
+        mock_fork_manager_for_derive.prepare_derive.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_derive_session_needs_compression(
+        self,
+        service_with_derive,
+        mock_fork_manager_for_derive,
+        mock_new_session,
+        mock_source_session,
+    ):
+        """Test derive_session when compression is needed."""
+        from core.fork import DeriveResult, DeriveData
+
+        # Configure to need compression
+        mock_fork_manager_for_derive.prepare_derive = AsyncMock(
+            return_value=DeriveResult(
+                success=True,
+                new_session=mock_new_session,
+                prompt="Continue here",
+                allowed_tools=[],
+                needs_compression=True,
+                helper_id="derive-compress-abc",
+                compression_prompt="Summarize this context...",
+                derive_data=DeriveData(
+                    new_session=mock_new_session,
+                    prompt="Continue here",
+                    allowed_tools=[],
+                    copy_items=[],
+                    compress_group_positions=[0, 1],
+                ),
+            )
+        )
+
+        # Mock start_helper
+        service_with_derive.start_helper = MagicMock()
+
+        result = await service_with_derive.derive_session(
+            source_session_id="source-123",
+            prompt="Continue here",
+        )
+
+        assert result.success
+        assert result.needs_compression
+        assert result.helper_id == "derive-compress-abc"
+
+        # Verify helper was started
+        service_with_derive.start_helper.assert_called_once()
+
+
+class TestFindSwitchTargetService:
+    """Tests for find_switch_target service method."""
+
+    @pytest.fixture
+    def mock_current_session(self):
+        """Create a mock current session."""
+        session = MagicMock()
+        session.id = "current-123"
+        session.get_all_forks = MagicMock(return_value=[])
+        session.is_fork = MagicMock(return_value=False)
+        return session
+
+    @pytest.fixture
+    def mock_target_session(self):
+        """Create a mock target session."""
+        session = MagicMock()
+        session.id = "target-456"
+        session.title = "Target Fork"
+        return session
+
+    @pytest.fixture
+    def mock_fork_manager_for_switch(self, mock_current_session, mock_target_session):
+        """Create a mock ForkManager configured for switch operations."""
+        from core.fork import SwitchResult
+
+        fork_manager = MagicMock()
+        fork_manager.find_switch_target = AsyncMock(
+            return_value=SwitchResult(
+                success=True,
+                target_session=mock_target_session,
+            )
+        )
+        return fork_manager
+
+    @pytest.fixture
+    def service_with_switch(self, mock_manager, stream_state, mock_fork_manager_for_switch, mock_current_session, mock_target_session):
+        """Create a service configured for switch tests."""
+        mock_manager.get_session = MagicMock(return_value=mock_current_session)
+        mock_manager.load_session = AsyncMock(return_value=mock_target_session)
+
+        service = SessionManagerService(mock_manager, stream_state)
+        service._fork_manager = mock_fork_manager_for_switch
+        return service
+
+    @pytest.mark.asyncio
+    async def test_find_switch_target_session_not_found(self, mock_manager, stream_state):
+        """Test find_switch_target returns error when current session not found."""
+        mock_manager.get_session = MagicMock(return_value=None)
+        mock_manager.load_session = AsyncMock(return_value=None)
+
+        service = SessionManagerService(mock_manager, stream_state)
+
+        result = await service.find_switch_target(
+            session_id="nonexistent",
+            name="some-fork",
+        )
+
+        assert not result.success
+        assert "not found" in result.error
+
+    @pytest.mark.asyncio
+    async def test_find_switch_target_success(
+        self,
+        service_with_switch,
+        mock_target_session,
+    ):
+        """Test successful find_switch_target."""
+        result = await service_with_switch.find_switch_target(
+            session_id="current-123",
+            name="target-fork",
+        )
+
+        assert result.success
+        assert result.target_session_id == "target-456"
+
+    @pytest.mark.asyncio
+    async def test_find_switch_target_not_found(
+        self,
+        service_with_switch,
+        mock_fork_manager_for_switch,
+    ):
+        """Test find_switch_target when target not found returns available forks."""
+        from core.fork import SwitchResult
+
+        # Configure to return no target but list available forks
+        mock_fork_manager_for_switch.find_switch_target = AsyncMock(
+            return_value=SwitchResult(
+                success=False,
+                error="Fork 'nonexistent' not found",
+                available_forks=[
+                    {"id": "fork-1", "name": "feature-a"},
+                    {"id": "fork-2", "name": "bugfix-b"},
+                ],
+            )
+        )
+
+        result = await service_with_switch.find_switch_target(
+            session_id="current-123",
+            name="nonexistent",
+        )
+
+        assert not result.success
+        assert "not found" in result.error
+        assert len(result.available_forks) == 2

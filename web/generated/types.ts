@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-18T17:53:22.056924
+// Generated: 2026-02-19T10:51:59.603336
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -184,6 +184,7 @@ export interface SessionInfo {
   cachedContextTokens?: number;
   contextWindow?: number;
   bindingIndicator?: string;
+  backendName?: string;
 }
 
 export interface TurnImageInfo {
@@ -289,6 +290,48 @@ export interface SubmitMessageResult {
   exchangeId: string;
   turnIndex: number;
   status: string;
+}
+
+export interface ForkSessionResult {
+  success: boolean;
+  childSessionId?: string;
+  parentSessionId?: string;
+  forkName?: string;
+  exchangeId?: string;
+  needsCompression?: boolean;
+  helperId?: string;
+  error?: string;
+}
+
+export interface MergeSessionResult {
+  success: boolean;
+  forkSessionId?: string;
+  parentSessionId?: string;
+  mergeId?: string;
+  mergePoint?: number;
+  error?: string;
+}
+
+export interface DeriveSessionResult {
+  success: boolean;
+  newSessionId?: string;
+  sourceSessionId?: string;
+  exchangeId?: string;
+  needsCompression?: boolean;
+  helperId?: string;
+  error?: string;
+}
+
+export interface SwitchTargetResult {
+  success: boolean;
+  targetSessionId?: string;
+  availableForks?: Record<string, unknown>[];
+  error?: string;
+}
+
+export interface ContextModeItem {
+  turnIndex: number;
+  mode: string;
 }
 
 export interface ImageAttachment {
@@ -567,6 +610,8 @@ export interface SessionTurnFinishedEvent {
   sessionId: string;
   turnId: string;
   tokens: number;
+  order?: number;
+  role?: string;
   contentBlock?: TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock | InterruptionBlock | ErrorBlock | LinkBlock | ForkBlock | MergeBlock | MergedToBlock | ArchiveBlock | SlideBlock | ReviewBlock | ForkProposalBlock | MergeProposalBlock | null;
   finalContent?: string;
 }
@@ -649,5 +694,18 @@ export interface ImageEventData {
   eventType: string;
   filePath: string;
   data?: Record<string, unknown>;
+}
+
+export interface LogEntryInput {
+  level: string;
+  message: string;
+  category?: string;
+  sessionId?: string;
+  details?: Record<string, unknown> | null;
+}
+
+export interface LogResult {
+  success: boolean;
+  seq?: number;
 }
 

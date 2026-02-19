@@ -23,9 +23,116 @@
   gap: 12px;
 }
 
+.session-status-bar__model-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Streaming indicator - pulsing dot */
+.session-status-bar__streaming-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-accent-green);
+  animation: streaming-pulse 1.5s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@keyframes streaming-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(0.85);
+  }
+}
+
+/* Backend container for dropdown positioning */
+.session-status-bar__backend-container {
+  position: relative;
+}
+
 .session-status-bar__model {
   font-weight: 600;
   color: var(--color-text-secondary);
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  border-radius: 4px;
+  cursor: default;
+  font-size: inherit;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.session-status-bar__model--clickable {
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.session-status-bar__model--clickable:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.session-status-bar__model--clickable:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.session-status-bar__dropdown-arrow {
+  font-size: 8px;
+  color: var(--color-text-muted);
+  margin-left: 2px;
+}
+
+/* Backend dropdown menu - floats upward since status bar is at bottom */
+.session-status-bar__backend-dropdown {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  margin-bottom: 4px;
+  min-width: 120px;
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+}
+
+.session-status-bar__backend-option {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  text-align: left;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition: background-color 0.1s ease;
+}
+
+.session-status-bar__backend-option:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.session-status-bar__backend-option--selected {
+  background: rgba(var(--color-accent-blue-rgb, 100, 150, 255), 0.15);
+  color: var(--color-accent-blue);
+}
+
+.session-status-bar__backend-option:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .session-status-bar__context-values {

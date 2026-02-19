@@ -43,6 +43,8 @@ from typing import Callable, Any, TYPE_CHECKING
 
 from codegen import ws_service, ws_expose, ws_event, ws_type
 from core.debug_log import debug_log
+from core.context import ContextBuilder
+from core.fork import ForkManager, ForkResult, MergeResult, ForkData, DeriveResult, DeriveData, SwitchResult
 from core.manager import SessionManager
 from core.stream_state import (
     StreamState,
@@ -51,7 +53,7 @@ from core.stream_state import (
     StreamStatus,
     get_stream_state,
 )
-from core.tree_state import TreeState
+from core.tree_state import TreeState, TreeEvent
 from models import TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, Turn
 from service.session_events import (
     SessionEventObserver,
@@ -149,6 +151,80 @@ class SubmitMessageResult:
     exchange_id: str  # UUID grouping user prompt + assistant response
     turn_index: int  # Index of the user turn just created
     status: str  # "started" or "queued"
+
+
+@ws_type
+@dataclass
+class ForkSessionResult:
+    """Result of a fork_session operation.
+
+    The fork may need context compression before it can start streaming.
+    If needs_compression is True, the client should wait for compression
+    to complete before the fork is ready.
+    """
+
+    success: bool
+    child_session_id: str = ""
+    parent_session_id: str = ""
+    fork_name: str = ""
+    exchange_id: str = ""  # Exchange ID for tracking the fork's stream
+    needs_compression: bool = False
+    helper_id: str = ""  # ID of compression helper if compression needed
+    error: str = ""
+
+
+@ws_type
+@dataclass
+class MergeSessionResult:
+    """Result of a merge_session operation."""
+
+    success: bool
+    fork_session_id: str = ""
+    parent_session_id: str = ""
+    merge_id: str = ""
+    merge_point: int = 0  # Turn index in parent where merge was inserted
+    error: str = ""
+
+
+@ws_type
+@dataclass
+class DeriveSessionResult:
+    """Result of a derive_session operation.
+
+    Derive creates a new independent session from selected context.
+    Unlike fork, the new session has no parent relationship.
+    """
+
+    success: bool
+    new_session_id: str = ""
+    source_session_id: str = ""
+    exchange_id: str = ""  # Exchange ID for tracking the session's stream
+    needs_compression: bool = False
+    helper_id: str = ""  # ID of compression helper if compression needed
+    error: str = ""
+
+
+@ws_type
+@dataclass
+class SwitchTargetResult:
+    """Result of a find_switch_target operation."""
+
+    success: bool
+    target_session_id: str = ""
+    available_forks: list[dict] = field(default_factory=list)
+    error: str = ""
+
+
+@ws_type
+@dataclass
+class ContextModeItem:
+    """Describes context mode for a turn in fork/derive operations.
+
+    Used by frontends to specify which turns to COPY, COMPRESS, or DROP.
+    """
+
+    turn_index: int
+    mode: str  # "copy", "compress", "drop"
 
 
 @ws_type
@@ -256,6 +332,10 @@ class SessionManagerService:
         self._helper_contexts: dict[str, _HelperContext] = {}
         # Backend config is needed to create new runners - will be set via set_backend_config
         self._backend_config: Any = None
+
+        # ForkManager for fork/derive/merge operations
+        self._context_builder = ContextBuilder()
+        self._fork_manager = ForkManager(self._context_builder)
 
         # Async observers for session events (SessionEventObserver protocol)
         self._observers: list[SessionEventObserver] = []
@@ -1494,6 +1574,570 @@ class SessionManagerService:
         return info
 
     @ws_expose
+    async def fork_session(
+        self,
+        parent_session_id: str,
+        prompt: str,
+        name: str = "",
+        background: bool = False,
+        context_modes: list[dict] | None = None,
+        allowed_tools: list[str] | None = None,
+        start_streaming: bool = True,
+    ) -> ForkSessionResult:
+        """Fork a new session from an existing parent session.
+
+        Creates a child session with selected context from the parent.
+        Context can be copied verbatim, compressed via LLM, or dropped.
+
+        If compression is needed, returns immediately with needs_compression=True
+        and helper_id. The client should then listen for helper events and call
+        complete_fork_after_compression() when done.
+
+        Args:
+            parent_session_id: ID of the session to fork from
+            prompt: Initial prompt for the fork
+            name: Optional name for the fork (e.g., "auth-bug")
+            background: If True, run in background and stay in parent session
+            context_modes: List of {turn_index, mode} dicts. Mode is "copy", "compress", or "drop".
+                          If not provided, all turns are copied.
+            allowed_tools: List of tool names to allow, or None for all tools
+            start_streaming: If True, start streaming after fork creation. Set False
+                           if you want to handle streaming separately.
+
+        Returns:
+            ForkSessionResult with child session info and streaming state
+        """
+        # Get parent session
+        parent_session = self._manager.get_session(parent_session_id)
+        if not parent_session:
+            parent_session = await self._manager.load_session(parent_session_id)
+            if not parent_session:
+                return ForkSessionResult(success=False, error=f"Parent session {parent_session_id} not found")
+
+        # Get context modes - either from parameter or from TreeState
+        from core.tree_state import ContextMode
+        tree_modes: dict[int, ContextMode] = {}
+        if context_modes:
+            # Use provided context_modes
+            for cm in context_modes:
+                turn_idx = cm.get("turn_index")
+                mode_str = cm.get("mode", "copy")
+                if mode_str == "compress":
+                    tree_modes[turn_idx] = ContextMode.COMPRESS
+                elif mode_str == "drop":
+                    tree_modes[turn_idx] = ContextMode.DROP
+                else:
+                    tree_modes[turn_idx] = ContextMode.COPY
+        elif self._tree_state:
+            # Use TreeState's context modes (set via UI)
+            tree_modes = self._tree_state.get_context_modes_for_session(parent_session_id)
+
+        # Build indexed messages with context modes
+        from models import Message
+        indexed_messages = []
+        for turn_idx, turn in enumerate(parent_session.turns):
+            # Get context mode for this turn
+            mode = tree_modes.get(turn_idx, ContextMode.COPY)
+
+            # Skip dropped turns
+            if mode == ContextMode.DROP:
+                continue
+
+            # Create a message with context_mode attribute
+            msg = Message(
+                role=turn.role,
+                content=turn.content,
+                content_blocks=turn.content_blocks,
+            )
+            msg.context_mode = mode
+
+            indexed_messages.append((msg, turn_idx))
+
+        # Use provided tools or get all available
+        tools = allowed_tools or []
+
+        # Prepare fork via ForkManager
+        result = await self._fork_manager.prepare_fork(
+            current_session=parent_session,
+            indexed_messages=indexed_messages,
+            prompt=prompt,
+            allowed_tools=tools,
+            name=name,
+            background=background,
+        )
+
+        if not result.success:
+            return ForkSessionResult(success=False, error=result.error or "Fork failed")
+
+        child_session = result.child_session
+
+        # Register child session with manager (creates runner)
+        self._manager.register_session(child_session)
+
+        # Update TreeState
+        if self._tree_state:
+            self._tree_state.add_session(child_session, is_current=not background)
+            self._tree_state.load_session(child_session.id, child_session)
+
+        if result.needs_compression:
+            # Start compression helper
+            helper_id = result.helper_id
+            self.start_helper(
+                helper_id=helper_id,
+                helper_type="compress",
+                prompt=result.compression_prompt,
+                session_id=parent_session_id,
+                metadata={
+                    "fork_data": result.fork_data,
+                    "parent_session_id": parent_session_id,
+                    "child_session_id": child_session.id,
+                },
+            )
+
+            return ForkSessionResult(
+                success=True,
+                child_session_id=child_session.id,
+                parent_session_id=parent_session_id,
+                fork_name=name or child_session.id[:8],
+                needs_compression=True,
+                helper_id=helper_id,
+            )
+
+        # No compression needed - optionally start streaming
+        exchange_id = ""
+        if start_streaming and prompt:
+            # Submit the prompt to start streaming
+            submit_result = await self.submit_message(
+                session_id=child_session.id,
+                content=prompt,
+                messages=child_session.turns,
+                allowed_tools=tools,
+            )
+            exchange_id = submit_result.exchange_id
+
+        self._emit_event(SessionManagerEvent.SESSION_CREATED, child_session.id)
+
+        return ForkSessionResult(
+            success=True,
+            child_session_id=child_session.id,
+            parent_session_id=parent_session_id,
+            fork_name=name or child_session.id[:8],
+            exchange_id=exchange_id,
+            needs_compression=False,
+        )
+
+    @ws_expose
+    async def complete_fork_after_compression(
+        self,
+        helper_id: str,
+        compressed_summary: str,
+        start_streaming: bool = True,
+    ) -> ForkSessionResult:
+        """Complete a fork after context compression finishes.
+
+        Called when the compression helper completes. Inserts the summary
+        at the correct position and finalizes the fork.
+
+        Args:
+            helper_id: ID of the compression helper
+            compressed_summary: LLM-generated summary of compressed context
+            start_streaming: If True, start streaming after fork is ready
+
+        Returns:
+            ForkSessionResult with the completed fork info
+        """
+        # Get the helper context with fork data
+        helper_ctx = self._helper_contexts.get(helper_id)
+        if not helper_ctx or not helper_ctx.metadata.get("fork_data"):
+            return ForkSessionResult(success=False, error="No fork data found for helper")
+
+        fork_data = helper_ctx.metadata["fork_data"]
+        parent_session_id = helper_ctx.metadata.get("parent_session_id", "")
+
+        # Complete the fork via ForkManager
+        result = await self._fork_manager.complete_fork_after_compression(
+            fork_data=fork_data,
+            compressed_summary=compressed_summary,
+        )
+
+        if not result.success:
+            return ForkSessionResult(success=False, error=result.error or "Fork completion failed")
+
+        child_session = result.child_session
+
+        # Clean up helper
+        self._helper_contexts.pop(helper_id, None)
+        self._helper_runners.pop(helper_id, None)
+
+        # Start streaming if requested
+        exchange_id = ""
+        if start_streaming and result.prompt:
+            submit_result = await self.submit_message(
+                session_id=child_session.id,
+                content=result.prompt,
+                messages=child_session.turns,
+                allowed_tools=result.allowed_tools or [],
+            )
+            exchange_id = submit_result.exchange_id
+
+        self._emit_event(SessionManagerEvent.SESSION_CREATED, child_session.id)
+
+        return ForkSessionResult(
+            success=True,
+            child_session_id=child_session.id,
+            parent_session_id=parent_session_id,
+            fork_name=result.name or child_session.id[:8],
+            exchange_id=exchange_id,
+            needs_compression=False,
+        )
+
+    @ws_expose
+    async def validate_merge(
+        self,
+        fork_session_id: str,
+    ) -> MergeSessionResult:
+        """Validate that a merge is possible for a fork session.
+
+        Use this to check if merge is valid before generating a summary.
+        Returns the parent session ID if valid.
+
+        Args:
+            fork_session_id: ID of the fork session to validate
+
+        Returns:
+            MergeSessionResult with success=True if valid, otherwise error
+        """
+        # Get fork session
+        fork_session = self._manager.get_session(fork_session_id)
+        if not fork_session:
+            fork_session = await self._manager.load_session(fork_session_id)
+            if not fork_session:
+                return MergeSessionResult(success=False, error=f"Fork session {fork_session_id} not found")
+
+        # Validate the merge
+        result = await self._fork_manager.prepare_merge(fork_session)
+        if not result.success:
+            return MergeSessionResult(success=False, error=result.error or "Not a valid fork")
+
+        return MergeSessionResult(
+            success=True,
+            fork_session_id=fork_session_id,
+            parent_session_id=result.parent_session.id,
+        )
+
+    @ws_expose
+    async def merge_session(
+        self,
+        fork_session_id: str,
+        merge_summary: str,
+        files_changed: list[str] | None = None,
+        key_accomplishments: list[str] | None = None,
+        reason: str = "",
+    ) -> MergeSessionResult:
+        """Merge a fork session back to its parent.
+
+        Creates a merge marker in both the fork and parent sessions,
+        recording what was accomplished in the fork.
+
+        Args:
+            fork_session_id: ID of the fork session to merge
+            merge_summary: Summary of what was accomplished in the fork
+            files_changed: List of key files that were modified
+            key_accomplishments: List of what was done
+            reason: Why the merge is happening now
+
+        Returns:
+            MergeSessionResult with merge info
+        """
+        # Get fork session
+        fork_session = self._manager.get_session(fork_session_id)
+        if not fork_session:
+            fork_session = await self._manager.load_session(fork_session_id)
+            if not fork_session:
+                return MergeSessionResult(success=False, error=f"Fork session {fork_session_id} not found")
+
+        # Validate the merge
+        result = await self._fork_manager.prepare_merge(fork_session)
+        if not result.success:
+            return MergeSessionResult(success=False, error=result.error or "Merge validation failed")
+
+        parent_session = result.parent_session
+
+        # Complete the merge
+        merge_result = await self._fork_manager.complete_merge(
+            fork_session=fork_session,
+            parent_session=parent_session,
+            merge_message=merge_summary,
+            files_changed=files_changed,
+            key_accomplishments=key_accomplishments,
+            reason=reason,
+        )
+
+        if not merge_result.success:
+            return MergeSessionResult(success=False, error=merge_result.error or "Merge failed")
+
+        # Update manager with saved sessions
+        self._manager.register_session(parent_session)
+
+        # Update TreeState
+        if self._tree_state:
+            # Reload both sessions in tree state
+            self._tree_state.load_session(fork_session.id, fork_session)
+            self._tree_state.load_session(parent_session.id, parent_session)
+
+        self._emit_event(SessionManagerEvent.SESSION_UPDATED, fork_session_id)
+        self._emit_event(SessionManagerEvent.SESSION_UPDATED, parent_session.id)
+
+        return MergeSessionResult(
+            success=True,
+            fork_session_id=fork_session_id,
+            parent_session_id=parent_session.id,
+            merge_id=merge_result.merge_id or "",
+            merge_point=merge_result.merge_point or 0,
+        )
+
+    @ws_expose
+    async def derive_session(
+        self,
+        source_session_id: str,
+        prompt: str = "",
+        context_modes: list[dict] | None = None,
+        allowed_tools: list[str] | None = None,
+        start_streaming: bool = True,
+    ) -> DeriveSessionResult:
+        """Derive a new independent session from selected context.
+
+        Unlike fork, derive creates a session with no parent relationship.
+        The new session is completely independent.
+
+        Args:
+            source_session_id: ID of the session to derive from
+            prompt: Optional initial prompt for the derived session
+            context_modes: List of {turn_index, mode} dicts. Mode is "copy", "compress", or "drop".
+                          If not provided, all turns are copied.
+            allowed_tools: List of tool names to allow, or None for all tools
+            start_streaming: If True and prompt provided, start streaming after creation
+
+        Returns:
+            DeriveSessionResult with new session info
+        """
+        # Get source session
+        source_session = self._manager.get_session(source_session_id)
+        if not source_session:
+            source_session = await self._manager.load_session(source_session_id)
+            if not source_session:
+                return DeriveSessionResult(success=False, error=f"Source session {source_session_id} not found")
+
+        # Get context modes - either from parameter or from TreeState
+        from core.tree_state import ContextMode
+        tree_modes: dict[int, ContextMode] = {}
+        if context_modes:
+            # Use provided context_modes
+            for cm in context_modes:
+                turn_idx = cm.get("turn_index")
+                mode_str = cm.get("mode", "copy")
+                if mode_str == "compress":
+                    tree_modes[turn_idx] = ContextMode.COMPRESS
+                elif mode_str == "drop":
+                    tree_modes[turn_idx] = ContextMode.DROP
+                else:
+                    tree_modes[turn_idx] = ContextMode.COPY
+        elif self._tree_state:
+            # Use TreeState's context modes (set via UI)
+            tree_modes = self._tree_state.get_context_modes_for_session(source_session_id)
+
+        # Build indexed messages with context modes
+        from models import Message
+        indexed_messages = []
+        for turn_idx, turn in enumerate(source_session.turns):
+            # Get context mode for this turn
+            mode = tree_modes.get(turn_idx, ContextMode.COPY)
+
+            # Skip dropped turns
+            if mode == ContextMode.DROP:
+                continue
+
+            # Create a message with context_mode attribute
+            msg = Message(
+                role=turn.role,
+                content=turn.content,
+                content_blocks=turn.content_blocks,
+            )
+            msg.context_mode = mode
+
+            indexed_messages.append((msg, turn_idx))
+
+        # Use provided tools or get all available
+        tools = allowed_tools or []
+
+        # Prepare derive via ForkManager
+        result = await self._fork_manager.prepare_derive(
+            current_session=source_session,
+            indexed_messages=indexed_messages,
+            prompt=prompt,
+            allowed_tools=tools,
+        )
+
+        if not result.success:
+            return DeriveSessionResult(success=False, error=result.error or "Derive failed")
+
+        new_session = result.new_session
+
+        # Register new session with manager (creates runner)
+        self._manager.register_session(new_session)
+
+        # Update TreeState
+        if self._tree_state:
+            self._tree_state.add_session(new_session, is_current=True)
+            self._tree_state.load_session(new_session.id, new_session)
+
+        if result.needs_compression:
+            # Start compression helper
+            helper_id = result.helper_id
+            self.start_helper(
+                helper_id=helper_id,
+                helper_type="derive",
+                prompt=result.compression_prompt,
+                session_id=source_session_id,
+                metadata={
+                    "derive_data": result.derive_data,
+                    "source_session_id": source_session_id,
+                    "new_session_id": new_session.id,
+                },
+            )
+
+            return DeriveSessionResult(
+                success=True,
+                new_session_id=new_session.id,
+                source_session_id=source_session_id,
+                needs_compression=True,
+                helper_id=helper_id,
+            )
+
+        # No compression needed - optionally start streaming
+        exchange_id = ""
+        if start_streaming and prompt:
+            submit_result = await self.submit_message(
+                session_id=new_session.id,
+                content=prompt,
+                messages=new_session.turns,
+                allowed_tools=tools,
+            )
+            exchange_id = submit_result.exchange_id
+
+        self._emit_event(SessionManagerEvent.SESSION_CREATED, new_session.id)
+
+        return DeriveSessionResult(
+            success=True,
+            new_session_id=new_session.id,
+            source_session_id=source_session_id,
+            exchange_id=exchange_id,
+            needs_compression=False,
+        )
+
+    @ws_expose
+    async def complete_derive_after_compression(
+        self,
+        helper_id: str,
+        compressed_summary: str,
+        start_streaming: bool = True,
+    ) -> DeriveSessionResult:
+        """Complete a derive after context compression finishes.
+
+        Args:
+            helper_id: ID of the compression helper
+            compressed_summary: LLM-generated summary of compressed context
+            start_streaming: If True, start streaming after derive is ready
+
+        Returns:
+            DeriveSessionResult with the completed derive info
+        """
+        # Get the helper context with derive data
+        helper_ctx = self._helper_contexts.get(helper_id)
+        if not helper_ctx or not helper_ctx.metadata.get("derive_data"):
+            return DeriveSessionResult(success=False, error="No derive data found for helper")
+
+        derive_data = helper_ctx.metadata["derive_data"]
+        source_session_id = helper_ctx.metadata.get("source_session_id", "")
+
+        # Complete the derive via ForkManager
+        result = await self._fork_manager.complete_derive_after_compression(
+            derive_data=derive_data,
+            compressed_summary=compressed_summary,
+        )
+
+        if not result.success:
+            return DeriveSessionResult(success=False, error=result.error or "Derive completion failed")
+
+        new_session = result.new_session
+
+        # Clean up helper
+        self._helper_contexts.pop(helper_id, None)
+        self._helper_runners.pop(helper_id, None)
+
+        # Start streaming if requested
+        exchange_id = ""
+        if start_streaming and result.prompt:
+            submit_result = await self.submit_message(
+                session_id=new_session.id,
+                content=result.prompt,
+                messages=new_session.turns,
+                allowed_tools=result.allowed_tools or [],
+            )
+            exchange_id = submit_result.exchange_id
+
+        self._emit_event(SessionManagerEvent.SESSION_CREATED, new_session.id)
+
+        return DeriveSessionResult(
+            success=True,
+            new_session_id=new_session.id,
+            source_session_id=source_session_id,
+            exchange_id=exchange_id,
+            needs_compression=False,
+        )
+
+    @ws_expose
+    async def find_switch_target(
+        self,
+        session_id: str,
+        name: str,
+    ) -> SwitchTargetResult:
+        """Find a session to switch to.
+
+        Searches forks of current session, then parent's forks if in a fork.
+
+        Args:
+            session_id: Current session ID
+            name: Fork name or session ID prefix, or "parent"/".."
+
+        Returns:
+            SwitchTargetResult with target session or available forks
+        """
+        # Get current session
+        current_session = self._manager.get_session(session_id)
+        if not current_session:
+            current_session = await self._manager.load_session(session_id)
+            if not current_session:
+                return SwitchTargetResult(success=False, error=f"Session {session_id} not found")
+
+        # Use ForkManager to find target
+        result = await self._fork_manager.find_switch_target(current_session, name)
+
+        if result.success and result.target_session:
+            # Ensure target is loaded in manager
+            await self._manager.load_session(result.target_session.id)
+            return SwitchTargetResult(
+                success=True,
+                target_session_id=result.target_session.id,
+            )
+        else:
+            return SwitchTargetResult(
+                success=False,
+                available_forks=result.available_forks or [],
+                error=result.error or "",
+            )
+
+    @ws_expose
     async def switch_session(self, session_id: str) -> bool:
         """Switch to a different session.
 
@@ -2120,6 +2764,113 @@ class SessionManagerService:
             turn_index=turn_index,
             status="started",
         )
+
+    # --- Backend Management ---
+
+    @ws_expose
+    async def list_backends(self) -> list[str]:
+        """List all available backend names.
+
+        Returns:
+            List of backend name strings
+        """
+        from config import get_config
+
+        config = get_config()
+        return list(config.backends.keys())
+
+    @ws_expose
+    async def get_session_backend(self, session_id: str) -> str | None:
+        """Get the backend name for a session.
+
+        Args:
+            session_id: ID of the session
+
+        Returns:
+            Effective backend name (explicit or default), or None if session not found
+        """
+        from config import get_config
+
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                return None
+
+        # Return explicit backend if set, otherwise the default
+        if session.backend_name:
+            return session.backend_name
+        config = get_config()
+        return config.default_backend
+
+    @ws_expose
+    async def set_session_backend(
+        self, session_id: str, backend_name: str
+    ) -> bool:
+        """Set the backend for a session.
+
+        The new backend will be used for the next streaming request.
+        Cannot change backend while streaming.
+
+        Args:
+            session_id: ID of the session to update
+            backend_name: Name of the backend to use
+
+        Returns:
+            True if successful, False if session not found or invalid backend
+        """
+        from config import get_config
+        from core.command_executor import CommandExecutor
+
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                return False
+
+        # Can't change backend while streaming
+        runner = self._manager.get_runner(session_id)
+        if runner and runner.is_streaming:
+            debug_log.warn(
+                "Cannot change backend while streaming",
+                category="backend",
+                data={"session_id": session_id},
+            )
+            return False
+
+        config = get_config()
+        executor = CommandExecutor()
+        result = executor.set_backend(session, backend_name, config)
+
+        if result.success:
+            # Save session to persist the change
+            await session.save()
+
+            # Update TreeState if available
+            if self._tree_state:
+                session_data = self._tree_state.get_session(session_id)
+                if session_data:
+                    # Update the SessionData cache so web UI sees the change
+                    session_data.backend_name = backend_name
+                    if session_data.session_ref:
+                        # Also update the live Session object
+                        session_data.session_ref.backend_name = backend_name
+                # Notify observers about the session update
+                self._tree_state.notify(TreeEvent.SESSION_UPDATED, session_id)
+
+            debug_log.info(
+                f"Backend changed to {backend_name}",
+                category="backend",
+                data={"session_id": session_id, "backend": backend_name},
+            )
+            return True
+        else:
+            debug_log.warn(
+                f"Failed to set backend: {result.error}",
+                category="backend",
+                data={"session_id": session_id, "error": result.error},
+            )
+            return False
 
     # --- Events ---
 

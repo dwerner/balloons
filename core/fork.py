@@ -240,6 +240,10 @@ class MergeResult:
     fork_name: str = ""
     merge_message: str = ""
 
+    # Merge details (set by complete_merge)
+    merge_id: str = ""
+    merge_point: int = 0
+
 
 @dataclass
 class DeriveResult:
@@ -657,6 +661,8 @@ class ForkManager:
             parent_session=parent_session,
             fork_name=fork_session.get_fork_display_name(),
             merge_message=merge_message,
+            merge_id=merge_id,
+            merge_point=merge_point,
         )
 
     async def prepare_derive(

@@ -64,15 +64,14 @@ export type ContentBlock =
   | ForkProposalBlock
   | MergeProposalBlock;
 
-// Debug logging to server
-function debugLog(message: string, data?: unknown): void {
-  const payload = { message, data, timestamp: Date.now() };
-  console.log('[useSessionData]', message, data);
-  fetch('/debug-log', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  }).catch(() => {}); // Ignore errors
+// Create a debug logger that uses the client's WebSocket connection
+function createDebugLog(client: BalloonsClient | null) {
+  return (message: string, data?: unknown): void => {
+    console.log('[useSessionData]', message, data);
+    if (client?.isConnected) {
+      client.debugLog.info(message, 'web.useSessionData', '', data as Record<string, unknown> | null).catch(() => {});
+    }
+  };
 }
 
 /**
@@ -210,6 +209,9 @@ export function useSessionData(
   client: BalloonsClient | null,
   autoSubscribe?: string | null
 ): UseSessionDataReturn {
+  // Create debug logger using the client's WebSocket connection
+  const debugLog = createDebugLog(client);
+
   // State
   const [turnsById, setTurnsById] = useState<Map<string, SessionDataTurn>>(new Map());
   const [isLoading, setIsLoading] = useState(false);
@@ -471,13 +473,17 @@ export function useSessionData(
 
               if (!existing) {
                 console.warn(`[useSessionData] turnFinished for unknown turn ${turnId}, creating`);
-                const maxOrder = Math.max(-1, ...Array.from(prev.values()).map((t) => t.order));
+                // Use order from event if available, otherwise fall back to maxOrder + 1
+                const serverOrder = event.order;
+                const effectiveOrder = serverOrder !== undefined && serverOrder !== null
+                  ? serverOrder
+                  : Math.max(-1, ...Array.from(prev.values()).map((t) => t.order)) + 1;
 
                 const next = new Map(prev);
                 next.set(turnId, {
                   turnId,
-                  order: maxOrder + 1,
-                  role: 'assistant',
+                  order: effectiveOrder,
+                  role: event.role ?? 'assistant',
                   contentBlock: finalContentBlock,
                   streaming: false,
                   viewed: false,

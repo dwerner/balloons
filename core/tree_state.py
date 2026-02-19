@@ -388,6 +388,10 @@ class TreeState:
         """Get session data by ID."""
         return self._sessions.get(session_id)
 
+    def has_session(self, session_id: str) -> bool:
+        """Check if a session exists in the tree state."""
+        return session_id in self._sessions
+
     def get_current_session_id(self) -> str | None:
         """Get the current session ID."""
         return self._current_session_id
