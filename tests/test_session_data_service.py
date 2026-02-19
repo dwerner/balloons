@@ -383,6 +383,7 @@ class TestEventData:
             "turn_id": "turn-uuid-3",
             "final_content": "Hello, world!",
             "tokens": 150,
+            "content_block": None,  # Optional, not set in this test
         }
 
 
@@ -505,24 +506,24 @@ class TestSessionSnapshot:
         # Check first turn (idx removed - order is from array position)
         assert snapshot.turns[0].turn_id == "turn-uuid-1"
         assert snapshot.turns[0].role == "user"
-        assert snapshot.turns[0].content == "Hello"
-        assert snapshot.turns[0].content_block_type == "text"
+        assert snapshot.turns[0].content_block.type == "text"
+        assert snapshot.turns[0].content_block.text == "Hello"
         assert snapshot.turns[0].exchange_id == "ex-1"
 
         # Check assistant turn
         assert snapshot.turns[1].turn_id == "turn-uuid-2"
         assert snapshot.turns[1].role == "assistant"
-        assert snapshot.turns[1].content == "Hi there!"
+        assert snapshot.turns[1].content_block.text == "Hi there!"
 
         # Check tool_use turn
         assert snapshot.turns[3].turn_id == "turn-uuid-4"
         assert snapshot.turns[3].role == "assistant"
-        assert snapshot.turns[3].content_block_type == "tool_use"
+        assert snapshot.turns[3].content_block.type == "tool_use"
 
         # Check tool_result turn
         assert snapshot.turns[4].turn_id == "turn-uuid-5"
         assert snapshot.turns[4].role == "tool"
-        assert snapshot.turns[4].content_block_type == "tool_result"
+        assert snapshot.turns[4].content_block.type == "tool_result"
 
     @pytest.mark.asyncio
     async def test_snapshot_includes_context_mode(
@@ -802,19 +803,19 @@ class TestTurnSnapshotFields:
 
         # Verify all required fields per acceptance criteria
         # Note: idx removed - order is from array position
+        # content and content_block_type replaced by content_block
         assert hasattr(turn, 'turn_id')
         assert hasattr(turn, 'role')
-        assert hasattr(turn, 'content')
+        assert hasattr(turn, 'content_block')  # Full structured content
         assert hasattr(turn, 'streaming')
         assert hasattr(turn, 'viewed')
         assert hasattr(turn, 'tokens')
         assert hasattr(turn, 'context_mode')
-        assert hasattr(turn, 'content_block_type')
         assert hasattr(turn, 'exchange_id')
 
         # Verify correct values
         assert turn.turn_id == "turn-id-abc"
         assert turn.role == "user"
-        assert turn.content == "test"
-        assert turn.content_block_type == "text"
+        assert turn.content_block.type == "text"
+        assert turn.content_block.text == "test"
         assert turn.exchange_id == "ex-1"

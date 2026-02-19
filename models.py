@@ -4,6 +4,8 @@ from typing import Optional, Any, Union
 from datetime import datetime
 from enum import Enum
 
+from codegen import ws_type
+
 
 class ContextMode(Enum):
     """How a turn should be included in context when forking.
@@ -31,6 +33,7 @@ class Sentiment(Enum):
     TERRIBLE = "terrible"    # ☠️ Actively harmful/wrong
 
 
+@ws_type
 @dataclass
 class TextBlock:
     """Plain text content."""
@@ -38,6 +41,7 @@ class TextBlock:
     text: str = ""
 
 
+@ws_type
 @dataclass
 class ImageBlock:
     """Image content - stores reference to uploaded image.
@@ -57,6 +61,7 @@ class ImageBlock:
     height: int = 0
 
 
+@ws_type
 @dataclass
 class ToolUseBlock:
     """Tool invocation by the assistant."""
@@ -66,6 +71,7 @@ class ToolUseBlock:
     input: dict = field(default_factory=dict)
 
 
+@ws_type
 @dataclass
 class ToolResultBlock:
     """Result from a tool invocation."""
@@ -75,6 +81,7 @@ class ToolResultBlock:
     is_error: bool = False
 
 
+@ws_type
 @dataclass
 class InterruptionBlock:
     """Marker indicating the response was interrupted by the user."""
@@ -82,6 +89,7 @@ class InterruptionBlock:
     reason: str = "user_cancelled"  # e.g., "user_cancelled", "timeout"
 
 
+@ws_type
 @dataclass
 class ErrorBlock:
     """Marker indicating the response ended with an error (truncated, decode error, etc.)."""
@@ -93,6 +101,7 @@ class ErrorBlock:
     dump_file: str = ""  # Path to dumped content file for LLM completion
 
 
+@ws_type
 @dataclass
 class LinkBlock:
     """Marker indicating a bidirectional link to another session."""
@@ -103,6 +112,7 @@ class LinkBlock:
     is_orphaned: bool = False  # True if linked session was deleted
 
 
+@ws_type
 @dataclass
 class ForkBlock:
     """Marker indicating where a fork was created.
@@ -118,6 +128,7 @@ class ForkBlock:
     status: str = "active"  # "active", "merged", "abandoned"
 
 
+@ws_type
 @dataclass
 class MergeBlock:
     """Marker indicating where a fork was merged back.
@@ -135,6 +146,7 @@ class MergeBlock:
     reason: str = ""  # Why the merge happened now
 
 
+@ws_type
 @dataclass
 class MergedToBlock:
     """Marker indicating this fork was merged back to its parent.
@@ -153,6 +165,7 @@ class MergedToBlock:
     reason: str = ""  # Why the merge happened now
 
 
+@ws_type
 @dataclass
 class SlideBlock:
     """Slide content for presentation mode.
@@ -169,6 +182,7 @@ class SlideBlock:
     notes: str = ""  # Speaker notes (not shown in presentation)
 
 
+@ws_type
 @dataclass
 class ReviewBlock:
     """Marker indicating where a quality review was initiated.
@@ -189,6 +203,7 @@ class ReviewBlock:
     notes: str = ""  # Speaker notes (not shown in presentation)
 
 
+@ws_type
 @dataclass
 class ContextAssignmentData:
     """A context mode assignment for a range of exchanges (stored form).
@@ -200,6 +215,7 @@ class ContextAssignmentData:
     reason: str = ""  # Why this mode for these exchanges
 
 
+@ws_type
 @dataclass
 class ExchangeInfo:
     """Information about an exchange for display in fork proposal tree.
@@ -212,6 +228,7 @@ class ExchangeInfo:
     mode: str = "compress"  # Default mode - can be overridden by context_plan
 
 
+@ws_type
 @dataclass
 class ForkBindingData:
     """Binding specification for a fork (stored form).
@@ -223,6 +240,7 @@ class ForkBindingData:
     role: str = ""  # "interview", "planning", "implementation", "postmortem", "exploration"
 
 
+@ws_type
 @dataclass
 class ForkProposalBlock:
     """An inline fork proposal from the LLM.
@@ -243,6 +261,7 @@ class ForkProposalBlock:
     all_exchanges: list[ExchangeInfo] = field(default_factory=list)  # All exchanges for interactive tree
 
 
+@ws_type
 @dataclass
 class MergeProposalBlock:
     """An inline merge proposal from the LLM.
@@ -259,6 +278,7 @@ class MergeProposalBlock:
     status: str = "pending"  # "pending", "accepted", "rejected"
 
 
+@ws_type
 @dataclass
 class ArchiveSummary:
     """Structured summary of archived content.
@@ -273,6 +293,7 @@ class ArchiveSummary:
     key_decisions: list[str] = field(default_factory=list)  # Important design decisions
 
 
+@ws_type
 @dataclass
 class ArchiveBlock:
     """Marker for archived turns stored in an external file.

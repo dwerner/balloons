@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-17T16:45:40.098635
+// Generated: 2026-02-18T17:53:22.056924
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -569,6 +569,62 @@ export interface SessionTurnFinishedEvent {
   tokens: number;
   contentBlock?: TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock | InterruptionBlock | ErrorBlock | LinkBlock | ForkBlock | MergeBlock | MergedToBlock | ArchiveBlock | SlideBlock | ReviewBlock | ForkProposalBlock | MergeProposalBlock | null;
   finalContent?: string;
+}
+
+export interface SessionStreamStartedEvent {
+  sessionId: string;
+  exchangeId: string;
+}
+
+export interface SessionStreamDoneEvent {
+  sessionId: string;
+  exchangeId: string;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+export interface SessionStreamErrorEvent {
+  sessionId: string;
+  exchangeId: string;
+  error: string;
+  errorType: string;
+}
+
+export interface SessionToolUseStartedEvent {
+  sessionId: string;
+  exchangeId: string;
+  turnIndex: number;
+  toolUseId: string;
+  toolName: string;
+  toolIndex: number;
+}
+
+export interface SessionToolInputDeltaEvent {
+  sessionId: string;
+  exchangeId: string;
+  toolUseId: string;
+  partialJson: string;
+}
+
+export interface SessionToolUseEvent {
+  sessionId: string;
+  exchangeId: string;
+  turnIndex: number;
+  toolUseId: string;
+  toolName: string;
+  toolInput: Record<string, unknown>;
+  toolIndex: number;
+}
+
+export interface SessionToolResultEvent {
+  sessionId: string;
+  exchangeId: string;
+  turnIndex: number;
+  toolUseId: string;
+  toolName: string;
+  result: string;
+  isError: boolean;
+  toolIndex: number;
 }
 
 export interface ImageUploadResult {

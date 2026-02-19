@@ -23,7 +23,7 @@ interface StreamingTurnsViewProps {
 }
 
 export function StreamingTurnsView({ sessionId, client }: StreamingTurnsViewProps) {
-  const { turns, isLoading, isSubscribed, error } = useSessionData(client, sessionId);
+  const { turns, isLoading, isSubscribed, isStreaming, streamError, error } = useSessionData(client, sessionId);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new content arrives
@@ -48,13 +48,27 @@ export function StreamingTurnsView({ sessionId, client }: StreamingTurnsViewProp
   return (
     <div className="streaming-turns-view" ref={scrollRef}>
       <div className="streaming-turns-header">
-        Session: {sessionId?.substring(0, 8)}... ({turns.length} turns)
+        <span className="session-info">
+          Session: {sessionId?.substring(0, 8)}... ({turns.length} turns)
+        </span>
         {isSubscribed && <span className="subscribed-badge">● subscribed</span>}
+        {isStreaming && <span className="streaming-badge">● streaming</span>}
+        {streamError && <span className="stream-error-badge" title={streamError}>⚠ error</span>}
       </div>
       <div className="streaming-turns-list">
         {turns.map((turn) => (
           <TurnCard key={turn.turnId} turn={turn} allTurns={turns} />
         ))}
+        {isStreaming && turns.length === 0 && (
+          <div className="streaming-placeholder">
+            <span className="streaming-dots">
+              <span className="dot">●</span>
+              <span className="dot">●</span>
+              <span className="dot">●</span>
+            </span>
+            <span>Waiting for response...</span>
+          </div>
+        )}
       </div>
     </div>
   );

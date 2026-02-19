@@ -7,6 +7,7 @@
 
 import React, { useMemo } from 'react';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
+import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
 import { TextCard } from './TextCard';
 import { ToolUseCard } from './ToolUseCard';
 import { ToolResultCard } from './ToolResultCard';
@@ -43,19 +44,35 @@ export function TurnCard({ turn, allTurns = [] }: TurnCardProps) {
   const matchingResult = useMemo(() => {
     if (blockType !== 'tool_use') return null;
 
+    // Get the tool_use_id for precise matching
+    const toolUseBlock = contentBlock as ToolUseBlock;
+    const toolUseId = toolUseBlock?.id;
+
     // Look for a tool_result turn that matches
     const turnOrder = turn.order;
-    const results = allTurns.filter(
-      (t) =>
-        t.contentBlock?.type === 'tool_result' &&
-        t.order > turnOrder &&
-        // Same exchange if available
-        (turn.exchangeId ? t.exchangeId === turn.exchangeId : true)
-    );
+    const results = allTurns.filter((t) => {
+      if (t.contentBlock?.type !== 'tool_result') return false;
+      if (t.order <= turnOrder) return false;
+
+      const resultBlock = t.contentBlock as ToolResultBlock;
+
+      // Match by toolUseId if available (most precise)
+      if (toolUseId && resultBlock?.toolUseId) {
+        return resultBlock.toolUseId === toolUseId;
+      }
+
+      // Fall back to exchange matching
+      if (turn.exchangeId) {
+        return t.exchangeId === turn.exchangeId;
+      }
+
+      // Last resort: just match by order (first result after this tool_use)
+      return true;
+    });
 
     // Return the first matching result
     return results.length > 0 ? results[0] : null;
-  }, [turn, blockType, allTurns]);
+  }, [turn, blockType, contentBlock, allTurns]);
 
   // Dispatch to appropriate card type
   if (blockType === 'tool_use') {
@@ -64,12 +81,27 @@ export function TurnCard({ turn, allTurns = [] }: TurnCardProps) {
 
   if (blockType === 'tool_result') {
     // Check if there's a matching tool_use that will render this result
-    const hasMatchingToolUse = allTurns.some(
-      (t) =>
-        t.contentBlock?.type === 'tool_use' &&
-        t.order < turn.order &&
-        (turn.exchangeId ? t.exchangeId === turn.exchangeId : true)
-    );
+    const resultBlock = contentBlock as ToolResultBlock;
+    const toolUseId = resultBlock?.toolUseId;
+
+    const hasMatchingToolUse = allTurns.some((t) => {
+      if (t.contentBlock?.type !== 'tool_use') return false;
+      if (t.order >= turn.order) return false;
+
+      const toolBlock = t.contentBlock as ToolUseBlock;
+
+      // Match by toolUseId if available
+      if (toolUseId && toolBlock?.id) {
+        return toolBlock.id === toolUseId;
+      }
+
+      // Fall back to exchange matching
+      if (turn.exchangeId) {
+        return t.exchangeId === turn.exchangeId;
+      }
+
+      return true;
+    });
 
     // If there's a matching tool_use, skip rendering (it will include the result)
     if (hasMatchingToolUse) {

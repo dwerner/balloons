@@ -9,6 +9,9 @@ focuses on efficient streaming of session content:
 - Turn deltas stream as content is generated
 - Snapshots provide full state for late-joining clients
 
+This service implements SessionEventObserver to receive events from
+SessionManagerService and forward them to subscribed WebSocket clients.
+
 Example usage:
     service = SessionDataService()
 
@@ -20,13 +23,40 @@ Example usage:
     # {"event": "turnDelta", "data": {"sessionId": "abc", "turnId": "uuid-123", "delta": "Hello"}}
 """
 
-from dataclasses import dataclass, field
-from typing import Callable, TYPE_CHECKING, Any, Awaitable
+from dataclasses import dataclass, field, asdict
+from typing import Callable, TYPE_CHECKING, Any, Awaitable, Union
 
 from codegen import ws_service, ws_expose, ws_event, ws_type
+from service.session_events import (
+    SessionEventObserver,
+    TurnCreatedEvent,
+    TurnDeltaEvent,
+    TurnFinishedEvent,
+    StreamStartedEvent,
+    StreamDoneEvent,
+    StreamErrorEvent,
+    ToolUseStartedEvent,
+    ToolInputDeltaEvent,
+    ToolUseEvent,
+    ToolResultEvent,
+)
+from models import (
+    TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock,
+    InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock,
+    MergedToBlock, ArchiveBlock, SlideBlock, ReviewBlock,
+    ForkProposalBlock, MergeProposalBlock
+)
 
 if TYPE_CHECKING:
     from core.tree_state import TreeState
+
+# ContentBlock union for type annotations
+ContentBlock = Union[
+    TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock,
+    InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock,
+    MergedToBlock, ArchiveBlock, SlideBlock, ReviewBlock,
+    ForkProposalBlock, MergeProposalBlock
+]
 
 # Type for session loader callback: async (session_id) -> Session | None
 SessionLoaderCallback = Callable[[str], Awaitable[Any]]
@@ -56,16 +86,18 @@ class TurnSnapshot:
     Used in SessionSnapshot to provide full turn state.
     Turns are ordered by array position - no separate idx field needed.
     turn_id is the stable identifier for targeting updates.
+
+    content_block contains the full structured data for the turn,
+    discriminated by the 'type' field (e.g., "text", "tool_use", "fork").
     """
 
     turn_id: str  # Stable UUID for the turn (primary identifier)
     role: str  # "user", "assistant", "tool"
-    content: str
     streaming: bool
     viewed: bool
     tokens: int
     context_mode: str  # "copy", "compress", "drop"
-    content_block_type: str = "text"
+    content_block: ContentBlock  # Full structured content block
     exchange_id: str | None = None
 
 
@@ -145,8 +177,93 @@ class SessionTurnFinishedEvent:
 
     session_id: str
     turn_id: str  # Stable UUID for the turn
-    final_content: str
     tokens: int
+    content_block: ContentBlock | None = None  # Full structured content block (optional for backwards compat)
+    final_content: str = ""  # Deprecated: use content_block instead
+
+
+@ws_type
+@dataclass
+class SessionStreamStartedEvent:
+    """Event payload when streaming starts for a session."""
+
+    session_id: str
+    exchange_id: str
+
+
+@ws_type
+@dataclass
+class SessionStreamDoneEvent:
+    """Event payload when streaming completes successfully."""
+
+    session_id: str
+    exchange_id: str
+    input_tokens: int
+    output_tokens: int
+
+
+@ws_type
+@dataclass
+class SessionStreamErrorEvent:
+    """Event payload when streaming fails or is cancelled."""
+
+    session_id: str
+    exchange_id: str
+    error: str
+    error_type: str  # "error", "rate_limit", "cancelled"
+
+
+@ws_type
+@dataclass
+class SessionToolUseStartedEvent:
+    """Event payload when a tool begins execution."""
+
+    session_id: str
+    exchange_id: str
+    turn_index: int
+    tool_use_id: str
+    tool_name: str
+    tool_index: int
+
+
+@ws_type
+@dataclass
+class SessionToolInputDeltaEvent:
+    """Event payload for streaming tool input JSON."""
+
+    session_id: str
+    exchange_id: str
+    tool_use_id: str
+    partial_json: str
+
+
+@ws_type
+@dataclass
+class SessionToolUseEvent:
+    """Event payload when tool input is complete."""
+
+    session_id: str
+    exchange_id: str
+    turn_index: int
+    tool_use_id: str
+    tool_name: str
+    tool_input: dict
+    tool_index: int
+
+
+@ws_type
+@dataclass
+class SessionToolResultEvent:
+    """Event payload when a tool finishes execution."""
+
+    session_id: str
+    exchange_id: str
+    turn_index: int
+    tool_use_id: str
+    tool_name: str
+    result: str
+    is_error: bool
+    tool_index: int
 
 
 @ws_service
@@ -375,11 +492,6 @@ class SessionDataService:
 
         if session_data.turns is not None:
             for idx, turn in enumerate(session_data.turns):
-                # Determine content_block_type from content_block
-                content_block_type = "text"
-                if turn.content_block is not None:
-                    content_block_type = turn.content_block.type
-
                 # Get context mode for this turn (still uses idx internally)
                 context_mode = self._tree_state.get_context_mode(session_id, turn.idx)
 
@@ -392,15 +504,19 @@ class SessionDataService:
                         if hasattr(session_turn, 'id'):
                             turn_id = session_turn.id
 
+                # Use content_block if available, otherwise create TextBlock from content
+                content_block = turn.content_block
+                if content_block is None:
+                    content_block = TextBlock(type="text", text=turn.content or "")
+
                 turn_snapshot = TurnSnapshot(
                     turn_id=turn_id,
                     role=turn.role,
-                    content=turn.content,
                     streaming=turn.streaming,
                     viewed=turn.viewed,
                     tokens=turn.tokens,
                     context_mode=context_mode.value,
-                    content_block_type=content_block_type,
+                    content_block=content_block,
                     exchange_id=turn.exchange_id,
                 )
                 turn_snapshots.append(turn_snapshot)
@@ -562,6 +678,7 @@ class SessionDataService:
         turn_id: str,
         final_content: str,
         tokens: int,
+        content_block: ContentBlock | None = None,
     ) -> None:
         """Emit a turn finished event to subscribed clients.
 
@@ -570,8 +687,9 @@ class SessionDataService:
         Args:
             session_id: The session containing the turn
             turn_id: Stable UUID for the turn
-            final_content: Complete content of the turn
+            final_content: Complete content of the turn (deprecated, use content_block)
             tokens: Token count for the turn
+            content_block: Full structured content block (optional, preferred over final_content)
         """
         subscribers = self._session_subscribers.get(session_id)
         if not subscribers:
@@ -580,16 +698,23 @@ class SessionDataService:
         event_data = SessionTurnFinishedEvent(
             session_id=session_id,
             turn_id=turn_id,
-            final_content=final_content,
             tokens=tokens,
+            content_block=content_block,
+            final_content=final_content,
         )
+        # Convert to dict for JSON serialization
+        event_dict = event_data.__dict__.copy()
+        if content_block is not None and hasattr(content_block, '__dict__'):
+            event_dict['content_block'] = asdict(content_block)
+
         from core.debug_log import debug_log
+        block_info = f"block_type={content_block.type}" if content_block else f"final_content_len={len(final_content)}"
         debug_log.debug(
-            f"emit_turn_finished: turn_id={turn_id}, final_content_len={len(final_content)}, "
+            f"emit_turn_finished: turn_id={turn_id}, {block_info}, "
             f"tokens={tokens}, subscribers={len(subscribers)}",
             category="websocket",
         )
-        self._emit_event("sessionDataTurnFinished", event_data.__dict__, subscribers)
+        self._emit_event("sessionDataTurnFinished", event_dict, subscribers)
 
     # --- Events (for TypeScript generation) ---
     # Event names are prefixed with "sessionData" to avoid collisions with
@@ -619,3 +744,214 @@ class SessionDataService:
         Clients should finalize the turn display and update token counts.
         """
         ...
+
+    @ws_event(name="sessionDataStreamStarted")
+    async def on_session_data_stream_started(self) -> SessionStreamStartedEvent:
+        """Emitted when streaming starts for a session."""
+        ...
+
+    @ws_event(name="sessionDataStreamDone")
+    async def on_session_data_stream_done(self) -> SessionStreamDoneEvent:
+        """Emitted when streaming completes successfully."""
+        ...
+
+    @ws_event(name="sessionDataStreamError")
+    async def on_session_data_stream_error(self) -> SessionStreamErrorEvent:
+        """Emitted when streaming fails or is cancelled."""
+        ...
+
+    @ws_event(name="sessionDataToolUseStarted")
+    async def on_session_data_tool_use_started(self) -> SessionToolUseStartedEvent:
+        """Emitted when a tool begins execution."""
+        ...
+
+    @ws_event(name="sessionDataToolInputDelta")
+    async def on_session_data_tool_input_delta(self) -> SessionToolInputDeltaEvent:
+        """Emitted while tool input JSON streams in."""
+        ...
+
+    @ws_event(name="sessionDataToolUse")
+    async def on_session_data_tool_use(self) -> SessionToolUseEvent:
+        """Emitted when tool input is complete and execution begins."""
+        ...
+
+    @ws_event(name="sessionDataToolResult")
+    async def on_session_data_tool_result(self) -> SessionToolResultEvent:
+        """Emitted when a tool finishes execution."""
+        ...
+
+    # --- SessionEventObserver Implementation ---
+    # These methods are called by SessionManagerService when it has events.
+    # They forward events to subscribed WebSocket clients.
+
+    async def on_turn_created(self, event: TurnCreatedEvent) -> None:
+        """Handle turn created event from SessionManagerService.
+
+        Forwards the event to all WebSocket clients subscribed to this session.
+        """
+        self.emit_turn_created(
+            session_id=event.session_id,
+            turn_id=event.turn_id,
+            role=event.role,
+            order=event.turn_index,
+            exchange_id=event.exchange_id,
+            content_block_type=event.content_block_type,
+        )
+
+    async def on_turn_delta(self, event: TurnDeltaEvent) -> None:
+        """Handle turn delta event from SessionManagerService.
+
+        Forwards the streaming content to subscribed WebSocket clients.
+        """
+        self.emit_turn_delta(
+            session_id=event.session_id,
+            turn_id=event.turn_id,
+            delta=event.delta,
+            accumulated_length=event.accumulated_length,
+        )
+
+    async def on_turn_finished(self, event: TurnFinishedEvent) -> None:
+        """Handle turn finished event from SessionManagerService.
+
+        Forwards the completion event to subscribed WebSocket clients.
+        """
+        self.emit_turn_finished(
+            session_id=event.session_id,
+            turn_id=event.turn_id,
+            final_content=event.content,
+            tokens=event.tokens,
+            content_block=event.content_block,
+        )
+
+    async def on_stream_started(self, event: StreamStartedEvent) -> None:
+        """Handle stream started event from SessionManagerService.
+
+        Emits streamStarted WebSocket event to subscribed clients.
+        """
+        session_id = event.session_id
+        subscribers = self._session_subscribers.get(session_id, set())
+        if not subscribers:
+            return
+
+        event_data = {
+            "session_id": session_id,
+            "exchange_id": event.exchange_id,
+        }
+        self._emit_event("sessionDataStreamStarted", event_data, subscribers)
+
+    async def on_stream_done(self, event: StreamDoneEvent) -> None:
+        """Handle stream done event from SessionManagerService.
+
+        Emits streamDone WebSocket event to subscribed clients.
+        """
+        session_id = event.session_id
+        subscribers = self._session_subscribers.get(session_id, set())
+        if not subscribers:
+            return
+
+        event_data = {
+            "session_id": session_id,
+            "exchange_id": event.exchange_id,
+            "input_tokens": event.input_tokens,
+            "output_tokens": event.output_tokens,
+        }
+        self._emit_event("sessionDataStreamDone", event_data, subscribers)
+
+    async def on_stream_error(self, event: StreamErrorEvent) -> None:
+        """Handle stream error event from SessionManagerService.
+
+        Emits streamError WebSocket event to subscribed clients.
+        """
+        session_id = event.session_id
+        subscribers = self._session_subscribers.get(session_id, set())
+        if not subscribers:
+            return
+
+        event_data = {
+            "session_id": session_id,
+            "exchange_id": event.exchange_id,
+            "error": event.error,
+            "error_type": event.error_type,  # "error", "rate_limit", "cancelled"
+        }
+        self._emit_event("sessionDataStreamError", event_data, subscribers)
+
+    async def on_tool_use_started(self, event: ToolUseStartedEvent) -> None:
+        """Handle tool use started event from SessionManagerService.
+
+        Emits toolUseStarted WebSocket event to subscribed clients.
+        """
+        session_id = event.session_id
+        subscribers = self._session_subscribers.get(session_id, set())
+        if not subscribers:
+            return
+
+        event_data = {
+            "session_id": session_id,
+            "exchange_id": event.exchange_id,
+            "turn_index": event.turn_index,
+            "tool_use_id": event.tool_use_id,
+            "tool_name": event.tool_name,
+            "tool_index": event.tool_index,
+        }
+        self._emit_event("sessionDataToolUseStarted", event_data, subscribers)
+
+    async def on_tool_input_delta(self, event: ToolInputDeltaEvent) -> None:
+        """Handle tool input delta event from SessionManagerService.
+
+        Emits toolInputDelta WebSocket event to subscribed clients.
+        """
+        session_id = event.session_id
+        subscribers = self._session_subscribers.get(session_id, set())
+        if not subscribers:
+            return
+
+        event_data = {
+            "session_id": session_id,
+            "exchange_id": event.exchange_id,
+            "tool_use_id": event.tool_use_id,
+            "partial_json": event.partial_json,
+        }
+        self._emit_event("sessionDataToolInputDelta", event_data, subscribers)
+
+    async def on_tool_use(self, event: ToolUseEvent) -> None:
+        """Handle tool use event from SessionManagerService.
+
+        Emits toolUse WebSocket event (tool input complete) to subscribed clients.
+        """
+        session_id = event.session_id
+        subscribers = self._session_subscribers.get(session_id, set())
+        if not subscribers:
+            return
+
+        event_data = {
+            "session_id": session_id,
+            "exchange_id": event.exchange_id,
+            "turn_index": event.turn_index,
+            "tool_use_id": event.tool_use_id,
+            "tool_name": event.tool_name,
+            "tool_input": event.tool_input,
+            "tool_index": event.tool_index,
+        }
+        self._emit_event("sessionDataToolUse", event_data, subscribers)
+
+    async def on_tool_result(self, event: ToolResultEvent) -> None:
+        """Handle tool result event from SessionManagerService.
+
+        Emits toolResult WebSocket event to subscribed clients.
+        """
+        session_id = event.session_id
+        subscribers = self._session_subscribers.get(session_id, set())
+        if not subscribers:
+            return
+
+        event_data = {
+            "session_id": session_id,
+            "exchange_id": event.exchange_id,
+            "turn_index": event.turn_index,
+            "tool_use_id": event.tool_use_id,
+            "tool_name": event.tool_name,
+            "result": event.result if isinstance(event.result, str) else str(event.result),
+            "is_error": event.is_error,
+            "tool_index": event.tool_index,
+        }
+        self._emit_event("sessionDataToolResult", event_data, subscribers)

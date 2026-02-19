@@ -5,7 +5,7 @@
  * Tool input is formatted based on tool type (Edit shows diff, Bash shows command, etc.)
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState } from 'react';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
 import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
 import './cards.css';
@@ -55,6 +55,16 @@ function formatJson(json: string | Record<string, unknown>): string {
   } catch {
     return typeof json === 'string' ? json : JSON.stringify(json);
   }
+}
+
+// Check if tool input is still streaming (partial JSON)
+function isStreamingInput(input: Record<string, unknown>): boolean {
+  return typeof input._streaming === 'string';
+}
+
+// Get partial JSON from streaming input
+function getStreamingJson(input: Record<string, unknown>): string {
+  return (input._streaming as string) || '';
 }
 
 // Generate simple diff
@@ -121,14 +131,56 @@ function Collapsible({
   );
 }
 
+// Streaming input indicator
+function StreamingInputIndicator({ partialJson }: { partialJson: string }) {
+  // Try to extract tool name or file path from partial JSON for context
+  const fileMatch = partialJson.match(/"file_path"\s*:\s*"([^"]+)"/);
+  const commandMatch = partialJson.match(/"command"\s*:\s*"([^"]+)"/);
+  const patternMatch = partialJson.match(/"pattern"\s*:\s*"([^"]+)"/);
+
+  let hint = '';
+  if (fileMatch && fileMatch[1]) {
+    hint = fileMatch[1];
+  } else if (commandMatch && commandMatch[1]) {
+    hint = commandMatch[1].substring(0, 50);
+  } else if (patternMatch && patternMatch[1]) {
+    hint = patternMatch[1];
+  }
+
+  return (
+    <div className="streaming-input-indicator">
+      <div className="streaming-input-header">
+        <span className="streaming-dots">
+          <span className="dot">●</span>
+          <span className="dot">●</span>
+          <span className="dot">●</span>
+        </span>
+        <span className="streaming-label">Building input...</span>
+      </div>
+      {hint && (
+        <code className="streaming-hint">{hint}</code>
+      )}
+      <pre className="streaming-json">
+        <code>{partialJson || '{'}</code>
+      </pre>
+    </div>
+  );
+}
+
 // Formatted tool input based on tool type
 function FormattedToolInput({
   toolName,
   toolInput,
+  isStreaming = false,
 }: {
   toolName: string;
   toolInput: Record<string, unknown>;
+  isStreaming?: boolean;
 }) {
+  // Handle streaming input - show partial JSON
+  if (isStreamingInput(toolInput)) {
+    return <StreamingInputIndicator partialJson={getStreamingJson(toolInput)} />;
+  }
   if (toolName === 'Edit') {
     const filePath = (toolInput.file_path || '') as string;
     const oldString = (toolInput.old_string || '') as string;
@@ -280,6 +332,44 @@ function FormattedToolResult({
   );
 }
 
+// Tool execution phase enum
+type ToolPhase = 'building' | 'executing' | 'waiting_result' | 'completed' | 'error';
+
+function getToolPhase(
+  streaming: boolean,
+  hasInput: boolean,
+  isInputStreaming: boolean,
+  hasResult: boolean,
+  isError: boolean
+): ToolPhase {
+  if (isError) return 'error';
+  if (hasResult) return 'completed';
+  if (!streaming) return 'completed';
+  if (isInputStreaming) return 'building';
+  if (hasInput) return 'executing';
+  return 'building';
+}
+
+function getPhaseIcon(phase: ToolPhase): string {
+  switch (phase) {
+    case 'building': return '⋯';
+    case 'executing': return '⏳';
+    case 'waiting_result': return '⏳';
+    case 'completed': return '✓';
+    case 'error': return '✗';
+  }
+}
+
+function getPhaseLabel(phase: ToolPhase): string {
+  switch (phase) {
+    case 'building': return 'Building input...';
+    case 'executing': return 'Executing...';
+    case 'waiting_result': return 'Waiting for result...';
+    case 'completed': return '';
+    case 'error': return 'Failed';
+  }
+}
+
 export function ToolUseCard({ turn, result }: ToolUseCardProps) {
   const { contentBlock, streaming, tokens } = turn;
 
@@ -290,38 +380,58 @@ export function ToolUseCard({ turn, result }: ToolUseCardProps) {
 
   const toolName = toolUseBlock?.name || 'Tool';
   const toolInput = toolUseBlock?.input || {};
-  const hasInput = Object.keys(toolInput).length > 0;
+  const inputIsStreaming = isStreamingInput(toolInput);
+  // hasInput is true if we have real keys (not just _streaming) or if we're streaming
+  const hasInput = inputIsStreaming || Object.keys(toolInput).filter(k => k !== '_streaming').length > 0;
 
   // Get result info if available
   const resultBlock = result?.contentBlock?.type === 'tool_result'
     ? (result.contentBlock as ToolResultBlock)
     : null;
+  const resultIsStreaming = result?.streaming ?? false;
   const hasResult = !!resultBlock;
   const resultContent = resultBlock?.content || '';
   const isError = resultBlock?.isError || false;
 
-  const statusIcon = streaming ? '⏳' : hasResult ? (isError ? '✗' : '✓') : '✓';
-  const statusClass = streaming ? 'executing' : isError ? 'error' : 'completed';
+  // Determine tool phase
+  const phase = getToolPhase(streaming, hasInput, inputIsStreaming, hasResult, isError);
+  const phaseIcon = getPhaseIcon(phase);
+  const phaseLabel = getPhaseLabel(phase);
+
+  const isActive = phase === 'building' || phase === 'executing' || phase === 'waiting_result';
+  const statusClass = isError ? 'error' : isActive ? 'executing' : 'completed';
 
   return (
-    <div className={`turn-card tool-use-card ${statusClass} ${streaming ? 'streaming' : ''}`}>
+    <div className={`turn-card tool-use-card ${statusClass} ${isActive ? 'streaming' : ''}`}>
       <div className="turn-card-header">
         <span className={`tool-use-status ${statusClass}`}>
-          {streaming ? <span className="tool-spinner">{statusIcon}</span> : statusIcon}
+          {isActive ? <span className="tool-spinner">{phaseIcon}</span> : phaseIcon}
         </span>
         <span className="turn-label tool-name">{toolName}</span>
-        {!streaming && tokens > 0 && <span className="turn-tokens">{tokens} tokens</span>}
+        {phaseLabel && <span className="tool-phase-label">{phaseLabel}</span>}
+        {!isActive && tokens > 0 && <span className="turn-tokens">{tokens} tokens</span>}
       </div>
 
       {hasInput && (
         <Collapsible title="Input" defaultExpanded={true}>
-          <FormattedToolInput toolName={toolName} toolInput={toolInput} />
+          <FormattedToolInput toolName={toolName} toolInput={toolInput} isStreaming={inputIsStreaming} />
         </Collapsible>
       )}
 
-      {hasResult && (
+      {(hasResult || resultIsStreaming) && (
         <Collapsible title={isError ? 'Error' : 'Result'} defaultExpanded={true}>
-          <FormattedToolResult result={resultContent} isError={isError} />
+          {resultIsStreaming && !resultContent ? (
+            <div className="tool-result-streaming">
+              <span className="streaming-dots">
+                <span className="dot">●</span>
+                <span className="dot">●</span>
+                <span className="dot">●</span>
+              </span>
+              <span>Waiting for result...</span>
+            </div>
+          ) : (
+            <FormattedToolResult result={resultContent} isError={isError} />
+          )}
         </Collapsible>
       )}
     </div>

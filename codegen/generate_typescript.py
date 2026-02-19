@@ -370,6 +370,7 @@ def main():
         import service.tree_state_service  # TreeStateService
         import service.queue_state_service  # QueueStateService
         import service.task_state_service  # TaskStateService
+        import service.session_data_service  # SessionDataService
         import service.image_service  # ImageService
     except ImportError as e:
         print(f"Warning: Could not import service modules: {e}")

@@ -19,6 +19,13 @@ import type {
   SessionTurnCreatedEvent,
   SessionTurnDeltaEvent,
   SessionTurnFinishedEvent,
+  SessionStreamStartedEvent,
+  SessionStreamDoneEvent,
+  SessionStreamErrorEvent,
+  SessionToolUseStartedEvent,
+  SessionToolInputDeltaEvent,
+  SessionToolUseEvent,
+  SessionToolResultEvent,
   TurnSnapshot,
   TextBlock,
   ToolUseBlock,
@@ -102,6 +109,10 @@ export interface UseSessionDataState {
   isLoading: boolean;
   /** Whether we're subscribed to the session */
   isSubscribed: boolean;
+  /** Whether the session is currently streaming */
+  isStreaming: boolean;
+  /** Stream error message if any */
+  streamError: string | null;
   /** Error message if any */
   error: string | null;
   /** Session ID we're subscribed to */
@@ -203,6 +214,8 @@ export function useSessionData(
   const [turnsById, setTurnsById] = useState<Map<string, SessionDataTurn>>(new Map());
   const [isLoading, setIsLoading] = useState(false);
   const [isSubscribed, setIsSubscribed] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [streamError, setStreamError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
 
@@ -228,6 +241,8 @@ export function useSessionData(
     setTurnsById(new Map());
     setIsLoading(false);
     setIsSubscribed(false);
+    setIsStreaming(false);
+    setStreamError(null);
     setError(null);
     setSessionId(null);
     currentSessionRef.current = null;
@@ -484,6 +499,127 @@ export function useSessionData(
           })
         );
 
+        // Stream lifecycle events
+        handlers.push(
+          client.sessionData.sessionDataStreamStarted((event: SessionStreamStartedEvent) => {
+            if (event.sessionId !== newSessionId) return;
+            setIsStreaming(true);
+            setStreamError(null);
+          })
+        );
+
+        handlers.push(
+          client.sessionData.sessionDataStreamDone((event: SessionStreamDoneEvent) => {
+            if (event.sessionId !== newSessionId) return;
+            setIsStreaming(false);
+          })
+        );
+
+        handlers.push(
+          client.sessionData.sessionDataStreamError((event: SessionStreamErrorEvent) => {
+            if (event.sessionId !== newSessionId) return;
+            setIsStreaming(false);
+            setStreamError(event.error);
+          })
+        );
+
+        // Tool events - update turn content blocks
+        handlers.push(
+          client.sessionData.sessionDataToolUseStarted((event: SessionToolUseStartedEvent) => {
+            if (event.sessionId !== newSessionId) return;
+            debugLog('sessionDataToolUseStarted', event);
+
+            // Find the tool_use turn by turn_index and update it with the tool info
+            setTurnsById((prev) => {
+              // Find a tool_use turn at this turn_index that needs initialization
+              for (const [turnId, turn] of prev.entries()) {
+                if (
+                  turn.contentBlock?.type === 'tool_use' &&
+                  turn.order === event.turnIndex &&
+                  !(turn.contentBlock as ToolUseBlock).id
+                ) {
+                  const next = new Map(prev);
+                  const block = turn.contentBlock as ToolUseBlock;
+                  next.set(turnId, {
+                    ...turn,
+                    contentBlock: {
+                      ...block,
+                      id: event.toolUseId,
+                      name: event.toolName,
+                    } as ToolUseBlock,
+                  });
+                  return next;
+                }
+              }
+              return prev;
+            });
+          })
+        );
+
+        handlers.push(
+          client.sessionData.sessionDataToolInputDelta((event: SessionToolInputDeltaEvent) => {
+            if (event.sessionId !== newSessionId) return;
+            // Update tool_use block with streaming input
+            setTurnsById((prev) => {
+              // Find the turn with this tool_use_id
+              for (const [turnId, turn] of prev.entries()) {
+                if (
+                  turn.contentBlock?.type === 'tool_use' &&
+                  (turn.contentBlock as ToolUseBlock).id === event.toolUseId
+                ) {
+                  const next = new Map(prev);
+                  const block = turn.contentBlock as ToolUseBlock;
+                  // Append to partial input display (stored as string for streaming)
+                  next.set(turnId, {
+                    ...turn,
+                    contentBlock: {
+                      ...block,
+                      input: { _streaming: event.partialJson },
+                    } as ToolUseBlock,
+                  });
+                  return next;
+                }
+              }
+              return prev;
+            });
+          })
+        );
+
+        handlers.push(
+          client.sessionData.sessionDataToolUse((event: SessionToolUseEvent) => {
+            if (event.sessionId !== newSessionId) return;
+            // Update tool_use block with final input
+            setTurnsById((prev) => {
+              for (const [turnId, turn] of prev.entries()) {
+                if (
+                  turn.contentBlock?.type === 'tool_use' &&
+                  (turn.contentBlock as ToolUseBlock).id === event.toolUseId
+                ) {
+                  const next = new Map(prev);
+                  const block = turn.contentBlock as ToolUseBlock;
+                  next.set(turnId, {
+                    ...turn,
+                    contentBlock: {
+                      ...block,
+                      input: event.toolInput,
+                    } as ToolUseBlock,
+                  });
+                  return next;
+                }
+              }
+              return prev;
+            });
+          })
+        );
+
+        handlers.push(
+          client.sessionData.sessionDataToolResult((event: SessionToolResultEvent) => {
+            if (event.sessionId !== newSessionId) return;
+            // Tool result turn is created via turnCreated/turnFinished - this is informational
+            debugLog('sessionDataToolResult', event);
+          })
+        );
+
         unsubscribersRef.current = handlers;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -526,6 +662,8 @@ export function useSessionData(
     turns,
     isLoading,
     isSubscribed,
+    isStreaming,
+    streamError,
     error,
     sessionId,
     subscribe,

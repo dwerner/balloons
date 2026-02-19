@@ -9,7 +9,7 @@ from openai import AsyncOpenAI
 
 from models import (
     Message, TextDelta, ResultEvent, InitEvent,
-    TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ArchiveBlock, ContextMode,
+    TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ArchiveBlock, ContextMode,
     ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultEvent,
 )
 from .base_runner import BaseRunner, RunnerEvent
@@ -116,10 +116,14 @@ class OpenAICompatibleRunner(BaseRunner):
             # Build content from blocks if available
             if msg.content_blocks:
                 content_parts = []
+                image_blocks = []
                 for block in msg.content_blocks:
                     if isinstance(block, TextBlock):
                         if block.text:
                             content_parts.append(block.text)
+                    elif isinstance(block, ImageBlock):
+                        # Collect images for OpenAI format
+                        image_blocks.append(block)
                     elif isinstance(block, ToolUseBlock):
                         # Format tool use so the model knows what was done
                         input_str = json.dumps(block.input, indent=2)
@@ -140,7 +144,26 @@ class OpenAICompatibleRunner(BaseRunner):
                         archive_info += f"\n(Use read_archive tool with archive_id={block.archive_id} to retrieve full content)"
                         content_parts.append(archive_info)
 
-                if content_parts:
+                # If we have images, use array content format
+                if image_blocks:
+                    content_array = []
+                    if content_parts:
+                        content_array.append({
+                            "type": "text",
+                            "text": "\n\n".join(content_parts),
+                        })
+                    for img in image_blocks:
+                        content_array.append({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"file://{img.file_path}",
+                            }
+                        })
+                    openai_messages.append({
+                        "role": role,
+                        "content": content_array,
+                    })
+                elif content_parts:
                     openai_messages.append({
                         "role": role,
                         "content": "\n\n".join(content_parts),

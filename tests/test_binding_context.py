@@ -359,10 +359,10 @@ class TestRoleGuidance:
         builder = BindingContextBuilder(goal_storage)
         context = await builder.build_binding_context("session-planning")
 
-        # Planning guidance should include fork instructions (from prompts/shared/roles/planning.md)
+        # Planning guidance should include planning instructions (from prompts/shared/roles/planning.md)
         assert "Planning Role" in context
-        assert "propose_fork" in context
-        assert "Do NOT implement code" in context
+        assert "planning mode" in context
+        assert "Do NOT implement code in this session" in context
 
     @pytest.mark.asyncio
     async def test_implementation_role_includes_merge_guidance(self, goal_storage, sample_todo):

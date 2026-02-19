@@ -67,7 +67,10 @@ def mock_manager(mock_session, mock_runner, mock_session_info):
     manager.create_session = AsyncMock(return_value=mock_session)
     manager.load_session = AsyncMock(return_value=mock_session)
     manager.set_active = AsyncMock(return_value=True)
-    manager.get_session = MagicMock(return_value=mock_session)
+    # Return mock_session only for matching ID, None otherwise
+    manager.get_session = MagicMock(
+        side_effect=lambda sid: mock_session if sid == mock_session.id else None
+    )
     manager.get_runner = MagicMock(return_value=mock_runner)
     manager.list_sessions = AsyncMock(return_value=[mock_session_info])
     manager.get_streaming_sessions = MagicMock(return_value=[])
@@ -239,6 +242,8 @@ class TestGetSession:
     @pytest.mark.asyncio
     async def test_get_session_loads_from_storage(self, service, mock_manager, mock_session):
         """Test that get_session loads from storage if not in memory."""
+        # Override the side_effect to always return None (simulating session not in memory)
+        mock_manager.get_session.side_effect = None
         mock_manager.get_session.return_value = None
         mock_manager.load_session.return_value = mock_session
 
@@ -984,17 +989,17 @@ class TestEventDispatch:
 
     @pytest.mark.asyncio
     async def test_dispatch_without_task_service(self, mock_manager, stream_state, ctx, mock_event):
-        """Test that dispatch does nothing without any service."""
+        """Test that dispatch still processes events without services (for observers)."""
         service = SessionManagerService(mock_manager, stream_state)
 
         # Should not raise
         event = mock_event("text", "Hello")
         await service._dispatch_event("test-123", event, ctx)
 
-        # Context should not be modified (no handler was called)
-        # But we still accumulate content locally
-        # Actually no - without any service we return early
-        assert ctx.content == ""  # Nothing happened
+        # Content should still be accumulated (for observers to receive)
+        # Even without task_service or session_data_service, events are processed
+        # so that observers can be notified
+        assert ctx.content == "Hello"
 
 
 class TestSessionDataServiceIntegration:
@@ -1041,6 +1046,13 @@ class TestSessionDataServiceIntegration:
         service.set_session_data_service(session_data_service)
         assert service._session_data_service == session_data_service
 
+    def test_set_session_data_service_registers_observer(self, mock_manager, stream_state, session_data_service):
+        """Test that setting the session data service registers it as an observer."""
+        service = SessionManagerService(mock_manager, stream_state)
+        assert session_data_service not in service._observers
+        service.set_session_data_service(session_data_service)
+        assert session_data_service in service._observers
+
     def test_init_with_session_data_service(self, mock_manager, stream_state, session_data_service):
         """Test initializing with session_data_service parameter."""
         service = SessionManagerService(
@@ -1049,6 +1061,15 @@ class TestSessionDataServiceIntegration:
             session_data_service=session_data_service,
         )
         assert service._session_data_service == session_data_service
+
+    def test_init_with_session_data_service_registers_observer(self, mock_manager, stream_state, session_data_service):
+        """Test initializing with session_data_service also registers it as observer."""
+        service = SessionManagerService(
+            mock_manager,
+            stream_state,
+            session_data_service=session_data_service,
+        )
+        assert session_data_service in service._observers
 
     @pytest.mark.asyncio
     async def test_dispatch_text_to_session_data_service(
@@ -1066,7 +1087,7 @@ class TestSessionDataServiceIntegration:
         event = mock_event("text", "Hello")
         await service_with_data_service._dispatch_event("test-123", event, ctx)
 
-        # Verify event was emitted to SessionDataService
+        # Verify event was emitted to SessionDataService via observer pattern
         assert len(events) == 1
         assert events[0][0] == "sessionDataTurnDelta"
         assert events[0][1]["session_id"] == "test-123"
@@ -1090,7 +1111,7 @@ class TestSessionDataServiceIntegration:
         event = mock_event("turn_started", {"turn_index": 5})
         await service_with_data_service._dispatch_event("test-123", event, ctx)
 
-        # Verify event was emitted to SessionDataService
+        # Verify event was emitted to SessionDataService via observer pattern
         assert len(events) == 1
         assert events[0][0] == "sessionDataTurnCreated"
         assert events[0][1]["session_id"] == "test-123"
@@ -1117,11 +1138,12 @@ class TestSessionDataServiceIntegration:
         event = mock_event("done", {"result": {}})
         await service_with_data_service._dispatch_event("test-123", event, ctx)
 
-        # Verify turnFinished was emitted
+        # Verify turnFinished was emitted via observer pattern
         turn_finished = [e for e in events if e[0] == "sessionDataTurnFinished"]
         assert len(turn_finished) == 1
         assert turn_finished[0][1]["session_id"] == "test-123"
-        assert turn_finished[0][1]["final_content"] == "Final response"
+        # Observer pattern uses content field, not final_content
+        assert turn_finished[0][1]["content_block"]["text"] == "Final response"
 
     @pytest.mark.asyncio
     async def test_dispatch_with_both_services(
@@ -1159,6 +1181,7 @@ class TestSessionDataServiceIntegration:
         assert len(task_events) == 1
         assert task_events[0][0] == "contentDelta"
 
+        # SessionDataService receives events via observer pattern
         assert len(data_events) == 1
         assert data_events[0][0] == "sessionDataTurnDelta"
 
@@ -1179,7 +1202,7 @@ class TestSessionDataServiceIntegration:
         event = mock_event("text", "Hello")
         await service_with_data_service._dispatch_event("test-123", event, ctx)
 
-        # Verify content was accumulated and event was emitted
+        # Verify content was accumulated and event was emitted via observer pattern
         assert ctx.content == "Hello"
         assert len(events) == 1
         assert events[0][0] == "sessionDataTurnDelta"
@@ -1202,8 +1225,567 @@ class TestSessionDataServiceIntegration:
         })
         await service_with_data_service._dispatch_event("test-123", event, ctx)
 
-        # Verify turnCreated was emitted with role="tool"
+        # Verify turnCreated was emitted with role="tool" via observer pattern
         assert len(events) == 1
         assert events[0][0] == "sessionDataTurnCreated"
         assert events[0][1]["role"] == "tool"
         assert events[0][1]["content_block_type"] == "tool_result"
+
+    @pytest.mark.asyncio
+    async def test_session_data_service_receives_events_via_observer_pattern(
+        self, service_with_data_service, session_data_service, ctx, mock_event
+    ):
+        """Test that SessionDataService receives events via the observer pattern.
+
+        This tests the new observer-based flow where SessionManagerService notifies
+        observers and SessionDataService implements SessionEventObserver.
+        """
+        from service.session_events import TurnCreatedEvent, TurnDeltaEvent, TurnFinishedEvent
+
+        # Subscribe a client to get events
+        await session_data_service.subscribe_session("test-123", "client-1")
+
+        events = []
+        def handler(event_name: str, data: dict, target_clients):
+            events.append((event_name, data, target_clients))
+        session_data_service.add_event_handler(handler)
+
+        # Notify observers directly (simulating what _dispatch_event does)
+        turn_created = TurnCreatedEvent(
+            session_id="test-123",
+            turn_id="turn-abc",
+            turn_index=1,
+            role="assistant",
+            exchange_id="exchange-456",
+            content_block_type="text"
+        )
+        await service_with_data_service._notify_observers("on_turn_created", turn_created)
+
+        turn_delta = TurnDeltaEvent(
+            session_id="test-123",
+            turn_id="turn-abc",
+            turn_index=1,
+            delta="Hello",
+            accumulated_length=5
+        )
+        await service_with_data_service._notify_observers("on_turn_delta", turn_delta)
+
+        turn_finished = TurnFinishedEvent(
+            session_id="test-123",
+            turn_id="turn-abc",
+            turn_index=1,
+            role="assistant",
+            content="Hello world",
+            tokens=10
+        )
+        await service_with_data_service._notify_observers("on_turn_finished", turn_finished)
+
+        # Verify all events were emitted
+        assert len(events) == 3
+        assert events[0][0] == "sessionDataTurnCreated"
+        assert events[0][1]["turn_id"] == "turn-abc"
+        assert events[1][0] == "sessionDataTurnDelta"
+        assert events[1][1]["delta"] == "Hello"
+        assert events[2][0] == "sessionDataTurnFinished"
+        assert events[2][1]["final_content"] == "Hello world"
+
+
+class TestAsyncObservers:
+    """Tests for the async observer pattern."""
+
+    @pytest.fixture
+    def mock_event(self):
+        """Create a mock event."""
+        class MockEvent:
+            def __init__(self, event_type, data=None):
+                self.event_type = event_type
+                self.data = data
+        return MockEvent
+
+    @pytest.fixture
+    def ctx(self):
+        """Create a test streaming context."""
+        return _StreamingContext(
+            session_id="test-123",
+            exchange_id="exchange-456",
+            user_turn_idx=0,
+            assistant_turn_idx=1,
+            assistant_turn_id="turn-789",
+        )
+
+    def test_add_observer(self, service):
+        """Test adding an observer."""
+        observer = MagicMock()
+        service.add_observer(observer)
+        assert observer in service._observers
+
+    def test_add_observer_idempotent(self, service):
+        """Test adding same observer twice doesn't duplicate."""
+        observer = MagicMock()
+        service.add_observer(observer)
+        service.add_observer(observer)
+        assert service._observers.count(observer) == 1
+
+    def test_remove_observer(self, service):
+        """Test removing an observer."""
+        observer = MagicMock()
+        service.add_observer(observer)
+        service.remove_observer(observer)
+        assert observer not in service._observers
+
+    def test_remove_nonexistent_observer(self, service):
+        """Test removing an observer that wasn't added."""
+        observer = MagicMock()
+        service.remove_observer(observer)  # Should not raise
+
+    @pytest.mark.asyncio
+    async def test_notify_observers_calls_method(self, service):
+        """Test that _notify_observers calls the correct method on observers."""
+        from service.session_events import TurnDeltaEvent
+
+        # Create an observer with an async method
+        observer = MagicMock()
+        observer.on_turn_delta = AsyncMock()
+        service.add_observer(observer)
+
+        event = TurnDeltaEvent(
+            session_id="test-123",
+            turn_id="turn-456",
+            turn_index=1,
+            delta="Hello",
+            accumulated_length=5,
+        )
+
+        await service._notify_observers("on_turn_delta", event)
+
+        observer.on_turn_delta.assert_called_once_with(event)
+
+    @pytest.mark.asyncio
+    async def test_notify_observers_handles_missing_method(self, service):
+        """Test that observers without the method are skipped."""
+        from service.session_events import TurnDeltaEvent
+
+        # Observer without on_turn_delta method
+        observer = MagicMock(spec=[])
+        service.add_observer(observer)
+
+        event = TurnDeltaEvent(
+            session_id="test-123",
+            turn_id="turn-456",
+            turn_index=1,
+            delta="Hello",
+            accumulated_length=5,
+        )
+
+        # Should not raise
+        await service._notify_observers("on_turn_delta", event)
+
+    @pytest.mark.asyncio
+    async def test_notify_observers_handles_errors(self, service):
+        """Test that errors in observers don't stop other observers."""
+        from service.session_events import TurnDeltaEvent
+
+        # Observer that raises
+        bad_observer = MagicMock()
+        bad_observer.on_turn_delta = AsyncMock(side_effect=Exception("Observer failed"))
+        service.add_observer(bad_observer)
+
+        # Good observer
+        good_observer = MagicMock()
+        good_observer.on_turn_delta = AsyncMock()
+        service.add_observer(good_observer)
+
+        event = TurnDeltaEvent(
+            session_id="test-123",
+            turn_id="turn-456",
+            turn_index=1,
+            delta="Hello",
+            accumulated_length=5,
+        )
+
+        # Should not raise, and good observer should still be called
+        await service._notify_observers("on_turn_delta", event)
+        good_observer.on_turn_delta.assert_called_once_with(event)
+
+    @pytest.mark.asyncio
+    async def test_dispatch_event_notifies_observers(self, service, ctx, mock_event):
+        """Test that _dispatch_event notifies observers with typed events."""
+        from service.session_events import TurnDeltaEvent
+
+        observer = MagicMock()
+        observer.on_turn_delta = AsyncMock()
+        service.add_observer(observer)
+
+        event = mock_event("text", "Hello")
+        await service._dispatch_event("test-123", event, ctx)
+
+        # Verify observer was notified
+        observer.on_turn_delta.assert_called_once()
+        call_args = observer.on_turn_delta.call_args[0][0]
+        assert isinstance(call_args, TurnDeltaEvent)
+        assert call_args.session_id == "test-123"
+        assert call_args.delta == "Hello"
+        assert call_args.accumulated_length == 5
+
+    @pytest.mark.asyncio
+    async def test_dispatch_turn_started_notifies_observers(self, service, ctx, mock_event):
+        """Test turn_started event notifies observers."""
+        from service.session_events import TurnCreatedEvent
+
+        observer = MagicMock()
+        observer.on_turn_created = AsyncMock()
+        service.add_observer(observer)
+
+        event = mock_event("turn_started", {"turn_index": 5, "turn_id": "new-turn"})
+        await service._dispatch_event("test-123", event, ctx)
+
+        # Verify observer was notified
+        observer.on_turn_created.assert_called_once()
+        call_args = observer.on_turn_created.call_args[0][0]
+        assert isinstance(call_args, TurnCreatedEvent)
+        assert call_args.session_id == "test-123"
+        assert call_args.turn_index == 5
+        assert call_args.role == "assistant"
+
+    @pytest.mark.asyncio
+    async def test_dispatch_done_notifies_observers(self, service, ctx, mock_event):
+        """Test done event notifies observers with stream_done."""
+        from service.session_events import StreamDoneEvent, TurnFinishedEvent
+
+        observer = MagicMock()
+        observer.on_turn_finished = AsyncMock()
+        observer.on_stream_done = AsyncMock()
+        service.add_observer(observer)
+
+        ctx.content = "Final response"
+        service._streaming_contexts["test-123"] = ctx
+
+        event = mock_event("done", {})
+        await service._dispatch_event("test-123", event, ctx)
+
+        # Verify both events were sent
+        observer.on_turn_finished.assert_called_once()
+        observer.on_stream_done.assert_called_once()
+
+        stream_done = observer.on_stream_done.call_args[0][0]
+        assert isinstance(stream_done, StreamDoneEvent)
+        assert stream_done.session_id == "test-123"
+        assert stream_done.exchange_id == "exchange-456"
+
+    @pytest.mark.asyncio
+    async def test_dispatch_error_notifies_observers(self, service, ctx, mock_event, stream_state):
+        """Test error event notifies observers with stream_error."""
+        from service.session_events import StreamErrorEvent
+
+        observer = MagicMock()
+        observer.on_stream_error = AsyncMock()
+        service.add_observer(observer)
+
+        service._streaming_contexts["test-123"] = ctx
+        stream_state.register_session_stream(
+            session_id="test-123",
+            exchange_id=ctx.exchange_id,
+            prompt="Test",
+        )
+
+        event = mock_event("error", "Something went wrong")
+        await service._dispatch_event("test-123", event, ctx)
+
+        # Verify observer was notified
+        observer.on_stream_error.assert_called_once()
+        call_args = observer.on_stream_error.call_args[0][0]
+        assert isinstance(call_args, StreamErrorEvent)
+        assert call_args.session_id == "test-123"
+        assert call_args.error == "Something went wrong"
+        assert call_args.error_type == "error"
+
+    @pytest.mark.asyncio
+    async def test_dispatch_tool_use_started_notifies_observers(self, service, ctx, mock_event):
+        """Test tool_use_start event notifies observers."""
+        from service.session_events import ToolUseStartedEvent
+
+        observer = MagicMock()
+        observer.on_tool_use_started = AsyncMock()
+        service.add_observer(observer)
+
+        event = mock_event("tool_use_start", {
+            "tool_use_id": "tool-123",
+            "tool_name": "Bash",
+            "tool_index": 0,
+        })
+        await service._dispatch_event("test-123", event, ctx)
+
+        # Verify observer was notified
+        observer.on_tool_use_started.assert_called_once()
+        call_args = observer.on_tool_use_started.call_args[0][0]
+        assert isinstance(call_args, ToolUseStartedEvent)
+        assert call_args.tool_name == "Bash"
+        assert call_args.tool_use_id == "tool-123"
+
+    @pytest.mark.asyncio
+    async def test_dispatch_tool_result_notifies_observers(self, service, ctx, mock_event):
+        """Test tool_result event notifies observers."""
+        from service.session_events import ToolResultEvent
+
+        observer = MagicMock()
+        observer.on_tool_result = AsyncMock()
+        observer.on_turn_finished = AsyncMock()
+        service.add_observer(observer)
+
+        ctx.tool_names["tool-123"] = "Bash"
+
+        event = mock_event("tool_result", {
+            "tool_use_id": "tool-123",
+            "result": "command output",
+            "tool_index": 0,
+            "turn_index": 2,
+        })
+        await service._dispatch_event("test-123", event, ctx)
+
+        # Verify observer was notified
+        observer.on_tool_result.assert_called_once()
+        call_args = observer.on_tool_result.call_args[0][0]
+        assert isinstance(call_args, ToolResultEvent)
+        assert call_args.tool_name == "Bash"
+        assert call_args.result == "command output"
+
+    @pytest.mark.asyncio
+    async def test_submit_message_notifies_stream_started(self, mock_manager, mock_session, mock_runner, stream_state):
+        """Test that submit_message notifies observers of stream_started."""
+        from service.session_events import StreamStartedEvent
+
+        mock_session.turns = []
+        mock_session.add_message = MagicMock()
+        mock_session.save = AsyncMock()
+        mock_runner.is_streaming = False
+        mock_runner.start_background = MagicMock()
+
+        service = SessionManagerService(mock_manager, stream_state)
+
+        observer = MagicMock()
+        observer.on_stream_started = AsyncMock()
+        service.add_observer(observer)
+
+        await service.submit_message(
+            session_id=mock_session.id,
+            content="Hello",
+        )
+
+        # Verify stream_started was emitted
+        observer.on_stream_started.assert_called_once()
+        call_args = observer.on_stream_started.call_args[0][0]
+        assert isinstance(call_args, StreamStartedEvent)
+        assert call_args.session_id == mock_session.id
+        assert call_args.prompt == "Hello"
+
+
+class TestHelperRunnerManagement:
+    """Tests for helper runner management in SessionManagerService."""
+
+    @pytest.fixture
+    def mock_manager_with_session(self, mock_manager, mock_session):
+        """Manager with a session that has a backend configured."""
+        mock_session.backend_name = "test-backend"
+        mock_manager.get_session.return_value = mock_session
+        return mock_manager
+
+    @pytest.mark.asyncio
+    async def test_start_helper_creates_runner(self, mock_manager_with_session, stream_state):
+        """Test that start_helper creates a helper runner."""
+        with patch("core.runner.HelperRunner") as MockHelperRunner, \
+             patch("config.get_config") as mock_get_config, \
+             patch("core.runner_factory.create_runner") as mock_create_runner:
+
+            # Setup mocks
+            mock_config = MagicMock()
+            mock_config.backends = {"test-backend": MagicMock(), "default": MagicMock()}
+            mock_config.default_backend = "default"
+            mock_config.get_backend.return_value = MagicMock()
+            mock_get_config.return_value = mock_config
+
+            mock_runner = MagicMock()
+            mock_create_runner.return_value = mock_runner
+
+            mock_helper = MagicMock()
+            MockHelperRunner.return_value = mock_helper
+
+            service = SessionManagerService(mock_manager_with_session, stream_state)
+
+            # Start a helper
+            service.start_helper(
+                helper_id="helper-123",
+                helper_type="compress",
+                prompt="Summarize this context",
+                session_id="test-session-123",
+                metadata={"fork_name": "test-fork"},
+            )
+
+            # Verify helper runner was created
+            MockHelperRunner.assert_called_once()
+            assert "helper-123" in service._helper_runners
+            assert "helper-123" in service._helper_contexts
+
+            # Verify context was set up correctly
+            ctx = service._helper_contexts["helper-123"]
+            assert ctx.helper_type == "compress"
+            assert ctx.session_id == "test-session-123"
+            assert ctx.metadata == {"fork_name": "test-fork"}
+
+            # Verify streaming was started
+            mock_helper.start_background.assert_called_once_with("Summarize this context")
+
+    @pytest.mark.asyncio
+    async def test_start_helper_uses_session_backend(self, mock_manager_with_session, stream_state):
+        """Test that start_helper uses the session's configured backend."""
+        with patch("core.runner.HelperRunner"), \
+             patch("config.get_config") as mock_get_config, \
+             patch("core.runner_factory.create_runner") as mock_create_runner:
+
+            mock_config = MagicMock()
+            test_backend = MagicMock(name="test-backend-config")
+            mock_config.backends = {"test-backend": test_backend, "default": MagicMock()}
+            mock_config.default_backend = "default"
+            mock_config.get_backend.side_effect = lambda name: test_backend if name == "test-backend" else MagicMock()
+            mock_get_config.return_value = mock_config
+
+            service = SessionManagerService(mock_manager_with_session, stream_state)
+
+            service.start_helper(
+                helper_id="helper-123",
+                helper_type="compress",
+                prompt="Test",
+                session_id="test-session-123",
+            )
+
+            # Verify the session's backend was used
+            mock_config.get_backend.assert_called_with("test-backend")
+            mock_create_runner.assert_called_once_with(test_backend)
+
+    @pytest.mark.asyncio
+    async def test_pump_helper_events_dispatches_text(self, mock_manager, stream_state):
+        """Test that helper text events are dispatched to observers."""
+        from service.session_events import HelperDeltaEvent
+        from core.runner import StreamEvent
+
+        service = SessionManagerService(mock_manager, stream_state)
+
+        # Create a mock helper runner with events
+        mock_helper = MagicMock()
+        mock_helper.drain_events.return_value = [
+            StreamEvent("text", "Hello "),
+            StreamEvent("text", "world"),
+        ]
+        mock_helper.is_done = False
+
+        service._helper_runners["helper-123"] = mock_helper
+        service._helper_contexts["helper-123"] = MagicMock(
+            helper_id="helper-123",
+            helper_type="compress",
+            session_id="test-session",
+            content="",
+            metadata={},
+        )
+        # Make content mutable
+        service._helper_contexts["helper-123"].content = ""
+
+        observer = MagicMock()
+        observer.on_helper_delta = AsyncMock()
+        service.add_observer(observer)
+
+        await service._pump_helper_events()
+
+        # Verify deltas were dispatched
+        assert observer.on_helper_delta.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_pump_helper_events_dispatches_done(self, mock_manager, stream_state):
+        """Test that helper done events are dispatched to observers."""
+        from service.session_events import HelperDoneEvent
+        from core.runner import StreamEvent
+        from service.session_manager_service import _HelperContext
+
+        service = SessionManagerService(mock_manager, stream_state)
+
+        # Create a mock helper runner that completes
+        mock_helper = MagicMock()
+        mock_helper.drain_events.return_value = [
+            StreamEvent("done", "Final result"),
+        ]
+        mock_helper.is_done = True
+
+        service._helper_runners["helper-123"] = mock_helper
+        service._helper_contexts["helper-123"] = _HelperContext(
+            helper_id="helper-123",
+            helper_type="merge",
+            session_id="test-session",
+            content="Accumulated content",
+            metadata={"merge_info": "test"},
+        )
+
+        observer = MagicMock()
+        observer.on_helper_done = AsyncMock()
+        service.add_observer(observer)
+
+        await service._pump_helper_events()
+
+        # Verify done was dispatched
+        observer.on_helper_done.assert_called_once()
+        call_args = observer.on_helper_done.call_args[0][0]
+        assert isinstance(call_args, HelperDoneEvent)
+        assert call_args.helper_id == "helper-123"
+        assert call_args.helper_type == "merge"
+        assert call_args.result == "Accumulated content"
+
+        # Verify helper was cleaned up
+        assert "helper-123" not in service._helper_runners
+        assert "helper-123" not in service._helper_contexts
+
+    @pytest.mark.asyncio
+    async def test_cancel_helper(self, mock_manager, stream_state):
+        """Test that cancel_helper cancels a running helper."""
+        service = SessionManagerService(mock_manager, stream_state)
+
+        mock_helper = MagicMock()
+        service._helper_runners["helper-123"] = mock_helper
+
+        result = service.cancel_helper("helper-123")
+
+        assert result is True
+        mock_helper.cancel.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cancel_helper_nonexistent(self, mock_manager, stream_state):
+        """Test that cancel_helper returns False for nonexistent helper."""
+        service = SessionManagerService(mock_manager, stream_state)
+
+        result = service.cancel_helper("nonexistent")
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_get_helper_result(self, mock_manager, stream_state):
+        """Test that get_helper_result returns accumulated content."""
+        from service.session_manager_service import _HelperContext
+
+        service = SessionManagerService(mock_manager, stream_state)
+
+        service._helper_contexts["helper-123"] = _HelperContext(
+            helper_id="helper-123",
+            helper_type="compress",
+            session_id="test-session",
+            content="The compressed summary",
+            metadata={},
+        )
+
+        result = service.get_helper_result("helper-123")
+
+        assert result == "The compressed summary"
+
+    @pytest.mark.asyncio
+    async def test_get_helper_result_nonexistent(self, mock_manager, stream_state):
+        """Test that get_helper_result returns None for nonexistent helper."""
+        service = SessionManagerService(mock_manager, stream_state)
+
+        result = service.get_helper_result("nonexistent")
+
+        assert result is None

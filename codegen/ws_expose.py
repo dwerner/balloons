@@ -413,11 +413,14 @@ def python_to_ts_type(py_type: Any) -> str:
     if is_dataclass(py_type):
         return py_type.__name__
 
-    # Handle other classes by name - special case for dict
+    # Handle other classes by name - special cases for unparameterized containers
     if hasattr(py_type, "__name__"):
-        if py_type.__name__ == "dict":
+        name = py_type.__name__
+        if name == "dict":
             return "Record<string, unknown>"
-        return py_type.__name__
+        if name == "list":
+            return "unknown[]"
+        return name
 
     return "unknown"
 

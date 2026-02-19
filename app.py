@@ -10,6 +10,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.widgets import TextArea, Button
+from models import ToolUseBlock
 
 # Debug logging for event ordering
 DEBUG_EVENTS = os.environ.get("BALLOONS_DEBUG_EVENTS", "").lower() in ("1", "true", "yes")
@@ -49,8 +50,6 @@ from core import (
     ContextBuilder,
     SessionRunner,
     SessionManager,
-    StreamEvent,
-    HelperRunner,
     NewSessionCommand,
     CopyTurnsCommand,
     QueryWithCommand,
@@ -111,22 +110,6 @@ from core import (
     # Streaming
     StreamingContext,
     StreamingCoordinator,
-    TextAction,
-    TextFlushAction,
-    InitAction,
-    ResultAction,
-    ToolUseStartAction,
-    ToolInputDeltaAction,
-    ToolUseCompleteAction,
-    ToolResultAction,
-    DoneAction,
-    ErrorAction,
-    RateLimitAction,
-    CancelledAction,
-    InputRequiredAction,
-    HelperDoneAction,
-    NoAction,
-    TurnStartedAction,
     # Helper data types
     ArchiveData,
     MergeData,
@@ -159,6 +142,18 @@ from service import (
     TaskStateService,
     SessionDataService,
     ImageService,
+)
+from service.session_events import (
+    TurnCreatedEvent,
+    TurnDeltaEvent,
+    TurnFinishedEvent,
+    StreamStartedEvent,
+    StreamDoneEvent,
+    StreamErrorEvent,
+    ToolUseStartedEvent,
+    ToolInputDeltaEvent,
+    ToolUseEvent,
+    ToolResultEvent as SessionToolResultEvent,
 )
 
 
@@ -332,8 +327,7 @@ class BalloonsApp(App):
         self._command_parser = CommandParser()
         self._formatter = Formatter()
         self._context_builder = ContextBuilder()
-        # Shared tree state - used by ContextTreeView and NestedTreeView
-        self._tree_state = TreeState()
+        # Note: _session_service and _tree_state are initialized after _manager below
         # Goal-centric tree state - used by GoalTreeView
         self._goal_tree_state = GoalTreeState()
         self._goal_tree_sync: GoalTreeSyncManager | None = None
@@ -345,6 +339,10 @@ class BalloonsApp(App):
             backend_config=self._backend_config,
             runner_factory=self._create_session_runner,
         )
+        # SessionManagerService for event pumping - created here so widgets can access tree_state
+        # Note: Event pump is started in on_mount(), observer registration also in on_mount()
+        self._session_service = SessionManagerService(self._manager)
+        self._tree_state = self._session_service.get_tree_state()
         # Simple runner for helper streaming (summaries, etc.) - used for blocking operations
         self._helper_runner = create_runner(self._backend_config)
         # Summarizer for LLM-based summary generation
@@ -352,12 +350,9 @@ class BalloonsApp(App):
             self._helper_runner,
             backend_name=self._backend_config.name,
         )
-        # Timer for polling background sessions
-        self._poll_timer = None
         # Per-session streaming contexts (session_id -> StreamingContext)
+        # Also used for helper tasks (helper_id -> StreamingContext)
         self._streaming_contexts: dict[str, StreamingContext] = {}
-        # Helper runners for non-blocking helper tasks (helper_id -> HelperRunner)
-        self._helper_runners: dict[str, HelperRunner] = {}
         # Streaming coordinator for dispatching events to actions
         self._streaming_coordinator = StreamingCoordinator()
         # Fork manager for fork/merge/derive operations
@@ -389,8 +384,7 @@ class BalloonsApp(App):
         self._task_service: TaskStateService | None = None
         # Session data service for subscription-based streaming (new path)
         self._session_data_service: SessionDataService | None = None
-        # Session manager service for handling submit_message and event pump
-        self._session_service: SessionManagerService | None = None
+        # Note: _session_service is initialized earlier (after _manager) so widgets can access tree_state
 
     @property
     def session(self) -> Session | None:
@@ -646,10 +640,11 @@ class BalloonsApp(App):
         await self._migrate_goals_if_needed()
         # Ensure default prompts are installed to ~/.balloons/prompts/
         ensure_prompts_installed()
-        # Subscribe to TreeState for context mode changes
+        # SessionManagerService was created in __init__ so widgets have tree_state
+        # Now register observers and start the event pump
         self._tree_state.add_observer(self._on_tree_state_event)
-        # Start the background session polling timer
-        self._poll_timer = self.set_interval(0.1, self._poll_background_sessions)
+        self._session_service.add_observer(self)  # TUI observes streaming events
+        self._session_service.start_event_pump()
         await self._initialize_session()
         # Register app-level tool handlers
         register_app_tool_handler("screen_snapshot", self._execute_screen_snapshot_tool)
@@ -662,6 +657,10 @@ class BalloonsApp(App):
         """Clean up when the app is unmounted."""
         # Unregister app-level tool handlers
         unregister_app_tool_handler("screen_snapshot")
+        # Stop event pump
+        if self._session_service is not None:
+            self._session_service.stop_event_pump()
+            self._session_service.remove_observer(self)
         # Stop WebSocket server if running
         await self._stop_ws_server()
         # Shutdown process supervisor (stops all running processes)
@@ -691,30 +690,28 @@ class BalloonsApp(App):
                 return await self._manager.load_session(session_id)
 
             # Create and register services with shared state
+            # TreeState is owned by SessionManagerService - share it with TreeStateService
             tree_service = TreeStateService(
-                self._tree_state,
+                self._session_service.get_tree_state(),
                 session_loader=load_session_for_tree,
             )
             queue_service = QueueStateService(self._queue_state)
-            self._session_service = SessionManagerService(self._manager)
+            # SessionManagerService is already created in on_mount() - reuse it
             goal_service = GoalTreeStateService(self._goal_tree_state)
             # Set LLM runner for smart todo placement
             goal_service.set_llm_runner(self._helper_runner)
-            # Store task_service as instance variable so we can emit streaming events from poll loop
+            # Store task_service as instance variable for WebSocket streaming events
             self._task_service = TaskStateService(get_stream_state())
-            # SessionDataService for subscription-based streaming (new path, runs parallel to TaskStateService)
+            # SessionDataService for subscription-based streaming
             self._session_data_service = SessionDataService()
             image_service = ImageService()
 
-            # Wire up event pump: SessionManagerService emits streaming events via TaskStateService
+            # Wire up TaskStateService for legacy WebSocket events
             self._session_service.set_task_state_service(self._task_service)
-            # Wire up TreeState so React can see turns via getTurns() after submitMessage()
-            self._session_service.set_tree_state(self._tree_state)
-            # Wire up SessionDataService to SessionManagerService (enables TreeState for snapshots)
+            # Wire up SessionDataService for new subscription-based streaming
             self._session_service.set_session_data_service(self._session_data_service)
-            self._session_service.start_event_pump()
 
-            # Subscribe to MESSAGE_SUBMITTED events so TUI can track streams started by React frontend
+            # Subscribe to MESSAGE_SUBMITTED events so TUI can set up UI for React-initiated streams
             self._session_service.add_event_handler(self._on_session_manager_event)
 
             self._ws_server.register_service(tree_service)
@@ -739,16 +736,15 @@ class BalloonsApp(App):
         """Stop the WebSocket server if running."""
         if self._ws_server is not None:
             try:
-                # Stop event pump and remove event handler first
+                # Remove WebSocket-specific event handler
                 if self._session_service is not None:
-                    self._session_service.stop_event_pump()
                     self._session_service.remove_event_handler(self._on_session_manager_event)
                 await self._ws_server.stop()
                 debug_log.info("WebSocket server stopped", category="websocket")
             except Exception as e:
                 debug_log.error(f"Error stopping WebSocket server: {e}", category="websocket")
             finally:
-                self._session_service = None
+                # Don't clear _session_service - it's still used for event pumping
                 self._task_service = None
                 self._session_data_service = None
                 self._ws_server = None
@@ -756,12 +752,9 @@ class BalloonsApp(App):
     def _on_session_manager_event(self, event_name: str, data: dict) -> None:
         """Handle events from SessionManagerService (for React frontend integration).
 
-        When React frontend calls submitMessage(), we need to create a streaming
-        context in the TUI so the poll loop can dispatch events to update the UI.
-
-        IMPORTANT: We take ownership of the session from the event pump by removing
-        its streaming context. This prevents both the TUI and event pump from
-        polling the same runner and stealing each other's events.
+        When React frontend calls submitMessage(), we create a TUI-specific streaming
+        context and set up the UI. SessionManagerService owns event pumping - we just
+        receive events via the observer pattern and update our local context/UI.
         """
         if event_name == "messageSubmitted":
             session_id = data.get("session_id")
@@ -781,31 +774,16 @@ class BalloonsApp(App):
                 # Determine if this is the active session
                 is_active = self.session and self.session.id == session_id
 
-                # Remove context from SessionManagerService event pump so TUI owns the events
-                # This prevents race condition where both poll the same runner
-                # Get the accumulated state so we can continue from where SessionManagerService left off
-                prior_state = None
-                if self._session_service:
-                    prior_state = self._session_service.release_streaming_context(session_id)
-
-                # Create streaming context so poll loop can track this session
-                # Use state from SessionManagerService if available (content already accumulated)
-                assistant_turn_idx = prior_state.get("assistant_turn_idx", turn_index + 1) if prior_state else turn_index + 1
-                assistant_turn_id = prior_state.get("assistant_turn_id", "") if prior_state else ""
+                # Create TUI-specific streaming context
+                # SessionManagerService owns event pumping - we receive events via observer pattern
                 ctx = StreamingContext(
                     session_id=session_id,
                     user_turn_idx=turn_index,
-                    assistant_turn_idx=assistant_turn_idx,
+                    assistant_turn_idx=turn_index + 1,  # Will be updated by on_turn_created
                     prompt=content,
                     is_active=is_active,
                     exchange_id=exchange_id,
-                    content=prior_state.get("content", "") if prior_state else "",
-                    final_turn_idx=assistant_turn_idx,  # Track from the start
-                    final_turn_id=assistant_turn_id,  # Carry over from SessionManagerService
                 )
-                # Carry over tool count if available
-                if prior_state and prior_state.get("tool_count"):
-                    ctx.tool_count = prior_state["tool_count"]
                 self._streaming_contexts[session_id] = ctx
 
                 # Update UI state if this is the active session
@@ -877,6 +855,457 @@ class BalloonsApp(App):
                 category="websocket",
                 session_id=session_id,
             )
+
+    # --- SessionEventObserver Implementation ---
+    # These methods are called by SessionManagerService when streaming events occur.
+    # The TUI receives events and updates its local context and UI accordingly.
+
+    async def on_stream_started(self, event: StreamStartedEvent) -> None:
+        """Handle stream started event from SessionManagerService."""
+        session_id = event.session_id
+        # If we don't have a context yet, this is a TUI-initiated stream
+        # Create the context here (external streams create context in _on_session_manager_event)
+        if session_id not in self._streaming_contexts:
+            is_active = self.session and self.session.id == session_id
+            ctx = StreamingContext(
+                session_id=session_id,
+                user_turn_idx=-1,  # Will be set later
+                assistant_turn_idx=-1,
+                prompt=event.prompt,
+                is_active=is_active,
+                exchange_id=event.exchange_id,
+            )
+            self._streaming_contexts[session_id] = ctx
+
+    async def on_turn_created(self, event: TurnCreatedEvent) -> None:
+        """Handle turn created event from SessionManagerService.
+
+        Creates a new turn node in the context tree for the given turn type.
+        For text turns, also starts a new assistant message in chat_log.
+        """
+        session_id = event.session_id
+        ctx = self._streaming_contexts.get(session_id)
+        if not ctx:
+            return
+
+        # Map content_block_type to turn_type for context_tree
+        turn_type = event.content_block_type  # "text", "tool_use", "tool_result"
+
+        # Update context with turn info
+        if event.role == "assistant" and turn_type in ("text", "text_turn"):
+            ctx.assistant_turn_idx = event.turn_index
+            ctx.final_turn_idx = event.turn_index
+            ctx.final_turn_id = event.turn_id
+            ctx.final_text_content = ""  # Reset for new text turn
+
+        # Track tool turn indices for finish_turn
+        # (tool_name and tool_use_id come in ToolUseStartedEvent)
+        # Store turn_id mapping for later
+        ctx.tool_turn_ids[(event.turn_id, turn_type)] = event.turn_index
+
+        # Update context tree
+        try:
+            context_tree = self.query_one("#context-tree", ContextTreeView)
+            context_tree.start_turn(
+                session_id,
+                event.turn_index,
+                event.role,
+                exchange_id=event.exchange_id,
+                turn_type=turn_type,
+            )
+        except Exception as e:
+            debug_log.error(f"Failed to start turn in context tree: {e}", category="stream")
+
+        # For text turns on active session, start a new assistant message in chat_log
+        # (tool turns are handled by on_tool_use_started and on_tool_result)
+        if ctx.is_active and event.role == "assistant" and turn_type in ("text", "text_turn"):
+            # If this is a continuation after tool use, start a new message
+            # The initial assistant message is created in _start_streaming
+            if ctx.tool_count > 0:
+                chat_log = self.query_one("#chat-log", ChatLogView)
+                chat_log.add_assistant_message()
+
+    async def on_turn_delta(self, event: TurnDeltaEvent) -> None:
+        """Handle turn delta event from SessionManagerService."""
+        session_id = event.session_id
+        ctx = self._streaming_contexts.get(session_id)
+        if not ctx:
+            return
+
+        # Update context with accumulated content
+        ctx.content = event.delta if event.accumulated_length == len(event.delta) else ctx.content + event.delta
+        ctx.final_text_content = ctx.content
+
+        is_active = ctx.is_active
+
+        # Update UI
+        try:
+            context_tree = self.query_one("#context-tree", ContextTreeView)
+            context_tree.update_streaming_text(session_id, event.turn_index, event.delta)
+
+            if is_active:
+                chat_log = self.query_one("#chat-log", ChatLogView)
+                chat_log.append_to_current(event.delta)
+        except Exception as e:
+            debug_log.error(f"Failed to update streaming text: {e}", category="stream")
+
+    async def on_turn_finished(self, event: TurnFinishedEvent) -> None:
+        """Handle turn finished event from SessionManagerService."""
+        session_id = event.session_id
+        ctx = self._streaming_contexts.get(session_id)
+        if not ctx:
+            return
+
+        # Update context tree
+        try:
+            context_tree = self.query_one("#context-tree", ContextTreeView)
+            content_block = event.content_block or TextBlock(type="text", text=event.content)
+            await context_tree.finish_turn(
+                session_id,
+                event.turn_index,
+                event.content,
+                content_block,
+                [],  # tool_outputs
+            )
+        except Exception as e:
+            debug_log.error(f"Failed to finish turn in context tree: {e}", category="stream")
+
+    async def on_stream_done(self, event: StreamDoneEvent) -> None:
+        """Handle stream done event from SessionManagerService."""
+        session_id = event.session_id
+        ctx = self._streaming_contexts.get(session_id)
+        if not ctx:
+            return
+
+        is_active = ctx.is_active
+
+        # Update UI
+        try:
+            context_tree = self.query_one("#context-tree", ContextTreeView)
+            context_tree.set_session_streaming(session_id, False)
+            self._tree_state.stop_streaming(session_id)
+
+            if is_active:
+                chat_log = self.query_one("#chat-log", ChatLogView)
+                input_box = self.query_one("#input-box", InputBox)
+                status_bar = self.query_one("#status-bar", StatusBar)
+
+                chat_log.finish_current_message()
+                input_box.set_streaming_mode(False)
+                status_bar.set_streaming(False)
+                self.streaming = False
+
+                # Update token counts
+                self._update_base_context_tokens()
+                self._update_context_tokens()
+
+                # Play completion sound
+                play_done_sound()
+        except Exception as e:
+            debug_log.error(f"Failed to handle stream done: {e}", category="stream")
+
+        # Clean up context
+        if session_id in self._streaming_contexts:
+            del self._streaming_contexts[session_id]
+
+        self._update_streaming_count()
+
+    async def on_stream_error(self, event: StreamErrorEvent) -> None:
+        """Handle stream error event from SessionManagerService."""
+        session_id = event.session_id
+        ctx = self._streaming_contexts.get(session_id)
+        if not ctx:
+            return
+
+        is_active = ctx.is_active
+
+        # Update UI
+        try:
+            context_tree = self.query_one("#context-tree", ContextTreeView)
+            context_tree.set_session_streaming(session_id, False)
+            self._tree_state.stop_streaming(session_id)
+
+            if is_active:
+                chat_log = self.query_one("#chat-log", ChatLogView)
+                input_box = self.query_one("#input-box", InputBox)
+                status_bar = self.query_one("#status-bar", StatusBar)
+
+                chat_log.add_error_marker(reason="stream_error", details=event.error)
+                input_box.set_streaming_mode(False)
+                status_bar.set_streaming(False)
+                self.streaming = False
+
+                # Play error sound
+                play_error_sound()
+        except Exception as e:
+            debug_log.error(f"Failed to handle stream error: {e}", category="stream")
+
+        # Clean up context
+        if session_id in self._streaming_contexts:
+            del self._streaming_contexts[session_id]
+
+        self._update_streaming_count()
+
+    async def on_tool_use_started(self, event: ToolUseStartedEvent) -> None:
+        """Handle tool use started event from SessionManagerService.
+
+        Adds a streaming tool widget to the chat log when a tool begins.
+        Updates context tree with tool name.
+        """
+        session_id = event.session_id
+        debug_log.info(
+            f"on_tool_use_started: {event.tool_name}",
+            category="stream",
+            details={
+                "session_id": session_id[:8],
+                "tool_use_id": event.tool_use_id[:12],
+                "known_contexts": list(k[:8] for k in self._streaming_contexts.keys()),
+            },
+        )
+        ctx = self._streaming_contexts.get(session_id)
+        if not ctx:
+            debug_log.warning(
+                f"on_tool_use_started: no streaming context for session",
+                category="stream",
+                details={
+                    "session_id": session_id[:8],
+                    "known_contexts": list(k[:8] for k in self._streaming_contexts.keys()),
+                },
+            )
+            return
+
+        # Track tool names for later (e.g., for slides refresh)
+        ctx.tool_names[event.tool_use_id] = event.tool_name
+        ctx.tool_count = getattr(ctx, 'tool_count', 0) + 1
+
+        # Track turn indices for tool_use turns
+        ctx.tool_turn_indices[(event.tool_use_id, "tool_use")] = event.turn_index
+
+        # Update stream state
+        get_stream_state().update_stream(
+            ctx.exchange_id,
+            status=StreamStatus.EXECUTING,
+            tool_name=event.tool_name,
+            tool_count=ctx.tool_count,
+        )
+
+        # Update context tree with tool name
+        try:
+            context_tree = self.query_one("#context-tree", ContextTreeView)
+            # Update the existing turn node with tool details
+            # Note: The turn was already started by on_turn_created with turn_type="tool_use"
+            # Here we update it with the tool_name and tool_use_id
+            context_tree.start_turn(
+                session_id,
+                event.turn_index,
+                "assistant",
+                exchange_id=ctx.exchange_id,
+                turn_type="tool_use",
+                tool_name=event.tool_name,
+                tool_use_id=event.tool_use_id,
+            )
+        except Exception as e:
+            debug_log.error(f"Failed to update tool turn in context tree: {e}", category="stream")
+
+        # Add streaming tool widget if this is the active session
+        if ctx.is_active:
+            chat_log = self.query_one("#chat-log", ChatLogView)
+            chat_log.add_streaming_tool_use(event.tool_name, event.tool_use_id)
+
+    async def on_tool_input_delta(self, event: ToolInputDeltaEvent) -> None:
+        """Handle tool input delta event from SessionManagerService.
+
+        Updates the streaming tool widget with partial JSON input.
+        """
+        session_id = event.session_id
+        ctx = self._streaming_contexts.get(session_id)
+        if not ctx:
+            return
+
+        # Update streaming tool widget if this is the active session
+        if ctx.is_active:
+            chat_log = self.query_one("#chat-log", ChatLogView)
+            chat_log.update_streaming_tool(event.tool_use_id, event.partial_json)
+
+    async def on_tool_use(self, event: ToolUseEvent) -> None:
+        """Handle tool use event from SessionManagerService.
+
+        Intercepts special balloons tools (propose_fork, propose_merge) that
+        need custom UI handling before execution continues.
+        """
+        session_id = event.session_id
+        tool_name = event.tool_name
+        tool_use_id = event.tool_use_id
+        tool_input = event.tool_input
+
+        debug_log.info(
+            f"on_tool_use received: {tool_name}",
+            category="stream",
+            details={
+                "session_id": session_id[:8],
+                "tool_use_id": tool_use_id[:20] if tool_use_id else "",
+                "is_balloons_tool": tool_use_id.startswith("balloons-") if tool_use_id else False,
+            },
+        )
+
+        # Get streaming context
+        ctx = self._streaming_contexts.get(session_id)
+        is_active = ctx.is_active if ctx else False
+
+        # Intercept propose_fork tool - show inline proposal widget
+        # Only handle balloons-tool calls (id starts with "balloons-"), not native CLI tools
+        if tool_name == "propose_fork" and is_active and tool_use_id.startswith("balloons-"):
+            proposal = parse_fork_proposal(tool_input)
+            if proposal:
+                await self._handle_fork_proposal(
+                    proposal,
+                    tool_use_id,
+                    session_id,
+                    ctx,
+                )
+            return
+
+        # Intercept propose_merge tool - show inline proposal widget
+        if tool_name == "propose_merge" and is_active and tool_use_id.startswith("balloons-"):
+            proposal = parse_merge_proposal(tool_input)
+            if proposal:
+                await self._handle_merge_proposal(
+                    proposal,
+                    tool_use_id,
+                    session_id,
+                    ctx,
+                )
+            return
+
+    async def on_tool_result(self, event: SessionToolResultEvent) -> None:
+        """Handle tool result event from SessionManagerService.
+
+        Finalizes the streaming tool widget with the result and handles
+        special tools like create_slide and goal mutations.
+        """
+        session_id = event.session_id
+        ctx = self._streaming_contexts.get(session_id)
+        if not ctx:
+            return
+
+        tool_name = event.tool_name
+        tool_use_id = event.tool_use_id
+        result = event.result
+
+        # Tool done, back to streaming
+        get_stream_state().update_stream(
+            ctx.exchange_id,
+            status=StreamStatus.STREAMING,
+            tool_name=None,
+        )
+
+        # Format and display tool result if active session
+        if ctx.is_active:
+            chat_log = self.query_one("#chat-log", ChatLogView)
+
+            # Format result for display
+            tool_result_event = ToolResultEvent(
+                tool_use_id=tool_use_id,
+                result=result if isinstance(result, str) else str(result),
+            )
+            formatted = self._format_tool_result(tool_result_event, session_id)
+
+            # Handle both single and tuple (truncated, full) returns
+            if isinstance(formatted, tuple):
+                content, full_content = formatted
+            else:
+                content, full_content = formatted, None
+
+            chat_log.finish_streaming_tool(
+                tool_use_id,
+                content,
+                full_content=full_content,
+                tool_name=tool_name,
+            )
+
+        # Refresh slides pane when create_slide tool completes
+        if tool_name == "create_slide" and tool_use_id.startswith("balloons-"):
+            debug_log.info(f"create_slide tool completed, refreshing slides pane", category="slides")
+            if session_id == self._tree_state.get_current_session_id():
+                self.call_later(self._refresh_slides_pane)
+
+        # Refresh goal tree when a goal mutation tool completes
+        if tool_name in GOAL_MUTATION_TOOLS and tool_use_id.startswith("balloons-"):
+            debug_log.info(f"Goal mutation tool {tool_name} completed, refreshing goal tree", category="goals")
+            self.call_later(lambda tn=tool_name, r=result: self._refresh_goal_tree_for_tool(tn, r))
+
+    # --- Helper Observer Methods (Phase 6) ---
+
+    async def on_helper_started(self, event) -> None:
+        """Handle helper started event from SessionManagerService.
+
+        Called when a helper task (compression, merge summary, etc.) begins.
+        The TUI maintains its own StreamingContext for UI state.
+        """
+        # Logging only - UI setup is done when starting the helper
+        debug_log.info(
+            f"Helper started: {event.helper_type}",
+            category="stream",
+            details={"helper_id": event.helper_id},
+        )
+
+    async def on_helper_delta(self, event) -> None:
+        """Handle helper text delta from SessionManagerService.
+
+        Updates the UI with streaming helper output.
+        """
+        ctx = self._streaming_contexts.get(event.helper_id)
+        if not ctx:
+            return
+
+        # Accumulate content in our local context
+        ctx.content += event.delta
+
+        # Update UI if this helper is being displayed
+        if ctx.is_active:
+            chat_log = self.query_one("#chat-log", ChatLogView)
+            chat_log.append_to_current(event.delta)
+
+    async def on_helper_done(self, event) -> None:
+        """Handle helper completion from SessionManagerService.
+
+        Routes to the appropriate completion handler based on helper_type.
+        """
+        ctx = self._streaming_contexts.get(event.helper_id)
+        if not ctx:
+            debug_log.warning(
+                f"No streaming context for completed helper",
+                category="stream",
+                details={"helper_id": event.helper_id, "helper_type": event.helper_type},
+            )
+            return
+
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        # Use the accumulated content from the service
+        ctx.content = event.result
+
+        # Finalize helper UI and trigger next phase
+        self._finalize_helper(
+            event.helper_id, ctx, chat_log, status_bar,
+            error=None, cancelled=False
+        )
+
+    async def on_helper_error(self, event) -> None:
+        """Handle helper error/cancellation from SessionManagerService."""
+        ctx = self._streaming_contexts.get(event.helper_id)
+        if not ctx:
+            return
+
+        chat_log = self.query_one("#chat-log", ChatLogView)
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        # Finalize with error state
+        self._finalize_helper(
+            event.helper_id, ctx, chat_log, status_bar,
+            error=event.error, cancelled=event.cancelled
+        )
 
     def _on_tree_state_event(self, event: TreeEvent, data: dict) -> None:
         """Handle state changes from TreeState that affect token counts and UI."""
@@ -1046,599 +1475,22 @@ class BalloonsApp(App):
         # Start streaming the combined prompt
         await self._start_streaming(combined_prompt)
 
-    async def _poll_background_sessions(self) -> None:
-        """Poll ALL streaming sessions for events and update UI.
+    # NOTE: _poll_background_sessions, _dispatch_polled_event, and _handle_streaming_action
+    # were removed in Phase 6 cleanup. Event pumping for both sessions and helpers is now
+    # handled by SessionManagerService._pump_events() which notifies observers via the
+    # observer pattern. TUI receives events via the on_*() observer methods.
+    #
+    # See:
+    # - SessionManagerService._pump_events() for session event pumping
+    # - SessionManagerService._pump_helper_events() for helper event pumping
+    # - BalloonsApp.on_*() observer methods for event handling
 
-        This is the core of the event-driven architecture:
-        - All sessions stream in background mode
-        - This timer polls for events from all sessions
-        - Events are dispatched to appropriate UI components
-        """
-        chat_log = self.query_one("#chat-log", ChatLogView)
-        context_tree = self.query_one("#context-tree", ContextTreeView)
-        status_bar = self.query_one("#status-bar", StatusBar)
-
-        # Get events from all streaming sessions
-        for session_id, events in self._manager.poll_all():
-            ctx = self._streaming_contexts.get(session_id)
-            if not ctx:
-                if events:
-                    debug_log.warning(
-                        f"Got {len(events)} events but no streaming context",
-                        category="stream",
-                        session_id=session_id,
-                        details={"event_types": [e.event_type for e in events[:5]]},
-                    )
-                continue  # No context, skip
-
-            for event in events:
-                try:
-                    await self._dispatch_polled_event(session_id, event, ctx, chat_log, context_tree, status_bar)
-                except Exception as e:
-                    debug_log.error(
-                        f"Event dispatch failed: {e}",
-                        session_id=session_id,
-                        category="llm",
-                        details={"event_type": event.event_type},
-                    )
-                    # Continue processing other events
-
-        # Poll helper runners (for context compression, merge summaries, etc.)
-        helper_ids_to_remove = []
-        for helper_id, runner in self._helper_runners.items():
-            ctx = self._streaming_contexts.get(helper_id)
-            if not ctx:
-                continue  # No context, skip
-
-            events = runner.drain_events()
-            for event in events:
-                try:
-                    self._dispatch_helper_event(helper_id, event, ctx, chat_log, status_bar)
-                except Exception as e:
-                    debug_log.error(
-                        f"Helper event dispatch failed: {e}",
-                        category="llm",
-                        details={"event_type": event.event_type, "helper_id": helper_id},
-                    )
-
-            # Mark for removal if done
-            if runner.is_done:
-                helper_ids_to_remove.append(helper_id)
-
-        # Clean up completed helpers
-        for helper_id in helper_ids_to_remove:
-            del self._helper_runners[helper_id]
-
-    async def _dispatch_polled_event(
-        self,
-        session_id: str,
-        event: StreamEvent,
-        ctx: StreamingContext,
-        chat_log: ChatLogView,
-        context_tree: ContextTreeView,
-        status_bar: StatusBar,
-    ) -> None:
-        """Dispatch a polled event to appropriate UI components.
-
-        Uses StreamingCoordinator to convert events to actions, then handles
-        the actions with UI-specific code.
-        """
-        # Get action from coordinator (also updates ctx state)
-        action = self._streaming_coordinator.dispatch_event(event, ctx)
-        is_active = ctx.is_active
-
-        # Log events for debugging
-        if event.event_type == "turn_started":
-            debug_event(f"turn_started: session={session_id[:8]} turn={event.data.get('turn_index')}")
-        elif event.event_type in ("text", "tool_use_start", "tool_use", "tool_result", "done", "error", "rate_limit", "cancelled", "input_required"):
-            debug_event(f"{event.event_type}: session={session_id[:8]}")
-
-        # Handle action based on type
-        await self._handle_streaming_action(action, ctx, chat_log, context_tree, status_bar)
-
-    async def _handle_streaming_action(
-        self,
-        action,
-        ctx: StreamingContext,
-        chat_log: ChatLogView,
-        context_tree: ContextTreeView,
-        status_bar: StatusBar,
-    ) -> None:
-        """Handle a streaming action by updating UI components.
-
-        This method contains all the UI-specific code for handling streaming actions.
-        """
-        session_id = action.session_id
-        is_active = ctx.is_active
-
-        if isinstance(action, NoAction):
-            pass  # Nothing to do
-
-        elif isinstance(action, TextAction):
-            # Update tree with streaming text
-            context_tree.update_streaming_text(
-                session_id,
-                ctx.assistant_turn_idx,
-                action.text,
-            )
-
-            # Track accumulated content for token estimation
-            ctx.content += action.text
-            # Track the final text turn for emission on done
-            ctx.final_turn_idx = ctx.assistant_turn_idx
-            ctx.final_text_content += action.text
-
-            # Update task state with approximate token count (rough estimate: 4 chars per token)
-            approx_tokens = len(ctx.content) // 4
-            get_stream_state().update_stream(ctx.exchange_id, tokens_streamed=approx_tokens)
-
-            # Emit content delta event for WebSocket clients (TaskStateService - old path)
-            if self._task_service is not None:
-                self._task_service.emit_content_delta(
-                    session_id=session_id,
-                    exchange_id=ctx.exchange_id,
-                    turn_index=ctx.assistant_turn_idx,
-                    delta=action.text,
-                    accumulated=ctx.content,
-                )
-            # Emit turn delta event for WebSocket clients (SessionDataService - new path)
-            if self._session_data_service is not None:
-                self._session_data_service.emit_turn_delta(
-                    session_id=session_id,
-                    turn_id=ctx.final_turn_id or str(ctx.assistant_turn_idx),
-                    delta=action.text,
-                    accumulated_length=len(ctx.content),
-                )
-
-            if is_active:
-                chat_log.append_to_current(action.text)
-            else:
-                # Update WithWidget for background session
-                with_widget = chat_log.find_with_widget(session_id)
-                if with_widget:
-                    with_widget.update_streaming(action.text)
-
-        elif isinstance(action, TextFlushAction):
-            # Text segment complete before tool use - commit as visible node in tree
-            # and finish the turn so it displays correctly
-            context_tree.flush_streaming_text(
-                session_id,
-                action.turn_idx,
-                action.text,
-            )
-            # Finish the text turn with proper content_block
-            content_block = TextBlock(text=action.text)
-            await context_tree.finish_turn(
-                session_id, action.turn_idx, action.text, content_block, []
-            )
-
-            # Emit turn finished event for WebSocket clients (TaskStateService - old path)
-            if self._task_service is not None:
-                self._task_service.emit_turn_finished(
-                    session_id=session_id,
-                    exchange_id=ctx.exchange_id,
-                    turn_index=action.turn_idx,
-                    role="assistant",
-                    content=action.text,
-                )
-            # Emit turn finished event for WebSocket clients (SessionDataService - new path)
-            if self._session_data_service is not None:
-                approx_tokens = len(action.text) // 4
-                self._session_data_service.emit_turn_finished(
-                    session_id=session_id,
-                    turn_id=action.turn_id or str(action.turn_idx),
-                    final_content=action.text,
-                    tokens=approx_tokens,
-                )
-
-            # Reset final turn tracking - this text segment is already emitted
-            ctx.final_turn_idx = -1
-            ctx.final_turn_id = ""
-            ctx.final_text_content = ""
-
-        elif isinstance(action, TurnStartedAction):
-            # New turn started during streaming (text_turn, tool_use, or tool_result)
-            # Create a new turn node in the context tree with turn_type info
-            # so labels display correctly during streaming (not just after finish_turn)
-            context_tree.start_turn(
-                session_id,
-                action.turn_idx,
-                action.role,
-                exchange_id=action.exchange_id,
-                turn_type=action.turn_type,
-                tool_name=action.tool_name,
-                tool_use_id=action.tool_use_id,
-                result_preview=action.result_preview,
-            )
-            # Track (tool_use_id, turn_type) -> turn_idx mapping for finish_turn calls
-            # We need the turn_type in the key because tool_use and tool_result share the same tool_use_id
-            if action.tool_use_id and action.turn_type in ("tool_use", "tool_result"):
-                ctx.tool_turn_indices[(action.tool_use_id, action.turn_type)] = action.turn_idx
-                ctx.tool_turn_ids[(action.tool_use_id, action.turn_type)] = action.turn_id
-            # Update assistant_turn_idx when a new text turn starts (after tool results)
-            if action.turn_type in ("text", "text_turn") and action.role == "assistant":
-                ctx.assistant_turn_idx = action.turn_idx
-                # Reset final text tracking for the new turn
-                ctx.final_turn_idx = action.turn_idx
-                ctx.final_turn_id = action.turn_id
-                ctx.final_text_content = ""
-            if action.turn_type == "tool_use":
-                debug_log.debug(
-                    f"Tool use turn started: {action.tool_name}",
-                    session_id=session_id,
-                    category="stream",
-                )
-            elif action.turn_type == "tool_result":
-                debug_log.debug(
-                    f"Tool result turn started",
-                    session_id=session_id,
-                    category="stream",
-                )
-
-            # Emit turn started event for WebSocket clients (TaskStateService - old path)
-            if self._task_service is not None:
-                self._task_service.emit_turn_started(
-                    session_id=session_id,
-                    exchange_id=action.exchange_id,
-                    turn_index=action.turn_idx,
-                    role=action.role,
-                    turn_type=action.turn_type,
-                )
-            # Emit turn created event for WebSocket clients (SessionDataService - new path)
-            if self._session_data_service is not None:
-                self._session_data_service.emit_turn_created(
-                    session_id=session_id,
-                    turn_id=action.turn_id or str(action.turn_idx),
-                    role=action.role,
-                    order=action.turn_idx,
-                    exchange_id=action.exchange_id,
-                    content_block_type=action.turn_type or "text",
-                )
-
-        elif isinstance(action, InitAction):
-            # Update task with model info
-            get_stream_state().update_stream(
-                ctx.exchange_id,
-                model=action.model,
-                context_window=action.context_window,
-            )
-            if is_active:
-                status_bar.update_stats(
-                    model=action.model,
-                    context_window=action.context_window,
-                )
-
-        elif isinstance(action, ResultAction):
-            # Update task with actual token counts
-            get_stream_state().update_stream(
-                ctx.exchange_id,
-                input_tokens=action.input_tokens,
-                output_tokens=action.output_tokens,
-            )
-            if is_active:
-                # Get session from manager for cost tracking
-                session = self._manager._sessions.get(session_id)
-                if session:
-                    status_bar.update_stats(cost=session.total_cost)
-                # Update context tokens to show cumulative context for NEXT request
-                # (includes the response that was just added)
-                self._update_base_context_tokens()
-                self._update_context_tokens()
-
-        elif isinstance(action, ToolUseStartAction):
-            # Note: Tree node is created by TurnStartedAction (tool_use_turn_started event)
-            # This action only updates the chat log streaming widget
-
-            # Track tool count for task state
-            ctx.tool_count = getattr(ctx, 'tool_count', 0) + 1
-            get_stream_state().update_stream(
-                ctx.exchange_id,
-                status=StreamStatus.EXECUTING,
-                tool_name=action.tool_name,
-                tool_count=ctx.tool_count,
-            )
-
-            # Emit tool use started event for WebSocket clients
-            if self._task_service is not None:
-                # Get turn index for this tool use
-                tool_turn_idx = ctx.tool_turn_indices.get((action.tool_use_id, "tool_use"), ctx.assistant_turn_idx)
-                self._task_service.emit_tool_use_started(
-                    session_id=session_id,
-                    exchange_id=ctx.exchange_id,
-                    turn_index=tool_turn_idx,
-                    tool_use_id=action.tool_use_id,
-                    tool_name=action.tool_name,
-                    tool_index=action.tool_index,
-                )
-
-            if is_active:
-                # Add streaming tool widget
-                chat_log.add_streaming_tool_use(action.tool_name, action.tool_use_id)
-
-        elif isinstance(action, ToolInputDeltaAction):
-            # Note: Tree node is created by TurnStartedAction (tool_use_turn_started event)
-            # This action only updates the chat log streaming widget
-
-            # Emit tool input delta event for WebSocket clients
-            if self._task_service is not None:
-                self._task_service.emit_tool_input_delta(
-                    session_id=session_id,
-                    exchange_id=ctx.exchange_id,
-                    tool_use_id=action.tool_use_id,
-                    partial_json=action.partial_json,
-                )
-
-            if is_active:
-                # Update streaming tool widget
-                chat_log.update_streaming_tool(action.tool_use_id, action.partial_json)
-
-        elif isinstance(action, ToolUseCompleteAction):
-            # Finalize the tool_use turn with real content_block and token count
-            turn_idx = ctx.tool_turn_indices.get((action.tool_use_id, "tool_use"))
-            if turn_idx is not None:
-                content_block = ToolUseBlock(
-                    id=action.tool_use_id,
-                    name=action.tool_name,
-                    input=action.tool_input,
-                )
-                # content param not used for tool turns - label uses content_block
-                await context_tree.finish_turn(
-                    session_id, turn_idx, "", content_block, []
-                )
-
-            # Emit tool use event for WebSocket clients (input complete, ready for execution)
-            if self._task_service is not None:
-                tool_turn_idx = turn_idx if turn_idx is not None else ctx.assistant_turn_idx
-                self._task_service.emit_tool_use(
-                    session_id=session_id,
-                    exchange_id=ctx.exchange_id,
-                    turn_index=tool_turn_idx,
-                    tool_use_id=action.tool_use_id,
-                    tool_name=action.tool_name,
-                    tool_input=action.tool_input,
-                    tool_index=action.tool_index,
-                )
-
-            # Emit turn_finished for the tool_use turn to SessionDataService
-            if self._session_data_service is not None:
-                turn_id = ctx.tool_turn_ids.get((action.tool_use_id, "tool_use"), "")
-                # Format tool_use content as JSON for display
-                import json
-                tool_content = json.dumps({
-                    "tool": action.tool_name,
-                    "input": action.tool_input,
-                }, indent=2)
-                self._session_data_service.emit_turn_finished(
-                    session_id=session_id,
-                    turn_id=turn_id,
-                    final_content=tool_content,
-                    tokens=len(tool_content) // 4,
-                )
-
-            # Intercept propose_fork tool - show modal before execution
-            # Only handle balloons-tool calls (id starts with "balloons-"), not native CLI tools
-            if action.tool_name == "propose_fork" and is_active and action.tool_use_id.startswith("balloons-"):
-                proposal = parse_fork_proposal(action.tool_input)
-                if proposal:
-                    await self._handle_fork_proposal(
-                        proposal,
-                        action.tool_use_id,
-                        session_id,
-                        ctx,
-                    )
-                    # Don't show normal tool UI for propose_fork
-                    return
-
-            # Intercept propose_merge tool - show modal before execution
-            if action.tool_name == "propose_merge" and is_active and action.tool_use_id.startswith("balloons-"):
-                proposal = parse_merge_proposal(action.tool_input)
-                if proposal:
-                    await self._handle_merge_proposal(
-                        proposal,
-                        action.tool_use_id,
-                        session_id,
-                        ctx,
-                    )
-                    # Don't show normal tool UI for propose_merge
-                    return
-
-            # Intercept begin_streaming_todo tool - show confirmation modal
-            if action.tool_name == "begin_streaming_todo" and is_active and action.tool_use_id.startswith("balloons-"):
-                proposal = await parse_begin_streaming_todo_proposal(action.tool_input)
-                if proposal and proposal.resolved_todos:
-                    await self._handle_begin_streaming_todo(
-                        proposal,
-                        action.tool_use_id,
-                        session_id,
-                        ctx,
-                    )
-                    # Don't show normal tool UI for begin_streaming_todo
-                    return
-
-            # Track tool names for post-result actions (like slides refresh)
-            if action.tool_use_id.startswith("balloons-"):
-                ctx.tool_names[action.tool_use_id] = action.tool_name
-                debug_log.info(f"Tracking balloons tool: {action.tool_name} ({action.tool_use_id})", category="slides")
-
-            if is_active:
-                # Finish streaming tool widget with formatted content
-                tool_event = ToolUseEvent(
-                    tool_use_id=action.tool_use_id,
-                    tool_name=action.tool_name,
-                    tool_input=action.tool_input,
-                )
-                formatted = self._format_tool_use(tool_event)
-                if isinstance(formatted, tuple):
-                    tool_content, full_content = formatted
-                else:
-                    tool_content, full_content = formatted, None
-                chat_log.finish_streaming_tool(
-                    tool_use_id=action.tool_use_id,
-                    content=tool_content,
-                    full_content=full_content,
-                    tool_name=action.tool_name,
-                )
-
-        elif isinstance(action, ToolResultAction):
-            # Finalize the tool_result turn with real content_block and token count
-            turn_idx = ctx.tool_turn_indices.get((action.tool_use_id, "tool_result"))
-            if turn_idx is not None:
-                content_block = ToolResultBlock(
-                    tool_use_id=action.tool_use_id,
-                    content=action.result,
-                )
-                # Use truncated result as preview
-                preview = action.result[:100] if action.result else ""
-                await context_tree.finish_turn(
-                    session_id, turn_idx, preview, content_block, []
-                )
-
-            # Tool done, back to streaming
-            get_stream_state().update_stream(
-                ctx.exchange_id,
-                status=StreamStatus.STREAMING,
-                tool_name=None,
-            )
-
-            # Emit tool result event for WebSocket clients (TaskStateService - old path)
-            if self._task_service is not None:
-                tool_turn_idx = turn_idx if turn_idx is not None else ctx.assistant_turn_idx
-                tool_name = ctx.tool_names.get(action.tool_use_id, "")
-                self._task_service.emit_tool_result(
-                    session_id=session_id,
-                    exchange_id=ctx.exchange_id,
-                    turn_index=tool_turn_idx,
-                    tool_use_id=action.tool_use_id,
-                    tool_name=tool_name,
-                    result=action.result,
-                    is_error=False,  # ToolResultAction doesn't track errors separately
-                    tool_index=action.tool_index,
-                )
-            # Emit turn finished event for WebSocket clients (SessionDataService - new path)
-            if self._session_data_service is not None and turn_idx is not None:
-                approx_tokens = len(action.result) // 4 if action.result else 0
-                # Get turn_id from action, stored mapping, or fallback to turn_idx
-                turn_id = action.turn_id or ctx.tool_turn_ids.get((action.tool_use_id, "tool_result"), "") or str(turn_idx)
-                self._session_data_service.emit_turn_finished(
-                    session_id=session_id,
-                    turn_id=turn_id,
-                    final_content=action.result,
-                    tokens=approx_tokens,
-                )
-
-            # Refresh slides pane when create_slide tool completes
-            tool_name = ctx.tool_names.get(action.tool_use_id)
-            debug_log.debug(f"ToolResultAction: tool_use_id={action.tool_use_id}, tool_name={tool_name}, tool_names={ctx.tool_names}", category="slides")
-            if tool_name == "create_slide" and action.tool_use_id.startswith("balloons-"):
-                debug_log.info(f"create_slide tool completed, refreshing slides pane", category="slides")
-                if session_id == self._tree_state.get_current_session_id():
-                    # Use call_later to ensure refresh happens after session state settles
-                    self.call_later(self._refresh_slides_pane)
-
-            # Refresh goal tree when a goal mutation tool completes
-            if tool_name in GOAL_MUTATION_TOOLS and action.tool_use_id.startswith("balloons-"):
-                debug_log.info(f"Goal mutation tool {tool_name} completed, refreshing goal tree", category="goals")
-                self.call_later(lambda tn=tool_name, r=action.result: self._refresh_goal_tree_for_tool(tn, r))
-
-            if is_active:
-                # Display tool result widget
-                tool_result_event = ToolResultEvent(
-                    tool_use_id=action.tool_use_id,
-                    result=action.result,
-                )
-                formatted = self._format_tool_result(tool_result_event, session_id)
-                if isinstance(formatted, tuple):
-                    result_content, full_content = formatted
-                else:
-                    result_content, full_content = formatted, None
-                chat_log.add_tool_result(
-                    result_content,
-                    tool_use_id=action.tool_use_id, full_content=full_content
-                )
-
-        elif isinstance(action, DoneAction):
-            debug_log.info("Received done action, calling finalize", category="stream", session_id=session_id)
-            play_done_sound()
-
-            # Emit turn finished event for the final assistant turn
-            # ONLY emit if the final_turn_idx is valid and matches the current turn
-            # This prevents double-emitting for text turns that were already finished via TextFlushAction
-            if self._task_service is not None and ctx.final_turn_idx >= 0:
-                # Only emit if the final turn is a text turn that wasn't already flushed
-                self._task_service.emit_turn_finished(
-                    session_id=session_id,
-                    exchange_id=ctx.exchange_id,
-                    turn_index=ctx.final_turn_idx,
-                    role="assistant",
-                    content=ctx.final_text_content,
-                )
-            # Emit turn finished event for WebSocket clients (SessionDataService - new path)
-            if self._session_data_service is not None and ctx.final_turn_idx >= 0:
-                approx_tokens = len(ctx.final_text_content) // 4
-                self._session_data_service.emit_turn_finished(
-                    session_id=session_id,
-                    turn_id=ctx.final_turn_id or str(ctx.final_turn_idx),
-                    final_content=ctx.final_text_content,
-                    tokens=approx_tokens,
-                )
-
-            await self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar)
-
-        elif isinstance(action, ErrorAction):
-            debug_log.error(action.error, session_id=session_id, category="stream")
-            play_error_sound()
-            if is_active:
-                chat_log.append_to_current(f"\n\n[Error: {action.error}]")
-            await self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar, error=action.error)
-
-        elif isinstance(action, RateLimitAction):
-            play_error_sound()
-            if is_active:
-                chat_log.append_to_current(f"\n\n[Rate Limit] {action.message}")
-            await self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar, error=action.message)
-
-        elif isinstance(action, CancelledAction):
-            await self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar, cancelled=True)
-
-        elif isinstance(action, InputRequiredAction):
-            play_notification_sound()
-            if is_active:
-                chat_log.append_to_current("\n\n[Claude is asking a question - session ended]")
-                self.notify("Claude asked a question (not supported)", severity="warning")
-            await self._finalize_streaming(session_id, ctx, chat_log, context_tree, status_bar)
-
-    def _dispatch_helper_event(
-        self,
-        helper_id: str,
-        event: StreamEvent,
-        ctx: StreamingContext,
-        chat_log: ChatLogView,
-        status_bar: StatusBar,
-    ) -> None:
-        """Dispatch a helper event (context compression, merge summary).
-
-        Uses StreamingCoordinator to convert events to actions, then handles
-        the actions with UI-specific code.
-        """
-        # Log events for debugging
-        if event.event_type == "text":
-            debug_event(f"helper text: helper={helper_id[:8]} len={len(event.data)}")
-        elif event.event_type in ("done", "error", "cancelled"):
-            debug_event(f"helper {event.event_type}: helper={helper_id[:8]}")
-
-        # Get action from coordinator (also updates ctx state)
-        action = self._streaming_coordinator.dispatch_helper_event(event, ctx)
-
-        # Handle action based on type
-        if isinstance(action, TextAction):
-            if ctx.is_active:
-                chat_log.append_to_current(action.text)
-
-        elif isinstance(action, HelperDoneAction):
-            self._finalize_helper(
-                helper_id, ctx, chat_log, status_bar,
-                error=action.error, cancelled=action.cancelled
-            )
+    # NOTE: _dispatch_helper_event was removed in Phase 6.
+    # Helper events are now dispatched via the observer pattern:
+    # - SessionManagerService polls helper runners and emits events
+    # - BalloonsApp.on_helper_delta() handles text deltas
+    # - BalloonsApp.on_helper_done() handles completion
+    # - BalloonsApp.on_helper_error() handles errors
 
     def _finalize_helper(
         self,
@@ -2646,25 +2498,9 @@ class BalloonsApp(App):
         # Generate assistant turn ID for tracking (will be used for streaming events)
         assistant_turn_id = str(uuid.uuid4())
 
-        # Emit user turn events to SessionDataService (for streaming view)
-        if self._session_data_service is not None:
-            # User turn is complete immediately (no streaming)
-            self._session_data_service.emit_turn_created(
-                session_id=self.session.id,
-                turn_id=user_turn.id,
-                role="user",
-                order=turn_idx,
-                exchange_id=exchange_id,
-                content_block_type="text",
-            )
-            self._session_data_service.emit_turn_finished(
-                session_id=self.session.id,
-                turn_id=user_turn.id,
-                final_content=prompt,
-                tokens=0,  # User turns don't have token counts
-            )
-            # Note: Don't pre-create assistant turn - it will be created when
-            # TurnStartedAction arrives from the runner with the actual turn_id
+        # Note: User turn events are emitted by SessionManagerService via the observer
+        # pattern when it polls the session. The service creates turn events for both
+        # web-initiated streams (submit_message) and TUI-initiated streams (poll_all).
 
         # Create streaming context for this session
         ctx = StreamingContext(
@@ -3083,12 +2919,10 @@ class BalloonsApp(App):
             )
             return
 
-        # Create helper runner for background summary generation
+        # Create helper for background summary generation
         helper_id = f"link-{uuid.uuid4().hex[:8]}"
-        helper_runner = HelperRunner(helper_id, runner=create_runner(self._backend_config))
-        self._helper_runners[helper_id] = helper_runner
 
-        # Create streaming context with link data
+        # Create streaming context with link data (TUI state)
         ctx = StreamingContext(
             session_id=helper_id,
             user_turn_idx=-1,
@@ -3116,8 +2950,13 @@ class BalloonsApp(App):
         chat_log.add_user_message(f"[Generating summary for '{session_name}'...]")
         chat_log.add_assistant_message()
 
-        # Start background streaming
-        helper_runner.start_background(summary_prompt)
+        # Start helper via service (uses session's backend)
+        self._session_service.start_helper(
+            helper_id=helper_id,
+            helper_type="link",
+            prompt=summary_prompt,
+            session_id=first_session_id,
+        )
 
     def _start_next_link_summary_or_complete(
         self,
@@ -3176,12 +3015,10 @@ class BalloonsApp(App):
             )
             return
 
-        # Create helper runner
+        # Create helper for summary generation
         helper_id = f"link-{uuid.uuid4().hex[:8]}"
-        helper_runner = HelperRunner(helper_id, runner=create_runner(self._backend_config))
-        self._helper_runners[helper_id] = helper_runner
 
-        # Create streaming context
+        # Create streaming context (TUI state)
         ctx = StreamingContext(
             session_id=helper_id,
             user_turn_idx=-1,
@@ -3205,7 +3042,13 @@ class BalloonsApp(App):
         chat_log.add_user_message(f"[Generating summary for '{session_name}'...]")
         chat_log.add_assistant_message()
 
-        helper_runner.start_background(summary_prompt)
+        # Start helper via service (uses session's backend)
+        self._session_service.start_helper(
+            helper_id=helper_id,
+            helper_type="link",
+            prompt=summary_prompt,
+            session_id=session_id,
+        )
 
     def _complete_link_operation(
         self,
@@ -3298,12 +3141,10 @@ class BalloonsApp(App):
         # Build the summary prompt (non-blocking)
         summary_prompt = self._summarizer.build_archive_summary_prompt(turns_to_archive, hint)
 
-        # Create helper runner for background summary generation
+        # Create helper for background summary generation
         helper_id = f"archive-{uuid.uuid4().hex[:8]}"
-        helper_runner = HelperRunner(helper_id, runner=create_runner(self._backend_config))
-        self._helper_runners[helper_id] = helper_runner
 
-        # Create streaming context with archive data
+        # Create streaming context with archive data (TUI state)
         ctx = StreamingContext(
             session_id=helper_id,
             user_turn_idx=-1,
@@ -3330,8 +3171,13 @@ class BalloonsApp(App):
         chat_log.add_user_message("[Generating archive summary...]")
         chat_log.add_assistant_message()
 
-        # Start background streaming
-        helper_runner.start_background(summary_prompt)
+        # Start helper via service (uses session's backend)
+        self._session_service.start_helper(
+            helper_id=helper_id,
+            helper_type="archive",
+            prompt=summary_prompt,
+            session_id=self.session.id,
+        )
 
     async def _archive_turns_from_tree(self, session_id: str, turn_indices: list[int]) -> None:
         """Archive turns requested from tree view (ctrl+shift+click or x key).
@@ -3368,12 +3214,10 @@ class BalloonsApp(App):
         # Build the summary prompt (non-blocking)
         summary_prompt = self._summarizer.build_archive_summary_prompt(turns_to_archive, "")
 
-        # Create helper runner for background summary generation
+        # Create helper for background summary generation
         helper_id = f"archive-tree-{uuid.uuid4().hex[:8]}"
-        helper_runner = HelperRunner(helper_id, runner=create_runner(self._backend_config))
-        self._helper_runners[helper_id] = helper_runner
 
-        # Create streaming context with archive data
+        # Create streaming context with archive data (TUI state)
         ctx = StreamingContext(
             session_id=helper_id,
             user_turn_idx=-1,
@@ -3400,8 +3244,13 @@ class BalloonsApp(App):
         chat_log.add_user_message("[Generating archive summary...]")
         chat_log.add_assistant_message()
 
-        # Start background streaming
-        helper_runner.start_background(summary_prompt)
+        # Start helper via service (uses session's backend)
+        self._session_service.start_helper(
+            helper_id=helper_id,
+            helper_type="archive",
+            prompt=summary_prompt,
+            session_id=self.session.id,
+        )
 
     async def _handle_rehydrate_command(self) -> None:
         """Rehydrate selected archive marker back to original turns."""
@@ -3580,8 +3429,11 @@ class BalloonsApp(App):
             self.query_one("#status-bar", StatusBar).set_status("")
 
         # Cancel any streaming (main runner)
-        if self.streaming and self._session_runner and self._session_runner.is_streaming:
+        if self._session_runner and self._session_runner.is_streaming:
             self._session_runner.cancel()
+            # The runner will emit a "cancelled" event which triggers on_stream_error,
+            # but also clear UI state immediately for responsiveness
+            self._clear_streaming_ui()
 
         # Cancel helper runner (used for context summaries, etc.)
         if self._helper_runner.is_running:
@@ -3591,6 +3443,27 @@ class BalloonsApp(App):
         # Always focus the input box
         input_box = self.query_one("#input-box", InputBox)
         input_box.focus()
+
+    def _clear_streaming_ui(self) -> None:
+        """Clear streaming UI state immediately (called on cancel)."""
+        try:
+            input_box = self.query_one("#input-box", InputBox)
+            status_bar = self.query_one("#status-bar", StatusBar)
+            chat_log = self.query_one("#chat-log", ChatLogView)
+            context_tree = self.query_one("#context-tree", ContextTreeView)
+
+            input_box.set_streaming_mode(False)
+            status_bar.set_streaming(False)
+            self.streaming = False
+            chat_log.finish_current_message()
+
+            # Update tree state for active session
+            if self.session:
+                context_tree.set_session_streaming(self.session.id, False)
+                self._tree_state.stop_streaming(self.session.id)
+                self._update_streaming_count()
+        except Exception as e:
+            debug_log.error(f"Failed to clear streaming UI: {e}", category="stream")
 
     async def _handle_copy_turns(self) -> None:
         """Copy selected turns to a new session."""
@@ -4489,10 +4362,8 @@ class BalloonsApp(App):
                 category="fork",
                 details={"helper_id": result.helper_id},
             )
-            helper_runner = HelperRunner(result.helper_id, runner=create_runner(self._backend_config))
-            self._helper_runners[result.helper_id] = helper_runner
 
-            # Create streaming context for the helper
+            # Create streaming context for the helper (TUI state)
             ctx = StreamingContext(
                 session_id=result.helper_id,
                 user_turn_idx=-1,
@@ -4517,7 +4388,13 @@ class BalloonsApp(App):
                 details={"helper_id": result.helper_id},
             )
 
-            helper_runner.start_background(result.compression_prompt)
+            # Start helper via service (uses session's backend)
+            self._session_service.start_helper(
+                helper_id=result.helper_id,
+                helper_type="compress",
+                prompt=result.compression_prompt,
+                session_id=self.session.id,
+            )
 
     async def _complete_fork_ui(self, result: ForkResult, chat_log: ChatLogView, context_tree: ContextTreeView, status_bar: StatusBar) -> None:
         """Complete fork UI updates after business logic is done.
@@ -4732,12 +4609,10 @@ class BalloonsApp(App):
         # Build the summary prompt (non-blocking)
         summary_prompt = self._summarizer.build_merge_summary_prompt(self.session, prompt)
 
-        # Create helper runner for background summary generation
+        # Create helper for background summary generation
         helper_id = f"merge-{uuid.uuid4().hex[:8]}"
-        helper_runner = HelperRunner(helper_id, runner=create_runner(self._backend_config))
-        self._helper_runners[helper_id] = helper_runner
 
-        # Create streaming context with merge data
+        # Create streaming context with merge data (TUI state)
         ctx = StreamingContext(
             session_id=helper_id,
             user_turn_idx=-1,
@@ -4761,8 +4636,13 @@ class BalloonsApp(App):
         chat_log.add_user_message("[Generating merge summary...]")
         chat_log.add_assistant_message()
 
-        # Start background streaming
-        helper_runner.start_background(summary_prompt)
+        # Start helper via service (uses session's backend)
+        self._session_service.start_helper(
+            helper_id=helper_id,
+            helper_type="merge",
+            prompt=summary_prompt,
+            session_id=self.session.id,
+        )
 
     async def _handle_derive_command(self, prompt: str) -> None:
         """Create a new independent session with selected context.
@@ -4799,9 +4679,6 @@ class BalloonsApp(App):
             await self._complete_derive_ui(result, chat_log, context_tree)
         else:
             # Compression needed - start helper streaming
-            helper_runner = HelperRunner(result.helper_id, runner=create_runner(self._backend_config))
-            self._helper_runners[result.helper_id] = helper_runner
-
             ctx = StreamingContext(
                 session_id=result.helper_id,
                 user_turn_idx=-1,
@@ -4820,7 +4697,13 @@ class BalloonsApp(App):
             chat_log.add_user_message("[Compressing context for new session...]")
             chat_log.add_assistant_message()
 
-            helper_runner.start_background(result.compression_prompt)
+            # Start helper via service (uses session's backend)
+            self._session_service.start_helper(
+                helper_id=result.helper_id,
+                helper_type="derive",
+                prompt=result.compression_prompt,
+                session_id=self.session.id if self.session else None,
+            )
 
     async def _complete_derive_ui(self, result: DeriveResult, chat_log: ChatLogView, context_tree: ContextTreeView) -> None:
         """Complete derive UI updates after business logic is done."""
@@ -4944,12 +4827,10 @@ class BalloonsApp(App):
         # Build the summary prompt (non-blocking)
         summary_prompt = self._summarizer.build_return_summary_prompt(selected_messages, return_prompt)
 
-        # Create helper runner for background summary generation
+        # Create helper for background summary generation
         helper_id = f"return-{uuid.uuid4().hex[:8]}"
-        helper_runner = HelperRunner(helper_id, runner=create_runner(self._backend_config))
-        self._helper_runners[helper_id] = helper_runner
 
-        # Create streaming context with return data
+        # Create streaming context with return data (TUI state)
         ctx = StreamingContext(
             session_id=helper_id,
             user_turn_idx=-1,
@@ -4973,8 +4854,13 @@ class BalloonsApp(App):
         chat_log.add_user_message("[Generating return summary...]")
         chat_log.add_assistant_message()
 
-        # Start background streaming
-        helper_runner.start_background(summary_prompt)
+        # Start helper via service (uses session's backend)
+        self._session_service.start_helper(
+            helper_id=helper_id,
+            helper_type="return",
+            prompt=summary_prompt,
+            session_id=self.session.id,
+        )
 
     async def _generate_return_summary(self, messages: list, return_prompt: str) -> str:
         """Generate a summary of selected messages using Claude."""
@@ -8183,7 +8069,7 @@ class BalloonsApp(App):
         """Quit the application."""
         # Cancel all streaming sessions
         self._manager.cancel_all()
-        # Stop polling timer
-        if self._poll_timer:
-            self._poll_timer.stop()
+        # Stop event pump
+        if self._session_service:
+            self._session_service.stop_event_pump()
         self.exit()

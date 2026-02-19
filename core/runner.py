@@ -499,6 +499,8 @@ class SessionRunner:
             self._background_task.cancel()
         self._runner.terminate()
         self._status = RunnerStatus.CANCELLED
+        # Put cancelled event directly - the async task may not complete to emit it
+        self._event_queue.put_nowait(self._make_event("cancelled", None))
 
     def _reset_state(self) -> None:
         """Reset accumulation state for a new stream."""
@@ -724,6 +726,14 @@ class SessionRunner:
 
             elif isinstance(event, ToolUseEvent):
                 # Tool input complete - create the block and turn
+                debug_log.info(
+                    f"_process_event: ToolUseEvent received",
+                    category="stream",
+                    details={
+                        "tool_use_id": event.tool_use_id[:20] if event.tool_use_id else "",
+                        "tool_name": event.tool_name,
+                    },
+                )
                 tool_block = ToolUseBlock(
                     id=event.tool_use_id,
                     name=event.tool_name,
@@ -1047,3 +1057,5 @@ class HelperRunner:
             self._background_task.cancel()
         self._runner.terminate()
         self._status = RunnerStatus.CANCELLED
+        # Put cancelled event directly - the async task may not complete to emit it
+        self._event_queue.put_nowait(self._make_event("cancelled", None))

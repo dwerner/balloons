@@ -374,7 +374,9 @@ class ClaudeRunner(BaseRunner):
         content = []
 
         # Build conversation history as text blocks
+        # Collect images from history to add as proper content blocks
         history_parts = []
+        history_images = []
         for msg in messages:
             if msg.context_mode == ContextMode.DROP:
                 continue
@@ -413,12 +415,8 @@ class ClaudeRunner(BaseRunner):
                     if isinstance(block, TextBlock) and block.text:
                         block_texts.append(block.text)
                     elif isinstance(block, ImageBlock):
-                        # Images in history are represented as placeholders
-                        # (Claude can't see past images, only current ones)
-                        img_info = f"[Image: {block.filename or 'image'}]"
-                        if block.width and block.height:
-                            img_info = f"[Image: {block.filename or 'image'} ({block.width}x{block.height})]"
-                        block_texts.append(img_info)
+                        # Collect images to add as proper content blocks after history
+                        history_images.append(block)
                     elif isinstance(block, ToolUseBlock):
                         tool_info = f"<tool_use name=\"{block.name}\" id=\"{block.id}\">\n{json.dumps(block.input, indent=2)}\n</tool_use>"
                         block_texts.append(tool_info)
@@ -454,25 +452,36 @@ class ClaudeRunner(BaseRunner):
             history_text = "<conversation_history>\n" + "\n\n".join(history_parts) + "\n</conversation_history>"
             content.append({"type": "text", "text": history_text})
 
-        # Add images for the current message (Claude can see these)
+        # Add images from history as proper content blocks (Anthropic URL format)
+        for img_block in history_images:
+            content.append({
+                "type": "image",
+                "source": {
+                    "type": "url",
+                    "url": f"file://{img_block.file_path}",
+                }
+            })
+            debug_log.info(
+                f"Added image from history: {img_block.file_path}",
+                category="image",
+                run_id=self._run_id,
+            )
+
+        # Add images for the current message (Anthropic URL format)
         if images:
             for img_block in images:
-                img_data = self._load_image_as_base64(img_block.file_path)
-                if img_data:
-                    b64_data, media_type = img_data
-                    content.append({
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": b64_data,
-                        }
-                    })
-                    debug_log.info(
-                        f"Added image to message: {img_block.filename}",
-                        category="image",
-                        run_id=self._run_id,
-                    )
+                content.append({
+                    "type": "image",
+                    "source": {
+                        "type": "url",
+                        "url": f"file://{img_block.file_path}",
+                    }
+                })
+                debug_log.info(
+                    f"Added image for current message: {img_block.file_path}",
+                    category="image",
+                    run_id=self._run_id,
+                )
 
         # Add the new prompt
         content.append({"type": "text", "text": new_prompt})

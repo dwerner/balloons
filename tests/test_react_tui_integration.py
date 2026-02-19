@@ -22,13 +22,30 @@ class MockSession:
         self.id = session_id
         self.turns = []
         self.title = "Test Session"
+        self.created = "2024-01-01T00:00:00"
+        self.last_modified = "2024-01-01T00:00:00"
+        self.model = "claude-3-opus"
+        self.parent_id = None
+        self.children = []
+        self.fork_name = None
+        self.fork_status = None
+        self.backend_name = None
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_cost = 0.0
+        self.cached_context_tokens = 0
+        self.context_window = 200000
 
     def add_message(self, role, content, content_blocks=None, exchange_id=None):
-        self.turns.append({
-            "role": role,
-            "content": content,
-            "exchange_id": exchange_id,
-        })
+        # Create a mock turn object with required attributes
+        turn = MagicMock()
+        turn.id = f"turn-{len(self.turns)}"
+        turn.role = role
+        turn.content = content
+        turn.exchange_id = exchange_id
+        turn.content_block = None
+        self.turns.append(turn)
+        return turn  # Return the turn like the real Session does
 
     async def save(self):
         pass

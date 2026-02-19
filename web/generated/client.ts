@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-17T16:45:40.100880
+// Generated: 2026-02-18T17:53:22.059356
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -818,15 +818,17 @@ export interface SessionManagerService {
    * The message is added to the session and streaming begins immediately
    * (unless queue=True, in which case it waits for current stream to finish).
    * 
-   * After calling this method, listen for streaming events on TaskStateService:
-   * - onContentDelta: Streaming text chunks
-   * - onToolUseStarted: Tool execution beginning
-   * - onToolResult: Tool execution completed
-   * - onTurnFinished: Exchange completed
+   * After calling this method, listen for streaming events via the observer pattern:
+   * - on_turn_delta: Streaming text chunks
+   * - on_tool_use_started: Tool execution beginning
+   * - on_tool_result: Tool execution completed
+   * - on_turn_finished: Exchange completed
    * 
    * Args:
    * session_id: ID of the session to submit to
    * content: The message content (user prompt)
+   * messages: Context messages to include. If None, uses all session turns.
+   * This allows frontends to curate which context is sent to the LLM.
    * queue: If True, queue the message instead of starting immediately.
    * If False and session is already streaming, returns error.
    * allowed_tools: List of tool names to allow, or None for all tools
@@ -837,7 +839,7 @@ export interface SessionManagerService {
    * Raises:
    * ValueError: If session not found or already streaming (when queue=False)
    */
-  submitMessage(sessionId: string, content: string, queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult>;
+  submitMessage(sessionId: string, content: string, messages?: unknown[] | null, queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult>;
 
   /**
    * Submit a message with image attachments to a session.
@@ -998,8 +1000,8 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.call('listSessions', {  });
   }
 
-  async submitMessage(sessionId: string, content: string, queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult> {
-    return this.call('submitMessage', { sessionId: sessionId, content: content, queue: queue, allowedTools: allowedTools });
+  async submitMessage(sessionId: string, content: string, messages?: unknown[] | null, queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult> {
+    return this.call('submitMessage', { sessionId: sessionId, content: content, messages: messages, queue: queue, allowedTools: allowedTools });
   }
 
   async submitMessageWithImages(sessionId: string, content: string, images: Record<string, unknown>[], queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult> {
@@ -2312,6 +2314,41 @@ export interface SessionDataService {
 
 export interface SessionDataEvents {
   /**
+   * Emitted when streaming completes successfully.
+   */
+  sessionDataStreamDone(callback: (data: Types.SessionStreamDoneEvent) => void): Unsubscribe;
+
+  /**
+   * Emitted when streaming fails or is cancelled.
+   */
+  sessionDataStreamError(callback: (data: Types.SessionStreamErrorEvent) => void): Unsubscribe;
+
+  /**
+   * Emitted when streaming starts for a session.
+   */
+  sessionDataStreamStarted(callback: (data: Types.SessionStreamStartedEvent) => void): Unsubscribe;
+
+  /**
+   * Emitted while tool input JSON streams in.
+   */
+  sessionDataToolInputDelta(callback: (data: Types.SessionToolInputDeltaEvent) => void): Unsubscribe;
+
+  /**
+   * Emitted when a tool finishes execution.
+   */
+  sessionDataToolResult(callback: (data: Types.SessionToolResultEvent) => void): Unsubscribe;
+
+  /**
+   * Emitted when tool input is complete and execution begins.
+   */
+  sessionDataToolUse(callback: (data: Types.SessionToolUseEvent) => void): Unsubscribe;
+
+  /**
+   * Emitted when a tool begins execution.
+   */
+  sessionDataToolUseStarted(callback: (data: Types.SessionToolUseStartedEvent) => void): Unsubscribe;
+
+  /**
    * Emitted when a new turn is created in a subscribed session.
    * 
    * Clients should create UI elements for the new turn.
@@ -2399,6 +2436,34 @@ export class SessionDataServiceClient implements SessionDataService {
 
   async unsubscribeSession(sessionId: string, clientId?: string): Promise<Types.SubscriptionResult> {
     return this.call('unsubscribeSession', { sessionId: sessionId, clientId: clientId });
+  }
+
+  sessionDataStreamDone(callback: (data: Types.SessionStreamDoneEvent) => void): Unsubscribe {
+    return this.subscribe('sessionDataStreamDone', callback);
+  }
+
+  sessionDataStreamError(callback: (data: Types.SessionStreamErrorEvent) => void): Unsubscribe {
+    return this.subscribe('sessionDataStreamError', callback);
+  }
+
+  sessionDataStreamStarted(callback: (data: Types.SessionStreamStartedEvent) => void): Unsubscribe {
+    return this.subscribe('sessionDataStreamStarted', callback);
+  }
+
+  sessionDataToolInputDelta(callback: (data: Types.SessionToolInputDeltaEvent) => void): Unsubscribe {
+    return this.subscribe('sessionDataToolInputDelta', callback);
+  }
+
+  sessionDataToolResult(callback: (data: Types.SessionToolResultEvent) => void): Unsubscribe {
+    return this.subscribe('sessionDataToolResult', callback);
+  }
+
+  sessionDataToolUse(callback: (data: Types.SessionToolUseEvent) => void): Unsubscribe {
+    return this.subscribe('sessionDataToolUse', callback);
+  }
+
+  sessionDataToolUseStarted(callback: (data: Types.SessionToolUseStartedEvent) => void): Unsubscribe {
+    return this.subscribe('sessionDataToolUseStarted', callback);
   }
 
   sessionDataTurnCreated(callback: (data: Types.SessionTurnCreatedEvent) => void): Unsubscribe {
