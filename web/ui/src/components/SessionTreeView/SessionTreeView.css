@@ -157,6 +157,54 @@
   color: #c084fc;
 }
 
+.tree-node__badge--pin {
+  font-size: 11px;
+}
+
+/* ===== Pin toggle ===== */
+.tree-node__pin-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  margin-left: auto;
+  padding-left: 8px;
+}
+
+.tree-node__content:hover .tree-node__pin-toggle {
+  opacity: 0.5;
+}
+
+.tree-node__pin-toggle:hover {
+  opacity: 1 !important;
+}
+
+.tree-pin {
+  cursor: pointer;
+  color: #888;
+  transition: color 0.15s ease, transform 0.15s ease;
+}
+
+.tree-pin:hover {
+  color: #facc15;
+  transform: scale(1.1);
+}
+
+.tree-pin--active {
+  color: #facc15;
+}
+
+/* Pinned session styling */
+.tree-node--pinned > .tree-node__content {
+  background: rgba(250, 204, 21, 0.05);
+}
+
+.tree-node--pinned > .tree-node__content .tree-node__pin-toggle {
+  opacity: 1;
+}
+
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }

@@ -1660,9 +1660,10 @@ class UserPrefs:
     """User preferences for UI state and settings.
 
     Mirrors the Rust UserPrefs type. Used to store persistent UI state
-    like which tree nodes are collapsed.
+    like which tree nodes are collapsed and which sessions are pinned.
     """
     goal_tree_collapsed_ids: list[str] = field(default_factory=list)
+    pinned_session_ids: list[str] = field(default_factory=list)
 
 
 class UserPrefsStorage:
@@ -1711,6 +1712,7 @@ class UserPrefsStorage:
         data = json.loads(json_data)
         return UserPrefs(
             goal_tree_collapsed_ids=data.get("goal_tree_collapsed_ids", []),
+            pinned_session_ids=data.get("pinned_session_ids", []),
         )
 
     async def save_prefs(self, prefs: UserPrefs) -> None:
@@ -1721,6 +1723,7 @@ class UserPrefsStorage:
         """
         data = {
             "goal_tree_collapsed_ids": prefs.goal_tree_collapsed_ids,
+            "pinned_session_ids": prefs.pinned_session_ids,
         }
         json_data = json.dumps(data)
         await self._run_sync(self._storage.save_user_prefs, json_data)

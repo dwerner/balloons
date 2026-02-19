@@ -255,6 +255,7 @@ class SessionLabelRenderer:
         spinner_frame: int = 0,
         is_streaming: bool = False,
         unviewed_count: int = 0,
+        is_pinned: bool = False,
     ) -> str:
         """Render a session label.
 
@@ -264,6 +265,7 @@ class SessionLabelRenderer:
             spinner_frame: Current frame of spinner animation (0-9)
             is_streaming: Whether the session is currently streaming
             unviewed_count: Number of unviewed turns in this session
+            is_pinned: Whether this session is pinned
 
         Returns:
             Rich markup string for the session label
@@ -285,6 +287,9 @@ class SessionLabelRenderer:
                 not session_data.backend_name and "claude" in (session_data.model or "").lower()
             ):
                 session_tokens += CLAUDE_SYSTEM_OVERHEAD
+
+        # Pin indicator
+        pin_indicator = "[yellow]📌[/] " if is_pinned else ""
 
         # Fork status indicator
         is_fork = session_data.parent_id is not None
@@ -340,9 +345,9 @@ class SessionLabelRenderer:
 
         # Build the label
         if name_part:
-            label = f"{model_indicator}{id_prefix}{name_part} {stats}{unviewed_indicator} {status}"
+            label = f"{pin_indicator}{model_indicator}{id_prefix}{name_part} {stats}{unviewed_indicator} {status}"
         else:
-            label = f"{model_indicator}{id_prefix}{date_str} {stats}{unviewed_indicator} {status}"
+            label = f"{pin_indicator}{model_indicator}{id_prefix}{date_str} {stats}{unviewed_indicator} {status}"
 
         # Highlight active session
         if is_active:

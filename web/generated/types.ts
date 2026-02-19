@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-19T10:51:59.603336
+// Generated: 2026-02-19T11:22:28.806453
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -185,6 +185,7 @@ export interface SessionInfo {
   contextWindow?: number;
   bindingIndicator?: string;
   backendName?: string;
+  isPinned?: boolean;
 }
 
 export interface TurnImageInfo {

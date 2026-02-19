@@ -1437,6 +1437,22 @@ export function App() {
     };
   }, [connectionState, selectedSessionId]);
 
+  // Toggle pin status for a session
+  const handleTogglePin = useCallback(async (sessionId: string) => {
+    const client = clientRef.current;
+    if (!client || connectionState !== 'connected') return;
+
+    try {
+      const isPinned = await client.tree.togglePin(sessionId);
+      // Update local state immediately for responsive UI
+      setSessions(prev => prev.map(s =>
+        s.id === sessionId ? { ...s, isPinned } : s
+      ));
+    } catch (err) {
+      console.error('Failed to toggle pin:', err);
+    }
+  }, [connectionState]);
+
   // Select a session
   // Note: We clear state BEFORE setting the new session ID to prevent race conditions
   // where streaming events for the old session could pollute the new session's state.
@@ -1734,6 +1750,7 @@ export function App() {
           turns={turns}
           streamingTask={streamingTask}
           onSelectSession={handleSelectSession}
+          onTogglePin={handleTogglePin}
           isLoadingTurns={isLoadingTurns}
           goalsClient={connectionState === 'connected' ? clientRef.current?.goals : undefined}
           onOpenCreateTodoModal={(planId, planTitle) => {
@@ -2109,6 +2126,7 @@ interface SidebarContentProps {
   turns: TurnInfo[];
   streamingTask: TaskInfo | null;
   onSelectSession: (sessionId: string) => void;
+  onTogglePin?: (sessionId: string) => void;
   isLoadingTurns?: boolean;
   goalsClient?: GoalTreeStateServiceClient;
   onOpenCreateTodoModal?: (planId: string, planTitle: string) => void;
@@ -2124,6 +2142,7 @@ function SidebarContent({
   turns,
   streamingTask,
   onSelectSession,
+  onTogglePin,
   isLoadingTurns = false,
   goalsClient,
   onOpenCreateTodoModal,
@@ -2314,6 +2333,7 @@ function SidebarContent({
           selectedSessionId={selectedSessionId}
           turns={turns}
           onSelectSession={handleSelectSession}
+          onTogglePin={onTogglePin}
           isLoading={isLoadingTurns}
         />
       ) : (

@@ -150,6 +150,10 @@ class TreeEvent(Enum):
 
     SESSION_HISTORY_CHANGED = "session_history_changed"
 
+    SESSION_PINNED = "session_pinned"
+    SESSION_UNPINNED = "session_unpinned"
+    PINNED_SESSIONS_CHANGED = "pinned_sessions_changed"
+
 
 # Type alias for observer callbacks
 ObserverCallback = Callable[[TreeEvent, dict[str, Any]], None]
@@ -187,6 +191,9 @@ class TreeState:
 
         # Sessions currently streaming
         self._streaming_sessions: set[str] = set()
+
+        # Pinned sessions (appear at top of lists/trees)
+        self._pinned_sessions: set[str] = set()
 
         # Session color assignments for visual distinction
         self._session_colors: dict[str, str] = {}
@@ -443,6 +450,82 @@ class TreeState:
             color_idx = len(self._session_colors) % len(self._color_palette)
             self._session_colors[session_id] = self._color_palette[color_idx]
         return self._session_colors[session_id]
+
+    # --- Session Pinning ---
+
+    def pin_session(self, session_id: str) -> bool:
+        """Pin a session to appear at top of lists.
+
+        Args:
+            session_id: The session to pin
+
+        Returns:
+            True if newly pinned, False if already pinned or session doesn't exist
+        """
+        if session_id not in self._sessions:
+            return False
+        if session_id in self._pinned_sessions:
+            return False
+
+        self._pinned_sessions.add(session_id)
+        self._notify(TreeEvent.SESSION_PINNED, {"session_id": session_id})
+        self._notify(TreeEvent.PINNED_SESSIONS_CHANGED, {
+            "pinned_session_ids": list(self._pinned_sessions),
+        })
+        return True
+
+    def unpin_session(self, session_id: str) -> bool:
+        """Unpin a session.
+
+        Args:
+            session_id: The session to unpin
+
+        Returns:
+            True if unpinned, False if wasn't pinned
+        """
+        if session_id not in self._pinned_sessions:
+            return False
+
+        self._pinned_sessions.discard(session_id)
+        self._notify(TreeEvent.SESSION_UNPINNED, {"session_id": session_id})
+        self._notify(TreeEvent.PINNED_SESSIONS_CHANGED, {
+            "pinned_session_ids": list(self._pinned_sessions),
+        })
+        return True
+
+    def toggle_pin(self, session_id: str) -> bool:
+        """Toggle pin state for a session.
+
+        Args:
+            session_id: The session to toggle
+
+        Returns:
+            True if now pinned, False if now unpinned
+        """
+        if session_id in self._pinned_sessions:
+            self.unpin_session(session_id)
+            return False
+        else:
+            self.pin_session(session_id)
+            return True
+
+    def is_pinned(self, session_id: str) -> bool:
+        """Check if a session is pinned."""
+        return session_id in self._pinned_sessions
+
+    def get_pinned_sessions(self) -> set[str]:
+        """Get all pinned session IDs."""
+        return self._pinned_sessions.copy()
+
+    def set_pinned_sessions(self, session_ids: list[str]) -> None:
+        """Set the pinned sessions from persistent storage.
+
+        Call this on startup to restore pinned sessions from storage.
+
+        Args:
+            session_ids: List of session IDs that should be pinned
+        """
+        self._pinned_sessions = set(session_ids)
 
     # --- Session Loading ---
 
@@ -1057,7 +1140,7 @@ class TreeState:
 
     # --- Bulk Operations ---
 
-    def clear(self, preserve_streaming: bool = True, preserve_history: bool = True) -> None:
+    def clear(self, preserve_streaming: bool = True, preserve_history: bool = True, preserve_pinned: bool = True) -> None:
         """Clear all state.
 
         Args:
@@ -1067,6 +1150,8 @@ class TreeState:
                 load_all_sessions() calls.
             preserve_history: If True (default), session history is preserved across
                 reloads so users can navigate back to recently viewed sessions.
+            preserve_pinned: If True (default), pinned sessions are preserved across
+                reloads so users don't lose their pinned sessions.
         """
         self._sessions.clear()
         self._context_modes.clear()
@@ -1076,6 +1161,8 @@ class TreeState:
             self._streaming_sessions.clear()
         if not preserve_history:
             self._session_history.clear()
+        if not preserve_pinned:
+            self._pinned_sessions.clear()
         self._session_colors.clear()
         self._notify(TreeEvent.FULL_REBUILD, {})
 

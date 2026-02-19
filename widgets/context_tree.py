@@ -150,6 +150,12 @@ class SelectableTreeWidget(Tree):
             self.last_turn_idx = last_turn_idx
             super().__init__()
 
+    class PinRequested(Message):
+        """Fired when user presses 'p' to toggle pin on a session."""
+        def __init__(self, session_id: str) -> None:
+            self.session_id = session_id
+            super().__init__()
+
 
     def on_click(self, event: Click) -> None:
         """Handle clicks on tree nodes.
@@ -301,6 +307,18 @@ class SelectableTreeWidget(Tree):
                     if session_id and turn_indices:
                         last_turn_idx = max(turn_indices)
                         self.post_message(self.JumpToExchangeEnd(session_id, last_turn_idx))
+                        event.prevent_default()
+                        event.stop()
+                        return
+        elif event.key == "p":
+            # Pin/unpin session
+            node = self.cursor_node
+            if node and node.data:
+                node_type = node.data.get("type")
+                if node_type == "session":
+                    session_id = node.data.get("session_id")
+                    if session_id:
+                        self.post_message(self.PinRequested(session_id))
                         event.prevent_default()
                         event.stop()
                         return
@@ -463,6 +481,13 @@ class ContextTreeView(Vertical):
         def __init__(self, session_id: str, last_turn_idx: int) -> None:
             self.session_id = session_id
             self.last_turn_idx = last_turn_idx
+            super().__init__()
+
+    class SessionPinToggled(Message):
+        """Fired when user presses 'p' to toggle pin on a session."""
+        def __init__(self, session_id: str, is_pinned: bool) -> None:
+            self.session_id = session_id
+            self.is_pinned = is_pinned
             super().__init__()
 
     # Spinner animation for streaming sessions
@@ -658,6 +683,12 @@ class ContextTreeView(Vertical):
             if session_id:
                 self._update_session_label(session_id)
             # Don't call _update_root_label here - wait for CONTEXT_TOKENS_CHANGED
+
+        elif event in (TreeEvent.SESSION_PINNED, TreeEvent.SESSION_UNPINNED):
+            # Session pin status changed - update its label
+            session_id = data.get("session_id")
+            if session_id:
+                self._update_session_label(session_id)
 
     # --- Spinner Animation ---
 
@@ -951,6 +982,10 @@ class ContextTreeView(Vertical):
         if session_data.backend_name == "claude" or (not session_data.backend_name and "claude" in (session_data.model or "").lower()):
             session_tokens += CLAUDE_SYSTEM_OVERHEAD
 
+        # Pin indicator
+        is_pinned = self._state.is_pinned(session_id)
+        pin_indicator = "[yellow]📌[/] " if is_pinned else ""
+
         # Show fork status indicator
         is_fork = session_data.parent_id is not None
         fork_status = session_data.fork_status
@@ -1003,9 +1038,9 @@ class ContextTreeView(Vertical):
             binding_indicator = f" [magenta]{escape_markup(session_data.binding_indicator)}[/]"
 
         if name_part:
-            label = f"{model_indicator}{id_prefix}{name_part}{binding_indicator} [dim]({msg_count}msg {token_str})[/]{unviewed_indicator} {status}"
+            label = f"{pin_indicator}{model_indicator}{id_prefix}{name_part}{binding_indicator} [dim]({msg_count}msg {token_str})[/]{unviewed_indicator} {status}"
         else:
-            label = f"{model_indicator}{id_prefix}{date_str}{binding_indicator} [dim]({msg_count}msg {token_str})[/]{unviewed_indicator} {status}"
+            label = f"{pin_indicator}{model_indicator}{id_prefix}{date_str}{binding_indicator} [dim]({msg_count}msg {token_str})[/]{unviewed_indicator} {status}"
 
         # Highlight active session
         if is_active:
@@ -2384,6 +2419,15 @@ class ContextTreeView(Vertical):
     def on_selectable_tree_widget_link_requested(self, event: SelectableTreeWidget.LinkRequested) -> None:
         """Handle ctrl+click link request - bubble up to app."""
         self.post_message(self.SessionLinkRequested(event.session_id))
+
+    def on_selectable_tree_widget_pin_requested(self, event: SelectableTreeWidget.PinRequested) -> None:
+        """Handle 'p' keypress to toggle pin on a session."""
+        session_id = event.session_id
+        is_pinned = self._state.toggle_pin(session_id)
+        # Update the session label to show/hide pin indicator
+        self._update_session_label(session_id)
+        # Notify app to persist the change
+        self.post_message(self.SessionPinToggled(session_id, is_pinned))
 
     def on_selectable_tree_widget_archive_requested(self, event: SelectableTreeWidget.ArchiveRequested) -> None:
         """Handle ctrl+shift+click archive request - bubble up to app."""

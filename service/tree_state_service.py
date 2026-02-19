@@ -54,6 +54,7 @@ class SessionInfo:
     context_window: int = 200000
     binding_indicator: str = ""
     backend_name: str = ""  # Name of the backend (empty = default)
+    is_pinned: bool = False  # Whether this session is pinned to top
 
 
 @ws_type
@@ -212,6 +213,7 @@ class TreeStateService:
             context_window=session_data.context_window,
             binding_indicator=session_data.binding_indicator,
             backend_name=session_data.backend_name,
+            is_pinned=self._state.is_pinned(session_data.id),
         )
 
     @ws_expose
@@ -240,6 +242,7 @@ class TreeStateService:
                 context_window=s.context_window,
                 binding_indicator=s.binding_indicator,
                 backend_name=s.backend_name,
+                is_pinned=self._state.is_pinned(s.id),
             )
             for s in sessions.values()
         ]
@@ -479,6 +482,65 @@ class TreeStateService:
         """
         return list(self._state.get_streaming_sessions())
 
+    # --- Session Pinning ---
+
+    @ws_expose
+    async def pin_session(self, session_id: str) -> bool:
+        """Pin a session to appear at top of lists.
+
+        Args:
+            session_id: The session to pin
+
+        Returns:
+            True if newly pinned, False if already pinned or session doesn't exist
+        """
+        return self._state.pin_session(session_id)
+
+    @ws_expose
+    async def unpin_session(self, session_id: str) -> bool:
+        """Unpin a session.
+
+        Args:
+            session_id: The session to unpin
+
+        Returns:
+            True if unpinned, False if wasn't pinned
+        """
+        return self._state.unpin_session(session_id)
+
+    @ws_expose
+    async def toggle_pin(self, session_id: str) -> bool:
+        """Toggle pin state for a session.
+
+        Args:
+            session_id: The session to toggle
+
+        Returns:
+            True if now pinned, False if now unpinned
+        """
+        return self._state.toggle_pin(session_id)
+
+    @ws_expose
+    async def is_pinned(self, session_id: str) -> bool:
+        """Check if a session is pinned.
+
+        Args:
+            session_id: The session to check
+
+        Returns:
+            True if session is pinned
+        """
+        return self._state.is_pinned(session_id)
+
+    @ws_expose
+    async def get_pinned_sessions(self) -> list[str]:
+        """Get all pinned session IDs.
+
+        Returns:
+            List of pinned session IDs
+        """
+        return list(self._state.get_pinned_sessions())
+
     # --- Events ---
 
     @ws_event
@@ -529,4 +591,19 @@ class TreeStateService:
     @ws_event
     async def on_streaming_stopped(self) -> TreeEventData:
         """Emitted when a session stops streaming."""
+        ...
+
+    @ws_event
+    async def on_session_pinned(self) -> TreeEventData:
+        """Emitted when a session is pinned."""
+        ...
+
+    @ws_event
+    async def on_session_unpinned(self) -> TreeEventData:
+        """Emitted when a session is unpinned."""
+        ...
+
+    @ws_event
+    async def on_pinned_sessions_changed(self) -> TreeEventData:
+        """Emitted when the pinned sessions list changes."""
         ...

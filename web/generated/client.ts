@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-19T10:51:59.605893
+// Generated: 2026-02-19T11:22:28.808994
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -62,6 +62,14 @@ export interface TreeStateService {
   getCurrentSessionId(): Promise<string | null>;
 
   /**
+   * Get all pinned session IDs.
+   * 
+   * Returns:
+   * List of pinned session IDs
+   */
+  getPinnedSessions(): Promise<string[]>;
+
+  /**
    * Get session information by ID.
    * 
    * Args:
@@ -118,6 +126,17 @@ export interface TreeStateService {
   getUnviewedCount(sessionId: string): Promise<number>;
 
   /**
+   * Check if a session is pinned.
+   * 
+   * Args:
+   * session_id: The session to check
+   * 
+   * Returns:
+   * True if session is pinned
+   */
+  isPinned(sessionId: string): Promise<boolean>;
+
+  /**
    * Check if a session is currently streaming.
    * 
    * Args:
@@ -139,6 +158,17 @@ export interface TreeStateService {
    * True if turn was marked viewed (was unviewed), False otherwise
    */
   markTurnViewed(sessionId: string, turnIdx: number): Promise<boolean>;
+
+  /**
+   * Pin a session to appear at top of lists.
+   * 
+   * Args:
+   * session_id: The session to pin
+   * 
+   * Returns:
+   * True if newly pinned, False if already pinned or session doesn't exist
+   */
+  pinSession(sessionId: string): Promise<boolean>;
 
   /**
    * Set the context mode for a turn.
@@ -173,6 +203,28 @@ export interface TreeStateService {
    */
   toggleContextMode(sessionId: string, turnIdx: number): Promise<string>;
 
+  /**
+   * Toggle pin state for a session.
+   * 
+   * Args:
+   * session_id: The session to toggle
+   * 
+   * Returns:
+   * True if now pinned, False if now unpinned
+   */
+  togglePin(sessionId: string): Promise<boolean>;
+
+  /**
+   * Unpin a session.
+   * 
+   * Args:
+   * session_id: The session to unpin
+   * 
+   * Returns:
+   * True if unpinned, False if wasn't pinned
+   */
+  unpinSession(sessionId: string): Promise<boolean>;
+
 }
 
 export interface TreeStateEvents {
@@ -182,9 +234,19 @@ export interface TreeStateEvents {
   onContextModeChanged(callback: (data: Types.TreeEventData) => void): Unsubscribe;
 
   /**
+   * Emitted when the pinned sessions list changes.
+   */
+  onPinnedSessionsChanged(callback: (data: Types.TreeEventData) => void): Unsubscribe;
+
+  /**
    * Emitted when a session is added.
    */
   onSessionAdded(callback: (data: Types.TreeEventData) => void): Unsubscribe;
+
+  /**
+   * Emitted when a session is pinned.
+   */
+  onSessionPinned(callback: (data: Types.TreeEventData) => void): Unsubscribe;
 
   /**
    * Emitted when a session is removed.
@@ -195,6 +257,11 @@ export interface TreeStateEvents {
    * Emitted when the current session changes.
    */
   onSessionSelected(callback: (data: Types.TreeEventData) => void): Unsubscribe;
+
+  /**
+   * Emitted when a session is unpinned.
+   */
+  onSessionUnpinned(callback: (data: Types.TreeEventData) => void): Unsubscribe;
 
   /**
    * Emitted when a session is updated.
@@ -290,6 +357,10 @@ export class TreeStateServiceClient implements TreeStateService {
     return this.call('getCurrentSessionId', {  });
   }
 
+  async getPinnedSessions(): Promise<string[]> {
+    return this.call('getPinnedSessions', {  });
+  }
+
   async getSession(sessionId: string): Promise<Types.SessionInfo | null> {
     return this.call('getSession', { sessionId: sessionId });
   }
@@ -310,12 +381,20 @@ export class TreeStateServiceClient implements TreeStateService {
     return this.call('getUnviewedCount', { sessionId: sessionId });
   }
 
+  async isPinned(sessionId: string): Promise<boolean> {
+    return this.call('isPinned', { sessionId: sessionId });
+  }
+
   async isStreaming(sessionId: string): Promise<boolean> {
     return this.call('isStreaming', { sessionId: sessionId });
   }
 
   async markTurnViewed(sessionId: string, turnIdx: number): Promise<boolean> {
     return this.call('markTurnViewed', { sessionId: sessionId, turnIdx: turnIdx });
+  }
+
+  async pinSession(sessionId: string): Promise<boolean> {
+    return this.call('pinSession', { sessionId: sessionId });
   }
 
   async setContextMode(sessionId: string, turnIdx: number, mode: string): Promise<null> {
@@ -330,12 +409,28 @@ export class TreeStateServiceClient implements TreeStateService {
     return this.call('toggleContextMode', { sessionId: sessionId, turnIdx: turnIdx });
   }
 
+  async togglePin(sessionId: string): Promise<boolean> {
+    return this.call('togglePin', { sessionId: sessionId });
+  }
+
+  async unpinSession(sessionId: string): Promise<boolean> {
+    return this.call('unpinSession', { sessionId: sessionId });
+  }
+
   onContextModeChanged(callback: (data: Types.TreeEventData) => void): Unsubscribe {
     return this.subscribe('contextModeChanged', callback);
   }
 
+  onPinnedSessionsChanged(callback: (data: Types.TreeEventData) => void): Unsubscribe {
+    return this.subscribe('pinnedSessionsChanged', callback);
+  }
+
   onSessionAdded(callback: (data: Types.TreeEventData) => void): Unsubscribe {
     return this.subscribe('sessionAdded', callback);
+  }
+
+  onSessionPinned(callback: (data: Types.TreeEventData) => void): Unsubscribe {
+    return this.subscribe('sessionPinned', callback);
   }
 
   onSessionRemoved(callback: (data: Types.TreeEventData) => void): Unsubscribe {
@@ -344,6 +439,10 @@ export class TreeStateServiceClient implements TreeStateService {
 
   onSessionSelected(callback: (data: Types.TreeEventData) => void): Unsubscribe {
     return this.subscribe('sessionSelected', callback);
+  }
+
+  onSessionUnpinned(callback: (data: Types.TreeEventData) => void): Unsubscribe {
+    return this.subscribe('sessionUnpinned', callback);
   }
 
   onSessionUpdated(callback: (data: Types.TreeEventData) => void): Unsubscribe {

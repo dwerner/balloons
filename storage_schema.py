@@ -278,11 +278,13 @@ class UserPrefs:
     The goal_tree_collapsed_ids field stores IDs of nodes that should be
     collapsed when the goal tree is displayed. By default, nodes are expanded;
     this list tracks nodes the user explicitly collapsed.
+
+    The pinned_session_ids field stores session IDs that should appear at the
+    top of session lists and tree views. Pinned sessions are sorted by last
+    modified within their group.
     """
     # Goal tree UI state
     goal_tree_collapsed_ids: list[str] = field(default_factory=list)  # IDs of collapsed nodes
 
-    # Future: add more user preferences here
-    # theme: Optional[str] = None
-    # default_backend: Optional[str] = None
-    # etc.
+    # Session pinning
+    pinned_session_ids: list[str] = field(default_factory=list)  # IDs of pinned sessions

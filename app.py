@@ -872,13 +872,6 @@ class BalloonsApp(App):
         active_session_id = self.session.id if self.session else None
         is_active = self.session and self.session.id == session_id
 
-        # Log session routing for debugging crosstalk issues
-        # Log FULL session IDs to catch partial match bugs
-        debug_log.warning(
-            f"CROSSTALK DEBUG on_stream_started: event={session_id}, active={active_session_id}, match={is_active}",
-            category="stream",
-        )
-
         # Create streaming context for local tracking
         # (SessionManagerService owns the authoritative context, this is for UI state)
         ctx = StreamingContext(
@@ -2314,6 +2307,15 @@ class BalloonsApp(App):
             self._tree_state.set_session_history(history)
         except Exception:
             pass  # History is non-critical, continue without it
+
+        # Load pinned sessions from user preferences
+        try:
+            from core.async_storage import get_user_prefs_storage
+            storage = await get_user_prefs_storage()
+            prefs = await storage.load_prefs()
+            self._tree_state.set_pinned_sessions(prefs.pinned_session_ids)
+        except Exception:
+            pass  # Pinned sessions are non-critical, continue without them
 
         # Load all sessions from index (fast - single file read)
         # Sessions are lazy-loaded: only metadata initially, full data on expand/activate
@@ -5725,6 +5727,30 @@ class BalloonsApp(App):
             input_box.insert(link_cmd)
 
         input_box.focus()
+
+    async def on_context_tree_view_session_pin_toggled(self, event: ContextTreeView.SessionPinToggled) -> None:
+        """Handle session pin toggle - persist to user prefs."""
+        from core.async_storage import get_user_prefs_storage
+
+        try:
+            storage = await get_user_prefs_storage()
+            prefs = await storage.load_prefs()
+
+            # Update the pinned_session_ids list based on the new state
+            if event.is_pinned:
+                if event.session_id not in prefs.pinned_session_ids:
+                    prefs.pinned_session_ids.append(event.session_id)
+            else:
+                if event.session_id in prefs.pinned_session_ids:
+                    prefs.pinned_session_ids.remove(event.session_id)
+
+            await storage.save_prefs(prefs)
+            debug_log.info(
+                f"Session {'pinned' if event.is_pinned else 'unpinned'}: {event.session_id[:8]}",
+                category="app",
+            )
+        except Exception as e:
+            debug_log.error(f"Failed to save pin state: {e}", category="app")
 
     def on_context_tree_view_colon_pressed(self, event: ContextTreeView.ColonPressed) -> None:
         """Handle : key from tree - jump to input box, insert colon only if empty."""
