@@ -1622,11 +1622,13 @@ class GoalTreeView(Vertical):
 
     async def _save_collapsed_state_async(self) -> None:
         """Async worker to save collapsed state to storage."""
-        from core.async_storage import get_user_prefs_storage, UserPrefs
+        from core.async_storage import get_user_prefs_storage
 
         try:
             storage = await get_user_prefs_storage()
-            prefs = UserPrefs(goal_tree_collapsed_ids=self._goal_state.get_collapsed_ids())
+            # Load existing prefs first to preserve other fields (e.g., pinned_session_ids)
+            prefs = await storage.load_prefs()
+            prefs.goal_tree_collapsed_ids = self._goal_state.get_collapsed_ids()
             await storage.save_prefs(prefs)
         except Exception as e:
             from core.debug_log import debug_log

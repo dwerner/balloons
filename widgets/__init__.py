@@ -1,4 +1,4 @@
-from .chat_log import ChatLogView, MoreBelowIndicator, NewMessagesIndicator
+from .chat_log import ChatLogView, MoreBelowIndicator, NewMessagesIndicator, SessionHeader
 from .input_box import InputBox
 from .stash_popup import StashPopup
 from core.stash import MessageStash, StashedMessage
@@ -29,6 +29,7 @@ from .begin_streaming_modal import BeginStreamingModal, BeginStreamingResult
 from .bound_session_modal import BoundSessionModal, BoundSessionResult
 from .entity_picker import EntityPickerModal, EntityPickerResult
 from .create_entity_modal import CreatePlanModal, CreatePlanResult, CreateTodoModal, CreateTodoResult
+from .rename_session_modal import RenameSessionModal, RenameSessionResult
 from .slides_pane import SlidesPane, SlideCard
 from .presentation_screen import PresentationScreen
 from .directory_picker import DirectoryBrowser
@@ -103,6 +104,9 @@ __all__ = [
     "CreatePlanResult",
     "CreateTodoModal",
     "CreateTodoResult",
+    "RenameSessionModal",
+    "RenameSessionResult",
+    "SessionHeader",
     "SlidesPane",
     "SlideCard",
     "PresentationScreen",

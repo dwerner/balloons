@@ -122,6 +122,7 @@ class ForkProposalMarker(Vertical):
             bind_to: ForkBindingData | None,
             bind_to_inherit: bool,
             turn_id: int,
+            session_id: str = "",
         ) -> None:
             super().__init__()
             self.proposal_id = proposal_id
@@ -132,14 +133,16 @@ class ForkProposalMarker(Vertical):
             self.bind_to = bind_to
             self.bind_to_inherit = bind_to_inherit
             self.turn_id = turn_id
+            self.session_id = session_id
 
     class Rejected(Message):
         """Posted when user rejects the fork proposal."""
 
-        def __init__(self, proposal_id: str, turn_id: int) -> None:
+        def __init__(self, proposal_id: str, turn_id: int, session_id: str = "") -> None:
             super().__init__()
             self.proposal_id = proposal_id
             self.turn_id = turn_id
+            self.session_id = session_id
 
     def __init__(
         self,
@@ -153,6 +156,7 @@ class ForkProposalMarker(Vertical):
         status: str = "pending",
         turn_id: int = 0,
         all_exchanges: list[ExchangeInfo] | None = None,
+        session_id: str = "",
         **kwargs
     ):
         super().__init__(**kwargs)
@@ -166,6 +170,7 @@ class ForkProposalMarker(Vertical):
         self.status = status
         self.turn_id = turn_id
         self.all_exchanges = all_exchanges or []
+        self.session_id = session_id
 
         if status == "accepted":
             self.add_class("accepted")
@@ -251,6 +256,7 @@ class ForkProposalMarker(Vertical):
                 bind_to=self.bind_to,
                 bind_to_inherit=self.bind_to_inherit,
                 turn_id=self.turn_id,
+                session_id=self.session_id,
             ))
             # Update visual state
             self.status = "accepted"
@@ -261,6 +267,7 @@ class ForkProposalMarker(Vertical):
             self.post_message(self.Rejected(
                 proposal_id=self.proposal_id,
                 turn_id=self.turn_id,
+                session_id=self.session_id,
             ))
             # Update visual state
             self.status = "rejected"

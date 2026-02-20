@@ -767,7 +767,13 @@ class MessageWidget(Static):
 
 
 class SessionHeader(Static):
-    """Header showing session title."""
+    """Header showing session title. Click to rename."""
+
+    class RenameRequested(Message):
+        """Posted when user clicks to rename the session."""
+        def __init__(self, current_title: str) -> None:
+            self.current_title = current_title
+            super().__init__()
 
     DEFAULT_CSS = """
     SessionHeader {
@@ -779,27 +785,37 @@ class SessionHeader(Static):
         border-bottom: solid $primary;
     }
 
-    SessionHeader.hidden {
-        display: none;
+    SessionHeader:hover {
+        background: $surface-lighten-1;
     }
     """
 
     def __init__(self, title: str = "", **kwargs):
         super().__init__(**kwargs)
         self._title = title
-        if not title:
-            self.add_class("hidden")
 
     def render(self) -> RenderableType:
-        return Text(self._title) if self._title else Text("")
+        if self._title:
+            return Text.assemble(
+                (self._title, "bold"),
+                " ",
+                ("[click to rename]", "dim italic"),
+            )
+        # Show a clickable placeholder when no title
+        return Text.assemble(
+            ("[untitled session]", "dim"),
+            " ",
+            ("[click to name]", "dim italic"),
+        )
 
     def set_title(self, title: str) -> None:
         self._title = title
-        if title:
-            self.remove_class("hidden")
-        else:
-            self.add_class("hidden")
         self.refresh()
+
+    def on_click(self, event: Click) -> None:
+        """Handle click to open rename modal."""
+        event.stop()
+        self.post_message(self.RenameRequested(self._title))
 
 
 class MoreBelowIndicator(Static):
@@ -1824,6 +1840,7 @@ class ChatLogView(VerticalScroll):
                 status=instr.status,
                 turn_id=instr.turn_id,
                 all_exchanges=instr.all_exchanges,
+                session_id=instr.session_id,
             )
 
         elif isinstance(instr, RenderMergeProposal):

@@ -174,6 +174,19 @@ class TaskPane(Vertical):
         self._stream_state.remove_observer(self._on_task_event)
         self._stop_spinner()
 
+    def on_show(self) -> None:
+        """When pane becomes visible, ensure spinner is running if needed.
+
+        Textual may pause timers for hidden widgets, so we restart the spinner
+        whenever the pane becomes visible to ensure the display stays updated.
+        """
+        # Stop any existing timer that might be stale
+        self._stop_spinner()
+        # Restart spinner if there are active streams
+        if self._stream_state.get_active_count() > 0:
+            self._start_spinner()
+        self._refresh_task_tree()
+
     async def _on_task_event(self, event: StreamEvent, stream: Stream) -> None:
         """Handle task state changes (async observer)."""
         # Skip if not mounted yet
@@ -183,7 +196,10 @@ class TaskPane(Vertical):
         # Update the reactive to trigger a refresh
         active_count = self._stream_state.get_active_count()
         self.task_count = active_count
-        self._refresh_task_tree()
+
+        # Only do expensive refreshes if visible
+        if self.display:
+            self._refresh_task_tree()
 
         # Start/stop spinner based on active task count
         if active_count > 0:
@@ -191,8 +207,8 @@ class TaskPane(Vertical):
         else:
             self._stop_spinner()
 
-        # If viewing this stream, refresh detail
-        if self._selected_stream_id == stream.stream_id:
+        # If viewing this stream, refresh detail (only if visible)
+        if self.display and self._selected_stream_id == stream.stream_id:
             self._show_stream_detail(stream)
 
     def _refresh_task_tree(self) -> None:
@@ -211,8 +227,12 @@ class TaskPane(Vertical):
             if not s.is_active
         ][:5]  # Show last 5 completed
 
-        # Update root label
+        # Ensure spinner is running if we have active streams
         active_count = len(active_streams)
+        if active_count > 0 and self._spinner_timer is None:
+            self._start_spinner()
+
+        # Update root label
         if active_count > 0:
             tree.root.set_label(f"[bold]Streams[/] [green]({active_count} active)[/]")
         else:
@@ -232,6 +252,9 @@ class TaskPane(Vertical):
 
         if was_expanded:
             tree.root.expand()
+
+        # Force the tree widget to refresh and re-render
+        tree.refresh()
 
     def _format_stream_label(self, stream: Stream) -> str:
         """Format a single stream for the tree as a markup string."""
@@ -318,14 +341,23 @@ class TaskPane(Vertical):
 
     def _advance_spinner(self) -> None:
         """Advance the spinner to the next frame and update active stream labels."""
-        self._spinner_frame = (self._spinner_frame + 1) % len(self._spinner_chars)
-        # Refresh tree to show updated spinner
-        self._refresh_task_tree()
-        # Also refresh detail pane if showing an active stream
-        if self._selected_stream_id:
-            stream = self._stream_state.get_stream(self._selected_stream_id)
-            if stream and stream.is_active:
-                self._show_stream_detail(stream)
+        try:
+            self._spinner_frame = (self._spinner_frame + 1) % len(self._spinner_chars)
+
+            # Only do expensive refreshes if visible
+            if not self.display:
+                return
+
+            # Refresh tree to show updated spinner and durations
+            self._refresh_task_tree()
+            # Also refresh detail pane if showing an active stream
+            if self._selected_stream_id:
+                stream = self._stream_state.get_stream(self._selected_stream_id)
+                if stream and stream.is_active:
+                    self._show_stream_detail(stream)
+        except Exception:
+            # Don't let errors stop the timer
+            pass
 
     def _show_stream_detail(self, stream: Stream) -> None:
         """Show detailed properties for selected stream."""
