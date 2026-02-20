@@ -129,6 +129,11 @@ class SessionRunner:
         self._exchange_id: str = ""  # UUID for current exchange
         self._turns: list[Turn] = []  # Completed turns in this exchange
         self._user_message_saved: bool = False  # Track if user message added to session
+        # Timing tracking for diagnosing streaming hangs
+        self._text_turn_started_at: str | None = None  # When first text arrived
+        self._tool_use_started_at: dict[str, str] = {}  # tool_use_id -> ISO timestamp
+        # Pre-generated ID for the initial assistant turn (used in turn_started event)
+        self._initial_turn_id: str | None = None
 
         # Debounced save state - coalesce rapid save requests
         self._save_pending: bool = False
@@ -215,9 +220,10 @@ class SessionRunner:
         # Add binding context to prompt if session has active bindings
         effective_prompt = await self._build_prompt_with_bindings(prompt)
 
-        # Emit turn_started event
+        # Emit turn_started event with pre-generated turn_id so web UI can track it
         yield self._make_event("turn_started", {
             "turn_index": self._turn_index,
+            "turn_id": self._initial_turn_id,
             "prompt": prompt,  # Original prompt for display
             "exchange_id": self._exchange_id,
         })
@@ -337,6 +343,13 @@ class SessionRunner:
         self._status = RunnerStatus.STREAMING
         self._turn_index = len(self.session.turns)  # Next turn index
 
+        # Debug log to trace turn_id
+        from core.debug_log import debug_log
+        debug_log.info(
+            f"SessionRunner.start_background: _initial_turn_id={self._initial_turn_id}, session={self.session.id[:8]}",
+            category="stream",
+        )
+
         self._background_task = asyncio.create_task(
             self._background_stream(prompt, messages, allowed_tools)
         )
@@ -353,9 +366,10 @@ class SessionRunner:
         # Add binding context to prompt if session has active bindings
         effective_prompt = await self._build_prompt_with_bindings(prompt)
 
-        # Emit turn_started event
+        # Emit turn_started event with pre-generated turn_id so web UI can track it
         await self._event_queue.put(self._make_event("turn_started", {
             "turn_index": self._turn_index,
+            "turn_id": self._initial_turn_id,
             "prompt": prompt,  # Original prompt for display
             "exchange_id": self._exchange_id,
         }))
@@ -517,6 +531,8 @@ class SessionRunner:
         # Timing tracking for diagnosing streaming hangs
         self._text_turn_started_at: str | None = None  # When first text arrived
         self._tool_use_started_at: dict[str, str] = {}  # tool_use_id -> ISO timestamp
+        # Pre-generated ID for the initial assistant turn (used in turn_started event)
+        self._initial_turn_id: str = str(uuid.uuid4())
         # Clear event queue
         while not self._event_queue.empty():
             try:
@@ -531,6 +547,7 @@ class SessionRunner:
         content_blocks: list,
         started_at: str | None = None,
         ended_at: str | None = None,
+        turn_id: str | None = None,
     ) -> Turn:
         """Create a Turn with the current exchange_id and timing info.
 
@@ -540,6 +557,7 @@ class SessionRunner:
             content_blocks: List with a single content block
             started_at: ISO timestamp when this turn began streaming (optional)
             ended_at: ISO timestamp when this turn completed (optional, defaults to now)
+            turn_id: Pre-generated turn ID (optional, auto-generated if not provided)
 
         Returns:
             Turn with exchange_id and timing fields set
@@ -547,7 +565,7 @@ class SessionRunner:
         if not content_blocks:
             raise ValueError("content_blocks must contain exactly one block")
         now = datetime.now().isoformat()
-        return Turn(
+        turn = Turn(
             role=role,
             content_block=content_blocks[0],  # Turn takes single content_block
             timestamp=now,
@@ -555,6 +573,10 @@ class SessionRunner:
             started_at=started_at,
             ended_at=ended_at or now,  # Default ended_at to now if not specified
         )
+        # Use pre-generated ID if provided (e.g., from turn_started event)
+        if turn_id:
+            turn.id = turn_id
+        return turn
 
     def _save_turn_to_session(self, turn: Turn, save_now: bool = False) -> None:
         """Add a turn to the session and optionally save to disk.
@@ -638,17 +660,25 @@ class SessionRunner:
             # Get turn index for this text turn
             text_turn_idx = len(self.session.turns)
 
+            # For the first text turn (matching turn_started event), use the pre-generated ID
+            # This ensures web UI can track from turn_started through turn_finished
+            use_initial_id = self._initial_turn_id is not None and len(self._turns) == 0
+
             # Create turn with timing info and save to session
             turn = self._create_turn(
                 "assistant",
                 flushed_text,
                 [text_block],
                 started_at=self._text_turn_started_at,
+                turn_id=self._initial_turn_id if use_initial_id else None,
             )
             self._turns.append(turn)
             self._save_turn_to_session(turn, save_now=save_now)
             self._text_buffer = ""
             self._text_turn_started_at = None  # Reset for next text turn
+            # Clear initial turn ID after first use so subsequent turns get new IDs
+            if use_initial_id:
+                self._initial_turn_id = None
 
             if emit_event:
                 # Emit turn_started for this text turn so UI creates a new node

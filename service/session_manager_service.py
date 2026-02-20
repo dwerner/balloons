@@ -54,6 +54,7 @@ from core.stream_state import (
     get_stream_state,
 )
 from core.tree_state import TreeState, TreeEvent
+from core.queue_state import QueueState
 from models import TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, Turn
 from service.session_events import (
     SessionEventObserver,
@@ -76,6 +77,7 @@ from service.session_events import (
 if TYPE_CHECKING:
     from service.task_state_service import TaskStateService
     from service.session_data_service import SessionDataService
+    from core.queue_state import QueueState
 
 
 class SessionManagerEvent(Enum):
@@ -229,6 +231,60 @@ class ContextModeItem:
 
 @ws_type
 @dataclass
+class ExchangeSummary:
+    """Summary of an exchange for display in fork/merge proposal UIs.
+
+    Used by frontends to show what each exchange contains when reviewing
+    a fork/merge proposal.
+    """
+
+    index: int  # Exchange index (0-based)
+    summary: str  # Short summary of the exchange content
+    mode: str = "compress"  # Default context mode for this exchange
+
+
+@ws_type
+@dataclass
+class RespondToForkProposalResult:
+    """Result of responding to a fork proposal (accept/reject).
+
+    If accepted, contains the same fields as ForkSessionResult.
+    If rejected, just indicates success.
+    """
+
+    success: bool
+    accepted: bool = False
+    # Only set if accepted and fork created:
+    child_session_id: str = ""
+    parent_session_id: str = ""
+    fork_name: str = ""
+    exchange_id: str = ""
+    needs_compression: bool = False
+    helper_id: str = ""
+    error: str = ""
+
+
+@ws_type
+@dataclass
+class RespondToMergeProposalResult:
+    """Result of responding to a merge proposal (accept/reject).
+
+    If accepted, contains the same fields as MergeSessionResult.
+    If rejected, just indicates success.
+    """
+
+    success: bool
+    accepted: bool = False
+    # Only set if accepted and merge completed:
+    fork_session_id: str = ""
+    parent_session_id: str = ""
+    merge_id: str = ""
+    merge_point: int = 0
+    error: str = ""
+
+
+@ws_type
+@dataclass
 class ImageAttachment:
     """Image attachment for a message.
 
@@ -299,6 +355,7 @@ class SessionManagerService:
         stream_state: StreamState | None = None,
         task_state_service: "TaskStateService | None" = None,
         session_data_service: "SessionDataService | None" = None,
+        queue_state: "QueueState | None" = None,
     ):
         """Initialize service with a SessionManager instance.
 
@@ -309,11 +366,14 @@ class SessionManagerService:
                                If provided, the event pump will relay events to frontends.
             session_data_service: Optional SessionDataService for emitting session data events.
                                  If provided, events will be emitted in parallel with TaskStateService.
+            queue_state: Optional QueueState for draining queued messages after streaming completes.
+                        If provided, queued messages will be automatically submitted when streaming ends.
         """
         self._manager = session_manager
         self._stream_state = stream_state or get_stream_state()
         self._task_service = task_state_service
         self._session_data_service = session_data_service
+        self._queue_state = queue_state
         # TreeState is owned by this service - authoritative source for session tree structure
         self._tree_state: TreeState = TreeState()
         self._event_handlers: list[Callable[[str, dict], None]] = []
@@ -442,6 +502,19 @@ class SessionManagerService:
         session_data_service.set_session_loader(self._manager.load_session)
         # Register as observer for the new event pattern
         self.add_observer(session_data_service)
+
+    def set_queue_state(self, queue_state: "QueueState") -> None:
+        """Set the QueueState for draining queued messages after streaming.
+
+        When streaming completes or is cancelled, queued messages are automatically
+        drained and submitted. This enables the "type while streaming" workflow
+        where users can queue messages that will be sent after the current
+        response completes.
+
+        Args:
+            queue_state: The QueueState to use for queue draining
+        """
+        self._queue_state = queue_state
 
     def get_tree_state(self) -> TreeState:
         """Get the TreeState owned by this service.
@@ -621,6 +694,51 @@ class SessionManagerService:
         self._pump_running = False
         if self._pump_task and not self._pump_task.done():
             self._pump_task.cancel()
+
+    async def _process_queued_messages(self, session_id: str) -> None:
+        """Drain and submit queued messages after streaming completes.
+
+        This is called after streaming ends (done, cancelled, or input_required)
+        to automatically send any messages the user typed while streaming.
+
+        Messages are combined with newline separators and submitted as a single
+        prompt. If no messages are queued, this is a no-op.
+
+        Args:
+            session_id: The session to process queued messages for
+        """
+        if not self._queue_state:
+            return
+
+        # Check if queue has messages
+        if not self._queue_state.has_messages(session_id):
+            return
+
+        # Check if queue is blocked (first message is paused)
+        if self._queue_state.is_blocked(session_id):
+            debug_log.info(
+                "Queue is blocked - first message is paused",
+                category="queue",
+                session_id=session_id,
+            )
+            return
+
+        # Drain all non-paused messages
+        messages = self._queue_state.drain(session_id)
+        if not messages:
+            return
+
+        # Combine all messages with double-newline separator
+        combined_prompt = "\n\n".join(messages)
+
+        debug_log.info(
+            f"Processing {len(messages)} queued messages as single prompt ({len(combined_prompt)} chars)",
+            category="queue",
+            session_id=session_id,
+        )
+
+        # Submit the combined message
+        await self.submit_message(session_id, combined_prompt)
 
     def register_streaming_context(
         self,
@@ -892,6 +1010,15 @@ class SessionManagerService:
             # Initial turn_started event - update context with turn info
             ctx.assistant_turn_idx = data.get("turn_index", ctx.user_turn_idx + 1)
             ctx.assistant_turn_id = data.get("turn_id", "")
+
+            # Generate a turn_id if missing (fallback for compatibility)
+            if not ctx.assistant_turn_id:
+                ctx.assistant_turn_id = str(uuid.uuid4())
+                debug_log.warning(
+                    f"turn_started event missing turn_id, generated: {ctx.assistant_turn_id[:8]}",
+                    category="stream",
+                    details={"session_id": session_id, "data": data},
+                )
 
             # Notify observers with typed event
             await self._notify_observers(
@@ -1361,6 +1488,9 @@ class SessionManagerService:
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
 
+            # Process any queued messages now that streaming is done
+            await self._process_queued_messages(session_id)
+
         elif event_type == "error":
             # Error - mark stream as failed
             error_msg = data if isinstance(data, str) else str(data)
@@ -1437,6 +1567,9 @@ class SessionManagerService:
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
 
+            # Process any queued messages now that streaming is cancelled
+            await self._process_queued_messages(session_id)
+
         elif event_type == "input_required":
             # Claude is asking for input - this shouldn't happen for non-interactive frontends
             # Mark as completed since we can't respond
@@ -1481,6 +1614,9 @@ class SessionManagerService:
                     self._tree_state.load_session(session_id, session)
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
+
+            # Process any queued messages now that streaming is done
+            await self._process_queued_messages(session_id)
 
         # Note: "raw" events are not relayed - they're for debugging only
 
@@ -1894,6 +2030,344 @@ class SessionManagerService:
             parent_session_id=parent_session.id,
             merge_id=merge_result.merge_id or "",
             merge_point=merge_result.merge_point or 0,
+        )
+
+    @ws_expose
+    async def get_exchange_summaries(
+        self,
+        session_id: str,
+        exclude_current: bool = True,
+    ) -> list[ExchangeSummary]:
+        """Get summaries of each exchange in a session for proposal UIs.
+
+        Returns short descriptions of each exchange for display in fork/merge
+        proposal components, helping the user understand what context each
+        exchange contains.
+
+        Args:
+            session_id: ID of the session to get exchange summaries for
+            exclude_current: If True, exclude the last exchange (the one
+                           containing a proposal). Default True since this
+                           is typically called when displaying a proposal.
+
+        Returns:
+            List of ExchangeSummary objects with index, summary, and default mode
+        """
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                return []
+
+        # Ensure session is loaded in TreeState for grouping
+        if self._tree_state and not self._tree_state.is_session_loaded(session_id):
+            self._tree_state.load_session(session_id, session)
+
+        summaries: list[ExchangeSummary] = []
+
+        if self._tree_state:
+            groups = self._tree_state.get_turns_grouped_by_exchange(session_id)
+
+            # Exclude the current (proposal) exchange if requested
+            if exclude_current and groups:
+                groups = groups[:-1]
+
+            for idx, group in enumerate(groups):
+                if not group:
+                    continue
+                # Get first meaningful content from the group
+                first_turn = group[0]
+                content = first_turn.content or ""
+                # Truncate for display
+                if len(content) > 60:
+                    content = content[:57] + "..."
+                # Remove newlines for single-line display
+                content = content.replace("\n", " ").strip()
+                role = first_turn.role
+                summary = f"[{role}] {content}"
+                summaries.append(ExchangeSummary(
+                    index=idx,
+                    summary=summary,
+                    mode="compress",  # Default mode
+                ))
+
+        return summaries
+
+    @ws_expose
+    async def respond_to_fork_proposal(
+        self,
+        session_id: str,
+        proposal_id: str,
+        accepted: bool,
+        context_plan: list[dict] | None = None,
+        initial_prompt: str | None = None,
+        name: str | None = None,
+        description: str | None = None,
+        start_streaming: bool = True,
+    ) -> RespondToForkProposalResult:
+        """Respond to a fork proposal by accepting or rejecting it.
+
+        When accepting, optionally provide modified context_plan and initial_prompt.
+        The context_plan uses exchange ranges (like "0-2", "last") rather than
+        individual turn indices - this method handles the resolution.
+
+        Args:
+            session_id: ID of the session containing the proposal
+            proposal_id: ID of the proposal to respond to
+            accepted: True to accept, False to reject
+            context_plan: Modified context plan (list of {exchange_range, mode, reason})
+                         If not provided, uses the original from the proposal
+            initial_prompt: Modified initial prompt (if not provided, uses original)
+            name: Fork name (if not provided, uses original from proposal)
+            description: Fork description (if not provided, uses original from proposal)
+            start_streaming: If True and accepted, start streaming after fork creation
+
+        Returns:
+            RespondToForkProposalResult with fork session info if accepted
+        """
+        # Get the session
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                return RespondToForkProposalResult(
+                    success=False,
+                    error=f"Session {session_id} not found",
+                )
+
+        # Find the proposal in the session
+        proposal_block = None
+        for turn in session.turns:
+            from models import ForkProposalBlock
+            if isinstance(turn.content_block, ForkProposalBlock):
+                if turn.content_block.proposal_id == proposal_id:
+                    proposal_block = turn.content_block
+                    break
+
+        if not proposal_block:
+            return RespondToForkProposalResult(
+                success=False,
+                error=f"Proposal {proposal_id} not found in session",
+            )
+
+        if proposal_block.status != "pending":
+            return RespondToForkProposalResult(
+                success=False,
+                error=f"Proposal already {proposal_block.status}",
+            )
+
+        if not accepted:
+            # Just update the status to rejected
+            session.update_fork_proposal_status(proposal_id, "rejected")
+            await session.save()
+            return RespondToForkProposalResult(
+                success=True,
+                accepted=False,
+            )
+
+        # Accept the proposal - execute the fork
+        # Get the context plan (use provided or original)
+        from core.fork import ForkProposal, ContextAssignment
+        from core.tree_state import ContextMode
+
+        raw_context_plan = context_plan or [
+            {"exchange_range": cp.exchange_range, "mode": cp.mode, "reason": cp.reason}
+            for cp in proposal_block.context_plan
+        ]
+
+        # Build a ForkProposal to resolve exchange ranges
+        fork_proposal = ForkProposal(
+            name=name or proposal_block.name,
+            description=description or proposal_block.description,
+            context_plan=[
+                ContextAssignment(
+                    exchange_range=cp.get("exchange_range", ""),
+                    mode=cp.get("mode", "compress"),
+                    reason=cp.get("reason", ""),
+                )
+                for cp in raw_context_plan
+            ],
+            initial_prompt=initial_prompt if initial_prompt is not None else proposal_block.initial_prompt,
+        )
+
+        # Ensure session is loaded in TreeState for exchange grouping
+        if self._tree_state and not self._tree_state.is_session_loaded(session_id):
+            self._tree_state.load_session(session_id, session)
+
+        # Get exchange groups to resolve ranges
+        groups = self._tree_state.get_turns_grouped_by_exchange(session_id) if self._tree_state else []
+        total_exchanges = len(groups)
+
+        # Resolve exchange ranges to turn indices with modes
+        # exclude_current=True because the proposal was made during the current exchange
+        exchange_modes = fork_proposal.resolve_exchange_indices(total_exchanges, exclude_current=True)
+
+        # Convert exchange modes to turn context modes
+        turn_context_modes: list[dict] = []
+        for exchange_idx, mode in exchange_modes.items():
+            if exchange_idx < len(groups):
+                for turn in groups[exchange_idx]:
+                    turn_context_modes.append({
+                        "turn_index": turn.idx,
+                        "mode": mode.value,  # "copy", "compress", "drop"
+                    })
+
+        # Also need to drop turns from exchanges not mentioned (default to drop? or compress?)
+        # For safety, default un-mentioned exchanges to compress
+        mentioned_exchanges = set(exchange_modes.keys())
+        for exchange_idx, group in enumerate(groups):
+            if exchange_idx not in mentioned_exchanges:
+                # Check if it's the last exchange (current proposal) - skip it
+                if exchange_idx == total_exchanges - 1:
+                    continue
+                for turn in group:
+                    # Default to compress for un-mentioned exchanges
+                    turn_context_modes.append({
+                        "turn_index": turn.idx,
+                        "mode": "compress",
+                    })
+
+        # Update proposal status before forking
+        session.update_fork_proposal_status(proposal_id, "accepted")
+        await session.save()
+
+        # Build the prompt
+        prompt = fork_proposal.initial_prompt or f"Continue with: {fork_proposal.description}"
+
+        # Create the fork using fork_session
+        fork_result = await self.fork_session(
+            parent_session_id=session_id,
+            prompt=prompt,
+            name=fork_proposal.name,
+            background=False,
+            context_modes=turn_context_modes,
+            allowed_tools=None,  # All tools
+            start_streaming=start_streaming,
+        )
+
+        if not fork_result.success:
+            # Revert status on failure
+            session.update_fork_proposal_status(proposal_id, "pending")
+            await session.save()
+            return RespondToForkProposalResult(
+                success=False,
+                error=fork_result.error or "Fork failed",
+            )
+
+        return RespondToForkProposalResult(
+            success=True,
+            accepted=True,
+            child_session_id=fork_result.child_session_id,
+            parent_session_id=fork_result.parent_session_id,
+            fork_name=fork_result.fork_name,
+            exchange_id=fork_result.exchange_id,
+            needs_compression=fork_result.needs_compression,
+            helper_id=fork_result.helper_id,
+        )
+
+    @ws_expose
+    async def respond_to_merge_proposal(
+        self,
+        session_id: str,
+        proposal_id: str,
+        accepted: bool,
+        summary: str | None = None,
+        files_changed: list[str] | None = None,
+        key_accomplishments: list[str] | None = None,
+        reason: str | None = None,
+    ) -> RespondToMergeProposalResult:
+        """Respond to a merge proposal by accepting or rejecting it.
+
+        When accepting, optionally provide a modified summary.
+
+        Args:
+            session_id: ID of the session containing the proposal (the fork session)
+            proposal_id: ID of the proposal to respond to
+            accepted: True to accept, False to reject
+            summary: Modified merge summary (if not provided, uses original)
+            files_changed: Modified list of changed files
+            key_accomplishments: Modified list of accomplishments
+            reason: Modified reason for merge
+
+        Returns:
+            RespondToMergeProposalResult with merge info if accepted
+        """
+        # Get the session
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                return RespondToMergeProposalResult(
+                    success=False,
+                    error=f"Session {session_id} not found",
+                )
+
+        # Find the proposal in the session
+        proposal_block = None
+        for turn in session.turns:
+            from models import MergeProposalBlock
+            if isinstance(turn.content_block, MergeProposalBlock):
+                if turn.content_block.proposal_id == proposal_id:
+                    proposal_block = turn.content_block
+                    break
+
+        if not proposal_block:
+            return RespondToMergeProposalResult(
+                success=False,
+                error=f"Proposal {proposal_id} not found in session",
+            )
+
+        if proposal_block.status != "pending":
+            return RespondToMergeProposalResult(
+                success=False,
+                error=f"Proposal already {proposal_block.status}",
+            )
+
+        if not accepted:
+            # Just update the status to rejected
+            session.update_merge_proposal_status(proposal_id, "rejected")
+            await session.save()
+            return RespondToMergeProposalResult(
+                success=True,
+                accepted=False,
+            )
+
+        # Accept the proposal - execute the merge
+        # Use provided values or fall back to original
+        merge_summary = summary if summary is not None else proposal_block.summary
+        merge_files = files_changed if files_changed is not None else proposal_block.files_changed
+        merge_accomplishments = key_accomplishments if key_accomplishments is not None else proposal_block.key_accomplishments
+        merge_reason = reason if reason is not None else proposal_block.reason
+
+        # Update proposal status before merging
+        session.update_merge_proposal_status(proposal_id, "accepted")
+        await session.save()
+
+        # Execute the merge
+        merge_result = await self.merge_session(
+            fork_session_id=session_id,
+            merge_summary=merge_summary,
+            files_changed=merge_files,
+            key_accomplishments=merge_accomplishments,
+            reason=merge_reason,
+        )
+
+        if not merge_result.success:
+            # Revert status on failure
+            session.update_merge_proposal_status(proposal_id, "pending")
+            await session.save()
+            return RespondToMergeProposalResult(
+                success=False,
+                error=merge_result.error or "Merge failed",
+            )
+
+        return RespondToMergeProposalResult(
+            success=True,
+            accepted=True,
+            fork_session_id=merge_result.fork_session_id,
+            parent_session_id=merge_result.parent_session_id,
+            merge_id=merge_result.merge_id,
+            merge_point=merge_result.merge_point,
         )
 
     @ws_expose
@@ -2834,7 +3308,7 @@ class SessionManagerService:
             debug_log.warn(
                 "Cannot change backend while streaming",
                 category="backend",
-                data={"session_id": session_id},
+                details={"session_id": session_id},
             )
             return False
 
@@ -2846,31 +3320,92 @@ class SessionManagerService:
             # Save session to persist the change
             await session.save()
 
+            # Recreate the runner with the new backend configuration
+            # This is critical - without this, the old runner continues to use
+            # the previous backend until the session is reloaded
+            from core.runner import SessionRunner
+            from core.runner_factory import create_runner
+
+            backend_config = config.get_backend(backend_name)
+            new_runner = SessionRunner(session, runner=create_runner(backend_config))
+            self._manager.update_runner(session_id, new_runner)
+
             # Update TreeState if available
             if self._tree_state:
                 session_data = self._tree_state.get_session(session_id)
                 if session_data:
                     # Update the SessionData cache so web UI sees the change
                     session_data.backend_name = backend_name
+                    # Also update model and context_window from the new backend config
+                    if backend_config:
+                        if backend_config.model:
+                            session_data.model = backend_config.model
+                        session_data.context_window = backend_config.context_window
                     if session_data.session_ref:
                         # Also update the live Session object
                         session_data.session_ref.backend_name = backend_name
+                        if backend_config:
+                            if backend_config.model:
+                                session_data.session_ref.model = backend_config.model
+                            session_data.session_ref.context_window = backend_config.context_window
                 # Notify observers about the session update
                 self._tree_state.notify(TreeEvent.SESSION_UPDATED, session_id)
 
             debug_log.info(
                 f"Backend changed to {backend_name}",
                 category="backend",
-                data={"session_id": session_id, "backend": backend_name},
+                details={"session_id": session_id, "backend": backend_name},
             )
             return True
         else:
             debug_log.warn(
                 f"Failed to set backend: {result.error}",
                 category="backend",
-                data={"session_id": session_id, "error": result.error},
+                details={"session_id": session_id, "error": result.error},
             )
             return False
+
+    @ws_expose
+    async def set_session_title(
+        self, session_id: str, title: str
+    ) -> bool:
+        """Set the title for a session.
+
+        Args:
+            session_id: ID of the session to update
+            title: New title for the session
+
+        Returns:
+            True if successful, False if session not found
+        """
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                return False
+
+        # Update the title
+        session.title = title
+        await session.save()
+
+        # Update TreeState if available
+        if self._tree_state:
+            session_data = self._tree_state.get_session(session_id)
+            if session_data:
+                # Update the SessionData cache so web UI sees the change
+                session_data.title = title
+                if session_data.session_ref:
+                    # Also update the live Session object
+                    session_data.session_ref.title = title
+            # Notify observers about the session update
+            self._tree_state.notify(TreeEvent.SESSION_UPDATED, session_id)
+
+        debug_log.info(
+            f"Session title changed to: {title}",
+            category="session",
+            details={"session_id": session_id, "title": title},
+        )
+        return True
 
     # --- Events ---
 

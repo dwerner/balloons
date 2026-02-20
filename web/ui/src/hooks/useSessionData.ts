@@ -332,6 +332,16 @@ export function useSessionData(
         setIsSubscribed(true);
         setIsLoading(false);
 
+        // Initialize streaming state from snapshot
+        // This handles the case where we reconnect to a session that was streaming
+        // or reconnect after it stopped streaming while we were disconnected
+        if (result.snapshot?.isStreaming !== undefined) {
+          setIsStreaming(result.snapshot.isStreaming);
+        } else {
+          // If no snapshot streaming info, default to false
+          setIsStreaming(false);
+        }
+
         // Set up event handlers
         const handlers: Unsubscribe[] = [];
 
@@ -652,6 +662,41 @@ export function useSessionData(
     return () => {
       unsubscribe();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, autoSubscribe]);
+
+  // Re-subscribe when client reconnects
+  // This handles the case where the WebSocket disconnects (e.g., phone sleeps)
+  // and then reconnects - we need to re-establish the subscription and refresh state
+  useEffect(() => {
+    if (!client || !autoSubscribe) return;
+
+    // Track previous state to detect reconnection
+    let wasConnected = client.isConnected;
+
+    const unsubStateChange = client.onStateChange((state) => {
+      const isNowConnected = state === 'connected';
+
+      // Detect reconnection: was disconnected, now connected
+      if (!wasConnected && isNowConnected) {
+        console.log('[useSessionData] Client reconnected, re-subscribing to session:', autoSubscribe);
+
+        // Clear stale subscription state since handlers are likely invalid
+        unsubscribersRef.current.forEach((unsub) => unsub());
+        unsubscribersRef.current = [];
+        setIsSubscribed(false);
+
+        // Re-subscribe to get fresh state
+        subscribe(autoSubscribe);
+      }
+
+      wasConnected = isNowConnected;
+    });
+
+    return () => {
+      unsubStateChange();
+    };
+    // Note: we intentionally don't depend on subscribe to avoid infinite loops
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client, autoSubscribe]);
 

@@ -15,6 +15,48 @@
   font-size: 12px;
 }
 
+/* ----- Title Row: Session name (long-press to rename) ----- */
+.session-status-bar__title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  border-radius: 4px;
+  transition: background-color 0.15s ease;
+}
+
+.session-status-bar__title-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.session-status-bar__title-row:active {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.session-status-bar__session-title {
+  font-weight: 600;
+  color: var(--color-text-primary);
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.session-status-bar__session-id {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--color-text-muted);
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
 /* ----- Header Row: Model + Context Values ----- */
 .session-status-bar__header {
   display: flex;
@@ -24,6 +66,12 @@
 }
 
 .session-status-bar__model-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.session-status-bar__right {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -60,24 +108,28 @@
   color: var(--color-text-secondary);
   background: none;
   border: none;
-  padding: 2px 4px;
-  margin: -2px -4px;
-  border-radius: 4px;
+  padding: 8px 12px;
+  margin: -8px -12px;
+  min-height: 44px; /* Touch-friendly minimum size */
+  border-radius: 6px;
   cursor: default;
-  font-size: inherit;
+  font-size: 14px;
   font-family: inherit;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  box-sizing: border-box;
 }
 
 .session-status-bar__model--clickable {
   cursor: pointer;
   transition: background-color 0.15s ease;
+  border: 1px solid transparent;
 }
 
 .session-status-bar__model--clickable:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.1);
+  border-color: var(--color-border-secondary);
 }
 
 .session-status-bar__model--clickable:disabled {
@@ -86,9 +138,14 @@
 }
 
 .session-status-bar__dropdown-arrow {
-  font-size: 8px;
+  font-size: 10px;
   color: var(--color-text-muted);
-  margin-left: 2px;
+  margin-left: 4px;
+  transition: transform 0.15s ease;
+}
+
+.session-status-bar__model--open .session-status-bar__dropdown-arrow {
+  transform: rotate(180deg);
 }
 
 /* Backend dropdown menu - floats upward since status bar is at bottom */
@@ -96,29 +153,38 @@
   position: absolute;
   bottom: 100%;
   left: 0;
-  margin-bottom: 4px;
-  min-width: 120px;
+  margin-bottom: 8px;
+  min-width: 180px;
   max-height: 300px;
   overflow-y: auto;
   background: var(--color-bg-secondary);
   border: 1px solid var(--color-border-secondary);
-  border-radius: 6px;
-  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.4);
   z-index: 100;
+}
+
+/* Dropdown overlay for click-outside-to-close */
+.session-status-bar__dropdown-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 99;
 }
 
 .session-status-bar__backend-option {
   display: block;
   width: 100%;
-  padding: 8px 12px;
+  padding: 12px 16px;
+  min-height: 44px; /* Touch-friendly minimum size */
   background: none;
   border: none;
   text-align: left;
-  font-size: 12px;
+  font-size: 14px;
   font-family: inherit;
   color: var(--color-text-primary);
   cursor: pointer;
   transition: background-color 0.1s ease;
+  box-sizing: border-box;
 }
 
 .session-status-bar__backend-option:hover:not(:disabled) {
@@ -126,13 +192,47 @@
 }
 
 .session-status-bar__backend-option--selected {
-  background: rgba(var(--color-accent-blue-rgb, 100, 150, 255), 0.15);
+  background: rgba(var(--color-accent-blue-rgb, 100, 150, 255), 0.25);
   color: var(--color-accent-blue);
+  font-weight: 600;
+  border-left: 3px solid var(--color-accent-blue);
 }
 
 .session-status-bar__backend-option:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* ----- Pin Button ----- */
+.session-status-bar__pin-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  transition: color 0.15s ease, background-color 0.15s ease, transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.session-status-bar__pin-button:hover {
+  color: #facc15;
+  background: rgba(250, 204, 21, 0.1);
+  transform: scale(1.1);
+}
+
+.session-status-bar__pin-button--active {
+  color: #facc15;
+}
+
+.session-status-bar__pin-button--active:hover {
+  background: rgba(250, 204, 21, 0.15);
 }
 
 .session-status-bar__context-values {

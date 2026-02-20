@@ -15,6 +15,7 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "chokidar": "^5.0.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-markdown": "^10.1.0",

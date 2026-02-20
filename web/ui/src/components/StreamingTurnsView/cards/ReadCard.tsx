@@ -1,0 +1,143 @@
+/**
+ * ReadCard - Compact file reading display with syntax highlighting
+ *
+ * Design goals:
+ * - File path in header (relative to working dir)
+ * - Line range shown inline if specified
+ * - No "Input" accordion - path IS the input
+ * - No "Result" header - content shown directly
+ * - Syntax highlighting based on file extension
+ * - Left-justified output
+ */
+
+import React from 'react';
+import type { SessionDataTurn } from '../../../hooks/useSessionData';
+import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
+import { BaseToolCard, calculateToolPhase, formatRelativePath } from './BaseToolCard';
+import { SyntaxHighlightedCode } from './SyntaxHighlighter';
+import './cards.css';
+
+interface ReadCardProps {
+  turn: SessionDataTurn;
+  result?: SessionDataTurn | null;
+}
+
+// Check if tool input is still streaming
+function isStreamingInput(input: Record<string, unknown>): boolean {
+  return typeof input._streaming === 'string';
+}
+
+export function ReadCard({ turn, result }: ReadCardProps) {
+  const { contentBlock, streaming, tokens } = turn;
+
+  // Extract tool info
+  const toolUseBlock = contentBlock?.type === 'tool_use'
+    ? (contentBlock as ToolUseBlock)
+    : null;
+
+  const toolInput = toolUseBlock?.input || {};
+  const inputIsStreaming = isStreamingInput(toolInput);
+
+  // Extract Read-specific inputs
+  const filePath = (toolInput.file_path || '') as string;
+  const offset = toolInput.offset as number | undefined;
+  const limit = toolInput.limit as number | undefined;
+
+  // Format line range
+  let lineRange = '';
+  if (offset !== undefined || limit !== undefined) {
+    const start = (offset || 0) + 1; // Convert to 1-indexed
+    if (limit !== undefined) {
+      lineRange = `:${start}-${start + limit - 1}`;
+    } else if (offset !== undefined) {
+      lineRange = `:${start}+`;
+    }
+  }
+
+  // Get result info
+  const resultBlock = result?.contentBlock?.type === 'tool_result'
+    ? (result.contentBlock as ToolResultBlock)
+    : null;
+  const hasResult = !!resultBlock;
+  const resultContent = resultBlock?.content || '';
+  const isError = resultBlock?.isError || false;
+
+  // Calculate phase
+  const hasInput = !inputIsStreaming && !!filePath;
+  const phase = calculateToolPhase(streaming, hasInput, inputIsStreaming, hasResult, isError);
+
+  // Format the display path
+  const displayPath = formatRelativePath(filePath);
+
+  // Header content: file path with optional line range
+  // Always show the path when we have it, or indicate the state otherwise
+  const headerContent = (() => {
+    if (filePath) {
+      return (
+        <code className="tool-file-path">
+          {displayPath}{lineRange}
+        </code>
+      );
+    }
+    if (inputIsStreaming) {
+      return <span className="tool-building">building...</span>;
+    }
+    // If no file path, show debug info about what we do have
+    const inputKeys = Object.keys(toolInput);
+    if (inputKeys.length > 0) {
+      // Input exists but file_path not found - show what keys we have
+      return <span className="tool-description">({inputKeys.join(', ')})</span>;
+    }
+    if (hasResult) {
+      return <span className="tool-description">(reading file)</span>;
+    }
+    return null;
+  })();
+
+  // Strip line number prefixes from Read output
+  // Claude Code's Read tool adds prefixes like "     1\t" (spaces + number + tab)
+  // We need to strip these for proper syntax highlighting
+  const stripLineNumberPrefixes = (content: string): string => {
+    return content
+      .split('\n')
+      .map(line => {
+        // Match pattern: optional spaces + digits + tab + content
+        // Claude Code format: "     1\tcontent" (cat -n style)
+        const match = line.match(/^\s*\d+\t(.*)$/);
+        return match ? match[1] : line;
+      })
+      .join('\n');
+  };
+
+  // Truncate very long output
+  const maxLength = 10000;
+  const truncated = resultContent.length > maxLength;
+  const strippedContent = stripLineNumberPrefixes(resultContent);
+  const displayContent = truncated
+    ? strippedContent.slice(0, maxLength) + '\n... [truncated]'
+    : strippedContent;
+
+  return (
+    <BaseToolCard
+      toolName="Read"
+      headerContent={headerContent}
+      phase={phase}
+      tokens={tokens}
+      className="read-card"
+    >
+      {hasResult && (
+        <SyntaxHighlightedCode
+          code={displayContent}
+          filePath={filePath}
+          maxHeight="400px"
+          showLineNumbers={true}
+        />
+      )}
+      {!hasResult && phase === 'executing' && (
+        <div className="tool-executing">Reading file...</div>
+      )}
+    </BaseToolCard>
+  );
+}
+
+export default ReadCard;

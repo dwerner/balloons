@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-19T11:22:28.806453
+// Generated: 2026-02-19T19:20:49.258771
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -333,6 +333,34 @@ export interface SwitchTargetResult {
 export interface ContextModeItem {
   turnIndex: number;
   mode: string;
+}
+
+export interface ExchangeSummary {
+  index: number;
+  summary: string;
+  mode?: string;
+}
+
+export interface RespondToForkProposalResult {
+  success: boolean;
+  accepted?: boolean;
+  childSessionId?: string;
+  parentSessionId?: string;
+  forkName?: string;
+  exchangeId?: string;
+  needsCompression?: boolean;
+  helperId?: string;
+  error?: string;
+}
+
+export interface RespondToMergeProposalResult {
+  success: boolean;
+  accepted?: boolean;
+  forkSessionId?: string;
+  parentSessionId?: string;
+  mergeId?: string;
+  mergePoint?: number;
+  error?: string;
 }
 
 export interface ImageAttachment {
@@ -694,6 +722,33 @@ export interface ImageInfo {
 export interface ImageEventData {
   eventType: string;
   filePath: string;
+  data?: Record<string, unknown>;
+}
+
+export interface SoundInfo {
+  filename: string;
+  mediaType: string;
+  sizeBytes: number;
+  isBuiltin?: boolean;
+}
+
+export interface SoundData {
+  filename: string;
+  mediaType: string;
+  dataBase64: string;
+}
+
+export interface SoundUploadResult {
+  filename: string;
+  mediaType: string;
+  sizeBytes: number;
+  success: boolean;
+  error?: string | null;
+}
+
+export interface SoundEventData {
+  eventType: string;
+  filename: string;
   data?: Record<string, unknown>;
 }
 

@@ -33,6 +33,52 @@ function formatKt(tokens: number): string {
   return `${kt.toFixed(1)}kt`;
 }
 
+// Format a date as a day group label
+function formatDayGroup(dateStr: string): string {
+  if (!dateStr) return 'Unknown';
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return 'Unknown';
+  const now = new Date();
+
+  // Get start of today, yesterday, etc.
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfYesterday = new Date(startOfToday);
+  startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+  const startOfThisWeek = new Date(startOfToday);
+  startOfThisWeek.setDate(startOfThisWeek.getDate() - now.getDay());
+  const startOfLastWeek = new Date(startOfThisWeek);
+  startOfLastWeek.setDate(startOfLastWeek.getDate() - 7);
+
+  if (date >= startOfToday) {
+    return 'Today';
+  } else if (date >= startOfYesterday) {
+    return 'Yesterday';
+  } else if (date >= startOfThisWeek) {
+    // This week - show day name
+    return date.toLocaleDateString(undefined, { weekday: 'long' });
+  } else if (date >= startOfLastWeek) {
+    return 'Last Week';
+  } else {
+    // Older - show month and year, or just month if same year
+    const sameYear = date.getFullYear() === now.getFullYear();
+    if (sameYear) {
+      return date.toLocaleDateString(undefined, { month: 'long' });
+    } else {
+      return date.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    }
+  }
+}
+
+// Get a sortable day key for grouping
+function getDayKey(dateStr: string): string {
+  if (!dateStr) return '1970-01-01';
+  const date = new Date(dateStr);
+  // Check for invalid date
+  if (isNaN(date.getTime())) return '1970-01-01';
+  // Return YYYY-MM-DD format for consistent grouping
+  return date.toISOString().split('T')[0] || '1970-01-01';
+}
+
 // Arrow icon component
 function Arrow({ open, color }: { open: boolean; color?: string }) {
   return (
@@ -55,22 +101,25 @@ function Arrow({ open, color }: { open: boolean; color?: string }) {
 // Pin icon component
 function PinIcon({ isPinned, onClick }: { isPinned: boolean; onClick: (e: React.MouseEvent) => void }) {
   return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill={isPinned ? 'currentColor' : 'none'}
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
+    <span
       className={`tree-pin ${isPinned ? 'tree-pin--active' : ''}`}
       onClick={onClick}
       title={isPinned ? 'Unpin session' : 'Pin session'}
     >
-      <path d="M12 17v5" />
-      <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1z" />
-    </svg>
+      <svg
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill={isPinned ? 'currentColor' : 'none'}
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M12 17v5" />
+        <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1z" />
+      </svg>
+    </span>
   );
 }
 
@@ -145,8 +194,11 @@ function SessionNode({
           {hasTurns ? <Arrow open={isExpanded} color={sessionColor} /> : <span className="tree-node__spacer" />}
         </span>
 
-        {isPinned && (
-          <span key="pin-badge" className="tree-node__badge tree-node__badge--pin">📌</span>
+        {/* Pin toggle on the left - always visible for pinned, hover for unpinned */}
+        {onTogglePin && (
+          <span key="pin-toggle" className={`tree-node__pin-toggle tree-node__pin-toggle--left ${isPinned ? 'tree-node__pin-toggle--pinned' : ''}`}>
+            <PinIcon isPinned={isPinned} onClick={handlePinClick} />
+          </span>
         )}
 
         {session.isStreaming && (
@@ -162,12 +214,6 @@ function SessionNode({
         <span key="id" className="tree-node__id">{session.id.slice(0, 8)}</span>
         <span key="label" className="tree-node__label">{sessionName}</span>
         <span key="meta" className="tree-node__meta">({session.messageCount}msg)</span>
-
-        {onTogglePin && (
-          <span key="pin-toggle" className="tree-node__pin-toggle">
-            <PinIcon isPinned={isPinned} onClick={handlePinClick} />
-          </span>
-        )}
       </div>
 
       {isExpanded && hasTurns && (
@@ -228,22 +274,58 @@ export const SessionTreeView = memo(function SessionTreeView({
     });
   }, []);
 
-  // Sort sessions: pinned first, then current, then by last modified
-  const sortedSessions = useMemo(() => {
-    return [...sessions].sort((a, b) => {
-      // Pinned sessions come first
-      const aPinned = a.isPinned ?? false;
-      const bPinned = b.isPinned ?? false;
-      if (aPinned && !bPinned) return -1;
-      if (!aPinned && bPinned) return 1;
+  // Group sessions by day with pinned sessions first
+  const groupedSessions = useMemo(() => {
+    // Separate pinned and unpinned sessions
+    const pinned = sessions.filter(s => s.isPinned);
+    const unpinned = sessions.filter(s => !s.isPinned);
 
-      // Within pinned/unpinned groups: current first
+    // Sort pinned by last modified (current first)
+    pinned.sort((a, b) => {
       if (a.isCurrent) return -1;
       if (b.isCurrent) return 1;
-
-      // Then by last modified
       return new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime();
     });
+
+    // Sort unpinned by last modified
+    unpinned.sort((a, b) => {
+      if (a.isCurrent) return -1;
+      if (b.isCurrent) return 1;
+      return new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime();
+    });
+
+    // Group unpinned by day
+    const dayGroups: { key: string; label: string; sessions: SessionInfo[] }[] = [];
+    let currentDayKey = '';
+    let currentGroup: SessionInfo[] = [];
+
+    for (const session of unpinned) {
+      const dayKey = getDayKey(session.lastModified);
+      if (dayKey !== currentDayKey) {
+        if (currentGroup.length > 0) {
+          dayGroups.push({
+            key: currentDayKey,
+            label: formatDayGroup(currentGroup[0]?.lastModified || ''),
+            sessions: currentGroup,
+          });
+        }
+        currentDayKey = dayKey;
+        currentGroup = [session];
+      } else {
+        currentGroup.push(session);
+      }
+    }
+
+    // Don't forget the last group
+    if (currentGroup.length > 0) {
+      dayGroups.push({
+        key: currentDayKey,
+        label: formatDayGroup(currentGroup[0]?.lastModified || ''),
+        sessions: currentGroup,
+      });
+    }
+
+    return { pinned, dayGroups };
   }, [sessions]);
 
   if (isLoading) {
@@ -262,28 +344,68 @@ export const SessionTreeView = memo(function SessionTreeView({
     );
   }
 
+  // Track index for consistent coloring across groups
+  let sessionIndex = 0;
+
   return (
     <ul className="tree-view">
-      {sortedSessions.map((session, index) => {
-        const isSelected = session.id === selectedSessionId;
-        const isExpanded = expandedSessions.has(session.id);
-        // Only pass turns for the selected session
-        const sessionTurns = isSelected ? turns : [];
+      {/* Pinned sessions first */}
+      {groupedSessions.pinned.length > 0 && (
+        <li className="tree-group tree-group--pinned">
+          <div className="tree-group__header">Pinned</div>
+          <ul className="tree-group__sessions">
+            {groupedSessions.pinned.map((session) => {
+              const isSelected = session.id === selectedSessionId;
+              const isExpanded = expandedSessions.has(session.id);
+              const sessionTurns = isSelected ? turns : [];
+              const idx = sessionIndex++;
 
-        return (
-          <SessionNode
-            key={session.id}
-            session={session}
-            index={index}
-            isSelected={isSelected}
-            isExpanded={isExpanded}
-            turns={sessionTurns}
-            onToggle={() => toggleSession(session.id)}
-            onSelect={() => onSelectSession(session.id)}
-            onTogglePin={onTogglePin ? () => onTogglePin(session.id) : undefined}
-          />
-        );
-      })}
+              return (
+                <SessionNode
+                  key={session.id}
+                  session={session}
+                  index={idx}
+                  isSelected={isSelected}
+                  isExpanded={isExpanded}
+                  turns={sessionTurns}
+                  onToggle={() => toggleSession(session.id)}
+                  onSelect={() => onSelectSession(session.id)}
+                  onTogglePin={onTogglePin ? () => onTogglePin(session.id) : undefined}
+                />
+              );
+            })}
+          </ul>
+        </li>
+      )}
+
+      {/* Day groups */}
+      {groupedSessions.dayGroups.map((group) => (
+        <li key={group.key} className="tree-group">
+          <div className="tree-group__header">{group.label}</div>
+          <ul className="tree-group__sessions">
+            {group.sessions.map((session) => {
+              const isSelected = session.id === selectedSessionId;
+              const isExpanded = expandedSessions.has(session.id);
+              const sessionTurns = isSelected ? turns : [];
+              const idx = sessionIndex++;
+
+              return (
+                <SessionNode
+                  key={session.id}
+                  session={session}
+                  index={idx}
+                  isSelected={isSelected}
+                  isExpanded={isExpanded}
+                  turns={sessionTurns}
+                  onToggle={() => toggleSession(session.id)}
+                  onSelect={() => onSelectSession(session.id)}
+                  onTogglePin={onTogglePin ? () => onTogglePin(session.id) : undefined}
+                />
+              );
+            })}
+          </ul>
+        </li>
+      ))}
     </ul>
   );
 });

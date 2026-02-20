@@ -1,12 +1,25 @@
 /* StreamingTurnsView styles */
 
-.streaming-turns-view {
+/* Container is the scrollable element with position:relative for the
+ * scroll-to-bottom indicator positioning.
+ *
+ * Parent .turns-container also has overflow-y:auto, but since we set
+ * height:100% here and our content will overflow within this container,
+ * our container handles the actual scrolling.
+ */
+.streaming-turns-view-container {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
   overflow-y: auto;
-  padding: 16px;
   background: var(--bg-primary, #ffffff);
+}
+
+.streaming-turns-view {
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
 }
 
 .streaming-turns-view.empty,
@@ -45,7 +58,7 @@
 }
 
 .streaming-badge {
-  color: var(--color-primary, #007bff);
+  color: var(--color-primary);
   font-weight: 500;
   animation: pulse 1s infinite;
 }
@@ -74,7 +87,7 @@
 .streaming-placeholder .dot {
   animation: dotPulse 1.4s infinite ease-in-out both;
   font-size: 10px;
-  color: var(--color-primary, #007bff);
+  color: var(--color-primary);
 }
 
 .streaming-placeholder .dot:nth-child(1) {
@@ -114,8 +127,8 @@
 }
 
 .streaming-turn-card.streaming {
-  border-color: var(--color-primary, #007bff);
-  box-shadow: 0 0 0 1px var(--color-primary, #007bff);
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary);
 }
 
 .streaming-turn-header {
@@ -146,7 +159,7 @@
 }
 
 .streaming-indicator {
-  color: var(--color-primary, #007bff);
+  color: var(--color-primary);
   animation: pulse 1s infinite;
 }
 
@@ -186,39 +199,68 @@
   background: var(--tool-bg, #fff3e0);
 }
 
-/* Dark mode */
-@media (prefers-color-scheme: dark) {
+/* Mobile responsive styles */
+@media (max-width: 768px) {
   .streaming-turns-view {
-    background: var(--bg-primary, #1e1e1e);
+    padding: 4px;
   }
 
   .streaming-turns-header {
-    background: var(--bg-secondary, #2d2d2d);
+    padding: 4px 6px;
+    margin-bottom: 6px;
+    font-size: 11px;
   }
 
-  .streaming-turn-card {
-    border-color: var(--border-color, #404040);
+  .streaming-turns-list {
+    gap: 6px;
   }
 
-  .streaming-turn-header {
-    background: var(--bg-secondary, #2d2d2d);
-    border-color: var(--border-color, #404040);
+  .streaming-placeholder {
+    padding: 12px;
+    gap: 6px;
   }
+}
 
-  .turn-label,
-  .streaming-turn-body {
-    color: var(--text-primary, #e0e0e0);
-  }
+/* Dark mode - using data-theme selector for theme system integration */
+:root[data-theme="dark"] .streaming-turns-view,
+[data-theme="dark"] .streaming-turns-view {
+  background: var(--bg-primary);
+}
 
-  .streaming-turn-card.user .streaming-turn-header {
-    background: var(--user-bg, #1a3a5c);
-  }
+:root[data-theme="dark"] .streaming-turns-header,
+[data-theme="dark"] .streaming-turns-header {
+  background: var(--bg-secondary);
+}
 
-  .streaming-turn-card.assistant .streaming-turn-header {
-    background: var(--assistant-bg, #3d2a4a);
-  }
+:root[data-theme="dark"] .streaming-turn-card,
+[data-theme="dark"] .streaming-turn-card {
+  border-color: var(--border-color);
+}
 
-  .streaming-turn-card.tool .streaming-turn-header {
-    background: var(--tool-bg, #4a3520);
-  }
+:root[data-theme="dark"] .streaming-turn-header,
+[data-theme="dark"] .streaming-turn-header {
+  background: var(--bg-secondary);
+  border-color: var(--border-color);
+}
+
+:root[data-theme="dark"] .turn-label,
+[data-theme="dark"] .turn-label,
+:root[data-theme="dark"] .streaming-turn-body,
+[data-theme="dark"] .streaming-turn-body {
+  color: var(--text-primary);
+}
+
+:root[data-theme="dark"] .streaming-turn-card.user .streaming-turn-header,
+[data-theme="dark"] .streaming-turn-card.user .streaming-turn-header {
+  background: rgba(74, 222, 128, 0.1);
+}
+
+:root[data-theme="dark"] .streaming-turn-card.assistant .streaming-turn-header,
+[data-theme="dark"] .streaming-turn-card.assistant .streaming-turn-header {
+  background: rgba(248, 113, 113, 0.1);
+}
+
+:root[data-theme="dark"] .streaming-turn-card.tool .streaming-turn-header,
+[data-theme="dark"] .streaming-turn-card.tool .streaming-turn-header {
+  background: rgba(251, 191, 36, 0.1);
 }

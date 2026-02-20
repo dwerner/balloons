@@ -1,5 +1,5 @@
 // Simple dev server for Bun with bundling
-import { watch } from "fs";
+import chokidar from "chokidar";
 import { join, dirname } from "path";
 
 const projectDir = import.meta.dir;
@@ -51,29 +51,38 @@ async function buildApp(): Promise<BuildOutput | null> {
 // Initial build
 let buildOutput = await buildApp();
 
-// Watch for changes and rebuild
+// Watch for changes and rebuild using chokidar (reliable on Linux)
 const dirsToWatch = [
   join(projectDir, "src"),
   join(webDir, "generated"),
 ];
 
-for (const dir of dirsToWatch) {
-  try {
-    watch(dir, { recursive: true }, async (event, filename) => {
-      if (filename?.endsWith(".ts") || filename?.endsWith(".tsx") || filename?.endsWith(".css")) {
-        console.log(`File changed: ${filename}, rebuilding...`);
-        const newBuild = await buildApp();
-        if (newBuild) {
-          buildOutput = newBuild;
-          console.log("Rebuild complete");
-        }
+// Debounce rebuilds to avoid multiple rapid rebuilds
+let rebuildTimeout: ReturnType<typeof setTimeout> | null = null;
+
+const watcher = chokidar.watch(dirsToWatch, {
+  ignoreInitial: true,
+  ignored: /(^|[\/\\])\../, // ignore dotfiles
+});
+
+watcher.on("all", async (event, filePath) => {
+  if (filePath.endsWith(".ts") || filePath.endsWith(".tsx") || filePath.endsWith(".css")) {
+    // Debounce: wait 50ms for more changes before rebuilding
+    if (rebuildTimeout) clearTimeout(rebuildTimeout);
+    rebuildTimeout = setTimeout(async () => {
+      console.log(`${event}: ${filePath}, rebuilding...`);
+      const newBuild = await buildApp();
+      if (newBuild) {
+        buildOutput = newBuild;
+        console.log("Rebuild complete");
       }
-    });
-    console.log(`Watching ${dir}`);
-  } catch (e) {
-    console.warn(`Could not watch ${dir}:`, e);
+    }, 50);
   }
-}
+});
+
+watcher.on("ready", () => {
+  console.log(`Watching ${dirsToWatch.join(", ")}`);
+});
 
 // Debug log file for browser logs
 const debugLogPath = join(projectDir, "browser-debug.log");

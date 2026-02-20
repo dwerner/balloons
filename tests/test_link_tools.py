@@ -171,6 +171,7 @@ class TestExecuteLinkTool:
         session.id = "test-session-12345678"
         session.title = "Test Session"
         session.fork_name = ""
+        session.backend_name = "anthropic"
         session.cached_context_tokens = 40000  # 20% usage
         session.context_window = 200000
         session.is_merged.return_value = False
@@ -187,6 +188,7 @@ class TestExecuteLinkTool:
         # Check structure
         assert data["name"] == "Test Session"
         assert data["session_id"] == "test-session-12345678"
+        assert data["backend"] == "anthropic"
         assert data["parents"] == []  # Root session has no parents
         assert data["merged_to"] is None  # Not merged
         assert data["merged_from"] == []  # No child merges
@@ -201,6 +203,7 @@ class TestExecuteLinkTool:
         session.id = "test-session-12345678"
         session.title = ""
         session.fork_name = "my-fork"
+        session.backend_name = "openrouter"
         session.cached_context_tokens = 160000
         session.context_window = 200000
         session.is_merged.return_value = False
@@ -238,6 +241,7 @@ class TestExecuteLinkTool:
         session.id = "test-session-12345678"
         session.title = "Main Session"
         session.fork_name = ""
+        session.backend_name = "anthropic"
         session.cached_context_tokens = 50000
         session.context_window = 200000
         session.is_merged.return_value = False
@@ -288,6 +292,7 @@ class TestExecuteLinkTool:
         session.id = "child-session-123"
         session.title = ""
         session.fork_name = "auth-fix"
+        session.backend_name = "anthropic"
         session.cached_context_tokens = 30000
         session.context_window = 200000
         session.is_merged.return_value = True
@@ -333,6 +338,7 @@ class TestExecuteLinkTool:
         session.id = "test-session-12345678"
         session.title = "Implementation Session"
         session.fork_name = ""
+        session.backend_name = "anthropic"
         session.cached_context_tokens = 40000
         session.context_window = 200000
         session.is_merged.return_value = False
@@ -373,6 +379,7 @@ class TestExecuteLinkTool:
         session.id = "test-session-12345678"
         session.title = "Unbound Session"
         session.fork_name = ""
+        session.backend_name = None  # No explicit backend
         session.cached_context_tokens = 40000
         session.context_window = 200000
         session.is_merged.return_value = False

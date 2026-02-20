@@ -27,6 +27,7 @@ import {
   TaskStateServiceClient,
   SessionDataServiceClient,
   ImageServiceClient,
+  SoundServiceClient,
   DebugLogServiceClient,
 } from './client';
 
@@ -65,6 +66,7 @@ export class BalloonsClient {
   private _tasks: TaskStateServiceClient | null = null;
   private _sessionData: SessionDataServiceClient | null = null;
   private _images: ImageServiceClient | null = null;
+  private _sounds: SoundServiceClient | null = null;
   private _debugLog: DebugLogServiceClient | null = null;
 
   constructor(url: string, options: BalloonsClientOptions = {}) {
@@ -143,6 +145,14 @@ export class BalloonsClient {
       throw new Error('Not connected. Call connect() first.');
     }
     return this._images;
+  }
+
+  /** Sound service (notification sounds) */
+  get sounds(): SoundServiceClient {
+    if (!this._sounds) {
+      throw new Error('Not connected. Call connect() first.');
+    }
+    return this._sounds;
   }
 
   /** Debug log service (logging from web to TUI debug pane) */
@@ -259,6 +269,7 @@ export class BalloonsClient {
     this._tasks = new TaskStateServiceClient(this.ws);
     this._sessionData = new SessionDataServiceClient(this.ws);
     this._images = new ImageServiceClient(this.ws);
+    this._sounds = new SoundServiceClient(this.ws);
     this._debugLog = new DebugLogServiceClient(this.ws);
   }
 
@@ -270,6 +281,7 @@ export class BalloonsClient {
     this._tasks = null;
     this._sessionData = null;
     this._images = null;
+    this._sounds = null;
     this._debugLog = null;
   }
 
@@ -297,6 +309,7 @@ export {
   TaskStateServiceClient,
   SessionDataServiceClient,
   ImageServiceClient,
+  SoundServiceClient,
   DebugLogServiceClient,
 } from './client';
 export type { Unsubscribe } from './client';

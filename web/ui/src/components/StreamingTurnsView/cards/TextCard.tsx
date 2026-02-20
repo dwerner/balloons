@@ -40,10 +40,7 @@ export function TextCard({ turn }: TextCardProps) {
       <div className="turn-card-body">
         {isAssistant ? (
           content ? (
-            <>
-              <MarkdownContent content={content} />
-              {streaming && <span className="streaming-cursor">▊</span>}
-            </>
+            <MarkdownContent content={content} />
           ) : streaming ? (
             <span className="thinking">Thinking...</span>
           ) : null

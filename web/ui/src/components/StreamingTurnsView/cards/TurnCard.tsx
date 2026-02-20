@@ -2,6 +2,7 @@
  * TurnCard - Main dispatcher component for turn rendering
  *
  * Routes to the appropriate card component based on contentBlock.type.
+ * For tool_use blocks, further routes to tool-specific cards (Read, Edit, etc.)
  * Also handles pairing tool_use turns with their matching tool_result.
  */
 
@@ -9,18 +10,31 @@ import React, { useMemo } from 'react';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
 import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
 import { TextCard } from './TextCard';
-import { ToolUseCard } from './ToolUseCard';
 import { ToolResultCard } from './ToolResultCard';
 import { SystemCard } from './SystemCard';
+import { ForkProposalCard } from './ForkProposalCard';
+import { MergeProposalCard } from './MergeProposalCard';
+
+// Tool-specific cards
+import { ReadCard } from './ReadCard';
+import { EditCard } from './EditCard';
+import { WriteCard } from './WriteCard';
+import { BashCard } from './BashCard';
+import { GrepCard } from './GrepCard';
+import { GlobCard } from './GlobCard';
+import { GenericToolCard } from './GenericToolCard';
+
 import './cards.css';
 
 export interface TurnCardProps {
   turn: SessionDataTurn;
   /** All turns for finding matching tool results */
   allTurns?: SessionDataTurn[];
+  /** Session ID for proposal cards that need API access */
+  sessionId?: string;
 }
 
-// System content block types
+// System content block types (non-interactive)
 const SYSTEM_TYPES = new Set([
   'fork',
   'merge',
@@ -31,14 +45,39 @@ const SYSTEM_TYPES = new Set([
   'image',
   'slide',
   'review',
-  'fork_proposal',
-  'merge_proposal',
   'archive',
 ]);
 
-export function TurnCard({ turn, allTurns = [] }: TurnCardProps) {
+// Interactive proposal types (need special handling)
+const PROPOSAL_TYPES = new Set([
+  'fork_proposal',
+  'merge_proposal',
+]);
+
+// Map of tool names to their specific card components
+const TOOL_CARD_MAP: Record<string, React.ComponentType<{ turn: SessionDataTurn; result?: SessionDataTurn | null }>> = {
+  Read: ReadCard,
+  Edit: EditCard,
+  Write: WriteCard,
+  Bash: BashCard,
+  Grep: GrepCard,
+  Glob: GlobCard,
+};
+
+export function TurnCard({ turn, allTurns = [], sessionId }: TurnCardProps) {
   const { role, contentBlock } = turn;
   const blockType = contentBlock?.type || 'text';
+
+  // Debug: log ALL system turns to understand what's coming through
+  // TODO: Remove after debugging
+  if (role === 'system') {
+    console.log('[TurnCard] System turn:', { role, blockType, hasContentBlock: !!contentBlock, contentBlockKeys: contentBlock ? Object.keys(contentBlock) : [], turnId: turn.turnId });
+  }
+
+  // Debug: log when we see proposal-related blocks
+  if (blockType === 'fork_proposal' || blockType === 'merge_proposal') {
+    console.log('[TurnCard] Rendering proposal card:', { blockType, sessionId, turn });
+  }
 
   // Find matching tool_result for tool_use turns
   const matchingResult = useMemo(() => {
@@ -76,7 +115,18 @@ export function TurnCard({ turn, allTurns = [] }: TurnCardProps) {
 
   // Dispatch to appropriate card type
   if (blockType === 'tool_use') {
-    return <ToolUseCard turn={turn} result={matchingResult} />;
+    const toolUseBlock = contentBlock as ToolUseBlock;
+    const toolName = toolUseBlock?.name || '';
+
+    // Try to get a tool-specific card
+    const ToolCardComponent = TOOL_CARD_MAP[toolName];
+
+    if (ToolCardComponent) {
+      return <ToolCardComponent turn={turn} result={matchingResult} />;
+    }
+
+    // Fall back to generic tool card
+    return <GenericToolCard turn={turn} result={matchingResult} />;
   }
 
   if (blockType === 'tool_result') {
@@ -112,6 +162,16 @@ export function TurnCard({ turn, allTurns = [] }: TurnCardProps) {
     return <ToolResultCard turn={turn} />;
   }
 
+  // Interactive proposal cards
+  if (blockType === 'fork_proposal') {
+    return <ForkProposalCard turn={turn} sessionId={sessionId} />;
+  }
+
+  if (blockType === 'merge_proposal') {
+    return <MergeProposalCard turn={turn} sessionId={sessionId} />;
+  }
+
+  // Non-interactive system cards
   if (SYSTEM_TYPES.has(blockType)) {
     return <SystemCard turn={turn} />;
   }
@@ -124,3 +184,5 @@ export function TurnCard({ turn, allTurns = [] }: TurnCardProps) {
 
   return <TextCard turn={turn} />;
 }
+
+export default TurnCard;

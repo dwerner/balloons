@@ -1,0 +1,181 @@
+/**
+ * ScrollToBottom component styles
+ *
+ * Floating pill-shaped button that appears when user scrolls away from bottom.
+ * Uses modern CSS for animations and dark mode support.
+ */
+
+.scroll-to-bottom {
+  /* Positioning */
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(100px);
+  z-index: 100;
+
+  /* Layout */
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+
+  /* Appearance */
+  background: var(--bg-elevated, #1a1a1a);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 999px; /* Pill shape */
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+
+  /* Typography */
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary, #fff);
+  white-space: nowrap;
+
+  /* Animation */
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.3s ease,
+    visibility 0.3s ease,
+    box-shadow 0.2s ease;
+
+  /* Remove default button styles */
+  outline: none;
+}
+
+.scroll-to-bottom.visible {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+}
+
+.scroll-to-bottom:hover {
+  background: var(--bg-hover, #2a2a2a);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+}
+
+.scroll-to-bottom:focus-visible {
+  outline: 2px solid var(--color-primary, #3b82f6);
+  outline-offset: 2px;
+}
+
+.scroll-to-bottom:active {
+  transform: translateX(-50%) scale(0.98);
+}
+
+/* Icon */
+.scroll-to-bottom-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* Label */
+.scroll-to-bottom-label {
+  line-height: 1;
+}
+
+/* Streaming indicator dots */
+.scroll-to-bottom-streaming-indicator {
+  display: flex;
+  gap: 2px;
+  margin-left: 4px;
+}
+
+.scroll-to-bottom-streaming-indicator .dot {
+  width: 4px;
+  height: 4px;
+  background: var(--color-primary, #3b82f6);
+  border-radius: 50%;
+  animation: scroll-to-bottom-pulse 1.4s infinite ease-in-out both;
+}
+
+.scroll-to-bottom-streaming-indicator .dot:nth-child(1) {
+  animation-delay: -0.32s;
+}
+
+.scroll-to-bottom-streaming-indicator .dot:nth-child(2) {
+  animation-delay: -0.16s;
+}
+
+.scroll-to-bottom-streaming-indicator .dot:nth-child(3) {
+  animation-delay: 0s;
+}
+
+@keyframes scroll-to-bottom-pulse {
+  0%, 80%, 100% {
+    opacity: 0.4;
+    transform: scale(0.8);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Streaming state - glow effect */
+.scroll-to-bottom.streaming {
+  border-color: var(--color-primary, #3b82f6);
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.3),
+    0 0 20px rgba(59, 130, 246, 0.2);
+}
+
+.scroll-to-bottom.streaming:hover {
+  box-shadow:
+    0 6px 16px rgba(0, 0, 0, 0.4),
+    0 0 24px rgba(59, 130, 246, 0.3);
+}
+
+/* Light mode */
+[data-theme="light"] .scroll-to-bottom {
+  background: var(--bg-primary, #fff);
+  border-color: var(--border-color, #e0e0e0);
+  color: var(--text-primary, #1a1a1a);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+[data-theme="light"] .scroll-to-bottom:hover {
+  background: var(--bg-secondary, #f5f5f5);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="light"] .scroll-to-bottom.streaming {
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.15),
+    0 0 20px rgba(59, 130, 246, 0.15);
+}
+
+/* Mobile: larger touch target */
+@media (max-width: 768px) {
+  .scroll-to-bottom {
+    padding: 10px 18px;
+    font-size: 14px;
+    bottom: 16px;
+  }
+
+  .scroll-to-bottom-icon {
+    font-size: 18px;
+  }
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .scroll-to-bottom {
+    transition: opacity 0.15s ease;
+  }
+
+  .scroll-to-bottom.visible {
+    transform: translateX(-50%);
+  }
+
+  .scroll-to-bottom:active {
+    transform: translateX(-50%);
+  }
+
+  .scroll-to-bottom-streaming-indicator .dot {
+    animation: none;
+    opacity: 1;
+  }
+}

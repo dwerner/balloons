@@ -147,6 +147,7 @@ class RenderForkProposal(RenderInstruction):
     bind_to_inherit: bool = False
     status: str = "pending"  # "pending", "accepted", "rejected"
     all_exchanges: list[ExchangeInfo] = field(default_factory=list)  # All exchanges for interactive tree
+    session_id: str = ""  # Session this proposal belongs to (for correct status updates)
 
 
 @dataclass
@@ -198,7 +199,7 @@ class HistoryLoader:
 
         Args:
             messages: List of Message or Turn objects to transform
-            session: Optional session (unused, kept for API compatibility)
+            session: Optional session for context (used for fork proposals to track session_id)
             start_turn_id: Starting turn counter (for appending to existing history)
 
         Returns:
@@ -206,6 +207,7 @@ class HistoryLoader:
         """
         instructions: list[RenderInstruction] = []
         turn_counter = start_turn_id
+        session_id = session.id if session else ""
 
         for turn_idx, msg in enumerate(messages):
             turn_counter += 1
@@ -218,7 +220,7 @@ class HistoryLoader:
             if msg.content_blocks:
                 for block_idx, block in enumerate(msg.content_blocks):
                     instr = await self._process_block(
-                        block, msg.role, turn_id, block_idx, turn_idx, sentiment
+                        block, msg.role, turn_id, block_idx, turn_idx, sentiment, session_id
                     )
                     if instr:
                         instructions.append(instr)
@@ -245,7 +247,8 @@ class HistoryLoader:
         turn_id: int,
         block_idx: int,
         turn_idx: int,
-        sentiment: Sentiment | None = None
+        sentiment: Sentiment | None = None,
+        session_id: str = ""
     ) -> RenderInstruction | None:
         """Process a single content block into a render instruction."""
 
@@ -382,6 +385,7 @@ class HistoryLoader:
                 bind_to_inherit=block.bind_to_inherit,
                 status=block.status,
                 all_exchanges=block.all_exchanges,
+                session_id=session_id,
             )
 
         elif isinstance(block, MergeProposalBlock):

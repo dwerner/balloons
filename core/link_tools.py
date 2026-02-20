@@ -299,9 +299,20 @@ async def _execute_session_info(session: Session) -> tuple[str, bool]:
     # Build parents array (empty if root session)
     parents = await _build_parents(session)
 
+    # Get effective backend name (explicit or default)
+    backend_name = session.backend_name
+    if not backend_name:
+        try:
+            from config import get_config
+            config = get_config()
+            backend_name = config.default_backend
+        except Exception:
+            backend_name = None
+
     result = {
         "name": session.title or session.fork_name or session.id[:8],
         "session_id": session.id,  # Full session ID for navigation
+        "backend": backend_name,  # Current backend (explicit or default)
         "parents": parents,  # empty = root session, non-empty = in a fork
         "context_tokens": context_tokens,
         "context_pct": round(context_usage_pct, 1),

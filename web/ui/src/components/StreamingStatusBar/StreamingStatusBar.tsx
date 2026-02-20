@@ -13,6 +13,10 @@ export interface StreamingStatusBarProps {
   stopDisabled?: boolean;
   /** Session's cached context tokens (running total from session data) */
   sessionContextTokens?: number;
+  /** Whether the session is pinned */
+  isPinned?: boolean;
+  /** Callback when pin state is toggled */
+  onTogglePin?: () => void;
 }
 
 /**
@@ -58,6 +62,27 @@ function getContextBarColorClass(percentage: number): string {
 }
 
 /**
+ * Pin icon component for session pinning
+ */
+function PinIcon({ isPinned }: { isPinned: boolean }) {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill={isPinned ? 'currentColor' : 'none'}
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M12 17v5" />
+      <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1z" />
+    </svg>
+  );
+}
+
+/**
  * StreamingStatusBar - Enhanced streaming status display
  *
  * Shows:
@@ -75,6 +100,8 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
   onStop,
   stopDisabled = false,
   sessionContextTokens,
+  isPinned = false,
+  onTogglePin,
 }: StreamingStatusBarProps) {
   // Track duration locally for smoother updates
   const [duration, setDuration] = useState(task.durationSeconds);
@@ -122,6 +149,19 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
         <div className="streaming-status-bar__timer">
           {formatDuration(duration)}
         </div>
+
+        {/* Pin toggle button */}
+        {onTogglePin && (
+          <button
+            type="button"
+            className={`streaming-status-bar__pin-button ${isPinned ? 'streaming-status-bar__pin-button--active' : ''}`}
+            onClick={onTogglePin}
+            title={isPinned ? 'Unpin session' : 'Pin session'}
+            aria-label={isPinned ? 'Unpin session' : 'Pin session'}
+          >
+            <PinIcon isPinned={isPinned} />
+          </button>
+        )}
 
         {onStop && (
           <button

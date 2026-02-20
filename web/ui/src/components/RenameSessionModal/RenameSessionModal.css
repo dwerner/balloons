@@ -1,0 +1,82 @@
+/**
+ * RenameSessionModal CSS
+ *
+ * Styling for the session rename modal.
+ * Follows patterns from CreateTodoModal and Modal base styles.
+ */
+
+/* ===== Content container ===== */
+.rename-session-modal__content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ===== Error message ===== */
+.rename-session-modal__error {
+  padding: 12px;
+  background: rgba(248, 113, 113, 0.1);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  border-radius: 6px;
+  color: var(--color-accent-red, #f87171);
+  font-size: 14px;
+}
+
+/* ===== Form ===== */
+.rename-session-modal__form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ===== Field ===== */
+.rename-session-modal__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ===== Label ===== */
+.rename-session-modal__label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-muted, #888);
+}
+
+/* ===== Input ===== */
+.rename-session-modal__input {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--color-text-primary, #fff);
+  background: var(--color-input-bg, rgba(0, 0, 0, 0.3));
+  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.1));
+  border-radius: 6px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.rename-session-modal__input::placeholder {
+  color: var(--color-text-muted, #666);
+}
+
+.rename-session-modal__input:focus {
+  border-color: var(--color-accent-primary, #22d3ee);
+  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.15);
+}
+
+.rename-session-modal__input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ===== Light theme ===== */
+[data-theme="light"] .rename-session-modal__input {
+  background: var(--color-input-bg, rgba(0, 0, 0, 0.05));
+}
+
+[data-theme="light"] .rename-session-modal__error {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.3);
+}

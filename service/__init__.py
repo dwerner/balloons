@@ -72,6 +72,7 @@ from service.goal_tree_state_service import GoalTreeStateService
 from service.task_state_service import TaskStateService
 from service.session_data_service import SessionDataService
 from service.image_service import ImageService
+from service.sound_service import SoundService
 from service.debug_log_service import DebugLogService
 from service.ws_server import WsServer, create_server
 from service.jwt_auth import JWTAuth, JWTConfig, TokenClaims
@@ -84,6 +85,7 @@ __all__ = [
     "TaskStateService",
     "SessionDataService",
     "ImageService",
+    "SoundService",
     "DebugLogService",
     "WsServer",
     "create_server",

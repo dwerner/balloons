@@ -228,6 +228,16 @@ class TreeState:
         for callback in self._observers:
             callback(event, data)
 
+    def notify(self, event: TreeEvent, session_id: str | None = None) -> None:
+        """Public method to notify observers of a state change.
+
+        Args:
+            event: The type of event that occurred
+            session_id: Optional session ID related to the event
+        """
+        data = {"session_id": session_id} if session_id else {}
+        self._notify(event, data)
+
     # --- Session Operations ---
 
     def add_session(self, session: SessionProtocol, is_current: bool = False) -> None:

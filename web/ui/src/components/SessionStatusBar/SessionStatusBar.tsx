@@ -1,5 +1,7 @@
 import React, { memo, useState, useEffect, useCallback } from 'react';
 import type { SessionInfo, BalloonsClient } from '../../../../generated/balloons-client';
+import { useLongPress } from '../../hooks';
+import { RenameSessionModal } from '../RenameSessionModal';
 import './SessionStatusBar.css';
 
 export interface SessionStatusBarProps {
@@ -11,6 +13,10 @@ export interface SessionStatusBarProps {
   client?: BalloonsClient | null;
   /** Callback when backend is changed */
   onBackendChange?: (backendName: string) => void;
+  /** Callback when pin state is toggled */
+  onTogglePin?: () => void;
+  /** Callback when session title is changed */
+  onTitleChange?: (newTitle: string) => void;
 }
 
 /**
@@ -71,11 +77,41 @@ function getModelDisplayName(model: string | undefined): string {
  * This bar is always shown when a session is selected,
  * regardless of streaming state.
  */
+/**
+ * Pin icon component for session pinning
+ */
+function PinIcon({ isPinned }: { isPinned: boolean }) {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill={isPinned ? 'currentColor' : 'none'}
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M12 17v5" />
+      <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1z" />
+    </svg>
+  );
+}
+
+/**
+ * Get session display name (title, forkName, or fallback to short ID)
+ */
+function getSessionDisplayName(session: SessionInfo): string {
+  return session.forkName || session.title || `Session ${session.id.slice(0, 8)}`;
+}
+
 export const SessionStatusBar = memo(function SessionStatusBar({
   session,
   isStreaming = false,
   client,
   onBackendChange,
+  onTogglePin,
+  onTitleChange,
 }: SessionStatusBarProps) {
   const contextTokens = session.cachedContextTokens ?? 0;
   const contextWindow = session.contextWindow ?? 200000;
@@ -86,6 +122,8 @@ export const SessionStatusBar = memo(function SessionStatusBar({
   const contextColorClass = getContextBarColorClass(contextUsage);
 
   const modelDisplay = getModelDisplayName(session.model);
+  const isPinned = session.isPinned ?? false;
+  const sessionName = getSessionDisplayName(session);
 
   // Backend selector state
   const [backends, setBackends] = useState<string[]>([]);
@@ -93,21 +131,45 @@ export const SessionStatusBar = memo(function SessionStatusBar({
   const [isChangingBackend, setIsChangingBackend] = useState(false);
   const [showBackendSelector, setShowBackendSelector] = useState(false);
 
+  // Rename modal state
+  const [showRenameModal, setShowRenameModal] = useState(false);
+
+  // Track connection state for dependency
+  const isConnected = client?.isConnected ?? false;
+
+  // Long press handler for session title
+  const titleLongPress = useLongPress({
+    onLongPress: () => {
+      if (client?.isConnected) {
+        setShowRenameModal(true);
+      }
+    },
+    delay: 500,
+  });
+
+  // Handle rename completion
+  const handleRenamed = useCallback((newTitle: string) => {
+    onTitleChange?.(newTitle);
+  }, [onTitleChange]);
+
   // Load available backends
   useEffect(() => {
-    if (client && client.isConnected) {
+    if (client && isConnected) {
       client.sessions.listBackends()
-        .then(setBackends)
+        .then(backends => {
+          console.log('Loaded backends:', backends);
+          setBackends(backends);
+        })
         .catch(err => console.error('Failed to load backends:', err));
     }
-  }, [client]);
+  }, [client, isConnected]);
 
   // Update selected backend when session changes
   // If session has no explicit backend, fetch the effective one (including default)
   useEffect(() => {
     if (session.backendName) {
       setSelectedBackend(session.backendName);
-    } else if (client && client.isConnected) {
+    } else if (client && isConnected) {
       // Fetch effective backend (which includes the default backend name)
       client.sessions.getSessionBackend(session.id)
         .then(backend => {
@@ -115,20 +177,34 @@ export const SessionStatusBar = memo(function SessionStatusBar({
         })
         .catch(err => console.error('Failed to get session backend:', err));
     }
-  }, [session.backendName, session.id, client]);
+  }, [session.backendName, session.id, client, isConnected]);
 
   // Handle backend change
   const handleBackendChange = useCallback(async (newBackend: string) => {
-    if (!client || isStreaming || newBackend === selectedBackend) {
+    if (!client || !client.isConnected) {
+      console.warn('Cannot change backend: client not connected');
+      return;
+    }
+    if (isStreaming) {
+      console.warn('Cannot change backend: session is streaming');
+      return;
+    }
+    if (newBackend === selectedBackend) {
+      console.log('Backend already selected:', newBackend);
+      setShowBackendSelector(false);
       return;
     }
 
     setIsChangingBackend(true);
     try {
+      console.log('Changing backend from', selectedBackend, 'to', newBackend);
       const success = await client.sessions.setSessionBackend(session.id, newBackend);
+      console.log('setSessionBackend result:', success);
       if (success) {
         setSelectedBackend(newBackend);
         onBackendChange?.(newBackend);
+      } else {
+        console.error('Backend change failed - server returned false');
       }
     } catch (err) {
       console.error('Failed to change backend:', err);
@@ -139,7 +215,18 @@ export const SessionStatusBar = memo(function SessionStatusBar({
   }, [client, isStreaming, selectedBackend, session.id, onBackendChange]);
 
   return (
+    <>
     <div className="session-status-bar" role="status">
+      {/* Session title row - long press to rename */}
+      <div
+        className="session-status-bar__title-row"
+        title="Long press to rename session"
+        {...titleLongPress}
+      >
+        <span className="session-status-bar__session-title">{sessionName}</span>
+        <span className="session-status-bar__session-id">{session.id.slice(0, 8)}</span>
+      </div>
+
       {/* Model and context info */}
       <div className="session-status-bar__header">
         <div className="session-status-bar__model-section">
@@ -156,45 +243,70 @@ export const SessionStatusBar = memo(function SessionStatusBar({
           <div className="session-status-bar__backend-container">
             <button
               type="button"
-              className={`session-status-bar__model ${backends.length > 1 ? 'session-status-bar__model--clickable' : ''}`}
+              className={`session-status-bar__model ${backends.length > 1 ? 'session-status-bar__model--clickable' : ''} ${showBackendSelector ? 'session-status-bar__model--open' : ''}`}
               onClick={() => backends.length > 1 && !isStreaming && setShowBackendSelector(!showBackendSelector)}
               disabled={isStreaming || backends.length <= 1}
               title={backends.length > 1 ? 'Click to change backend' : modelDisplay}
+              aria-expanded={showBackendSelector}
+              aria-haspopup="listbox"
             >
               {selectedBackend || modelDisplay}
               {backends.length > 1 && !isStreaming && (
-                <span className="session-status-bar__dropdown-arrow">
-                  {showBackendSelector ? '▼' : '▲'}
+                <span className="session-status-bar__dropdown-arrow" aria-hidden="true">
+                  ▲
                 </span>
               )}
             </button>
 
-            {/* Backend dropdown */}
+            {/* Backend dropdown with click-outside overlay */}
             {showBackendSelector && backends.length > 1 && (
-              <div className="session-status-bar__backend-dropdown">
-                {backends.map(backend => (
-                  <button
-                    key={backend}
-                    type="button"
-                    className={`session-status-bar__backend-option ${backend === selectedBackend ? 'session-status-bar__backend-option--selected' : ''}`}
-                    onClick={() => handleBackendChange(backend)}
-                    disabled={isChangingBackend}
-                  >
-                    {backend}
-                    {backend === selectedBackend && ' ✓'}
-                  </button>
-                ))}
-              </div>
+              <>
+                <div
+                  className="session-status-bar__dropdown-overlay"
+                  onClick={() => setShowBackendSelector(false)}
+                  aria-hidden="true"
+                />
+                <div className="session-status-bar__backend-dropdown" role="listbox">
+                  {backends.map(backend => (
+                    <button
+                      key={backend}
+                      type="button"
+                      role="option"
+                      aria-selected={backend === selectedBackend}
+                      className={`session-status-bar__backend-option ${backend === selectedBackend ? 'session-status-bar__backend-option--selected' : ''}`}
+                      onClick={() => handleBackendChange(backend)}
+                      disabled={isChangingBackend}
+                    >
+                      {backend}
+                    </button>
+                  ))}
+                </div>
+              </>
             )}
           </div>
         </div>
 
-        <span className="session-status-bar__context-values">
-          {formatTokens(contextTokens)} / {formatTokens(contextWindow)}
-          <span className="session-status-bar__context-percent">
-            ({contextUsage.toFixed(0)}%)
+        <div className="session-status-bar__right">
+          {/* Pin toggle button */}
+          {onTogglePin && (
+            <button
+              type="button"
+              className={`session-status-bar__pin-button ${isPinned ? 'session-status-bar__pin-button--active' : ''}`}
+              onClick={onTogglePin}
+              title={isPinned ? 'Unpin session' : 'Pin session'}
+              aria-label={isPinned ? 'Unpin session' : 'Pin session'}
+            >
+              <PinIcon isPinned={isPinned} />
+            </button>
+          )}
+
+          <span className="session-status-bar__context-values">
+            {formatTokens(contextTokens)} / {formatTokens(contextWindow)}
+            <span className="session-status-bar__context-percent">
+              ({contextUsage.toFixed(0)}%)
+            </span>
           </span>
-        </span>
+        </div>
       </div>
 
       {/* Context usage bar */}
@@ -210,6 +322,19 @@ export const SessionStatusBar = memo(function SessionStatusBar({
         />
       </div>
     </div>
+
+    {/* Rename session modal */}
+    {client && isConnected && (
+      <RenameSessionModal
+        isOpen={showRenameModal}
+        onClose={() => setShowRenameModal(false)}
+        sessionId={session.id}
+        currentTitle={session.title || session.forkName || ''}
+        client={client.sessions}
+        onRenamed={handleRenamed}
+      />
+    )}
+    </>
   );
 });
 

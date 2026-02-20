@@ -44,6 +44,40 @@
   padding-left: 20px; /* Creates visual hierarchy */
 }
 
+/* ===== Day group headers ===== */
+.tree-group {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tree-group__header {
+  font-size: 11px;
+  font-weight: 600;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 12px 8px 4px 8px;
+  margin-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.tree-group:first-child .tree-group__header {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.tree-group--pinned .tree-group__header {
+  color: #facc15;
+}
+
+.tree-group__sessions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
 /* ===== Node (base) ===== */
 .tree-node {
   display: flex;
@@ -169,10 +203,17 @@
   flex-shrink: 0;
   opacity: 0;
   transition: opacity 0.15s ease;
-  margin-left: auto;
-  padding-left: 8px;
 }
 
+/* Left-side pin toggle styling */
+.tree-node__pin-toggle--left {
+  margin-left: 0;
+  margin-right: 4px;
+  padding-left: 0;
+  width: 16px;
+}
+
+/* Show pin toggle on hover */
 .tree-node__content:hover .tree-node__pin-toggle {
   opacity: 0.5;
 }
@@ -181,10 +222,18 @@
   opacity: 1 !important;
 }
 
+/* Always show if pinned */
+.tree-node__pin-toggle--pinned {
+  opacity: 1;
+}
+
 .tree-pin {
   cursor: pointer;
   color: #888;
   transition: color 0.15s ease, transform 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .tree-pin:hover {
@@ -196,13 +245,13 @@
   color: #facc15;
 }
 
+.tree-pin svg {
+  display: block;
+}
+
 /* Pinned session styling */
 .tree-node--pinned > .tree-node__content {
   background: rgba(250, 204, 21, 0.05);
-}
-
-.tree-node--pinned > .tree-node__content .tree-node__pin-toggle {
-  opacity: 1;
 }
 
 @keyframes spin {
@@ -256,4 +305,8 @@
 
 [data-theme="light"] .tree-node__content--selected {
   background: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme="light"] .tree-group__header {
+  border-top-color: rgba(0, 0, 0, 0.08);
 }

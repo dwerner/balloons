@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-19T11:22:28.808994
+// Generated: 2026-02-19T19:20:49.261415
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -961,6 +961,24 @@ export interface SessionManagerService {
   getAllStreamingInfo(): Promise<Types.StreamingInfo[]>;
 
   /**
+   * Get summaries of each exchange in a session for proposal UIs.
+   * 
+   * Returns short descriptions of each exchange for display in fork/merge
+   * proposal components, helping the user understand what context each
+   * exchange contains.
+   * 
+   * Args:
+   * session_id: ID of the session to get exchange summaries for
+   * exclude_current: If True, exclude the last exchange (the one
+   * containing a proposal). Default True since this
+   * is typically called when displaying a proposal.
+   * 
+   * Returns:
+   * List of ExchangeSummary objects with index, summary, and default mode
+   */
+  getExchangeSummaries(sessionId: string, excludeCurrent?: boolean): Promise<Types.ExchangeSummary[]>;
+
+  /**
    * Get information about a specific session.
    * 
    * Args:
@@ -1036,6 +1054,48 @@ export interface SessionManagerService {
   mergeSession(forkSessionId: string, mergeSummary: string, filesChanged?: string[] | null, keyAccomplishments?: string[] | null, reason?: string): Promise<Types.MergeSessionResult>;
 
   /**
+   * Respond to a fork proposal by accepting or rejecting it.
+   * 
+   * When accepting, optionally provide modified context_plan and initial_prompt.
+   * The context_plan uses exchange ranges (like "0-2", "last") rather than
+   * individual turn indices - this method handles the resolution.
+   * 
+   * Args:
+   * session_id: ID of the session containing the proposal
+   * proposal_id: ID of the proposal to respond to
+   * accepted: True to accept, False to reject
+   * context_plan: Modified context plan (list of {exchange_range, mode, reason})
+   * If not provided, uses the original from the proposal
+   * initial_prompt: Modified initial prompt (if not provided, uses original)
+   * name: Fork name (if not provided, uses original from proposal)
+   * description: Fork description (if not provided, uses original from proposal)
+   * start_streaming: If True and accepted, start streaming after fork creation
+   * 
+   * Returns:
+   * RespondToForkProposalResult with fork session info if accepted
+   */
+  respondToForkProposal(sessionId: string, proposalId: string, accepted: boolean, contextPlan?: Record<string, unknown>[] | null, initialPrompt?: string | null, name?: string | null, description?: string | null, startStreaming?: boolean): Promise<Types.RespondToForkProposalResult>;
+
+  /**
+   * Respond to a merge proposal by accepting or rejecting it.
+   * 
+   * When accepting, optionally provide a modified summary.
+   * 
+   * Args:
+   * session_id: ID of the session containing the proposal (the fork session)
+   * proposal_id: ID of the proposal to respond to
+   * accepted: True to accept, False to reject
+   * summary: Modified merge summary (if not provided, uses original)
+   * files_changed: Modified list of changed files
+   * key_accomplishments: Modified list of accomplishments
+   * reason: Modified reason for merge
+   * 
+   * Returns:
+   * RespondToMergeProposalResult with merge info if accepted
+   */
+  respondToMergeProposal(sessionId: string, proposalId: string, accepted: boolean, summary?: string | null, filesChanged?: string[] | null, keyAccomplishments?: string[] | null, reason?: string | null): Promise<Types.RespondToMergeProposalResult>;
+
+  /**
    * Set the backend for a session.
    * 
    * The new backend will be used for the next streaming request.
@@ -1049,6 +1109,18 @@ export interface SessionManagerService {
    * True if successful, False if session not found or invalid backend
    */
   setSessionBackend(sessionId: string, backendName: string): Promise<boolean>;
+
+  /**
+   * Set the title for a session.
+   * 
+   * Args:
+   * session_id: ID of the session to update
+   * title: New title for the session
+   * 
+   * Returns:
+   * True if successful, False if session not found
+   */
+  setSessionTitle(sessionId: string, title: string): Promise<boolean>;
 
   /**
    * Submit a message to a session and start streaming the response.
@@ -1257,6 +1329,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.call('getAllStreamingInfo', {  });
   }
 
+  async getExchangeSummaries(sessionId: string, excludeCurrent?: boolean): Promise<Types.ExchangeSummary[]> {
+    return this.call('getExchangeSummaries', { sessionId: sessionId, excludeCurrent: excludeCurrent });
+  }
+
   async getSession(sessionId: string): Promise<Types.ManagedSessionInfo | null> {
     return this.call('getSession', { sessionId: sessionId });
   }
@@ -1285,8 +1361,20 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.call('mergeSession', { forkSessionId: forkSessionId, mergeSummary: mergeSummary, filesChanged: filesChanged, keyAccomplishments: keyAccomplishments, reason: reason });
   }
 
+  async respondToForkProposal(sessionId: string, proposalId: string, accepted: boolean, contextPlan?: Record<string, unknown>[] | null, initialPrompt?: string | null, name?: string | null, description?: string | null, startStreaming?: boolean): Promise<Types.RespondToForkProposalResult> {
+    return this.call('respondToForkProposal', { sessionId: sessionId, proposalId: proposalId, accepted: accepted, contextPlan: contextPlan, initialPrompt: initialPrompt, name: name, description: description, startStreaming: startStreaming });
+  }
+
+  async respondToMergeProposal(sessionId: string, proposalId: string, accepted: boolean, summary?: string | null, filesChanged?: string[] | null, keyAccomplishments?: string[] | null, reason?: string | null): Promise<Types.RespondToMergeProposalResult> {
+    return this.call('respondToMergeProposal', { sessionId: sessionId, proposalId: proposalId, accepted: accepted, summary: summary, filesChanged: filesChanged, keyAccomplishments: keyAccomplishments, reason: reason });
+  }
+
   async setSessionBackend(sessionId: string, backendName: string): Promise<boolean> {
     return this.call('setSessionBackend', { sessionId: sessionId, backendName: backendName });
+  }
+
+  async setSessionTitle(sessionId: string, title: string): Promise<boolean> {
+    return this.call('setSessionTitle', { sessionId: sessionId, title: title });
   }
 
   async submitMessage(sessionId: string, content: string, messages?: unknown[] | null, queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult> {
@@ -2949,6 +3037,155 @@ export class ImageServiceClient implements ImageService {
 
   onImageUploaded(callback: (data: Types.ImageEventData) => void): Unsubscribe {
     return this.subscribe('imageUploaded', callback);
+  }
+
+}
+
+/**
+ * WebSocket-exposed service for sound file management.
+ * 
+ * Handles listing available sounds, retrieving sound data for browser playback,
+ * and uploading custom sounds.
+ */
+export interface SoundService {
+  /**
+   * Delete a sound file.
+   * 
+   * Args:
+   * filename: Name of the sound file to delete
+   * 
+   * Returns:
+   * True if deleted, False if not found
+   */
+  deleteSound(filename: string): Promise<boolean>;
+
+  /**
+   * Get sound file data for browser playback.
+   * 
+   * Args:
+   * filename: Name of the sound file
+   * 
+   * Returns:
+   * SoundData with base64-encoded audio, or None if not found
+   */
+  getSoundData(filename: string): Promise<Types.SoundData | null>;
+
+  /**
+   * Get the sounds directory path.
+   * 
+   * Returns:
+   * Absolute path to sounds directory
+   */
+  getSoundsDir(): Promise<string>;
+
+  /**
+   * List all available sound files.
+   * 
+   * Returns:
+   * List of SoundInfo objects for each sound file.
+   */
+  listSounds(): Promise<Types.SoundInfo[]>;
+
+  /**
+   * Upload a custom sound file.
+   * 
+   * Args:
+   * data_base64: Base64-encoded audio data
+   * filename: Desired filename
+   * media_type: MIME type (audio/ogg, audio/mpeg, etc.)
+   * 
+   * Returns:
+   * SoundUploadResult with success status
+   */
+  uploadSound(dataBase64: string, filename: string, mediaType: string): Promise<Types.SoundUploadResult>;
+
+}
+
+export interface SoundEvents {
+  /**
+   * Emitted when a sound is deleted.
+   */
+  onSoundDeleted(callback: (data: Types.SoundEventData) => void): Unsubscribe;
+
+  /**
+   * Emitted when a sound is uploaded.
+   */
+  onSoundUploaded(callback: (data: Types.SoundEventData) => void): Unsubscribe;
+
+}
+
+export class SoundServiceClient implements SoundService {
+  private ws: WebSocket;
+  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
+  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
+
+  constructor(ws: WebSocket) {
+    this.ws = ws;
+    this.ws.addEventListener('message', this.handleMessage.bind(this));
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    const msg = JSON.parse(event.data);
+    if (msg.id && this.pending.has(msg.id)) {
+      const { resolve, reject } = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      if (msg.error) {
+        reject(new Error(msg.error.message));
+      } else {
+        resolve(msg.result);
+      }
+    } else if (msg.event) {
+      const handlers = this.eventHandlers.get(msg.event);
+      if (handlers) {
+        handlers.forEach(h => h(msg.data));
+      }
+    }
+  }
+
+  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const id = generateRequestId();
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, new Set());
+    }
+    this.eventHandlers.get(event)!.add(callback);
+    return () => {
+      this.eventHandlers.get(event)?.delete(callback);
+    };
+  }
+
+  async deleteSound(filename: string): Promise<boolean> {
+    return this.call('deleteSound', { filename: filename });
+  }
+
+  async getSoundData(filename: string): Promise<Types.SoundData | null> {
+    return this.call('getSoundData', { filename: filename });
+  }
+
+  async getSoundsDir(): Promise<string> {
+    return this.call('getSoundsDir', {  });
+  }
+
+  async listSounds(): Promise<Types.SoundInfo[]> {
+    return this.call('listSounds', {  });
+  }
+
+  async uploadSound(dataBase64: string, filename: string, mediaType: string): Promise<Types.SoundUploadResult> {
+    return this.call('uploadSound', { dataBase64: dataBase64, filename: filename, mediaType: mediaType });
+  }
+
+  onSoundDeleted(callback: (data: Types.SoundEventData) => void): Unsubscribe {
+    return this.subscribe('soundDeleted', callback);
+  }
+
+  onSoundUploaded(callback: (data: Types.SoundEventData) => void): Unsubscribe {
+    return this.subscribe('soundUploaded', callback);
   }
 
 }

@@ -10,7 +10,7 @@ from typing import Optional, AsyncIterator
 
 import aiofiles
 
-from models import Message, TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, ArchiveSummary, SlideBlock, ReviewBlock, ContentBlock, ContextMode, QueuedMessage, MessageQueue, Turn, ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData
+from models import Message, TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, ArchiveSummary, SlideBlock, ReviewBlock, ContentBlock, ContextMode, QueuedMessage, MessageQueue, Turn, ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData, ExchangeInfo
 
 # Rust storage availability (checked lazily to avoid circular imports)
 _rust_storage_checked = False
@@ -1070,6 +1070,49 @@ class Session:
                 "task_category": block.task_category,
                 "task_description": block.task_description,
             }
+        elif isinstance(block, ForkProposalBlock):
+            result = {
+                "type": "fork_proposal",
+                "proposal_id": block.proposal_id,
+                "name": block.name,
+                "description": block.description,
+                "context_plan": [
+                    {
+                        "exchange_range": cp.exchange_range,
+                        "mode": cp.mode,
+                        "reason": cp.reason,
+                    }
+                    for cp in block.context_plan
+                ],
+                "initial_prompt": block.initial_prompt,
+                "bind_to_inherit": block.bind_to_inherit,
+                "status": block.status,
+                "all_exchanges": [
+                    {
+                        "index": ex.index,
+                        "summary": ex.summary,
+                        "mode": ex.mode,
+                    }
+                    for ex in block.all_exchanges
+                ],
+            }
+            if block.bind_to:
+                result["bind_to"] = {
+                    "entity_type": block.bind_to.entity_type,
+                    "entity_id": block.bind_to.entity_id,
+                    "role": block.bind_to.role,
+                }
+            return result
+        elif isinstance(block, MergeProposalBlock):
+            return {
+                "type": "merge_proposal",
+                "proposal_id": block.proposal_id,
+                "summary": block.summary,
+                "reason": block.reason,
+                "files_changed": block.files_changed,
+                "key_accomplishments": block.key_accomplishments,
+                "status": block.status,
+            }
         return {"type": "unknown"}
 
     def _serialize_turn(self, turn: Turn) -> dict:
@@ -1258,6 +1301,52 @@ class Session:
                 overall_score=data.get("overall_score", 0.0),
                 task_category=data.get("task_category", ""),
                 task_description=data.get("task_description", ""),
+            )
+        elif block_type == "fork_proposal":
+            # Parse context_plan
+            context_plan = []
+            for cp_data in data.get("context_plan", []):
+                context_plan.append(ContextAssignmentData(
+                    exchange_range=cp_data.get("exchange_range", ""),
+                    mode=cp_data.get("mode", "compress"),
+                    reason=cp_data.get("reason", ""),
+                ))
+            # Parse all_exchanges
+            all_exchanges = []
+            for ex_data in data.get("all_exchanges", []):
+                all_exchanges.append(ExchangeInfo(
+                    index=ex_data.get("index", 0),
+                    summary=ex_data.get("summary", ""),
+                    mode=ex_data.get("mode", "compress"),
+                ))
+            # Parse bind_to
+            bind_to = None
+            if "bind_to" in data and data["bind_to"]:
+                bind_to_data = data["bind_to"]
+                bind_to = ForkBindingData(
+                    entity_type=bind_to_data.get("entity_type", ""),
+                    entity_id=bind_to_data.get("entity_id", ""),
+                    role=bind_to_data.get("role", ""),
+                )
+            return ForkProposalBlock(
+                proposal_id=data.get("proposal_id", ""),
+                name=data.get("name", ""),
+                description=data.get("description", ""),
+                context_plan=context_plan,
+                initial_prompt=data.get("initial_prompt", ""),
+                bind_to=bind_to,
+                bind_to_inherit=data.get("bind_to_inherit", False),
+                status=data.get("status", "pending"),
+                all_exchanges=all_exchanges,
+            )
+        elif block_type == "merge_proposal":
+            return MergeProposalBlock(
+                proposal_id=data.get("proposal_id", ""),
+                summary=data.get("summary", ""),
+                reason=data.get("reason", ""),
+                files_changed=data.get("files_changed", []),
+                key_accomplishments=data.get("key_accomplishments", []),
+                status=data.get("status", "pending"),
             )
         # Fallback to text
         return TextBlock(text=str(data))

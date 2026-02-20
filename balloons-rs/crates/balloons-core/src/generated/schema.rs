@@ -2,7 +2,7 @@
 //!
 //! Generated from Python domain entities marked with @rust_schema.
 //! Source: models.py and other domain modules
-//! Generated: 2026-02-13T13:15:34.115019
+//! Generated: 2026-02-19T17:35:55.818505
 //!
 //! To regenerate:
 //!     python -m codegen.generate_rust
@@ -185,4 +185,6 @@ pub struct SessionBinding {
 pub struct UserPrefs {
     #[serde(default)]
     pub goal_tree_collapsed_ids: Vec<String>,
+    #[serde(default)]
+    pub pinned_session_ids: Vec<String>,
 }

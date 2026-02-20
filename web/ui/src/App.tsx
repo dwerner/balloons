@@ -11,7 +11,7 @@ import { ForkProposalTurn } from './components/ForkProposalTurn';
 import { CreateTodoModal, type CreateTodoResult } from './components/CreateTodoModal';
 import { SimpleTurnsView } from './components/SimpleTurnsView';
 import { StreamingTurnsView } from './components/StreamingTurnsView';
-import { useWakeLock } from './hooks';
+import { useWakeLock, useSoundNotifications } from './hooks';
 
 // Module-level client reference for debug logging
 // Set when client connects, cleared on disconnect
@@ -843,12 +843,9 @@ const MessageInputInner = forwardRef<MessageInputHandle, MessageInputProps>(
   }
 );
 
-// Custom comparison - only re-render for visual/functional changes, not callback identity
-const MessageInput = memo(MessageInputInner, (prevProps, nextProps) => {
-  return prevProps.placeholder === nextProps.placeholder &&
-         prevProps.disabled === nextProps.disabled;
-  // Intentionally ignore onSubmit and onPaste - we use refs for those
-});
+// Use default memo - will re-render when callbacks change (which only happens
+// on session/state changes, not keystrokes since input is uncontrolled)
+const MessageInput = memo(MessageInputInner);
 
 export function App() {
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
@@ -1020,6 +1017,14 @@ export function App() {
             setSelectedSessionId(null);
             setTurns([]);
           }
+        })
+      );
+
+      // Pin state changes - refresh sessions to get updated isPinned and re-sort
+      unsubscribers.push(
+        client.tree.onPinnedSessionsChanged(async () => {
+          const sessionList = await client.tree.getAllSessions();
+          setSessions(sessionList);
         })
       );
 
@@ -1734,11 +1739,19 @@ export function App() {
 
   const selectedSession = sessions.find(s => s.id === selectedSessionId);
 
+  // Sound notifications for streaming events
+  // This hook subscribes to sessionDataStreamDone and sessionDataStreamError events
+  // and plays configured notification sounds when they occur
+  const soundNotifications = useSoundNotifications(
+    connectionState === 'connected' ? clientRef.current : null,
+    selectedSessionId
+  );
+
   return (
     <AppLayout>
       {/* Mobile header */}
       <AppLayout.Header>
-        <MobileHeader connectionState={connectionState} />
+        <MobileHeader connectionState={connectionState} selectedSession={selectedSession} />
       </AppLayout.Header>
 
       {/* Sidebar */}
@@ -1747,6 +1760,7 @@ export function App() {
           connectionState={connectionState}
           sessions={sessions}
           selectedSessionId={selectedSessionId}
+          selectedSession={selectedSession}
           turns={turns}
           streamingTask={streamingTask}
           onSelectSession={handleSelectSession}
@@ -1757,6 +1771,8 @@ export function App() {
             setCreateTodoModalState({ isOpen: true, planId, planTitle });
           }}
           creatingSessionFor={creatingSessionFor}
+          soundEnabled={soundNotifications.soundEnabled}
+          onToggleSound={() => soundNotifications.setSoundEnabled(!soundNotifications.soundEnabled)}
           onNewBareSession={async () => {
             const sessionsClient = clientRef.current?.sessions;
             if (!sessionsClient || connectionState !== 'connected') return;
@@ -1951,12 +1967,15 @@ export function App() {
                   onStop={handleStopStreaming}
                   stopDisabled={connectionState !== 'connected'}
                   sessionContextTokens={selectedSession.cachedContextTokens}
+                  isPinned={selectedSession.isPinned ?? false}
+                  onTogglePin={() => handleTogglePin(selectedSession.id)}
                 />
               ) : selectedSession && (
                 <SessionStatusBar
                   session={selectedSession}
                   isStreaming={selectedSession.isStreaming}
                   client={clientRef.current}
+                  onTogglePin={() => handleTogglePin(selectedSession.id)}
                 />
               )}
               {/* Image preview area */}
@@ -2100,10 +2119,16 @@ export function App() {
 
 interface MobileHeaderProps {
   connectionState: ConnectionState;
+  selectedSession?: SessionInfo | null;
 }
 
-function MobileHeader({ connectionState }: MobileHeaderProps) {
+function MobileHeader({ connectionState, selectedSession }: MobileHeaderProps) {
   const { openSidebar } = useLayout();
+
+  // Format title: session name (or title) + hash prefix
+  const headerTitle = selectedSession
+    ? `${selectedSession.forkName || selectedSession.title || 'Session'} #${selectedSession.id.slice(0, 6)}`
+    : 'Balloons';
 
   return (
     <>
@@ -2111,7 +2136,7 @@ function MobileHeader({ connectionState }: MobileHeaderProps) {
         ☰
       </button>
       <div className={`connection-status ${connectionState}`} title={connectionState} />
-      <h1>Balloons</h1>
+      <h1>{headerTitle}</h1>
     </>
   );
 }
@@ -2123,6 +2148,7 @@ interface SidebarContentProps {
   connectionState: ConnectionState;
   sessions: SessionInfo[];
   selectedSessionId: string | null;
+  selectedSession?: SessionInfo | null;
   turns: TurnInfo[];
   streamingTask: TaskInfo | null;
   onSelectSession: (sessionId: string) => void;
@@ -2133,12 +2159,16 @@ interface SidebarContentProps {
   onNewBareSession?: () => void;
   onNewBoundSession?: (entityType: string, entityId: string) => Promise<void>;
   creatingSessionFor?: string | null; // "entityType:entityId" when creating bound session
+  // Sound notification props
+  soundEnabled?: boolean;
+  onToggleSound?: () => void;
 }
 
 function SidebarContent({
   connectionState,
   sessions,
   selectedSessionId,
+  selectedSession,
   turns,
   streamingTask,
   onSelectSession,
@@ -2149,6 +2179,8 @@ function SidebarContent({
   onNewBareSession,
   onNewBoundSession,
   creatingSessionFor = null,
+  soundEnabled = true,
+  onToggleSound,
 }: SidebarContentProps) {
   const { closeSidebar, layoutMode } = useLayout();
   const { resolvedTheme, toggleTheme } = useTheme();
@@ -2177,20 +2209,34 @@ function SidebarContent({
     }
   }, [onSelectSession, closeSidebar, layoutMode]);
 
-  // Sort sessions: current first, then by last modified (most recent first)
+  // Sort sessions: pinned first, then current, then by last modified (most recent first)
   const sortedSessions = useMemo(() => {
     return [...sessions].sort((a, b) => {
+      // Pinned sessions come first
+      const aPinned = a.isPinned ?? false;
+      const bPinned = b.isPinned ?? false;
+      if (aPinned && !bPinned) return -1;
+      if (!aPinned && bPinned) return 1;
+
+      // Within pinned/unpinned groups: current first
       if (a.isCurrent) return -1;
       if (b.isCurrent) return 1;
+
+      // Then by last modified
       return new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime();
     });
   }, [sessions]);
+
+  // Format title: session name (or title) + hash prefix
+  const headerTitle = selectedSession
+    ? `${selectedSession.forkName || selectedSession.title || 'Session'} #${selectedSession.id.slice(0, 6)}`
+    : 'Balloons';
 
   return (
     <>
       <header className="sidebar-header">
         <div className={`connection-status ${connectionState}`} title={connectionState} />
-        <h1>Balloons</h1>
+        <h1>{headerTitle}</h1>
 
         {/* View mode toggle */}
         <div className="view-toggle">
@@ -2219,6 +2265,18 @@ function SidebarContent({
             🎯
           </button>
         </div>
+
+        {/* Sound notification toggle */}
+        {onToggleSound && (
+          <button
+            className={`sound-toggle ${soundEnabled ? 'active' : ''}`}
+            onClick={onToggleSound}
+            aria-label={soundEnabled ? 'Disable notification sounds' : 'Enable notification sounds'}
+            title={soundEnabled ? 'Sounds: enabled' : 'Sounds: disabled'}
+          >
+            {soundEnabled ? '🔔' : '🔕'}
+          </button>
+        )}
 
         {/* Wake lock toggle - keeps screen awake on mobile */}
         {wakeLockSupported && (
@@ -2347,14 +2405,29 @@ function SidebarContent({
           {sortedSessions.map(session => {
             const isSelected = session.id === selectedSessionId;
             const showStreamingDetails = isSelected && session.isStreaming && streamingTask;
+            const isPinned = session.isPinned ?? false;
             return (
               <div
                 key={session.id}
-                className={`session-item ${isSelected ? 'selected' : ''} ${session.isStreaming ? 'streaming' : ''}`}
+                className={`session-item ${isSelected ? 'selected' : ''} ${session.isStreaming ? 'streaming' : ''} ${isPinned ? 'pinned' : ''}`}
                 onClick={() => handleSelectSession(session.id)}
               >
-                <div className="session-title">
-                  {session.title || `Session ${session.id.slice(0, 8)}`}
+                <div className="session-header">
+                  {onTogglePin && (
+                    <span
+                      className={`session-pin ${isPinned ? 'session-pin--active' : ''}`}
+                      onClick={(e) => { e.stopPropagation(); onTogglePin(session.id); }}
+                      title={isPinned ? 'Unpin session' : 'Pin session'}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill={isPinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 17v5" />
+                        <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1z" />
+                      </svg>
+                    </span>
+                  )}
+                  <div className="session-title">
+                    {session.title || `Session ${session.id.slice(0, 8)}`}
+                  </div>
                 </div>
                 <div className="session-meta">
                   {session.messageCount} messages

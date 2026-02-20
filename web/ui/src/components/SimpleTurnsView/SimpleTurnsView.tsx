@@ -1,6 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { BalloonsClient } from '../../../../generated/balloons-client';
 import { MarkdownContent } from '../../MarkdownContent';
+import { useAutoScroll } from '../../hooks';
+import { ScrollToBottom } from '../ScrollToBottom';
 import './SimpleTurnsView.css';
 
 // Create a debug logger that uses the client's WebSocket connection
@@ -54,7 +56,14 @@ export function SimpleTurnsView({ sessionId, client }: SimpleTurnsViewProps) {
   const [turns, setTurns] = useState<StreamingTurn[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const [isStreaming, setIsStreaming] = useState(false);
+
+  // Robust autoscroll: follows stream, pauses on user scroll-up, resumes on click
+  const { scrollRef, isFollowing, scrollToBottom } = useAutoScroll({
+    deps: [turns],
+    threshold: 150,
+    enabled: true,
+  });
 
   // Load turns from server when session changes
   useEffect(() => {
@@ -500,12 +509,43 @@ export function SimpleTurnsView({ sessionId, client }: SimpleTurnsViewProps) {
     };
   }, [sessionId, client]);
 
-  // Auto-scroll to bottom when new content arrives
+  // Track streaming state from events
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [turns]);
+    if (!sessionId || !client) return;
+
+    const unsubscribers: Array<() => void> = [];
+
+    unsubscribers.push(
+      client.sessionData.sessionDataStreamStarted((event) => {
+        if (event.sessionId === sessionId) {
+          setIsStreaming(true);
+        }
+      })
+    );
+
+    unsubscribers.push(
+      client.sessionData.sessionDataStreamDone((event) => {
+        if (event.sessionId === sessionId) {
+          setIsStreaming(false);
+        }
+      })
+    );
+
+    unsubscribers.push(
+      client.sessionData.sessionDataStreamError((event) => {
+        if (event.sessionId === sessionId) {
+          setIsStreaming(false);
+        }
+      })
+    );
+
+    return () => {
+      unsubscribers.forEach(unsub => unsub());
+    };
+  }, [sessionId, client]);
+
+  // Show scroll indicator when streaming and user scrolled away
+  const showScrollIndicator = isStreaming && !isFollowing;
 
   if (!sessionId) {
     return <div className="simple-turns-view empty">No session selected</div>;
@@ -520,15 +560,22 @@ export function SimpleTurnsView({ sessionId, client }: SimpleTurnsViewProps) {
   }
 
   return (
-    <div className="simple-turns-view" ref={scrollRef}>
-      <div className="simple-turns-header">
-        Simple Turns View ({turns.length} turns)
+    <div className="simple-turns-view-container" ref={scrollRef}>
+      <div className="simple-turns-view">
+        <div className="simple-turns-header">
+          Simple Turns View ({turns.length} turns)
+        </div>
+        <div className="simple-turns-list">
+          {turns.map(turn => (
+            <TurnCard key={turn.idx} turn={turn} />
+          ))}
+        </div>
       </div>
-      <div className="simple-turns-list">
-        {turns.map(turn => (
-          <TurnCard key={turn.idx} turn={turn} />
-        ))}
-      </div>
+      <ScrollToBottom
+        visible={showScrollIndicator}
+        onClick={scrollToBottom}
+        isStreaming={isStreaming}
+      />
     </div>
   );
 }
@@ -602,6 +649,47 @@ function TurnCard({ turn }: { turn: StreamingTurn }) {
           ) : streaming ? (
             <span className="thinking">Thinking...</span>
           ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  // Fork proposal - rendered as interactive card
+  // TODO: Import and use ForkProposalCard from StreamingTurnsView
+  if (contentBlockType === 'fork_proposal') {
+    return (
+      <div className="turn-card system fork-proposal">
+        <div className="turn-card-header">
+          <span className="turn-icon">⑂</span>
+          <span className="turn-label">Fork Proposal</span>
+        </div>
+        <div className="turn-card-body">
+          <div className="fork-proposal-notice">
+            ⚠️ Fork proposal cards are only fully interactive in Streaming view.
+            <br />
+            Switch to <strong>Streaming</strong> view (button above) to accept/reject.
+          </div>
+          <pre className="fork-proposal-raw">{content}</pre>
+        </div>
+      </div>
+    );
+  }
+
+  // Merge proposal - similar treatment
+  if (contentBlockType === 'merge_proposal') {
+    return (
+      <div className="turn-card system merge-proposal">
+        <div className="turn-card-header">
+          <span className="turn-icon">⤴</span>
+          <span className="turn-label">Merge Proposal</span>
+        </div>
+        <div className="turn-card-body">
+          <div className="merge-proposal-notice">
+            ⚠️ Merge proposal cards are only fully interactive in Streaming view.
+            <br />
+            Switch to <strong>Streaming</strong> view (button above) to accept/reject.
+          </div>
+          <pre className="merge-proposal-raw">{content}</pre>
         </div>
       </div>
     );

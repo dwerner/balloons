@@ -1,9 +1,18 @@
-.simple-turns-view {
+/* Container is the scrollable element with position:relative for the
+ * scroll-to-bottom indicator positioning.
+ */
+.simple-turns-view-container {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
   overflow-y: auto;
   background: var(--background-secondary, #1e1e1e);
+}
+
+.simple-turns-view {
+  display: flex;
+  flex-direction: column;
   padding: 12px;
 }
 
@@ -61,7 +70,7 @@
 }
 
 .streaming-indicator {
-  color: var(--accent, #4dabf7);
+  color: var(--accent);
   animation: pulse 1s infinite;
 }
 
@@ -89,16 +98,16 @@
 
 /* Assistant turns */
 .turn-card.assistant {
-  border-color: var(--accent, #4dabf7);
+  border-color: var(--accent-assistant, #f87171);
 }
 
 .turn-card.assistant .turn-card-header {
-  background: rgba(77, 171, 247, 0.1);
-  color: var(--accent, #4dabf7);
+  background: rgba(248, 113, 113, 0.1);
+  color: var(--accent-assistant, #f87171);
 }
 
 .turn-card.assistant.streaming {
-  border-color: var(--accent-active, #74c0fc);
+  border-color: var(--accent-active);
 }
 
 .turn-card.assistant .thinking {

@@ -33,7 +33,7 @@ def debug_event(msg: str) -> None:
         _log.debug(msg)
 
 from rich.console import RenderableType
-from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, GoalTreeView, GoalTreeWidget, VerticalSplitter, HorizontalSplitter, TaskPane, ClickableSessionLink, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, ReviewMarker, ForkProposalMarker, MergeProposalMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, BeginStreamingModal, BeginStreamingResult, MessageStash, StashPopup, SlidesPane, PresentationScreen, MessageQueuePopup, EntityPane, ActionableToastRack, ActionableNotification, ActionableToast, FrameMonitorWidget, get_frame_monitor
+from widgets import ChatLogView, MoreBelowIndicator, InputBox, StatusBar, ContextTreeView, NestedTreeView, GoalTreeView, GoalTreeWidget, VerticalSplitter, HorizontalSplitter, TaskPane, ClickableSessionLink, WithWidget, WithResultWidget, DebugPane, ForkMarker, MergeMarker, LinkMarker, ReviewMarker, ForkProposalMarker, MergeProposalMarker, Breadcrumb, ConfirmDialog, HelpModal, NewSessionModal, NewSessionResult, PreferencesModal, ToolPreferences, DEFAULT_TOOLS, ForkProposalModal, ForkProposalResult, MergeProposalModal, MergeProposalResult, BeginStreamingModal, BeginStreamingResult, MessageStash, StashPopup, SlidesPane, PresentationScreen, MessageQueuePopup, EntityPane, ActionableToastRack, ActionableNotification, ActionableToast, FrameMonitorWidget, get_frame_monitor, RenameSessionModal, RenameSessionResult, SessionHeader
 from widgets.input_box import CompletionPopup
 from widgets.archive_marker import ArchiveMarker
 from claude_runner import ClaudeRunner
@@ -142,6 +142,7 @@ from service import (
     TaskStateService,
     SessionDataService,
     ImageService,
+    SoundService,
     DebugLogService,
 )
 from service.session_events import (
@@ -342,7 +343,8 @@ class BalloonsApp(App):
         )
         # SessionManagerService for event pumping - created here so widgets can access tree_state
         # Note: Event pump is started in on_mount(), observer registration also in on_mount()
-        self._session_service = SessionManagerService(self._manager)
+        # Pass queue_state so queued messages are automatically submitted when streaming ends
+        self._session_service = SessionManagerService(self._manager, queue_state=self._queue_state)
         self._tree_state = self._session_service.get_tree_state()
         # Simple runner for helper streaming (summaries, etc.) - used for blocking operations
         self._helper_runner = create_runner(self._backend_config)
@@ -704,6 +706,7 @@ class BalloonsApp(App):
             # SessionDataService for subscription-based streaming
             self._session_data_service = SessionDataService()
             image_service = ImageService()
+            sound_service = SoundService()
             debug_log_service = DebugLogService()
 
             # Wire up TaskStateService for legacy WebSocket events
@@ -721,6 +724,7 @@ class BalloonsApp(App):
             self._ws_server.register_service(self._task_service)
             self._ws_server.register_service(self._session_data_service)
             self._ws_server.register_service(image_service)
+            self._ws_server.register_service(sound_service)
             self._ws_server.register_service(debug_log_service)
 
             # Start the server
@@ -3656,6 +3660,32 @@ class BalloonsApp(App):
             session_id, turn_idx, "[Fork proposal]", turn.content_block, []
         )
 
+        # Emit turn events for WebSocket clients (web UI)
+        # This is critical for the web UI to render the ForkProposalCard
+        await self._manager._notify_observers(
+            "on_turn_created",
+            TurnCreatedEvent(
+                session_id=session_id,
+                turn_id=turn.id,
+                turn_index=turn_idx,
+                role="system",
+                exchange_id=exchange_id or "",
+                content_block_type="fork_proposal",
+            ),
+        )
+        await self._manager._notify_observers(
+            "on_turn_finished",
+            TurnFinishedEvent(
+                session_id=session_id,
+                turn_id=turn.id,
+                turn_index=turn_idx,
+                role="system",
+                content="[Fork proposal]",
+                tokens=0,
+                content_block=turn.content_block,
+            ),
+        )
+
         # Store metadata for later use when accepting the proposal
         self._pending_fork_proposals[proposal_id] = {
             "proposal": proposal,
@@ -3680,6 +3710,7 @@ class BalloonsApp(App):
             status="pending",
             turn_id=turn_idx,
             all_exchanges=all_exchanges,
+            session_id=session_id,
         )
         chat_log.mount(widget)
         chat_log.scroll_end(animate=False)
@@ -3968,6 +3999,32 @@ class BalloonsApp(App):
         context_tree.start_turn(session_id, turn_idx, "system", exchange_id=exchange_id)
         await context_tree.finish_turn(
             session_id, turn_idx, "[Merge proposal]", turn.content_block, []
+        )
+
+        # Emit turn events for WebSocket clients (web UI)
+        # This is critical for the web UI to render the MergeProposalCard
+        await self._manager._notify_observers(
+            "on_turn_created",
+            TurnCreatedEvent(
+                session_id=session_id,
+                turn_id=turn.id,
+                turn_index=turn_idx,
+                role="system",
+                exchange_id=exchange_id or "",
+                content_block_type="merge_proposal",
+            ),
+        )
+        await self._manager._notify_observers(
+            "on_turn_finished",
+            TurnFinishedEvent(
+                session_id=session_id,
+                turn_id=turn.id,
+                turn_index=turn_idx,
+                role="system",
+                content="[Merge proposal]",
+                tokens=0,
+                content_block=turn.content_block,
+            ),
         )
 
         # Store metadata for later use when accepting the proposal
@@ -5053,7 +5110,8 @@ class BalloonsApp(App):
                 bind_to=bind_to,
             )
 
-            session_id = self.session.id if self.session else None
+            # Use session_id from event if available (preferred), otherwise fall back to current session
+            session_id = event.session_id or (self.session.id if self.session else None)
             if not session_id:
                 self.notify("No active session", severity="error")
                 return
@@ -5087,16 +5145,19 @@ class BalloonsApp(App):
         debug_log.info(
             f"Fork proposal rejected",
             category="fork",
-            details={"proposal_id": event.proposal_id},
+            details={"proposal_id": event.proposal_id, "session_id": event.session_id},
         )
 
         # Remove from pending
         self._pending_fork_proposals.pop(event.proposal_id, None)
 
-        # Update the proposal status in the session
-        if self.session:
-            self.session.update_fork_proposal_status(event.proposal_id, "rejected")
-            await self.session.save()
+        # Update the proposal status in the correct session (use event.session_id if available)
+        session_id = event.session_id or (self.session.id if self.session else None)
+        if session_id:
+            session = self._manager.get_session(session_id)
+            if session:
+                session.update_fork_proposal_status(event.proposal_id, "rejected")
+                await session.save()
 
         # Notify the user
         self.notify("Fork proposal rejected")
@@ -5467,6 +5528,23 @@ class BalloonsApp(App):
         # Convert 1-indexed turn_id to 0-indexed turn_idx
         turn_idx = event.turn_id - 1
         context_tree.scroll_to_turn(self.session.id, turn_idx)
+
+    def on_session_header_rename_requested(self, event: SessionHeader.RenameRequested) -> None:
+        """Handle click on session header to rename the session."""
+        if not self.session:
+            return
+
+        def handle_result(result: RenameSessionResult | None) -> None:
+            if result is not None:
+                asyncio.create_task(self._handle_title_command(result.new_title))
+
+        self.push_screen(
+            RenameSessionModal(
+                session_id=self.session.id,
+                current_title=event.current_title,
+            ),
+            handle_result,
+        )
 
     async def on_context_tree_view_context_mode_changed(self, event: ContextTreeView.ContextModeChanged) -> None:
         """Handle context mode change from tree - persist to session."""

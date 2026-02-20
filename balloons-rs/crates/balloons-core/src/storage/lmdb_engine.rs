@@ -1676,6 +1676,7 @@ impl StorageEngine for LmdbEngine {
             }
             None => Ok(UserPrefs {
                 goal_tree_collapsed_ids: vec![],
+                pinned_session_ids: vec![],
             }),
         }
     }
@@ -2319,12 +2320,14 @@ mod tests {
                 "plan-2".to_string(),
                 "todo-3".to_string(),
             ],
+            pinned_session_ids: vec!["session-1".to_string()],
         };
 
         future::block_on(async {
             engine.save_user_prefs(&prefs).await.unwrap();
             let loaded = engine.load_user_prefs().await.unwrap();
             assert_eq!(loaded.goal_tree_collapsed_ids, prefs.goal_tree_collapsed_ids);
+            assert_eq!(loaded.pinned_session_ids, prefs.pinned_session_ids);
         });
     }
 
@@ -2335,6 +2338,7 @@ mod tests {
 
         let prefs = UserPrefs {
             goal_tree_collapsed_ids: vec!["goal-abc".to_string(), "plan-xyz".to_string()],
+            pinned_session_ids: vec!["session-abc".to_string()],
         };
 
         // Save and close
@@ -2351,6 +2355,7 @@ mod tests {
             future::block_on(async {
                 let loaded = engine.load_user_prefs().await.unwrap();
                 assert_eq!(loaded.goal_tree_collapsed_ids, prefs.goal_tree_collapsed_ids);
+                assert_eq!(loaded.pinned_session_ids, prefs.pinned_session_ids);
             });
         }
     }
@@ -2364,17 +2369,20 @@ mod tests {
             // Save initial prefs
             let initial = UserPrefs {
                 goal_tree_collapsed_ids: vec!["node-1".to_string()],
+                pinned_session_ids: vec!["session-a".to_string()],
             };
             engine.save_user_prefs(&initial).await.unwrap();
 
             // Save new prefs (should overwrite)
             let updated = UserPrefs {
                 goal_tree_collapsed_ids: vec!["node-2".to_string(), "node-3".to_string()],
+                pinned_session_ids: vec!["session-b".to_string(), "session-c".to_string()],
             };
             engine.save_user_prefs(&updated).await.unwrap();
 
             let loaded = engine.load_user_prefs().await.unwrap();
             assert_eq!(loaded.goal_tree_collapsed_ids, updated.goal_tree_collapsed_ids);
+            assert_eq!(loaded.pinned_session_ids, updated.pinned_session_ids);
         });
     }
 

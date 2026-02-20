@@ -942,6 +942,19 @@ class SessionDataService:
             "tool_input": event.tool_input,
             "tool_index": event.tool_index,
         }
+
+        # DEBUG: Log Edit tool inputs to help diagnose missing diff data
+        if event.tool_name == "Edit":
+            from core.debug_log import debug_log
+            tool_input = event.tool_input or {}
+            debug_log.info(
+                f"[SessionDataService] Edit tool_input: file_path={tool_input.get('file_path', 'N/A')}, "
+                f"old_string_len={len(tool_input.get('old_string', ''))}, "
+                f"new_string_len={len(tool_input.get('new_string', ''))}, "
+                f"keys={list(tool_input.keys())}",
+                category="websocket",
+            )
+
         self._emit_event("sessionDataToolUse", event_data, subscribers)
 
     async def on_tool_result(self, event: ToolResultEvent) -> None:

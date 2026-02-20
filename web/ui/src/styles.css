@@ -4,92 +4,180 @@
 
 /* ----- CSS Variables (Theme Colors) ----- */
 
-/* Dark theme (default) */
+/* Dark theme (default) - Green-tinted */
 :root,
 [data-theme="dark"] {
-  /* Primary background colors */
-  --color-bg-primary: #1a1a2e;
-  --color-bg-secondary: #16213e;
-  --color-bg-tertiary: #0f3460;
+  /* Primary background colors - green-tinted dark */
+  --color-bg-primary: #0a1210;
+  --color-bg-secondary: #0f1a16;
+  --color-bg-tertiary: #152420;
 
-  /* Accent colors */
+  /* Accent colors - Green as primary */
   --color-accent-green: #4ade80;
   --color-accent-green-hover: #22c55e;
-  --color-accent-red: #e94560;
-  --color-accent-red-hover: #dc2626;
+  --color-accent-red: #f87171;
+  --color-accent-red-hover: #ef4444;
   --color-accent-yellow: #facc15;
   --color-accent-yellow-hover: #eab308;
   --color-accent-blue: #60a5fa;
   --color-accent-link: #58a6ff;
 
   /* Text colors */
-  --color-text-primary: #eee;
-  --color-text-secondary: #888;
-  --color-text-muted: #666;
-  --color-text-dim: #6b7280;
+  --color-text-primary: #e8f5e8;
+  --color-text-secondary: #8ba58b;
+  --color-text-muted: #5c7a5c;
+  --color-text-dim: #4a6b4a;
 
-  /* Border colors */
-  --color-border-primary: #0f3460;
-  --color-border-secondary: #30363d;
-  --color-border-tertiary: #2d3748;
+  /* Border colors - green-tinted */
+  --color-border-primary: #1f3a2f;
+  --color-border-secondary: #2a4a3a;
+  --color-border-tertiary: #243d30;
 
-  /* Code colors */
-  --color-code-bg: #0d1117;
-  --color-code-text: #e6db74;
-  --color-code-header: #161b22;
-  --color-code-comment: #8b949e;
+  /* Code colors - green-tinted */
+  --color-code-bg: #081210;
+  --color-code-text: #a8e6a3;
+  --color-code-header: #0f1a16;
+  --color-code-comment: #6b9b6b;
 
   /* Button disabled state */
-  --color-button-disabled-bg: #374151;
-  --color-button-disabled-text: #6b7280;
+  --color-button-disabled-bg: #1f3a2f;
+  --color-button-disabled-text: #4a6b4a;
 
   /* Overlays */
   --color-overlay: rgba(0, 0, 0, 0.5);
 
   /* Spacing */
   --sidebar-width: 280px;
+
+  /* =========================================================================
+   * Card System Variables (used by StreamingTurnsView cards)
+   * These map to the theme system for consistent styling
+   * ========================================================================= */
+
+  /* Background colors for cards - green-tinted */
+  --bg-primary: #0a1210;
+  --bg-secondary: #0f1a16;
+  --bg-tertiary: #152420;
+  --bg-code: #081210;
+  --bg-hover: #1a2e24;
+
+  /* Text colors for cards */
+  --text-primary: #e8f5e8;
+  --text-secondary: #8ba58b;
+  --text-tertiary: #5c7a5c;
+
+  /* Border colors for cards */
+  --border-color: #2a4a3a;
+  --border-muted: #1f3a2f;
+
+  /* Primary accent - GREEN */
+  --color-primary: #4ade80;
+  --accent: #f87171;  /* Assistant accent - RED */
+  --accent-active: #ef4444;
+
+  /* Role-specific accents */
+  --accent-user: #4ade80;  /* User is green */
+  --accent-assistant: #f87171;  /* Assistant is red */
+  --accent-tool: #fbbf24;
+  --accent-success: #4ade80;
+  --accent-fork: #c084fc;
+  --accent-merge: #22d3ee;
+  --accent-link: #34d399;
+  --accent-blue: #60a5fa;
+  --error: #f87171;
+
+  /* Status colors */
+  --color-success: #4ade80;
+  --color-error: #f87171;
+
+  /* Typography */
+  --font-mono: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
 }
 
-/* Light theme */
+/* Light theme - Soft pastel green */
 [data-theme="light"] {
-  /* Primary background colors */
-  --color-bg-primary: #f8fafc;
-  --color-bg-secondary: #ffffff;
-  --color-bg-tertiary: #e2e8f0;
+  /* Primary background colors - soft pastel greens (not harsh white) */
+  --color-bg-primary: #e8f0eb;
+  --color-bg-secondary: #dfe9e2;
+  --color-bg-tertiary: #d2e0d6;
 
-  /* Accent colors - slightly darker for light theme */
-  --color-accent-green: #16a34a;
-  --color-accent-green-hover: #15803d;
-  --color-accent-red: #dc2626;
-  --color-accent-red-hover: #b91c1c;
-  --color-accent-yellow: #ca8a04;
-  --color-accent-yellow-hover: #a16207;
-  --color-accent-blue: #2563eb;
-  --color-accent-link: #2563eb;
+  /* Accent colors - softer for pastel theme */
+  --color-accent-green: #22a55a;
+  --color-accent-green-hover: #1a8a4a;
+  --color-accent-red: #e05555;
+  --color-accent-red-hover: #c94545;
+  --color-accent-yellow: #d4a020;
+  --color-accent-yellow-hover: #b88a18;
+  --color-accent-blue: #4080d0;
+  --color-accent-link: #4080d0;
 
-  /* Text colors */
-  --color-text-primary: #1e293b;
-  --color-text-secondary: #64748b;
-  --color-text-muted: #94a3b8;
-  --color-text-dim: #cbd5e1;
+  /* Text colors - softer contrast */
+  --color-text-primary: #2a3d30;
+  --color-text-secondary: #506058;
+  --color-text-muted: #708878;
+  --color-text-dim: #98b0a0;
 
-  /* Border colors */
-  --color-border-primary: #e2e8f0;
-  --color-border-secondary: #cbd5e1;
-  --color-border-tertiary: #e2e8f0;
+  /* Border colors - soft pastel */
+  --color-border-primary: #c5d8cb;
+  --color-border-secondary: #afc8b8;
+  --color-border-tertiary: #c5d8cb;
 
-  /* Code colors */
-  --color-code-bg: #f1f5f9;
-  --color-code-text: #7c3aed;
-  --color-code-header: #e2e8f0;
-  --color-code-comment: #64748b;
+  /* Code colors - pastel */
+  --color-code-bg: #d8e8dc;
+  --color-code-text: #2a6040;
+  --color-code-header: #c5d8cb;
+  --color-code-comment: #506058;
 
   /* Button disabled state */
-  --color-button-disabled-bg: #e2e8f0;
-  --color-button-disabled-text: #94a3b8;
+  --color-button-disabled-bg: #c5d8cb;
+  --color-button-disabled-text: #708878;
 
   /* Overlays */
-  --color-overlay: rgba(0, 0, 0, 0.3);
+  --color-overlay: rgba(0, 0, 0, 0.25);
+
+  /* =========================================================================
+   * Card System Variables (used by StreamingTurnsView cards)
+   * Light theme overrides - soft pastel
+   * ========================================================================= */
+
+  /* Background colors for cards - soft pastel */
+  --bg-primary: #dfe9e2;
+  --bg-secondary: #d2e0d6;
+  --bg-tertiary: #c5d8cb;
+  --bg-code: #d8e8dc;
+  --bg-hover: #c8dace;
+
+  /* Text colors for cards */
+  --text-primary: #2a3d30;
+  --text-secondary: #506058;
+  --text-tertiary: #708878;
+
+  /* Border colors for cards */
+  --border-color: #b8ccc0;
+  --border-muted: #afc8b8;
+
+  /* Primary accent - GREEN */
+  --color-primary: #22a55a;
+  --accent: #e05555;  /* Assistant accent - RED (softer) */
+  --accent-active: #c94545;
+
+  /* Role-specific accents (softer for pastel) */
+  --accent-user: #22a55a;  /* User is green */
+  --accent-assistant: #e05555;  /* Assistant is red */
+  --accent-tool: #d4a020;
+  --accent-success: #22a55a;
+  --accent-fork: #a050d0;
+  --accent-merge: #20a0b8;
+  --accent-link: #20a898;
+  --accent-blue: #4080d0;
+  --error: #e05555;
+
+  /* Status colors */
+  --color-success: #16a34a;
+  --color-error: #dc2626;
+
+  /* Typography */
+  --font-mono: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
 }
 
 /* ----- Reset & Base Styles ----- */
@@ -287,6 +375,38 @@ body {
   background: rgba(250, 204, 21, 0.25);
 }
 
+/* ----- Sound Notification Toggle Button ----- */
+.sound-toggle {
+  background: none;
+  border: 1px solid var(--color-border-secondary);
+  color: var(--color-text-secondary);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 6px;
+  line-height: 1;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sound-toggle:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-accent-blue);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.sound-toggle.active {
+  color: var(--color-accent-blue);
+  border-color: var(--color-accent-blue);
+  background: rgba(59, 130, 246, 0.15);
+}
+
+.sound-toggle.active:hover {
+  background: rgba(59, 130, 246, 0.25);
+}
+
 /* ----- New Session Row Button ----- */
 .new-session-row {
   display: block;
@@ -408,6 +528,46 @@ body {
 
 .session-item.streaming {
   border-left: 3px solid var(--color-accent-green);
+}
+
+.session-item.pinned {
+  background: rgba(250, 204, 21, 0.05);
+}
+
+.session-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.session-pin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #888;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease, transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.session-item:hover .session-pin {
+  opacity: 0.5;
+}
+
+.session-pin:hover {
+  opacity: 1 !important;
+  color: #facc15;
+  transform: scale(1.1);
+}
+
+.session-pin--active {
+  opacity: 1;
+  color: #facc15;
+}
+
+.session-pin svg {
+  display: block;
 }
 
 .session-title {
@@ -657,6 +817,8 @@ body {
   .turns-container {
     flex: 1 1 0;
     min-height: 100px;
+    padding: 4px; /* Reduce horizontal padding on mobile */
+    padding-bottom: 8px;
   }
 
   /* Input area should not shrink and stick to bottom */
@@ -672,15 +834,15 @@ body {
 
 .input-field {
   flex: 1;
-  padding: 10px 12px;
+  padding: 12px 14px;
   border: 1px solid var(--color-border-primary);
   border-radius: 8px;
   background: var(--color-bg-primary);
   color: var(--color-text-primary);
   font-size: 16px;
-  resize: none;
-  min-height: 44px;
-  max-height: 120px;
+  resize: vertical;  /* Allow vertical resize */
+  min-height: 60px;  /* Increased min height */
+  max-height: 300px; /* Increased max height */
 }
 
 .input-field:focus {
@@ -702,14 +864,14 @@ body {
 
 @media (min-width: 768px) {
   .input-area {
-    padding: 16px;
+    padding: 16px 20px;
   }
 
   .input-field {
-    padding: 12px 16px;
+    padding: 14px 18px;
     font-size: 14px;
-    min-height: 48px;
-    max-height: 200px;
+    min-height: 72px;   /* Increased min height */
+    max-height: 400px;  /* Increased max height */
   }
 
   .send-button {
@@ -835,28 +997,31 @@ body {
   border-color: var(--color-accent-yellow);
 }
 
-/* ----- Streaming Status Bar ----- */
+/* ----- Streaming Status Bar (Compact) ----- */
 .streaming-status {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px 12px;
-  margin-bottom: 8px;
-  background: rgba(74, 222, 128, 0.08);
-  border: 1px solid rgba(74, 222, 128, 0.2);
-  border-radius: 8px;
-  font-size: 13px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  margin-bottom: 6px;
+  background: rgba(74, 222, 128, 0.06);
+  border: 1px solid rgba(74, 222, 128, 0.15);
+  border-radius: 6px;
+  font-size: 11px;
 }
 
 .streaming-status-main {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
 }
 
 .streaming-indicator {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--color-accent-green);
   animation: pulse 1s infinite;
@@ -864,33 +1029,34 @@ body {
 }
 
 .streaming-model {
-  font-weight: 600;
+  font-weight: 500;
   color: var(--color-accent-green);
-  flex: 1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-size: 11px;
 }
 
 .streaming-duration {
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: 10px;
   font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
 }
 
 .streaming-status-details {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding-left: 16px;
-  font-size: 12px;
+  gap: 8px;
+  font-size: 10px;
   color: var(--color-text-secondary);
+  flex-shrink: 0;
 }
 
 .streaming-tokens {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
 }
 
 .token-rate {
@@ -900,34 +1066,29 @@ body {
 .streaming-tool {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   color: var(--color-accent-yellow);
   font-weight: 500;
+  font-size: 10px;
 }
 
 .tool-icon {
   animation: spin 2s linear infinite;
+  font-size: 10px;
 }
 
 .queue-badge {
   background: rgba(250, 204, 21, 0.2);
   color: var(--color-accent-yellow);
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 9px;
   font-weight: 500;
 }
 
 @media (min-width: 768px) {
   .streaming-status {
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 16px;
-  }
-
-  .streaming-status-details {
-    padding-left: 0;
+    padding: 5px 12px;
   }
 }
 
