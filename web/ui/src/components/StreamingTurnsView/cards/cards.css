@@ -1849,12 +1849,32 @@
   border-radius: 4px;
   font-size: 12px;
   text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
 }
 
 .fork-proposal-resolution.status-accepted,
 .merge-proposal-resolution.status-accepted {
   background: rgba(81, 207, 102, 0.1);
   color: var(--accent-success, #51cf66);
+}
+
+/* Go to fork button */
+.go-to-fork-btn {
+  background: var(--accent-primary, #4dabf7);
+  color: white;
+  border: none;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.go-to-fork-btn:hover {
+  background: var(--accent-primary-hover, #339af0);
 }
 
 .fork-proposal-resolution.status-rejected,

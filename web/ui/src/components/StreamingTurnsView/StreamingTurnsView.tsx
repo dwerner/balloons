@@ -18,7 +18,7 @@
  * - Shows "scroll to bottom" indicator to resume following
  */
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import type { BalloonsClient } from '../../../../generated/balloons-client';
 import { useSessionData, useAutoScroll } from '../../hooks';
 import { TurnCard, ClientContext } from './cards';
@@ -28,10 +28,17 @@ import './StreamingTurnsView.css';
 interface StreamingTurnsViewProps {
   sessionId: string | null;
   client: BalloonsClient;
+  onSelectSession?: (sessionId: string) => void;
 }
 
-export function StreamingTurnsView({ sessionId, client }: StreamingTurnsViewProps) {
+export function StreamingTurnsView({ sessionId, client, onSelectSession }: StreamingTurnsViewProps) {
   const { turns, isLoading, isSubscribed, isStreaming, streamError, error } = useSessionData(client, sessionId);
+
+  // Memoize context value to prevent unnecessary re-renders
+  const contextValue = useMemo(() => ({
+    client,
+    onSelectSession,
+  }), [client, onSelectSession]);
 
   // Robust autoscroll: follows stream, pauses on user scroll-up, resumes on click
   const { scrollRef, isFollowing, scrollToBottom } = useAutoScroll({
@@ -56,7 +63,7 @@ export function StreamingTurnsView({ sessionId, client }: StreamingTurnsViewProp
   const showScrollIndicator = isStreaming && !isFollowing;
 
   return (
-    <ClientContext.Provider value={client}>
+    <ClientContext.Provider value={contextValue}>
       <div className="streaming-turns-view-container" ref={scrollRef}>
         <div className="streaming-turns-view">
           <div className="streaming-turns-header">

@@ -8,17 +8,28 @@
 import { createContext, useContext } from 'react';
 import type { BalloonsClient } from '../../../../../generated/balloons-client';
 
+// Combined context value
+interface ClientContextValue {
+  client: BalloonsClient | null;
+  onSelectSession?: (sessionId: string) => void;
+}
+
 // Context with null default (must be provided by parent)
-export const ClientContext = createContext<BalloonsClient | null>(null);
+export const ClientContext = createContext<ClientContextValue>({ client: null });
 
 // Hook for accessing the client
 export function useClient(): BalloonsClient | null {
-  return useContext(ClientContext);
+  return useContext(ClientContext).client;
+}
+
+// Hook for accessing the session selection callback
+export function useSelectSession(): ((sessionId: string) => void) | undefined {
+  return useContext(ClientContext).onSelectSession;
 }
 
 // Hook that throws if client is not available
 export function useRequiredClient(): BalloonsClient {
-  const client = useContext(ClientContext);
+  const { client } = useContext(ClientContext);
   if (!client) {
     throw new Error('useRequiredClient must be used within a ClientContext.Provider');
   }

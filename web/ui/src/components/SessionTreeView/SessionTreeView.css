@@ -5,7 +5,75 @@
  * - Semantic list styling (remove default bullets)
  * - Visual hierarchy through padding
  * - Arrow rotation for expand/collapse state
+ *
+ * New features:
+ * - Exchange grouping with collapsible turns
+ * - Multi-selection with checkboxes and bulk action toolbar
+ * - Improved visual hierarchy
  */
+
+/* ===== Container wrapper ===== */
+.tree-view-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ===== Bulk action toolbar ===== */
+.tree-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(96, 165, 250, 0.1);
+  border-bottom: 1px solid rgba(96, 165, 250, 0.2);
+  flex-shrink: 0;
+}
+
+.tree-toolbar__count {
+  font-size: 12px;
+  font-weight: 500;
+  color: #60a5fa;
+  margin-right: auto;
+}
+
+.tree-toolbar__action {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #e0e0e0;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.tree-toolbar__action:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.tree-toolbar__action--danger {
+  color: #f87171;
+}
+
+.tree-toolbar__action--danger:hover {
+  background: rgba(248, 113, 113, 0.2);
+}
+
+.tree-toolbar__action--text {
+  background: transparent;
+  color: #888;
+}
+
+.tree-toolbar__action--text:hover {
+  color: #e0e0e0;
+  background: transparent;
+}
 
 /* ===== Root container ===== */
 .tree-view {
@@ -298,6 +366,65 @@
   }
 }
 
+/* ===== Checkbox ===== */
+.tree-node__checkbox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-right: 4px;
+}
+
+.tree-checkbox {
+  cursor: pointer;
+  color: #888;
+  transition: color 0.15s ease, transform 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tree-checkbox:hover {
+  color: #60a5fa;
+  transform: scale(1.1);
+}
+
+.tree-checkbox--checked {
+  color: #60a5fa;
+}
+
+.tree-checkbox svg {
+  display: block;
+}
+
+/* Checked session styling */
+.tree-node--checked > .tree-node__content {
+  background: rgba(96, 165, 250, 0.1);
+}
+
+/* ===== Exchange node ===== */
+.tree-node--exchange > .tree-node__content {
+  padding: 4px 8px;
+  border-left: none;
+  margin-left: 4px;
+}
+
+.tree-node--exchange > .tree-node__content:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* ===== Indented turn ===== */
+.tree-node--indented {
+  margin-left: 8px;
+}
+
+/* ===== Loading/empty states ===== */
+.tree-node--loading > .tree-node__content,
+.tree-node--empty > .tree-node__content {
+  color: #666;
+  font-style: italic;
+}
+
 /* ===== Light theme support ===== */
 [data-theme="light"] .tree-node__content:hover {
   background: rgba(0, 0, 0, 0.05);
@@ -309,4 +436,26 @@
 
 [data-theme="light"] .tree-group__header {
   border-top-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .tree-toolbar {
+  background: rgba(96, 165, 250, 0.1);
+  border-bottom-color: rgba(96, 165, 250, 0.2);
+}
+
+[data-theme="light"] .tree-toolbar__action {
+  background: rgba(0, 0, 0, 0.05);
+  color: #333;
+}
+
+[data-theme="light"] .tree-toolbar__action:hover {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme="light"] .tree-node--checked > .tree-node__content {
+  background: rgba(96, 165, 250, 0.15);
+}
+
+[data-theme="light"] .tree-node--exchange > .tree-node__content:hover {
+  background: rgba(0, 0, 0, 0.03);
 }

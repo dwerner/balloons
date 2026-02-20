@@ -941,6 +941,16 @@ class SessionManagerService:
 
         elif event_type == "done":
             # Helper complete
+            debug_log.info(
+                f"Helper done: {helper_id}, type={ctx.helper_type}",
+                category="fork",
+                details={
+                    "content_len": len(ctx.content),
+                    "has_fork_data": bool(ctx.metadata.get("fork_data")),
+                    "auto_complete": ctx.metadata.get("auto_complete", False),
+                },
+            )
+
             await self._notify_observers(
                 "on_helper_done",
                 HelperDoneEvent(
@@ -950,6 +960,38 @@ class SessionManagerService:
                     metadata=ctx.metadata,
                 ),
             )
+
+            # Auto-complete fork compression if flagged to do so
+            # This allows React UI to work without needing to listen for helper events
+            # TUI sets auto_complete=False because it handles completion manually
+            if (
+                ctx.helper_type == "compress"
+                and ctx.metadata.get("fork_data")
+                and ctx.metadata.get("auto_complete", False)
+            ):
+                debug_log.info(
+                    f"Auto-completing fork compression for helper {helper_id}",
+                    category="fork",
+                )
+                try:
+                    result = await self.complete_fork_after_compression(
+                        helper_id=helper_id,
+                        compressed_summary=ctx.content,
+                        start_streaming=True,
+                    )
+                    debug_log.info(
+                        f"Auto-complete result: success={result.success}, error={result.error}",
+                        category="fork",
+                    )
+                except Exception as e:
+                    # Log but don't fail - the manual path is still available
+                    debug_log.warning(
+                        f"Auto-complete fork compression failed: {e}",
+                        category="fork"
+                    )
+                    import traceback
+                    traceback.print_exc()
+
             # Clean up context
             if helper_id in self._helper_contexts:
                 del self._helper_contexts[helper_id]
@@ -1719,6 +1761,7 @@ class SessionManagerService:
         context_modes: list[dict] | None = None,
         allowed_tools: list[str] | None = None,
         start_streaming: bool = True,
+        auto_complete_compression: bool = False,
     ) -> ForkSessionResult:
         """Fork a new session from an existing parent session.
 
@@ -1735,6 +1778,8 @@ class SessionManagerService:
             name: Optional name for the fork (e.g., "auth-bug")
             background: If True, run in background and stay in parent session
             context_modes: List of {turn_index, mode} dicts. Mode is "copy", "compress", or "drop".
+            auto_complete_compression: If True, automatically complete fork when compression
+                                       finishes (for clients that don't handle helper events).
                           If not provided, all turns are copied.
             allowed_tools: List of tool names to allow, or None for all tools
             start_streaming: If True, start streaming after fork creation. Set False
@@ -1827,6 +1872,7 @@ class SessionManagerService:
                     "fork_data": result.fork_data,
                     "parent_session_id": parent_session_id,
                     "child_session_id": child_session.id,
+                    "auto_complete": auto_complete_compression,
                 },
             )
 
@@ -2227,14 +2273,22 @@ class SessionManagerService:
                         "mode": "compress",
                     })
 
-        # Update proposal status before forking
-        session.update_fork_proposal_status(proposal_id, "accepted")
-        await session.save()
+        # Mark proposal as being processed (will update with child_session_id after fork succeeds)
 
         # Build the prompt
         prompt = fork_proposal.initial_prompt or f"Continue with: {fork_proposal.description}"
 
         # Create the fork using fork_session
+        # Set auto_complete_compression=True so React UI works without helper event handling
+        debug_log.info(
+            f"Creating fork from proposal: name={fork_proposal.name}",
+            category="fork",
+            details={
+                "prompt": prompt[:100] + "..." if len(prompt) > 100 else prompt,
+                "num_context_modes": len(turn_context_modes),
+                "start_streaming": start_streaming,
+            },
+        )
         fork_result = await self.fork_session(
             parent_session_id=session_id,
             prompt=prompt,
@@ -2243,16 +2297,30 @@ class SessionManagerService:
             context_modes=turn_context_modes,
             allowed_tools=None,  # All tools
             start_streaming=start_streaming,
+            auto_complete_compression=True,
+        )
+
+        debug_log.info(
+            f"Fork result: success={fork_result.success}, needs_compression={fork_result.needs_compression}",
+            category="fork",
+            details={
+                "child_session_id": fork_result.child_session_id,
+                "helper_id": fork_result.helper_id,
+                "error": fork_result.error,
+            },
         )
 
         if not fork_result.success:
-            # Revert status on failure
-            session.update_fork_proposal_status(proposal_id, "pending")
-            await session.save()
             return RespondToForkProposalResult(
                 success=False,
                 error=fork_result.error or "Fork failed",
             )
+
+        # Update proposal status with child_session_id now that fork succeeded
+        session.update_fork_proposal_status(
+            proposal_id, "accepted", child_session_id=fork_result.child_session_id
+        )
+        await session.save()
 
         return RespondToForkProposalResult(
             success=True,

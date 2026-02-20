@@ -13,7 +13,7 @@
 import React, { useState, useCallback, memo, useEffect } from 'react';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
 import type { ForkProposalBlock, ExchangeSummary } from '../../../../../generated/types';
-import { useClient } from './ClientContext';
+import { useClient, useSelectSession } from './ClientContext';
 import { ContextPlanTree, type ContextAssignment } from './ContextPlanTree';
 import './cards.css';
 
@@ -33,6 +33,7 @@ export const ForkProposalCard = memo(function ForkProposalCard({
   sessionId,
 }: ForkProposalCardProps) {
   const client = useClient();
+  const selectSession = useSelectSession();
   const block = turn.contentBlock as ForkProposalBlock | undefined;
 
   // Parse context plan from block
@@ -66,9 +67,16 @@ export const ForkProposalCard = memo(function ForkProposalCard({
     return null;
   }
 
-  const { proposalId, name, description, bindTo, bindToInherit } = block;
+  const { proposalId, name, description, bindTo, bindToInherit, childSessionId } = block;
   const isPending = status === 'pending';
   const isLoading = status === 'loading';
+
+  // Handler for navigating to the created fork
+  const handleGoToFork = useCallback(() => {
+    if (childSessionId && selectSession) {
+      selectSession(childSessionId);
+    }
+  }, [childSessionId, selectSession]);
 
   const handleAccept = useCallback(async () => {
     if (!client || !sessionId || !proposalId) return;
@@ -97,7 +105,16 @@ export const ForkProposalCard = memo(function ForkProposalCard({
 
       if (result.success && result.accepted) {
         setStatus('accepted');
-        // The session tree should auto-refresh
+        // Navigate to the new fork session
+        if (result.childSessionId && selectSession) {
+          // TODO: If needsCompression is true, we should wait for helper completion
+          // before navigating. For now, navigate immediately - the session exists
+          // but may not have context populated yet if compression was needed.
+          if (result.needsCompression) {
+            console.warn('[ForkProposalCard] Fork needs compression - context may not be ready yet');
+          }
+          selectSession(result.childSessionId);
+        }
       } else {
         setStatus('pending');
         setError(result.error || 'Failed to accept proposal');
@@ -106,7 +123,7 @@ export const ForkProposalCard = memo(function ForkProposalCard({
       setStatus('pending');
       setError(err instanceof Error ? err.message : 'Unknown error');
     }
-  }, [client, sessionId, proposalId, contextPlan, initialPrompt, name, description]);
+  }, [client, sessionId, proposalId, contextPlan, initialPrompt, name, description, selectSession]);
 
   const handleReject = useCallback(async () => {
     if (!client || !sessionId || !proposalId) return;
@@ -262,7 +279,19 @@ export const ForkProposalCard = memo(function ForkProposalCard({
         {/* Status message for resolved proposals */}
         {!isPending && !isLoading && (
           <div className={`fork-proposal-resolution status-${status}`}>
-            {status === 'accepted' && '✓ Fork created successfully'}
+            {status === 'accepted' && (
+              <>
+                <span>✓ Fork created successfully</span>
+                {childSessionId && selectSession && (
+                  <button
+                    className="btn btn-primary btn-small go-to-fork-btn"
+                    onClick={handleGoToFork}
+                  >
+                    Go to fork →
+                  </button>
+                )}
+              </>
+            )}
             {status === 'rejected' && '✗ Fork proposal was rejected'}
           </div>
         )}

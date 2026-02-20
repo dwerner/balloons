@@ -730,14 +730,23 @@ class Session:
         )
         return self.add_turn(role="system", content_block=proposal_block, exchange_id=exchange_id)
 
-    def update_fork_proposal_status(self, proposal_id: str, status: str) -> bool:
+    def update_fork_proposal_status(
+        self, proposal_id: str, status: str, child_session_id: str | None = None
+    ) -> bool:
         """Update the status of a fork proposal block.
+
+        Args:
+            proposal_id: The proposal ID to update
+            status: New status ("pending", "accepted", "rejected")
+            child_session_id: If accepted, the ID of the created fork session
 
         Returns True if found and updated, False if not found.
         """
         for turn in self.turns:
             if isinstance(turn.content_block, ForkProposalBlock) and turn.content_block.proposal_id == proposal_id:
                 turn.content_block.status = status
+                if child_session_id:
+                    turn.content_block.child_session_id = child_session_id
                 return True
         return False
 

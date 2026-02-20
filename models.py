@@ -259,6 +259,7 @@ class ForkProposalBlock:
     bind_to_inherit: bool = False  # True if bind_to was "inherit"
     status: str = "pending"  # "pending", "accepted", "rejected"
     all_exchanges: list[ExchangeInfo] = field(default_factory=list)  # All exchanges for interactive tree
+    child_session_id: str = ""  # ID of created fork session (set on accept)
 
 
 @ws_type

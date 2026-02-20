@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-19T19:20:49.261415
+// Generated: 2026-02-20T13:19:30.209278
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -934,6 +934,8 @@ export interface SessionManagerService {
    * name: Optional name for the fork (e.g., "auth-bug")
    * background: If True, run in background and stay in parent session
    * context_modes: List of {turn_index, mode} dicts. Mode is "copy", "compress", or "drop".
+   * auto_complete_compression: If True, automatically complete fork when compression
+   * finishes (for clients that don't handle helper events).
    * If not provided, all turns are copied.
    * allowed_tools: List of tool names to allow, or None for all tools
    * start_streaming: If True, start streaming after fork creation. Set False
@@ -942,7 +944,7 @@ export interface SessionManagerService {
    * Returns:
    * ForkSessionResult with child session info and streaming state
    */
-  forkSession(parentSessionId: string, prompt: string, name?: string, background?: boolean, contextModes?: Record<string, unknown>[] | null, allowedTools?: string[] | null, startStreaming?: boolean): Promise<Types.ForkSessionResult>;
+  forkSession(parentSessionId: string, prompt: string, name?: string, background?: boolean, contextModes?: Record<string, unknown>[] | null, allowedTools?: string[] | null, startStreaming?: boolean, autoCompleteCompression?: boolean): Promise<Types.ForkSessionResult>;
 
   /**
    * Get the ID of the currently active session.
@@ -1317,8 +1319,8 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.call('findSwitchTarget', { sessionId: sessionId, name: name });
   }
 
-  async forkSession(parentSessionId: string, prompt: string, name?: string, background?: boolean, contextModes?: Record<string, unknown>[] | null, allowedTools?: string[] | null, startStreaming?: boolean): Promise<Types.ForkSessionResult> {
-    return this.call('forkSession', { parentSessionId: parentSessionId, prompt: prompt, name: name, background: background, contextModes: contextModes, allowedTools: allowedTools, startStreaming: startStreaming });
+  async forkSession(parentSessionId: string, prompt: string, name?: string, background?: boolean, contextModes?: Record<string, unknown>[] | null, allowedTools?: string[] | null, startStreaming?: boolean, autoCompleteCompression?: boolean): Promise<Types.ForkSessionResult> {
+    return this.call('forkSession', { parentSessionId: parentSessionId, prompt: prompt, name: name, background: background, contextModes: contextModes, allowedTools: allowedTools, startStreaming: startStreaming, autoCompleteCompression: autoCompleteCompression });
   }
 
   async getActiveSessionId(): Promise<string | null> {

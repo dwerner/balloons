@@ -1189,9 +1189,20 @@ class BalloonsApp(App):
         ctx = self._streaming_contexts.get(session_id)
         is_active = ctx.is_active if ctx else False
 
-        # Intercept propose_fork tool - show inline proposal widget
+        debug_log.info(
+            f"on_tool_use: checking for fork/merge intercept",
+            category="fork",
+            details={
+                "tool_name": tool_name,
+                "is_active": is_active,
+                "has_ctx": ctx is not None,
+                "is_balloons_tool": tool_use_id.startswith("balloons-") if tool_use_id else False,
+            },
+        )
+
+        # Intercept propose_fork tool - create proposal turn (for all sessions)
         # Only handle balloons-tool calls (id starts with "balloons-"), not native CLI tools
-        if tool_name == "propose_fork" and is_active and tool_use_id.startswith("balloons-"):
+        if tool_name == "propose_fork" and tool_use_id.startswith("balloons-"):
             proposal = parse_fork_proposal(tool_input)
             if proposal:
                 await self._handle_fork_proposal(
@@ -1202,8 +1213,8 @@ class BalloonsApp(App):
                 )
             return
 
-        # Intercept propose_merge tool - show inline proposal widget
-        if tool_name == "propose_merge" and is_active and tool_use_id.startswith("balloons-"):
+        # Intercept propose_merge tool - create proposal turn (for all sessions)
+        if tool_name == "propose_merge" and tool_use_id.startswith("balloons-"):
             proposal = parse_merge_proposal(tool_input)
             if proposal:
                 await self._handle_merge_proposal(
@@ -3581,16 +3592,26 @@ class BalloonsApp(App):
         proposal: ForkProposal,
         tool_use_id: str,
         session_id: str,
-        ctx: StreamingContext,
+        ctx: StreamingContext | None,
     ) -> None:
         """Handle a propose_fork tool call by creating an inline proposal turn.
 
         When the LLM calls propose_fork, we create a proposal turn in the
         conversation that the user can accept or reject inline via buttons.
         This replaces the modal dialog approach.
+
+        Works for both active TUI sessions and background sessions.
+        For background sessions, the turn is created and websocket events
+        are emitted so the web UI can render the proposal.
         """
-        chat_log = self.query_one("#chat-log", ChatLogView)
-        context_tree = self.query_one("#context-tree", ContextTreeView)
+        is_active = ctx.is_active if ctx else False
+
+        # Get TUI widgets only if this is the active session
+        chat_log = None
+        context_tree = None
+        if is_active:
+            chat_log = self.query_one("#chat-log", ChatLogView)
+            context_tree = self.query_one("#context-tree", ContextTreeView)
 
         # Convert ForkProposal to persistable format
         context_plan_data = [
@@ -3653,16 +3674,16 @@ class BalloonsApp(App):
         # Get the turn index for later reference
         turn_idx = len(session.turns) - 1
 
-        # Update context tree using the same pattern as streaming:
-        # start_turn creates the node, finish_turn updates with final content
-        context_tree.start_turn(session_id, turn_idx, "system", exchange_id=exchange_id)
-        await context_tree.finish_turn(
-            session_id, turn_idx, "[Fork proposal]", turn.content_block, []
-        )
+        # Update context tree (TUI only)
+        if is_active and context_tree:
+            context_tree.start_turn(session_id, turn_idx, "system", exchange_id=exchange_id)
+            await context_tree.finish_turn(
+                session_id, turn_idx, "[Fork proposal]", turn.content_block, []
+            )
 
         # Emit turn events for WebSocket clients (web UI)
         # This is critical for the web UI to render the ForkProposalCard
-        await self._manager._notify_observers(
+        await self._session_service._notify_observers(
             "on_turn_created",
             TurnCreatedEvent(
                 session_id=session_id,
@@ -3673,7 +3694,7 @@ class BalloonsApp(App):
                 content_block_type="fork_proposal",
             ),
         )
-        await self._manager._notify_observers(
+        await self._session_service._notify_observers(
             "on_turn_finished",
             TurnFinishedEvent(
                 session_id=session_id,
@@ -3694,26 +3715,28 @@ class BalloonsApp(App):
             "turn_idx": turn_idx,
         }
 
-        # Remove the streaming tool widget that was created for propose_fork
-        # (we're replacing it with the custom ForkProposalMarker widget)
-        chat_log.remove_streaming_tool(tool_use_id)
+        # TUI-specific: Update chat log widgets
+        if is_active and chat_log:
+            # Remove the streaming tool widget that was created for propose_fork
+            # (we're replacing it with the custom ForkProposalMarker widget)
+            chat_log.remove_streaming_tool(tool_use_id)
 
-        # Add the proposal widget to the chat log
-        widget = ForkProposalMarker(
-            proposal_id=proposal_id,
-            name=proposal.name,
-            description=proposal.description,
-            context_plan=context_plan_data,
-            initial_prompt=proposal.initial_prompt or "",
-            bind_to=bind_to_data,
-            bind_to_inherit=bind_to_inherit,
-            status="pending",
-            turn_id=turn_idx,
-            all_exchanges=all_exchanges,
-            session_id=session_id,
-        )
-        chat_log.mount(widget)
-        chat_log.scroll_end(animate=False)
+            # Add the proposal widget to the chat log
+            widget = ForkProposalMarker(
+                proposal_id=proposal_id,
+                name=proposal.name,
+                description=proposal.description,
+                context_plan=context_plan_data,
+                initial_prompt=proposal.initial_prompt or "",
+                bind_to=bind_to_data,
+                bind_to_inherit=bind_to_inherit,
+                status="pending",
+                turn_id=turn_idx,
+                all_exchanges=all_exchanges,
+                session_id=session_id,
+            )
+            chat_log.mount(widget)
+            chat_log.scroll_end(animate=False)
 
         # Save the session
         asyncio.create_task(session.save())
@@ -3959,20 +3982,38 @@ class BalloonsApp(App):
         proposal: MergeProposal,
         tool_use_id: str,
         session_id: str,
-        ctx: StreamingContext,
+        ctx: StreamingContext | None,
     ) -> None:
         """Handle a propose_merge tool call by creating an inline proposal turn.
 
         When the LLM calls propose_merge, we create a proposal turn in the
         conversation that the user can accept or reject inline via buttons.
         This replaces the modal dialog approach.
+
+        Works for both active TUI sessions and background sessions.
+        For background sessions, the turn is created and websocket events
+        are emitted so the web UI can render the proposal.
         """
-        chat_log = self.query_one("#chat-log", ChatLogView)
-        context_tree = self.query_one("#context-tree", ContextTreeView)
+        is_active = ctx.is_active if ctx else False
+
+        # Get TUI widgets only if this is the active session
+        chat_log = None
+        context_tree = None
+        if is_active:
+            chat_log = self.query_one("#chat-log", ChatLogView)
+            context_tree = self.query_one("#context-tree", ContextTreeView)
+
+        # Get the session
+        session = self._manager.get_session(session_id)
+        if not session:
+            if is_active:
+                self.notify("Session not found for merge proposal", severity="error")
+            return
 
         # Validate that we're in a fork
-        if not self.session.is_fork():
-            self.notify("Cannot merge: not in a fork", severity="error")
+        if not session.is_fork():
+            if is_active:
+                self.notify("Cannot merge: not in a fork", severity="error")
             return
 
         # Allow re-merging (updated fork status after each merge)
@@ -3983,7 +4024,7 @@ class BalloonsApp(App):
 
         # Add the proposal as a turn in the session
         exchange_id = ctx.exchange_id if ctx else None
-        turn = self.session.add_merge_proposal_turn(
+        turn = session.add_merge_proposal_turn(
             proposal_id=proposal_id,
             summary=proposal.summary,
             reason=proposal.reason,
@@ -3993,17 +4034,19 @@ class BalloonsApp(App):
             exchange_id=exchange_id,
         )
 
-        # Update context tree using the same pattern as streaming:
-        # start_turn creates the node, finish_turn updates with final content
-        turn_idx = len(self.session.turns) - 1
-        context_tree.start_turn(session_id, turn_idx, "system", exchange_id=exchange_id)
-        await context_tree.finish_turn(
-            session_id, turn_idx, "[Merge proposal]", turn.content_block, []
-        )
+        # Get turn index
+        turn_idx = len(session.turns) - 1
+
+        # Update context tree (TUI only)
+        if is_active and context_tree:
+            context_tree.start_turn(session_id, turn_idx, "system", exchange_id=exchange_id)
+            await context_tree.finish_turn(
+                session_id, turn_idx, "[Merge proposal]", turn.content_block, []
+            )
 
         # Emit turn events for WebSocket clients (web UI)
         # This is critical for the web UI to render the MergeProposalCard
-        await self._manager._notify_observers(
+        await self._session_service._notify_observers(
             "on_turn_created",
             TurnCreatedEvent(
                 session_id=session_id,
@@ -4014,7 +4057,7 @@ class BalloonsApp(App):
                 content_block_type="merge_proposal",
             ),
         )
-        await self._manager._notify_observers(
+        await self._session_service._notify_observers(
             "on_turn_finished",
             TurnFinishedEvent(
                 session_id=session_id,
@@ -4035,25 +4078,27 @@ class BalloonsApp(App):
             "turn_idx": turn_idx,
         }
 
-        # Remove the streaming tool widget that was created for propose_merge
-        # (we're replacing it with the custom MergeProposalMarker widget)
-        chat_log.remove_streaming_tool(tool_use_id)
+        # TUI-specific: Update chat log widgets
+        if is_active and chat_log:
+            # Remove the streaming tool widget that was created for propose_merge
+            # (we're replacing it with the custom MergeProposalMarker widget)
+            chat_log.remove_streaming_tool(tool_use_id)
 
-        # Add the proposal widget to the chat log
-        widget = MergeProposalMarker(
-            proposal_id=proposal_id,
-            summary=proposal.summary,
-            reason=proposal.reason,
-            files_changed=proposal.files_changed,
-            key_accomplishments=proposal.key_accomplishments,
-            status="pending",
-            turn_id=turn_idx,
-        )
-        chat_log.mount(widget)
-        chat_log.scroll_end(animate=False)
+            # Add the proposal widget to the chat log
+            widget = MergeProposalMarker(
+                proposal_id=proposal_id,
+                summary=proposal.summary,
+                reason=proposal.reason,
+                files_changed=proposal.files_changed,
+                key_accomplishments=proposal.key_accomplishments,
+                status="pending",
+                turn_id=turn_idx,
+            )
+            chat_log.mount(widget)
+            chat_log.scroll_end(animate=False)
 
         # Save the session
-        asyncio.create_task(self.session.save())
+        asyncio.create_task(session.save())
 
         debug_log.info(
             f"Merge proposal turn created",

@@ -1458,6 +1458,20 @@ export function App() {
     }
   }, [connectionState]);
 
+  // Load turns for a session (used by SessionTreeView for lazy loading)
+  const handleLoadTurns = useCallback(async (sessionId: string): Promise<TurnInfo[]> => {
+    const client = clientRef.current;
+    if (!client || connectionState !== 'connected') return [];
+
+    try {
+      const sessionTurns = await client.tree.getTurns(sessionId);
+      return sessionTurns;
+    } catch (err) {
+      console.error('Failed to load turns for session:', sessionId, err);
+      return [];
+    }
+  }, [connectionState]);
+
   // Select a session
   // Note: We clear state BEFORE setting the new session ID to prevent race conditions
   // where streaming events for the old session could pollute the new session's state.
@@ -1765,6 +1779,7 @@ export function App() {
           streamingTask={streamingTask}
           onSelectSession={handleSelectSession}
           onTogglePin={handleTogglePin}
+          onLoadTurns={handleLoadTurns}
           isLoadingTurns={isLoadingTurns}
           goalsClient={connectionState === 'connected' ? clientRef.current?.goals : undefined}
           onOpenCreateTodoModal={(planId, planTitle) => {
@@ -1949,7 +1964,7 @@ export function App() {
               {conversationViewMode === 'simple' && clientRef.current && connectionState === 'connected' ? (
                 <SimpleTurnsView sessionId={selectedSessionId} client={clientRef.current} />
               ) : conversationViewMode === 'streaming' && clientRef.current && connectionState === 'connected' ? (
-                <StreamingTurnsView sessionId={selectedSessionId} client={clientRef.current} />
+                <StreamingTurnsView sessionId={selectedSessionId} client={clientRef.current} onSelectSession={setSelectedSessionId} />
               ) : (
                 <div className="empty-state">
                   <h2>Connecting...</h2>
@@ -2153,6 +2168,7 @@ interface SidebarContentProps {
   streamingTask: TaskInfo | null;
   onSelectSession: (sessionId: string) => void;
   onTogglePin?: (sessionId: string) => void;
+  onLoadTurns?: (sessionId: string) => Promise<TurnInfo[]>;
   isLoadingTurns?: boolean;
   goalsClient?: GoalTreeStateServiceClient;
   onOpenCreateTodoModal?: (planId: string, planTitle: string) => void;
@@ -2173,6 +2189,7 @@ function SidebarContent({
   streamingTask,
   onSelectSession,
   onTogglePin,
+  onLoadTurns,
   isLoadingTurns = false,
   goalsClient,
   onOpenCreateTodoModal,
@@ -2392,6 +2409,7 @@ function SidebarContent({
           turns={turns}
           onSelectSession={handleSelectSession}
           onTogglePin={onTogglePin}
+          onLoadTurns={onLoadTurns}
           isLoading={isLoadingTurns}
         />
       ) : (
