@@ -23,6 +23,7 @@ import { BashCard } from './BashCard';
 import { GrepCard } from './GrepCard';
 import { GlobCard } from './GlobCard';
 import { GenericToolCard } from './GenericToolCard';
+import { MidiPlayerCard } from './MidiPlayerCard';
 
 import './cards.css';
 
@@ -62,6 +63,7 @@ const TOOL_CARD_MAP: Record<string, React.ComponentType<{ turn: SessionDataTurn;
   Bash: BashCard,
   Grep: GrepCard,
   Glob: GlobCard,
+  play_midi: MidiPlayerCard,
 };
 
 export function TurnCard({ turn, allTurns = [], sessionId }: TurnCardProps) {

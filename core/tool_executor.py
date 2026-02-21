@@ -134,6 +134,8 @@ async def execute_tool(
             return await execute_create_slide(args, session)
         elif name == "speak":
             return await execute_speak(args)
+        elif name == "play_midi":
+            return execute_play_midi(args)
         else:
             return f"Unknown tool: {name}", True
 
@@ -875,3 +877,27 @@ async def execute_save_review(args: dict, session: "Session") -> tuple[str, bool
     except Exception as e:
         debug_log.error(f"Failed to save review: {e}", category="review")
         return f"Error saving review: {e}", True
+
+
+def execute_play_midi(args: dict) -> tuple[str, bool]:
+    """Handle a play_midi tool call (fallback for non-balloons tool calls).
+
+    This is primarily a client-side tool - balloons-tool calls are intercepted
+    in app.py and never reach here. This fallback exists for native Claude
+    tool calling which bypasses the balloons-tool intercept.
+
+    Args:
+        args: Tool arguments containing notes, bpm, waveform, volume
+
+    Returns:
+        Tuple of (result_string, is_error)
+    """
+    # Minimal validation - client handles everything
+    notes = args.get("notes", "")
+    bpm = args.get("bpm", 120)
+
+    if not notes:
+        return "Error: notes is required", True
+
+    # Simple acknowledgment - actual playback is client-side
+    return f"MIDI tool acknowledged. Playback is handled by the UI.", False

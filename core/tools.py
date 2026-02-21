@@ -466,7 +466,7 @@ The speech will be queued and played sequentially. The user can stop speech at a
 BALLOON_TOOL_NAMES = {
     "balloon", "propose_fork", "propose_merge", "create_slide",
     "list_links", "follow_link", "search_linked_session", "session_info",
-    "speak",
+    "speak", "play_midi",
 }
 
 # Process supervisor tools for managing long-running background processes
@@ -661,6 +661,62 @@ The review will be associated with the session being reviewed.""",
 # Names of review tools
 REVIEW_TOOL_NAMES = {"save_review"}
 
+# MIDI Player tool for browser-based audio synthesis
+MIDI_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "play_midi",
+            "description": """Play a sequence of musical notes through the browser using Web Audio synthesis.
+
+Use this tool to:
+- Play melodies or musical phrases
+- Demonstrate musical concepts
+- Create notification sounds or audio feedback
+
+The notes are synthesized in the browser using oscillators, so no external MIDI device is needed.
+
+Notation format:
+- Notes: C4, D#4, Eb5 (note name + octave, sharps/flats supported)
+- Rests: R (silence for one beat)
+- Durations: :w (whole), :h (half), :q (quarter, default), :e (eighth), :s (sixteenth)
+- Chords: [C4,E4,G4] (notes in brackets play simultaneously)
+
+Example: "C4 D4 E4:h F4 G4:w [C4,E4,G4]:h" plays C-D-E(half)-F-G(whole)-Cmaj(half)""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "notes": {
+                        "type": "string",
+                        "description": "Space-separated sequence of notes (e.g., 'C4 D4 E4:h R G4:w')"
+                    },
+                    "bpm": {
+                        "type": "integer",
+                        "description": "Tempo in beats per minute (60-240)",
+                        "minimum": 60,
+                        "maximum": 240
+                    },
+                    "waveform": {
+                        "type": "string",
+                        "enum": ["sine", "square", "sawtooth", "triangle"],
+                        "description": "Oscillator waveform type. Default: sine"
+                    },
+                    "volume": {
+                        "type": "number",
+                        "description": "Volume level 0-1. Default: 0.5",
+                        "minimum": 0,
+                        "maximum": 1
+                    }
+                },
+                "required": ["notes", "bpm"]
+            }
+        }
+    },
+]
+
+# Names of MIDI tools
+MIDI_TOOL_NAMES = {"play_midi"}
+
 # Import goal tools
 from .goal_tools import GOAL_TOOLS, GOAL_TOOL_NAMES
 
@@ -672,12 +728,13 @@ def get_tools_for_request(
     include_supervisor_tools: bool = True,
     include_review_tools: bool = False,
     include_goal_tools: bool = True,
+    include_midi_tools: bool = True,
 ) -> list[dict] | None:
     """Get the list of tools to include in an API request.
 
     Includes standard file/shell tools and optionally Balloons-specific tools
     (workflow, UI, session/link navigation), supervisor tools, review tools,
-    and goal management tools.
+    goal management tools, and MIDI tools.
 
     Args:
         allowed_tools: List of tool names to allow, or None for all
@@ -686,6 +743,7 @@ def get_tools_for_request(
         include_supervisor_tools: If True, include process supervisor tools
         include_review_tools: If True, include session review tools (save_review)
         include_goal_tools: If True, include goal management tools (create_goal, etc.)
+        include_midi_tools: If True, include MIDI player tools (play_midi)
 
     Returns:
         List of tool definitions, or None if tools disabled
@@ -703,6 +761,8 @@ def get_tools_for_request(
         all_tools = all_tools + REVIEW_TOOLS
     if include_goal_tools:
         all_tools = all_tools + GOAL_TOOLS
+    if include_midi_tools:
+        all_tools = all_tools + MIDI_TOOLS
 
     if allowed_tools is None:
         return all_tools

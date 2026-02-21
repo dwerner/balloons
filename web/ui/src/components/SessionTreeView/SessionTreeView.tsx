@@ -15,8 +15,13 @@
  */
 
 import React, { useState, useCallback, useMemo, memo, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import type { SessionInfo, TurnInfo } from '../../../../generated/balloons-client';
+import { createLogger } from '../../utils/debugLog';
 import './SessionTreeView.css';
+
+// Create scoped logger for this module
+const debugLog = createLogger('SessionTreeView');
 
 // Context modes for turns
 export type ContextMode = 'COPY' | 'COMPRESS' | 'DROP';
@@ -281,16 +286,223 @@ function TurnNode({ turn, indent = false }: { turn: TurnInfo; indent?: boolean }
   );
 }
 
+// Context menu for exchanges
+interface ExchangeMenuProps {
+  position: { x: number; y: number };
+  contextMode?: ContextMode;
+  onSetContextMode: (mode: ContextMode) => void;
+  onArchive: () => void;
+  onDelete: () => void;
+  onClose: () => void;
+}
+
+function ExchangeContextMenu({
+  position,
+  contextMode,
+  onSetContextMode,
+  onArchive,
+  onDelete,
+  onClose,
+}: ExchangeMenuProps) {
+  const menuRef = React.useRef<HTMLDivElement>(null);
+
+  // Wrap callbacks with logging
+  const handleSetContextMode = useCallback((mode: ContextMode) => {
+    debugLog('Context mode selected', { mode });
+    onSetContextMode(mode);
+  }, [onSetContextMode]);
+
+  const handleArchive = useCallback(() => {
+    debugLog('Archive action triggered');
+    onArchive();
+  }, [onArchive]);
+
+  const handleDelete = useCallback(() => {
+    debugLog('Delete action triggered');
+    onDelete();
+  }, [onDelete]);
+
+  // Debug log when menu mounts
+  useEffect(() => {
+    debugLog('ExchangeContextMenu mounted', { position, contextMode });
+    return () => {
+      debugLog('ExchangeContextMenu unmounted');
+    };
+  }, [position, contextMode]);
+
+  // Close on click outside (delay to avoid closing immediately on the opening click)
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        debugLog('ExchangeContextMenu click outside, closing');
+        onClose();
+      }
+    };
+    // Small delay to avoid the mousedown that opened the menu from closing it
+    const timeoutId = setTimeout(() => {
+      document.addEventListener('mousedown', handleClickOutside);
+    }, 100);
+    return () => {
+      clearTimeout(timeoutId);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [onClose]);
+
+  // Close on escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        debugLog('ExchangeContextMenu escape pressed, closing');
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
+  // Use portal to render at document root to avoid overflow issues
+  return createPortal(
+    <div
+      ref={menuRef}
+      className="exchange-context-menu"
+      style={{
+        position: 'fixed',
+        left: position.x,
+        top: position.y,
+        zIndex: 9999,  // Very high z-index to ensure visibility
+      }}
+    >
+      <div className="exchange-context-menu__section">
+        <div className="exchange-context-menu__label">Context Mode</div>
+        <button
+          className={`exchange-context-menu__item ${contextMode === 'COPY' ? 'exchange-context-menu__item--active' : ''}`}
+          onClick={() => { handleSetContextMode('COPY'); onClose(); }}
+        >
+          <span className="exchange-context-menu__icon">📋</span>
+          Copy
+          <span className="exchange-context-menu__hint">Include verbatim</span>
+        </button>
+        <button
+          className={`exchange-context-menu__item ${contextMode === 'COMPRESS' ? 'exchange-context-menu__item--active' : ''}`}
+          onClick={() => { handleSetContextMode('COMPRESS'); onClose(); }}
+        >
+          <span className="exchange-context-menu__icon">📦</span>
+          Compress
+          <span className="exchange-context-menu__hint">Summarize</span>
+        </button>
+        <button
+          className={`exchange-context-menu__item ${contextMode === 'DROP' ? 'exchange-context-menu__item--active' : ''}`}
+          onClick={() => { handleSetContextMode('DROP'); onClose(); }}
+        >
+          <span className="exchange-context-menu__icon">🗑️</span>
+          Drop
+          <span className="exchange-context-menu__hint">Exclude from context</span>
+        </button>
+      </div>
+      <div className="exchange-context-menu__divider" />
+      <div className="exchange-context-menu__section">
+        <button
+          className="exchange-context-menu__item"
+          onClick={() => { handleArchive(); onClose(); }}
+        >
+          <span className="exchange-context-menu__icon"><ArchiveIcon /></span>
+          Archive
+        </button>
+        <button
+          className="exchange-context-menu__item exchange-context-menu__item--danger"
+          onClick={() => { handleDelete(); onClose(); }}
+        >
+          <span className="exchange-context-menu__icon"><TrashIcon /></span>
+          Delete
+        </button>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+// Long press hook for touch devices
+function useLongPress(
+  onLongPress: (position: { x: number; y: number }) => void,
+  onClick?: () => void,
+  { delay = 500 }: { delay?: number } = {}
+) {
+  const timeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressTriggeredRef = React.useRef(false);
+  const isActiveRef = React.useRef(false);  // Track if we started a valid press
+  const positionRef = React.useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  const start = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    // Only trigger on primary button for mouse (left-click)
+    if ('button' in e && e.button !== 0) return;
+
+    isActiveRef.current = true;
+    longPressTriggeredRef.current = false;
+
+    // Capture position immediately (before React event pooling)
+    if ('touches' in e) {
+      const touch = e.touches[0];
+      if (touch) {
+        positionRef.current = { x: touch.clientX, y: touch.clientY };
+      }
+    } else {
+      positionRef.current = { x: e.clientX, y: e.clientY };
+    }
+
+    timeoutRef.current = setTimeout(() => {
+      longPressTriggeredRef.current = true;
+      onLongPress(positionRef.current);
+    }, delay);
+  }, [onLongPress, delay]);
+
+  const clear = useCallback((shouldTriggerClick = true) => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    // Only trigger onClick if we had an active press that wasn't a long-press
+    if (shouldTriggerClick && isActiveRef.current && !longPressTriggeredRef.current && onClick) {
+      onClick();
+    }
+    isActiveRef.current = false;
+  }, [onClick]);
+
+  return {
+    onMouseDown: start,
+    onMouseUp: () => clear(true),
+    onMouseLeave: () => clear(false),
+    onTouchStart: start,
+    onTouchEnd: () => clear(true),
+  };
+}
+
 // Exchange node component - groups user + assistant turns
 function ExchangeNode({
   exchange,
   isExpanded,
+  contextMode,
   onToggle,
+  onContextModeChange,
+  onArchive,
+  onDelete,
 }: {
   exchange: Exchange;
   isExpanded: boolean;
+  contextMode?: ContextMode;
   onToggle: () => void;
+  onContextModeChange?: (mode: ContextMode) => void;
+  onArchive?: () => void;
+  onDelete?: () => void;
 }) {
+  const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
+
+  // Debug log when menuPosition changes
+  useEffect(() => {
+    if (menuPosition) {
+      debugLog('menuPosition set', { menuPosition, exchangeId: exchange.id });
+    }
+  }, [menuPosition, exchange.id]);
+
   const userPreview = exchange.userTurn
     ? (exchange.userTurn.content || '').slice(0, 50).replace(/\n/g, ' ')
     : null;
@@ -303,13 +515,50 @@ function ExchangeNode({
   const turnCount = (exchange.userTurn ? 1 : 0) + exchange.assistantTurns.length + exchange.systemTurns.length;
   const hasChildren = turnCount > 1;
 
+  // Get context mode badge color
+  const getModeColor = (mode?: ContextMode) => {
+    switch (mode) {
+      case 'COPY': return '#4ade80';      // green
+      case 'COMPRESS': return '#facc15';  // yellow
+      case 'DROP': return '#f87171';      // red
+      default: return undefined;
+    }
+  };
+
+  const handleLongPress = useCallback((position: { x: number; y: number }) => {
+    debugLog('Long press triggered', { x: position.x, y: position.y, exchangeId: exchange.id });
+    setMenuPosition(position);
+  }, [exchange.id]);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    debugLog('Context menu triggered', { x: e.clientX, y: e.clientY, exchangeId: exchange.id });
+    setMenuPosition({ x: e.clientX, y: e.clientY });
+  }, [exchange.id]);
+
+  const longPressHandlers = useLongPress(handleLongPress, onToggle, { delay: 500 });
+
   return (
     <li className="tree-node tree-node--exchange">
-      <div className="tree-node__content" onClick={onToggle}>
-        <span className="tree-node__toggle">
+      <div
+        className="tree-node__content"
+        {...longPressHandlers}
+        onContextMenu={handleContextMenu}
+      >
+        <span className="tree-node__toggle" onClick={(e) => { e.stopPropagation(); onToggle(); }}>
           {hasChildren ? <Arrow open={isExpanded} /> : <span className="tree-node__spacer" />}
         </span>
         <span className="tree-node__icon">💬</span>
+        {contextMode && (
+          <span
+            className="tree-node__mode-badge"
+            style={{ backgroundColor: getModeColor(contextMode) }}
+            title={`Context: ${contextMode}`}
+          >
+            {contextMode.charAt(0)}
+          </span>
+        )}
         <span className="tree-node__label tree-node__label--muted">
           {userPreview || 'System'}
           {userPreview && userPreview.length >= 50 ? '...' : ''}
@@ -337,9 +586,23 @@ function ExchangeNode({
           ))}
         </ul>
       )}
+
+      {menuPosition && (
+        <ExchangeContextMenu
+          position={menuPosition}
+          contextMode={contextMode}
+          onSetContextMode={(mode) => onContextModeChange?.(mode)}
+          onArchive={() => onArchive?.()}
+          onDelete={() => onDelete?.()}
+          onClose={() => setMenuPosition(null)}
+        />
+      )}
     </li>
   );
 }
+
+// Exchange action type for callbacks
+export type ExchangeAction = 'archive' | 'delete';
 
 // Session node component
 function SessionNode({
@@ -355,6 +618,8 @@ function SessionNode({
   onSelect,
   onTogglePin,
   onToggleCheck,
+  onExchangeContextModeChange,
+  onExchangeAction,
 }: {
   session: SessionInfo;
   index: number;
@@ -368,6 +633,8 @@ function SessionNode({
   onSelect: (e: React.MouseEvent) => void;
   onTogglePin?: () => void;
   onToggleCheck?: (e: React.MouseEvent) => void;
+  onExchangeContextModeChange?: (turnIndices: number[], mode: ContextMode) => void;
+  onExchangeAction?: (turnIndices: number[], action: ExchangeAction) => void;
 }) {
   const sessionColor = SESSION_COLORS[index % SESSION_COLORS.length] || '#60a5fa';
   const sessionName = session.forkName || session.title || `Session ${session.id.slice(0, 8)}`;
@@ -377,7 +644,11 @@ function SessionNode({
   const hasContent = session.messageCount > 0;
 
   // Group turns into exchanges for display
-  const exchanges = useMemo(() => groupTurnsIntoExchanges(turns), [turns]);
+  const exchanges = useMemo(() => {
+    const result = groupTurnsIntoExchanges(turns);
+    debugLog('SessionNode exchanges', { sessionId: session.id, turnsCount: turns.length, exchangesCount: result.length });
+    return result;
+  }, [turns, session.id]);
 
   // Track which exchanges are expanded
   const [expandedExchanges, setExpandedExchanges] = useState<Set<string>>(new Set());
@@ -453,14 +724,36 @@ function SessionNode({
               </div>
             </li>
           ) : exchanges.length > 0 ? (
-            exchanges.map(exchange => (
-              <ExchangeNode
-                key={exchange.id}
-                exchange={exchange}
-                isExpanded={expandedExchanges.has(exchange.id)}
-                onToggle={() => toggleExchange(exchange.id)}
-              />
-            ))
+            exchanges.map(exchange => {
+              // Get all turn indices in this exchange for callbacks
+              const turnIndices: number[] = [
+                ...exchange.systemTurns.map(t => t.idx),
+                ...(exchange.userTurn ? [exchange.userTurn.idx] : []),
+                ...exchange.assistantTurns.map(t => t.idx),
+              ];
+              // Get context mode from the first turn (they should all be the same in an exchange)
+              const firstTurn = exchange.userTurn || exchange.assistantTurns[0] || exchange.systemTurns[0];
+              const contextMode = firstTurn?.contextMode as ContextMode | undefined;
+
+              return (
+                <ExchangeNode
+                  key={exchange.id}
+                  exchange={exchange}
+                  isExpanded={expandedExchanges.has(exchange.id)}
+                  contextMode={contextMode}
+                  onToggle={() => toggleExchange(exchange.id)}
+                  onContextModeChange={onExchangeContextModeChange
+                    ? (mode) => onExchangeContextModeChange(turnIndices, mode)
+                    : undefined}
+                  onArchive={onExchangeAction
+                    ? () => onExchangeAction(turnIndices, 'archive')
+                    : undefined}
+                  onDelete={onExchangeAction
+                    ? () => onExchangeAction(turnIndices, 'delete')
+                    : undefined}
+                />
+              );
+            })
           ) : (
             <li className="tree-node tree-node--empty">
               <div className="tree-node__content">
@@ -486,6 +779,8 @@ interface SessionTreeViewProps {
   onSelectSession: (sessionId: string) => void;
   onSelectTurn?: (turnIdx: number) => void;
   onContextModeChange?: (sessionId: string, turnIdx: number, mode: ContextMode) => void;
+  onExchangeContextModeChange?: (sessionId: string, turnIndices: number[], mode: ContextMode) => void;
+  onExchangeAction?: (sessionId: string, turnIndices: number[], action: ExchangeAction) => void;
   onLinkSession?: (sessionId: string) => void;
   onTogglePin?: (sessionId: string) => void;
   onBulkAction?: (sessionIds: string[], action: BulkAction) => void;
@@ -501,8 +796,28 @@ export const SessionTreeView = memo(function SessionTreeView({
   onTogglePin,
   onBulkAction,
   onLoadTurns,
+  onExchangeContextModeChange,
+  onExchangeAction,
   isLoading = false,
 }: SessionTreeViewProps) {
+  // Log on mount
+  useEffect(() => {
+    debugLog('SessionTreeView mounted', { sessionCount: sessions.length });
+  }, [sessions.length]);
+
+  // Debug: global contextmenu listener to see if events are being captured
+  useEffect(() => {
+    const handleGlobalContextMenu = (e: MouseEvent) => {
+      debugLog('Global contextmenu event', {
+        target: (e.target as HTMLElement)?.className,
+        tagName: (e.target as HTMLElement)?.tagName,
+        defaultPrevented: e.defaultPrevented,
+      });
+    };
+    document.addEventListener('contextmenu', handleGlobalContextMenu, true); // capture phase
+    return () => document.removeEventListener('contextmenu', handleGlobalContextMenu, true);
+  }, []);
+
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
   const [checkedSessions, setCheckedSessions] = useState<Set<string>>(new Set());
   const [lastClickedSessionId, setLastClickedSessionId] = useState<string | null>(null);
@@ -745,6 +1060,12 @@ export const SessionTreeView = memo(function SessionTreeView({
         onSelect={(e) => handleSessionClick(session.id, e)}
         onTogglePin={onTogglePin ? () => onTogglePin(session.id) : undefined}
         onToggleCheck={(e) => handleCheckboxClick(session.id, e)}
+        onExchangeContextModeChange={onExchangeContextModeChange
+          ? (turnIndices, mode) => onExchangeContextModeChange(session.id, turnIndices, mode)
+          : undefined}
+        onExchangeAction={onExchangeAction
+          ? (turnIndices, action) => onExchangeAction(session.id, turnIndices, action)
+          : undefined}
       />
     );
   };

@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-20T13:19:30.206005
+// Generated: 2026-02-20T16:34:02.707013
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -370,6 +370,24 @@ export interface ImageAttachment {
   filename?: string;
   width?: number;
   height?: number;
+}
+
+export interface StartArchiveResult {
+  success: boolean;
+  helperId?: string;
+  sessionId?: string;
+  turnStart?: number;
+  turnEnd?: number;
+  error?: string;
+}
+
+export interface CompleteArchiveResult {
+  success: boolean;
+  sessionId?: string;
+  archiveId?: string;
+  turnIndex?: number;
+  turnsArchived?: number;
+  error?: string;
 }
 
 export interface GoalInfo {

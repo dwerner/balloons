@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-20T13:19:30.209278
+// Generated: 2026-02-20T16:34:02.709775
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -25,6 +25,21 @@ export type Unsubscribe = () => void;
  * and real-time event subscriptions for state changes.
  */
 export interface TreeStateService {
+  /**
+   * Delete multiple turns from a session.
+   * 
+   * Loads the session if needed, deletes the specified turns,
+   * saves the session, and updates the tree state.
+   * 
+   * Args:
+   * session_id: The session ID
+   * turn_indices: List of turn indices to delete
+   * 
+   * Returns:
+   * Number of turns actually deleted
+   */
+  deleteTurns(sessionId: string, turnIndices: number[]): Promise<number>;
+
   /**
    * Get all sessions.
    * 
@@ -171,6 +186,22 @@ export interface TreeStateService {
   pinSession(sessionId: string): Promise<boolean>;
 
   /**
+   * Request archiving of turns (triggers background LLM summary generation).
+   * 
+   * This method emits an event that the app handles to start the archive
+   * workflow. The actual archiving happens asynchronously because it requires
+   * LLM-generated summaries.
+   * 
+   * Args:
+   * session_id: The session ID
+   * turn_indices: List of turn indices to archive
+   * 
+   * Returns:
+   * True if the archive request was accepted, False if invalid
+   */
+  requestArchive(sessionId: string, turnIndices: number[]): Promise<boolean>;
+
+  /**
    * Set the context mode for a turn.
    * 
    * Args:
@@ -228,6 +259,11 @@ export interface TreeStateService {
 }
 
 export interface TreeStateEvents {
+  /**
+   * Emitted when an archive is requested (triggers background LLM task).
+   */
+  onArchiveRequested(callback: (data: Types.TreeEventData) => void): Unsubscribe;
+
   /**
    * Emitted when a turn's context mode changes.
    */
@@ -293,6 +329,11 @@ export interface TreeStateEvents {
    */
   onTurnUpdated(callback: (data: Types.TreeEventData) => void): Unsubscribe;
 
+  /**
+   * Emitted when turns are deleted from a session.
+   */
+  onTurnsDeleted(callback: (data: Types.TreeEventData) => void): Unsubscribe;
+
 }
 
 export class TreeStateServiceClient implements TreeStateService {
@@ -339,6 +380,10 @@ export class TreeStateServiceClient implements TreeStateService {
     return () => {
       this.eventHandlers.get(event)?.delete(callback);
     };
+  }
+
+  async deleteTurns(sessionId: string, turnIndices: number[]): Promise<number> {
+    return this.call('deleteTurns', { sessionId: sessionId, turnIndices: turnIndices });
   }
 
   async getAllSessions(): Promise<Types.SessionInfo[]> {
@@ -397,6 +442,10 @@ export class TreeStateServiceClient implements TreeStateService {
     return this.call('pinSession', { sessionId: sessionId });
   }
 
+  async requestArchive(sessionId: string, turnIndices: number[]): Promise<boolean> {
+    return this.call('requestArchive', { sessionId: sessionId, turnIndices: turnIndices });
+  }
+
   async setContextMode(sessionId: string, turnIdx: number, mode: string): Promise<null> {
     return this.call('setContextMode', { sessionId: sessionId, turnIdx: turnIdx, mode: mode });
   }
@@ -415,6 +464,10 @@ export class TreeStateServiceClient implements TreeStateService {
 
   async unpinSession(sessionId: string): Promise<boolean> {
     return this.call('unpinSession', { sessionId: sessionId });
+  }
+
+  onArchiveRequested(callback: (data: Types.TreeEventData) => void): Unsubscribe {
+    return this.subscribe('archiveRequested', callback);
   }
 
   onContextModeChanged(callback: (data: Types.TreeEventData) => void): Unsubscribe {
@@ -467,6 +520,10 @@ export class TreeStateServiceClient implements TreeStateService {
 
   onTurnUpdated(callback: (data: Types.TreeEventData) => void): Unsubscribe {
     return this.subscribe('turnUpdated', callback);
+  }
+
+  onTurnsDeleted(callback: (data: Types.TreeEventData) => void): Unsubscribe {
+    return this.subscribe('turnsDeleted', callback);
   }
 
 }
@@ -832,6 +889,21 @@ export interface SessionManagerService {
   cancelStreaming(sessionId: string): Promise<boolean>;
 
   /**
+   * Complete an archive after summary generation.
+   * 
+   * Can be called manually with a custom summary, or automatically
+   * by the helper completion handler with the generated summary.
+   * 
+   * Args:
+   * helper_id: ID of the archive helper task
+   * summary: Summary text to use. If None, uses the helper's generated summary.
+   * 
+   * Returns:
+   * CompleteArchiveResult with archive details
+   */
+  completeArchive(helperId: string, summary?: string | null): Promise<Types.CompleteArchiveResult>;
+
+  /**
    * Complete a derive after context compression finishes.
    * 
    * Args:
@@ -1125,6 +1197,24 @@ export interface SessionManagerService {
   setSessionTitle(sessionId: string, title: string): Promise<boolean>;
 
   /**
+   * Start archiving turns with LLM-generated summary.
+   * 
+   * This starts a background task to generate a summary of the turns being
+   * archived. The actual archive is performed after the summary completes.
+   * 
+   * Args:
+   * session_id: ID of the session to archive turns from
+   * turn_indices: List of turn indices to archive (must be contiguous)
+   * auto_complete: If True, automatically complete the archive after
+   * summary generation. If False, client must call
+   * complete_archive() manually.
+   * 
+   * Returns:
+   * StartArchiveResult with helper_id for tracking progress
+   */
+  startArchive(sessionId: string, turnIndices: number[], autoComplete?: boolean): Promise<Types.StartArchiveResult>;
+
+  /**
    * Submit a message to a session and start streaming the response.
    * 
    * This is the primary way for frontends to interact with the LLM.
@@ -1208,6 +1298,16 @@ export interface SessionManagerService {
 }
 
 export interface SessionManagerEvents {
+  /**
+   * Emitted when an archive operation completes successfully.
+   */
+  onArchiveCompleted(callback: (data: Types.CompleteArchiveResult) => void): Unsubscribe;
+
+  /**
+   * Emitted when an archive operation begins.
+   */
+  onArchiveStarted(callback: (data: Types.StartArchiveResult) => void): Unsubscribe;
+
   /**
    * Emitted when a message is submitted and streaming begins.
    */
@@ -1295,6 +1395,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.call('cancelStreaming', { sessionId: sessionId });
   }
 
+  async completeArchive(helperId: string, summary?: string | null): Promise<Types.CompleteArchiveResult> {
+    return this.call('completeArchive', { helperId: helperId, summary: summary });
+  }
+
   async completeDeriveAfterCompression(helperId: string, compressedSummary: string, startStreaming?: boolean): Promise<Types.DeriveSessionResult> {
     return this.call('completeDeriveAfterCompression', { helperId: helperId, compressedSummary: compressedSummary, startStreaming: startStreaming });
   }
@@ -1379,6 +1483,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.call('setSessionTitle', { sessionId: sessionId, title: title });
   }
 
+  async startArchive(sessionId: string, turnIndices: number[], autoComplete?: boolean): Promise<Types.StartArchiveResult> {
+    return this.call('startArchive', { sessionId: sessionId, turnIndices: turnIndices, autoComplete: autoComplete });
+  }
+
   async submitMessage(sessionId: string, content: string, messages?: unknown[] | null, queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult> {
     return this.call('submitMessage', { sessionId: sessionId, content: content, messages: messages, queue: queue, allowedTools: allowedTools });
   }
@@ -1393,6 +1501,14 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   async validateMerge(forkSessionId: string): Promise<Types.MergeSessionResult> {
     return this.call('validateMerge', { forkSessionId: forkSessionId });
+  }
+
+  onArchiveCompleted(callback: (data: Types.CompleteArchiveResult) => void): Unsubscribe {
+    return this.subscribe('archiveCompleted', callback);
+  }
+
+  onArchiveStarted(callback: (data: Types.StartArchiveResult) => void): Unsubscribe {
+    return this.subscribe('archiveStarted', callback);
   }
 
   onMessageSubmitted(callback: (data: Types.SubmitMessageResult) => void): Unsubscribe {

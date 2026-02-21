@@ -1225,6 +1225,18 @@ class BalloonsApp(App):
                 )
             return
 
+        # Intercept play_midi tool - purely client-side, no backend execution needed
+        # The UI will render an interactive player component from the tool_use turn
+        if tool_name == "play_midi" and tool_use_id.startswith("balloons-"):
+            debug_log.info(
+                f"play_midi: client-side tool intercepted, skipping backend execution",
+                category="midi",
+                details={"bpm": tool_input.get("bpm"), "notes_len": len(tool_input.get("notes", ""))},
+            )
+            # The tool_use turn is already saved - UI will render MidiPlayerCard
+            # No result needed back to LLM
+            return
+
         # For regular tools, finalize the streaming tool use widget with formatted input
         # This ensures the tool input is displayed before the result arrives
         if is_active:

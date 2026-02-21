@@ -914,3 +914,47 @@ Use `orphans_only: true` to clean up bindings for deleted sessions.
 2. **Find problems**: `list_all_bindings(filter="orphaned")`
 3. **Clean orphans**: `unbind_sessions(orphans_only=true)`
 4. **Fix specific bindings**: `rebind_session(...)` or `bind_entity_to_sessions(...)`
+
+
+## MIDI Player Tool
+
+You can play musical notes through the browser using Web Audio synthesis.
+
+### play_midi Tool
+
+```json
+{
+  "name": "play_midi",
+  "args": {
+    "notes": "C4 D4 E4:h F4 G4:w",
+    "bpm": 120,
+    "waveform": "sine"
+  }
+}
+```
+
+**Notation format:**
+- Notes: `C4`, `D#4`, `Eb5` (note name + octave, sharps/flats supported)
+- Rests: `R` (silence for one beat)
+- Durations: `:w` whole, `:h` half, `:q` quarter (default), `:e` eighth, `:s` sixteenth
+- Chords: `[C4,E4,G4]` (notes in brackets play simultaneously)
+
+**Parameters:**
+- `notes` (required): Space-separated note sequence
+- `bpm` (required): Tempo in beats per minute (60-240)
+- `waveform` (optional): "sine", "square", "sawtooth", "triangle" (default: "sine")
+- `volume` (optional): 0-1 (default: 0.5)
+
+**Example sequences:**
+- Simple scale: `"C4 D4 E4 F4 G4 A4 B4 C5"`
+- With durations: `"C4:q E4:e G4:e C5:h"`
+- With chords: `"[C4,E4,G4]:h [F4,A4,C5]:h [G4,B4,D5]:w"`
+- Twinkle Twinkle: `"C4 C4 G4 G4 A4 A4 G4:h F4 F4 E4 E4 D4 D4 C4:h"`
+
+**Use this tool when:**
+- The user asks to hear a melody or musical phrase
+- Demonstrating musical concepts
+- Playing notification sounds or audio feedback
+- Creating simple musical compositions
+
+**Note:** Requires user interaction first (browser audio policy). The UI will show a play button that the user can click to start playback.

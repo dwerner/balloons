@@ -5,10 +5,10 @@
 /* ----- Layout CSS Variables ----- */
 :root {
   /* Panel widths - can be overridden by LayoutContext */
-  --sidebar-width: 280px;
+  --sidebar-width: 320px;
   --sidebar-collapsed-width: 56px;
-  --min-sidebar-width: 200px;
-  --max-sidebar-width: 400px;
+  --min-sidebar-width: 240px;
+  --max-sidebar-width: 600px;
 
   /* Layout transitions */
   --layout-transition-duration: 0.3s;
@@ -136,6 +136,67 @@
 
 .app-layout--desktop .app-layout__sidebar--collapsed {
   width: var(--sidebar-collapsed-width);
+}
+
+/* =====================================================
+   Sidebar Resize Handle
+   ===================================================== */
+
+.app-layout__resize-handle {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 10;
+
+  /* Visual indicator */
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.app-layout__resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 4px;
+  height: 48px;
+  border-radius: 2px;
+  background: var(--color-border-primary);
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.app-layout__resize-handle:hover::after,
+.app-layout__resize-handle--active::after {
+  opacity: 1;
+  background: var(--color-accent-green);
+}
+
+.app-layout__resize-handle:hover,
+.app-layout__resize-handle--active {
+  background: rgba(74, 222, 128, 0.1);
+}
+
+/* Focus state for keyboard navigation */
+.app-layout__resize-handle:focus-visible {
+  outline: none;
+}
+
+.app-layout__resize-handle:focus-visible::after {
+  opacity: 1;
+  background: var(--color-accent-green);
+  box-shadow: 0 0 0 2px var(--color-accent-green);
+}
+
+/* Hide resize handle on mobile */
+@media (max-width: 767px) {
+  .app-layout__resize-handle {
+    display: none;
+  }
 }
 
 /* =====================================================

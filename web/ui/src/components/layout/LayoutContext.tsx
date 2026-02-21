@@ -60,9 +60,9 @@ const STORAGE_KEY_SIDEBAR_WIDTH = 'balloons:sidebar-width';
 const STORAGE_KEY_SIDEBAR_COLLAPSED = 'balloons:sidebar-collapsed';
 
 // Default sidebar width
-const DEFAULT_SIDEBAR_WIDTH = 280;
-const MIN_SIDEBAR_WIDTH = 200;
-const MAX_SIDEBAR_WIDTH = 400;
+const DEFAULT_SIDEBAR_WIDTH = 320;
+const MIN_SIDEBAR_WIDTH = 240;
+const MAX_SIDEBAR_WIDTH = 600;  // Increased for context curation workflow
 const COLLAPSED_SIDEBAR_WIDTH = 56;
 
 export interface LayoutProviderProps {

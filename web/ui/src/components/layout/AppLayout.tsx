@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useCallback, useRef, useState } from 'react';
 import { useLayout, LayoutProvider } from './LayoutContext';
 import { ThemeProvider } from './ThemeContext';
 import './AppLayout.css';
@@ -104,6 +104,101 @@ interface SidebarProps {
 }
 
 /**
+ * Resize handle for the sidebar
+ */
+function ResizeHandle() {
+  const { layoutMode, isSidebarCollapsed, setSidebarWidth, panels } = useLayout();
+  const [isDragging, setIsDragging] = useState(false);
+  const startXRef = useRef(0);
+  const startWidthRef = useRef(0);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (layoutMode !== 'desktop' || isSidebarCollapsed) return;
+
+    e.preventDefault();
+    setIsDragging(true);
+    startXRef.current = e.clientX;
+    startWidthRef.current = panels.sidebar.width;
+
+    // Add grabbing cursor to body during drag
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, [layoutMode, isSidebarCollapsed, panels.sidebar.width]);
+
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    if (layoutMode !== 'desktop' || isSidebarCollapsed) return;
+
+    const touch = e.touches[0];
+    if (!touch) return;
+
+    setIsDragging(true);
+    startXRef.current = touch.clientX;
+    startWidthRef.current = panels.sidebar.width;
+  }, [layoutMode, isSidebarCollapsed, panels.sidebar.width]);
+
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const delta = e.clientX - startXRef.current;
+      const newWidth = startWidthRef.current + delta;
+      setSidebarWidth(newWidth);
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      const touch = e.touches[0];
+      if (!touch) return;
+      const delta = touch.clientX - startXRef.current;
+      const newWidth = startWidthRef.current + delta;
+      setSidebarWidth(newWidth);
+    };
+
+    const handleEnd = () => {
+      setIsDragging(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleEnd);
+    document.addEventListener('touchmove', handleTouchMove);
+    document.addEventListener('touchend', handleEnd);
+    document.addEventListener('touchcancel', handleEnd);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleEnd);
+      document.removeEventListener('touchmove', handleTouchMove);
+      document.removeEventListener('touchend', handleEnd);
+      document.removeEventListener('touchcancel', handleEnd);
+    };
+  }, [isDragging, setSidebarWidth]);
+
+  // Only show on desktop when not collapsed
+  if (layoutMode !== 'desktop' || isSidebarCollapsed) return null;
+
+  return (
+    <div
+      className={`app-layout__resize-handle ${isDragging ? 'app-layout__resize-handle--active' : ''}`}
+      onMouseDown={handleMouseDown}
+      onTouchStart={handleTouchStart}
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize sidebar"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        // Keyboard resize support
+        if (e.key === 'ArrowLeft') {
+          setSidebarWidth(panels.sidebar.width - 10);
+        } else if (e.key === 'ArrowRight') {
+          setSidebarWidth(panels.sidebar.width + 10);
+        }
+      }}
+    />
+  );
+}
+
+/**
  * Sidebar panel - appears on the left in desktop mode, slides in as overlay on mobile
  */
 function Sidebar({ children, className = '' }: SidebarProps) {
@@ -127,6 +222,7 @@ function Sidebar({ children, className = '' }: SidebarProps) {
         aria-hidden={!isVisible}
       >
         {children}
+        <ResizeHandle />
       </aside>
     </>
   );

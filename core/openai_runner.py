@@ -279,13 +279,29 @@ class OpenAICompatibleRunner(BaseRunner):
                 }
                 openai_messages.append(assistant_msg)
 
+                # Client-only tools - handled entirely by UI, no backend execution
+                # These tools are intercepted at the app/UI layer from the tool_use event
+                CLIENT_ONLY_TOOLS = {"play_midi", "propose_fork", "propose_merge"}
+
                 # Execute each tool and add results
                 for tc in tool_calls:
                     if self._cancelled:
                         break
 
+                    tool_name = tc["name"]
+
+                    # Skip client-only tools - UI handles them from the tool_use event
+                    if tool_name in CLIENT_ONLY_TOOLS:
+                        debug_log.info(
+                            f"Skipping client-only tool: {tool_name}",
+                            category="tool",
+                            run_id=self._run_id,
+                        )
+                        # Don't add to openai_messages - no result for LLM
+                        continue
+
                     result, is_error = await execute_tool(
-                        tc["name"],
+                        tool_name,
                         tc["arguments"],
                         working_dir or ".",
                         self._run_id,

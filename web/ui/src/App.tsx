@@ -12,23 +12,14 @@ import { CreateTodoModal, type CreateTodoResult } from './components/CreateTodoM
 import { SimpleTurnsView } from './components/SimpleTurnsView';
 import { StreamingTurnsView } from './components/StreamingTurnsView';
 import { useWakeLock, useSoundNotifications } from './hooks';
+import { setDebugClient, createLogger } from './utils/debugLog';
 
 // Module-level client reference for debug logging
 // Set when client connects, cleared on disconnect
 let globalClient: BalloonsClient | null = null;
 
-// Debug logger that sends to TUI's debug pane via WebSocket
-// Falls back to console.log if not connected
-function debugLog(message: string, data?: Record<string, unknown>) {
-  console.log('[App]', message, data);
-
-  // Try to send to TUI debug pane via WebSocket
-  if (globalClient?.isConnected) {
-    globalClient.debugLog.info(message, 'web', '', data ?? null).catch(() => {
-      // Silently ignore - don't want to spam console with connection errors
-    });
-  }
-}
+// Create a scoped logger for this module
+const debugLog = createLogger('App');
 
 // View mode for conversation display
 // 'simple' uses TreeStateService (server-side state)
@@ -921,8 +912,9 @@ export function App() {
     client.connect()
       .then(async () => {
         setError(null);
-        // Set global client for debug logging
+        // Set global client for debug logging (both local ref and shared utility)
         globalClient = client;
+        setDebugClient(client);
 
         // Load initial session list
         try {
@@ -974,6 +966,7 @@ export function App() {
     return () => {
       unsubState();
       globalClient = null;
+      setDebugClient(null);
       client.disconnect();
     };
   }, []);
@@ -1786,6 +1779,56 @@ export function App() {
             setCreateTodoModalState({ isOpen: true, planId, planTitle });
           }}
           creatingSessionFor={creatingSessionFor}
+          onExchangeContextModeChange={async (sessionId, turnIndices, mode) => {
+            const client = clientRef.current;
+            if (!client || connectionState !== 'connected') return;
+
+            // Set context mode for all turns in the exchange
+            try {
+              for (const turnIdx of turnIndices) {
+                await client.tree.setContextMode(sessionId, turnIdx, mode.toLowerCase());
+              }
+              debugLog('Set context mode for exchange', { sessionId, turnIndices, mode });
+            } catch (err) {
+              console.error('Failed to set context mode:', err);
+            }
+          }}
+          onExchangeAction={async (sessionId, turnIndices, action) => {
+            const client = clientRef.current;
+            if (!client || connectionState !== 'connected') return;
+
+            try {
+              if (action === 'delete') {
+                // Confirm before deleting
+                const turnCount = turnIndices.length;
+                const confirmed = window.confirm(
+                  `Delete ${turnCount} turn${turnCount > 1 ? 's' : ''}? This cannot be undone.`
+                );
+                if (!confirmed) return;
+
+                const deletedCount = await client.tree.deleteTurns(sessionId, turnIndices);
+                debugLog('Deleted turns', { sessionId, turnIndices, deletedCount });
+
+                // Refresh turns for this session
+                if (selectedSessionId === sessionId) {
+                  const newTurns = await client.tree.getTurns(sessionId);
+                  setTurns(newTurns);
+                }
+              } else if (action === 'archive') {
+                // Start archive (with auto-completion after LLM generates summary)
+                const result = await client.sessions.startArchive(sessionId, turnIndices, true);
+                if (result.success) {
+                  debugLog('Archive started', { sessionId, turnIndices, helperId: result.helperId });
+                  // The archive will auto-complete after LLM generates summary
+                  // Session will be updated via events
+                } else {
+                  console.warn('Archive request failed:', result.error);
+                }
+              }
+            } catch (err) {
+              console.error(`Failed to ${action} turns:`, err);
+            }
+          }}
           soundEnabled={soundNotifications.soundEnabled}
           onToggleSound={() => soundNotifications.setSoundEnabled(!soundNotifications.soundEnabled)}
           onNewBareSession={async () => {
@@ -2159,6 +2202,11 @@ function MobileHeader({ connectionState, selectedSession }: MobileHeaderProps) {
 // Sidebar view mode
 type SidebarView = 'list' | 'tree' | 'goals';
 
+// Context mode type from SessionTreeView
+type ContextMode = 'COPY' | 'COMPRESS' | 'DROP';
+// Exchange action type from SessionTreeView
+type ExchangeAction = 'archive' | 'delete';
+
 interface SidebarContentProps {
   connectionState: ConnectionState;
   sessions: SessionInfo[];
@@ -2175,6 +2223,9 @@ interface SidebarContentProps {
   onNewBareSession?: () => void;
   onNewBoundSession?: (entityType: string, entityId: string) => Promise<void>;
   creatingSessionFor?: string | null; // "entityType:entityId" when creating bound session
+  // Exchange context menu callbacks
+  onExchangeContextModeChange?: (sessionId: string, turnIndices: number[], mode: ContextMode) => void;
+  onExchangeAction?: (sessionId: string, turnIndices: number[], action: ExchangeAction) => void;
   // Sound notification props
   soundEnabled?: boolean;
   onToggleSound?: () => void;
@@ -2196,6 +2247,8 @@ function SidebarContent({
   onNewBareSession,
   onNewBoundSession,
   creatingSessionFor = null,
+  onExchangeContextModeChange,
+  onExchangeAction,
   soundEnabled = true,
   onToggleSound,
 }: SidebarContentProps) {
@@ -2411,6 +2464,8 @@ function SidebarContent({
           onTogglePin={onTogglePin}
           onLoadTurns={onLoadTurns}
           isLoading={isLoadingTurns}
+          onExchangeContextModeChange={onExchangeContextModeChange}
+          onExchangeAction={onExchangeAction}
         />
       ) : (
         <div className="session-list">

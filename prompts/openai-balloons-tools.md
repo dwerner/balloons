@@ -293,3 +293,15 @@ Goals integrate with the fork/merge workflow. Each phase uses a dedicated sessio
 - **Bind sessions before working** - keeps context focused
 - **One todo per implementation fork** - clean context, clear merges
 - **Merge back after each phase** - progress is recorded in parent
+
+
+## MIDI Player
+
+### play_midi
+Play musical notes through the browser using Web Audio synthesis.
+- `notes` (required): Space-separated note sequence (e.g., "C4 D4 E4:h [C4,E4,G4]:w")
+- `bpm` (required): Tempo 60-240
+- `waveform` (optional): "sine", "square", "sawtooth", "triangle"
+- `volume` (optional): 0-1
+
+Notation: Notes like `C4`, `D#5`, `Eb3`. Durations: `:w` whole, `:h` half, `:q` quarter (default), `:e` eighth, `:s` sixteenth. Rests: `R`. Chords: `[C4,E4,G4]`.

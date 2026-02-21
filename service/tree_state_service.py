@@ -541,6 +541,70 @@ class TreeStateService:
         """
         return list(self._state.get_pinned_sessions())
 
+    # --- Turn Modification Operations ---
+
+    @ws_expose
+    async def delete_turns(self, session_id: str, turn_indices: list[int]) -> int:
+        """Delete multiple turns from a session.
+
+        Loads the session if needed, deletes the specified turns,
+        saves the session, and updates the tree state.
+
+        Args:
+            session_id: The session ID
+            turn_indices: List of turn indices to delete
+
+        Returns:
+            Number of turns actually deleted
+        """
+        from session import Session
+
+        # Load the session
+        session = await Session.load(session_id)
+        if not session:
+            return 0
+
+        # Delete the turns
+        deleted_count = session.delete_turns(turn_indices)
+
+        if deleted_count > 0:
+            # Save the session
+            await session.save()
+
+            # Reload the session into tree state
+            self._state.load_session(session_id, session)
+
+        return deleted_count
+
+    @ws_expose
+    async def request_archive(
+        self, session_id: str, turn_indices: list[int]
+    ) -> bool:
+        """Request archiving of turns (triggers background LLM summary generation).
+
+        This method emits an event that the app handles to start the archive
+        workflow. The actual archiving happens asynchronously because it requires
+        LLM-generated summaries.
+
+        Args:
+            session_id: The session ID
+            turn_indices: List of turn indices to archive
+
+        Returns:
+            True if the archive request was accepted, False if invalid
+        """
+        if not turn_indices:
+            return False
+
+        # Emit event for app to handle
+        for handler in self._event_handlers:
+            handler("archiveRequested", {
+                "session_id": session_id,
+                "turn_indices": turn_indices,
+            })
+
+        return True
+
     # --- Events ---
 
     @ws_event
@@ -606,4 +670,14 @@ class TreeStateService:
     @ws_event
     async def on_pinned_sessions_changed(self) -> TreeEventData:
         """Emitted when the pinned sessions list changes."""
+        ...
+
+    @ws_event
+    async def on_turns_deleted(self) -> TreeEventData:
+        """Emitted when turns are deleted from a session."""
+        ...
+
+    @ws_event
+    async def on_archive_requested(self) -> TreeEventData:
+        """Emitted when an archive is requested (triggers background LLM task)."""
         ...

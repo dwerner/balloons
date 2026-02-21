@@ -299,6 +299,36 @@ class ImageAttachment:
     height: int = 0
 
 
+@ws_type
+@dataclass
+class StartArchiveResult:
+    """Result of starting an archive operation.
+
+    Archives require LLM-generated summaries, so the operation runs asynchronously.
+    The helper_id can be used to track progress via helper events.
+    """
+
+    success: bool
+    helper_id: str = ""  # ID for tracking the archive helper task
+    session_id: str = ""  # Session being archived
+    turn_start: int = 0  # First turn index being archived
+    turn_end: int = 0  # End turn index (exclusive)
+    error: str = ""
+
+
+@ws_type
+@dataclass
+class CompleteArchiveResult:
+    """Result of completing an archive after summary generation."""
+
+    success: bool
+    session_id: str = ""
+    archive_id: str = ""  # ID of the archive block created
+    turn_index: int = 0  # Index of the archive turn
+    turns_archived: int = 0  # Number of turns that were archived
+    error: str = ""
+
+
 @dataclass
 class _StreamingContext:
     """Internal context for tracking streaming state per session.
@@ -988,6 +1018,32 @@ class SessionManagerService:
                     debug_log.warning(
                         f"Auto-complete fork compression failed: {e}",
                         category="fork"
+                    )
+                    import traceback
+                    traceback.print_exc()
+
+            # Auto-complete archive if flagged to do so
+            if (
+                ctx.helper_type == "archive"
+                and ctx.metadata.get("auto_complete", False)
+            ):
+                debug_log.info(
+                    f"Auto-completing archive for helper {helper_id}",
+                    category="archive",
+                )
+                try:
+                    result = await self.complete_archive(
+                        helper_id=helper_id,
+                        summary=ctx.content,
+                    )
+                    debug_log.info(
+                        f"Archive auto-complete result: success={result.success}, error={result.error}",
+                        category="archive",
+                    )
+                except Exception as e:
+                    debug_log.warning(
+                        f"Auto-complete archive failed: {e}",
+                        category="archive"
                     )
                     import traceback
                     traceback.print_exc()
@@ -2638,6 +2694,180 @@ class SessionManagerService:
             needs_compression=False,
         )
 
+    # --- Archive Operations ---
+
+    @ws_expose
+    async def start_archive(
+        self,
+        session_id: str,
+        turn_indices: list[int],
+        auto_complete: bool = True,
+    ) -> StartArchiveResult:
+        """Start archiving turns with LLM-generated summary.
+
+        This starts a background task to generate a summary of the turns being
+        archived. The actual archive is performed after the summary completes.
+
+        Args:
+            session_id: ID of the session to archive turns from
+            turn_indices: List of turn indices to archive (must be contiguous)
+            auto_complete: If True, automatically complete the archive after
+                          summary generation. If False, client must call
+                          complete_archive() manually.
+
+        Returns:
+            StartArchiveResult with helper_id for tracking progress
+        """
+        from core.summarizer import Summarizer
+
+        # Load the session
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                return StartArchiveResult(success=False, error=f"Session {session_id} not found")
+
+        if not turn_indices:
+            return StartArchiveResult(success=False, error="No turns specified")
+
+        # Calculate turn range (must be contiguous)
+        turn_start = min(turn_indices)
+        turn_end = max(turn_indices) + 1
+
+        # Validate indices
+        if turn_start < 0 or turn_end > len(session.turns):
+            return StartArchiveResult(
+                success=False,
+                error=f"Invalid turn range: {turn_start}-{turn_end}, session has {len(session.turns)} turns"
+            )
+
+        # Get turns to archive
+        turns_to_archive = session.turns[turn_start:turn_end]
+
+        debug_log.info(
+            f"Starting archive: session={session_id[:8]}, turns={turn_start}-{turn_end-1}",
+            category="archive",
+        )
+
+        # Build summary prompt
+        summarizer = Summarizer(runner=None)  # We don't need the runner for prompt building
+        summary_prompt = summarizer.build_archive_summary_prompt(turns_to_archive, "")
+
+        # Generate helper ID
+        helper_id = f"archive-{uuid.uuid4().hex[:8]}"
+
+        # Store archive metadata for completion
+        archive_metadata = {
+            "session_id": session_id,
+            "turn_indices": list(turn_indices),
+            "turn_start": turn_start,
+            "turn_end": turn_end,
+            "auto_complete": auto_complete,
+        }
+
+        # Start helper task
+        self.start_helper(
+            helper_id=helper_id,
+            helper_type="archive",
+            prompt=summary_prompt,
+            session_id=session_id,
+            metadata=archive_metadata,
+        )
+
+        return StartArchiveResult(
+            success=True,
+            helper_id=helper_id,
+            session_id=session_id,
+            turn_start=turn_start,
+            turn_end=turn_end,
+        )
+
+    @ws_expose
+    async def complete_archive(
+        self,
+        helper_id: str,
+        summary: str | None = None,
+    ) -> CompleteArchiveResult:
+        """Complete an archive after summary generation.
+
+        Can be called manually with a custom summary, or automatically
+        by the helper completion handler with the generated summary.
+
+        Args:
+            helper_id: ID of the archive helper task
+            summary: Summary text to use. If None, uses the helper's generated summary.
+
+        Returns:
+            CompleteArchiveResult with archive details
+        """
+        from core.commands import CommandExecutor
+
+        # Get helper context
+        helper_ctx = self._helper_contexts.get(helper_id)
+        if not helper_ctx:
+            return CompleteArchiveResult(success=False, error=f"Helper {helper_id} not found")
+
+        if helper_ctx.helper_type != "archive":
+            return CompleteArchiveResult(success=False, error=f"Helper {helper_id} is not an archive task")
+
+        # Get archive metadata
+        metadata = helper_ctx.metadata
+        session_id = metadata.get("session_id", "")
+        turn_indices = metadata.get("turn_indices", [])
+        turn_start = metadata.get("turn_start", 0)
+        turn_end = metadata.get("turn_end", 0)
+
+        # Use provided summary or helper's generated content
+        archive_summary = summary if summary is not None else helper_ctx.content.strip()
+        if not archive_summary:
+            archive_summary = f"Archived turns {turn_start}-{turn_end - 1}"
+
+        debug_log.info(
+            f"Completing archive: session={session_id[:8]}, summary={archive_summary[:50]}...",
+            category="archive",
+        )
+
+        # Load session
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                return CompleteArchiveResult(success=False, error=f"Session {session_id} not found")
+
+        # Use command executor to perform archive
+        executor = CommandExecutor()
+        result = executor.prepare_archive(
+            session=session,
+            turn_indices=turn_indices,
+            summary=archive_summary,
+        )
+
+        if not result.success:
+            return CompleteArchiveResult(success=False, error=result.error or "Archive failed")
+
+        # Update session with new turns
+        session.turns = result.new_turns
+        await session.save()
+
+        # Update tree state
+        if self._tree_state:
+            self._tree_state.load_session(session_id, session)
+
+        # Clean up helper context
+        self._helper_contexts.pop(helper_id, None)
+        self._helper_runners.pop(helper_id, None)
+
+        # Emit session updated event
+        self._emit_event(SessionManagerEvent.SESSION_UPDATED, session_id)
+
+        return CompleteArchiveResult(
+            success=True,
+            session_id=session_id,
+            archive_id=result.archive_id or "",
+            turn_index=turn_start,
+            turns_archived=len(turn_indices),
+        )
+
     @ws_expose
     async def find_switch_target(
         self,
@@ -3510,4 +3740,14 @@ class SessionManagerService:
     @ws_event
     async def on_message_submitted(self) -> SubmitMessageResult:
         """Emitted when a message is submitted and streaming begins."""
+        ...
+
+    @ws_event
+    async def on_archive_started(self) -> StartArchiveResult:
+        """Emitted when an archive operation begins."""
+        ...
+
+    @ws_event
+    async def on_archive_completed(self) -> CompleteArchiveResult:
+        """Emitted when an archive operation completes successfully."""
         ...
