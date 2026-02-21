@@ -10,13 +10,13 @@ repository = "https://github.com/dwerner/balloons"
 
 [workspace.dependencies]
 # Async runtime
-core-executor = { git = "https://github.com/dwerner/core-executor" }
+core-executor = { path = "../../core-executor" }
 
 # Tokenization
 tiktoken-rs = "0.6"
 
 # Process management
-procstream = { git = "https://github.com/dwerner/procstream", features = ["macros"] }
+procstream = { path = "../../procstream", features = ["macros"] }
 
 # Storage
 heed = "0.21"

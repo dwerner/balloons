@@ -15,11 +15,12 @@ use crate::process::{handle_process_events, SupervisedProcess};
 use crate::types::{LogEntry, OutputQuery, ProcessId, ProcessInfo, StartRequest};
 
 /// Global executor for spawning background event handler tasks.
-/// Single-threaded since event handlers are I/O-bound.
+/// Uses multiple threads since each supervised process gets its own long-running
+/// event handler that needs to run concurrently.
 static EXECUTOR: OnceLock<Mutex<ThreadPoolExecutor>> = OnceLock::new();
 
 fn get_executor() -> &'static Mutex<ThreadPoolExecutor> {
-    EXECUTOR.get_or_init(|| Mutex::new(ThreadPoolExecutor::new(1)))
+    EXECUTOR.get_or_init(|| Mutex::new(ThreadPoolExecutor::new(8)))
 }
 
 /// The main process supervisor.

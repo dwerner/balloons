@@ -1435,6 +1435,37 @@ class BalloonsApp(App):
             session_history = data.get("session_history", [])
             asyncio.create_task(self._save_session_history(session_history))
 
+        elif event in (TreeEvent.SESSION_PINNED, TreeEvent.SESSION_UNPINNED):
+            # Session pin state changed - persist to user prefs
+            # Use create_task to avoid blocking the UI
+            session_id = data.get("session_id")
+            is_pinned = event == TreeEvent.SESSION_PINNED
+            asyncio.create_task(self._save_pinned_state(session_id, is_pinned))
+
+    async def _save_pinned_state(self, session_id: str, is_pinned: bool) -> None:
+        """Save pinned session state to user prefs (background task)."""
+        from core.async_storage import get_user_prefs_storage
+
+        try:
+            storage = await get_user_prefs_storage()
+            prefs = await storage.load_prefs()
+
+            # Update the pinned_session_ids list based on the new state
+            if is_pinned:
+                if session_id not in prefs.pinned_session_ids:
+                    prefs.pinned_session_ids.append(session_id)
+            else:
+                if session_id in prefs.pinned_session_ids:
+                    prefs.pinned_session_ids.remove(session_id)
+
+            await storage.save_prefs(prefs)
+            debug_log.info(
+                f"Session {'pinned' if is_pinned else 'unpinned'}: {session_id[:8]}",
+                category="app",
+            )
+        except Exception as e:
+            debug_log.error(f"Failed to save pin state: {e}", category="app")
+
     async def _save_session_history(self, session_history: list[str]) -> None:
         """Save session history to storage (background task)."""
         try:
@@ -5882,30 +5913,6 @@ class BalloonsApp(App):
             input_box.insert(link_cmd)
 
         input_box.focus()
-
-    async def on_context_tree_view_session_pin_toggled(self, event: ContextTreeView.SessionPinToggled) -> None:
-        """Handle session pin toggle - persist to user prefs."""
-        from core.async_storage import get_user_prefs_storage
-
-        try:
-            storage = await get_user_prefs_storage()
-            prefs = await storage.load_prefs()
-
-            # Update the pinned_session_ids list based on the new state
-            if event.is_pinned:
-                if event.session_id not in prefs.pinned_session_ids:
-                    prefs.pinned_session_ids.append(event.session_id)
-            else:
-                if event.session_id in prefs.pinned_session_ids:
-                    prefs.pinned_session_ids.remove(event.session_id)
-
-            await storage.save_prefs(prefs)
-            debug_log.info(
-                f"Session {'pinned' if event.is_pinned else 'unpinned'}: {event.session_id[:8]}",
-                category="app",
-            )
-        except Exception as e:
-            debug_log.error(f"Failed to save pin state: {e}", category="app")
 
     def on_context_tree_view_colon_pressed(self, event: ContextTreeView.ColonPressed) -> None:
         """Handle : key from tree - jump to input box, insert colon only if empty."""

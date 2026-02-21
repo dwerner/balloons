@@ -14,11 +14,12 @@ use balloons_core::{
 };
 use balloons_supervisor::{ProcessSupervisor, StartRequest};
 
-// Global executor for supervisor operations
+// Global executor for supervisor operations - needs multiple threads since
+// each supervised process runs a long-lived event handler task
 static SUPERVISOR_EXECUTOR: OnceLock<Mutex<ThreadPoolExecutor>> = OnceLock::new();
 
 fn get_supervisor_executor() -> &'static Mutex<ThreadPoolExecutor> {
-    SUPERVISOR_EXECUTOR.get_or_init(|| Mutex::new(ThreadPoolExecutor::new(1)))
+    SUPERVISOR_EXECUTOR.get_or_init(|| Mutex::new(ThreadPoolExecutor::new(8)))
 }
 
 /// Python-facing storage handle

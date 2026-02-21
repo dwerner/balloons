@@ -494,7 +494,10 @@ class TreeStateService:
         Returns:
             True if newly pinned, False if already pinned or session doesn't exist
         """
-        return self._state.pin_session(session_id)
+        result = self._state.pin_session(session_id)
+        if result:
+            await self._persist_pin_state(session_id, is_pinned=True)
+        return result
 
     @ws_expose
     async def unpin_session(self, session_id: str) -> bool:
@@ -506,7 +509,10 @@ class TreeStateService:
         Returns:
             True if unpinned, False if wasn't pinned
         """
-        return self._state.unpin_session(session_id)
+        result = self._state.unpin_session(session_id)
+        if result:
+            await self._persist_pin_state(session_id, is_pinned=False)
+        return result
 
     @ws_expose
     async def toggle_pin(self, session_id: str) -> bool:
@@ -518,7 +524,33 @@ class TreeStateService:
         Returns:
             True if now pinned, False if now unpinned
         """
-        return self._state.toggle_pin(session_id)
+        is_pinned = self._state.toggle_pin(session_id)
+        await self._persist_pin_state(session_id, is_pinned=is_pinned)
+        return is_pinned
+
+    async def _persist_pin_state(self, session_id: str, is_pinned: bool) -> None:
+        """Persist pinned session state to user prefs."""
+        from core.async_storage import get_user_prefs_storage
+        from core.debug_log import debug_log
+
+        try:
+            storage = await get_user_prefs_storage()
+            prefs = await storage.load_prefs()
+
+            if is_pinned:
+                if session_id not in prefs.pinned_session_ids:
+                    prefs.pinned_session_ids.append(session_id)
+            else:
+                if session_id in prefs.pinned_session_ids:
+                    prefs.pinned_session_ids.remove(session_id)
+
+            await storage.save_prefs(prefs)
+            debug_log.info(
+                f"Session {'pinned' if is_pinned else 'unpinned'}: {session_id[:8]}",
+                category="websocket",
+            )
+        except Exception as e:
+            debug_log.error(f"Failed to save pin state: {e}", category="websocket")
 
     @ws_expose
     async def is_pinned(self, session_id: str) -> bool:

@@ -39,10 +39,10 @@ def _get_prompt_path(filename: str) -> Path | None:
 
 
 def ensure_prompts_installed() -> None:
-    """Copy default prompts to user directory if not present.
+    """Copy default prompts to user directory if missing or outdated.
 
     Creates ~/.balloons/prompts/ and copies default prompts from the
-    source directory if they don't already exist in the user directory.
+    source directory if they don't exist or are older than the source.
     """
     _USER_PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -51,10 +51,18 @@ def ensure_prompts_installed() -> None:
 
     for filename in prompts:
         user_path = _USER_PROMPTS_DIR / filename
-        if not user_path.exists():
-            source_path = _SOURCE_PROMPTS_DIR / filename
-            if source_path.exists():
-                user_path.write_text(source_path.read_text())
+        source_path = _SOURCE_PROMPTS_DIR / filename
+
+        if not source_path.exists():
+            continue
+
+        # Copy if user file doesn't exist or source is newer
+        should_copy = not user_path.exists()
+        if not should_copy and user_path.exists():
+            should_copy = source_path.stat().st_mtime > user_path.stat().st_mtime
+
+        if should_copy:
+            user_path.write_text(source_path.read_text())
 
 
 def _load_prompt_file(filename: str) -> str:

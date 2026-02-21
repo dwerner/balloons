@@ -569,7 +569,7 @@ body {
 }
 
 .session-item {
-  padding: 12px;
+  padding: 8px;
   border-radius: 8px;
   cursor: pointer;
   margin-bottom: 4px;
@@ -720,14 +720,14 @@ body {
 .turns-container {
   flex: 1;
   overflow-y: auto;
-  padding: 12px;
-  padding-bottom: 16px; /* Small padding at bottom */
+  padding: 6px;
+  padding-bottom: 6px; /* Small padding at bottom */
   min-height: 0;
 }
 
 .turn {
-  margin-bottom: 12px;
-  padding: 10px 12px;
+  margin-bottom: 6px;
+  padding: 6px 6px;
   border-radius: 8px;
   max-width: 95%;
 }
@@ -1285,7 +1285,7 @@ body {
   background: var(--color-code-header);
   color: var(--color-code-comment);
   font-size: 12px;
-  padding: 6px 12px;
+  padding: 6px 6px;
   border-bottom: 1px solid var(--color-border-secondary);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
@@ -1307,7 +1307,7 @@ body {
 .turn.tool .turn-content blockquote {
   border-left: 3px solid var(--color-accent-green);
   margin: 12px 0;
-  padding: 8px 16px;
+  padding: 6px 6px;
   background: rgba(74, 222, 128, 0.1);
   color: #c9d1d9;
 }
@@ -1331,7 +1331,7 @@ body {
 .turn.tool .turn-content th,
 .turn.tool .turn-content td {
   border: 1px solid var(--color-border-secondary);
-  padding: 8px 12px;
+  padding: 6px 6px;
   text-align: left;
 }
 
@@ -1396,7 +1396,6 @@ body {
    ===================================================== */
 
 .turn-tool-uses {
-  margin-top: 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1516,7 +1515,7 @@ body {
 .tool-use-json,
 .tool-use-result {
   margin: 0;
-  padding: 8px 12px;
+  padding: 6px 6px;
   background: var(--color-code-bg);
   font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
   font-size: 12px;
@@ -1540,7 +1539,7 @@ body {
 
 /* ----- Formatted Tool Input/Output ----- */
 .tool-input-formatted {
-  padding: 8px 12px;
+  padding: 8px 6px;
   background: var(--color-code-bg);
 }
 

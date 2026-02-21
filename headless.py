@@ -76,6 +76,7 @@ async def _load_all_sessions_into_tree(tree_state) -> int:
 
     This populates the session list so the frontend can see all sessions.
     Sessions are loaded lazily - only metadata initially, full data on access.
+    Also loads pinned session state from user preferences.
 
     Args:
         tree_state: The TreeState to populate
@@ -84,6 +85,19 @@ async def _load_all_sessions_into_tree(tree_state) -> int:
         Number of sessions loaded
     """
     from session import Session
+    from core.async_storage import get_user_prefs_storage
+
+    # Load pinned sessions from user preferences first
+    try:
+        storage = await get_user_prefs_storage()
+        prefs = await storage.load_prefs()
+        tree_state.set_pinned_sessions(prefs.pinned_session_ids)
+        debug_log.info(
+            f"Loaded {len(prefs.pinned_session_ids)} pinned sessions",
+            category="startup",
+        )
+    except Exception as e:
+        debug_log.warning(f"Failed to load pinned sessions: {e}", category="startup")
 
     sessions = await Session.list_sessions()
     for metadata in sessions:

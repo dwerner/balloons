@@ -493,7 +493,6 @@ dependencies = [
 [[package]]
 name = "core-executor"
 version = "0.1.0"
-source = "git+https://github.com/dwerner/core-executor#dd69571382354c0a482177512afff6083b050734"
 dependencies = [
  "async-channel 1.9.0",
  "async-executor",
@@ -1826,7 +1825,6 @@ dependencies = [
 [[package]]
 name = "procstream"
 version = "0.1.0"
-source = "git+https://github.com/dwerner/procstream#525b083a4b36426ed1f6ae15ae4d158717bb2105"
 dependencies = [
  "async-channel 2.5.0",
  "async-process",
@@ -1846,7 +1844,6 @@ dependencies = [
 [[package]]
 name = "procstream-macros"
 version = "0.1.0"
-source = "git+https://github.com/dwerner/procstream#525b083a4b36426ed1f6ae15ae4d158717bb2105"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2797,7 +2794,6 @@ dependencies = [
 [[package]]
 name = "wat-cpu"
 version = "0.1.0"
-source = "git+https://github.com/dwerner/core-executor#dd69571382354c0a482177512afff6083b050734"
 dependencies = [
  "libc",
  "winapi",
