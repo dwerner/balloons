@@ -58,7 +58,11 @@ export function GrepCard({ turn, result }: GrepCardProps) {
   // Format display path
   const displayPath = formatRelativePath(path);
 
-  // Header content: pattern and path
+  // Parse results to count matches
+  const resultLines = resultContent.split('\n').filter(line => line.trim());
+  const matchCount = resultLines.length;
+
+  // Header content: pattern, path, and match count
   const headerContent = pattern ? (
     <>
       <code className="tool-pattern">/{pattern}/</code>
@@ -66,14 +70,13 @@ export function GrepCard({ turn, result }: GrepCardProps) {
       <code className="tool-search-path">{displayPath}</code>
       {glob && <code className="tool-glob">{glob}</code>}
       {caseInsensitive && <span className="tool-badge">-i</span>}
+      {hasResult && !isError && matchCount > 0 && (
+        <span className="tool-match-count">{matchCount} match{matchCount !== 1 ? 'es' : ''}</span>
+      )}
     </>
   ) : inputIsStreaming ? (
     <span className="tool-building">building...</span>
   ) : null;
-
-  // Parse results to count matches
-  const resultLines = resultContent.split('\n').filter(line => line.trim());
-  const matchCount = resultLines.length;
 
   // Truncate very long output
   const maxLines = 50;
@@ -91,9 +94,6 @@ export function GrepCard({ turn, result }: GrepCardProps) {
     >
       {hasResult && (
         <>
-          {!isError && matchCount > 0 && (
-            <div className="tool-match-count">{matchCount} match{matchCount !== 1 ? 'es' : ''}</div>
-          )}
           {isError ? (
             <pre className="tool-search-results error">
               <code>{resultContent}</code>

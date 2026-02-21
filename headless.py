@@ -71,6 +71,28 @@ def _initialize_supervisor() -> None:
         debug_log.error(f"Failed to initialize supervisor: {e}", category="startup")
 
 
+async def _load_all_sessions_into_tree(tree_state) -> int:
+    """Load all session metadata into TreeState.
+
+    This populates the session list so the frontend can see all sessions.
+    Sessions are loaded lazily - only metadata initially, full data on access.
+
+    Args:
+        tree_state: The TreeState to populate
+
+    Returns:
+        Number of sessions loaded
+    """
+    from session import Session
+
+    sessions = await Session.list_sessions()
+    for metadata in sessions:
+        tree_state.add_session_from_metadata(metadata, is_current=False)
+
+    debug_log.info(f"Loaded {len(sessions)} sessions into tree state", category="startup")
+    return len(sessions)
+
+
 def _create_session_runner_factory():
     """Create a runner factory function for SessionManager.
 
@@ -150,6 +172,9 @@ async def run_server(
 
     # Start event pump
     session_service.start_event_pump()
+
+    # Load all sessions into TreeState so they appear in the session list
+    await _load_all_sessions_into_tree(tree_state)
 
     # Configure WebSocket server
     ws_config = config.websocket

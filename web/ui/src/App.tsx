@@ -718,14 +718,18 @@ function formatTokens(count: number): string {
   return String(count);
 }
 
-// Get WebSocket URL from environment, query param, or derive from current host
-function getWsUrl(): string {
+// Server slots - A is primary (8765), B is secondary (8766)
+type ServerSlot = 'A' | 'B';
+const SLOT_PORTS: Record<ServerSlot, number> = { A: 8765, B: 8766 };
+
+// Get WebSocket URL for a given slot
+function getWsUrlForSlot(slot: ServerSlot): string {
   // Check for explicit override
   if (typeof window !== 'undefined' && (window as any).BALLOONS_WS_URL) {
     return (window as any).BALLOONS_WS_URL;
   }
 
-  // Check URL query param: ?ws=host:port
+  // Check URL query param: ?ws=host:port (overrides slot)
   if (typeof window !== 'undefined') {
     const params = new URLSearchParams(window.location.search);
     const wsParam = params.get('ws');
@@ -733,14 +737,24 @@ function getWsUrl(): string {
       return `ws://${wsParam}`;
     }
 
-    // Default: use same host as the page, port 8765
-    return `ws://${window.location.hostname}:8765`;
+    // Use slot's port
+    const port = SLOT_PORTS[slot];
+    return `ws://${window.location.hostname}:${port}`;
   }
 
-  return 'ws://localhost:8765';
+  return `ws://localhost:${SLOT_PORTS[slot]}`;
 }
 
-const WS_URL = getWsUrl();
+// Get initial slot from localStorage, default to A
+function getInitialSlot(): ServerSlot {
+  if (typeof window !== 'undefined') {
+    const stored = localStorage.getItem('balloons:server-slot');
+    if (stored === 'A' || stored === 'B') {
+      return stored;
+    }
+  }
+  return 'A';
+}
 
 // ============================================================================
 // Fast Input Component - uses uncontrolled input to avoid re-renders
@@ -839,8 +853,15 @@ const MessageInputInner = forwardRef<MessageInputHandle, MessageInputProps>(
 const MessageInput = memo(MessageInputInner);
 
 export function App() {
+  // Server slot (A=8765, B=8766) - persisted to localStorage
+  const [serverSlot, setServerSlot] = useState<ServerSlot>(getInitialSlot);
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
+
+  // Persist slot to localStorage when changed
+  useEffect(() => {
+    localStorage.setItem('balloons:server-slot', serverSlot);
+  }, [serverSlot]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(() => {
     // Restore persisted session ID on load
     if (typeof window !== 'undefined') {
@@ -896,9 +917,12 @@ export function App() {
     }
   }, [selectedSessionId]);
 
-  // Initialize client and connect
+  // Initialize client and connect - reconnects when slot changes
   useEffect(() => {
-    const client = new BalloonsClient(WS_URL, {
+    const wsUrl = getWsUrlForSlot(serverSlot);
+    debugLog(`Connecting to slot ${serverSlot} at ${wsUrl}`);
+
+    const client = new BalloonsClient(wsUrl, {
       autoReconnect: true,
       reconnectDelay: 2000,
       maxReconnectAttempts: 10,
@@ -964,12 +988,13 @@ export function App() {
       });
 
     return () => {
+      debugLog(`Disconnecting from slot ${serverSlot}`);
       unsubState();
       globalClient = null;
       setDebugClient(null);
       client.disconnect();
     };
-  }, []);
+  }, [serverSlot]); // Reconnect when slot changes
 
   // Subscribe to events when connected
   useEffect(() => {
@@ -1771,7 +1796,10 @@ export function App() {
     <AppLayout>
       {/* Mobile header */}
       <AppLayout.Header>
-        <MobileHeader connectionState={connectionState} selectedSession={selectedSession} />
+        <MobileHeader
+          connectionState={connectionState}
+          selectedSession={selectedSession}
+        />
       </AppLayout.Header>
 
       {/* Sidebar */}
@@ -1845,6 +1873,8 @@ export function App() {
           }}
           soundEnabled={soundNotifications.soundEnabled}
           onToggleSound={() => soundNotifications.setSoundEnabled(!soundNotifications.soundEnabled)}
+          serverSlot={serverSlot}
+          onSlotChange={setServerSlot}
           onNewBareSession={async () => {
             const sessionsClient = clientRef.current?.sessions;
             if (!sessionsClient || connectionState !== 'connected') return;
@@ -2298,6 +2328,9 @@ interface SidebarContentProps {
   // Sound notification props
   soundEnabled?: boolean;
   onToggleSound?: () => void;
+  // Server slot props
+  serverSlot: ServerSlot;
+  onSlotChange: (slot: ServerSlot) => void;
 }
 
 function SidebarContent({
@@ -2321,6 +2354,8 @@ function SidebarContent({
   onExchangeAction,
   soundEnabled = true,
   onToggleSound,
+  serverSlot,
+  onSlotChange,
 }: SidebarContentProps) {
   const { closeSidebar, layoutMode } = useLayout();
   const { resolvedTheme, toggleTheme } = useTheme();
@@ -2371,6 +2406,10 @@ function SidebarContent({
   const headerTitle = selectedSession
     ? `${selectedSession.forkName || selectedSession.title || 'Session'} #${selectedSession.id.slice(0, 6)}`
     : 'Balloons';
+
+  const toggleSlot = useCallback(() => {
+    onSlotChange(serverSlot === 'A' ? 'B' : 'A');
+  }, [serverSlot, onSlotChange]);
 
   return (
     <>
@@ -2444,6 +2483,19 @@ function SidebarContent({
           </button>
         )}
       </header>
+
+      {/* Server slot toggle row */}
+      <div className="slot-toggle-row">
+        <span className="slot-label">Server:</span>
+        <button
+          className={`slot-toggle slot-${serverSlot.toLowerCase()}`}
+          onClick={toggleSlot}
+          title={`Server slot ${serverSlot} (port ${SLOT_PORTS[serverSlot]}). Click to switch.`}
+        >
+          {serverSlot}
+        </button>
+        <span className="slot-port">:{SLOT_PORTS[serverSlot]}</span>
+      </div>
 
       {onNewBareSession && (
         <button

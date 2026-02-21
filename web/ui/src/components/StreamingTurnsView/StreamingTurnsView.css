@@ -19,7 +19,7 @@
 .streaming-turns-view {
   display: flex;
   flex-direction: column;
-  padding: 16px;
+  padding: 6px;
 }
 
 .streaming-turns-view.empty,

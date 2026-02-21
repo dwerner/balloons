@@ -821,7 +821,7 @@
 }
 
 .tool-card-body {
-  padding: 8px 10px;
+  padding: 6px 6px;
   font-size: 12px;
 }
 
@@ -1042,7 +1042,8 @@
 .tool-match-count {
   font-size: 10px;
   color: var(--text-secondary, #888);
-  margin-bottom: 6px;
+  margin-left: auto;
+  padding-left: 8px;
 }
 
 /* ============================================================================
@@ -1310,7 +1311,7 @@
   }
 
   .tool-card-body {
-    padding: 5px 6px;
+    padding: 6px 6px;
   }
 
   .tool-file-path {
