@@ -3917,15 +3917,35 @@ class BalloonsApp(App):
 
         # Apply context modes to all turns in each exchange
         # Use batch mode to suppress per-turn token recalculation (huge perf win)
+        # IMPORTANT: We must set modes for ALL exchanges, not just mentioned ones.
+        # Unmentioned exchanges default to COMPRESS (same as web flow in respond_to_fork_proposal).
+        mentioned_exchanges = set(exchange_modes.keys())
         self._batch_context_mode_changes = True
         try:
-            for exchange_idx, mode in exchange_modes.items():
-                if exchange_idx < len(groups):
-                    for turn in groups[exchange_idx]:
-                        self._tree_state.set_context_mode(session_id, turn.idx, mode)
+            for exchange_idx, group in enumerate(groups):
+                # Skip the last exchange (contains the proposal itself)
+                if exchange_idx == total_exchanges - 1:
+                    continue
+
+                if exchange_idx in mentioned_exchanges:
+                    # Use the specified mode
+                    mode = exchange_modes[exchange_idx]
+                else:
+                    # Default unmentioned exchanges to COMPRESS
+                    mode = ContextMode.COMPRESS
+
+                for turn in group:
+                    self._tree_state.set_context_mode(session_id, turn.idx, mode)
         finally:
             self._batch_context_mode_changes = False
-        debug_log.info("_execute_fork_proposal: applied context modes", category="fork")
+        debug_log.info(
+            "_execute_fork_proposal: applied context modes",
+            category="fork",
+            details={
+                "mentioned_exchanges": len(mentioned_exchanges),
+                "total_exchanges": total_exchanges,
+            },
+        )
 
         # Now do one token update for all the changes
         self._update_base_context_tokens()
