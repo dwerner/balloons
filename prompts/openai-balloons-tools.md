@@ -305,3 +305,32 @@ Play musical notes through the browser using Web Audio synthesis.
 - `volume` (optional): 0-1
 
 Notation: Notes like `C4`, `D#5`, `Eb3`. Durations: `:w` whole, `:h` half, `:q` quarter (default), `:e` eighth, `:s` sixteenth. Rests: `R`. Chords: `[C4,E4,G4]`.
+
+
+## Headless Server Architecture
+
+Balloons runs as a headless WebSocket server with A/B slot support for safe self-modification:
+
+- **Slot A (port 8765)**: Primary/stable instance
+- **Slot B (port 8766)**: Secondary/experimental instance
+
+**Key files:**
+- `headless.py` - Headless server entry point
+- `balloons-server.py` - Server management script (start/stop/restart/list)
+- `docs/headless-mode.md` - Full documentation
+
+**Quick commands:**
+```bash
+python balloons-server.py list        # Show running instances
+python balloons-server.py start       # Start Slot A
+python balloons-server.py start -b    # Start Slot B
+python balloons-server.py restart -b  # Restart Slot B with new code
+```
+
+**Self-modification workflow:**
+1. Code changes to source files don't affect running servers
+2. Start/restart Slot B to test changes
+3. If changes work, restart Slot A to promote
+4. If changes break, Slot A still runs stable code
+
+The React UI can toggle between slots via the "Server: A/B" control in the sidebar.
