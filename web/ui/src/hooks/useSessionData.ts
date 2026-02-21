@@ -554,6 +554,13 @@ export function useSessionData(
                   turn.order === event.turnIndex &&
                   !(turn.contentBlock as ToolUseBlock).id
                 ) {
+                  debugLog('Populating tool_use ID', {
+                    turnId: turnId.substring(0, 8),
+                    turnIndex: event.turnIndex,
+                    toolUseId: event.toolUseId,
+                    toolName: event.toolName,
+                    previousId: (turn.contentBlock as ToolUseBlock).id || '(empty)',
+                  });
                   const next = new Map(prev);
                   const block = turn.contentBlock as ToolUseBlock;
                   next.set(turnId, {
@@ -567,6 +574,13 @@ export function useSessionData(
                   return next;
                 }
               }
+              debugLog('sessionDataToolUseStarted: could not find matching turn', {
+                turnIndex: event.turnIndex,
+                toolUseId: event.toolUseId,
+                toolName: event.toolName,
+                turnsCount: prev.size,
+                turnOrders: Array.from(prev.values()).map((t) => ({ order: t.order, type: t.contentBlock?.type })),
+              });
               return prev;
             });
           })
