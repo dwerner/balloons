@@ -1517,6 +1517,19 @@ export function App() {
     }
   }, [connectionState, selectedSessionId]);
 
+  // Scroll to a specific turn in the chat log
+  // Uses data-turn-order attribute on turn wrappers in StreamingTurnsView
+  const handleSelectTurn = useCallback((turnIdx: number) => {
+    // Find the turn element by data attribute
+    const turnElement = document.querySelector(`[data-turn-order="${turnIdx}"]`);
+    if (turnElement) {
+      turnElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Flash highlight effect
+      turnElement.classList.add('turn-highlight');
+      setTimeout(() => turnElement.classList.remove('turn-highlight'), 1500);
+    }
+  }, []);
+
   // Generate unique ID for image attachments
   const generateImageId = () => `img-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 
@@ -1771,6 +1784,7 @@ export function App() {
           turns={turns}
           streamingTask={streamingTask}
           onSelectSession={handleSelectSession}
+          onSelectTurn={handleSelectTurn}
           onTogglePin={handleTogglePin}
           onLoadTurns={handleLoadTurns}
           isLoadingTurns={isLoadingTurns}
@@ -1979,29 +1993,11 @@ export function App() {
           </div>
         ) : (
           <>
-            {/* View mode toggle */}
-            <div className="conversation-view-toggle">
-              <button
-                className={`view-toggle-btn ${conversationViewMode === 'simple' ? 'active' : ''}`}
-                onClick={() => {
-                  setConversationViewMode('simple');
-                  localStorage.setItem('balloons:conversation-view', 'simple');
-                }}
-                title="Simple view - uses TreeStateService"
-              >
-                Simple
-              </button>
-              <button
-                className={`view-toggle-btn ${conversationViewMode === 'streaming' ? 'active' : ''}`}
-                onClick={() => {
-                  setConversationViewMode('streaming');
-                  localStorage.setItem('balloons:conversation-view', 'streaming');
-                }}
-                title="Streaming view - uses SessionDataService (WIP)"
-              >
-                Streaming
-              </button>
-            </div>
+            {/* View mode toggle and detail panel toggle */}
+            <MainContentHeader
+              conversationViewMode={conversationViewMode}
+              setConversationViewMode={setConversationViewMode}
+            />
 
             <div className="turns-container">
               {conversationViewMode === 'simple' && clientRef.current && connectionState === 'connected' ? (
@@ -2105,6 +2101,16 @@ export function App() {
         )}
       </AppLayout.Main>
 
+      {/* Detail panel (right sidebar) */}
+      <AppLayout.Detail>
+        <div style={{ padding: '16px' }}>
+          <h3 style={{ margin: '0 0 16px 0', color: 'var(--color-text-primary)' }}>Detail Panel</h3>
+          <p style={{ color: 'var(--color-text-secondary)', fontSize: '14px' }}>
+            This panel can be used for settings, session details, goals, or other contextual information.
+          </p>
+        </div>
+      </AppLayout.Detail>
+
       {/* CreateTodoModal - rendered at App level for portal */}
       <CreateTodoModal
         isOpen={createTodoModalState.isOpen}
@@ -2181,12 +2187,17 @@ interface MobileHeaderProps {
 }
 
 function MobileHeader({ connectionState, selectedSession }: MobileHeaderProps) {
-  const { openSidebar } = useLayout();
+  const { openSidebar, openDetail } = useLayout();
 
   // Format title: session name (or title) + hash prefix
   const headerTitle = selectedSession
     ? `${selectedSession.forkName || selectedSession.title || 'Session'} #${selectedSession.id.slice(0, 6)}`
     : 'Balloons';
+
+  const handleOpenDetail = () => {
+    console.log('Detail button clicked, openDetail:', openDetail);
+    openDetail();
+  };
 
   return (
     <>
@@ -2195,7 +2206,64 @@ function MobileHeader({ connectionState, selectedSession }: MobileHeaderProps) {
       </button>
       <div className={`connection-status ${connectionState}`} title={connectionState} />
       <h1>{headerTitle}</h1>
+      <button className="menu-button menu-button--right" onClick={handleOpenDetail} aria-label="Open detail panel">
+        ⋮
+      </button>
     </>
+  );
+}
+
+// View mode type for conversation display
+type ViewMode = 'simple' | 'streaming';
+
+interface MainContentHeaderProps {
+  conversationViewMode: ViewMode;
+  setConversationViewMode: (mode: ViewMode) => void;
+}
+
+/**
+ * Header bar for the main content area with view toggle and detail panel toggle
+ */
+function MainContentHeader({ conversationViewMode, setConversationViewMode }: MainContentHeaderProps) {
+  const { layoutMode, isDetailCollapsed, toggleDetailCollapse } = useLayout();
+
+  return (
+    <div className="conversation-view-toggle">
+      <button
+        className={`view-toggle-btn ${conversationViewMode === 'simple' ? 'active' : ''}`}
+        onClick={() => {
+          setConversationViewMode('simple');
+          localStorage.setItem('balloons:conversation-view', 'simple');
+        }}
+        title="Simple view - uses TreeStateService"
+      >
+        Simple
+      </button>
+      <button
+        className={`view-toggle-btn ${conversationViewMode === 'streaming' ? 'active' : ''}`}
+        onClick={() => {
+          setConversationViewMode('streaming');
+          localStorage.setItem('balloons:conversation-view', 'streaming');
+        }}
+        title="Streaming view - uses SessionDataService (WIP)"
+      >
+        Streaming
+      </button>
+
+      {/* Spacer */}
+      <div style={{ flex: 1 }} />
+
+      {/* Detail panel toggle - only show on desktop */}
+      {layoutMode === 'desktop' && (
+        <button
+          className={`view-toggle-btn detail-toggle-btn ${!isDetailCollapsed ? 'active' : ''}`}
+          onClick={toggleDetailCollapse}
+          title={isDetailCollapsed ? 'Show detail panel' : 'Hide detail panel'}
+        >
+          {isDetailCollapsed ? '◀ More Stuff' : 'Less Stuff ▶'}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -2215,6 +2283,7 @@ interface SidebarContentProps {
   turns: TurnInfo[];
   streamingTask: TaskInfo | null;
   onSelectSession: (sessionId: string) => void;
+  onSelectTurn?: (turnIdx: number) => void;
   onTogglePin?: (sessionId: string) => void;
   onLoadTurns?: (sessionId: string) => Promise<TurnInfo[]>;
   isLoadingTurns?: boolean;
@@ -2239,6 +2308,7 @@ function SidebarContent({
   turns,
   streamingTask,
   onSelectSession,
+  onSelectTurn,
   onTogglePin,
   onLoadTurns,
   isLoadingTurns = false,
@@ -2461,6 +2531,7 @@ function SidebarContent({
           selectedSessionId={selectedSessionId}
           turns={turns}
           onSelectSession={handleSelectSession}
+          onSelectTurn={onSelectTurn}
           onTogglePin={onTogglePin}
           onLoadTurns={onLoadTurns}
           isLoading={isLoadingTurns}

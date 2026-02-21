@@ -125,6 +125,20 @@ export const SessionStatusBar = memo(function SessionStatusBar({
   const isPinned = session.isPinned ?? false;
   const sessionName = getSessionDisplayName(session);
 
+  // Collapsed state - persist in localStorage
+  const [isCollapsed, setIsCollapsed] = useState(() => {
+    const stored = localStorage.getItem('sessionStatusBar.collapsed');
+    return stored === 'true';
+  });
+
+  const toggleCollapsed = useCallback(() => {
+    setIsCollapsed(prev => {
+      const next = !prev;
+      localStorage.setItem('sessionStatusBar.collapsed', String(next));
+      return next;
+    });
+  }, []);
+
   // Backend selector state
   const [backends, setBackends] = useState<string[]>([]);
   const [selectedBackend, setSelectedBackend] = useState<string>(session.backendName || '');
@@ -216,111 +230,152 @@ export const SessionStatusBar = memo(function SessionStatusBar({
 
   return (
     <>
-    <div className="session-status-bar" role="status">
-      {/* Session title row - long press to rename */}
-      <div
-        className="session-status-bar__title-row"
-        title="Long press to rename session"
-        {...titleLongPress}
-      >
-        <span className="session-status-bar__session-title">{sessionName}</span>
-        <span className="session-status-bar__session-id">{session.id.slice(0, 8)}</span>
-      </div>
-
-      {/* Model and context info */}
-      <div className="session-status-bar__header">
-        <div className="session-status-bar__model-section">
-          {/* Streaming indicator */}
-          {isStreaming && (
-            <span
-              className="session-status-bar__streaming-indicator"
-              aria-label="Streaming active"
-              title="Streaming active"
+    <div className={`session-status-bar ${isCollapsed ? 'session-status-bar--collapsed' : ''}`} role="status">
+      {/* Collapsed view: toggle + minimal progress bar */}
+      {isCollapsed ? (
+        <div className="session-status-bar__collapsed-view">
+          <button
+            type="button"
+            className="session-status-bar__toggle"
+            onClick={toggleCollapsed}
+            title="Expand status bar"
+            aria-label="Expand status bar"
+            aria-expanded={false}
+          >
+            <span className="session-status-bar__toggle-icon">▲</span>
+          </button>
+          <div className="session-status-bar__mini-track">
+            <div
+              className={`session-status-bar__mini-bar ${contextColorClass}`}
+              style={{ width: `${contextUsage}%` }}
+              role="progressbar"
+              aria-valuenow={contextUsage}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-label={`Context usage: ${contextUsage.toFixed(0)}%`}
             />
-          )}
-
-          {/* Model/Backend display with dropdown */}
-          <div className="session-status-bar__backend-container">
-            <button
-              type="button"
-              className={`session-status-bar__model ${backends.length > 1 ? 'session-status-bar__model--clickable' : ''} ${showBackendSelector ? 'session-status-bar__model--open' : ''}`}
-              onClick={() => backends.length > 1 && !isStreaming && setShowBackendSelector(!showBackendSelector)}
-              disabled={isStreaming || backends.length <= 1}
-              title={backends.length > 1 ? 'Click to change backend' : modelDisplay}
-              aria-expanded={showBackendSelector}
-              aria-haspopup="listbox"
-            >
-              {selectedBackend || modelDisplay}
-              {backends.length > 1 && !isStreaming && (
-                <span className="session-status-bar__dropdown-arrow" aria-hidden="true">
-                  ▲
-                </span>
-              )}
-            </button>
-
-            {/* Backend dropdown with click-outside overlay */}
-            {showBackendSelector && backends.length > 1 && (
-              <>
-                <div
-                  className="session-status-bar__dropdown-overlay"
-                  onClick={() => setShowBackendSelector(false)}
-                  aria-hidden="true"
-                />
-                <div className="session-status-bar__backend-dropdown" role="listbox">
-                  {backends.map(backend => (
-                    <button
-                      key={backend}
-                      type="button"
-                      role="option"
-                      aria-selected={backend === selectedBackend}
-                      className={`session-status-bar__backend-option ${backend === selectedBackend ? 'session-status-bar__backend-option--selected' : ''}`}
-                      onClick={() => handleBackendChange(backend)}
-                      disabled={isChangingBackend}
-                    >
-                      {backend}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
           </div>
         </div>
-
-        <div className="session-status-bar__right">
-          {/* Pin toggle button */}
-          {onTogglePin && (
+      ) : (
+        <>
+          {/* Session title row - toggle + title + id */}
+          <div className="session-status-bar__title-row">
             <button
               type="button"
-              className={`session-status-bar__pin-button ${isPinned ? 'session-status-bar__pin-button--active' : ''}`}
-              onClick={onTogglePin}
-              title={isPinned ? 'Unpin session' : 'Pin session'}
-              aria-label={isPinned ? 'Unpin session' : 'Pin session'}
+              className="session-status-bar__toggle"
+              onClick={toggleCollapsed}
+              title="Collapse status bar"
+              aria-label="Collapse status bar"
+              aria-expanded={true}
             >
-              <PinIcon isPinned={isPinned} />
+              <span className="session-status-bar__toggle-icon">▼</span>
             </button>
-          )}
+            <div
+              className="session-status-bar__title-content"
+              title="Long press to rename session"
+              {...titleLongPress}
+            >
+              <span className="session-status-bar__session-title">{sessionName}</span>
+              <span className="session-status-bar__session-id">{session.id.slice(0, 8)}</span>
+            </div>
+          </div>
 
-          <span className="session-status-bar__context-values">
-            {formatTokens(contextTokens)} / {formatTokens(contextWindow)}
-            <span className="session-status-bar__context-percent">
-              ({contextUsage.toFixed(0)}%)
-            </span>
-          </span>
-        </div>
-      </div>
+          {/* Model and context info */}
+          <div className="session-status-bar__header">
+            <div className="session-status-bar__model-section">
+              {/* Streaming indicator */}
+              {isStreaming && (
+                <span
+                  className="session-status-bar__streaming-indicator"
+                  aria-label="Streaming active"
+                  title="Streaming active"
+                />
+              )}
 
-      {/* Context usage bar */}
-      <div className="session-status-bar__context-track">
-        <div
-          className={`session-status-bar__context-bar ${contextColorClass}`}
-          style={{ width: `${contextUsage}%` }}
-          role="progressbar"
-          aria-valuenow={contextUsage}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-label={`Context usage: ${contextUsage.toFixed(0)}%`}
-        />
-      </div>
+              {/* Model/Backend display with dropdown */}
+              <div className="session-status-bar__backend-container">
+                <button
+                  type="button"
+                  className={`session-status-bar__model ${backends.length > 1 ? 'session-status-bar__model--clickable' : ''} ${showBackendSelector ? 'session-status-bar__model--open' : ''}`}
+                  onClick={() => backends.length > 1 && !isStreaming && setShowBackendSelector(!showBackendSelector)}
+                  disabled={isStreaming || backends.length <= 1}
+                  title={backends.length > 1 ? 'Click to change backend' : modelDisplay}
+                  aria-expanded={showBackendSelector}
+                  aria-haspopup="listbox"
+                >
+                  {selectedBackend || modelDisplay}
+                  {backends.length > 1 && !isStreaming && (
+                    <span className="session-status-bar__dropdown-arrow" aria-hidden="true">
+                      ▲
+                    </span>
+                  )}
+                </button>
+
+                {/* Backend dropdown with click-outside overlay */}
+                {showBackendSelector && backends.length > 1 && (
+                  <>
+                    <div
+                      className="session-status-bar__dropdown-overlay"
+                      onClick={() => setShowBackendSelector(false)}
+                      aria-hidden="true"
+                    />
+                    <div className="session-status-bar__backend-dropdown" role="listbox">
+                      {backends.map(backend => (
+                        <button
+                          key={backend}
+                          type="button"
+                          role="option"
+                          aria-selected={backend === selectedBackend}
+                          className={`session-status-bar__backend-option ${backend === selectedBackend ? 'session-status-bar__backend-option--selected' : ''}`}
+                          onClick={() => handleBackendChange(backend)}
+                          disabled={isChangingBackend}
+                        >
+                          {backend}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div className="session-status-bar__right">
+              {/* Pin toggle button */}
+              {onTogglePin && (
+                <button
+                  type="button"
+                  className={`session-status-bar__pin-button ${isPinned ? 'session-status-bar__pin-button--active' : ''}`}
+                  onClick={onTogglePin}
+                  title={isPinned ? 'Unpin session' : 'Pin session'}
+                  aria-label={isPinned ? 'Unpin session' : 'Pin session'}
+                >
+                  <PinIcon isPinned={isPinned} />
+                </button>
+              )}
+
+              <span className="session-status-bar__context-values">
+                {formatTokens(contextTokens)} / {formatTokens(contextWindow)}
+                <span className="session-status-bar__context-percent">
+                  ({contextUsage.toFixed(0)}%)
+                </span>
+              </span>
+            </div>
+          </div>
+
+          {/* Context usage bar */}
+          <div className="session-status-bar__context-track">
+            <div
+              className={`session-status-bar__context-bar ${contextColorClass}`}
+              style={{ width: `${contextUsage}%` }}
+              role="progressbar"
+              aria-valuenow={contextUsage}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-label={`Context usage: ${contextUsage.toFixed(0)}%`}
+            />
+          </div>
+        </>
+      )}
     </div>
 
     {/* Rename session modal */}

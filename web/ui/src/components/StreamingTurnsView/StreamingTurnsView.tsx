@@ -76,7 +76,9 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession }: Strea
           </div>
           <div className="streaming-turns-list">
             {turns.map((turn) => (
-              <TurnCard key={turn.turnId} turn={turn} allTurns={turns} sessionId={sessionId || undefined} />
+              <div key={turn.turnId} data-turn-order={turn.order}>
+                <TurnCard turn={turn} allTurns={turns} sessionId={sessionId || undefined} />
+              </div>
             ))}
             {isStreaming && turns.length === 0 && (
               <div className="streaming-placeholder">

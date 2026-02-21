@@ -229,6 +229,12 @@ body {
   cursor: pointer;
   padding: 4px;
   line-height: 1;
+  flex-shrink: 0;
+}
+
+.menu-button--right {
+  font-size: 20px;
+  letter-spacing: 2px;
 }
 
 .mobile-header h1 {
@@ -647,6 +653,17 @@ body {
   border-color: var(--color-accent);
 }
 
+/* Detail panel toggle button */
+.conversation-view-toggle .detail-toggle-btn {
+  margin-left: auto;
+  background: var(--color-bg-tertiary);
+}
+
+.conversation-view-toggle .detail-toggle-btn.active {
+  background: var(--color-accent-green);
+  border-color: var(--color-accent-green);
+}
+
 /* ----- Turns Container ----- */
 .turns-container {
   flex: 1;
@@ -791,7 +808,7 @@ body {
 /* ----- Input Area ----- */
 .input-area {
   border-top: 1px solid var(--color-border-primary);
-  padding: 12px;
+  padding: 4px;
   background: var(--color-bg-secondary);
   margin-top: auto; /* Push to bottom of flex container */
   flex-shrink: 0; /* Don't shrink the input area */
@@ -800,7 +817,7 @@ body {
 /* Safe area padding for notched devices - only add what's needed */
 @supports (padding-bottom: env(safe-area-inset-bottom)) {
   .input-area {
-    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    padding-bottom: max(4px, env(safe-area-inset-bottom));
   }
 }
 
@@ -864,7 +881,7 @@ body {
 
 @media (min-width: 768px) {
   .input-area {
-    padding: 16px 20px;
+    padding: 6px 6px;
   }
 
   .input-field {

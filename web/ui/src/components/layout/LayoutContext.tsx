@@ -30,7 +30,7 @@ export interface LayoutContextValue {
   // Panel states
   panels: Record<PanelId, PanelState>;
 
-  // Sidebar controls
+  // Sidebar controls (left panel)
   isSidebarOpen: boolean;
   isSidebarCollapsed: boolean;
   openSidebar: () => void;
@@ -39,9 +39,18 @@ export interface LayoutContextValue {
   collapseSidebar: () => void;
   expandSidebar: () => void;
   toggleSidebarCollapse: () => void;
-
-  // Panel width controls (for future resizable panels)
   setSidebarWidth: (width: number) => void;
+
+  // Detail panel controls (right panel)
+  isDetailOpen: boolean;
+  isDetailCollapsed: boolean;
+  openDetail: () => void;
+  closeDetail: () => void;
+  toggleDetail: () => void;
+  collapseDetail: () => void;
+  expandDetail: () => void;
+  toggleDetailCollapse: () => void;
+  setDetailWidth: (width: number) => void;
 
   // CSS custom properties for panels
   cssVars: Record<string, string>;
@@ -58,12 +67,20 @@ const LayoutContext = createContext<LayoutContextValue | null>(null);
 // Local storage keys
 const STORAGE_KEY_SIDEBAR_WIDTH = 'balloons:sidebar-width';
 const STORAGE_KEY_SIDEBAR_COLLAPSED = 'balloons:sidebar-collapsed';
+const STORAGE_KEY_DETAIL_WIDTH = 'balloons:detail-width';
+const STORAGE_KEY_DETAIL_COLLAPSED = 'balloons:detail-collapsed';
 
 // Default sidebar width
 const DEFAULT_SIDEBAR_WIDTH = 320;
 const MIN_SIDEBAR_WIDTH = 240;
 const MAX_SIDEBAR_WIDTH = 600;  // Increased for context curation workflow
 const COLLAPSED_SIDEBAR_WIDTH = 56;
+
+// Default detail panel width
+const DEFAULT_DETAIL_WIDTH = 320;
+const MIN_DETAIL_WIDTH = 240;
+const MAX_DETAIL_WIDTH = 600;
+const COLLAPSED_DETAIL_WIDTH = 56;
 
 export interface LayoutProviderProps {
   children: React.ReactNode;
@@ -99,15 +116,39 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
     return DEFAULT_SIDEBAR_WIDTH;
   });
 
+  // Mobile detail panel open state (overlay)
+  const [isDetailOpen, setIsDetailOpen] = useState(false);
+
+  // Desktop detail panel collapsed state (persisted)
+  const [isDetailCollapsed, setIsDetailCollapsed] = useState(() => {
+    if (typeof window === 'undefined') return true; // Default collapsed on desktop
+    const stored = localStorage.getItem(STORAGE_KEY_DETAIL_COLLAPSED);
+    return stored !== 'false'; // Default to true (collapsed)
+  });
+
+  // Detail panel width (persisted)
+  const [detailWidth, setDetailWidthState] = useState(() => {
+    if (typeof window === 'undefined') return DEFAULT_DETAIL_WIDTH;
+    const stored = localStorage.getItem(STORAGE_KEY_DETAIL_WIDTH);
+    if (stored) {
+      const parsed = parseInt(stored, 10);
+      if (!isNaN(parsed) && parsed >= MIN_DETAIL_WIDTH && parsed <= MAX_DETAIL_WIDTH) {
+        return parsed;
+      }
+    }
+    return DEFAULT_DETAIL_WIDTH;
+  });
+
   // Handle window resize
   useEffect(() => {
     const handleResize = () => {
       const newMode = window.innerWidth >= BREAKPOINTS.tablet ? 'desktop' : 'mobile';
       setLayoutMode(newMode);
 
-      // Close mobile sidebar when switching to desktop
+      // Close mobile panels when switching to desktop
       if (newMode === 'desktop') {
         setIsSidebarOpen(false);
+        setIsDetailOpen(false);
       }
     };
 
@@ -120,10 +161,27 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
     localStorage.setItem(STORAGE_KEY_SIDEBAR_COLLAPSED, String(isSidebarCollapsed));
   }, [isSidebarCollapsed]);
 
-  // Sidebar controls
-  const openSidebar = useCallback(() => setIsSidebarOpen(true), []);
+  // Persist detail panel collapsed state
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_DETAIL_COLLAPSED, String(isDetailCollapsed));
+  }, [isDetailCollapsed]);
+
+  // Sidebar controls - close detail panel on mobile when opening sidebar
+  const openSidebar = useCallback(() => {
+    if (layoutMode === 'mobile') {
+      setIsDetailOpen(false); // Only one panel at a time on mobile
+    }
+    setIsSidebarOpen(true);
+  }, [layoutMode]);
   const closeSidebar = useCallback(() => setIsSidebarOpen(false), []);
-  const toggleSidebar = useCallback(() => setIsSidebarOpen(prev => !prev), []);
+  const toggleSidebar = useCallback(() => {
+    setIsSidebarOpen(prev => {
+      if (!prev && layoutMode === 'mobile') {
+        setIsDetailOpen(false);
+      }
+      return !prev;
+    });
+  }, [layoutMode]);
 
   const collapseSidebar = useCallback(() => setIsSidebarCollapsed(true), []);
   const expandSidebar = useCallback(() => setIsSidebarCollapsed(false), []);
@@ -134,6 +192,34 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
     const clamped = Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, width));
     setSidebarWidthState(clamped);
     localStorage.setItem(STORAGE_KEY_SIDEBAR_WIDTH, String(clamped));
+  }, []);
+
+  // Detail panel controls - close sidebar on mobile when opening detail
+  const openDetail = useCallback(() => {
+    if (layoutMode === 'mobile') {
+      setIsSidebarOpen(false); // Only one panel at a time on mobile
+    }
+    setIsDetailOpen(true);
+  }, [layoutMode]);
+  const closeDetail = useCallback(() => setIsDetailOpen(false), []);
+  const toggleDetail = useCallback(() => {
+    setIsDetailOpen(prev => {
+      if (!prev && layoutMode === 'mobile') {
+        setIsSidebarOpen(false);
+      }
+      return !prev;
+    });
+  }, [layoutMode]);
+
+  const collapseDetail = useCallback(() => setIsDetailCollapsed(true), []);
+  const expandDetail = useCallback(() => setIsDetailCollapsed(false), []);
+  const toggleDetailCollapse = useCallback(() => setIsDetailCollapsed(prev => !prev), []);
+
+  // Detail panel width control
+  const setDetailWidth = useCallback((width: number) => {
+    const clamped = Math.max(MIN_DETAIL_WIDTH, Math.min(MAX_DETAIL_WIDTH, width));
+    setDetailWidthState(clamped);
+    localStorage.setItem(STORAGE_KEY_DETAIL_WIDTH, String(clamped));
   }, []);
 
   // Build panel states
@@ -149,11 +235,12 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
       width: 0, // auto
     },
     detail: {
-      isVisible: false,
-      isCollapsed: false,
-      width: 0,
+      isVisible: layoutMode === 'desktop' ? !isDetailCollapsed : isDetailOpen,
+      isCollapsed: layoutMode === 'desktop' && isDetailCollapsed,
+      // On mobile, always use full width; on desktop, use collapsed width when collapsed
+      width: layoutMode === 'mobile' ? detailWidth : (isDetailCollapsed ? COLLAPSED_DETAIL_WIDTH : detailWidth),
     },
-  }), [layoutMode, isSidebarOpen, isSidebarCollapsed, sidebarWidth]);
+  }), [layoutMode, isSidebarOpen, isSidebarCollapsed, sidebarWidth, isDetailOpen, isDetailCollapsed, detailWidth]);
 
   // CSS custom properties
   const cssVars: Record<string, string> = useMemo(() => ({
@@ -161,7 +248,11 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
     '--sidebar-collapsed-width': `${COLLAPSED_SIDEBAR_WIDTH}px`,
     '--min-sidebar-width': `${MIN_SIDEBAR_WIDTH}px`,
     '--max-sidebar-width': `${MAX_SIDEBAR_WIDTH}px`,
-  }), [panels.sidebar.width]);
+    '--detail-width': `${panels.detail.width}px`,
+    '--detail-collapsed-width': `${COLLAPSED_DETAIL_WIDTH}px`,
+    '--min-detail-width': `${MIN_DETAIL_WIDTH}px`,
+    '--max-detail-width': `${MAX_DETAIL_WIDTH}px`,
+  }), [panels.sidebar.width, panels.detail.width]);
 
   const value: LayoutContextValue = useMemo(() => ({
     layoutMode,
@@ -175,6 +266,15 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
     expandSidebar,
     toggleSidebarCollapse,
     setSidebarWidth,
+    isDetailOpen,
+    isDetailCollapsed,
+    openDetail,
+    closeDetail,
+    toggleDetail,
+    collapseDetail,
+    expandDetail,
+    toggleDetailCollapse,
+    setDetailWidth,
     cssVars,
   }), [
     layoutMode,
@@ -188,6 +288,15 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
     expandSidebar,
     toggleSidebarCollapse,
     setSidebarWidth,
+    isDetailOpen,
+    isDetailCollapsed,
+    openDetail,
+    closeDetail,
+    toggleDetail,
+    collapseDetail,
+    expandDetail,
+    toggleDetailCollapse,
+    setDetailWidth,
     cssVars,
   ]);
 

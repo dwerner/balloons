@@ -339,6 +339,19 @@
   border-left: none;
 }
 
+/* Clickable turn (for scrolling to turn in chat log) */
+.tree-node--turn > .tree-node__content--clickable {
+  cursor: pointer;
+}
+
+.tree-node--turn > .tree-node__content--clickable:hover {
+  background: rgba(96, 165, 250, 0.15);
+}
+
+[data-theme="light"] .tree-node--turn > .tree-node__content--clickable:hover {
+  background: rgba(96, 165, 250, 0.1);
+}
+
 /* ===== Mobile adjustments ===== */
 @media (max-width: 767px) {
   .tree-view {

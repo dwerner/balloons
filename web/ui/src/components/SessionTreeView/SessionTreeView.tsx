@@ -261,15 +261,31 @@ function TrashIcon() {
 }
 
 // Turn node component (used inside exchanges)
-function TurnNode({ turn, indent = false }: { turn: TurnInfo; indent?: boolean }) {
+function TurnNode({
+  turn,
+  indent = false,
+  onClick,
+}: {
+  turn: TurnInfo;
+  indent?: boolean;
+  onClick?: (turnIdx: number) => void;
+}) {
   const icon = turn.role === 'user' ? '👤' :
                turn.role === 'assistant' ? '🤖' : '⚙';
   const preview = (turn.content || '').slice(0, 60).replace(/\n/g, ' ');
   const tokenStr = formatKt(turn.tokens);
 
+  const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onClick?.(turn.idx);
+  };
+
   return (
     <li className={`tree-node tree-node--turn ${indent ? 'tree-node--indented' : ''}`}>
-      <div className="tree-node__content">
+      <div
+        className={`tree-node__content ${onClick ? 'tree-node__content--clickable' : ''}`}
+        onClick={onClick ? handleClick : undefined}
+      >
         <span key="spacer" className="tree-node__spacer" />
         <span key="icon" className="tree-node__icon">{icon}</span>
         <span key="label" className="tree-node__label tree-node__label--muted">
@@ -485,6 +501,7 @@ function ExchangeNode({
   onContextModeChange,
   onArchive,
   onDelete,
+  onTurnClick,
 }: {
   exchange: Exchange;
   isExpanded: boolean;
@@ -493,6 +510,7 @@ function ExchangeNode({
   onContextModeChange?: (mode: ContextMode) => void;
   onArchive?: () => void;
   onDelete?: () => void;
+  onTurnClick?: (turnIdx: number) => void;
 }) {
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
 
@@ -576,13 +594,13 @@ function ExchangeNode({
       {isExpanded && hasChildren && (
         <ul className="tree-children">
           {exchange.systemTurns.map(turn => (
-            <TurnNode key={turn.idx} turn={turn} indent />
+            <TurnNode key={turn.idx} turn={turn} indent onClick={onTurnClick} />
           ))}
           {exchange.userTurn && (
-            <TurnNode key={exchange.userTurn.idx} turn={exchange.userTurn} indent />
+            <TurnNode key={exchange.userTurn.idx} turn={exchange.userTurn} indent onClick={onTurnClick} />
           )}
           {exchange.assistantTurns.map(turn => (
-            <TurnNode key={turn.idx} turn={turn} indent />
+            <TurnNode key={turn.idx} turn={turn} indent onClick={onTurnClick} />
           ))}
         </ul>
       )}
@@ -620,6 +638,7 @@ function SessionNode({
   onToggleCheck,
   onExchangeContextModeChange,
   onExchangeAction,
+  onTurnClick,
 }: {
   session: SessionInfo;
   index: number;
@@ -635,6 +654,7 @@ function SessionNode({
   onToggleCheck?: (e: React.MouseEvent) => void;
   onExchangeContextModeChange?: (turnIndices: number[], mode: ContextMode) => void;
   onExchangeAction?: (turnIndices: number[], action: ExchangeAction) => void;
+  onTurnClick?: (turnIdx: number) => void;
 }) {
   const sessionColor = SESSION_COLORS[index % SESSION_COLORS.length] || '#60a5fa';
   const sessionName = session.forkName || session.title || `Session ${session.id.slice(0, 8)}`;
@@ -751,6 +771,7 @@ function SessionNode({
                   onDelete={onExchangeAction
                     ? () => onExchangeAction(turnIndices, 'delete')
                     : undefined}
+                  onTurnClick={onTurnClick}
                 />
               );
             })
@@ -793,6 +814,7 @@ export const SessionTreeView = memo(function SessionTreeView({
   selectedSessionId,
   turns,
   onSelectSession,
+  onSelectTurn,
   onTogglePin,
   onBulkAction,
   onLoadTurns,
@@ -866,16 +888,17 @@ export const SessionTreeView = memo(function SessionTreeView({
       const isExpanding = !next.has(sessionId);
       if (isExpanding) {
         next.add(sessionId);
-        // Load turns if not selected session and not already loaded
+        // Select the session when expanding to ensure turns are loaded
+        // This prevents "No messages" for sessions that weren't loaded
         if (sessionId !== selectedSessionId) {
-          loadTurnsForSession(sessionId);
+          onSelectSession(sessionId);
         }
       } else {
         next.delete(sessionId);
       }
       return next;
     });
-  }, [selectedSessionId, loadTurnsForSession]);
+  }, [selectedSessionId, onSelectSession]);
 
   // Get all session IDs in display order for range selection
   const sessionIdOrder = useMemo(() => {
@@ -968,43 +991,54 @@ export const SessionTreeView = memo(function SessionTreeView({
       return new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime();
     });
 
-    // Sort unpinned by last modified
-    unpinned.sort((a, b) => {
-      if (a.isCurrent) return -1;
-      if (b.isCurrent) return 1;
-      return new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime();
-    });
-
-    // Group unpinned by day
-    const dayGroups: { key: string; label: string; sessions: SessionInfo[] }[] = [];
-    let currentDayKey = '';
-    let currentGroup: SessionInfo[] = [];
+    // Group unpinned by day label first, THEN sort within groups
+    // This ensures all "Today" sessions are together even if isCurrent bumps one to the top
+    const dayGroupMap = new Map<string, { key: string; label: string; sessions: SessionInfo[]; sortKey: number }>();
 
     for (const session of unpinned) {
       const dayKey = getDayKey(session.lastModified);
-      if (dayKey !== currentDayKey) {
-        if (currentGroup.length > 0) {
-          dayGroups.push({
-            key: currentDayKey,
-            label: formatDayGroup(currentGroup[0]?.lastModified || ''),
-            sessions: currentGroup,
-          });
-        }
-        currentDayKey = dayKey;
-        currentGroup = [session];
-      } else {
-        currentGroup.push(session);
+      const label = formatDayGroup(session.lastModified);
+
+      if (!dayGroupMap.has(label)) {
+        // Calculate a sort key for ordering groups (more recent = higher/earlier)
+        // Use the dayKey (YYYY-MM-DD) as the basis for sorting groups
+        dayGroupMap.set(label, {
+          key: dayKey,
+          label,
+          sessions: [],
+          sortKey: new Date(dayKey).getTime(),
+        });
+      }
+      dayGroupMap.get(label)!.sessions.push(session);
+    }
+
+    // Sort sessions within each group (current first, then by last modified)
+    for (const group of dayGroupMap.values()) {
+      group.sessions.sort((a, b) => {
+        if (a.isCurrent) return -1;
+        if (b.isCurrent) return 1;
+        return new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime();
+      });
+      // Update sortKey to be the most recent session in the group
+      const mostRecent = group.sessions[0];
+      if (mostRecent) {
+        group.sortKey = new Date(mostRecent.lastModified).getTime();
       }
     }
 
-    // Don't forget the last group
-    if (currentGroup.length > 0) {
-      dayGroups.push({
-        key: currentDayKey,
-        label: formatDayGroup(currentGroup[0]?.lastModified || ''),
-        sessions: currentGroup,
-      });
-    }
+    // Sort groups by their most recent session (descending - most recent first)
+    // "Unknown" group always goes to the bottom
+    const dayGroups = Array.from(dayGroupMap.values())
+      .sort((a, b) => {
+        // Unknown always goes last
+        if (a.label === 'Unknown') return 1;
+        if (b.label === 'Unknown') return -1;
+        // Handle NaN sortKeys (treat as very old)
+        const aKey = isNaN(a.sortKey) ? 0 : a.sortKey;
+        const bKey = isNaN(b.sortKey) ? 0 : b.sortKey;
+        return bKey - aKey;
+      })
+      .map(({ key, label, sessions }) => ({ key, label, sessions }));
 
     return { pinned, dayGroups };
   }, [sessions]);
@@ -1045,6 +1079,11 @@ export const SessionTreeView = memo(function SessionTreeView({
     const isLoadingSessionTurns = loadingTurns.has(session.id);
     const idx = sessionIndex++;
 
+    // Handle turn click: select session if not selected, then scroll to turn
+    const handleTurnClick = onSelectTurn && isSelected
+      ? (turnIdx: number) => onSelectTurn(turnIdx)
+      : undefined;
+
     return (
       <SessionNode
         key={session.id}
@@ -1066,6 +1105,7 @@ export const SessionTreeView = memo(function SessionTreeView({
         onExchangeAction={onExchangeAction
           ? (turnIndices, action) => onExchangeAction(session.id, turnIndices, action)
           : undefined}
+        onTurnClick={handleTurnClick}
       />
     );
   };

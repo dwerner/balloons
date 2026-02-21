@@ -262,6 +262,10 @@
     padding: 12px 16px;
   }
 
+  .streaming-status-bar--collapsed {
+    padding: 4px 16px;
+  }
+
   .streaming-status-bar__header {
     gap: 16px;
   }
@@ -281,6 +285,95 @@
   .streaming-status-bar__stop {
     padding: 5px 16px;
   }
+}
+
+/* ----- Toggle Button ----- */
+.streaming-status-bar__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  transition: color 0.15s ease, background-color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.streaming-status-bar__toggle:hover {
+  color: var(--color-text-secondary);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.streaming-status-bar__toggle-icon {
+  font-size: 10px;
+  line-height: 1;
+}
+
+/* ----- Collapsed State ----- */
+.streaming-status-bar--collapsed {
+  padding: 4px 12px;
+  gap: 0;
+}
+
+.streaming-status-bar__collapsed-view {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.streaming-status-bar__indicator--mini {
+  width: 6px;
+  height: 6px;
+}
+
+.streaming-status-bar__mini-track {
+  flex: 1;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.streaming-status-bar__mini-bar {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease-out, background-color 0.3s ease;
+}
+
+/* Mini bar color states */
+.streaming-status-bar__mini-bar.context-bar--healthy {
+  background: var(--color-accent-green);
+}
+
+.streaming-status-bar__mini-bar.context-bar--moderate {
+  background: var(--color-accent-blue);
+}
+
+.streaming-status-bar__mini-bar.context-bar--warning {
+  background: var(--color-accent-yellow);
+}
+
+.streaming-status-bar__mini-bar.context-bar--critical {
+  background: var(--color-accent-red);
+  animation: context-critical-pulse 1s infinite;
+}
+
+.streaming-status-bar__mini-timer {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.streaming-status-bar__stop--mini {
+  padding: 2px 8px;
+  font-size: 11px;
 }
 
 /* ----- Ready State (when not streaming) ----- */

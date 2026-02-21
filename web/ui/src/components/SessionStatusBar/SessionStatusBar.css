@@ -7,7 +7,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 8px 12px;
+  padding: 6px 6px;
   margin-bottom: 8px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--color-border-secondary);
@@ -15,12 +15,20 @@
   font-size: 12px;
 }
 
-/* ----- Title Row: Session name (long-press to rename) ----- */
+/* ----- Title Row: Toggle + Session name ----- */
 .session-status-bar__title-row {
   display: flex;
   align-items: center;
+  gap: 4px;
+}
+
+.session-status-bar__title-content {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
   padding: 4px 0;
   cursor: pointer;
   user-select: none;
@@ -30,11 +38,11 @@
   transition: background-color 0.15s ease;
 }
 
-.session-status-bar__title-row:hover {
+.session-status-bar__title-content:hover {
   background: rgba(255, 255, 255, 0.05);
 }
 
-.session-status-bar__title-row:active {
+.session-status-bar__title-content:active {
   background: rgba(255, 255, 255, 0.1);
 }
 
@@ -108,8 +116,8 @@
   color: var(--color-text-secondary);
   background: none;
   border: none;
-  padding: 8px 12px;
-  margin: -8px -12px;
+  padding: 6px 6px;
+  margin: -6px -6px;
   min-height: 44px; /* Touch-friendly minimum size */
   border-radius: 6px;
   cursor: default;
@@ -287,9 +295,85 @@
   }
 }
 
+/* ----- Toggle Button ----- */
+.session-status-bar__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  transition: color 0.15s ease, background-color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.session-status-bar__toggle:hover {
+  color: var(--color-text-secondary);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.session-status-bar__toggle-icon {
+  font-size: 10px;
+  line-height: 1;
+}
+
+/* ----- Collapsed State ----- */
+.session-status-bar--collapsed {
+  padding: 4px 12px;
+  gap: 0;
+}
+
+.session-status-bar__collapsed-view {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.session-status-bar__mini-track {
+  flex: 1;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.session-status-bar__mini-bar {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease-out, background-color 0.3s ease;
+}
+
+/* Mini bar color states (reuse context-bar colors) */
+.session-status-bar__mini-bar.context-bar--healthy {
+  background: var(--color-accent-green);
+}
+
+.session-status-bar__mini-bar.context-bar--moderate {
+  background: var(--color-accent-blue);
+}
+
+.session-status-bar__mini-bar.context-bar--warning {
+  background: var(--color-accent-yellow);
+}
+
+.session-status-bar__mini-bar.context-bar--critical {
+  background: var(--color-accent-red);
+  animation: context-critical-pulse 1s infinite;
+}
+
 /* ----- Desktop Layout ----- */
 @media (min-width: 768px) {
   .session-status-bar {
     padding: 10px 16px;
+  }
+
+  .session-status-bar--collapsed {
+    padding: 4px 16px;
   }
 }

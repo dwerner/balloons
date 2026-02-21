@@ -10,6 +10,12 @@
   --min-sidebar-width: 240px;
   --max-sidebar-width: 600px;
 
+  /* Detail panel widths */
+  --detail-width: 320px;
+  --detail-collapsed-width: 56px;
+  --min-detail-width: 240px;
+  --max-detail-width: 600px;
+
   /* Layout transitions */
   --layout-transition-duration: 0.3s;
   --layout-transition-easing: cubic-bezier(0.4, 0, 0.2, 1);
@@ -95,6 +101,18 @@
   grid-template-columns: var(--sidebar-collapsed-width) 1fr;
 }
 
+/* ----- Desktop Layout with Detail Panel ----- */
+.app-layout--desktop.app-layout--detail-visible {
+  grid-template-columns: var(--sidebar-width) 1fr var(--detail-width);
+  grid-template-areas:
+    "sidebar header detail"
+    "sidebar main detail";
+}
+
+.app-layout--desktop.app-layout--detail-visible:has(.app-layout__sidebar--collapsed) {
+  grid-template-columns: var(--sidebar-collapsed-width) 1fr var(--detail-width);
+}
+
 /* =====================================================
    Sidebar
    ===================================================== */
@@ -143,20 +161,22 @@
    ===================================================== */
 
 .app-layout__resize-handle {
+  z-index: 10;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+/* ----- Right Resize Handle (for Sidebar) ----- */
+.app-layout__resize-handle--right {
   position: absolute;
   top: 0;
   right: -4px;
   bottom: 0;
   width: 8px;
   cursor: col-resize;
-  z-index: 10;
-
-  /* Visual indicator */
-  background: transparent;
-  transition: background 0.15s ease;
 }
 
-.app-layout__resize-handle::after {
+.app-layout__resize-handle--right::after {
   content: '';
   position: absolute;
   top: 50%;
@@ -170,33 +190,120 @@
   transition: opacity 0.15s ease, background 0.15s ease;
 }
 
-.app-layout__resize-handle:hover::after,
-.app-layout__resize-handle--active::after {
+.app-layout__resize-handle--right:hover::after,
+.app-layout__resize-handle--right.app-layout__resize-handle--active::after {
   opacity: 1;
   background: var(--color-accent-green);
 }
 
-.app-layout__resize-handle:hover,
-.app-layout__resize-handle--active {
+.app-layout__resize-handle--right:hover,
+.app-layout__resize-handle--right.app-layout__resize-handle--active {
   background: rgba(74, 222, 128, 0.1);
 }
 
 /* Focus state for keyboard navigation */
-.app-layout__resize-handle:focus-visible {
+.app-layout__resize-handle--right:focus-visible {
   outline: none;
 }
 
-.app-layout__resize-handle:focus-visible::after {
+.app-layout__resize-handle--right:focus-visible::after {
   opacity: 1;
   background: var(--color-accent-green);
   box-shadow: 0 0 0 2px var(--color-accent-green);
 }
 
-/* Hide resize handle on mobile */
+/* Hide vertical resize handles on mobile - bottom handles are shown instead */
 @media (max-width: 767px) {
-  .app-layout__resize-handle {
+  .app-layout__resize-handle--right,
+  .app-layout__resize-handle--left {
     display: none;
   }
+}
+
+/* ----- Bottom Resize Handle (Mobile) ----- */
+.app-layout__resize-handle--bottom {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 24px;
+  cursor: ew-resize;
+  z-index: 10;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.app-layout__resize-handle--bottom::after {
+  content: '';
+  width: 48px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-border-primary);
+  opacity: 0.5;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.app-layout__resize-handle--bottom:hover::after,
+.app-layout__resize-handle--bottom.app-layout__resize-handle--active::after {
+  opacity: 1;
+  background: var(--color-accent-green);
+}
+
+/* Hide bottom resize handle on desktop */
+@media (min-width: 768px) {
+  .app-layout__resize-handle--bottom {
+    display: none;
+  }
+}
+
+/* ----- Left Resize Handle (for Detail panel) ----- */
+.app-layout__resize-handle--left {
+  position: absolute;
+  top: 0;
+  left: -4px;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 10;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.app-layout__resize-handle--left::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 4px;
+  height: 48px;
+  border-radius: 2px;
+  background: var(--color-border-primary);
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.app-layout__resize-handle--left:hover::after,
+.app-layout__resize-handle--left.app-layout__resize-handle--active::after {
+  opacity: 1;
+  background: var(--color-accent-green);
+}
+
+.app-layout__resize-handle--left:hover,
+.app-layout__resize-handle--left.app-layout__resize-handle--active {
+  background: rgba(74, 222, 128, 0.1);
+}
+
+.app-layout__resize-handle--left:focus-visible {
+  outline: none;
+}
+
+.app-layout__resize-handle--left:focus-visible::after {
+  opacity: 1;
+  background: var(--color-accent-green);
+  box-shadow: 0 0 0 2px var(--color-accent-green);
 }
 
 /* =====================================================
@@ -219,6 +326,75 @@
 }
 
 .app-layout__sidebar-overlay--visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* =====================================================
+   Detail Panel (Right Sidebar)
+   ===================================================== */
+
+.app-layout__detail {
+  grid-area: detail;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-secondary);
+  border-left: 1px solid var(--color-border-primary);
+  overflow: hidden;
+  min-height: 0;
+  position: relative;
+}
+
+/* ----- Mobile Detail Panel (Overlay) ----- */
+.app-layout--mobile .app-layout__detail {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--detail-width);
+  min-width: 60vw;
+  max-width: 85vw;
+  z-index: 100;
+  transform: translateX(100%);
+  transition: transform var(--layout-transition-duration) var(--layout-transition-easing);
+}
+
+.app-layout--mobile .app-layout__detail--visible {
+  transform: translateX(0);
+}
+
+/* ----- Desktop Detail Panel ----- */
+.app-layout--desktop .app-layout__detail {
+  position: relative;
+  transform: none;
+  width: var(--detail-width);
+  transition: width var(--layout-transition-duration) var(--layout-transition-easing);
+}
+
+.app-layout--desktop .app-layout__detail--collapsed {
+  display: none;
+}
+
+/* =====================================================
+   Detail Panel Overlay (Mobile)
+   ===================================================== */
+
+.app-layout__detail-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--color-overlay, rgba(0, 0, 0, 0.5));
+  z-index: 99;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity var(--layout-transition-duration) var(--layout-transition-easing),
+    visibility var(--layout-transition-duration) var(--layout-transition-easing);
+}
+
+.app-layout__detail-overlay--visible {
   opacity: 1;
   visibility: visible;
 }
@@ -283,6 +459,11 @@
     /* Remove bottom padding - handled by input area */
   }
 
+  .app-layout--mobile .app-layout__detail {
+    padding-top: env(safe-area-inset-top);
+    padding-right: env(safe-area-inset-right);
+  }
+
   .app-layout--mobile .app-layout__main {
     /* Safe area handled by input-area, not main container */
     padding-bottom: 0;
@@ -295,7 +476,8 @@
 
 /* Focus visible styles for keyboard navigation */
 .app-layout__sidebar:focus-visible,
-.app-layout__main:focus-visible {
+.app-layout__main:focus-visible,
+.app-layout__detail:focus-visible {
   outline: 2px solid var(--color-accent-green);
   outline-offset: -2px;
 }
@@ -306,7 +488,9 @@
 
 @media (prefers-reduced-motion: reduce) {
   .app-layout__sidebar,
-  .app-layout__sidebar-overlay {
+  .app-layout__sidebar-overlay,
+  .app-layout__detail,
+  .app-layout__detail-overlay {
     transition-duration: 0.01ms !important;
   }
 }
@@ -324,6 +508,8 @@
 
   .app-layout__sidebar,
   .app-layout__sidebar-overlay,
+  .app-layout__detail,
+  .app-layout__detail-overlay,
   .app-layout__header {
     display: none !important;
   }

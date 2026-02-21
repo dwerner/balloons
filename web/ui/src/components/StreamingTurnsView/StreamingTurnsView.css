@@ -119,6 +119,24 @@
   gap: 12px;
 }
 
+/* Turn highlight effect (when scrolling to a turn from tree view) */
+.turn-highlight {
+  animation: turnHighlight 1.5s ease-out;
+}
+
+@keyframes turnHighlight {
+  0% {
+    background: rgba(96, 165, 250, 0.3);
+    outline: 2px solid rgba(96, 165, 250, 0.6);
+    outline-offset: 2px;
+  }
+  100% {
+    background: transparent;
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+  }
+}
+
 /* Turn card base styles */
 .streaming-turn-card {
   border-radius: 8px;

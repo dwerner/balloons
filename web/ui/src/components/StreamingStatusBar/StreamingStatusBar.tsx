@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useState, useRef } from 'react';
+import React, { memo, useEffect, useState, useRef, useCallback } from 'react';
 import type { TaskInfo } from '../../../../generated/balloons-client';
 import './StreamingStatusBar.css';
 
@@ -103,6 +103,20 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
   isPinned = false,
   onTogglePin,
 }: StreamingStatusBarProps) {
+  // Collapsed state - persist in localStorage (shared with SessionStatusBar)
+  const [isCollapsed, setIsCollapsed] = useState(() => {
+    const stored = localStorage.getItem('sessionStatusBar.collapsed');
+    return stored === 'true';
+  });
+
+  const toggleCollapsed = useCallback(() => {
+    setIsCollapsed(prev => {
+      const next = !prev;
+      localStorage.setItem('sessionStatusBar.collapsed', String(next));
+      return next;
+    });
+  }, []);
+
   // Track duration locally for smoother updates
   const [duration, setDuration] = useState(task.durationSeconds);
   const startTimeRef = useRef<number>(Date.now() - task.durationSeconds * 1000);
@@ -136,99 +150,24 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
   const hasRate = task.currentTokenRate > 0;
 
   return (
-    <div className="streaming-status-bar" role="status" aria-live="polite">
-      {/* Top row: Model, Duration, Stop */}
-      <div className="streaming-status-bar__header">
-        <div className="streaming-status-bar__model">
-          <span className="streaming-status-bar__indicator" aria-hidden="true" />
-          <span className="streaming-status-bar__model-name">
-            {task.model || task.backendName || 'Streaming'}
-          </span>
-        </div>
-
-        <div className="streaming-status-bar__timer">
-          {formatDuration(duration)}
-        </div>
-
-        {/* Pin toggle button */}
-        {onTogglePin && (
+    <div className={`streaming-status-bar ${isCollapsed ? 'streaming-status-bar--collapsed' : ''}`} role="status" aria-live="polite">
+      {/* Collapsed view: toggle + minimal progress bar with streaming indicator and stop */}
+      {isCollapsed ? (
+        <div className="streaming-status-bar__collapsed-view">
           <button
             type="button"
-            className={`streaming-status-bar__pin-button ${isPinned ? 'streaming-status-bar__pin-button--active' : ''}`}
-            onClick={onTogglePin}
-            title={isPinned ? 'Unpin session' : 'Pin session'}
-            aria-label={isPinned ? 'Unpin session' : 'Pin session'}
+            className="streaming-status-bar__toggle"
+            onClick={toggleCollapsed}
+            title="Expand status bar"
+            aria-label="Expand status bar"
+            aria-expanded={false}
           >
-            <PinIcon isPinned={isPinned} />
+            <span className="streaming-status-bar__toggle-icon">▲</span>
           </button>
-        )}
-
-        {onStop && (
-          <button
-            type="button"
-            className="streaming-status-bar__stop"
-            onClick={onStop}
-            disabled={stopDisabled}
-            aria-label="Stop streaming"
-          >
-            Stop
-          </button>
-        )}
-      </div>
-
-      {/* Middle row: Tokens/Tool info */}
-      <div className="streaming-status-bar__details">
-        {isToolRunning ? (
-          <div className="streaming-status-bar__tool">
-            <span className="streaming-status-bar__tool-icon" aria-hidden="true">
-              ⚙
-            </span>
-            <span className="streaming-status-bar__tool-name">{task.toolName}</span>
-            {task.toolCount > 1 && (
-              <span className="streaming-status-bar__tool-count">
-                ({task.toolCount})
-              </span>
-            )}
-          </div>
-        ) : hasTokens ? (
-          <div className="streaming-status-bar__tokens">
-            <span className="streaming-status-bar__token-count">
-              {formatTokens(task.tokensStreamed)} tokens
-            </span>
-            {hasRate && (
-              <span className="streaming-status-bar__token-rate">
-                {formatTokenRate(task.currentTokenRate)}/s
-              </span>
-            )}
-          </div>
-        ) : (
-          <div className="streaming-status-bar__waiting">
-            Starting...
-          </div>
-        )}
-
-        {queuedMessageCount > 0 && (
-          <div className="streaming-status-bar__queue-badge">
-            {queuedMessageCount} queued
-          </div>
-        )}
-      </div>
-
-      {/* Bottom row: Context usage bar */}
-      {task.contextWindow > 0 && (
-        <div className="streaming-status-bar__context">
-          <div className="streaming-status-bar__context-label">
-            <span className="streaming-status-bar__context-text">Context</span>
-            <span className="streaming-status-bar__context-values">
-              {formatTokens(totalContextTokens)} / {formatTokens(task.contextWindow)}
-              <span className="streaming-status-bar__context-percent">
-                ({contextUsage.toFixed(0)}%)
-              </span>
-            </span>
-          </div>
-          <div className="streaming-status-bar__context-track">
+          <span className="streaming-status-bar__indicator streaming-status-bar__indicator--mini" aria-hidden="true" />
+          <div className="streaming-status-bar__mini-track">
             <div
-              className={`streaming-status-bar__context-bar ${contextColorClass}`}
+              className={`streaming-status-bar__mini-bar ${contextColorClass}`}
               style={{ width: `${contextUsage}%` }}
               role="progressbar"
               aria-valuenow={contextUsage}
@@ -237,7 +176,134 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
               aria-label={`Context usage: ${contextUsage.toFixed(0)}%`}
             />
           </div>
+          <span className="streaming-status-bar__mini-timer">{formatDuration(duration)}</span>
+          {onStop && (
+            <button
+              type="button"
+              className="streaming-status-bar__stop streaming-status-bar__stop--mini"
+              onClick={onStop}
+              disabled={stopDisabled}
+              aria-label="Stop streaming"
+            >
+              Stop
+            </button>
+          )}
         </div>
+      ) : (
+        <>
+          {/* Top row: Toggle, Model, Duration, Stop */}
+          <div className="streaming-status-bar__header">
+            <button
+              type="button"
+              className="streaming-status-bar__toggle"
+              onClick={toggleCollapsed}
+              title="Collapse status bar"
+              aria-label="Collapse status bar"
+              aria-expanded={true}
+            >
+              <span className="streaming-status-bar__toggle-icon">▼</span>
+            </button>
+            <div className="streaming-status-bar__model">
+              <span className="streaming-status-bar__indicator" aria-hidden="true" />
+              <span className="streaming-status-bar__model-name">
+                {task.model || task.backendName || 'Streaming'}
+              </span>
+            </div>
+
+            <div className="streaming-status-bar__timer">
+              {formatDuration(duration)}
+            </div>
+
+            {/* Pin toggle button */}
+            {onTogglePin && (
+              <button
+                type="button"
+                className={`streaming-status-bar__pin-button ${isPinned ? 'streaming-status-bar__pin-button--active' : ''}`}
+                onClick={onTogglePin}
+                title={isPinned ? 'Unpin session' : 'Pin session'}
+                aria-label={isPinned ? 'Unpin session' : 'Pin session'}
+              >
+                <PinIcon isPinned={isPinned} />
+              </button>
+            )}
+
+            {onStop && (
+              <button
+                type="button"
+                className="streaming-status-bar__stop"
+                onClick={onStop}
+                disabled={stopDisabled}
+                aria-label="Stop streaming"
+              >
+                Stop
+              </button>
+            )}
+          </div>
+
+          {/* Middle row: Tokens/Tool info */}
+          <div className="streaming-status-bar__details">
+            {isToolRunning ? (
+              <div className="streaming-status-bar__tool">
+                <span className="streaming-status-bar__tool-icon" aria-hidden="true">
+                  ⚙
+                </span>
+                <span className="streaming-status-bar__tool-name">{task.toolName}</span>
+                {task.toolCount > 1 && (
+                  <span className="streaming-status-bar__tool-count">
+                    ({task.toolCount})
+                  </span>
+                )}
+              </div>
+            ) : hasTokens ? (
+              <div className="streaming-status-bar__tokens">
+                <span className="streaming-status-bar__token-count">
+                  {formatTokens(task.tokensStreamed)} tokens
+                </span>
+                {hasRate && (
+                  <span className="streaming-status-bar__token-rate">
+                    {formatTokenRate(task.currentTokenRate)}/s
+                  </span>
+                )}
+              </div>
+            ) : (
+              <div className="streaming-status-bar__waiting">
+                Starting...
+              </div>
+            )}
+
+            {queuedMessageCount > 0 && (
+              <div className="streaming-status-bar__queue-badge">
+                {queuedMessageCount} queued
+              </div>
+            )}
+          </div>
+
+          {/* Bottom row: Context usage bar */}
+          {task.contextWindow > 0 && (
+            <div className="streaming-status-bar__context">
+              <div className="streaming-status-bar__context-label">
+                <span className="streaming-status-bar__context-text">Context</span>
+                <span className="streaming-status-bar__context-values">
+                  {formatTokens(totalContextTokens)} / {formatTokens(task.contextWindow)}
+                  <span className="streaming-status-bar__context-percent">
+                    ({contextUsage.toFixed(0)}%)
+                  </span>
+                </span>
+              </div>
+              <div className="streaming-status-bar__context-track">
+                <div
+                  className={`streaming-status-bar__context-bar ${contextColorClass}`}
+                  style={{ width: `${contextUsage}%` }}
+                  role="progressbar"
+                  aria-valuenow={contextUsage}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label={`Context usage: ${contextUsage.toFixed(0)}%`}
+                />
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
