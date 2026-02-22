@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-21T19:05:29.246310
+// Generated: 2026-02-22T14:37:33.844712
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -2813,6 +2813,23 @@ export interface SessionDataService {
 
 export interface SessionDataEvents {
   /**
+   * Emitted when a chunk of historical turns is ready.
+   * 
+   * Sent incrementally during session subscription when the session
+   * has historical turns. Clients should merge chunks by turn_id
+   * and use the order field for sorting.
+   */
+  sessionDataHistoryChunk(callback: (data: Types.SessionHistoryChunkEvent) => void): Unsubscribe;
+
+  /**
+   * Emitted when all historical turns have been sent.
+   * 
+   * After receiving this event, clients can be confident they have
+   * all historical data and can finalize the initial render.
+   */
+  sessionDataHistoryComplete(callback: (data: Types.SessionHistoryCompleteEvent) => void): Unsubscribe;
+
+  /**
    * Emitted when streaming completes successfully.
    */
   sessionDataStreamDone(callback: (data: Types.SessionStreamDoneEvent) => void): Unsubscribe;
@@ -2935,6 +2952,14 @@ export class SessionDataServiceClient implements SessionDataService {
 
   async unsubscribeSession(sessionId: string, clientId?: string): Promise<Types.SubscriptionResult> {
     return this.call('unsubscribeSession', { sessionId: sessionId, clientId: clientId });
+  }
+
+  sessionDataHistoryChunk(callback: (data: Types.SessionHistoryChunkEvent) => void): Unsubscribe {
+    return this.subscribe('sessionDataHistoryChunk', callback);
+  }
+
+  sessionDataHistoryComplete(callback: (data: Types.SessionHistoryCompleteEvent) => void): Unsubscribe {
+    return this.subscribe('sessionDataHistoryComplete', callback);
   }
 
   sessionDataStreamDone(callback: (data: Types.SessionStreamDoneEvent) => void): Unsubscribe {

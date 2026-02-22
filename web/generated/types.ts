@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-21T19:05:29.243475
+// Generated: 2026-02-22T14:37:33.841999
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -718,6 +718,21 @@ export interface SessionToolResultEvent {
   result: string;
   isError: boolean;
   toolIndex: number;
+}
+
+export interface SessionHistoryChunkEvent {
+  sessionId: string;
+  chunkId: string;
+  turns: TurnSnapshot[];
+  chunkIndex: number;
+  totalChunks: number;
+  watermark: number;
+}
+
+export interface SessionHistoryCompleteEvent {
+  sessionId: string;
+  totalTurns: number;
+  finalWatermark: number;
 }
 
 export interface ImageUploadResult {

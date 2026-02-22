@@ -1,6 +1,6 @@
 # Plan: Remove TreeState & Implement Chunked History Loading
 
-**Status**: In Progress (Phase 1 Complete)
+**Status**: In Progress (Phase 2 Complete)
 **Created**: 2025-02-22
 **Last Updated**: 2025-02-22
 
@@ -367,3 +367,4 @@ If TUI still exists:
 |------|-------|-------|
 | 2025-02-22 | Planning | Initial plan documented |
 | 2025-02-22 | Phase 1 | ✅ Added `get_turn_count()` and `load_turns_range()` to Rust traits, LMDB engine, StorageClient, PyO3 bindings, and Python async_storage.py |
+| 2025-02-22 | Phase 2 | ✅ Added `SessionHistoryChunkEvent` and `SessionHistoryCompleteEvent` types with `@ws_event` decorators. Added `emit_history_chunk()` and `emit_history_complete()` helper methods. Regenerated TypeScript types. |

@@ -268,6 +268,42 @@ class SessionToolResultEvent:
     tool_index: int
 
 
+@ws_type
+@dataclass
+class SessionHistoryChunkEvent:
+    """Event payload for a chunk of historical turns.
+
+    Sent incrementally when a client subscribes to a session with history.
+    Chunks may arrive out of order; clients should merge by turn_id and
+    sort by the order field in TurnSnapshot.
+
+    The watermark indicates the highest turn order in this chunk, useful
+    for tracking loading progress and detecting gaps.
+    """
+
+    session_id: str
+    chunk_id: str  # Unique ID for this chunk (for deduplication)
+    turns: list[TurnSnapshot]  # Historical turns in this chunk
+    chunk_index: int  # 0-based index of this chunk
+    total_chunks: int  # Total number of chunks expected
+    watermark: int  # Highest turn order in this chunk
+
+
+@ws_type
+@dataclass
+class SessionHistoryCompleteEvent:
+    """Event payload when all historical turns have been sent.
+
+    Signals that the client has received all historical data and can
+    finalize the initial render. Any streaming events received after
+    subscription started should already be merged.
+    """
+
+    session_id: str
+    total_turns: int  # Total number of historical turns sent
+    final_watermark: int  # Highest turn order across all chunks
+
+
 @ws_service
 class SessionDataService:
     """WebSocket-exposed service for session data streaming.
@@ -748,6 +784,89 @@ class SessionDataService:
         )
         self._emit_event("sessionDataTurnFinished", event_dict, subscribers)
 
+    def emit_history_chunk(
+        self,
+        session_id: str,
+        chunk_id: str,
+        turns: list[TurnSnapshot],
+        chunk_index: int,
+        total_chunks: int,
+        watermark: int,
+    ) -> None:
+        """Emit a history chunk event to subscribed clients.
+
+        Called during chunked history loading to send batches of historical turns.
+
+        Args:
+            session_id: The session being loaded
+            chunk_id: Unique identifier for this chunk (for deduplication)
+            turns: List of TurnSnapshot objects in this chunk
+            chunk_index: 0-based index of this chunk
+            total_chunks: Total number of chunks expected
+            watermark: Highest turn order in this chunk
+        """
+        subscribers = self._session_subscribers.get(session_id)
+        if not subscribers:
+            return
+
+        from core.debug_log import debug_log
+        debug_log.debug(
+            f"emit_history_chunk: session={session_id[:8]}, chunk={chunk_index}/{total_chunks}, "
+            f"turns={len(turns)}, watermark={watermark}, subscribers={len(subscribers)}",
+            category="websocket",
+        )
+
+        # Convert TurnSnapshot list to dicts for serialization
+        turn_dicts = []
+        for turn in turns:
+            turn_dict = turn.__dict__.copy()
+            if turn.content_block is not None and hasattr(turn.content_block, '__dict__'):
+                turn_dict['content_block'] = asdict(turn.content_block)
+            turn_dicts.append(turn_dict)
+
+        event_data = {
+            "session_id": session_id,
+            "chunk_id": chunk_id,
+            "turns": turn_dicts,
+            "chunk_index": chunk_index,
+            "total_chunks": total_chunks,
+            "watermark": watermark,
+        }
+        self._emit_event("sessionDataHistoryChunk", event_data, subscribers)
+
+    def emit_history_complete(
+        self,
+        session_id: str,
+        total_turns: int,
+        final_watermark: int,
+    ) -> None:
+        """Emit a history complete event to subscribed clients.
+
+        Called when all historical chunks have been sent.
+
+        Args:
+            session_id: The session that finished loading
+            total_turns: Total number of historical turns sent
+            final_watermark: Highest turn order across all chunks
+        """
+        subscribers = self._session_subscribers.get(session_id)
+        if not subscribers:
+            return
+
+        from core.debug_log import debug_log
+        debug_log.info(
+            f"emit_history_complete: session={session_id[:8]}, total_turns={total_turns}, "
+            f"watermark={final_watermark}, subscribers={len(subscribers)}",
+            category="websocket",
+        )
+
+        event_data = SessionHistoryCompleteEvent(
+            session_id=session_id,
+            total_turns=total_turns,
+            final_watermark=final_watermark,
+        )
+        self._emit_event("sessionDataHistoryComplete", event_data.__dict__, subscribers)
+
     # --- Events (for TypeScript generation) ---
     # Event names are prefixed with "sessionData" to avoid collisions with
     # TaskStateService and TreeStateService which also have turn events.
@@ -810,6 +929,25 @@ class SessionDataService:
     @ws_event(name="sessionDataToolResult")
     async def on_session_data_tool_result(self) -> SessionToolResultEvent:
         """Emitted when a tool finishes execution."""
+        ...
+
+    @ws_event(name="sessionDataHistoryChunk")
+    async def on_session_data_history_chunk(self) -> SessionHistoryChunkEvent:
+        """Emitted when a chunk of historical turns is ready.
+
+        Sent incrementally during session subscription when the session
+        has historical turns. Clients should merge chunks by turn_id
+        and use the order field for sorting.
+        """
+        ...
+
+    @ws_event(name="sessionDataHistoryComplete")
+    async def on_session_data_history_complete(self) -> SessionHistoryCompleteEvent:
+        """Emitted when all historical turns have been sent.
+
+        After receiving this event, clients can be confident they have
+        all historical data and can finalize the initial render.
+        """
         ...
 
     # --- SessionEventObserver Implementation ---
