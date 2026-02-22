@@ -59,6 +59,23 @@ pub trait StorageEngine: Send + Sync {
     /// Load all turns for a session
     async fn load_turns(&self, session_id: &str) -> Result<Vec<TurnData>>;
 
+    /// Get the number of turns for a session (without loading turn data)
+    ///
+    /// Returns 0 if the session has no turns or doesn't exist.
+    async fn get_turn_count(&self, session_id: &str) -> Result<usize>;
+
+    /// Load a range of turns for a session (for chunked/paginated loading)
+    ///
+    /// Returns turns starting at `offset` (0-indexed) up to `limit` turns.
+    /// If offset is beyond the number of turns, returns an empty vec.
+    /// Turns are returned in their stored order (oldest first by default).
+    async fn load_turns_range(
+        &self,
+        session_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<TurnData>>;
+
     /// Delete a specific turn
     async fn delete_turn(&self, session_id: &str, turn_id: &str) -> Result<()>;
 

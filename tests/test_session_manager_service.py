@@ -1115,7 +1115,8 @@ class TestSessionDataServiceIntegration:
         assert len(events) == 1
         assert events[0][0] == "sessionDataTurnCreated"
         assert events[0][1]["session_id"] == "test-123"
-        assert events[0][1]["turn_id"] == ""  # Empty because event doesn't contain turn_id
+        # turn_id is generated if not provided in the event
+        assert events[0][1]["turn_id"]  # Should be a non-empty UUID
         assert events[0][1]["role"] == "assistant"
 
     @pytest.mark.asyncio

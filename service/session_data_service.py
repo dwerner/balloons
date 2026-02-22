@@ -468,17 +468,41 @@ class SessionDataService:
         Returns:
             SessionSnapshot with full turn history, or None if session not found
         """
+        from core.debug_log import debug_log
+
         if not self._tree_state:
+            debug_log.info("get_session_snapshot: no tree_state", category="fork")
             return None
 
         session_data = self._tree_state.get_session(session_id)
 
+        debug_log.info(
+            f"get_session_snapshot: session_id={session_id[:8]}",
+            category="fork",
+            details={
+                "session_data_exists": session_data is not None,
+                "session_data_turns": len(session_data.turns) if session_data and session_data.turns else None,
+                "session_ref_exists": session_data.session_ref is not None if session_data else None,
+                "session_ref_turns": len(session_data.session_ref.turns) if session_data and session_data.session_ref else None,
+            }
+        )
+
         # If session not in TreeState or turns not loaded, try to load it
         if session_data is None or session_data.turns is None:
+            debug_log.info(
+                f"get_session_snapshot: need to load session {session_id[:8]}",
+                category="fork",
+                details={"session_data_is_none": session_data is None}
+            )
             if self._session_loader:
                 # Load session from storage
                 session = await self._session_loader(session_id)
                 if session:
+                    debug_log.info(
+                        f"get_session_snapshot: loaded session {session_id[:8]} from storage",
+                        category="fork",
+                        details={"turn_count": len(session.turns)}
+                    )
                     # Add/update in TreeState and load turns
                     self._tree_state.add_session(session, is_current=False)
                     self._tree_state.load_session(session_id, session)

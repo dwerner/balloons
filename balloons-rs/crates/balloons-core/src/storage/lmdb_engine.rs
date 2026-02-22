@@ -502,6 +502,67 @@ impl StorageEngine for LmdbEngine {
         Ok(turns)
     }
 
+    async fn get_turn_count(&self, session_id: &str) -> Result<usize> {
+        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        // Get turn order and return the length
+        match self.turn_order
+            .get(&rtxn, session_id)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
+            Some(bytes) => {
+                let turn_order = serde_json::from_slice::<TurnOrder>(bytes)
+                    .map_err(|e| Error::Serialization(e.to_string()))?;
+                Ok(turn_order.turn_ids.len())
+            }
+            None => Ok(0), // No turns for this session
+        }
+    }
+
+    async fn load_turns_range(
+        &self,
+        session_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<TurnData>> {
+        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        // Get turn order
+        let turn_order = match self.turn_order
+            .get(&rtxn, session_id)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
+            Some(bytes) => serde_json::from_slice::<TurnOrder>(bytes)
+                .map_err(|e| Error::Serialization(e.to_string()))?,
+            None => return Ok(vec![]), // No turns for this session
+        };
+
+        // Calculate the range to load
+        let total = turn_order.turn_ids.len();
+        if offset >= total {
+            return Ok(vec![]); // Offset beyond available turns
+        }
+
+        let end = std::cmp::min(offset + limit, total);
+        let turn_ids_slice = &turn_order.turn_ids[offset..end];
+
+        // Load turns in order
+        let mut turns = Vec::with_capacity(turn_ids_slice.len());
+        for turn_id in turn_ids_slice {
+            if let Some(bytes) = self.turns
+                .get(&rtxn, turn_id)
+                .map_err(|e| Error::Database(e.to_string()))?
+            {
+                let turn: TurnData = serde_json::from_slice(bytes)
+                    .map_err(|e| Error::Serialization(e.to_string()))?;
+                turns.push(turn);
+            }
+            // Note: We silently skip missing turns (orphaned references)
+        }
+
+        Ok(turns)
+    }
+
     async fn delete_turn(&self, session_id: &str, turn_id: &str) -> Result<()> {
         let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
 

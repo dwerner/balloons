@@ -1895,9 +1895,11 @@ class SessionManagerService:
         # Build indexed messages with context modes
         from models import Message
         indexed_messages = []
+        mode_stats = {"copy": 0, "compress": 0, "drop": 0}
         for turn_idx, turn in enumerate(parent_session.turns):
             # Get context mode for this turn
             mode = tree_modes.get(turn_idx, ContextMode.COPY)
+            mode_stats[mode.value] = mode_stats.get(mode.value, 0) + 1
 
             # Skip dropped turns
             if mode == ContextMode.DROP:
@@ -1912,6 +1914,16 @@ class SessionManagerService:
             msg.context_mode = mode
 
             indexed_messages.append((msg, turn_idx))
+
+        debug_log.info(
+            f"fork_session: built indexed messages",
+            category="fork",
+            details={
+                "parent_turn_count": len(parent_session.turns),
+                "indexed_message_count": len(indexed_messages),
+                "mode_stats": mode_stats,
+            }
+        )
 
         # Use provided tools or get all available
         tools = allowed_tools or []
@@ -1936,8 +1948,25 @@ class SessionManagerService:
 
         # Update TreeState
         if self._tree_state:
+            debug_log.info(
+                f"fork_session: adding child to tree_state",
+                category="fork",
+                details={
+                    "child_session_id": child_session.id[:8],
+                    "child_turn_count": len(child_session.turns),
+                    "background": background,
+                }
+            )
             self._tree_state.add_session(child_session, is_current=not background)
             self._tree_state.load_session(child_session.id, child_session)
+            debug_log.info(
+                f"fork_session: child added to tree_state",
+                category="fork",
+                details={
+                    "child_session_id": child_session.id[:8],
+                    "is_loaded": self._tree_state.is_session_loaded(child_session.id),
+                }
+            )
 
         if result.needs_compression:
             # Start compression helper
@@ -2025,6 +2054,46 @@ class SessionManagerService:
             return ForkSessionResult(success=False, error=result.error or "Fork completion failed")
 
         child_session = result.child_session
+
+        # Update TreeState with the now-populated child session
+        # This is critical: the initial load_session was called before compression completed,
+        # so tree_state has an empty turns list. We need to reload with the populated session.
+        if self._tree_state:
+            debug_log.info(
+                f"complete_fork_after_compression: updating tree_state with populated session",
+                category="fork",
+                details={
+                    "child_session_id": child_session.id[:8],
+                    "child_turn_count": len(child_session.turns),
+                }
+            )
+            self._tree_state.load_session(child_session.id, child_session)
+
+        # Emit turnFinished events for each turn so subscribed clients get the data
+        # This handles the case where React subscribed before compression completed
+        if self._session_data_service:
+            for turn_idx, turn in enumerate(child_session.turns):
+                content_block = turn.content_block
+                # Get text content for backward compat
+                final_content = ""
+                if content_block:
+                    if hasattr(content_block, 'text'):
+                        final_content = content_block.text or ""
+                    elif hasattr(content_block, 'content'):
+                        final_content = content_block.content or ""
+                self._session_data_service.emit_turn_finished(
+                    session_id=child_session.id,
+                    turn_id=turn.id,
+                    final_content=final_content,
+                    tokens=turn.tokens,
+                    order=turn_idx,
+                    role=turn.role,
+                    content_block=content_block,
+                )
+            debug_log.info(
+                f"complete_fork_after_compression: emitted {len(child_session.turns)} turn events",
+                category="fork",
+            )
 
         # Clean up helper
         self._helper_contexts.pop(helper_id, None)

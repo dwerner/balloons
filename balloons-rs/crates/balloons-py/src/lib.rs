@@ -151,6 +151,51 @@ impl Storage {
         })
     }
 
+    /// Get the number of turns for a session (without loading turn data)
+    fn get_turn_count(&self, py: Python<'_>, session_id: &str) -> PyResult<usize> {
+        let client = Arc::clone(&self.client);
+        let session_id = session_id.to_string();
+
+        py.allow_threads(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task =
+                executor.spawn_on_any(async move { client.get_turn_count(&session_id).await });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Load a range of turns for a session (for chunked/paginated loading)
+    ///
+    /// Args:
+    ///     session_id: Session ID
+    ///     offset: Starting index (0-indexed)
+    ///     limit: Maximum number of turns to return
+    ///
+    /// Returns: JSON array of turn data
+    fn load_turns_range(
+        &self,
+        py: Python<'_>,
+        session_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> PyResult<String> {
+        let client = Arc::clone(&self.client);
+        let session_id = session_id.to_string();
+
+        py.allow_threads(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor
+                .spawn_on_any(async move { client.load_turns_range(&session_id, offset, limit).await });
+            let turns = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+            serde_json::to_string(&turns).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
     /// Delete a turn by ID
     fn delete_turn(&self, py: Python<'_>, session_id: &str, turn_id: &str) -> PyResult<()> {
         let client = Arc::clone(&self.client);

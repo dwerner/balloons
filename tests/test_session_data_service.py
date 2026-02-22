@@ -384,6 +384,8 @@ class TestEventData:
             "final_content": "Hello, world!",
             "tokens": 150,
             "content_block": None,  # Optional, not set in this test
+            "order": 0,  # Default value
+            "role": "assistant",  # Default value
         }
 
 

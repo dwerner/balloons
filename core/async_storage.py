@@ -460,6 +460,38 @@ class AsyncStorage:
         json_data = await self._run_sync(self._storage.load_turns, session_id)
         return json.loads(json_data)
 
+    async def get_turn_count(self, session_id: str) -> int:
+        """Get the number of turns for a session without loading turn data.
+
+        Args:
+            session_id: The session to count turns for
+
+        Returns:
+            Number of turns in the session (0 if session has no turns)
+        """
+        return await self._run_sync(self._storage.get_turn_count, session_id)
+
+    async def load_turns_range(
+        self,
+        session_id: str,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Load a range of turns for a session (for chunked/paginated loading).
+
+        Args:
+            session_id: The session to load turns from
+            offset: Starting index (0-indexed, oldest first)
+            limit: Maximum number of turns to return
+
+        Returns:
+            List of turn data dicts in order
+        """
+        json_data = await self._run_sync(
+            self._storage.load_turns_range, session_id, offset, limit
+        )
+        return json.loads(json_data)
+
     async def delete_turn(self, session_id: str, turn_id: str) -> None:
         """Delete a turn from storage.
 

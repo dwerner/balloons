@@ -37,6 +37,23 @@ impl StorageClient {
         self.engine.load_turns(session_id).await
     }
 
+    /// Get the number of turns for a session (without loading turn data).
+    pub async fn get_turn_count(&self, session_id: &str) -> Result<usize> {
+        self.engine.get_turn_count(session_id).await
+    }
+
+    /// Load a range of turns for a session (for chunked/paginated loading).
+    ///
+    /// Returns turns starting at `offset` (0-indexed) up to `limit` turns.
+    pub async fn load_turns_range(
+        &self,
+        session_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<TurnData>> {
+        self.engine.load_turns_range(session_id, offset, limit).await
+    }
+
     pub async fn delete_turn(&self, session_id: &str, turn_id: &str) -> Result<()> {
         self.engine.delete_turn(session_id, turn_id).await
     }
