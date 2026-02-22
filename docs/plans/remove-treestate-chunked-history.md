@@ -1,6 +1,6 @@
 # Plan: Remove TreeState & Implement Chunked History Loading
 
-**Status**: In Progress (Phase 4 Complete)
+**Status**: In Progress (Phase 5 Complete)
 **Created**: 2025-02-22
 **Last Updated**: 2025-02-22
 
@@ -389,3 +389,4 @@ If TUI still exists:
 | 2025-02-22 | Phase 2 | ✅ Added `SessionHistoryChunkEvent` and `SessionHistoryCompleteEvent` types with `@ws_event` decorators. Added `emit_history_chunk()` and `emit_history_complete()` helper methods. Regenerated TypeScript types. |
 | 2025-02-22 | Phase 3 | ✅ Implemented chunked history loading in SessionDataService. Key changes: (1) `subscribe_session()` now registers subscription FIRST, returns metadata-only snapshot, spawns background task for history streaming. (2) Added `_stream_history_from_storage()` that loads turns via `load_turns_range()` and emits chunk/complete events. (3) Added `_turn_dict_to_snapshot()` and `_deserialize_content_block()` for LMDB → TurnSnapshot conversion. (4) Wired up AsyncStorage in headless.py and app.py. (5) Added comprehensive tests for chunked loading. |
 | 2025-02-22 | Phase 4 | ✅ Implemented client-side merge logic in useSessionData.ts. Key changes: (1) Added `isLoadingHistory` and `historyWatermark` state for tracking history loading progress. (2) Added handler for `sessionDataHistoryChunk` events that merges historical turns by turn_id (without overwriting streaming turns). (3) Added handler for `sessionDataHistoryComplete` to finalize history loading. (4) Added `order` field to `TurnSnapshot` for client-side sorting. (5) Regenerated TypeScript types. This fixes the broken chat log from Phase 3. |
+| 2025-02-22 | Phase 5 | ✅ Extracted runtime state from TreeState. Analysis: (1) `_streaming_sessions` → Already tracked in SessionManagerService via `_streaming_contexts`. (2) `_current_session_id` → Already client state (`selectedSessionId` prop in React). (3) `_session_colors` → Already client-derived (`SESSION_COLORS[index % len]` in SessionTreeView.tsx). (4) `_merge_modes` → Added persistence via session children. Changes: Updated `TreeState.load_session()` to read `context_mode` from children dict entries. Updated `TreeState.set_merge_mode()` to write `context_mode` back to session children and mark dirty for save. Added 2 new tests for merge mode persistence. |

@@ -485,6 +485,50 @@ class TestTreeStateContextModes:
         state.set_merge_mode("parent", "fork", ContextMode.DROP)
         assert state.get_merge_mode("parent", "fork").value == "drop"
 
+    def test_merge_modes_loaded_from_session_children(self):
+        """Merge modes should be loaded from session children when session loads."""
+        state = TreeState()
+
+        # Create session with children that have persisted context_mode
+        session = MockSession(
+            id="parent",
+            children=[
+                {"session_id": "fork1", "status": "merged", "context_mode": "drop"},
+                {"session_id": "fork2", "status": "merged", "context_mode": "compress"},
+                {"session_id": "fork3", "status": "merged"},  # No context_mode, should default to COPY
+                {"session_id": "fork4", "status": "active"},  # Not merged, should not load
+            ]
+        )
+
+        state.load_session("parent", session)
+
+        # Check merge modes loaded correctly
+        assert state.get_merge_mode("parent", "fork1").value == "drop"
+        assert state.get_merge_mode("parent", "fork2").value == "compress"
+        assert state.get_merge_mode("parent", "fork3").value == "copy"  # Default
+        assert state.get_merge_mode("parent", "fork4").value == "copy"  # Not loaded (not merged), default
+
+    def test_set_merge_mode_updates_session_children(self):
+        """Setting merge mode should update the session's children for persistence."""
+        state = TreeState()
+
+        # Create session with a merged child
+        session = MockSession(
+            id="parent",
+            children=[
+                {"session_id": "fork1", "status": "merged"},
+            ]
+        )
+
+        state.load_session("parent", session)
+
+        # Set merge mode
+        state.set_merge_mode("parent", "fork1", ContextMode.COMPRESS)
+
+        # Check that both in-memory and session object are updated
+        assert state.get_merge_mode("parent", "fork1").value == "compress"
+        assert session.children[0].get("context_mode") == "compress"
+
 
 class TestTreeStateStreaming:
     """Test streaming state management."""

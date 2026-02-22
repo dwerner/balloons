@@ -593,13 +593,18 @@ class TreeState:
             if self.get_context_mode(session_id, t.idx).value != ContextMode.DROP.value
         )
 
-        # Load merge modes for merged children
+        # Load merge modes for merged children from persisted data
         for child in session.children:
             if child.get("status") == "merged":
                 fork_id = child.get("session_id", "")
                 merge_key = (session_id, fork_id)
                 if merge_key not in self._merge_modes:
-                    self._merge_modes[merge_key] = ContextMode.COPY
+                    # Load from persisted context_mode, default to COPY
+                    persisted_mode = child.get("context_mode", "copy")
+                    try:
+                        self._merge_modes[merge_key] = ContextMode(persisted_mode)
+                    except ValueError:
+                        self._merge_modes[merge_key] = ContextMode.COPY
 
         self._notify(TreeEvent.SESSION_LOADED, {"session_id": session_id})
 
@@ -958,8 +963,25 @@ class TreeState:
         return self._merge_modes.get((parent_session_id, fork_session_id), ContextMode.COPY)
 
     def set_merge_mode(self, parent_session_id: str, fork_session_id: str, mode: ContextMode) -> None:
-        """Set the context mode for a merge."""
+        """Set the context mode for a merge.
+
+        Updates both the in-memory cache and the session's children list
+        so the mode persists when the session is saved.
+        """
         self._merge_modes[(parent_session_id, fork_session_id)] = mode
+
+        # Also update the Session object so it persists on save
+        session_data = self._sessions.get(parent_session_id)
+        if session_data and session_data.session_ref:
+            session = session_data.session_ref
+            for child in session.children:
+                if child.get("session_id") == fork_session_id:
+                    child["context_mode"] = mode.value
+                    # Mark for save (if session has dirty tracking)
+                    if hasattr(session, 'mark_metadata_dirty'):
+                        session.mark_metadata_dirty()
+                    break
+
         self._notify(TreeEvent.CONTEXT_MODE_CHANGED, {
             "type": "merge",
             "parent_session_id": parent_session_id,
