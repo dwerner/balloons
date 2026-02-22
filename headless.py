@@ -190,14 +190,21 @@ async def run_server(
     async def load_session_for_tree(session_id: str):
         return await session_manager.load_session(session_id)
 
-    tree_service = TreeStateService(tree_state, session_loader=load_session_for_tree)
+    # Initialize AsyncStorage for direct LMDB queries (Phase 6)
+    from core.async_storage import AsyncStorage
+    storage = AsyncStorage()
+
+    # Phase 6: TreeStateService now queries storage directly for turn data
+    tree_service = TreeStateService(
+        tree_state,
+        session_loader=load_session_for_tree,
+        storage=storage,
+    )
     queue_service = QueueStateService(queue_state)
     goal_service = GoalTreeStateService(goal_tree_state)
     task_service = TaskStateService(stream_state)
 
     # Initialize SessionDataService with storage for chunked history loading
-    from core.async_storage import AsyncStorage
-    storage = AsyncStorage()
     session_data_service = SessionDataService(storage=storage)
     session_data_service.set_session_loader(load_session_for_tree)
     session_data_service.set_tree_state(tree_state)

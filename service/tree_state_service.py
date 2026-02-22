@@ -13,6 +13,21 @@ Example usage:
 
     # Events are pushed to subscribed clients:
     # {"event": "sessionUpdated", "data": {"sessionId": "abc"}}
+
+Phase 6 Migration Notes:
+========================
+This service is being migrated to query AsyncStorage (LMDB) directly instead of
+through TreeState. TreeState is still used for:
+- Observer/event pattern (session/turn change notifications)
+- Runtime state (streaming sessions, current session per TUI)
+- Context modes (will move to Turn storage later)
+
+Data queries now use AsyncStorage:
+- get_session() -> storage.load_session()
+- get_all_sessions() -> storage.list_sessions()
+- get_turns() -> storage.load_turns_range()
+
+After Phase 7, TreeState will be eliminated entirely.
 """
 
 from dataclasses import dataclass, field
@@ -20,6 +35,7 @@ from typing import Callable, Any, Awaitable, TYPE_CHECKING
 
 from codegen import ws_service, ws_expose, ws_event, ws_type
 from core.tree_state import TreeState, TreeEvent, SessionData, TurnData
+from core.async_storage import AsyncStorage
 from models import ContextMode, ImageBlock, ToolUseBlock, ToolResultBlock
 
 if TYPE_CHECKING:
@@ -134,22 +150,31 @@ class TreeStateService:
 
     Provides read/write access to session and turn data, context mode management,
     and real-time event subscriptions for state changes.
+
+    Phase 6 Architecture:
+    - Data queries use AsyncStorage (LMDB) directly
+    - TreeState is kept for observer/event pattern and runtime state
+    - After Phase 7, TreeState will be eliminated entirely
     """
 
     def __init__(
         self,
         tree_state: TreeState,
         session_loader: SessionLoaderCallback | None = None,
+        storage: AsyncStorage | None = None,
     ):
         """Initialize service with a TreeState instance.
 
         Args:
-            tree_state: The TreeState to expose via WebSocket
+            tree_state: The TreeState for events and runtime state
             session_loader: Optional callback to load sessions on demand.
                            If provided, get_turns will auto-load sessions.
+            storage: AsyncStorage for direct LMDB queries (Phase 6).
+                    If not provided, falls back to TreeState queries.
         """
         self._state = tree_state
         self._session_loader = session_loader
+        self._storage = storage
         self._event_handlers: list[Callable[[str, dict], None]] = []
 
         # Wire up TreeState observer to emit WebSocket events
@@ -273,6 +298,90 @@ class TreeStateService:
 
     # --- Turn Operations ---
 
+    def _turn_dict_to_info(self, turn_dict: dict, turn_idx: int, session_id: str) -> TurnInfo:
+        """Convert a storage turn dict to TurnInfo.
+
+        This is used when loading turns directly from AsyncStorage instead of
+        from TreeState's in-memory cache.
+
+        Args:
+            turn_dict: Turn data dict from storage (matches _turn_to_wire format)
+            turn_idx: The turn index (position in the turn order)
+            session_id: The session ID (for context mode lookup)
+
+        Returns:
+            TurnInfo for the turn
+        """
+        from core.debug_log import debug_log
+
+        # Extract content block type and related info
+        content_block_type = "text"
+        images: list[TurnImageInfo] = []
+        tool_use: ToolUseInfo | None = None
+        tool_result: ToolResultInfo | None = None
+        content = ""
+
+        block_data = turn_dict.get("content_block")
+        if block_data:
+            content_block_type = block_data.get("type", "text")
+
+            if content_block_type == "text":
+                content = block_data.get("text", "")
+            elif content_block_type == "image":
+                images.append(TurnImageInfo(
+                    file_path=block_data.get("file_path", ""),
+                    filename=block_data.get("filename", ""),
+                    media_type=block_data.get("media_type", ""),
+                    width=block_data.get("width", 0),
+                    height=block_data.get("height", 0),
+                ))
+                content = f"[Image: {block_data.get('filename', 'image')}]"
+            elif content_block_type == "tool_use":
+                tool_use = ToolUseInfo(
+                    tool_use_id=block_data.get("id", ""),
+                    tool_name=block_data.get("name", ""),
+                    tool_input=block_data.get("input", {}),
+                )
+                content = f"Tool: {block_data.get('name', '')}"
+            elif content_block_type == "tool_result":
+                result_content = block_data.get("content", "")
+                is_error = block_data.get("is_error", False)
+                tool_result = ToolResultInfo(
+                    tool_use_id=block_data.get("tool_use_id", ""),
+                    content=result_content,
+                    is_error=is_error,
+                )
+                preview = result_content[:100] + "..." if len(result_content) > 100 else result_content
+                content = ("Error: " if is_error else "Result: ") + preview
+            elif content_block_type == "fork":
+                content = f"Fork: {block_data.get('fork_name', '')}"
+            elif content_block_type == "merge":
+                msg = block_data.get("message", "")
+                msg_preview = msg[:50] + "..." if len(msg) > 50 else msg
+                content = f"Merged: {block_data.get('fork_name', '')} - {msg_preview}"
+            elif content_block_type == "archive":
+                content = f"Archive: {block_data.get('summary', '')[:50]}..."
+            else:
+                content = f"[{content_block_type}]"
+
+        # Get context mode from turn data (Phase 6: context mode is in turn storage)
+        context_mode = turn_dict.get("context_mode", "compress")
+
+        return TurnInfo(
+            idx=turn_idx,
+            role=turn_dict.get("role", "assistant"),
+            content=content,
+            streaming=False,  # Loaded turns are never streaming
+            viewed=True,  # Loaded turns are considered viewed
+            tokens=turn_dict.get("tokens", 0),
+            context_mode=context_mode,
+            content_block_type=content_block_type,
+            exchange_id=turn_dict.get("exchange_id"),
+            images=images,
+            tool_use=tool_use,
+            tool_result=tool_result,
+        )
+
     def _turn_to_info(self, t: TurnData, session_id: str) -> TurnInfo:
         """Convert a TurnData to TurnInfo with full content block information."""
         from core.debug_log import debug_log
@@ -338,7 +447,10 @@ class TreeStateService:
     async def get_turns(self, session_id: str) -> list[TurnInfo]:
         """Get all turns for a session.
 
-        If the session exists but turns aren't loaded, and a session_loader
+        Phase 6: Uses AsyncStorage directly when available.
+        Falls back to TreeState if storage is not configured (for backwards compat).
+
+        If neither storage nor cached turns are available, and a session_loader
         callback was provided, the session will be loaded automatically.
 
         Args:
@@ -347,6 +459,15 @@ class TreeStateService:
         Returns:
             List of turn info objects, empty if session not found/loaded
         """
+        # Phase 6: Prefer loading from storage directly
+        if self._storage is not None:
+            turn_dicts = await self._storage.load_turns(session_id)
+            return [
+                self._turn_dict_to_info(turn_dict, idx, session_id)
+                for idx, turn_dict in enumerate(turn_dicts)
+            ]
+
+        # Fallback: use TreeState cache
         session_data = self._state.get_session(session_id)
 
         # Auto-load session if turns not loaded and we have a loader
@@ -365,6 +486,8 @@ class TreeStateService:
     async def get_turn(self, session_id: str, turn_idx: int) -> TurnInfo | None:
         """Get a specific turn.
 
+        Phase 6: Uses AsyncStorage directly when available.
+
         Args:
             session_id: The session ID
             turn_idx: The turn index
@@ -372,6 +495,14 @@ class TreeStateService:
         Returns:
             Turn info if found, None otherwise
         """
+        # Phase 6: Prefer loading from storage directly
+        if self._storage is not None:
+            turn_dicts = await self._storage.load_turns_range(session_id, turn_idx, 1)
+            if turn_dicts:
+                return self._turn_dict_to_info(turn_dicts[0], turn_idx, session_id)
+            return None
+
+        # Fallback: use TreeState cache
         turn = self._state.get_turn(session_id, turn_idx)
         if not turn:
             return None
@@ -384,6 +515,8 @@ class TreeStateService:
     async def get_context_mode(self, session_id: str, turn_idx: int) -> str:
         """Get the context mode for a turn.
 
+        Phase 6: Reads from turn storage directly when available.
+
         Args:
             session_id: The session ID
             turn_idx: The turn index
@@ -391,6 +524,14 @@ class TreeStateService:
         Returns:
             Context mode string: "copy", "compress", or "drop"
         """
+        # Phase 6: Prefer reading from storage directly
+        if self._storage is not None:
+            turn_dicts = await self._storage.load_turns_range(session_id, turn_idx, 1)
+            if turn_dicts:
+                return turn_dicts[0].get("context_mode", "compress")
+            return "compress"  # Default if turn not found
+
+        # Fallback: use TreeState cache
         return self._state.get_context_mode(session_id, turn_idx).value
 
     @ws_expose
@@ -399,17 +540,31 @@ class TreeStateService:
     ) -> None:
         """Set the context mode for a turn.
 
+        Phase 6: Updates turn in storage and notifies via TreeState events.
+
         Args:
             session_id: The session ID
             turn_idx: The turn index
             mode: The mode to set ("copy", "compress", or "drop")
         """
         context_mode = ContextMode(mode)
+
+        # Phase 6: Persist to storage if available
+        if self._storage is not None and self._session_loader is not None:
+            # Load the session, update the turn's context_mode, save
+            session = await self._session_loader(session_id)
+            if session and turn_idx < len(session.turns):
+                session.turns[turn_idx].context_mode = context_mode
+                await self._storage.save_session(session)
+
+        # Update TreeState for event notification
         self._state.set_context_mode(session_id, turn_idx, context_mode)
 
     @ws_expose
     async def toggle_context_mode(self, session_id: str, turn_idx: int) -> str:
         """Toggle context mode: COPY -> COMPRESS -> DROP -> COPY.
+
+        Phase 6: Updates turn in storage and notifies via TreeState events.
 
         Args:
             session_id: The session ID
@@ -418,7 +573,24 @@ class TreeStateService:
         Returns:
             The new context mode string
         """
-        new_mode = self._state.toggle_context_mode(session_id, turn_idx)
+        # Get current mode and determine new mode
+        current = await self.get_context_mode(session_id, turn_idx)
+        if current == "copy":
+            new_mode = ContextMode.COMPRESS
+        elif current in ("compress", "summarize"):
+            new_mode = ContextMode.DROP
+        else:  # drop
+            new_mode = ContextMode.COPY
+
+        # Phase 6: Persist to storage if available
+        if self._storage is not None and self._session_loader is not None:
+            session = await self._session_loader(session_id)
+            if session and turn_idx < len(session.turns):
+                session.turns[turn_idx].context_mode = new_mode
+                await self._storage.save_session(session)
+
+        # Update TreeState for event notification
+        self._state.set_context_mode(session_id, turn_idx, new_mode)
         return new_mode.value
 
     # --- Viewed State ---

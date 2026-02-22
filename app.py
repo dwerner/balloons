@@ -693,9 +693,13 @@ class BalloonsApp(App):
 
             # Create and register services with shared state
             # TreeState is owned by SessionManagerService - share it with TreeStateService
+            # Phase 6: TreeStateService now queries storage directly for turn data
+            from core.async_storage import AsyncStorage
+            storage = AsyncStorage()
             tree_service = TreeStateService(
                 self._session_service.get_tree_state(),
                 session_loader=load_session_for_tree,
+                storage=storage,
             )
             queue_service = QueueStateService(self._queue_state)
             # SessionManagerService is already created in on_mount() - reuse it
@@ -705,8 +709,6 @@ class BalloonsApp(App):
             # Store task_service as instance variable for WebSocket streaming events
             self._task_service = TaskStateService(get_stream_state())
             # SessionDataService for subscription-based streaming with chunked history
-            from core.async_storage import AsyncStorage
-            storage = AsyncStorage()
             self._session_data_service = SessionDataService(
                 tree_state=self._tree_state,
                 storage=storage,
