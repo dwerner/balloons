@@ -125,6 +125,7 @@
   border-right: 1px solid var(--color-border-primary);
   overflow: hidden;
   min-height: 0;
+  position: relative; /* Needed for resize handle positioning */
 }
 
 /* ----- Mobile Sidebar (Overlay) ----- */
@@ -170,7 +171,7 @@
 .app-layout__resize-handle--right {
   position: absolute;
   top: 0;
-  right: -4px;
+  right: 0;
   bottom: 0;
   width: 8px;
   cursor: col-resize;
@@ -262,7 +263,7 @@
 .app-layout__resize-handle--left {
   position: absolute;
   top: 0;
-  left: -4px;
+  left: 0;
   bottom: 0;
   width: 8px;
   cursor: col-resize;

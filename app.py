@@ -43,6 +43,7 @@ from models import (
     TextDelta, ToolUseEvent, ToolResultEvent,
     TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, Message, ContextMode,
     ArchiveBlock, ContextAssignmentData, ForkBindingData, ExchangeInfo,
+    ForkProposalBlock, MergeProposalBlock,
 )
 from core import (
     CommandParser,
@@ -993,10 +994,26 @@ class BalloonsApp(App):
         if not ctx:
             return
 
-        # Update context tree
+        is_active = ctx.is_active
+        content_block = event.content_block or TextBlock(type="text", text=event.content)
+
+        # Handle fork proposal turns - add widget to chat log
+        if isinstance(content_block, ForkProposalBlock) and is_active:
+            await self._handle_fork_proposal_turn_finished(
+                session_id, event.turn_index, content_block, ctx
+            )
+            return
+
+        # Handle merge proposal turns - add widget to chat log
+        if isinstance(content_block, MergeProposalBlock) and is_active:
+            await self._handle_merge_proposal_turn_finished(
+                session_id, event.turn_index, content_block, ctx
+            )
+            return
+
+        # Update context tree for other turn types
         try:
             context_tree = self.query_one("#context-tree", ContextTreeView)
-            content_block = event.content_block or TextBlock(type="text", text=event.content)
             await context_tree.finish_turn(
                 session_id,
                 event.turn_index,
@@ -3789,6 +3806,92 @@ class BalloonsApp(App):
             category="fork",
             details={"proposal_id": proposal_id, "name": proposal.name},
         )
+
+    async def _handle_fork_proposal_turn_finished(
+        self,
+        session_id: str,
+        turn_index: int,
+        content_block: ForkProposalBlock,
+        ctx: StreamingContext,
+    ) -> None:
+        """Handle fork proposal turn finished - TUI-specific widget updates.
+
+        Called from on_turn_finished when a ForkProposalBlock is detected.
+        The proposal turn was created by SessionManagerService, so we just
+        need to update the UI widgets here.
+        """
+        # Update context tree
+        try:
+            context_tree = self.query_one("#context-tree", ContextTreeView)
+            context_tree.start_turn(session_id, turn_index, "system", exchange_id=ctx.exchange_id)
+            await context_tree.finish_turn(
+                session_id, turn_index, "[Fork proposal]", content_block, []
+            )
+        except Exception as e:
+            debug_log.error(f"Failed to update context tree for fork proposal: {e}", category="fork")
+
+        # Add the proposal widget to the chat log
+        try:
+            chat_log = self.query_one("#chat-log", ChatLogView)
+
+            widget = ForkProposalMarker(
+                proposal_id=content_block.proposal_id,
+                name=content_block.name,
+                description=content_block.description,
+                context_plan=content_block.context_plan,
+                initial_prompt=content_block.initial_prompt or "",
+                bind_to=content_block.bind_to,
+                bind_to_inherit=content_block.bind_to_inherit,
+                status=content_block.status,
+                turn_id=turn_index,
+                all_exchanges=content_block.all_exchanges,
+                session_id=session_id,
+            )
+            chat_log.mount(widget)
+            chat_log.scroll_end(animate=False)
+        except Exception as e:
+            debug_log.error(f"Failed to add fork proposal widget: {e}", category="fork")
+
+    async def _handle_merge_proposal_turn_finished(
+        self,
+        session_id: str,
+        turn_index: int,
+        content_block: MergeProposalBlock,
+        ctx: StreamingContext,
+    ) -> None:
+        """Handle merge proposal turn finished - TUI-specific widget updates.
+
+        Called from on_turn_finished when a MergeProposalBlock is detected.
+        The proposal turn was created by SessionManagerService, so we just
+        need to update the UI widgets here.
+        """
+        # Update context tree
+        try:
+            context_tree = self.query_one("#context-tree", ContextTreeView)
+            context_tree.start_turn(session_id, turn_index, "system", exchange_id=ctx.exchange_id)
+            await context_tree.finish_turn(
+                session_id, turn_index, "[Merge proposal]", content_block, []
+            )
+        except Exception as e:
+            debug_log.error(f"Failed to update context tree for merge proposal: {e}", category="merge")
+
+        # Add the proposal widget to the chat log
+        try:
+            chat_log = self.query_one("#chat-log", ChatLogView)
+
+            widget = MergeProposalMarker(
+                proposal_id=content_block.proposal_id,
+                summary=content_block.summary,
+                reason=content_block.reason,
+                files_changed=content_block.files_changed,
+                key_accomplishments=content_block.key_accomplishments,
+                status=content_block.status,
+                turn_id=turn_index,
+            )
+            chat_log.mount(widget)
+            chat_log.scroll_end(animate=False)
+        except Exception as e:
+            debug_log.error(f"Failed to add merge proposal widget: {e}", category="merge")
 
     def _get_exchange_summaries(self, session_id: str, exclude_current: bool = True) -> list[str]:
         """Get short summaries of each exchange for display in the proposal modal.

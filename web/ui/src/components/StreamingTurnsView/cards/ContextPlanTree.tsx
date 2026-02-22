@@ -9,7 +9,7 @@
  * Matches the TUI's ContextPlanTree behavior.
  */
 
-import React, { useState, useCallback, memo } from 'react';
+import React, { useState, useCallback, useEffect, memo } from 'react';
 import type { ExchangeSummary } from '../../../../../generated/types';
 import './cards.css';
 
@@ -215,6 +215,17 @@ export const ContextPlanTree = memo(function ContextPlanTree({
     }
     return contextPlan;
   });
+
+  // Re-expand when allExchanges prop changes (e.g., after async fetch completes)
+  // This is critical because the initial render happens before exchanges are loaded
+  useEffect(() => {
+    if (allExchanges && allExchanges.length > 0) {
+      setExpandedPlan(expandContextPlan(contextPlan, allExchanges));
+    } else if (contextPlan.length > 0) {
+      // If no allExchanges provided, use contextPlan directly
+      setExpandedPlan(contextPlan);
+    }
+  }, [allExchanges, contextPlan]);
 
   const handleToggle = useCallback(
     (index: number) => {

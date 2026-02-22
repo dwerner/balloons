@@ -683,6 +683,7 @@ class AsyncStorage:
                 } if block.bind_to else None,
                 "bind_to_inherit": block.bind_to_inherit,
                 "status": block.status,
+                "child_session_id": block.child_session_id,
                 "all_exchanges": [
                     {
                         "index": ex.index,
@@ -936,6 +937,7 @@ class AsyncStorage:
                 bind_to=bind_to,
                 bind_to_inherit=data.get("bind_to_inherit", False),
                 status=data.get("status", "pending"),
+                child_session_id=data.get("child_session_id", ""),
                 all_exchanges=all_exchanges,
             )
         elif block_type == "merge_proposal":

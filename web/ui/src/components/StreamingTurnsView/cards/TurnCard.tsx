@@ -138,6 +138,45 @@ export function TurnCard({ turn, allTurns = [], sessionId }: TurnCardProps) {
   if (blockType === 'tool_use') {
     const toolUseBlock = contentBlock as ToolUseBlock;
     const toolName = toolUseBlock?.name || '';
+    const toolUseId = toolUseBlock?.id || '';
+
+    // Special handling for propose_fork tool - render as ForkProposalCard
+    // The tool input contains the fork proposal data
+    if (toolName === 'propose_fork' && toolUseId.startsWith('balloons-')) {
+      const input = toolUseBlock?.input as Record<string, unknown> | undefined;
+      if (input && !('_streaming' in input)) {
+        // Build a synthetic fork proposal block from the tool input
+        const syntheticBlock = {
+          type: 'fork_proposal' as const,
+          proposalId: toolUseId,
+          name: (input.name as string) || '',
+          description: (input.description as string) || '',
+          contextPlan: ((input.context_plan as unknown[]) || []).map((cp: unknown) => {
+            const item = cp as Record<string, unknown>;
+            return {
+              exchangeRange: (item.exchange_range as string) || '',
+              mode: (item.mode as string) || 'compress',
+              reason: (item.reason as string) || '',
+            };
+          }),
+          initialPrompt: (input.initial_prompt as string) || '',
+          bindTo: input.bind_to && typeof input.bind_to === 'object' ? {
+            entityType: ((input.bind_to as Record<string, unknown>).entity_type as string) || '',
+            entityId: ((input.bind_to as Record<string, unknown>).entity_id as string) || '',
+            role: ((input.bind_to as Record<string, unknown>).role as string) || '',
+          } : null,
+          bindToInherit: input.bind_to === 'inherit',
+          status: 'pending' as const,
+          allExchanges: [],
+        };
+        // Create a synthetic turn with the fork proposal block
+        const syntheticTurn = {
+          ...turn,
+          contentBlock: syntheticBlock,
+        };
+        return <ForkProposalCard turn={syntheticTurn} sessionId={sessionId} />;
+      }
+    }
 
     // Try to get a tool-specific card
     const ToolCardComponent = TOOL_CARD_MAP[toolName];

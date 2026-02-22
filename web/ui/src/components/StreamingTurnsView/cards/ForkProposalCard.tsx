@@ -71,6 +71,20 @@ export const ForkProposalCard = memo(function ForkProposalCard({
   const isPending = status === 'pending';
   const isLoading = status === 'loading';
 
+  // DEBUG: Log render state
+  console.log('[ForkProposalCard] Rendering:', {
+    proposalId,
+    name,
+    status,
+    isPending,
+    isLoading,
+    hasClient: !!client,
+    sessionId,
+    contextPlanLength: contextPlan.length,
+    exchangesLength: exchanges.length,
+    blockStatus: block?.status,
+  });
+
   // Handler for navigating to the created fork
   const handleGoToFork = useCallback(() => {
     if (childSessionId && selectSession) {

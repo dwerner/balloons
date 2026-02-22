@@ -35,6 +35,7 @@ from core import (
 )
 from core.debug_log import debug_log
 from core.goal_tree_state import GoalTreeState
+from core.goal_tree_sync import GoalTreeSyncManager
 from core.queue_state import get_queue_state
 from core.supervisor_tools import set_supervisor, shutdown_supervisor
 from service import (
@@ -105,6 +106,24 @@ async def _load_all_sessions_into_tree(tree_state) -> int:
 
     debug_log.info(f"Loaded {len(sessions)} sessions into tree state", category="startup")
     return len(sessions)
+
+
+async def _load_goal_tree_data(goal_tree_state: GoalTreeState, tree_state) -> None:
+    """Load goal tree data (goals, plans, todos, bindings) into GoalTreeState.
+
+    This populates the goal tree so the frontend can see all goals and their
+    associated plans, todos, and session bindings.
+
+    Args:
+        goal_tree_state: The GoalTreeState to populate
+        tree_state: The TreeState containing session data
+    """
+    sync_manager = GoalTreeSyncManager(goal_tree_state, tree_state)
+    await sync_manager.initial_load()
+    debug_log.info(
+        f"Loaded {len(goal_tree_state._goals)} goals into goal tree state",
+        category="startup",
+    )
 
 
 def _create_session_runner_factory():
@@ -189,6 +208,9 @@ async def run_server(
 
     # Load all sessions into TreeState so they appear in the session list
     await _load_all_sessions_into_tree(tree_state)
+
+    # Load goal tree data (goals, plans, todos, session bindings)
+    await _load_goal_tree_data(goal_tree_state, tree_state)
 
     # Configure WebSocket server
     ws_config = config.websocket
