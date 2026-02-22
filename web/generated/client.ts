@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-22T14:37:33.844712
+// Generated: 2026-02-22T15:07:56.938212
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -2779,12 +2779,16 @@ export interface SessionDataService {
   /**
    * Subscribe to receive updates for a session.
    * 
-   * Returns the full session snapshot atomically with the subscription,
-   * ensuring the client has complete initial state before receiving any
-   * incremental events.
+   * Returns session metadata immediately, then streams historical turns
+   * via sessionDataHistoryChunk events. This ensures:
+   * 1. Subscription is registered FIRST (capturing concurrent streaming events)
+   * 2. Client gets metadata without waiting for full history load
+   * 3. History arrives progressively, enabling incremental rendering
    * 
    * When subscribed, the client will receive:
-   * - turnCreated: When a new turn starts
+   * - historyChunk: Batches of historical turns during initial load
+   * - historyComplete: Signals all history has been sent
+   * - turnCreated: When a new turn starts (may interleave with history)
    * - turnDelta: As content streams in
    * - turnFinished: When a turn completes
    * 
@@ -2793,7 +2797,7 @@ export interface SessionDataService {
    * client_id: Unique identifier for the subscribing client
    * 
    * Returns:
-   * SubscribeSessionResult with snapshot if session found
+   * SubscribeSessionResult with metadata-only snapshot (no turns)
    */
   subscribeSession(sessionId: string, clientId?: string): Promise<Types.SubscribeSessionResult>;
 

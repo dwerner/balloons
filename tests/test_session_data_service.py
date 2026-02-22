@@ -565,7 +565,11 @@ class TestSessionSnapshot:
     async def test_subscribe_session_returns_snapshot(
         self, service_with_tree_state, tree_state, mock_session
     ):
-        """Test that subscribe_session returns snapshot with subscription."""
+        """Test that subscribe_session returns metadata-only snapshot.
+
+        With chunked history loading (Phase 3), subscribe returns immediately
+        with session metadata. Turns arrive via historyChunk events.
+        """
         tree_state.add_session(mock_session, is_current=True)
         tree_state.load_session(mock_session.id, mock_session)
 
@@ -577,7 +581,10 @@ class TestSessionSnapshot:
         assert result.subscribed is True
         assert result.session_id == mock_session.id
         assert result.snapshot is not None
-        assert len(result.snapshot.turns) == 5
+        # Phase 3: snapshot contains metadata only, turns stream via chunks
+        assert len(result.snapshot.turns) == 0  # Empty - history sent via events
+        assert result.snapshot.title == "Test Session"
+        assert result.snapshot.model == "claude-3"
 
     @pytest.mark.asyncio
     async def test_subscribe_session_snapshot_is_atomic(
@@ -734,7 +741,11 @@ class TestSessionLoading:
     async def test_subscribe_loads_session_via_loader(
         self, tree_state, mock_session_for_loader
     ):
-        """Test that subscribe_session uses loader when session not loaded."""
+        """Test that subscribe_session uses loader when session not loaded.
+
+        With chunked history loading (Phase 3), subscribe returns metadata only.
+        Turns will be sent via historyChunk events.
+        """
         async def mock_loader(session_id: str):
             if session_id == mock_session_for_loader.id:
                 return mock_session_for_loader
@@ -747,7 +758,9 @@ class TestSessionLoading:
 
         assert result.subscribed is True
         assert result.snapshot is not None
-        assert len(result.snapshot.turns) == 1
+        # Phase 3: snapshot contains metadata only, turns stream via chunks
+        assert len(result.snapshot.turns) == 0
+        assert result.snapshot.title == "Loaded Session"
 
 
 class TestTurnSnapshotFields:
@@ -821,3 +834,267 @@ class TestTurnSnapshotFields:
         assert turn.content_block.type == "text"
         assert turn.content_block.text == "test"
         assert turn.exchange_id == "ex-1"
+
+
+class TestChunkedHistoryLoading:
+    """Tests for Phase 3: chunked history loading from LMDB.
+
+    These tests verify that:
+    1. subscribe_session returns metadata immediately (no turns)
+    2. Historical turns are streamed via historyChunk events
+    3. historyComplete is emitted when all chunks are sent
+    """
+
+    @pytest.fixture
+    def tree_state(self):
+        return TreeState()
+
+    @pytest.fixture
+    def mock_storage(self):
+        """Create a mock AsyncStorage for testing chunked loading."""
+        class MockStorage:
+            def __init__(self):
+                self.turns = {}  # session_id -> list of turn dicts
+                self.get_turn_count_calls = []
+                self.load_turns_range_calls = []
+
+            async def get_turn_count(self, session_id: str) -> int:
+                self.get_turn_count_calls.append(session_id)
+                return len(self.turns.get(session_id, []))
+
+            async def load_turns_range(
+                self, session_id: str, offset: int, limit: int
+            ) -> list[dict]:
+                self.load_turns_range_calls.append((session_id, offset, limit))
+                turns = self.turns.get(session_id, [])
+                return turns[offset:offset + limit]
+
+        return MockStorage()
+
+    @pytest.fixture
+    def mock_session(self):
+        """Create a mock session with metadata."""
+        @dataclass
+        class MockSession:
+            id: str = "test-session-1"
+            created: str = "2024-01-01T00:00:00"
+            last_modified: str = "2024-01-01T01:00:00"
+            model: str = "claude-3"
+            title: str = "Test Session"
+            total_input_tokens: int = 100
+            total_output_tokens: int = 200
+            total_cost: float = 0.05
+            parent_id: str | None = None
+            children: list = field(default_factory=list)
+            fork_name: str = ""
+            fork_status: str = "active"
+            backend_name: str = ""
+            turns: list = field(default_factory=list)
+            messages: list = field(default_factory=list)
+
+        return MockSession()
+
+    @pytest.mark.asyncio
+    async def test_subscribe_returns_empty_turns(
+        self, tree_state, mock_storage, mock_session
+    ):
+        """Test that subscribe returns metadata with empty turns list."""
+        tree_state.add_session(mock_session, is_current=True)
+
+        service = SessionDataService(
+            tree_state=tree_state,
+            storage=mock_storage,
+        )
+
+        result = await service.subscribe_session(mock_session.id, "client-a")
+
+        assert result.subscribed is True
+        assert result.snapshot is not None
+        assert result.snapshot.title == "Test Session"
+        assert len(result.snapshot.turns) == 0  # Empty - history via events
+
+    @pytest.mark.asyncio
+    async def test_history_chunk_events_emitted(
+        self, tree_state, mock_storage, mock_session
+    ):
+        """Test that historyChunk events are emitted for turns."""
+        import asyncio
+
+        # Add some turns to the mock storage
+        mock_storage.turns[mock_session.id] = [
+            {
+                "id": "turn-1",
+                "role": "user",
+                "content_block": {"type": "text", "text": "Hello"},
+                "tokens": 10,
+                "context_mode": "copy",
+                "exchange_id": "ex-1",
+            },
+            {
+                "id": "turn-2",
+                "role": "assistant",
+                "content_block": {"type": "text", "text": "Hi there!"},
+                "tokens": 15,
+                "context_mode": "copy",
+                "exchange_id": "ex-1",
+            },
+        ]
+
+        tree_state.add_session(mock_session, is_current=True)
+
+        service = SessionDataService(
+            tree_state=tree_state,
+            storage=mock_storage,
+        )
+
+        # Track emitted events
+        events = []
+        def capture_event(name, data, clients):
+            events.append((name, data))
+
+        service.add_event_handler(capture_event)
+
+        # Subscribe - this triggers history loading
+        result = await service.subscribe_session(mock_session.id, "client-a")
+        assert result.subscribed is True
+
+        # Wait for background task to complete
+        await asyncio.sleep(0.1)
+
+        # Should have emitted historyChunk and historyComplete events
+        event_names = [e[0] for e in events]
+        assert "sessionDataHistoryChunk" in event_names
+        assert "sessionDataHistoryComplete" in event_names
+
+        # Check chunk event content
+        chunk_event = next(e for e in events if e[0] == "sessionDataHistoryChunk")
+        assert chunk_event[1]["session_id"] == mock_session.id
+        assert len(chunk_event[1]["turns"]) == 2
+
+        # Check complete event content
+        complete_event = next(e for e in events if e[0] == "sessionDataHistoryComplete")
+        assert complete_event[1]["session_id"] == mock_session.id
+        assert complete_event[1]["total_turns"] == 2
+
+    @pytest.mark.asyncio
+    async def test_history_complete_emitted_for_empty_session(
+        self, tree_state, mock_storage, mock_session
+    ):
+        """Test that historyComplete is emitted even for sessions with no turns."""
+        import asyncio
+
+        mock_storage.turns[mock_session.id] = []  # Empty
+        tree_state.add_session(mock_session, is_current=True)
+
+        service = SessionDataService(
+            tree_state=tree_state,
+            storage=mock_storage,
+        )
+
+        events = []
+        service.add_event_handler(lambda name, data, clients: events.append((name, data)))
+
+        await service.subscribe_session(mock_session.id, "client-a")
+        await asyncio.sleep(0.1)
+
+        # Should have historyComplete but no historyChunk
+        event_names = [e[0] for e in events]
+        assert "sessionDataHistoryComplete" in event_names
+
+        complete_event = next(e for e in events if e[0] == "sessionDataHistoryComplete")
+        assert complete_event[1]["total_turns"] == 0
+        assert complete_event[1]["final_watermark"] == -1
+
+    @pytest.mark.asyncio
+    async def test_no_history_events_without_storage(self, tree_state, mock_session):
+        """Test that history events are not emitted without storage configured."""
+        import asyncio
+
+        tree_state.add_session(mock_session, is_current=True)
+
+        # No storage configured
+        service = SessionDataService(tree_state=tree_state)
+
+        events = []
+        service.add_event_handler(lambda name, data, clients: events.append((name, data)))
+
+        await service.subscribe_session(mock_session.id, "client-a")
+        await asyncio.sleep(0.1)
+
+        # Should not have any history events
+        event_names = [e[0] for e in events]
+        assert "sessionDataHistoryChunk" not in event_names
+        assert "sessionDataHistoryComplete" not in event_names
+
+    @pytest.mark.asyncio
+    async def test_turn_dict_to_snapshot_conversion(self, tree_state, mock_storage):
+        """Test that turn dicts from storage are correctly converted to TurnSnapshot."""
+        service = SessionDataService(
+            tree_state=tree_state,
+            storage=mock_storage,
+        )
+
+        turn_dict = {
+            "id": "turn-uuid-123",
+            "role": "assistant",
+            "content_block": {"type": "text", "text": "Hello world"},
+            "tokens": 42,
+            "context_mode": "compress",
+            "exchange_id": "ex-abc",
+        }
+
+        snapshot = service._turn_dict_to_snapshot(turn_dict, order=5)
+
+        assert snapshot.turn_id == "turn-uuid-123"
+        assert snapshot.role == "assistant"
+        assert snapshot.tokens == 42
+        assert snapshot.context_mode == "compress"
+        assert snapshot.exchange_id == "ex-abc"
+        assert snapshot.streaming is False  # Historical turns never streaming
+        assert snapshot.viewed is True  # Historical turns considered viewed
+        assert snapshot.content_block.type == "text"
+        assert snapshot.content_block.text == "Hello world"
+
+    @pytest.mark.asyncio
+    async def test_deserialize_content_block_types(self, tree_state, mock_storage):
+        """Test that various content block types are correctly deserialized."""
+        service = SessionDataService(
+            tree_state=tree_state,
+            storage=mock_storage,
+        )
+
+        # Test text block
+        text_block = service._deserialize_content_block({"type": "text", "text": "hello"})
+        assert text_block.type == "text"
+        assert text_block.text == "hello"
+
+        # Test tool_use block
+        tool_use_block = service._deserialize_content_block({
+            "type": "tool_use",
+            "id": "tool-123",
+            "name": "read_file",
+            "input": {"path": "/tmp/foo"},
+        })
+        assert tool_use_block.type == "tool_use"
+        assert tool_use_block.id == "tool-123"
+        assert tool_use_block.name == "read_file"
+        assert tool_use_block.input == {"path": "/tmp/foo"}
+
+        # Test tool_result block
+        tool_result_block = service._deserialize_content_block({
+            "type": "tool_result",
+            "tool_use_id": "tool-123",
+            "content": "file contents",
+            "is_error": False,
+        })
+        assert tool_result_block.type == "tool_result"
+        assert tool_result_block.tool_use_id == "tool-123"
+
+        # Test fork block
+        fork_block = service._deserialize_content_block({
+            "type": "fork",
+            "child_session_id": "child-session",
+            "fork_name": "feature-branch",
+        })
+        assert fork_block.type == "fork"
+        assert fork_block.child_session_id == "child-session"

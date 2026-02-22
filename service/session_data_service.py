@@ -23,6 +23,7 @@ Example usage:
     # {"event": "turnDelta", "data": {"sessionId": "abc", "turnId": "uuid-123", "delta": "Hello"}}
 """
 
+import asyncio
 from dataclasses import dataclass, field, asdict
 from typing import Callable, TYPE_CHECKING, Any, Awaitable, Union
 
@@ -49,6 +50,7 @@ from models import (
 
 if TYPE_CHECKING:
     from core.tree_state import TreeState
+    from core.async_storage import AsyncStorage
 
 # ContentBlock union for type annotations
 ContentBlock = Union[
@@ -84,11 +86,14 @@ class TurnSnapshot:
     """Complete snapshot of a single turn.
 
     Used in SessionSnapshot to provide full turn state.
-    Turns are ordered by array position - no separate idx field needed.
     turn_id is the stable identifier for targeting updates.
 
     content_block contains the full structured data for the turn,
     discriminated by the 'type' field (e.g., "text", "tool_use", "fork").
+
+    order is the turn's position in the session (0-indexed), used by clients
+    to sort turns correctly when history chunks arrive out of order with
+    streaming events.
     """
 
     turn_id: str  # Stable UUID for the turn (primary identifier)
@@ -98,6 +103,7 @@ class TurnSnapshot:
     tokens: int
     context_mode: str  # "copy", "compress", "drop"
     content_block: ContentBlock  # Full structured content block
+    order: int = 0  # Turn position in session (for sorting)
     exchange_id: str | None = None
 
 
@@ -319,10 +325,14 @@ class SessionDataService:
     - Turn lifecycle events (created, delta, finished)
     """
 
+    # Configuration for chunked history loading
+    HISTORY_CHUNK_SIZE = 50  # Number of turns per chunk
+
     def __init__(
         self,
         tree_state: "TreeState | None" = None,
         session_loader: SessionLoaderCallback | None = None,
+        storage: "AsyncStorage | None" = None,
     ) -> None:
         """Initialize the session data service.
 
@@ -331,6 +341,8 @@ class SessionDataService:
                        Can also be set later via set_tree_state().
             session_loader: Optional async callback to load sessions from storage.
                            Used when a session isn't already loaded in TreeState.
+            storage: Optional AsyncStorage for direct LMDB access (used for chunked
+                    history loading). Can also be set later via set_storage().
         """
         # Event handlers receive: (event_name, data, target_clients)
         # target_clients is a set of client_ids that should receive the event
@@ -339,10 +351,14 @@ class SessionDataService:
         self._subscriptions: dict[str, set[str]] = {}
         # Track reverse mapping: session_id -> set of client_ids
         self._session_subscribers: dict[str, set[str]] = {}
-        # TreeState for loading session data
+        # TreeState for loading session data (temporary, to be removed in later phases)
         self._tree_state: "TreeState | None" = tree_state
         # Session loader callback for loading sessions not in TreeState
         self._session_loader: SessionLoaderCallback | None = session_loader
+        # AsyncStorage for direct LMDB access (chunked history loading)
+        self._storage: "AsyncStorage | None" = storage
+        # Track background history loading tasks: session_id -> task
+        self._history_tasks: dict[str, asyncio.Task] = {}
 
     def set_tree_state(self, tree_state: "TreeState") -> None:
         """Set the TreeState for loading session snapshots.
@@ -362,6 +378,16 @@ class SessionDataService:
             loader: Async callback (session_id) -> Session | None
         """
         self._session_loader = loader
+
+    def set_storage(self, storage: "AsyncStorage") -> None:
+        """Set the AsyncStorage for direct LMDB access.
+
+        Enables chunked history loading for large sessions.
+
+        Args:
+            storage: The AsyncStorage instance for LMDB access
+        """
+        self._storage = storage
 
     def add_event_handler(
         self, handler: Callable[[str, dict, set[str] | None], None]
@@ -404,12 +430,16 @@ class SessionDataService:
     ) -> SubscribeSessionResult:
         """Subscribe to receive updates for a session.
 
-        Returns the full session snapshot atomically with the subscription,
-        ensuring the client has complete initial state before receiving any
-        incremental events.
+        Returns session metadata immediately, then streams historical turns
+        via sessionDataHistoryChunk events. This ensures:
+        1. Subscription is registered FIRST (capturing concurrent streaming events)
+        2. Client gets metadata without waiting for full history load
+        3. History arrives progressively, enabling incremental rendering
 
         When subscribed, the client will receive:
-        - turnCreated: When a new turn starts
+        - historyChunk: Batches of historical turns during initial load
+        - historyComplete: Signals all history has been sent
+        - turnCreated: When a new turn starts (may interleave with history)
         - turnDelta: As content streams in
         - turnFinished: When a turn completes
 
@@ -418,8 +448,10 @@ class SessionDataService:
             client_id: Unique identifier for the subscribing client
 
         Returns:
-            SubscribeSessionResult with snapshot if session found
+            SubscribeSessionResult with metadata-only snapshot (no turns)
         """
+        from core.debug_log import debug_log
+
         if not client_id:
             return SubscribeSessionResult(
                 session_id=session_id,
@@ -427,10 +459,7 @@ class SessionDataService:
                 error="client_id is required",
             )
 
-        # Get snapshot BEFORE adding subscription to ensure atomicity
-        # (client won't miss events that happen after snapshot but before subscription)
-        snapshot = await self.get_session_snapshot(session_id)
-
+        # PHASE 3 CHANGE: Register subscription FIRST to capture concurrent events
         # Add to client's subscriptions
         if client_id not in self._subscriptions:
             self._subscriptions[client_id] = set()
@@ -441,17 +470,41 @@ class SessionDataService:
             self._session_subscribers[session_id] = set()
         self._session_subscribers[session_id].add(client_id)
 
-        from core.debug_log import debug_log
         debug_log.info(
             f"subscribe_session: session={session_id[:8]}, client={client_id}, "
             f"total_subscribers={len(self._session_subscribers.get(session_id, set()))}",
             category="websocket",
         )
 
+        # Get metadata-only snapshot (no turns) - fast operation
+        snapshot = await self._get_session_metadata_snapshot(session_id)
+
+        # PHASE 3 CHANGE: Spawn background task to stream history from LMDB
+        # Only if session exists and we have storage configured
+        if snapshot is not None and self._storage is not None:
+            # Cancel any existing history task for this session (e.g., from reconnect)
+            if session_id in self._history_tasks:
+                self._history_tasks[session_id].cancel()
+
+            # Start streaming history in background
+            task = asyncio.create_task(
+                self._stream_history_from_storage(session_id),
+                name=f"history-{session_id[:8]}",
+            )
+            self._history_tasks[session_id] = task
+
+            # Clean up task reference when done
+            def cleanup_task(t: asyncio.Task) -> None:
+                if session_id in self._history_tasks and self._history_tasks[session_id] is t:
+                    del self._history_tasks[session_id]
+            task.add_done_callback(cleanup_task)
+
+        # Subscription succeeds even if session not found (client may be waiting for it)
+        # snapshot will be None in that case
         return SubscribeSessionResult(
             session_id=session_id,
             subscribed=True,
-            snapshot=snapshot,
+            snapshot=snapshot,  # Metadata only (no turns), or None if session not found
         )
 
     @ws_expose
@@ -595,6 +648,331 @@ class SessionDataService:
             turns=turn_snapshots,
             streaming_turn_ids=streaming_turn_ids,
         )
+
+    async def _get_session_metadata_snapshot(self, session_id: str) -> SessionSnapshot | None:
+        """Get session metadata without loading turns.
+
+        This is a fast operation that returns only the session's metadata,
+        suitable for immediate response when subscribing. Historical turns
+        are streamed separately via _stream_history_from_storage.
+
+        Args:
+            session_id: The session to get metadata for
+
+        Returns:
+            SessionSnapshot with empty turns list, or None if session not found
+        """
+        from core.debug_log import debug_log
+
+        if not self._tree_state:
+            debug_log.info("_get_session_metadata_snapshot: no tree_state", category="fork")
+            return None
+
+        session_data = self._tree_state.get_session(session_id)
+
+        # If session not in TreeState, try to load metadata only
+        if session_data is None:
+            debug_log.info(
+                f"_get_session_metadata_snapshot: session {session_id[:8]} not in TreeState",
+                category="fork",
+            )
+            if self._session_loader:
+                # Load session from storage (this loads metadata and turns, but we only use metadata)
+                session = await self._session_loader(session_id)
+                if session:
+                    # Add to TreeState (metadata only, turns will be loaded via chunks)
+                    self._tree_state.add_session(session, is_current=False)
+                    session_data = self._tree_state.get_session(session_id)
+
+        if not session_data:
+            return None
+
+        # Return metadata-only snapshot (empty turns, history streams separately)
+        return SessionSnapshot(
+            session_id=session_id,
+            title=session_data.title,
+            model=session_data.model,
+            is_streaming=session_data.is_streaming,
+            turns=[],  # Empty - history will stream via chunk events
+            streaming_turn_ids=[],
+        )
+
+    async def _stream_history_from_storage(self, session_id: str) -> None:
+        """Stream historical turns from LMDB storage in chunks.
+
+        Loads turns directly from LMDB using load_turns_range() and emits
+        sessionDataHistoryChunk events for each batch. When all chunks are
+        sent, emits sessionDataHistoryComplete.
+
+        This runs as a background task after subscribe_session returns,
+        allowing clients to render progressively and receive streaming
+        events concurrently.
+
+        Args:
+            session_id: The session to load history for
+        """
+        from core.debug_log import debug_log
+
+        if not self._storage:
+            debug_log.warning(
+                f"_stream_history_from_storage: no storage configured for session {session_id[:8]}",
+                category="websocket",
+            )
+            # Emit empty completion to signal no history available
+            self.emit_history_complete(session_id, total_turns=0, final_watermark=-1)
+            return
+
+        try:
+            # Get total turn count
+            total_turns = await self._storage.get_turn_count(session_id)
+
+            debug_log.info(
+                f"_stream_history_from_storage: session={session_id[:8]}, total_turns={total_turns}",
+                category="websocket",
+            )
+
+            if total_turns == 0:
+                self.emit_history_complete(session_id, total_turns=0, final_watermark=-1)
+                return
+
+            # Calculate chunk count
+            chunk_size = self.HISTORY_CHUNK_SIZE
+            total_chunks = (total_turns + chunk_size - 1) // chunk_size  # ceil division
+
+            final_watermark = -1
+            turns_sent = 0
+
+            # Load and emit chunks
+            for chunk_index in range(total_chunks):
+                offset = chunk_index * chunk_size
+                limit = min(chunk_size, total_turns - offset)
+
+                # Load chunk from LMDB
+                turn_dicts = await self._storage.load_turns_range(session_id, offset, limit)
+
+                # Convert to TurnSnapshot objects
+                turn_snapshots = []
+                chunk_watermark = -1
+
+                for order, turn_dict in enumerate(turn_dicts, start=offset):
+                    snapshot = self._turn_dict_to_snapshot(turn_dict, order)
+                    turn_snapshots.append(snapshot)
+                    chunk_watermark = max(chunk_watermark, order)
+
+                # Update final watermark
+                final_watermark = max(final_watermark, chunk_watermark)
+                turns_sent += len(turn_snapshots)
+
+                # Generate unique chunk ID for deduplication
+                chunk_id = f"{session_id[:8]}-chunk-{chunk_index}"
+
+                # Emit chunk event
+                self.emit_history_chunk(
+                    session_id=session_id,
+                    chunk_id=chunk_id,
+                    turns=turn_snapshots,
+                    chunk_index=chunk_index,
+                    total_chunks=total_chunks,
+                    watermark=chunk_watermark,
+                )
+
+                # Yield to allow other tasks to run (especially streaming events)
+                await asyncio.sleep(0)
+
+            # Emit completion event
+            self.emit_history_complete(
+                session_id=session_id,
+                total_turns=turns_sent,
+                final_watermark=final_watermark,
+            )
+
+            debug_log.info(
+                f"_stream_history_from_storage: completed session={session_id[:8]}, "
+                f"turns_sent={turns_sent}, chunks={total_chunks}",
+                category="websocket",
+            )
+
+        except asyncio.CancelledError:
+            debug_log.info(
+                f"_stream_history_from_storage: cancelled for session {session_id[:8]}",
+                category="websocket",
+            )
+            raise
+        except Exception as e:
+            debug_log.error(
+                f"_stream_history_from_storage: error for session {session_id[:8]}: {e}",
+                category="websocket",
+            )
+            # Emit completion with error state (0 turns signals incomplete load)
+            self.emit_history_complete(session_id, total_turns=0, final_watermark=-1)
+
+    def _turn_dict_to_snapshot(self, turn_dict: dict, order: int) -> TurnSnapshot:
+        """Convert a turn dict from LMDB to a TurnSnapshot.
+
+        Args:
+            turn_dict: Turn data dict from storage (matches Rust TurnData schema)
+            order: Turn position in the session (0-indexed)
+
+        Returns:
+            TurnSnapshot suitable for sending to clients
+        """
+        # Extract fields from the storage dict
+        turn_id = turn_dict.get("id", "")
+        role = turn_dict.get("role", "assistant")
+        tokens = turn_dict.get("tokens", 0)
+        context_mode = turn_dict.get("context_mode", "copy")
+        exchange_id = turn_dict.get("exchange_id")
+
+        # Handle content_block - it's stored as a JSON value
+        content_block_data = turn_dict.get("content_block", {"type": "text", "text": ""})
+
+        # Convert to the appropriate ContentBlock type
+        content_block = self._deserialize_content_block(content_block_data)
+
+        return TurnSnapshot(
+            turn_id=turn_id,
+            role=role,
+            streaming=False,  # Historical turns are never streaming
+            viewed=True,  # Historical turns are considered viewed
+            tokens=tokens,
+            context_mode=context_mode,
+            content_block=content_block,
+            order=order,  # Turn position for client-side sorting
+            exchange_id=exchange_id,
+        )
+
+    def _deserialize_content_block(self, data: dict) -> ContentBlock:
+        """Deserialize a content block dict to the appropriate type.
+
+        Args:
+            data: Dict with 'type' field indicating block type
+
+        Returns:
+            Appropriate ContentBlock instance
+        """
+        block_type = data.get("type", "text")
+
+        if block_type == "text":
+            return TextBlock(type="text", text=data.get("text", ""))
+        elif block_type == "image":
+            return ImageBlock(
+                type="image",
+                file_path=data.get("file_path", ""),
+                media_type=data.get("media_type", ""),
+                filename=data.get("filename", ""),
+                width=data.get("width", 0),
+                height=data.get("height", 0),
+            )
+        elif block_type == "tool_use":
+            return ToolUseBlock(
+                type="tool_use",
+                id=data.get("id", ""),
+                name=data.get("name", ""),
+                input=data.get("input", {}),
+            )
+        elif block_type == "tool_result":
+            return ToolResultBlock(
+                type="tool_result",
+                tool_use_id=data.get("tool_use_id", ""),
+                content=data.get("content", ""),
+                is_error=data.get("is_error", False),
+            )
+        elif block_type == "interruption":
+            return InterruptionBlock(
+                type="interruption",
+                reason=data.get("reason", "user_cancelled"),
+            )
+        elif block_type == "error":
+            return ErrorBlock(
+                type="error",
+                reason=data.get("reason", "stream_error"),
+                partial_tool_name=data.get("partial_tool_name", ""),
+                partial_tool_input=data.get("partial_tool_input", ""),
+                details=data.get("details", ""),
+                dump_file=data.get("dump_file", ""),
+            )
+        elif block_type == "link":
+            return LinkBlock(
+                type="link",
+                link_id=data.get("link_id", ""),
+                linked_session_id=data.get("linked_session_id", ""),
+                summary=data.get("summary", ""),
+                is_orphaned=data.get("is_orphaned", False),
+            )
+        elif block_type == "fork":
+            return ForkBlock(
+                type="fork",
+                fork_id=data.get("fork_id", ""),
+                child_session_id=data.get("child_session_id", ""),
+                fork_name=data.get("fork_name", ""),
+                prompt=data.get("prompt", ""),
+                status=data.get("status", "active"),
+            )
+        elif block_type == "merge":
+            return MergeBlock(
+                type="merge",
+                merge_id=data.get("merge_id", ""),
+                child_session_id=data.get("child_session_id", ""),
+                fork_name=data.get("fork_name", ""),
+                message=data.get("message", ""),
+                files_changed=data.get("files_changed", []),
+                key_accomplishments=data.get("key_accomplishments", []),
+                reason=data.get("reason", ""),
+            )
+        elif block_type == "merged_to":
+            return MergedToBlock(
+                type="merged_to",
+                merge_id=data.get("merge_id", ""),
+                parent_session_id=data.get("parent_session_id", ""),
+                parent_name=data.get("parent_name", ""),
+                parent_turn=data.get("parent_turn", 0),
+                message=data.get("message", ""),
+                files_changed=data.get("files_changed", []),
+                key_accomplishments=data.get("key_accomplishments", []),
+            )
+        elif block_type == "archive":
+            return ArchiveBlock(
+                type="archive",
+            )
+        elif block_type == "slide":
+            return SlideBlock(
+                type="slide",
+                slide_index=data.get("slide_index", 0),
+                title=data.get("title", ""),
+                content=data.get("content", ""),
+                notes=data.get("notes", ""),
+            )
+        elif block_type == "review":
+            return ReviewBlock(
+                type="review",
+                review_type=data.get("review_type", "thought"),
+                content=data.get("content", ""),
+                rating=data.get("rating"),
+            )
+        elif block_type == "fork_proposal":
+            return ForkProposalBlock(
+                type="fork_proposal",
+                proposal_id=data.get("proposal_id", ""),
+                name=data.get("name", ""),
+                description=data.get("description", ""),
+                context_plan=data.get("context_plan", []),
+                initial_prompt=data.get("initial_prompt", ""),
+                status=data.get("status", "pending"),
+            )
+        elif block_type == "merge_proposal":
+            return MergeProposalBlock(
+                type="merge_proposal",
+                proposal_id=data.get("proposal_id", ""),
+                summary=data.get("summary", ""),
+                reason=data.get("reason", ""),
+                files_changed=data.get("files_changed", []),
+                key_accomplishments=data.get("key_accomplishments", []),
+                status=data.get("status", "pending"),
+            )
+        else:
+            # Unknown type - return as text block with JSON dump
+            import json
+            return TextBlock(type="text", text=json.dumps(data))
 
     @ws_expose
     async def get_subscribed_sessions(self, client_id: str) -> list[str]:

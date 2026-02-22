@@ -194,7 +194,14 @@ async def run_server(
     queue_service = QueueStateService(queue_state)
     goal_service = GoalTreeStateService(goal_tree_state)
     task_service = TaskStateService(stream_state)
-    session_data_service = SessionDataService()
+
+    # Initialize SessionDataService with storage for chunked history loading
+    from core.async_storage import AsyncStorage
+    storage = AsyncStorage()
+    session_data_service = SessionDataService(storage=storage)
+    session_data_service.set_session_loader(load_session_for_tree)
+    session_data_service.set_tree_state(tree_state)
+
     image_service = ImageService()
     sound_service = SoundService()
     debug_log_service = DebugLogService()

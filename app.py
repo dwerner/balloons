@@ -704,8 +704,18 @@ class BalloonsApp(App):
             goal_service.set_llm_runner(self._helper_runner)
             # Store task_service as instance variable for WebSocket streaming events
             self._task_service = TaskStateService(get_stream_state())
-            # SessionDataService for subscription-based streaming
-            self._session_data_service = SessionDataService()
+            # SessionDataService for subscription-based streaming with chunked history
+            from core.async_storage import AsyncStorage
+            storage = AsyncStorage()
+            self._session_data_service = SessionDataService(
+                tree_state=self._tree_state,
+                storage=storage,
+            )
+            # Set session loader for loading sessions not in TreeState
+            async def load_session_for_sds(session_id: str):
+                from session import Session
+                return await Session.load(session_id)
+            self._session_data_service.set_session_loader(load_session_for_sds)
             image_service = ImageService()
             sound_service = SoundService()
             debug_log_service = DebugLogService()

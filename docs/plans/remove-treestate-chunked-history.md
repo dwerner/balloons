@@ -1,6 +1,6 @@
 # Plan: Remove TreeState & Implement Chunked History Loading
 
-**Status**: In Progress (Phase 2 Complete)
+**Status**: In Progress (Phase 4 Complete)
 **Created**: 2025-02-22
 **Last Updated**: 2025-02-22
 
@@ -361,6 +361,25 @@ If TUI still exists:
 
 ---
 
+## Lessons Learned
+
+### Don't Break the App Between Phases
+
+**Issue**: Between Phase 3 and Phase 4, there was a gap where the chat log was broken. Phase 3 changed the server to emit chunked history events, but the client (Phase 4) wasn't updated yet to handle them.
+
+**Lesson**: When splitting work across server/client boundaries:
+
+1. **Implement both sides together** when possible, or
+2. **Add feature flags** so old behavior continues until new client is ready, or
+3. **Make new behavior additive** - keep old snapshot behavior working while adding chunked events alongside
+
+**For future phases**: If a phase changes the wire protocol or event flow, ensure the client can still function with the old behavior until the next phase lands. Consider:
+- Dual-emit: Send both old events AND new events during transition
+- Version negotiation: Client indicates which protocol version it supports
+- Graceful degradation: New events are optional enhancements, not required
+
+---
+
 ## Progress Log
 
 | Date | Phase | Notes |
@@ -368,3 +387,5 @@ If TUI still exists:
 | 2025-02-22 | Planning | Initial plan documented |
 | 2025-02-22 | Phase 1 | ✅ Added `get_turn_count()` and `load_turns_range()` to Rust traits, LMDB engine, StorageClient, PyO3 bindings, and Python async_storage.py |
 | 2025-02-22 | Phase 2 | ✅ Added `SessionHistoryChunkEvent` and `SessionHistoryCompleteEvent` types with `@ws_event` decorators. Added `emit_history_chunk()` and `emit_history_complete()` helper methods. Regenerated TypeScript types. |
+| 2025-02-22 | Phase 3 | ✅ Implemented chunked history loading in SessionDataService. Key changes: (1) `subscribe_session()` now registers subscription FIRST, returns metadata-only snapshot, spawns background task for history streaming. (2) Added `_stream_history_from_storage()` that loads turns via `load_turns_range()` and emits chunk/complete events. (3) Added `_turn_dict_to_snapshot()` and `_deserialize_content_block()` for LMDB → TurnSnapshot conversion. (4) Wired up AsyncStorage in headless.py and app.py. (5) Added comprehensive tests for chunked loading. |
+| 2025-02-22 | Phase 4 | ✅ Implemented client-side merge logic in useSessionData.ts. Key changes: (1) Added `isLoadingHistory` and `historyWatermark` state for tracking history loading progress. (2) Added handler for `sessionDataHistoryChunk` events that merges historical turns by turn_id (without overwriting streaming turns). (3) Added handler for `sessionDataHistoryComplete` to finalize history loading. (4) Added `order` field to `TurnSnapshot` for client-side sorting. (5) Regenerated TypeScript types. This fixes the broken chat log from Phase 3. |

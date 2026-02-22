@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-22T14:37:33.841999
+// Generated: 2026-02-22T15:07:56.935351
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -613,6 +613,7 @@ export interface TurnSnapshot {
   tokens: number;
   contextMode: string;
   contentBlock: TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock | InterruptionBlock | ErrorBlock | LinkBlock | ForkBlock | MergeBlock | MergedToBlock | ArchiveBlock | SlideBlock | ReviewBlock | ForkProposalBlock | MergeProposalBlock;
+  order?: number;
   exchangeId?: string | null;
 }
 

@@ -26,6 +26,8 @@ import type {
   SessionToolInputDeltaEvent,
   SessionToolUseEvent,
   SessionToolResultEvent,
+  SessionHistoryChunkEvent,
+  SessionHistoryCompleteEvent,
   TurnSnapshot,
   TextBlock,
   ToolUseBlock,
@@ -110,6 +112,10 @@ export interface UseSessionDataState {
   isSubscribed: boolean;
   /** Whether the session is currently streaming */
   isStreaming: boolean;
+  /** Whether history chunks are still being loaded */
+  isLoadingHistory: boolean;
+  /** Highest turn order received from history chunks (for gap detection) */
+  historyWatermark: number;
   /** Stream error message if any */
   streamError: string | null;
   /** Error message if any */
@@ -217,6 +223,8 @@ export function useSessionData(
   const [isLoading, setIsLoading] = useState(false);
   const [isSubscribed, setIsSubscribed] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [historyWatermark, setHistoryWatermark] = useState(-1);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -244,6 +252,8 @@ export function useSessionData(
     setIsLoading(false);
     setIsSubscribed(false);
     setIsStreaming(false);
+    setIsLoadingHistory(false);
+    setHistoryWatermark(-1);
     setStreamError(null);
     setError(null);
     setSessionId(null);
@@ -331,6 +341,12 @@ export function useSessionData(
         setTurnsById(initialTurns);
         setIsSubscribed(true);
         setIsLoading(false);
+
+        // History loading state: if snapshot has no turns, history will arrive via chunks
+        // If snapshot has turns (legacy or small session), we're already complete
+        const hasTurnsInSnapshot = (result.snapshot?.turns?.length ?? 0) > 0;
+        setIsLoadingHistory(!hasTurnsInSnapshot);
+        setHistoryWatermark(-1);
 
         // Initialize streaming state from snapshot
         // This handles the case where we reconnect to a session that was streaming
@@ -650,6 +666,75 @@ export function useSessionData(
           })
         );
 
+        // History chunk - merge historical turns (Phase 4: chunked history loading)
+        handlers.push(
+          client.sessionData.sessionDataHistoryChunk((event: SessionHistoryChunkEvent) => {
+            if (event.sessionId !== newSessionId) return;
+            debugLog('sessionDataHistoryChunk', {
+              chunkIndex: event.chunkIndex,
+              totalChunks: event.totalChunks,
+              turnsCount: event.turns?.length ?? 0,
+            });
+
+            // Mark that we're loading history
+            setIsLoadingHistory(true);
+
+            // Merge historical turns into state
+            // IMPORTANT: Don't overwrite turns that are already present (they may be streaming)
+            setTurnsById((prev) => {
+              const next = new Map(prev);
+              let maxWatermark = -1;
+
+              for (const turn of event.turns || []) {
+                const turnId = turn.turnId || '';
+                if (!turnId) continue;
+
+                // Get the order from the turn data
+                const order = turn.order ?? 0;
+                if (order > maxWatermark) {
+                  maxWatermark = order;
+                }
+
+                // Only add if not already present - streaming turns take precedence
+                if (!next.has(turnId)) {
+                  next.set(turnId, {
+                    turnId,
+                    order,
+                    role: turn.role,
+                    contentBlock: turn.contentBlock,
+                    streaming: turn.streaming || false,
+                    viewed: turn.viewed || false,
+                    tokens: turn.tokens || 0,
+                    contextMode: turn.contextMode || 'copy',
+                    exchangeId: turn.exchangeId ?? undefined,
+                  });
+                }
+              }
+
+              // Update watermark
+              if (maxWatermark > -1) {
+                setHistoryWatermark((prev) => Math.max(prev, maxWatermark));
+              }
+
+              return next;
+            });
+          })
+        );
+
+        // History complete - all historical turns have been sent
+        handlers.push(
+          client.sessionData.sessionDataHistoryComplete((event: SessionHistoryCompleteEvent) => {
+            if (event.sessionId !== newSessionId) return;
+            debugLog('sessionDataHistoryComplete', {
+              totalTurns: event.totalTurns,
+              finalWatermark: event.finalWatermark,
+            });
+
+            setIsLoadingHistory(false);
+            setHistoryWatermark(event.finalWatermark);
+          })
+        );
+
         unsubscribersRef.current = handlers;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -728,6 +813,8 @@ export function useSessionData(
     isLoading,
     isSubscribed,
     isStreaming,
+    isLoadingHistory,
+    historyWatermark,
     streamError,
     error,
     sessionId,
