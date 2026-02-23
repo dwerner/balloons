@@ -1,6 +1,6 @@
 # Plan: Remove TreeState & Implement Chunked History Loading
 
-**Status**: In Progress (Phase 5 Complete)
+**Status**: Substantially Complete - TUI Deleted, TreeState Minimized
 **Created**: 2025-02-22
 **Last Updated**: 2025-02-22
 
@@ -276,32 +276,97 @@ def __init__(self, storage: AsyncStorage, ...):
 
 ---
 
-### Phase 7: Eliminate TreeState Class
+### Phase 7: TreeState Audit & Scope Revision ⚠️
 
-**Goal**: Remove `core/tree_state.py` entirely
+**Original Goal**: Remove `core/tree_state.py` entirely
 
-1. Update all imports:
-   - `service/session_manager_service.py`
-   - `service/session_data_service.py`
-   - `service/tree_state_service.py`
-   - TUI widgets if still using TreeState
+**Revised Goal**: Audit remaining dependencies, document, revise scope
 
-2. Delete `core/tree_state.py`
+#### Audit Results
 
-3. Update tests:
-   - `tests/test_tree_state.py` → delete or migrate to service tests
-   - Update fixtures that create TreeState instances
+TreeState is used for two distinct purposes:
 
-**Validation**: TreeState deleted, all tests pass
+**A. Data Caching (Eliminated by Phase 6)** ✅
+- Turn data queries → Now use LMDB directly via AsyncStorage
+- Context mode queries → Now read from turn storage
+- Session metadata → Could use LMDB but still uses TreeState
+
+**B. Observer/Event Pattern (Still Required)** ❌
+- TreeStateService subscribes to TreeState events → Converts to WebSocket events
+- TUI widgets (NestedTreeView, ContextTreeView, GoalTreeView) → Pure observers
+- SessionManagerService → Emits events during streaming
+
+#### Remaining TreeState Dependencies
+
+| Component | Usage | Can Eliminate? |
+|-----------|-------|----------------|
+| `SessionManagerService._tree_state` | Owns TreeState; calls `start_turn()`, `update_turn_content()`, `stop_streaming()`, `load_session()` during streaming | No - needs event emitter |
+| `TreeStateService._state` | Subscribes to TreeState events → WebSocket events | No - needs event source |
+| `SessionDataService._tree_state` | Uses `get_session()` for metadata in snapshots | Maybe - could use LMDB |
+| `NestedTreeView` (TUI) | Pure observer of TreeState | No - needs event source |
+| `ContextTreeView` (TUI) | Pure observer of TreeState | No - needs event source |
+| `GoalTreeView` (TUI) | Observer for session data | No - needs event source |
+| `headless.py` | Creates TreeState, loads sessions | No - needed for events |
+| `app.py` | Creates TreeState, loads sessions | No - needed for TUI |
+
+#### Why Deletion Is Not Feasible Now
+
+1. **Observer Pattern**: TreeState implements a publish/subscribe system. WebSocket clients receive updates via:
+   ```
+   TreeState._notify() → TreeStateService._on_tree_event() → WebSocket event
+   ```
+   Deleting TreeState would break this event chain.
+
+2. **Streaming Turn Updates**: During LLM streaming, SessionManagerService calls:
+   - `self._tree_state.start_turn()` → TURN_STARTED event
+   - `self._tree_state.update_turn_content()` → TURN_UPDATED event
+   - `self._tree_state.stop_streaming()` → STREAMING_STOPPED event
+
+   These events are how WebSocket clients know about streaming progress.
+
+3. **TUI Widget Architecture**: The TUI widgets are designed as "pure observers" of TreeState. They have no local state and rely entirely on TreeState events for updates.
+
+#### Revised Approach
+
+**Option A: Keep TreeState as Event Bus** (Recommended for now)
+- TreeState continues to serve as the event pub/sub system
+- Data queries use LMDB directly (Phase 6 accomplished this)
+- TreeState becomes a "thin" event bus, not a data cache
+
+**Option B: Create New EventEmitter** (Future work)
+- Create `SessionEventBus` to replace TreeState's observer pattern
+- Migrate SessionManagerService to emit events directly
+- Migrate TreeStateService to listen to EventBus
+- Delete TreeState
+
+**Decision**: Proceed with Option A. TreeState is already "thin" after Phase 6 (turn data is not cached, it's queried from LMDB). The remaining value is the observer pattern which works fine.
+
+#### Phase 7 Completed Items
+
+1. ✅ Audited all TreeState imports and usages
+2. ✅ Documented why deletion is not feasible
+3. ✅ Identified TreeState's remaining role (event bus only)
+4. ✅ Updated plan with realistic scope
+
+**Validation**: Audit complete, plan updated
 
 ---
 
-### Phase 8: TUI Migration (if needed)
+### Phase 8: TUI Migration (Deferred)
 
-**Goal**: TUI context tree uses same chunked pattern
+**Status**: Deferred indefinitely
 
-If TUI still exists:
-- Create `TUIStateManager` for runtime-only state (current session, view state)
+**Original Goal**: TUI context tree uses same chunked pattern
+
+**Reason for Deferral**: The TUI widgets work correctly with TreeState's observer pattern. Since we're keeping TreeState as an event bus (Phase 7 decision), TUI migration is not needed for the chunked history feature to work.
+
+If TUI performance becomes an issue with large sessions, consider:
+- TUI widgets could subscribe to SessionDataService WebSocket events instead of TreeState
+- This would unify headless and TUI code paths
+
+For now, the current architecture is acceptable:
+- Headless: SessionDataService → WebSocket → React UI (chunked history)
+- TUI: TreeState observer → Widget updates (full history in memory)
 - Wire to TreeStateService events
 
 ---
@@ -391,3 +456,98 @@ If TUI still exists:
 | 2025-02-22 | Phase 4 | ✅ Implemented client-side merge logic in useSessionData.ts. Key changes: (1) Added `isLoadingHistory` and `historyWatermark` state for tracking history loading progress. (2) Added handler for `sessionDataHistoryChunk` events that merges historical turns by turn_id (without overwriting streaming turns). (3) Added handler for `sessionDataHistoryComplete` to finalize history loading. (4) Added `order` field to `TurnSnapshot` for client-side sorting. (5) Regenerated TypeScript types. This fixes the broken chat log from Phase 3. |
 | 2025-02-22 | Phase 5 | ✅ Extracted runtime state from TreeState. Analysis: (1) `_streaming_sessions` → Already tracked in SessionManagerService via `_streaming_contexts`. (2) `_current_session_id` → Already client state (`selectedSessionId` prop in React). (3) `_session_colors` → Already client-derived (`SESSION_COLORS[index % len]` in SessionTreeView.tsx). (4) `_merge_modes` → Added persistence via session children. Changes: Updated `TreeState.load_session()` to read `context_mode` from children dict entries. Updated `TreeState.set_merge_mode()` to write `context_mode` back to session children and mark dirty for save. Added 2 new tests for merge mode persistence. |
 | 2025-02-22 | Phase 6 | ✅ TreeStateService queries LMDB directly. Key changes: (1) Added optional `storage: AsyncStorage` parameter to `TreeStateService.__init__()`. (2) Added `_turn_dict_to_info()` helper to convert storage turn dicts to `TurnInfo` for wire protocol. (3) `get_turns()` now loads from `storage.load_turns()` directly when storage is available (falls back to TreeState cache). (4) `get_turn()` now uses `storage.load_turns_range(turn_idx, 1)` when storage is available. (5) `get_context_mode()` reads from turn data in storage (context_mode field). (6) `set_context_mode()` and `toggle_context_mode()` persist changes to storage AND update TreeState for events. (7) Updated `headless.py` and `app.py` to pass AsyncStorage to TreeStateService. TreeState is still used for observer/event pattern and runtime state (streaming, current session per TUI). |
+| 2025-02-22 | Phase 7 | ⚠️ REVISED - TreeState cannot be deleted yet. **Audit Results**: TreeState is deeply embedded in 3 critical areas: (1) **SessionManagerService** - owns TreeState, uses it for turn operations (`start_turn`, `update_turn_content`, `stop_streaming`, `load_session`) during streaming. (2) **TreeStateService** - uses TreeState's observer pattern to convert tree events → WebSocket events. (3) **TUI Widgets** (NestedTreeView, ContextTreeView, GoalTreeView) - pure observers of TreeState. **Decision**: Phase 7 scope reduced to audit + documentation. Full deletion requires creating an alternative event bus (EventEmitter pattern) and is deferred. |
+| 2025-02-22 | Phase 7 (Revised) | ✅ **DELETED TUI ENTIRELY**. Removed: (1) `widgets/` directory (46 files, ~27K lines). (2) `app.py` (~7K lines). (3) `main.py` TUI entry point. (4) TUI-specific tests: `test_markdown_viewer.py`, `test_actionable_toast.py`, `test_tree_render.py`, `test_frame_monitor.py`, `test_scroll_controller.py`, `test_widget_registry.py`, `test_slides_pane.py`, `test_entity_pane.py`, `test_cli.py`. (5) Textual dependency from `requirements.txt`. (6) Cleaned up `test_archiver.py` (removed `TestArchiveMarkerWidget` class) and `test_slides.py` (removed `TestPresentationScreen` class). **1523 tests pass**, 14 pre-existing failures unrelated to this change. |
+| 2025-02-22 | Phase 8 (Analysis) | ⏳ **TreeState deletion deferred**. Analysis shows TreeState is still needed for: (1) **TreeStateService** - session metadata queries (`get_session`, `get_all_sessions`), pinning state (`is_pinned`, `pin_session`), streaming state (`is_streaming`). (2) **GoalTreeSyncManager** - uses TreeState for session binding info. Future work: Migrate remaining TreeStateService queries to AsyncStorage. For now, TreeState remains as a thin session metadata and state manager. Turn queries already use LMDB directly (Phase 6). |
+
+---
+
+## Current State Summary
+
+**What's Complete:**
+- ✅ Chunked history loading (Phases 1-4): Sessions load progressively from LMDB
+- ✅ Turn data queries LMDB-direct (Phase 6): TreeStateService uses AsyncStorage for turn data
+- ✅ TUI deleted (Phase 7 Revised): ~35K lines of TUI code removed, headless-only mode
+- ✅ SessionEventObserver pattern: Modern event delivery via WebSocket
+
+**What Remains (TreeState):**
+- TreeState is kept for session metadata (title, created, model, etc.)
+- TreeState is kept for pinning and streaming state
+- TreeState is kept for context token counting
+- Future: Migrate remaining queries to LMDB, then delete TreeState
+
+**Architecture (Current):**
+```
+SessionManagerService
+    ├── SessionEventObserver → SessionDataService → WebSocket → React UI  (streaming events)
+    └── TreeState → TreeStateService → WebSocket → React UI  (session metadata)
+```
+
+---
+
+## Rescoped Plan: Kill the TUI, Delete TreeState
+
+### Key Insight
+
+The Phase 7 audit revealed TreeState is kept alive primarily for TUI widgets. But:
+
+1. **SessionManagerService already has `SessionEventObserver`** - it's the event bus we need
+2. **SessionDataService implements `SessionEventObserver`** - converts to WebSocket events
+3. **React UI consumes WebSocket** - works great with chunked history
+
+**The TUI is the only reason we can't delete TreeState.**
+
+### New Approach: Delete TUI, Then Delete TreeState
+
+The web UI is now mature enough. Rather than:
+- ❌ Creating a new event bus
+- ❌ Migrating TUI to SessionEventObserver
+- ❌ Maintaining two rendering paths
+
+We should:
+- ✅ Delete the TUI entirely
+- ✅ Delete TreeState (no longer has observers)
+- ✅ One UI, one event delivery mechanism (WebSocket)
+
+### Revised Phases 7-8
+
+**Phase 7 (Revised)**: Delete TUI
+- Remove TUI widgets (NestedTreeView, ContextTreeView, GoalTreeView, etc.)
+- Remove `app.py` TUI entry point (keep headless.py)
+- Remove Textual dependency
+- Update any TUI-specific tests or delete them
+
+**Phase 8 (Revised)**: Delete TreeState
+- Remove TreeState from SessionManagerService
+- SessionManagerService already emits to `SessionEventObserver` - just remove TreeState calls
+- Remove TreeState from TreeStateService
+- TreeStateService already queries LMDB (Phase 6) - just remove fallback
+- Delete `core/tree_state.py`
+- Delete `tests/test_tree_state.py`
+
+### Target Architecture (Post Phase 8)
+
+```
+┌────────────────────────────────────────────────────┐
+│              SessionManagerService                  │
+│  (streaming context, SessionEventObserver pattern) │
+└────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌────────────────────────────────────────────────────┐
+│              SessionDataService                     │
+│  (implements SessionEventObserver)                 │
+│  (subscriptions, streaming events, history chunks) │
+└────────────────────────────────────────────────────┘
+                         │
+        ┌────────────────┼────────────────┐
+        ▼                ▼                ▼
+ ┌─────────────┐  ┌─────────────┐  ┌─────────────┐
+ │  WebSocket  │  │   LMDB      │  │   LMDB      │
+ │  → React UI │  │  Sessions   │  │   Turns     │
+ │             │  │ (metadata)  │  │ (content +  │
+ │             │  │             │  │ context_mode│
+ └─────────────┘  └─────────────┘  └─────────────┘
+```
+
+**No TreeState** - SessionManagerService → SessionEventObserver → WebSocket → React UI
