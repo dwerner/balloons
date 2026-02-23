@@ -961,13 +961,11 @@ export function App() {
   useEffect(() => {
     localStorage.setItem('balloons:server-slot', serverSlot);
   }, [serverSlot]);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(() => {
-    // Restore persisted session ID on load
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('balloons:selected-session');
-    }
-    return null;
-  });
+  // Note: selectedSessionId is NOT initialized from localStorage here to avoid a race condition
+  // where selectedSessionId is set before sessions are loaded, causing selectedSession to be
+  // undefined. Instead, the persisted session ID is read from localStorage after sessions are
+  // loaded in the connection handler (see the "Load initial session list" section below).
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [turns, setTurns] = useState<TurnInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [queuedMessageCount, setQueuedMessageCount] = useState(0);
