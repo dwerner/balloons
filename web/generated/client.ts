@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-22T16:13:34.917529
+// Generated: 2026-02-22T18:43:41.334472
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -17,532 +17,6 @@ function generateRequestId(): string {
 }
 
 export type Unsubscribe = () => void;
-
-/**
- * WebSocket-exposed service for tree state management.
- * 
- * Provides read/write access to session and turn data, context mode management,
- * and real-time event subscriptions for state changes.
- * 
- * Phase 6 Architecture:
- * - Data queries use AsyncStorage (LMDB) directly
- * - TreeState is kept for observer/event pattern and runtime state
- * - After Phase 7, TreeState will be eliminated entirely
- */
-export interface TreeStateService {
-  /**
-   * Delete multiple turns from a session.
-   * 
-   * Loads the session if needed, deletes the specified turns,
-   * saves the session, and updates the tree state.
-   * 
-   * Args:
-   * session_id: The session ID
-   * turn_indices: List of turn indices to delete
-   * 
-   * Returns:
-   * Number of turns actually deleted
-   */
-  deleteTurns(sessionId: string, turnIndices: number[]): Promise<number>;
-
-  /**
-   * Get all sessions.
-   * 
-   * Returns:
-   * List of all session info objects
-   */
-  getAllSessions(): Promise<Types.SessionInfo[]>;
-
-  /**
-   * Get the context mode for a turn.
-   * 
-   * Phase 6: Reads from turn storage directly when available.
-   * 
-   * Args:
-   * session_id: The session ID
-   * turn_idx: The turn index
-   * 
-   * Returns:
-   * Context mode string: "copy", "compress", or "drop"
-   */
-  getContextMode(sessionId: string, turnIdx: number): Promise<string>;
-
-  /**
-   * Get current context token counts.
-   * 
-   * Returns:
-   * Tuple of (selected_tokens, total_tokens)
-   */
-  getContextTokens(): Promise<[number, number]>;
-
-  /**
-   * Get the current active session ID.
-   * 
-   * Returns:
-   * Current session ID or None if no session is active
-   */
-  getCurrentSessionId(): Promise<string | null>;
-
-  /**
-   * Get all pinned session IDs.
-   * 
-   * Returns:
-   * List of pinned session IDs
-   */
-  getPinnedSessions(): Promise<string[]>;
-
-  /**
-   * Get session information by ID.
-   * 
-   * Args:
-   * session_id: The session ID to look up
-   * 
-   * Returns:
-   * Session info if found, None otherwise
-   */
-  getSession(sessionId: string): Promise<Types.SessionInfo | null>;
-
-  /**
-   * Get all session IDs that are currently streaming.
-   * 
-   * Returns:
-   * List of streaming session IDs
-   */
-  getStreamingSessions(): Promise<string[]>;
-
-  /**
-   * Get a specific turn.
-   * 
-   * Phase 6: Uses AsyncStorage directly when available.
-   * 
-   * Args:
-   * session_id: The session ID
-   * turn_idx: The turn index
-   * 
-   * Returns:
-   * Turn info if found, None otherwise
-   */
-  getTurn(sessionId: string, turnIdx: number): Promise<Types.TurnInfo | null>;
-
-  /**
-   * Get all turns for a session.
-   * 
-   * Phase 6: Uses AsyncStorage directly when available.
-   * Falls back to TreeState if storage is not configured (for backwards compat).
-   * 
-   * If neither storage nor cached turns are available, and a session_loader
-   * callback was provided, the session will be loaded automatically.
-   * 
-   * Args:
-   * session_id: The session to get turns for
-   * 
-   * Returns:
-   * List of turn info objects, empty if session not found/loaded
-   */
-  getTurns(sessionId: string): Promise<Types.TurnInfo[]>;
-
-  /**
-   * Get count of unviewed turns in a session.
-   * 
-   * Args:
-   * session_id: The session ID
-   * 
-   * Returns:
-   * Number of unviewed turns
-   */
-  getUnviewedCount(sessionId: string): Promise<number>;
-
-  /**
-   * Check if a session is pinned.
-   * 
-   * Args:
-   * session_id: The session to check
-   * 
-   * Returns:
-   * True if session is pinned
-   */
-  isPinned(sessionId: string): Promise<boolean>;
-
-  /**
-   * Check if a session is currently streaming.
-   * 
-   * Args:
-   * session_id: The session ID
-   * 
-   * Returns:
-   * True if session is streaming
-   */
-  isStreaming(sessionId: string): Promise<boolean>;
-
-  /**
-   * Mark a turn as viewed.
-   * 
-   * Args:
-   * session_id: The session ID
-   * turn_idx: The turn index
-   * 
-   * Returns:
-   * True if turn was marked viewed (was unviewed), False otherwise
-   */
-  markTurnViewed(sessionId: string, turnIdx: number): Promise<boolean>;
-
-  /**
-   * Pin a session to appear at top of lists.
-   * 
-   * Args:
-   * session_id: The session to pin
-   * 
-   * Returns:
-   * True if newly pinned, False if already pinned or session doesn't exist
-   */
-  pinSession(sessionId: string): Promise<boolean>;
-
-  /**
-   * Request archiving of turns (triggers background LLM summary generation).
-   * 
-   * This method emits an event that the app handles to start the archive
-   * workflow. The actual archiving happens asynchronously because it requires
-   * LLM-generated summaries.
-   * 
-   * Args:
-   * session_id: The session ID
-   * turn_indices: List of turn indices to archive
-   * 
-   * Returns:
-   * True if the archive request was accepted, False if invalid
-   */
-  requestArchive(sessionId: string, turnIndices: number[]): Promise<boolean>;
-
-  /**
-   * Set the context mode for a turn.
-   * 
-   * Phase 6: Updates turn in storage and notifies via TreeState events.
-   * 
-   * Args:
-   * session_id: The session ID
-   * turn_idx: The turn index
-   * mode: The mode to set ("copy", "compress", or "drop")
-   */
-  setContextMode(sessionId: string, turnIdx: number, mode: string): Promise<null>;
-
-  /**
-   * Set the current active session.
-   * 
-   * Args:
-   * session_id: The session to make current
-   * 
-   * Returns:
-   * True if session was found and set, False otherwise
-   */
-  setCurrentSession(sessionId: string): Promise<boolean>;
-
-  /**
-   * Toggle context mode: COPY -> COMPRESS -> DROP -> COPY.
-   * 
-   * Phase 6: Updates turn in storage and notifies via TreeState events.
-   * 
-   * Args:
-   * session_id: The session ID
-   * turn_idx: The turn index
-   * 
-   * Returns:
-   * The new context mode string
-   */
-  toggleContextMode(sessionId: string, turnIdx: number): Promise<string>;
-
-  /**
-   * Toggle pin state for a session.
-   * 
-   * Args:
-   * session_id: The session to toggle
-   * 
-   * Returns:
-   * True if now pinned, False if now unpinned
-   */
-  togglePin(sessionId: string): Promise<boolean>;
-
-  /**
-   * Unpin a session.
-   * 
-   * Args:
-   * session_id: The session to unpin
-   * 
-   * Returns:
-   * True if unpinned, False if wasn't pinned
-   */
-  unpinSession(sessionId: string): Promise<boolean>;
-
-}
-
-export interface TreeStateEvents {
-  /**
-   * Emitted when an archive is requested (triggers background LLM task).
-   */
-  onArchiveRequested(callback: (data: Types.TreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a turn's context mode changes.
-   */
-  onContextModeChanged(callback: (data: Types.TreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when the pinned sessions list changes.
-   */
-  onPinnedSessionsChanged(callback: (data: Types.TreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a session is added.
-   */
-  onSessionAdded(callback: (data: Types.TreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a session is pinned.
-   */
-  onSessionPinned(callback: (data: Types.TreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a session is removed.
-   */
-  onSessionRemoved(callback: (data: Types.TreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when the current session changes.
-   */
-  onSessionSelected(callback: (data: Types.TreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a session is unpinned.
-   */
-  onSessionUnpinned(callback: (data: Types.TreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a session is updated.
-   */
-  onSessionUpdated(callback: (data: Types.TreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a session starts streaming.
-   */
-  onStreamingStarted(callback: (data: Types.TreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a session stops streaming.
-   */
-  onStreamingStopped(callback: (data: Types.TreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a turn finishes streaming.
-   */
-  onTurnFinished(callback: (data: Types.TreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a new turn starts streaming.
-   */
-  onTurnStarted(callback: (data: Types.TreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when turn content is updated during streaming.
-   */
-  onTurnUpdated(callback: (data: Types.TreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when turns are deleted from a session.
-   */
-  onTurnsDeleted(callback: (data: Types.TreeEventData) => void): Unsubscribe;
-
-}
-
-export class TreeStateServiceClient implements TreeStateService {
-  private ws: WebSocket;
-  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
-  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
-
-  constructor(ws: WebSocket) {
-    this.ws = ws;
-    this.ws.addEventListener('message', this.handleMessage.bind(this));
-  }
-
-  private handleMessage(event: MessageEvent): void {
-    const msg = JSON.parse(event.data);
-    if (msg.id && this.pending.has(msg.id)) {
-      const { resolve, reject } = this.pending.get(msg.id)!;
-      this.pending.delete(msg.id);
-      if (msg.error) {
-        reject(new Error(msg.error.message));
-      } else {
-        resolve(msg.result);
-      }
-    } else if (msg.event) {
-      const handlers = this.eventHandlers.get(msg.event);
-      if (handlers) {
-        handlers.forEach(h => h(msg.data));
-      }
-    }
-  }
-
-  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
-    const id = generateRequestId();
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.ws.send(JSON.stringify({ id, method, params }));
-    });
-  }
-
-  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
-    if (!this.eventHandlers.has(event)) {
-      this.eventHandlers.set(event, new Set());
-    }
-    this.eventHandlers.get(event)!.add(callback);
-    return () => {
-      this.eventHandlers.get(event)?.delete(callback);
-    };
-  }
-
-  async deleteTurns(sessionId: string, turnIndices: number[]): Promise<number> {
-    return this.call('deleteTurns', { sessionId: sessionId, turnIndices: turnIndices });
-  }
-
-  async getAllSessions(): Promise<Types.SessionInfo[]> {
-    return this.call('getAllSessions', {  });
-  }
-
-  async getContextMode(sessionId: string, turnIdx: number): Promise<string> {
-    return this.call('getContextMode', { sessionId: sessionId, turnIdx: turnIdx });
-  }
-
-  async getContextTokens(): Promise<[number, number]> {
-    return this.call('getContextTokens', {  });
-  }
-
-  async getCurrentSessionId(): Promise<string | null> {
-    return this.call('getCurrentSessionId', {  });
-  }
-
-  async getPinnedSessions(): Promise<string[]> {
-    return this.call('getPinnedSessions', {  });
-  }
-
-  async getSession(sessionId: string): Promise<Types.SessionInfo | null> {
-    return this.call('getSession', { sessionId: sessionId });
-  }
-
-  async getStreamingSessions(): Promise<string[]> {
-    return this.call('getStreamingSessions', {  });
-  }
-
-  async getTurn(sessionId: string, turnIdx: number): Promise<Types.TurnInfo | null> {
-    return this.call('getTurn', { sessionId: sessionId, turnIdx: turnIdx });
-  }
-
-  async getTurns(sessionId: string): Promise<Types.TurnInfo[]> {
-    return this.call('getTurns', { sessionId: sessionId });
-  }
-
-  async getUnviewedCount(sessionId: string): Promise<number> {
-    return this.call('getUnviewedCount', { sessionId: sessionId });
-  }
-
-  async isPinned(sessionId: string): Promise<boolean> {
-    return this.call('isPinned', { sessionId: sessionId });
-  }
-
-  async isStreaming(sessionId: string): Promise<boolean> {
-    return this.call('isStreaming', { sessionId: sessionId });
-  }
-
-  async markTurnViewed(sessionId: string, turnIdx: number): Promise<boolean> {
-    return this.call('markTurnViewed', { sessionId: sessionId, turnIdx: turnIdx });
-  }
-
-  async pinSession(sessionId: string): Promise<boolean> {
-    return this.call('pinSession', { sessionId: sessionId });
-  }
-
-  async requestArchive(sessionId: string, turnIndices: number[]): Promise<boolean> {
-    return this.call('requestArchive', { sessionId: sessionId, turnIndices: turnIndices });
-  }
-
-  async setContextMode(sessionId: string, turnIdx: number, mode: string): Promise<null> {
-    return this.call('setContextMode', { sessionId: sessionId, turnIdx: turnIdx, mode: mode });
-  }
-
-  async setCurrentSession(sessionId: string): Promise<boolean> {
-    return this.call('setCurrentSession', { sessionId: sessionId });
-  }
-
-  async toggleContextMode(sessionId: string, turnIdx: number): Promise<string> {
-    return this.call('toggleContextMode', { sessionId: sessionId, turnIdx: turnIdx });
-  }
-
-  async togglePin(sessionId: string): Promise<boolean> {
-    return this.call('togglePin', { sessionId: sessionId });
-  }
-
-  async unpinSession(sessionId: string): Promise<boolean> {
-    return this.call('unpinSession', { sessionId: sessionId });
-  }
-
-  onArchiveRequested(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('archiveRequested', callback);
-  }
-
-  onContextModeChanged(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('contextModeChanged', callback);
-  }
-
-  onPinnedSessionsChanged(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('pinnedSessionsChanged', callback);
-  }
-
-  onSessionAdded(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('sessionAdded', callback);
-  }
-
-  onSessionPinned(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('sessionPinned', callback);
-  }
-
-  onSessionRemoved(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('sessionRemoved', callback);
-  }
-
-  onSessionSelected(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('sessionSelected', callback);
-  }
-
-  onSessionUnpinned(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('sessionUnpinned', callback);
-  }
-
-  onSessionUpdated(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('sessionUpdated', callback);
-  }
-
-  onStreamingStarted(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('streamingStarted', callback);
-  }
-
-  onStreamingStopped(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('streamingStopped', callback);
-  }
-
-  onTurnFinished(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('turnFinished', callback);
-  }
-
-  onTurnStarted(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('turnStarted', callback);
-  }
-
-  onTurnUpdated(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('turnUpdated', callback);
-  }
-
-  onTurnsDeleted(callback: (data: Types.TreeEventData) => void): Unsubscribe {
-    return this.subscribe('turnsDeleted', callback);
-  }
-
-}
 
 /**
  * WebSocket-exposed service for queue state management.
@@ -2757,6 +2231,18 @@ export class TaskStateServiceClient implements TaskStateService {
  */
 export interface SessionDataService {
   /**
+   * Delete multiple turns from a session.
+   * 
+   * Args:
+   * session_id: The session ID
+   * turn_indices: List of turn indices to delete
+   * 
+   * Returns:
+   * Number of turns actually deleted
+   */
+  deleteTurns(sessionId: string, turnIndices: number[]): Promise<number>;
+
+  /**
    * Get all sessions with metadata.
    * 
    * Returns session list directly from LMDB storage, with pinning and
@@ -2823,6 +2309,33 @@ export interface SessionDataService {
   getSubscribedSessions(clientId: string): Promise<string[]>;
 
   /**
+   * Get a specific turn from a session.
+   * 
+   * Args:
+   * session_id: The session ID
+   * turn_idx: The turn index
+   * 
+   * Returns:
+   * TurnInfo if found, None otherwise
+   */
+  getTurn(sessionId: string, turnIdx: number): Promise<Types.TurnInfo | null>;
+
+  /**
+   * Get all turns for a session.
+   * 
+   * DEPRECATED: This method exists for backwards compatibility with the
+   * existing frontend. New code should use subscribe_session() and
+   * receive turns via the historyChunk event.
+   * 
+   * Args:
+   * session_id: The session ID to get turns for
+   * 
+   * Returns:
+   * List of TurnInfo objects for all turns in the session
+   */
+  getTurns(sessionId: string): Promise<Types.TurnInfo[]>;
+
+  /**
    * Check if a session is pinned.
    * 
    * Args:
@@ -2843,6 +2356,16 @@ export interface SessionDataService {
    * True if newly pinned, False if already pinned or session doesn't exist
    */
   pinSession(sessionId: string): Promise<boolean>;
+
+  /**
+   * Set the context mode for a turn.
+   * 
+   * Args:
+   * session_id: The session ID
+   * turn_idx: The turn index
+   * mode: The mode to set ("copy", "compress", or "drop")
+   */
+  setContextMode(sessionId: string, turnIdx: number, mode: string): Promise<null>;
 
   /**
    * Subscribe to receive updates for a session.
@@ -2965,6 +2488,13 @@ export interface SessionDataEvents {
   sessionDataStreamError(callback: (data: Types.SessionStreamErrorEvent) => void): Unsubscribe;
 
   /**
+   * Emitted periodically during streaming with progress info.
+   * 
+   * Throttled to avoid flooding - provides status bar updates.
+   */
+  sessionDataStreamProgress(callback: (data: Types.SessionStreamProgressEvent) => void): Unsubscribe;
+
+  /**
    * Emitted when streaming starts for a session.
    */
   sessionDataStreamStarted(callback: (data: Types.SessionStreamStartedEvent) => void): Unsubscribe;
@@ -3059,6 +2589,10 @@ export class SessionDataServiceClient implements SessionDataService {
     };
   }
 
+  async deleteTurns(sessionId: string, turnIndices: number[]): Promise<number> {
+    return this.call('deleteTurns', { sessionId: sessionId, turnIndices: turnIndices });
+  }
+
   async getAllSessions(): Promise<Types.SessionInfo[]> {
     return this.call('getAllSessions', {  });
   }
@@ -3083,12 +2617,24 @@ export class SessionDataServiceClient implements SessionDataService {
     return this.call('getSubscribedSessions', { clientId: clientId });
   }
 
+  async getTurn(sessionId: string, turnIdx: number): Promise<Types.TurnInfo | null> {
+    return this.call('getTurn', { sessionId: sessionId, turnIdx: turnIdx });
+  }
+
+  async getTurns(sessionId: string): Promise<Types.TurnInfo[]> {
+    return this.call('getTurns', { sessionId: sessionId });
+  }
+
   async isPinned(sessionId: string): Promise<boolean> {
     return this.call('isPinned', { sessionId: sessionId });
   }
 
   async pinSession(sessionId: string): Promise<boolean> {
     return this.call('pinSession', { sessionId: sessionId });
+  }
+
+  async setContextMode(sessionId: string, turnIdx: number, mode: string): Promise<null> {
+    return this.call('setContextMode', { sessionId: sessionId, turnIdx: turnIdx, mode: mode });
   }
 
   async subscribeSession(sessionId: string, clientId?: string): Promise<Types.SubscribeSessionResult> {
@@ -3141,6 +2687,10 @@ export class SessionDataServiceClient implements SessionDataService {
 
   sessionDataStreamError(callback: (data: Types.SessionStreamErrorEvent) => void): Unsubscribe {
     return this.subscribe('sessionDataStreamError', callback);
+  }
+
+  sessionDataStreamProgress(callback: (data: Types.SessionStreamProgressEvent) => void): Unsubscribe {
+    return this.subscribe('sessionDataStreamProgress', callback);
   }
 
   sessionDataStreamStarted(callback: (data: Types.SessionStreamStartedEvent) => void): Unsubscribe {

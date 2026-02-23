@@ -139,6 +139,25 @@ class StreamDoneEvent:
 
 
 @dataclass
+class StreamProgressEvent:
+    """Emitted periodically during streaming with progress info.
+
+    Provides real-time streaming status for the status bar.
+    Throttled to avoid flooding (not sent on every delta).
+    """
+
+    session_id: str
+    exchange_id: str
+    tokens_streamed: int  # Estimated output tokens so far
+    current_token_rate: float  # Tokens/sec
+    tool_name: str | None  # Currently executing tool, if any
+    tool_count: int  # Tools executed so far
+    model: str  # Model name
+    context_window: int  # Model's context window
+    duration_seconds: float  # Time since stream started
+
+
+@dataclass
 class StreamErrorEvent:
     """Emitted when streaming fails with an error.
 
@@ -304,6 +323,10 @@ class SessionEventObserver(Protocol):
 
     async def on_stream_done(self, event: StreamDoneEvent) -> None:
         """Called when streaming completes successfully."""
+        ...
+
+    async def on_stream_progress(self, event: StreamProgressEvent) -> None:
+        """Called periodically with streaming progress info."""
         ...
 
     async def on_stream_error(self, event: StreamErrorEvent) -> None:

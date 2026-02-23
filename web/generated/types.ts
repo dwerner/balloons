@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-22T16:13:34.914536
+// Generated: 2026-02-22T18:43:41.331327
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -167,68 +167,6 @@ export interface ArchiveBlock {
   turnEnd?: number;
   messageCount?: number;
   tokenEstimate?: number;
-}
-
-export interface SessionInfo {
-  id: string;
-  title: string;
-  created: string;
-  lastModified: string;
-  model: string;
-  messageCount: number;
-  totalCost: number;
-  isCurrent: boolean;
-  isStreaming: boolean;
-  forkName: string;
-  forkStatus: string;
-  parentId?: string | null;
-  cachedContextTokens?: number;
-  contextWindow?: number;
-  bindingIndicator?: string;
-  backendName?: string;
-  isPinned?: boolean;
-}
-
-export interface TurnImageInfo {
-  filePath: string;
-  filename: string;
-  mediaType: string;
-  width?: number;
-  height?: number;
-}
-
-export interface ToolUseInfo {
-  toolUseId: string;
-  toolName: string;
-  toolInput?: Record<string, unknown>;
-}
-
-export interface ToolResultInfo {
-  toolUseId: string;
-  content: string;
-  isError?: boolean;
-}
-
-export interface TurnInfo {
-  idx: number;
-  role: string;
-  content: string;
-  streaming: boolean;
-  viewed: boolean;
-  tokens: number;
-  contextMode: string;
-  contentBlockType?: string;
-  exchangeId?: string | null;
-  images?: TurnImageInfo[];
-  toolUse?: ToolUseInfo | null;
-  toolResult?: ToolResultInfo | null;
-}
-
-export interface TreeEventData {
-  eventType: string;
-  sessionId: string;
-  turnIdx?: number | null;
-  data?: Record<string, unknown>;
 }
 
 export interface QueuedMessageInfo {
@@ -677,6 +615,18 @@ export interface SessionStreamDoneEvent {
   outputTokens: number;
 }
 
+export interface SessionStreamProgressEvent {
+  sessionId: string;
+  exchangeId: string;
+  tokensStreamed: number;
+  currentTokenRate: number;
+  toolName: string | null;
+  toolCount: number;
+  model: string;
+  contextWindow: number;
+  durationSeconds: number;
+}
+
 export interface SessionStreamErrorEvent {
   sessionId: string;
   exchangeId: string;
@@ -776,6 +726,39 @@ export interface SessionPinnedEvent {
 
 export interface PinnedSessionsChangedEvent {
   pinnedSessionIds: string[];
+}
+
+export interface ToolUseInfo {
+  toolUseId: string;
+  name: string;
+  inputJson: string;
+}
+
+export interface ToolResultInfo {
+  toolUseId: string;
+  content: string;
+  isError?: boolean;
+}
+
+export interface TurnImageInfo {
+  sourceType: string;
+  mediaType: string;
+  data: string;
+}
+
+export interface TurnInfo {
+  idx: number;
+  role: string;
+  content: string;
+  streaming: boolean;
+  viewed: boolean;
+  tokens: number;
+  contextMode: string;
+  contentBlockType?: string;
+  exchangeId?: string | null;
+  images?: TurnImageInfo[];
+  toolUse?: ToolUseInfo | null;
+  toolResult?: ToolResultInfo | null;
 }
 
 export interface ImageUploadResult {

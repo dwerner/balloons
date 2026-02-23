@@ -281,8 +281,6 @@
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 300px;
-  overflow-y: auto;
 }
 
 .tool-result-output.error {
@@ -442,8 +440,6 @@
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 200px;
-  overflow-y: auto;
 }
 
 .tool-use-json {
@@ -456,8 +452,6 @@
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 200px;
-  overflow-y: auto;
 }
 
 /* ============================================================================
@@ -470,8 +464,6 @@
   background: var(--bg-code, #1a1a1a);
   border-radius: 4px;
   overflow-x: auto;
-  max-height: 300px;
-  overflow-y: auto;
 }
 
 .diff-line {
@@ -823,6 +815,39 @@
 .tool-card-body {
   padding: 6px 6px;
   font-size: 12px;
+  position: relative;
+  overflow: hidden;
+}
+
+.tool-card-body.collapsed {
+  /* Height is set dynamically via inline style */
+  overflow: hidden;
+}
+
+.tool-card-fade-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 30px;
+  background: linear-gradient(transparent, var(--bg-primary, #1e1e1e));
+  pointer-events: none;
+}
+
+.collapsible-header-clickable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.collapsible-header-clickable:hover {
+  background: var(--bg-hover, #383838);
+}
+
+.tool-card-collapse-indicator {
+  font-size: 10px;
+  color: var(--text-tertiary, #666);
+  margin-left: 8px;
+  flex-shrink: 0;
 }
 
 /* Tool-specific header elements */
@@ -920,8 +945,6 @@
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 400px;
-  overflow-y: auto;
 }
 
 .tool-diff-view {
@@ -931,8 +954,6 @@
   background: var(--bg-code, #1a1a1a);
   border-radius: 4px;
   overflow-x: auto;
-  max-height: 300px;
-  overflow-y: auto;
 }
 
 /* Edit card fallback display */
@@ -966,8 +987,6 @@
   color: var(--text-primary, #e0e0e0);
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 150px;
-  overflow-y: auto;
 }
 
 .tool-edit-missing {
@@ -1011,8 +1030,6 @@
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 400px;
-  overflow-y: auto;
 }
 
 .tool-output.error {
@@ -1031,8 +1048,6 @@
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 300px;
-  overflow-y: auto;
 }
 
 .tool-search-results.error {
@@ -1149,8 +1164,6 @@
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 200px;
-  overflow-y: auto;
 }
 
 .tool-result-message {
@@ -1235,8 +1248,6 @@
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 200px;
-  overflow-y: auto;
 }
 
 /* Collapsible content for tool cards */
@@ -1434,6 +1445,16 @@
 [data-theme="light"] .tool-card-header {
   background: var(--bg-secondary, #f5f5f5);
   border-color: var(--border-color, #e0e0e0);
+}
+
+:root[data-theme="light"] .tool-card-header.collapsible-header-clickable:hover,
+[data-theme="light"] .tool-card-header.collapsible-header-clickable:hover {
+  background: var(--bg-hover, #e8e8e8);
+}
+
+:root[data-theme="light"] .tool-card-fade-overlay,
+[data-theme="light"] .tool-card-fade-overlay {
+  background: linear-gradient(transparent, var(--bg-primary, #ffffff));
 }
 
 :root[data-theme="light"] .tool-file-path,

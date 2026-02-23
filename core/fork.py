@@ -19,6 +19,7 @@ from models import Message, TextBlock, ContextMode
 from session import Session
 from storage_schema import SessionBinding
 from .context_grouper import group_messages_by_context_mode, ContextGroups
+from .debug_log import debug_log
 
 
 # =============================================================================
@@ -400,7 +401,17 @@ class ForkManager:
             for msg, _ in sorted(groups.copy_items, key=lambda x: x[1]):
                 child_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
+            debug_log.info(
+                f"prepare_fork: populated child session with {len(child_session.turns)} turns, saving",
+                category="fork",
+                details={"child_id": child_session.id[:8]},
+            )
             await child_session.save()
+            debug_log.info(
+                f"prepare_fork: child session saved",
+                category="fork",
+                details={"child_id": child_session.id[:8]},
+            )
 
             # Inherit bindings from parent
             await copy_session_bindings(current_session.id, child_session.id)

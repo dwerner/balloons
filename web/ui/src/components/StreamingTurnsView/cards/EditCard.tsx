@@ -155,7 +155,7 @@ export function EditCard({ turn, result }: EditCardProps) {
     >
       {/* Show diff when we have input */}
       {diffLines.length > 0 ? (
-        <DiffHighlightedCode diffLines={diffLines} maxHeight="300px" />
+        <DiffHighlightedCode diffLines={diffLines} />
       ) : (oldString || newString) && !inputIsStreaming ? (
         /* Show raw strings with syntax highlighting if we have them but diff is empty */
         <div className="tool-edit-raw">
@@ -165,7 +165,6 @@ export function EditCard({ turn, result }: EditCardProps) {
               <SyntaxHighlightedCode
                 code={oldString}
                 filePath={filePath}
-                maxHeight="150px"
               />
             </div>
           )}
@@ -175,7 +174,6 @@ export function EditCard({ turn, result }: EditCardProps) {
               <SyntaxHighlightedCode
                 code={newString}
                 filePath={filePath}
-                maxHeight="150px"
               />
             </div>
           )}

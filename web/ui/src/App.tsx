@@ -942,7 +942,7 @@ export function App() {
 
         // Load initial session list
         try {
-          const sessionList = await client.tree.getAllSessions();
+          const sessionList = await client.sessionData.getAllSessions();
           setSessions(sessionList);
 
           // Determine which session to select:
@@ -957,8 +957,8 @@ export function App() {
             // Use persisted session if it still exists
             sessionIdToLoad = persistedId;
           } else {
-            // Fall back to current session from backend
-            sessionIdToLoad = await client.tree.getCurrentSessionId();
+            // Fall back to most recent session (sessions are sorted by last_modified)
+            sessionIdToLoad = sessionList[0]?.id ?? null;
           }
 
           if (sessionIdToLoad) {
@@ -967,7 +967,7 @@ export function App() {
 
             // Load all session data in parallel
             const [sessionTurns, queueInfo, task] = await Promise.all([
-              client.tree.getTurns(sessionIdToLoad),
+              client.sessionData.getTurns(sessionIdToLoad),
               client.queue.getQueue(sessionIdToLoad),
               client.tasks.getSessionTask(sessionIdToLoad),
             ]);
@@ -1006,15 +1006,15 @@ export function App() {
     try {
       // Session events
       unsubscribers.push(
-        client.tree.onSessionAdded(async () => {
-          const sessionList = await client.tree.getAllSessions();
+        client.sessionData.sessionDataSessionAdded(async () => {
+          const sessionList = await client.sessionData.getAllSessions();
           setSessions(sessionList);
         })
       );
 
       unsubscribers.push(
-        client.tree.onSessionUpdated(async (data) => {
-          const sessionList = await client.tree.getAllSessions();
+        client.sessionData.sessionDataSessionUpdated(async (data) => {
+          const sessionList = await client.sessionData.getAllSessions();
           setSessions(sessionList);
 
           // NOTE: Do NOT refetch turns here for the selected session.
@@ -1027,8 +1027,8 @@ export function App() {
       );
 
       unsubscribers.push(
-        client.tree.onSessionRemoved(async (data) => {
-          const sessionList = await client.tree.getAllSessions();
+        client.sessionData.sessionDataSessionRemoved(async (data) => {
+          const sessionList = await client.sessionData.getAllSessions();
           setSessions(sessionList);
 
           if (data.sessionId === selectedSessionId) {
@@ -1040,8 +1040,8 @@ export function App() {
 
       // Pin state changes - refresh sessions to get updated isPinned and re-sort
       unsubscribers.push(
-        client.tree.onPinnedSessionsChanged(async () => {
-          const sessionList = await client.tree.getAllSessions();
+        client.sessionData.sessionDataSessionPinned(async () => {
+          const sessionList = await client.sessionData.getAllSessions();
           setSessions(sessionList);
         })
       );
@@ -1199,17 +1199,17 @@ export function App() {
             });
           }
           // Also refresh session list to update streaming indicator
-          client.tree.getAllSessions().then(sessionList => {
+          client.sessionData.getAllSessions().then(sessionList => {
             setSessions(sessionList);
           });
         })
       );
 
-      // Keep the tree-based onTurnUpdated for non-streaming updates (e.g., context mode changes)
+      // Keep the tree-based sessionDataTurnFinished for non-streaming updates (e.g., context mode changes)
       unsubscribers.push(
-        client.tree.onTurnUpdated(async (data) => {
-          if (data.sessionId === selectedSessionId && data.turnIdx != null) {
-            const turnIdx = data.turnIdx;
+        client.sessionData.sessionDataTurnFinished(async (data) => {
+          if (data.sessionId === selectedSessionId && data.order != null) {
+            const turnIdx = data.order;
             // Use setTurns callback to check streaming state without stale closure
             setTurns(prev => {
               const existingTurn = prev.find(t => t.idx === turnIdx);
@@ -1218,7 +1218,7 @@ export function App() {
                 return prev;
               }
               // Fetch updated turn asynchronously and update state
-              client.tree.getTurn(data.sessionId, turnIdx).then(updatedTurn => {
+              client.sessionData.getTurn(data.sessionId, turnIdx).then(updatedTurn => {
                 if (updatedTurn) {
                   setTurns(current => {
                     const newTurns = [...current];
@@ -1241,8 +1241,8 @@ export function App() {
 
       // Streaming events
       unsubscribers.push(
-        client.tree.onStreamingStarted(async (data) => {
-          const sessionList = await client.tree.getAllSessions();
+        client.sessionData.sessionDataStreamStarted(async (data) => {
+          const sessionList = await client.sessionData.getAllSessions();
           setSessions(sessionList);
 
           // Clear tool uses when a new streaming session starts
@@ -1253,8 +1253,8 @@ export function App() {
       );
 
       unsubscribers.push(
-        client.tree.onStreamingStopped(async (data) => {
-          const sessionList = await client.tree.getAllSessions();
+        client.sessionData.sessionDataStreamDone(async (data) => {
+          const sessionList = await client.sessionData.getAllSessions();
           setSessions(sessionList);
         })
       );
@@ -1323,7 +1323,7 @@ export function App() {
       // This ensures web UI matches TUI by discarding incremental streaming state
       const reloadTurnsAfterTaskEnd = async (sessionId: string) => {
         setStreamingTask(null);
-        const sessionTurns = await client.tree.getTurns(sessionId);
+        const sessionTurns = await client.sessionData.getTurns(sessionId);
         setTurns(sessionTurns);
         setToolUses([]);
       };
@@ -1466,7 +1466,7 @@ export function App() {
     if (!client || connectionState !== 'connected') return;
 
     try {
-      const isPinned = await client.tree.togglePin(sessionId);
+      const isPinned = await client.sessionData.togglePin(sessionId);
       // Update local state immediately for responsive UI
       setSessions(prev => prev.map(s =>
         s.id === sessionId ? { ...s, isPinned } : s
@@ -1482,7 +1482,7 @@ export function App() {
     if (!client || connectionState !== 'connected') return [];
 
     try {
-      const sessionTurns = await client.tree.getTurns(sessionId);
+      const sessionTurns = await client.sessionData.getTurns(sessionId);
       return sessionTurns;
     } catch (err) {
       console.error('Failed to load turns for session:', sessionId, err);
@@ -1519,7 +1519,7 @@ export function App() {
     try {
       // Fetch all session data in parallel for faster loading
       const [sessionTurns, queueInfo, task] = await Promise.all([
-        client.tree.getTurns(sessionId),
+        client.sessionData.getTurns(sessionId),
         client.queue.getQueue(sessionId),
         client.tasks.getSessionTask(sessionId),
       ]);
@@ -1828,7 +1828,7 @@ export function App() {
             // Set context mode for all turns in the exchange
             try {
               for (const turnIdx of turnIndices) {
-                await client.tree.setContextMode(sessionId, turnIdx, mode.toLowerCase());
+                await client.sessionData.setContextMode(sessionId, turnIdx, mode.toLowerCase());
               }
               debugLog('Set context mode for exchange', { sessionId, turnIndices, mode });
             } catch (err) {
@@ -1848,12 +1848,12 @@ export function App() {
                 );
                 if (!confirmed) return;
 
-                const deletedCount = await client.tree.deleteTurns(sessionId, turnIndices);
+                const deletedCount = await client.sessionData.deleteTurns(sessionId, turnIndices);
                 debugLog('Deleted turns', { sessionId, turnIndices, deletedCount });
 
                 // Refresh turns for this session
                 if (selectedSessionId === sessionId) {
-                  const newTurns = await client.tree.getTurns(sessionId);
+                  const newTurns = await client.sessionData.getTurns(sessionId);
                   setTurns(newTurns);
                 }
               } else if (action === 'archive') {
@@ -1993,7 +1993,7 @@ export function App() {
               }
 
               // Refresh the session list
-              const sessionList = await client.tree.getAllSessions();
+              const sessionList = await client.sessionData.getAllSessions();
               setSessions(sessionList);
 
               // Switch to the new session
@@ -2192,7 +2192,7 @@ export function App() {
             await client.sessions.submitMessage(newSession.id, initialPrompt);
 
             // Refresh the session list to include the new session
-            const sessionList = await client.tree.getAllSessions();
+            const sessionList = await client.sessionData.getAllSessions();
             setSessions(sessionList);
 
             // Switch to the new session

@@ -10,17 +10,16 @@
  *
  *   // Access service clients
  *   const sessions = await client.sessions.listSessions();
- *   const turns = await client.tree.getTurns(sessionId);
+ *   const turns = await client.sessionData.getTurns(sessionId);
  *
  *   // Subscribe to events
- *   client.tree.onTurnUpdated((data) => console.log('Turn:', data));
+ *   client.sessionData.sessionDataSessionUpdated((data) => console.log('Session:', data));
  *
  *   // Disconnect
  *   client.disconnect();
  */
 
 import {
-  TreeStateServiceClient,
   QueueStateServiceClient,
   SessionManagerServiceClient,
   GoalTreeStateServiceClient,
@@ -59,7 +58,6 @@ export class BalloonsClient {
   private stateListeners: Set<(state: ConnectionState) => void> = new Set();
 
   // Service clients (lazily initialized)
-  private _tree: TreeStateServiceClient | null = null;
   private _queue: QueueStateServiceClient | null = null;
   private _sessions: SessionManagerServiceClient | null = null;
   private _goals: GoalTreeStateServiceClient | null = null;
@@ -90,14 +88,6 @@ export class BalloonsClient {
   }
 
   // --- Service Accessors ---
-
-  /** Tree state service (sessions, turns, context modes) */
-  get tree(): TreeStateServiceClient {
-    if (!this._tree) {
-      throw new Error('Not connected. Call connect() first.');
-    }
-    return this._tree;
-  }
 
   /** Queue state service (message queues) */
   get queue(): QueueStateServiceClient {
@@ -262,7 +252,6 @@ export class BalloonsClient {
   private initializeClients(): void {
     if (!this.ws) return;
 
-    this._tree = new TreeStateServiceClient(this.ws);
     this._queue = new QueueStateServiceClient(this.ws);
     this._sessions = new SessionManagerServiceClient(this.ws);
     this._goals = new GoalTreeStateServiceClient(this.ws);
@@ -274,7 +263,6 @@ export class BalloonsClient {
   }
 
   private clearClients(): void {
-    this._tree = null;
     this._queue = null;
     this._sessions = null;
     this._goals = null;
@@ -302,7 +290,6 @@ export class BalloonsClient {
 // Re-export types for convenience
 export * from './types';
 export {
-  TreeStateServiceClient,
   QueueStateServiceClient,
   SessionManagerServiceClient,
   GoalTreeStateServiceClient,

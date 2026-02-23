@@ -102,7 +102,6 @@ export function GrepCard({ turn, result }: GrepCardProps) {
             <GrepHighlightedResults
               content={displayContent}
               pattern={pattern}
-              maxHeight="300px"
             />
           )}
         </>

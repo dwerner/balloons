@@ -129,7 +129,6 @@ export function ReadCard({ turn, result }: ReadCardProps) {
         <SyntaxHighlightedCode
           code={displayContent}
           filePath={filePath}
-          maxHeight="400px"
           showLineNumbers={true}
         />
       )}

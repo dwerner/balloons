@@ -35,6 +35,7 @@ from service.session_events import (
     TurnFinishedEvent,
     StreamStartedEvent,
     StreamDoneEvent,
+    StreamProgressEvent,
     StreamErrorEvent,
     ToolUseStartedEvent,
     ToolInputDeltaEvent,
@@ -207,6 +208,26 @@ class SessionStreamDoneEvent:
     exchange_id: str
     input_tokens: int
     output_tokens: int
+
+
+@ws_type
+@dataclass
+class SessionStreamProgressEvent:
+    """Event payload for streaming progress updates.
+
+    Emitted periodically during streaming (throttled, not on every delta).
+    Provides real-time status for the status bar.
+    """
+
+    session_id: str
+    exchange_id: str
+    tokens_streamed: int  # Estimated output tokens so far
+    current_token_rate: float  # Tokens/sec
+    tool_name: str | None  # Currently executing tool, if any
+    tool_count: int  # Tools executed so far
+    model: str  # Model name
+    context_window: int  # Model's context window
+    duration_seconds: float  # Time since stream started
 
 
 @ws_type
@@ -593,6 +614,12 @@ class SessionDataService:
         # Get metadata-only snapshot (no turns) - fast operation
         snapshot = await self._get_session_metadata_snapshot(session_id)
 
+        debug_log.info(
+            f"subscribe_session: snapshot_exists={snapshot is not None}, storage_exists={self._storage is not None}",
+            category="fork",
+            details={"session_id": session_id[:8]},
+        )
+
         # PHASE 3 CHANGE: Spawn background task to stream history from LMDB
         # Only if session exists and we have storage configured
         if snapshot is not None and self._storage is not None:
@@ -600,9 +627,16 @@ class SessionDataService:
             if session_id in self._history_tasks:
                 self._history_tasks[session_id].cancel()
 
-            # Start streaming history in background
+            # Start streaming history in background with a small delay
+            # This ensures the client has time to set up event handlers before
+            # history chunks arrive. Without this delay, events can be lost if
+            # they're emitted before the client's handlers are registered.
+            async def delayed_stream_history():
+                await asyncio.sleep(0.05)  # 50ms delay for handler setup
+                await self._stream_history_from_storage(session_id)
+
             task = asyncio.create_task(
-                self._stream_history_from_storage(session_id),
+                delayed_stream_history(),
                 name=f"history-{session_id[:8]}",
             )
             self._history_tasks[session_id] = task
@@ -780,7 +814,7 @@ class SessionDataService:
         if not self._storage:
             debug_log.warning(
                 f"_stream_history_from_storage: no storage configured for session {session_id[:8]}",
-                category="websocket",
+                category="fork",
             )
             # Emit empty completion to signal no history available
             self.emit_history_complete(session_id, total_turns=0, final_watermark=-1)
@@ -792,7 +826,7 @@ class SessionDataService:
 
             debug_log.info(
                 f"_stream_history_from_storage: session={session_id[:8]}, total_turns={total_turns}",
-                category="websocket",
+                category="fork",
             )
 
             if total_turns == 0:
@@ -1362,6 +1396,133 @@ class SessionDataService:
         )
         return result
 
+    @ws_expose
+    async def get_turn(self, session_id: str, turn_idx: int) -> TurnInfo | None:
+        """Get a specific turn from a session.
+
+        Args:
+            session_id: The session ID
+            turn_idx: The turn index
+
+        Returns:
+            TurnInfo if found, None otherwise
+        """
+        turns = await self.get_turns(session_id)
+        for turn in turns:
+            if turn.idx == turn_idx:
+                return turn
+        return None
+
+    @ws_expose
+    async def set_context_mode(
+        self, session_id: str, turn_idx: int, mode: str
+    ) -> None:
+        """Set the context mode for a turn.
+
+        Args:
+            session_id: The session ID
+            turn_idx: The turn index
+            mode: The mode to set ("copy", "compress", or "drop")
+        """
+        from core.debug_log import debug_log
+        from session import ContextMode
+
+        if not self._session_loader:
+            debug_log.warning(
+                "set_context_mode called without session_loader configured",
+                category="websocket",
+            )
+            return
+
+        session = await self._session_loader(session_id)
+        if not session:
+            debug_log.warning(
+                f"set_context_mode: session {session_id[:8]} not found",
+                category="websocket",
+            )
+            return
+
+        if turn_idx < 0 or turn_idx >= len(session.turns):
+            debug_log.warning(
+                f"set_context_mode: turn index {turn_idx} out of range",
+                category="websocket",
+            )
+            return
+
+        # Parse the mode string to enum
+        try:
+            context_mode = ContextMode(mode.lower())
+        except ValueError:
+            debug_log.warning(
+                f"set_context_mode: invalid mode '{mode}'",
+                category="websocket",
+            )
+            return
+
+        # Update the turn's context mode
+        session.turns[turn_idx].context_mode = context_mode
+        await session.save()
+
+        debug_log.info(
+            f"set_context_mode: session {session_id[:8]} turn {turn_idx} -> {mode}",
+            category="websocket",
+        )
+
+        # Emit session updated event
+        session_info = self.session_to_info(session)
+        self.emit_session_updated(session_info)
+
+    @ws_expose
+    async def delete_turns(self, session_id: str, turn_indices: list[int]) -> int:
+        """Delete multiple turns from a session.
+
+        Args:
+            session_id: The session ID
+            turn_indices: List of turn indices to delete
+
+        Returns:
+            Number of turns actually deleted
+        """
+        from core.debug_log import debug_log
+
+        if not self._session_loader:
+            debug_log.warning(
+                "delete_turns called without session_loader configured",
+                category="websocket",
+            )
+            return 0
+
+        session = await self._session_loader(session_id)
+        if not session:
+            debug_log.warning(
+                f"delete_turns: session {session_id[:8]} not found",
+                category="websocket",
+            )
+            return 0
+
+        # Sort indices in reverse order to delete from end first
+        # This prevents index shifting during deletion
+        sorted_indices = sorted(turn_indices, reverse=True)
+
+        deleted_count = 0
+        for idx in sorted_indices:
+            if 0 <= idx < len(session.turns):
+                del session.turns[idx]
+                deleted_count += 1
+
+        if deleted_count > 0:
+            await session.save()
+            debug_log.info(
+                f"delete_turns: session {session_id[:8]} deleted {deleted_count} turns",
+                category="websocket",
+            )
+
+            # Emit session updated event
+            session_info = self.session_to_info(session)
+            self.emit_session_updated(session_info)
+
+        return deleted_count
+
     # --- Pinning Operations ---
 
     @ws_expose
@@ -1816,6 +1977,14 @@ class SessionDataService:
         """Emitted when streaming completes successfully."""
         ...
 
+    @ws_event(name="sessionDataStreamProgress")
+    async def on_session_data_stream_progress(self) -> SessionStreamProgressEvent:
+        """Emitted periodically during streaming with progress info.
+
+        Throttled to avoid flooding - provides status bar updates.
+        """
+        ...
+
     @ws_event(name="sessionDataStreamError")
     async def on_session_data_stream_error(self) -> SessionStreamErrorEvent:
         """Emitted when streaming fails or is cancelled."""
@@ -1974,6 +2143,30 @@ class SessionDataService:
             "output_tokens": event.output_tokens,
         }
         self._emit_event("sessionDataStreamDone", event_data, subscribers)
+
+    async def on_stream_progress(self, event: StreamProgressEvent) -> None:
+        """Handle stream progress event from SessionManagerService.
+
+        Emits streamProgress WebSocket event to subscribed clients.
+        This event is throttled (not sent on every delta).
+        """
+        session_id = event.session_id
+        subscribers = self._session_subscribers.get(session_id, set())
+        if not subscribers:
+            return
+
+        event_data = {
+            "session_id": session_id,
+            "exchange_id": event.exchange_id,
+            "tokens_streamed": event.tokens_streamed,
+            "current_token_rate": event.current_token_rate,
+            "tool_name": event.tool_name,
+            "tool_count": event.tool_count,
+            "model": event.model,
+            "context_window": event.context_window,
+            "duration_seconds": event.duration_seconds,
+        }
+        self._emit_event("sessionDataStreamProgress", event_data, subscribers)
 
     async def on_stream_error(self, event: StreamErrorEvent) -> None:
         """Handle stream error event from SessionManagerService.

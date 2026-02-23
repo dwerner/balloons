@@ -119,7 +119,6 @@ export function BashCard({ turn, result }: BashCardProps) {
           <SyntaxHighlightedCode
             code={displayOutput || '(no output)'}
             language="bash"
-            maxHeight="400px"
           />
         )
       )}

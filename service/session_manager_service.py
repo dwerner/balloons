@@ -64,6 +64,7 @@ from service.session_events import (
     TurnFinishedEvent,
     StreamStartedEvent,
     StreamDoneEvent,
+    StreamProgressEvent,
     StreamErrorEvent,
     ToolUseStartedEvent,
     ToolInputDeltaEvent,
@@ -351,6 +352,8 @@ class _StreamingContext:
     tool_turn_indices: dict = field(default_factory=dict)  # (tool_use_id, turn_type) -> turn_idx
     tool_turn_ids: dict = field(default_factory=dict)  # (tool_use_id, turn_type) -> turn_id
     tool_names: dict = field(default_factory=dict)  # tool_use_id -> tool_name
+    # Progress event throttling
+    last_progress_emit: float = 0.0  # Timestamp of last progress event emission
 
 
 @dataclass
@@ -1222,6 +1225,28 @@ class SessionManagerService:
                     accumulated=ctx.content,
                 )
 
+            # Emit throttled progress event (every 500ms)
+            import time
+            now = time.monotonic()
+            if now - ctx.last_progress_emit >= 0.5:
+                ctx.last_progress_emit = now
+                stream = self._stream_state.get_stream(ctx.exchange_id)
+                if stream:
+                    await self._notify_observers(
+                        "on_stream_progress",
+                        StreamProgressEvent(
+                            session_id=session_id,
+                            exchange_id=ctx.exchange_id,
+                            tokens_streamed=stream.tokens_streamed,
+                            current_token_rate=stream.current_token_rate,
+                            tool_name=stream.tool_name,
+                            tool_count=stream.tool_count,
+                            model=stream.model,
+                            context_window=stream.context_window,
+                            duration_seconds=stream.duration_seconds,
+                        ),
+                    )
+
         elif event_type == "text_flush":
             # Text segment complete before tool use
             text = data.get("text", "") if isinstance(data, dict) else ""
@@ -1571,6 +1596,26 @@ class SessionManagerService:
                     result=result,
                     is_error=False,
                     tool_index=tool_idx,
+                )
+
+            # Emit progress event after tool completion (state change)
+            stream = self._stream_state.get_stream(ctx.exchange_id)
+            if stream:
+                import time
+                ctx.last_progress_emit = time.monotonic()
+                await self._notify_observers(
+                    "on_stream_progress",
+                    StreamProgressEvent(
+                        session_id=session_id,
+                        exchange_id=ctx.exchange_id,
+                        tokens_streamed=stream.tokens_streamed,
+                        current_token_rate=stream.current_token_rate,
+                        tool_name=stream.tool_name,
+                        tool_count=stream.tool_count,
+                        model=stream.model,
+                        context_window=stream.context_window,
+                        duration_seconds=stream.duration_seconds,
+                    ),
                 )
 
         elif event_type == "init":

@@ -666,7 +666,6 @@ function SessionNode({
   // Group turns into exchanges for display
   const exchanges = useMemo(() => {
     const result = groupTurnsIntoExchanges(turns);
-    debugLog('SessionNode exchanges', { sessionId: session.id, turnsCount: turns.length, exchangesCount: result.length });
     return result;
   }, [turns, session.id]);
 

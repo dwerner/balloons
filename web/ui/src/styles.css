@@ -717,9 +717,12 @@ body {
 }
 
 /* ----- Turns Container ----- */
+/* NOTE: overflow-y removed - the child StreamingTurnsView/SimpleTurnsView handles
+ * scrolling via useAutoScroll hook. Having two nested scrollable containers
+ * broke the "pause autoscroll when user scrolls up" behavior (Bug #12). */
 .turns-container {
   flex: 1;
-  overflow-y: auto;
+  overflow: hidden; /* Child container handles scroll */
   padding: 6px;
   padding-bottom: 6px; /* Small padding at bottom */
   min-height: 0;
@@ -882,12 +885,14 @@ body {
     flex: 1 1 auto;
   }
 
-  /* Keep turns container scrollable and let it shrink when keyboard appears */
+  /* Keep turns container flexible and let it shrink when keyboard appears */
+  /* NOTE: Child container handles scrolling (see Bug #12 fix) */
   .turns-container {
     flex: 1 1 0;
     min-height: 100px;
     padding: 4px; /* Reduce horizontal padding on mobile */
     padding-bottom: 8px;
+    overflow: hidden; /* Child container handles scroll */
   }
 
   /* Input area should not shrink and stick to bottom */

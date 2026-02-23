@@ -4,11 +4,11 @@
  * Provides:
  * - Consistent header with status icon, tool name, and custom content
  * - Status-based styling (executing, completed, error)
- * - Optional collapsible content areas
+ * - Collapsible content - shows first N lines by default, expands on header tap
  * - Token count display
  */
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import './cards.css';
 
 // Tool execution phase
@@ -27,6 +27,10 @@ export interface BaseToolCardProps {
   children?: React.ReactNode;
   /** Additional CSS class */
   className?: string;
+  /** Number of lines to show when collapsed (default: 5) */
+  collapsedLines?: number;
+  /** Start expanded (default: false for completed, true for active) */
+  defaultExpanded?: boolean;
 }
 
 // Phase to icon mapping
@@ -57,6 +61,9 @@ function ToolStatusIcon({ phase }: { phase: ToolPhase }) {
 
 /**
  * BaseToolCard - Wrapper component for tool-specific cards
+ *
+ * Content is collapsible - shows first N lines by default (when completed).
+ * Tap/click the header to expand/collapse.
  */
 export function BaseToolCard({
   toolName,
@@ -65,19 +72,78 @@ export function BaseToolCard({
   tokens = 0,
   children,
   className = '',
+  collapsedLines = 5,
+  defaultExpanded,
 }: BaseToolCardProps) {
   const isActive = phase === 'building' || phase === 'executing';
   const statusClass = phase === 'error' ? 'error' : isActive ? 'executing' : 'completed';
 
+  // Active states are always expanded; completed states collapse by default
+  const [expanded, setExpanded] = useState(defaultExpanded ?? isActive);
+  const [needsCollapse, setNeedsCollapse] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  // Calculate if content is tall enough to need collapsing
+  // Using line-height of ~18px (11px font * 1.4 line-height + padding)
+  const collapsedHeight = collapsedLines * 18 + 12; // +12 for padding
+
+  useEffect(() => {
+    if (bodyRef.current && !isActive) {
+      const contentHeight = bodyRef.current.scrollHeight;
+      setNeedsCollapse(contentHeight > collapsedHeight + 20); // +20 threshold
+    }
+  }, [children, collapsedHeight, isActive]);
+
+  // Keep expanded while active
+  useEffect(() => {
+    if (isActive) {
+      setExpanded(true);
+    }
+  }, [isActive]);
+
+  const toggleExpanded = () => {
+    if (!isActive && needsCollapse) {
+      setExpanded(!expanded);
+    }
+  };
+
+  const isCollapsible = !isActive && needsCollapse;
+  const isCollapsed = isCollapsible && !expanded;
+
   return (
     <div className={`turn-card tool-card ${statusClass} ${isActive ? 'streaming' : ''} ${className}`}>
-      <div className="tool-card-header">
+      <div
+        className={`tool-card-header ${isCollapsible ? 'collapsible-header-clickable' : ''}`}
+        onClick={toggleExpanded}
+        role={isCollapsible ? 'button' : undefined}
+        tabIndex={isCollapsible ? 0 : undefined}
+        onKeyDown={isCollapsible ? (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            toggleExpanded();
+          }
+        } : undefined}
+      >
         <ToolStatusIcon phase={phase} />
         <span className="tool-card-name">{toolName}</span>
         {headerContent && <div className="tool-card-header-content">{headerContent}</div>}
         {!isActive && tokens > 0 && <span className="tool-card-tokens">{tokens} tokens</span>}
+        {isCollapsible && (
+          <span className="tool-card-collapse-indicator">
+            {expanded ? '▼' : '▶'}
+          </span>
+        )}
       </div>
-      {children && <div className="tool-card-body">{children}</div>}
+      {children && (
+        <div
+          ref={bodyRef}
+          className={`tool-card-body ${isCollapsed ? 'collapsed' : ''}`}
+          style={isCollapsed ? { maxHeight: `${collapsedHeight}px` } : undefined}
+        >
+          {children}
+          {isCollapsed && <div className="tool-card-fade-overlay" />}
+        </div>
+      )}
     </div>
   );
 }

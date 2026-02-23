@@ -76,7 +76,7 @@ export function SimpleTurnsView({ sessionId, client }: SimpleTurnsViewProps) {
       setIsLoading(true);
       setError(null);
       try {
-        const serverTurns = await client.tree.getTurns(sessionId);
+        const serverTurns = await client.sessionData.getTurns(sessionId);
         // DEBUG: Log content lengths from server on initial load
         debugLog(`Initial load: ${serverTurns.length} turns`);
         serverTurns.forEach(t => {
@@ -464,7 +464,7 @@ export function SimpleTurnsView({ sessionId, client }: SimpleTurnsViewProps) {
           return prev;
         });
 
-        const serverTurns = await client.tree.getTurns(sessionId);
+        const serverTurns = await client.sessionData.getTurns(sessionId);
         // Log the last 10 turns with full details to debug missing turns
         const lastTurns = serverTurns.slice(-10);
         debugLog(`TASK_COMPLETED getTurns returned ${serverTurns.length} turns, last 10:`, {

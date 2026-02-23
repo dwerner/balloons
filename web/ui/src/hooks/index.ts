@@ -6,6 +6,7 @@ export type {
   SessionDataTurn,
   UseSessionDataState,
   UseSessionDataReturn,
+  StreamingProgress,
 } from './useSessionData';
 
 export { useSoundNotifications } from './useSoundNotifications';

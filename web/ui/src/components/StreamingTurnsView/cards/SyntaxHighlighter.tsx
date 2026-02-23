@@ -178,7 +178,6 @@ interface SyntaxHighlightedCodeProps {
   code: string;
   language?: string;
   filePath?: string;
-  maxHeight?: string;
   showLineNumbers?: boolean;
 }
 
@@ -186,7 +185,6 @@ export function SyntaxHighlightedCode({
   code,
   language,
   filePath,
-  maxHeight = '400px',
   showLineNumbers = false,
 }: SyntaxHighlightedCodeProps) {
   // Determine language from prop or file path
@@ -202,36 +200,33 @@ export function SyntaxHighlightedCode({
   }
 
   return (
-    <div style={{ maxHeight, overflow: 'auto' }}>
-      <PrismHighlighter
-        style={customCodeTheme}
-        language={lang}
-        PreTag="div"
-        showLineNumbers={showLineNumbers}
-        wrapLines={true}
-        lineNumberStyle={{
-          minWidth: '2.5em',
-          paddingRight: '1em',
-          color: 'var(--text-tertiary, #5c7a5c)',
-          userSelect: 'none',
-        }}
-      >
-        {code}
-      </PrismHighlighter>
-    </div>
+    <PrismHighlighter
+      style={customCodeTheme}
+      language={lang}
+      PreTag="div"
+      showLineNumbers={showLineNumbers}
+      wrapLines={true}
+      lineNumberStyle={{
+        minWidth: '2.5em',
+        paddingRight: '1em',
+        color: 'var(--text-tertiary, #5c7a5c)',
+        userSelect: 'none',
+      }}
+    >
+      {code}
+    </PrismHighlighter>
   );
 }
 
 interface DiffHighlightedCodeProps {
   diffLines: string[];
-  maxHeight?: string;
 }
 
-export function DiffHighlightedCode({ diffLines, maxHeight = '300px' }: DiffHighlightedCodeProps) {
+export function DiffHighlightedCode({ diffLines }: DiffHighlightedCodeProps) {
   if (diffLines.length === 0) return null;
 
   return (
-    <div className="tool-diff-view" style={{ maxHeight, overflow: 'auto' }}>
+    <div className="tool-diff-view">
       {diffLines.map((line, idx) => {
         let className = 'diff-line diff-context';
         if (line.startsWith('+++') || line.startsWith('---')) {
@@ -254,13 +249,11 @@ export function DiffHighlightedCode({ diffLines, maxHeight = '300px' }: DiffHigh
 interface GrepHighlightedResultsProps {
   content: string;
   pattern?: string;
-  maxHeight?: string;
 }
 
 export function GrepHighlightedResults({
   content,
   pattern,
-  maxHeight = '300px',
 }: GrepHighlightedResultsProps) {
   // Parse grep output and highlight matches
   const highlightedLines = useMemo(() => {
@@ -311,7 +304,7 @@ export function GrepHighlightedResults({
   }
 
   return (
-    <div className="grep-results" style={{ maxHeight, overflow: 'auto' }}>
+    <div className="grep-results">
       {highlightedLines.map((item) => (
         <div key={item.key} className="grep-result-line">
           {item.file && (

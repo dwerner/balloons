@@ -21,6 +21,7 @@ import type {
   SessionTurnFinishedEvent,
   SessionStreamStartedEvent,
   SessionStreamDoneEvent,
+  SessionStreamProgressEvent,
   SessionStreamErrorEvent,
   SessionToolUseStartedEvent,
   SessionToolInputDeltaEvent,
@@ -69,7 +70,6 @@ export type ContentBlock =
 // Create a debug logger that uses the client's WebSocket connection
 function createDebugLog(client: BalloonsClient | null) {
   return (message: string, data?: unknown): void => {
-    console.log('[useSessionData]', message, data);
     if (client?.isConnected) {
       client.debugLog.info(message, 'web.useSessionData', '', data as Record<string, unknown> | null).catch(() => {});
     }
@@ -101,6 +101,27 @@ export interface SessionDataTurn {
   exchangeId?: string;
 }
 
+/**
+ * Streaming progress info for status bar display.
+ * Updated periodically (throttled) during streaming.
+ */
+export interface StreamingProgress {
+  /** Estimated output tokens so far */
+  tokensStreamed: number;
+  /** Current token rate (tokens/sec) */
+  currentTokenRate: number;
+  /** Currently executing tool name, if any */
+  toolName: string | null;
+  /** Number of tools executed so far */
+  toolCount: number;
+  /** Model name */
+  model: string;
+  /** Model's context window size */
+  contextWindow: number;
+  /** Duration since stream started (seconds) */
+  durationSeconds: number;
+}
+
 export interface UseSessionDataState {
   /** Map of turn_id -> turn data */
   turnsById: Map<string, SessionDataTurn>;
@@ -122,6 +143,8 @@ export interface UseSessionDataState {
   error: string | null;
   /** Session ID we're subscribed to */
   sessionId: string | null;
+  /** Streaming progress info (updated periodically during streaming) */
+  streamingProgress: StreamingProgress | null;
 }
 
 export interface UseSessionDataReturn extends UseSessionDataState {
@@ -228,6 +251,7 @@ export function useSessionData(
   const [streamError, setStreamError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [streamingProgress, setStreamingProgress] = useState<StreamingProgress | null>(null);
 
   // Refs for cleanup
   const unsubscribersRef = useRef<Unsubscribe[]>([]);
@@ -257,6 +281,7 @@ export function useSessionData(
     setStreamError(null);
     setError(null);
     setSessionId(null);
+    setStreamingProgress(null);
     currentSessionRef.current = null;
   }, []);
 
@@ -274,7 +299,7 @@ export function useSessionData(
         );
       } catch (err) {
         // Ignore unsubscribe errors during disconnect
-        console.debug('[useSessionData] Unsubscribe skipped (disconnected):', err);
+        debugLog('[useSessionData] Unsubscribe skipped (disconnected):', err);
       }
     }
 
@@ -306,59 +331,9 @@ export function useSessionData(
       currentSessionRef.current = newSessionId;
 
       try {
-        console.log(`[useSessionData] Subscribing to session ${newSessionId}`);
-
-        // Subscribe to session - returns snapshot atomically with subscription
-        const result = await client.sessionData.subscribeSession(newSessionId);
-
-        console.log(`[useSessionData] Subscribe result:`, result);
-
-        if (!result.subscribed) {
-          throw new Error(result.error || 'Subscription failed');
-        }
-
-        console.log(`[useSessionData] Subscription successful, snapshot has ${result.snapshot?.turns?.length ?? 0} turns`);
-
-        // Convert snapshot turns to our format
-        const initialTurns = new Map<string, SessionDataTurn>();
-        if (result.snapshot?.turns) {
-          result.snapshot.turns.forEach((turn: TurnSnapshot, arrayIndex: number) => {
-            const turnId = turn.turnId || `snapshot-${newSessionId}-${arrayIndex}`;
-            initialTurns.set(turnId, {
-              turnId,
-              order: arrayIndex,
-              role: turn.role,
-              contentBlock: turn.contentBlock,
-              streaming: turn.streaming || false,
-              viewed: turn.viewed || false,
-              tokens: turn.tokens || 0,
-              contextMode: turn.contextMode || 'copy',
-              exchangeId: turn.exchangeId ?? undefined,
-            });
-          });
-        }
-
-        setTurnsById(initialTurns);
-        setIsSubscribed(true);
-        setIsLoading(false);
-
-        // History loading state: if snapshot has no turns, history will arrive via chunks
-        // If snapshot has turns (legacy or small session), we're already complete
-        const hasTurnsInSnapshot = (result.snapshot?.turns?.length ?? 0) > 0;
-        setIsLoadingHistory(!hasTurnsInSnapshot);
-        setHistoryWatermark(-1);
-
-        // Initialize streaming state from snapshot
-        // This handles the case where we reconnect to a session that was streaming
-        // or reconnect after it stopped streaming while we were disconnected
-        if (result.snapshot?.isStreaming !== undefined) {
-          setIsStreaming(result.snapshot.isStreaming);
-        } else {
-          // If no snapshot streaming info, default to false
-          setIsStreaming(false);
-        }
-
-        // Set up event handlers
+        // IMPORTANT: Set up event handlers BEFORE subscribing to avoid race conditions
+        // History chunks may arrive immediately after subscription, before the async
+        // subscribe call returns. If handlers aren't registered, events are lost.
         const handlers: Unsubscribe[] = [];
 
         // Turn created - add new turn
@@ -368,7 +343,7 @@ export function useSessionData(
             debugLog('sessionDataTurnCreated received', event);
 
             if (!event || typeof event !== 'object') {
-              console.warn('[useSessionData] turnCreated received invalid event:', event);
+              debugLog('[useSessionData] turnCreated received invalid event:', event);
               return;
             }
 
@@ -378,7 +353,7 @@ export function useSessionData(
 
             const turnId = event.turnId ?? '';
             if (!turnId) {
-              console.warn('[useSessionData] turnCreated missing turnId:', event);
+              debugLog('[useSessionData] turnCreated missing turnId:', event);
               return;
             }
 
@@ -426,7 +401,7 @@ export function useSessionData(
             const turnId = event.turnId ?? '';
 
             if (!turnId) {
-              console.warn('[useSessionData] turnDelta missing turnId:', event);
+              debugLog('[useSessionData] turnDelta missing turnId:', event);
               return;
             }
 
@@ -434,7 +409,7 @@ export function useSessionData(
               const existing = prev.get(turnId);
               if (!existing) {
                 // Turn not found - create it with text block
-                console.warn(`[useSessionData] turnDelta for unknown turn ${turnId}, creating`);
+                debugLog(`[useSessionData] turnDelta for unknown turn ${turnId}, creating`);
                 const maxOrder = Math.max(-1, ...Array.from(prev.values()).map((t) => t.order));
 
                 const next = new Map(prev);
@@ -466,10 +441,9 @@ export function useSessionData(
         // Turn finished - finalize turn with complete content block
         handlers.push(
           client.sessionData.sessionDataTurnFinished((event: SessionTurnFinishedEvent) => {
-            console.log('[useSessionData] turnFinished raw event:', event);
 
             if (!event || typeof event !== 'object') {
-              console.warn('[useSessionData] turnFinished received invalid event:', event);
+              debugLog('[useSessionData] turnFinished received invalid event:', event);
               return;
             }
 
@@ -477,7 +451,7 @@ export function useSessionData(
 
             const turnId = event.turnId || '';
             if (!turnId) {
-              console.warn('[useSessionData] turnFinished missing turnId:', event);
+              debugLog('[useSessionData] turnFinished missing turnId:', event);
               return;
             }
 
@@ -498,7 +472,7 @@ export function useSessionData(
               }
 
               if (!existing) {
-                console.warn(`[useSessionData] turnFinished for unknown turn ${turnId}, creating`);
+                debugLog(`[useSessionData] turnFinished for unknown turn ${turnId}, creating`);
                 // Use order from event if available, otherwise fall back to maxOrder + 1
                 const serverOrder = event.order;
                 const effectiveOrder = serverOrder !== undefined && serverOrder !== null
@@ -537,6 +511,8 @@ export function useSessionData(
             if (event.sessionId !== newSessionId) return;
             setIsStreaming(true);
             setStreamError(null);
+            // Reset progress when stream starts
+            setStreamingProgress(null);
           })
         );
 
@@ -544,6 +520,24 @@ export function useSessionData(
           client.sessionData.sessionDataStreamDone((event: SessionStreamDoneEvent) => {
             if (event.sessionId !== newSessionId) return;
             setIsStreaming(false);
+            // Clear progress when stream ends
+            setStreamingProgress(null);
+          })
+        );
+
+        // Stream progress - throttled updates during streaming
+        handlers.push(
+          client.sessionData.sessionDataStreamProgress((event: SessionStreamProgressEvent) => {
+            if (event.sessionId !== newSessionId) return;
+            setStreamingProgress({
+              tokensStreamed: event.tokensStreamed,
+              currentTokenRate: event.currentTokenRate,
+              toolName: event.toolName,
+              toolCount: event.toolCount,
+              model: event.model,
+              contextWindow: event.contextWindow,
+              durationSeconds: event.durationSeconds,
+            });
           })
         );
 
@@ -552,6 +546,7 @@ export function useSessionData(
             if (event.sessionId !== newSessionId) return;
             setIsStreaming(false);
             setStreamError(event.error);
+            setStreamingProgress(null);
           })
         );
 
@@ -735,7 +730,53 @@ export function useSessionData(
           })
         );
 
+        // Save handlers immediately so events can be processed
         unsubscribersRef.current = handlers;
+
+        // NOW subscribe - handlers are ready to receive events
+        const result = await client.sessionData.subscribeSession(newSessionId);
+
+        if (!result.subscribed) {
+          // Cleanup handlers on failure
+          handlers.forEach((unsub) => unsub());
+          unsubscribersRef.current = [];
+          throw new Error(result.error || 'Subscription failed');
+        }
+
+        // Process snapshot (metadata only - history arrives via chunks)
+        const initialTurns = new Map<string, SessionDataTurn>();
+        if (result.snapshot?.turns) {
+          result.snapshot.turns.forEach((turn: TurnSnapshot, arrayIndex: number) => {
+            const turnId = turn.turnId || `snapshot-${newSessionId}-${arrayIndex}`;
+            initialTurns.set(turnId, {
+              turnId,
+              order: arrayIndex,
+              role: turn.role,
+              contentBlock: turn.contentBlock,
+              streaming: turn.streaming || false,
+              viewed: turn.viewed || false,
+              tokens: turn.tokens || 0,
+              contextMode: turn.contextMode || 'copy',
+              exchangeId: turn.exchangeId ?? undefined,
+            });
+          });
+        }
+
+        setTurnsById(initialTurns);
+        setIsSubscribed(true);
+        setIsLoading(false);
+
+        // History loading state: if snapshot has no turns, history will arrive via chunks
+        const hasTurnsInSnapshot = (result.snapshot?.turns?.length ?? 0) > 0;
+        setIsLoadingHistory(!hasTurnsInSnapshot);
+        setHistoryWatermark(-1);
+
+        // Initialize streaming state from snapshot
+        if (result.snapshot?.isStreaming !== undefined) {
+          setIsStreaming(result.snapshot.isStreaming);
+        } else {
+          setIsStreaming(false);
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         setError(`Subscription failed: ${message}`);
@@ -778,7 +819,7 @@ export function useSessionData(
 
       // Detect reconnection: was disconnected, now connected
       if (!wasConnected && isNowConnected) {
-        console.log('[useSessionData] Client reconnected, re-subscribing to session:', autoSubscribe);
+        debugLog('[useSessionData] Client reconnected, re-subscribing to session:', autoSubscribe);
 
         // Clear stale subscription state since handlers are likely invalid
         unsubscribersRef.current.forEach((unsub) => unsub());
@@ -818,6 +859,7 @@ export function useSessionData(
     streamError,
     error,
     sessionId,
+    streamingProgress,
     subscribe,
     unsubscribe,
     getTurn,
