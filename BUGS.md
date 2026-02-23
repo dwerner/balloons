@@ -151,3 +151,39 @@ Fixed by immediately setting a minimal `TaskInfo` object from the event data whe
 - The content exists but is not being displayed
 - Possibly related to Bug #10 fix - the `_flush_text_as_turn(emit_event=True)` change may be creating a turn but the content isn't being streamed/rendered correctly
 - This is a regression from the turn ordering fix
+
+## Bug #21: Tool use errors should render as error turns with single-line format
+- Errors like `<tool_use_error>File does not exist.</tool_use_error>` should be displayed as dedicated error turns
+- Should render as a compact single-line error message, not as a multi-line block
+- Currently these may be rendering as regular text or in a verbose format
+
+## Bug #22: Streaming turns show double pulsing dot indicator (●●)
+- Turns that are actively streaming show two pulsing dots instead of one
+- Should be a single pulsing indicator
+- Likely a duplicate rendering or CSS issue
+
+## Bug #23: Pinned sessions fall into date categories (TODAY/YESTERDAY/UNKNOWN)
+- Pinned sessions should stay in the pinned section at the top of the context tree
+- Instead they're being moved into date-based categories like TODAY, YESTERDAY, or UNKNOWN
+- Client-side glitch - the pinned state is not being respected when sorting/categorizing sessions
+
+## Bug #24: Don't return FORK_PROPOSAL_PENDING or MERGE_PROPOSAL_PENDING to LLM
+- When a fork or merge proposal is pending user input, these status values should not be returned to the LLM
+- The LLM should be waiting for user input in these cases, not receiving status updates
+- These pending states are meant to block until user accepts/rejects, not to continue the conversation
+
+## Bug #25: Long messages are truncated instead of being collapsible
+- Long turn content is being truncated, which loses information
+- Turns should NOT truncate content
+- Instead, turns should be collapsible:
+  - Default/collapsed state: show first 5 lines
+  - Header bar should display the total line count (e.g., "42 lines")
+  - Expanded state: show full content when clicking header
+- This is similar to Bug #14 but applies to all turn types, not just tool use cards
+
+## Bug #26: Turn cards should support "raw" view toggle for debugging
+- Any turn type that derives from the base turn card should provide a "raw" rendering mode
+- Should be easily toggleable (button/hotkey) to switch between:
+  - Default: special/formatted rendering (markdown, syntax highlighting, etc.)
+  - Raw: plain text/JSON representation of the turn data for debugging
+- Useful for debugging rendering issues and understanding turn data structure

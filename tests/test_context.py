@@ -1,7 +1,7 @@
 """Tests for context building."""
 
 import pytest
-from core.context import ContextBuilder
+from core.context import ContextBuilder, OutputFormat
 from models import Message, TextBlock, ToolUseBlock, ToolResultBlock, ContextMode
 
 
@@ -16,7 +16,8 @@ class TestContextBuilder:
     def test_empty_messages(self, builder):
         """Empty message list produces just the new prompt."""
         result = builder.build_context([], "hello")
-        assert result == "User: hello"
+        # New format: prompt is not prefixed with "User:" since it's the current message
+        assert result == "hello"
 
     def test_simple_user_message(self, builder):
         """Single user message is included."""
@@ -24,8 +25,11 @@ class TestContextBuilder:
             Message(role="user", content="first message")
         ]
         result = builder.build_context(messages, "second")
-        assert "User: first message" in result
-        assert "User: second" in result
+        # New format uses XML tags
+        assert "<user>" in result
+        assert "first message" in result
+        assert "second" in result
+        assert "<conversation_history>" in result
 
     def test_user_and_assistant(self, builder):
         """Both user and assistant messages are included."""
@@ -34,9 +38,12 @@ class TestContextBuilder:
             Message(role="assistant", content="answer"),
         ]
         result = builder.build_context(messages, "follow up")
-        assert "User: question" in result
-        assert "Assistant: answer" in result
-        assert "User: follow up" in result
+        # New format uses XML tags
+        assert "<user>" in result
+        assert "question" in result
+        assert "<assistant>" in result
+        assert "answer" in result
+        assert "follow up" in result
 
     def test_drop_mode_excludes_message(self, builder):
         """Messages with DROP context_mode are excluded."""
@@ -78,7 +85,7 @@ class TestContextBuilder:
         assert "original content" in result
 
     def test_tool_use_block_formatting(self, builder):
-        """ToolUseBlock is formatted with tool name and JSON input."""
+        """ToolUseBlock is formatted with XML tags and JSON input."""
         messages = [
             Message(
                 role="assistant",
@@ -89,12 +96,13 @@ class TestContextBuilder:
             ),
         ]
         result = builder.build_context(messages, "new")
-        assert "[Tool Use: Read]" in result
+        # New format uses XML tags matching build_message_content
+        assert '<tool_use name="Read" id="123">' in result
         assert "file_path" in result
         assert "/test.py" in result
 
     def test_tool_result_block_formatting(self, builder):
-        """ToolResultBlock is formatted with result content."""
+        """ToolResultBlock is formatted with XML tags."""
         messages = [
             Message(
                 role="assistant",
@@ -105,11 +113,12 @@ class TestContextBuilder:
             ),
         ]
         result = builder.build_context(messages, "new")
-        assert "[Tool Result]" in result
+        # New format uses XML tags
+        assert '<tool_result id="123">' in result
         assert "file contents here" in result
 
     def test_tool_result_error_block(self, builder):
-        """Error tool results include [Error] prefix."""
+        """Error tool results include error attribute."""
         messages = [
             Message(
                 role="assistant",
@@ -120,7 +129,8 @@ class TestContextBuilder:
             ),
         ]
         result = builder.build_context(messages, "new")
-        assert "[Tool Result][Error]" in result
+        # New format uses XML attribute for errors
+        assert '<tool_result id="123" error="true">' in result
         assert "file not found" in result
 
     def test_long_tool_result_included_fully(self, builder):
@@ -155,9 +165,56 @@ class TestContextBuilder:
         ]
         result = builder.build_context(messages, "new")
         assert "Let me check that file" in result
-        assert "[Tool Use: Read]" in result
-        assert "[Tool Result]" in result
+        assert '<tool_use name="Read"' in result
+        assert '<tool_result id="123">' in result
         assert "hello world program" in result
+
+
+class TestContextBuilderChaining:
+    """Tests for the builder pattern chaining API."""
+
+    def test_builder_chaining(self, builder):
+        """Builder methods can be chained."""
+        messages = [Message(role="user", content="hello")]
+        result = (builder
+            .add_messages(messages)
+            .set_prompt("world")
+            .build(OutputFormat.TEXT))
+        assert "hello" in result.as_text()
+        assert "world" in result.as_text()
+
+    def test_clear_resets_state(self, builder):
+        """Clear removes accumulated state."""
+        builder.add_messages([Message(role="user", content="first")])
+        builder.set_prompt("test")
+        builder.clear()
+        result = builder.build(OutputFormat.TEXT)
+        assert "first" not in result.as_text()
+        assert "test" not in result.as_text()
+
+    def test_structured_format(self, builder):
+        """STRUCTURED format produces list of dicts."""
+        messages = [Message(role="user", content="hello")]
+        result = (builder
+            .add_messages(messages)
+            .set_prompt("world")
+            .build(OutputFormat.STRUCTURED))
+        assert isinstance(result.content, list)
+        assert all(isinstance(item, dict) for item in result.content)
+        # Should have history block and prompt block
+        assert len(result.content) == 2
+        assert result.content[0]["type"] == "text"
+        assert result.content[1]["type"] == "text"
+
+    def test_build_message_content_compatibility(self, builder):
+        """build_message_content produces same format as ClaudeRunner."""
+        messages = [Message(role="user", content="hello")]
+        content = builder.build_message_content(messages, "world")
+        assert isinstance(content, list)
+        assert len(content) == 2  # history + prompt
+        assert content[0]["type"] == "text"
+        assert "<conversation_history>" in content[0]["text"]
+        assert content[1]["text"] == "world"
 
 
 class TestContextSummaryPrompt:
@@ -217,7 +274,7 @@ class TestCountTurnTokens:
         result = builder.count_turn_tokens("assistant", [
             ToolUseBlock(id="123", name="Read", input={"file_path": "/very/long/path/to/file.py"})
         ])
-        # Should include "[Tool Use: Read]\n" + JSON formatted input
+        # Should include XML tags + JSON formatted input
         assert result > 10  # Rough estimate, JSON adds tokens
 
     def test_tool_result_block_counts_tokens(self, builder):
@@ -225,7 +282,7 @@ class TestCountTurnTokens:
         result = builder.count_turn_tokens("assistant", [
             ToolResultBlock(tool_use_id="123", content="file contents " * 100)
         ])
-        # Should include "[Tool Result]\n" + content
+        # Should include XML tags + content
         assert result > 50  # Lots of content
 
     def test_multiple_blocks_sum_correctly(self, builder):
@@ -244,3 +301,26 @@ class TestCountTurnTokens:
         assert result > text_only
         assert result > tool_use_only
         assert result > tool_result_only
+
+
+class TestTokenCounting:
+    """Tests for token counting accuracy."""
+
+    def test_count_tokens_matches_structured(self, builder):
+        """Token count should match between TEXT and STRUCTURED formats."""
+        messages = [
+            Message(role="user", content="hello world"),
+            Message(role="assistant", content="I can help with that"),
+        ]
+        builder.add_messages(messages).set_prompt("continue")
+
+        # Get token count
+        token_count = builder.count_tokens()
+
+        # Build structured and manually count
+        builder.clear().add_messages(messages).set_prompt("continue")
+        result = builder.build(OutputFormat.STRUCTURED)
+
+        # Both should produce reasonable counts
+        assert token_count > 0
+        assert result.token_count > 0

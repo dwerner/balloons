@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 
-export type Theme = 'light' | 'dark' | 'system';
-export type ResolvedTheme = 'light' | 'dark';
+export type Theme = 'light' | 'dark' | 'dark-flat' | 'system';
+export type ResolvedTheme = 'light' | 'dark' | 'dark-flat';
 
 interface ThemeContextValue {
   theme: Theme;
@@ -20,7 +20,7 @@ function getSystemTheme(): ResolvedTheme {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
-// Resolve theme to light or dark
+// Resolve theme to light, dark, or dark-flat
 function resolveTheme(theme: Theme): ResolvedTheme {
   if (theme === 'system') {
     return getSystemTheme();
@@ -33,7 +33,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setThemeState] = useState<Theme>(() => {
     if (typeof window === 'undefined') return 'dark';
     const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored === 'light' || stored === 'dark' || stored === 'system') {
+    if (stored === 'light' || stored === 'dark' || stored === 'dark-flat' || stored === 'system') {
       return stored;
     }
     return 'dark';
@@ -64,9 +64,14 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(STORAGE_KEY, newTheme);
   }, []);
 
-  // Toggle between light and dark (skip system)
+  // Cycle through themes: dark -> dark-flat -> light -> dark
   const toggleTheme = useCallback(() => {
-    setTheme(resolvedTheme === 'dark' ? 'light' : 'dark');
+    const cycle: Record<ResolvedTheme, Theme> = {
+      'dark': 'dark-flat',
+      'dark-flat': 'light',
+      'light': 'dark',
+    };
+    setTheme(cycle[resolvedTheme]);
   }, [resolvedTheme, setTheme]);
 
   const value = useMemo(() => ({

@@ -323,3 +323,64 @@
 [data-theme="dark"] .streaming-turn-card.tool .streaming-turn-header {
   background: rgba(251, 191, 36, 0.1);
 }
+
+/* Dark flat mode - minimal borders */
+:root[data-theme="dark-flat"] .streaming-turn-card,
+[data-theme="dark-flat"] .streaming-turn-card {
+  border: none;
+  border-left: 2px solid var(--border-color);
+}
+
+:root[data-theme="dark-flat"] .streaming-turn-card.streaming,
+[data-theme="dark-flat"] .streaming-turn-card.streaming {
+  box-shadow: none;
+  border-left-color: var(--color-primary);
+}
+
+:root[data-theme="dark-flat"] .streaming-turn-header,
+[data-theme="dark-flat"] .streaming-turn-header {
+  background: transparent;
+  border-bottom: none;
+}
+
+:root[data-theme="dark-flat"] .streaming-turn-card.user,
+[data-theme="dark-flat"] .streaming-turn-card.user {
+  border-left-color: var(--accent-user);
+}
+
+:root[data-theme="dark-flat"] .streaming-turn-card.user .streaming-turn-header,
+[data-theme="dark-flat"] .streaming-turn-card.user .streaming-turn-header {
+  background: transparent;
+}
+
+:root[data-theme="dark-flat"] .streaming-turn-card.assistant,
+[data-theme="dark-flat"] .streaming-turn-card.assistant {
+  border-left-color: var(--accent-assistant);
+}
+
+:root[data-theme="dark-flat"] .streaming-turn-card.assistant .streaming-turn-header,
+[data-theme="dark-flat"] .streaming-turn-card.assistant .streaming-turn-header {
+  background: transparent;
+}
+
+:root[data-theme="dark-flat"] .streaming-turn-card.tool,
+[data-theme="dark-flat"] .streaming-turn-card.tool {
+  border-left-color: var(--accent-tool);
+}
+
+:root[data-theme="dark-flat"] .streaming-turn-card.tool .streaming-turn-header,
+[data-theme="dark-flat"] .streaming-turn-card.tool .streaming-turn-header {
+  background: transparent;
+}
+
+:root[data-theme="dark-flat"] .parallel-group,
+[data-theme="dark-flat"] .parallel-group {
+  border: none;
+  border-left: 2px solid rgb(147, 51, 234);
+}
+
+:root[data-theme="dark-flat"] .parallel-group-header,
+[data-theme="dark-flat"] .parallel-group-header {
+  background: transparent;
+  border-bottom: none;
+}

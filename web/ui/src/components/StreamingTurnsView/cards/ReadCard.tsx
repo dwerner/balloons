@@ -95,15 +95,15 @@ export function ReadCard({ turn, result }: ReadCardProps) {
   })();
 
   // Strip line number prefixes from Read output
-  // Claude Code's Read tool adds prefixes like "     1\t" (spaces + number + tab)
+  // Balloons Read tool adds prefixes like "     1→" (spaces + number + arrow)
   // We need to strip these for proper syntax highlighting
   const stripLineNumberPrefixes = (content: string): string => {
     return content
       .split('\n')
       .map(line => {
-        // Match pattern: optional spaces + digits + tab + content
-        // Claude Code format: "     1\tcontent" (cat -n style)
-        const match = line.match(/^\s*\d+\t(.*)$/);
+        // Match pattern: optional spaces + digits + arrow (→) + content
+        // Format: "     1→content" or "   123→content"
+        const match = line.match(/^\s*\d+→(.*)$/);
         return match ? match[1] : line;
       })
       .join('\n');

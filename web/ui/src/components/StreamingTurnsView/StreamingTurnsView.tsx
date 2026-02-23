@@ -20,10 +20,13 @@
 
 import React, { useMemo, useEffect } from 'react';
 import type { BalloonsClient } from '../../../../generated/balloons-client';
-import { useSessionData, useAutoScroll, type SessionDataTurn } from '../../hooks';
+import { useSessionData, useAutoScroll, type SessionDataTurn, type StreamingProgress } from '../../hooks';
 import { TurnCard, ClientContext } from './cards';
 import { ScrollToBottom } from '../ScrollToBottom';
 import './StreamingTurnsView.css';
+
+// Re-export StreamingProgress for consumers
+export type { StreamingProgress } from '../../hooks';
 
 /**
  * Represents either a single turn or a group of parallel turns
@@ -40,10 +43,12 @@ interface StreamingTurnsViewProps {
   onSelectSession?: (sessionId: string) => void;
   /** Callback when scroll state changes (for status bar display) */
   onScrollStateChange?: (state: { isFollowing: boolean; isAtBottom: boolean }) => void;
+  /** Callback when streaming progress updates (for status bar token counts) */
+  onStreamingProgressChange?: (progress: StreamingProgress | null) => void;
 }
 
-export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrollStateChange }: StreamingTurnsViewProps) {
-  const { turns, isLoading, isSubscribed, isStreaming, streamError, error } = useSessionData(client, sessionId);
+export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrollStateChange, onStreamingProgressChange }: StreamingTurnsViewProps) {
+  const { turns, isLoading, isSubscribed, isStreaming, streamError, error, streamingProgress } = useSessionData(client, sessionId);
 
   // Memoize context value to prevent unnecessary re-renders
   const contextValue = useMemo(() => ({
@@ -64,6 +69,13 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
       onScrollStateChange({ isFollowing, isAtBottom });
     }
   }, [isFollowing, isAtBottom, onScrollStateChange]);
+
+  // Report streaming progress changes to parent (for status bar token counts)
+  useEffect(() => {
+    if (onStreamingProgressChange) {
+      onStreamingProgressChange(streamingProgress);
+    }
+  }, [streamingProgress, onStreamingProgressChange]);
 
   // Filter out tool_result turns - they're rendered inline with their matching tool_use
   // NOTE: All hooks must be called before any early returns

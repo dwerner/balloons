@@ -359,9 +359,8 @@ class ClaudeRunner(BaseRunner):
     ) -> list[dict]:
         """Build content blocks for the user message.
 
-        Converts message history into a content array that Claude can understand.
-        Each message becomes a text block with role prefix, tool uses become
-        proper tool_use references, and tool results become tool_result blocks.
+        Delegates to ContextBuilder which is the single source of truth for
+        context formatting. This ensures token counting is accurate.
 
         Args:
             messages: Message history
@@ -371,122 +370,25 @@ class ClaudeRunner(BaseRunner):
         Returns:
             List of content blocks for the user message
         """
-        content = []
+        from core.context import ContextBuilder, OutputFormat
 
-        # Build conversation history as text blocks
-        # Collect images from history to add as proper content blocks
-        history_parts = []
-        history_images = []
-        for msg in messages:
-            if msg.context_mode == ContextMode.DROP:
-                continue
+        builder = ContextBuilder()
+        builder.add_messages(messages)
+        builder.set_prompt(new_prompt)
+        if images:
+            builder.add_images(images)
 
-            # Handle system messages
-            if msg.role == "system":
-                if msg.content_blocks:
-                    for block in msg.content_blocks:
-                        if isinstance(block, LinkBlock):
-                            link_info = f"[Link: {block.linked_session_id[:8]}]"
-                            if block.summary:
-                                link_info += f" - {block.summary}"
-                            history_parts.append(link_info)
-                        elif isinstance(block, ArchiveBlock):
-                            archive_info = f"[Archived {block.message_count} turns: {block.summary}]"
-                            archive_info += f"\n(Archive JSON path: {block.file_path})"
-                            history_parts.append(archive_info)
-                        elif isinstance(block, TextBlock) and block.text:
-                            history_parts.append(block.text)
-                elif msg.content:
-                    history_parts.append(msg.content)
-                continue
+        result = builder.build(OutputFormat.STRUCTURED)
 
-            # Use summary if in SUMMARIZE mode
-            if msg.context_mode == ContextMode.SUMMARIZE and msg.summary:
-                role_name = "User" if msg.role == "user" else "Assistant"
-                history_parts.append(f"<{role_name.lower()}>\n[Summary] {msg.summary}\n</{role_name.lower()}>")
-                continue
-
-            # Build content from blocks
-            if msg.content_blocks:
-                role_name = "user" if msg.role == "user" else "assistant"
-                block_texts = []
-
-                for block in msg.content_blocks:
-                    if isinstance(block, TextBlock) and block.text:
-                        block_texts.append(block.text)
-                    elif isinstance(block, ImageBlock):
-                        # Collect images to add as proper content blocks after history
-                        history_images.append(block)
-                    elif isinstance(block, ToolUseBlock):
-                        tool_info = f"<tool_use name=\"{block.name}\" id=\"{block.id}\">\n{json.dumps(block.input, indent=2)}\n</tool_use>"
-                        block_texts.append(tool_info)
-                    elif isinstance(block, ToolResultBlock):
-                        error_attr = ' error="true"' if block.is_error else ''
-                        result_info = f"<tool_result id=\"{block.tool_use_id}\"{error_attr}>\n{block.content}\n</tool_result>"
-                        block_texts.append(result_info)
-                    elif isinstance(block, InterruptionBlock):
-                        block_texts.append(f"[Response interrupted: {block.reason}]")
-                    elif isinstance(block, ErrorBlock):
-                        error_info = f"[Response truncated: {block.reason}]"
-                        if block.partial_tool_name:
-                            error_info += f" (incomplete tool: {block.partial_tool_name})"
-                        block_texts.append(error_info)
-                    elif isinstance(block, LinkBlock):
-                        link_info = f"[Link: {block.linked_session_id[:8]}]"
-                        if block.summary:
-                            link_info += f" - {block.summary}"
-                        block_texts.append(link_info)
-                    elif isinstance(block, ArchiveBlock):
-                        archive_info = f"[Archived {block.message_count} turns: {block.summary}]"
-                        archive_info += f"\n(Archive ID: {block.archive_id}, JSON path: {block.file_path})"
-                        block_texts.append(archive_info)
-
-                if block_texts:
-                    history_parts.append(f"<{role_name}>\n" + "\n\n".join(block_texts) + f"\n</{role_name}>")
-            elif msg.content:
-                role_name = "user" if msg.role == "user" else "assistant"
-                history_parts.append(f"<{role_name}>\n{msg.content}\n</{role_name}>")
-
-        # Add history as a single text block if we have any
-        if history_parts:
-            history_text = "<conversation_history>\n" + "\n\n".join(history_parts) + "\n</conversation_history>"
-            content.append({"type": "text", "text": history_text})
-
-        # Add images from history as proper content blocks (Anthropic URL format)
-        for img_block in history_images:
-            content.append({
-                "type": "image",
-                "source": {
-                    "type": "url",
-                    "url": f"file://{img_block.file_path}",
-                }
-            })
+        # Log images that were collected (for debugging)
+        for img_block in result.history_images:
             debug_log.info(
-                f"Added image from history: {img_block.file_path}",
+                f"Added image: {img_block.file_path}",
                 category="image",
                 run_id=self._run_id,
             )
 
-        # Add images for the current message (Anthropic URL format)
-        if images:
-            for img_block in images:
-                content.append({
-                    "type": "image",
-                    "source": {
-                        "type": "url",
-                        "url": f"file://{img_block.file_path}",
-                    }
-                })
-                debug_log.info(
-                    f"Added image for current message: {img_block.file_path}",
-                    category="image",
-                    run_id=self._run_id,
-                )
-
-        # Add the new prompt
-        content.append({"type": "text", "text": new_prompt})
-
-        return content
+        return result.content  # type: ignore
 
     async def stream_response(
         self, messages: list[Message], prompt: str, allowed_tools: list[str] | None = None,
@@ -975,78 +877,17 @@ class ClaudeRunner(BaseRunner):
 
     @staticmethod
     def build_context(messages: list[Message], new_prompt: str) -> str:
-        """Build a human-readable context string for display purposes.
+        """Build context string for display/debugging.
 
-        This is used by the UI to show what context will be sent. The actual
-        API uses build_message_content() which returns structured content blocks.
+        Delegates to ContextBuilder which is the single source of truth.
 
         Args:
             messages: Message history
             new_prompt: New user prompt
 
         Returns:
-            Human-readable string representation of the context
+            Context string with XML formatting
         """
-        parts = []
-
-        for msg in messages:
-            if msg.context_mode == ContextMode.DROP:
-                continue
-
-            if msg.role == "system":
-                if msg.content_blocks:
-                    for block in msg.content_blocks:
-                        if isinstance(block, LinkBlock):
-                            link_info = f"[Link: {block.linked_session_id[:8]}]"
-                            if block.summary:
-                                link_info += f" - {block.summary}"
-                            parts.append(link_info)
-                        elif isinstance(block, ArchiveBlock):
-                            archive_info = f"[Archived {block.message_count} turns: {block.summary}]"
-                            archive_info += f"\n(Archive ID: {block.archive_id}, JSON path: {block.file_path})"
-                            parts.append(archive_info)
-                        elif isinstance(block, TextBlock) and block.text:
-                            parts.append(block.text)
-                elif msg.content:
-                    parts.append(msg.content)
-                continue
-
-            role_name = "User" if msg.role == "user" else "Assistant"
-
-            if msg.context_mode == ContextMode.SUMMARIZE and msg.summary:
-                parts.append(f"{role_name}: [Summary] {msg.summary}")
-                continue
-
-            if msg.content_blocks:
-                block_texts = []
-                for block in msg.content_blocks:
-                    if isinstance(block, TextBlock) and block.text:
-                        block_texts.append(block.text)
-                    elif isinstance(block, ToolUseBlock):
-                        block_texts.append(f"[Tool: {block.name}]\n{json.dumps(block.input, indent=2)}")
-                    elif isinstance(block, ToolResultBlock):
-                        error_mark = " (error)" if block.is_error else ""
-                        block_texts.append(f"[Result{error_mark}]\n{block.content}")
-                    elif isinstance(block, InterruptionBlock):
-                        block_texts.append(f"[Interrupted: {block.reason}]")
-                    elif isinstance(block, ErrorBlock):
-                        block_texts.append(f"[Error: {block.reason}]")
-                    elif isinstance(block, LinkBlock):
-                        link_info = f"[Link: {block.linked_session_id[:8]}]"
-                        if block.summary:
-                            link_info += f" - {block.summary}"
-                        block_texts.append(link_info)
-                    elif isinstance(block, ArchiveBlock):
-                        archive_info = f"[Archived {block.message_count} turns: {block.summary}]"
-                        archive_info += f"\n(Archive ID: {block.archive_id}, JSON path: {block.file_path})"
-                        block_texts.append(archive_info)
-
-                if block_texts:
-                    parts.append(f"{role_name}: " + "\n".join(block_texts))
-            elif msg.content:
-                parts.append(f"{role_name}: {msg.content}")
-
-        if new_prompt:
-            parts.append(f"User: {new_prompt}")
-
-        return "\n\n".join(parts)
+        from core.context import ContextBuilder
+        builder = ContextBuilder()
+        return builder.build_context(messages, new_prompt)

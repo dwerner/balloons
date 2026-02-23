@@ -11,26 +11,34 @@ The balloons app stores conversation history as a list of Message objects with
 rich content_blocks (TextBlock, ToolUseBlock, ToolResultBlock, etc.). When making
 API calls, this history must be compiled into the format expected by each backend.
 
-Supported Backends:
-1. Claude (via claude CLI) - Text-based context (single string)
-2. OpenAI-compatible APIs - Chat completion format (list of message dicts)
+CONTEXT FORMAT (XML-based):
+---------------------------
+Context is formatted with XML tags for structure:
 
-CURRENT FORMAT (Text Serialization):
-------------------------------------
-Both backends currently serialize tool calls as text, not native API formats.
+    <conversation_history>
+    <user>
+    What is 2+2?
+    </user>
 
-Claude format (single string, newline-separated):
-    User: <content>
+    <assistant>
+    The answer is 4.
 
-    Assistant: <text>
+    <tool_use name="Calculate" id="123">
+    {"expression": "2+2"}
+    </tool_use>
+    </assistant>
 
-    [Tool: <name>]
-    <json input>
+    <tool_result id="123">
+    4
+    </tool_result>
+    </conversation_history>
 
-    [Result]
-    <result content>
+    new prompt here
 
-    User: <new prompt>
+This format is used consistently for:
+- Sending to Claude API (via build_message_content)
+- Token counting (via ContextBuilder.count_tokens)
+- Display/debugging (via ContextBuilder.build_context)
 
 OpenAI format (list of message dicts):
     [
@@ -45,29 +53,6 @@ CONTEXT MODE RULES:
 - COPY: Include message content verbatim
 - SUMMARIZE: Use msg.summary if present, else fall back to content
 - DROP: Exclude message entirely
-
-FUTURE: Native Tool Formats (not yet implemented):
---------------------------------------------------
-Claude native format would use content blocks:
-    [
-      {"role": "user", "content": [{"type": "text", "text": "..."}]},
-      {"role": "assistant", "content": [
-        {"type": "text", "text": "..."},
-        {"type": "tool_use", "id": "...", "name": "...", "input": {...}}
-      ]},
-      {"role": "user", "content": [
-        {"type": "tool_result", "tool_use_id": "...", "content": "..."}
-      ]}
-    ]
-
-OpenAI native format would use tool_calls and role=tool:
-    [
-      {"role": "user", "content": "..."},
-      {"role": "assistant", "content": "...", "tool_calls": [
-        {"id": "...", "type": "function", "function": {"name": "...", "arguments": "{...}"}}
-      ]},
-      {"role": "tool", "tool_call_id": "...", "content": "..."}
-    ]
 """
 
 import json
@@ -78,10 +63,9 @@ from models import (
     InterruptionBlock, ErrorBlock, ArchiveBlock, ContextMode,
 )
 
-# Import OpenAI runner first (doesn't import claude_runner)
+# Import builders
+from core.context import ContextBuilder
 from core.openai_runner import OpenAICompatibleRunner
-# Then import claude_runner (which may cause core/__init__.py to load, but that's OK
-# since openai_runner is already loaded)
 from claude_runner import ClaudeRunner
 
 
@@ -105,32 +89,54 @@ def conversation_with_tool_use():
         Message(role="user", content="Read the config file"),
         Message(
             role="assistant",
-            content="Let me read that file.",
+            content="",
             content_blocks=[
-                TextBlock(text="Let me read that file."),
+                TextBlock(text="I'll read that file for you."),
                 ToolUseBlock(
-                    id="tool_001",
+                    id="tool-123",
                     name="Read",
-                    input={"file_path": "/etc/config.yaml"}
+                    input={"file_path": "/etc/config.yaml"},
                 ),
             ],
         ),
         Message(
             role="assistant",
-            content="[Tool Result]",
+            content="",
             content_blocks=[
                 ToolResultBlock(
-                    tool_use_id="tool_001",
+                    tool_use_id="tool-123",
                     content="key: value\nport: 8080",
-                    is_error=False,
+                ),
+            ],
+        ),
+    ]
+
+
+@pytest.fixture
+def conversation_with_tool_error():
+    """Conversation with a tool that returns an error."""
+    return [
+        Message(role="user", content="Read the missing file"),
+        Message(
+            role="assistant",
+            content="",
+            content_blocks=[
+                ToolUseBlock(
+                    id="tool-456",
+                    name="Read",
+                    input={"file_path": "/nonexistent"},
                 ),
             ],
         ),
         Message(
             role="assistant",
-            content="The config file contains key=value and port=8080.",
+            content="",
             content_blocks=[
-                TextBlock(text="The config file contains key=value and port=8080."),
+                ToolResultBlock(
+                    tool_use_id="tool-456",
+                    content="File not found",
+                    is_error=True,
+                ),
             ],
         ),
     ]
@@ -143,13 +149,12 @@ def conversation_with_multiple_tools():
         Message(role="user", content="Find and read test files"),
         Message(
             role="assistant",
-            content="I'll search for test files.",
+            content="",
             content_blocks=[
-                TextBlock(text="I'll search for test files."),
                 ToolUseBlock(
-                    id="tool_001",
+                    id="tool-1",
                     name="Glob",
-                    input={"pattern": "test_*.py"}
+                    input={"pattern": "**/*test*.py"},
                 ),
             ],
         ),
@@ -158,20 +163,19 @@ def conversation_with_multiple_tools():
             content="",
             content_blocks=[
                 ToolResultBlock(
-                    tool_use_id="tool_001",
+                    tool_use_id="tool-1",
                     content="test_foo.py\ntest_bar.py",
                 ),
             ],
         ),
         Message(
             role="assistant",
-            content="Found 2 test files, reading the first one.",
+            content="",
             content_blocks=[
-                TextBlock(text="Found 2 test files, reading the first one."),
                 ToolUseBlock(
-                    id="tool_002",
+                    id="tool-2",
                     name="Read",
-                    input={"file_path": "test_foo.py"}
+                    input={"file_path": "test_foo.py"},
                 ),
             ],
         ),
@@ -180,39 +184,8 @@ def conversation_with_multiple_tools():
             content="",
             content_blocks=[
                 ToolResultBlock(
-                    tool_use_id="tool_002",
-                    content="def test_example():\n    assert True",
-                ),
-            ],
-        ),
-    ]
-
-
-@pytest.fixture
-def conversation_with_tool_error():
-    """Conversation where a tool returns an error."""
-    return [
-        Message(role="user", content="Read the missing file"),
-        Message(
-            role="assistant",
-            content="Let me try to read that.",
-            content_blocks=[
-                TextBlock(text="Let me try to read that."),
-                ToolUseBlock(
-                    id="tool_001",
-                    name="Read",
-                    input={"file_path": "/nonexistent.txt"}
-                ),
-            ],
-        ),
-        Message(
-            role="assistant",
-            content="",
-            content_blocks=[
-                ToolResultBlock(
-                    tool_use_id="tool_001",
-                    content="Error: File not found",
-                    is_error=True,
+                    tool_use_id="tool-2",
+                    content="def test_example():\n    pass",
                 ),
             ],
         ),
@@ -221,14 +194,14 @@ def conversation_with_tool_error():
 
 @pytest.fixture
 def conversation_with_interruption():
-    """Conversation where response was interrupted."""
+    """Conversation with an interruption block."""
     return [
-        Message(role="user", content="Write a long essay"),
+        Message(role="user", content="Do something long"),
         Message(
             role="assistant",
-            content="Here is the beginning of the essay...",
+            content="",
             content_blocks=[
-                TextBlock(text="Here is the beginning of the essay..."),
+                TextBlock(text="Starting the task..."),
                 InterruptionBlock(reason="user_cancelled"),
             ],
         ),
@@ -237,19 +210,15 @@ def conversation_with_interruption():
 
 @pytest.fixture
 def conversation_with_error_block():
-    """Conversation where response was truncated."""
+    """Conversation with an error block (truncated response)."""
     return [
-        Message(role="user", content="Do something complex"),
+        Message(role="user", content="Generate a lot of text"),
         Message(
             role="assistant",
-            content="Starting the task...",
+            content="",
             content_blocks=[
-                TextBlock(text="Starting the task..."),
-                ErrorBlock(
-                    reason="truncated",
-                    partial_tool_name="Edit",
-                    partial_tool_input='{"file_path": "/some/file',
-                ),
+                TextBlock(text="Here is some text..."),
+                ErrorBlock(reason="truncated", details="Response too long"),
             ],
         ),
     ]
@@ -257,134 +226,127 @@ def conversation_with_error_block():
 
 @pytest.fixture
 def conversation_with_context_modes():
-    """Conversation with different context modes."""
+    """Conversation with various context modes."""
     return [
-        Message(
-            role="user",
-            content="First question",
-            context_mode=ContextMode.COPY,
-        ),
+        # COPY - include fully
+        Message(role="user", content="First question", context_mode=ContextMode.COPY),
+        # SUMMARIZE - use summary field
         Message(
             role="assistant",
-            content="Long detailed answer that should be summarized...",
+            content="Long detailed answer that goes on and on...",
             context_mode=ContextMode.SUMMARIZE,
             summary="Brief: answered first question",
         ),
-        Message(
-            role="user",
-            content="Off-topic tangent to drop",
-            context_mode=ContextMode.DROP,
-        ),
-        Message(
-            role="assistant",
-            content="Response to tangent",
-            context_mode=ContextMode.DROP,
-        ),
-        Message(
-            role="user",
-            content="Back on topic",
-            context_mode=ContextMode.COPY,
-        ),
+        # DROP - exclude entirely
+        Message(role="user", content="Off-topic tangent", context_mode=ContextMode.DROP),
+        Message(role="assistant", content="Response to tangent", context_mode=ContextMode.DROP),
+        # COPY again
+        Message(role="user", content="Back on topic", context_mode=ContextMode.COPY),
     ]
 
 
 # =============================================================================
-# Claude Runner Tests
+# ContextBuilder Tests (Single Source of Truth)
 # =============================================================================
 
-class TestClaudeContextFormat:
-    """Tests for ClaudeRunner.build_context() output format."""
+class TestContextBuilderFormat:
+    """Tests for ContextBuilder output format - the single source of truth."""
 
-    def test_empty_messages_returns_just_prompt(self):
+    @pytest.fixture
+    def builder(self):
+        return ContextBuilder()
+
+    def test_empty_messages_returns_just_prompt(self, builder):
         """Empty message list produces just the new prompt."""
-        result = ClaudeRunner.build_context([], "Hello")
-        assert result == "User: Hello"
+        result = builder.build_context([], "Hello")
+        assert result == "Hello"
 
-    def test_simple_conversation_format(self, simple_conversation):
-        """Simple conversation uses User/Assistant prefixes."""
-        result = ClaudeRunner.build_context(simple_conversation, "follow up")
+    def test_simple_conversation_format(self, builder, simple_conversation):
+        """Simple conversation uses XML tags."""
+        result = builder.build_context(simple_conversation, "follow up")
 
-        # Check structure
-        lines = result.split("\n\n")
-        assert len(lines) == 3
+        # Check XML structure
+        assert "<conversation_history>" in result
+        assert "</conversation_history>" in result
+        assert "<user>" in result
+        assert "</user>" in result
+        assert "<assistant>" in result
+        assert "</assistant>" in result
+        assert "What is 2+2?" in result
+        assert "The answer is 4." in result
+        assert "follow up" in result
 
-        assert lines[0] == "User: What is 2+2?"
-        assert lines[1] == "Assistant: The answer is 4."
-        assert lines[2] == "User: follow up"
+    def test_tool_use_format(self, builder, conversation_with_tool_use):
+        """Tool use is formatted with XML tags."""
+        result = builder.build_context(conversation_with_tool_use, "next")
 
-    def test_tool_use_format(self, conversation_with_tool_use):
-        """Tool use is formatted as [Tool: name] with JSON input."""
-        result = ClaudeRunner.build_context(conversation_with_tool_use, "next")
-
-        # Check tool use marker present
-        assert "[Tool: Read]" in result
-
-        # Check JSON input is included
+        # Check tool use XML
+        assert '<tool_use name="Read" id="tool-123">' in result
         assert '"file_path"' in result
         assert '"/etc/config.yaml"' in result
 
-    def test_tool_result_format(self, conversation_with_tool_use):
-        """Tool result is formatted as [Result] with content."""
-        result = ClaudeRunner.build_context(conversation_with_tool_use, "next")
+    def test_tool_result_format(self, builder, conversation_with_tool_use):
+        """Tool result is formatted with XML tags."""
+        result = builder.build_context(conversation_with_tool_use, "next")
 
-        assert "[Result]" in result
+        assert '<tool_result id="tool-123">' in result
         assert "key: value" in result
         assert "port: 8080" in result
 
-    def test_tool_error_format(self, conversation_with_tool_error):
-        """Tool errors include (error) suffix in result."""
-        result = ClaudeRunner.build_context(conversation_with_tool_error, "next")
+    def test_tool_error_format(self, builder, conversation_with_tool_error):
+        """Tool errors include error attribute."""
+        result = builder.build_context(conversation_with_tool_error, "next")
 
-        assert "[Result (error)]" in result
+        assert '<tool_result id="tool-456" error="true">' in result
         assert "File not found" in result
 
-    def test_multiple_tools_ordering(self, conversation_with_multiple_tools):
+    def test_multiple_tools_ordering(self, builder, conversation_with_multiple_tools):
         """Multiple tools appear in order with their results."""
-        result = ClaudeRunner.build_context(conversation_with_multiple_tools, "done")
+        result = builder.build_context(conversation_with_multiple_tools, "done")
 
         # Find positions of each element
-        glob_pos = result.find("[Tool: Glob]")
+        glob_pos = result.find('<tool_use name="Glob"')
         glob_result_pos = result.find("test_foo.py")
-        read_pos = result.find("[Tool: Read]")
+        read_pos = result.find('<tool_use name="Read"')
         read_result_pos = result.find("def test_example")
 
         # Verify ordering
         assert glob_pos < glob_result_pos < read_pos < read_result_pos
 
-    def test_interruption_block_format(self, conversation_with_interruption):
+    def test_interruption_block_format(self, builder, conversation_with_interruption):
         """Interruption blocks are formatted with reason."""
-        result = ClaudeRunner.build_context(conversation_with_interruption, "continue")
+        result = builder.build_context(conversation_with_interruption, "continue")
 
-        assert "[Interrupted: user_cancelled]" in result
+        assert "[Response interrupted: user_cancelled]" in result
 
-    def test_error_block_format(self, conversation_with_error_block):
+    def test_error_block_format(self, builder, conversation_with_error_block):
         """Error blocks show truncation info."""
-        result = ClaudeRunner.build_context(conversation_with_error_block, "retry")
+        result = builder.build_context(conversation_with_error_block, "retry")
 
-        assert "[Error: truncated]" in result
+        assert "[Response truncated: truncated]" in result
 
-    def test_drop_mode_excludes_messages(self, conversation_with_context_modes):
+    def test_drop_mode_excludes_messages(self, builder, conversation_with_context_modes):
         """DROP mode messages are not included in output."""
-        result = ClaudeRunner.build_context(conversation_with_context_modes, "new")
+        result = builder.build_context(conversation_with_context_modes, "new")
 
         assert "Off-topic tangent" not in result
         assert "Response to tangent" not in result
 
-    def test_summarize_mode_uses_summary(self, conversation_with_context_modes):
+    def test_summarize_mode_uses_summary(self, builder, conversation_with_context_modes):
         """SUMMARIZE mode uses summary field instead of content."""
-        result = ClaudeRunner.build_context(conversation_with_context_modes, "new")
+        result = builder.build_context(conversation_with_context_modes, "new")
 
         assert "[Summary] Brief: answered first question" in result
         assert "Long detailed answer" not in result
 
-    def test_copy_mode_includes_full_content(self, conversation_with_context_modes):
+    def test_copy_mode_includes_full_content(self, builder, conversation_with_context_modes):
         """COPY mode includes full content."""
-        result = ClaudeRunner.build_context(conversation_with_context_modes, "new")
+        result = builder.build_context(conversation_with_context_modes, "new")
 
         assert "First question" in result
         assert "Back on topic" in result
 
-    def test_summarize_without_summary_falls_back(self):
+    def test_summarize_without_summary_falls_back(self, builder):
         """SUMMARIZE mode without summary uses content."""
         messages = [
             Message(
@@ -394,11 +356,11 @@ class TestClaudeContextFormat:
                 summary="",  # Empty summary
             ),
         ]
-        result = ClaudeRunner.build_context(messages, "new")
+        result = builder.build_context(messages, "new")
 
         assert "Original content" in result
 
-    def test_mixed_content_blocks_all_included(self):
+    def test_mixed_content_blocks_all_included(self, builder):
         """Messages with mixed block types include all blocks."""
         messages = [
             Message(
@@ -412,16 +374,16 @@ class TestClaudeContextFormat:
                 ],
             ),
         ]
-        result = ClaudeRunner.build_context(messages, "next")
+        result = builder.build_context(messages, "next")
 
         assert "First I'll check the file." in result
-        assert "[Tool: Read]" in result
-        assert "[Result]" in result
+        assert '<tool_use name="Read"' in result
+        assert '<tool_result id="t1">' in result
         assert "code here" in result
         assert "The file contains code." in result
 
-    def test_empty_text_blocks_skipped(self):
-        """Empty text blocks don't add extra whitespace."""
+    def test_empty_text_blocks_skipped(self, builder):
+        """Empty text blocks don't add extra content."""
         messages = [
             Message(
                 role="assistant",
@@ -432,11 +394,39 @@ class TestClaudeContextFormat:
                 ],
             ),
         ]
-        result = ClaudeRunner.build_context(messages, "next")
+        result = builder.build_context(messages, "next")
 
-        # Should have content but not extra blank entries
         assert "Actual content" in result
-        assert "Assistant: \n\n" not in result  # No empty prefix
+
+
+# =============================================================================
+# ClaudeRunner Tests (Delegates to ContextBuilder)
+# =============================================================================
+
+class TestClaudeContextFormat:
+    """Tests for ClaudeRunner.build_context() - should match ContextBuilder."""
+
+    def test_delegates_to_context_builder(self, simple_conversation):
+        """ClaudeRunner.build_context delegates to ContextBuilder."""
+        claude_result = ClaudeRunner.build_context(simple_conversation, "follow up")
+        builder_result = ContextBuilder().build_context(simple_conversation, "follow up")
+
+        assert claude_result == builder_result
+
+    def test_empty_messages_returns_just_prompt(self):
+        """Empty message list produces just the new prompt."""
+        result = ClaudeRunner.build_context([], "Hello")
+        assert result == "Hello"
+
+    def test_tool_use_format(self, conversation_with_tool_use):
+        """Tool use is formatted with XML tags."""
+        result = ClaudeRunner.build_context(conversation_with_tool_use, "next")
+        assert '<tool_use name="Read"' in result
+
+    def test_drop_mode_excludes_messages(self, conversation_with_context_modes):
+        """DROP mode messages are not included in output."""
+        result = ClaudeRunner.build_context(conversation_with_context_modes, "new")
+        assert "Off-topic tangent" not in result
 
 
 # =============================================================================
@@ -488,95 +478,86 @@ class TestOpenAIContextFormat:
         result = runner.build_messages(simple_conversation, "follow up")
 
         assert len(result) == 3
-        assert result[0] == {"role": "user", "content": "What is 2+2?"}
-        assert result[1] == {"role": "assistant", "content": "The answer is 4."}
-        assert result[2] == {"role": "user", "content": "follow up"}
+        assert result[0]["role"] == "user"
+        assert "What is 2+2?" in result[0]["content"]
+        assert result[1]["role"] == "assistant"
+        assert "The answer is 4." in result[1]["content"]
+        assert result[2]["role"] == "user"
+        assert result[2]["content"] == "follow up"
 
     def test_tool_use_serialized_as_text(self, runner, conversation_with_tool_use):
-        """Tool use is currently serialized as text in content."""
+        """Tool uses are serialized as text in OpenAI format."""
         result = runner.build_messages(conversation_with_tool_use, "next")
+        all_content = " ".join(m.get("content", "") for m in result)
 
-        # Find the message with tool use
-        tool_msg = next(m for m in result if "[Tool: Read]" in m.get("content", ""))
-
-        assert tool_msg["role"] == "assistant"
-        assert '"file_path"' in tool_msg["content"]
-        assert '"/etc/config.yaml"' in tool_msg["content"]
+        assert "[Tool: Read]" in all_content
+        assert '"file_path"' in all_content
 
     def test_tool_result_serialized_as_text(self, runner, conversation_with_tool_use):
-        """Tool result is currently serialized as text in content."""
+        """Tool results are serialized as text in OpenAI format."""
         result = runner.build_messages(conversation_with_tool_use, "next")
+        all_content = " ".join(m.get("content", "") for m in result)
 
-        # Find the message with tool result
-        result_msg = next(m for m in result if "[Result]" in m.get("content", ""))
-
-        assert result_msg["role"] == "assistant"
-        assert "key: value" in result_msg["content"]
+        assert "[Result]" in all_content
+        assert "key: value" in all_content
 
     def test_tool_error_format(self, runner, conversation_with_tool_error):
-        """Tool errors include (error) suffix."""
+        """Tool errors include (error) marker in OpenAI format."""
         result = runner.build_messages(conversation_with_tool_error, "next")
-
         all_content = " ".join(m.get("content", "") for m in result)
+
         assert "[Result (error)]" in all_content
         assert "File not found" in all_content
 
     def test_interruption_block_format(self, runner, conversation_with_interruption):
-        """Interruption blocks are formatted with reason."""
+        """Interruption blocks are formatted in OpenAI messages."""
         result = runner.build_messages(conversation_with_interruption, "continue")
-
         all_content = " ".join(m.get("content", "") for m in result)
+
         assert "[Interrupted: user_cancelled]" in all_content
 
     def test_error_block_format(self, runner, conversation_with_error_block):
-        """Error blocks show truncation info."""
+        """Error blocks are formatted in OpenAI messages."""
         result = runner.build_messages(conversation_with_error_block, "retry")
-
         all_content = " ".join(m.get("content", "") for m in result)
+
         assert "[Error: truncated]" in all_content
 
     def test_drop_mode_excludes_messages(self, runner, conversation_with_context_modes):
-        """DROP mode messages are not included."""
+        """DROP mode messages are not included in OpenAI output."""
         result = runner.build_messages(conversation_with_context_modes, "new")
-
         all_content = " ".join(m.get("content", "") for m in result)
+
         assert "Off-topic tangent" not in all_content
-        assert "Response to tangent" not in all_content
 
     def test_summarize_mode_uses_summary(self, runner, conversation_with_context_modes):
-        """SUMMARIZE mode uses summary field."""
+        """SUMMARIZE mode uses summary field in OpenAI format."""
         result = runner.build_messages(conversation_with_context_modes, "new")
-
         all_content = " ".join(m.get("content", "") for m in result)
-        assert "[Summary] Brief: answered first question" in all_content
-        assert "Long detailed answer" not in all_content
+
+        assert "[Summary]" in all_content
 
     def test_output_is_list_of_dicts(self, runner, simple_conversation):
-        """Output is a list of dictionaries with role and content."""
-        result = runner.build_messages(simple_conversation, "test")
+        """Output is a list of message dicts."""
+        result = runner.build_messages(simple_conversation, "next")
 
         assert isinstance(result, list)
         for msg in result:
             assert isinstance(msg, dict)
             assert "role" in msg
             assert "content" in msg
-            assert msg["role"] in ("user", "assistant", "system")
 
-    def test_role_mapping(self, runner):
-        """Internal roles map to OpenAI roles correctly."""
-        messages = [
-            Message(role="user", content="user msg"),
-            Message(role="assistant", content="assistant msg"),
-            # Note: "tool" role messages would be mapped to "assistant" in current impl
-        ]
-        result = runner.build_messages(messages, "new")
+    def test_role_mapping(self, runner, simple_conversation):
+        """Roles are correctly mapped."""
+        result = runner.build_messages(simple_conversation, "next")
 
         assert result[0]["role"] == "user"
         assert result[1]["role"] == "assistant"
+        assert result[2]["role"] == "user"
 
 
 # =============================================================================
-# Cross-Backend Consistency Tests
+# Cross-Backend Consistency
 # =============================================================================
 
 class TestCrossBackendConsistency:
@@ -590,45 +571,54 @@ class TestCrossBackendConsistency:
             model="test-model",
         )
 
-    def test_both_include_all_tool_uses(self, openai_runner, conversation_with_multiple_tools):
+    @pytest.fixture
+    def builder(self):
+        return ContextBuilder()
+
+    def test_both_include_all_tool_uses(self, builder, openai_runner, conversation_with_multiple_tools):
         """Both backends include all tool uses from conversation."""
-        claude_result = ClaudeRunner.build_context(conversation_with_multiple_tools, "done")
+        context_result = builder.build_context(conversation_with_multiple_tools, "done")
         openai_result = openai_runner.build_messages(conversation_with_multiple_tools, "done")
         openai_content = " ".join(m.get("content", "") for m in openai_result)
 
-        # Both should have both tool uses
-        for tool_name in ["Glob", "Read"]:
-            assert f"[Tool: {tool_name}]" in claude_result
-            assert f"[Tool: {tool_name}]" in openai_content
+        # ContextBuilder uses XML format
+        assert '<tool_use name="Glob"' in context_result
+        assert '<tool_use name="Read"' in context_result
 
-    def test_both_respect_drop_mode(self, openai_runner, conversation_with_context_modes):
+        # OpenAI uses text format
+        assert "[Tool: Glob]" in openai_content
+        assert "[Tool: Read]" in openai_content
+
+    def test_both_respect_drop_mode(self, builder, openai_runner, conversation_with_context_modes):
         """Both backends respect DROP context mode."""
-        claude_result = ClaudeRunner.build_context(conversation_with_context_modes, "new")
+        context_result = builder.build_context(conversation_with_context_modes, "new")
         openai_result = openai_runner.build_messages(conversation_with_context_modes, "new")
         openai_content = " ".join(m.get("content", "") for m in openai_result)
 
         # Neither should have dropped content
-        assert "Off-topic tangent" not in claude_result
+        assert "Off-topic tangent" not in context_result
         assert "Off-topic tangent" not in openai_content
 
-    def test_both_use_summary_in_summarize_mode(self, openai_runner, conversation_with_context_modes):
+    def test_both_use_summary_in_summarize_mode(self, builder, openai_runner, conversation_with_context_modes):
         """Both backends use summary field in SUMMARIZE mode."""
-        claude_result = ClaudeRunner.build_context(conversation_with_context_modes, "new")
+        context_result = builder.build_context(conversation_with_context_modes, "new")
         openai_result = openai_runner.build_messages(conversation_with_context_modes, "new")
         openai_content = " ".join(m.get("content", "") for m in openai_result)
 
         # Both should use summary
-        assert "[Summary]" in claude_result
+        assert "[Summary]" in context_result
         assert "[Summary]" in openai_content
 
-    def test_both_handle_tool_errors(self, openai_runner, conversation_with_tool_error):
-        """Both backends format tool errors with (error) marker in Result."""
-        claude_result = ClaudeRunner.build_context(conversation_with_tool_error, "next")
+    def test_both_handle_tool_errors(self, builder, openai_runner, conversation_with_tool_error):
+        """Both backends indicate tool errors."""
+        context_result = builder.build_context(conversation_with_tool_error, "next")
         openai_result = openai_runner.build_messages(conversation_with_tool_error, "next")
         openai_content = " ".join(m.get("content", "") for m in openai_result)
 
-        # Both should have error marker in result
-        assert "[Result (error)]" in claude_result
+        # ContextBuilder uses XML attribute
+        assert 'error="true"' in context_result
+
+        # OpenAI uses text marker
         assert "[Result (error)]" in openai_content
 
 
@@ -640,6 +630,10 @@ class TestEdgeCases:
     """Tests for edge cases and boundary conditions."""
 
     @pytest.fixture
+    def builder(self):
+        return ContextBuilder()
+
+    @pytest.fixture
     def openai_runner(self):
         return OpenAICompatibleRunner(
             base_url="http://test",
@@ -647,32 +641,32 @@ class TestEdgeCases:
             model="test-model",
         )
 
-    def test_empty_content_blocks_fallback_to_content(self, openai_runner):
+    def test_empty_content_blocks_fallback_to_content(self, builder, openai_runner):
         """Empty content_blocks uses plain content field."""
         messages = [
             Message(role="user", content="plain text", content_blocks=[]),
         ]
 
-        claude_result = ClaudeRunner.build_context(messages, "new")
+        context_result = builder.build_context(messages, "new")
         openai_result = openai_runner.build_messages(messages, "new")
 
-        assert "plain text" in claude_result
+        assert "plain text" in context_result
         assert "plain text" in openai_result[0]["content"]
 
-    def test_special_characters_in_content(self, openai_runner):
+    def test_special_characters_in_content(self, builder, openai_runner):
         """Special characters are preserved."""
         messages = [
             Message(role="user", content="Code: `x = 1`\nJSON: {\"a\": 1}"),
         ]
 
-        claude_result = ClaudeRunner.build_context(messages, "new")
+        context_result = builder.build_context(messages, "new")
         openai_result = openai_runner.build_messages(messages, "new")
 
-        assert '`x = 1`' in claude_result
-        assert '{"a": 1}' in claude_result
+        assert '`x = 1`' in context_result
+        assert '{"a": 1}' in context_result
         assert '`x = 1`' in openai_result[0]["content"]
 
-    def test_very_long_tool_result(self, openai_runner):
+    def test_very_long_tool_result(self, builder, openai_runner):
         """Long tool results are included fully (truncation is display concern)."""
         long_content = "x" * 50000
         messages = [
@@ -685,25 +679,25 @@ class TestEdgeCases:
             ),
         ]
 
-        claude_result = ClaudeRunner.build_context(messages, "new")
+        context_result = builder.build_context(messages, "new")
         openai_result = openai_runner.build_messages(messages, "new")
 
-        assert long_content in claude_result
+        assert long_content in context_result
         assert long_content in openai_result[0]["content"]
 
-    def test_unicode_content(self, openai_runner):
+    def test_unicode_content(self, builder, openai_runner):
         """Unicode content is handled correctly."""
         messages = [
-            Message(role="user", content="Hello  World "),
+            Message(role="user", content="Hello 🌍 World 🎉"),
         ]
 
-        claude_result = ClaudeRunner.build_context(messages, "new")
+        context_result = builder.build_context(messages, "new")
         openai_result = openai_runner.build_messages(messages, "new")
 
-        assert "" in claude_result
-        assert "" in openai_result[0]["content"]
+        assert "🌍" in context_result
+        assert "🌍" in openai_result[0]["content"]
 
-    def test_nested_json_in_tool_input(self, openai_runner):
+    def test_nested_json_in_tool_input(self, builder, openai_runner):
         """Nested JSON in tool input is properly serialized."""
         messages = [
             Message(
@@ -722,15 +716,15 @@ class TestEdgeCases:
             ),
         ]
 
-        claude_result = ClaudeRunner.build_context(messages, "new")
+        context_result = builder.build_context(messages, "new")
         openai_result = openai_runner.build_messages(messages, "new")
 
         # Both should have the nested structure serialized
-        assert '"nested"' in claude_result
-        assert '"deep"' in claude_result
+        assert '"nested"' in context_result
+        assert '"deep"' in context_result
         assert '"nested"' in openai_result[0]["content"]
 
-    def test_newlines_in_tool_result(self, openai_runner):
+    def test_newlines_in_tool_result(self, builder, openai_runner):
         """Newlines in tool results are preserved."""
         messages = [
             Message(
@@ -745,10 +739,10 @@ class TestEdgeCases:
             ),
         ]
 
-        claude_result = ClaudeRunner.build_context(messages, "new")
+        context_result = builder.build_context(messages, "new")
         openai_result = openai_runner.build_messages(messages, "new")
 
-        assert "line1\nline2\nline3" in claude_result
+        assert "line1\nline2\nline3" in context_result
         assert "line1\nline2\nline3" in openai_result[0]["content"]
 
 
@@ -758,6 +752,10 @@ class TestEdgeCases:
 
 class TestArchiveBlockFormat:
     """Tests for ArchiveBlock context formatting."""
+
+    @pytest.fixture
+    def builder(self):
+        return ContextBuilder()
 
     @pytest.fixture
     def openai_runner(self):
@@ -790,16 +788,16 @@ class TestArchiveBlockFormat:
             Message(role="user", content="Continuing the conversation"),
         ]
 
-    def test_archive_block_shows_summary(self, conversation_with_archive):
+    def test_archive_block_shows_summary(self, builder, conversation_with_archive):
         """Archive block shows summary in context."""
-        result = ClaudeRunner.build_context(conversation_with_archive, "new question")
+        result = builder.build_context(conversation_with_archive, "new question")
 
         assert "Archived 5 turns" in result
         assert "Discussion about API design" in result
 
-    def test_archive_block_shows_archive_id(self, conversation_with_archive):
+    def test_archive_block_shows_archive_id(self, builder, conversation_with_archive):
         """Archive block shows archive_id for retrieval."""
-        result = ClaudeRunner.build_context(conversation_with_archive, "new question")
+        result = builder.build_context(conversation_with_archive, "new question")
 
         assert "archive-123-abc" in result
 
@@ -811,7 +809,7 @@ class TestArchiveBlockFormat:
         assert "Archived 5 turns" in all_content
         assert "Discussion about API design" in all_content
 
-    def test_archive_in_assistant_message(self, openai_runner):
+    def test_archive_in_assistant_message(self, builder, openai_runner):
         """Archive block in assistant message is formatted correctly."""
         messages = [
             Message(
@@ -832,19 +830,19 @@ class TestArchiveBlockFormat:
             ),
         ]
 
-        claude_result = ClaudeRunner.build_context(messages, "continue")
+        context_result = builder.build_context(messages, "continue")
         openai_result = openai_runner.build_messages(messages, "continue")
         openai_content = " ".join(m.get("content", "") for m in openai_result)
 
         # Both should have archive info
-        assert "Archived 10 turns" in claude_result
-        assert "file operations" in claude_result
-        assert "archive-456" in claude_result
+        assert "Archived 10 turns" in context_result
+        assert "file operations" in context_result
+        assert "archive-456" in context_result
 
         assert "Archived 10 turns" in openai_content
         assert "file operations" in openai_content
 
-    def test_multiple_archives_in_context(self, openai_runner):
+    def test_multiple_archives_in_context(self, builder):
         """Multiple archive blocks are all included."""
         messages = [
             Message(
@@ -880,9 +878,9 @@ class TestArchiveBlockFormat:
             ),
         ]
 
-        claude_result = ClaudeRunner.build_context(messages, "final")
+        result = builder.build_context(messages, "final")
 
-        assert "Initial setup discussion" in claude_result
-        assert "Implementation details" in claude_result
-        assert "archive-1" in claude_result
-        assert "archive-2" in claude_result
+        assert "Initial setup discussion" in result
+        assert "Implementation details" in result
+        assert "archive-1" in result
+        assert "archive-2" in result

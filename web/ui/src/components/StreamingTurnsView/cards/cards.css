@@ -2141,3 +2141,254 @@
 [data-theme="light"] .context-tree-hint {
   border-color: var(--border-color, #ddd);
 }
+
+/* ============================================================================
+ * Dark Flat Mode Overrides - Minimal borders, uniform backgrounds
+ * ============================================================================ */
+
+:root[data-theme="dark-flat"] .turn-card,
+[data-theme="dark-flat"] .turn-card {
+  border: none;
+  background: var(--bg-primary, #0c0c0c);
+  box-shadow: none;
+}
+
+:root[data-theme="dark-flat"] .turn-card.streaming,
+[data-theme="dark-flat"] .turn-card.streaming {
+  border: none;
+  box-shadow: none;
+  border-left: 2px solid var(--color-primary);
+}
+
+:root[data-theme="dark-flat"] .turn-card-header,
+[data-theme="dark-flat"] .turn-card-header {
+  background: transparent;
+  border-bottom: none;
+  padding-bottom: 4px;
+}
+
+:root[data-theme="dark-flat"] .text-card.user,
+[data-theme="dark-flat"] .text-card.user {
+  border: none;
+  border-left: 2px solid var(--accent-user, #6b9b6b);
+}
+
+:root[data-theme="dark-flat"] .text-card.user .turn-card-header,
+[data-theme="dark-flat"] .text-card.user .turn-card-header {
+  background: transparent;
+}
+
+:root[data-theme="dark-flat"] .text-card.assistant,
+[data-theme="dark-flat"] .text-card.assistant {
+  border: none;
+  border-left: 2px solid var(--accent-assistant, #c07070);
+}
+
+:root[data-theme="dark-flat"] .text-card.assistant .turn-card-header,
+[data-theme="dark-flat"] .text-card.assistant .turn-card-header {
+  background: transparent;
+}
+
+/* Tool cards - flat */
+:root[data-theme="dark-flat"] .tool-use-card,
+[data-theme="dark-flat"] .tool-use-card,
+:root[data-theme="dark-flat"] .tool-card,
+[data-theme="dark-flat"] .tool-card {
+  border: none;
+  border-left: 2px solid var(--accent-tool, #b8a040);
+}
+
+:root[data-theme="dark-flat"] .tool-use-card .turn-card-header,
+[data-theme="dark-flat"] .tool-use-card .turn-card-header,
+:root[data-theme="dark-flat"] .tool-card-header,
+[data-theme="dark-flat"] .tool-card-header {
+  background: transparent;
+  border-bottom: none;
+}
+
+:root[data-theme="dark-flat"] .tool-card.completed,
+[data-theme="dark-flat"] .tool-card.completed {
+  border-left-color: var(--accent-success, #6b9b6b);
+}
+
+:root[data-theme="dark-flat"] .tool-card.error,
+[data-theme="dark-flat"] .tool-card.error {
+  border-left-color: var(--error, #c07070);
+}
+
+:root[data-theme="dark-flat"] .tool-card.executing .tool-card-header,
+[data-theme="dark-flat"] .tool-card.executing .tool-card-header,
+:root[data-theme="dark-flat"] .tool-card.completed .tool-card-header,
+[data-theme="dark-flat"] .tool-card.completed .tool-card-header,
+:root[data-theme="dark-flat"] .tool-card.error .tool-card-header,
+[data-theme="dark-flat"] .tool-card.error .tool-card-header {
+  background: transparent;
+}
+
+/* Tool result cards - flat */
+:root[data-theme="dark-flat"] .tool-result-card,
+[data-theme="dark-flat"] .tool-result-card {
+  border: none;
+  border-left: 2px solid var(--accent-success, #6b9b6b);
+}
+
+:root[data-theme="dark-flat"] .tool-result-card .turn-card-header,
+[data-theme="dark-flat"] .tool-result-card .turn-card-header {
+  background: transparent;
+}
+
+:root[data-theme="dark-flat"] .tool-result-card.error,
+[data-theme="dark-flat"] .tool-result-card.error {
+  border-left-color: var(--error, #c07070);
+}
+
+/* System cards - flat */
+:root[data-theme="dark-flat"] .system-card,
+[data-theme="dark-flat"] .system-card {
+  border: none;
+  border-left: 2px solid var(--border-muted, #1a1a1a);
+}
+
+:root[data-theme="dark-flat"] .system-card .turn-card-header,
+[data-theme="dark-flat"] .system-card .turn-card-header {
+  background: transparent;
+}
+
+:root[data-theme="dark-flat"] .system-card.system-fork,
+[data-theme="dark-flat"] .system-card.system-fork,
+:root[data-theme="dark-flat"] .system-card.system-fork-proposal,
+[data-theme="dark-flat"] .system-card.system-fork-proposal {
+  border-left-color: var(--accent-fork, #9070b0);
+}
+
+:root[data-theme="dark-flat"] .system-card.system-fork .turn-card-header,
+[data-theme="dark-flat"] .system-card.system-fork .turn-card-header,
+:root[data-theme="dark-flat"] .system-card.system-fork-proposal .turn-card-header,
+[data-theme="dark-flat"] .system-card.system-fork-proposal .turn-card-header {
+  background: transparent;
+}
+
+:root[data-theme="dark-flat"] .system-card.system-merge,
+[data-theme="dark-flat"] .system-card.system-merge,
+:root[data-theme="dark-flat"] .system-card.system-merged-to,
+[data-theme="dark-flat"] .system-card.system-merged-to,
+:root[data-theme="dark-flat"] .system-card.system-merge-proposal,
+[data-theme="dark-flat"] .system-card.system-merge-proposal {
+  border-left-color: var(--accent-merge, #509090);
+}
+
+:root[data-theme="dark-flat"] .system-card.system-merge .turn-card-header,
+[data-theme="dark-flat"] .system-card.system-merge .turn-card-header,
+:root[data-theme="dark-flat"] .system-card.system-merged-to .turn-card-header,
+[data-theme="dark-flat"] .system-card.system-merged-to .turn-card-header,
+:root[data-theme="dark-flat"] .system-card.system-merge-proposal .turn-card-header,
+[data-theme="dark-flat"] .system-card.system-merge-proposal .turn-card-header {
+  background: transparent;
+}
+
+:root[data-theme="dark-flat"] .system-card.system-error,
+[data-theme="dark-flat"] .system-card.system-error,
+:root[data-theme="dark-flat"] .system-card.system-interruption,
+[data-theme="dark-flat"] .system-card.system-interruption {
+  border-left-color: var(--error, #c07070);
+}
+
+:root[data-theme="dark-flat"] .system-card.system-error .turn-card-header,
+[data-theme="dark-flat"] .system-card.system-error .turn-card-header,
+:root[data-theme="dark-flat"] .system-card.system-interruption .turn-card-header,
+[data-theme="dark-flat"] .system-card.system-interruption .turn-card-header {
+  background: transparent;
+}
+
+:root[data-theme="dark-flat"] .system-card.system-link,
+[data-theme="dark-flat"] .system-card.system-link {
+  border-left-color: var(--accent-link, #508080);
+}
+
+:root[data-theme="dark-flat"] .system-card.system-link .turn-card-header,
+[data-theme="dark-flat"] .system-card.system-link .turn-card-header {
+  background: transparent;
+}
+
+/* Collapsibles - flat */
+:root[data-theme="dark-flat"] .collapsible,
+[data-theme="dark-flat"] .collapsible {
+  border: none;
+}
+
+:root[data-theme="dark-flat"] .collapsible-header,
+[data-theme="dark-flat"] .collapsible-header {
+  background: var(--bg-tertiary, #141414);
+}
+
+/* Code blocks and outputs - flat */
+:root[data-theme="dark-flat"] .code-block-wrapper,
+[data-theme="dark-flat"] .code-block-wrapper {
+  border: none;
+}
+
+:root[data-theme="dark-flat"] .code-language,
+[data-theme="dark-flat"] .code-language {
+  border-bottom: none;
+  background: var(--bg-tertiary, #141414);
+}
+
+/* Tables - flat */
+:root[data-theme="dark-flat"] .context-plan-table th,
+[data-theme="dark-flat"] .context-plan-table th,
+:root[data-theme="dark-flat"] .context-plan-table td,
+[data-theme="dark-flat"] .context-plan-table td {
+  border-color: var(--border-color, #1a1a1a);
+}
+
+/* Fork/merge proposal cards - flat */
+:root[data-theme="dark-flat"] .fork-proposal-card,
+[data-theme="dark-flat"] .fork-proposal-card,
+:root[data-theme="dark-flat"] .merge-proposal-card,
+[data-theme="dark-flat"] .merge-proposal-card {
+  border: none;
+  border-left: 2px solid var(--accent-fork, #9070b0);
+}
+
+:root[data-theme="dark-flat"] .fork-proposal-card .turn-card-header,
+[data-theme="dark-flat"] .fork-proposal-card .turn-card-header,
+:root[data-theme="dark-flat"] .merge-proposal-card .turn-card-header,
+[data-theme="dark-flat"] .merge-proposal-card .turn-card-header {
+  background: transparent;
+}
+
+:root[data-theme="dark-flat"] .fork-proposal-actions,
+[data-theme="dark-flat"] .fork-proposal-actions,
+:root[data-theme="dark-flat"] .merge-proposal-actions,
+[data-theme="dark-flat"] .merge-proposal-actions {
+  border-top-color: var(--border-color, #1a1a1a);
+}
+
+/* Grep results - flat */
+:root[data-theme="dark-flat"] .grep-result-line,
+[data-theme="dark-flat"] .grep-result-line {
+  border-bottom-color: var(--border-muted, #141414);
+}
+
+/* Tool result section - flat */
+:root[data-theme="dark-flat"] .tool-result-section,
+[data-theme="dark-flat"] .tool-result-section {
+  border-top-color: var(--border-muted, #1a1a1a);
+}
+
+/* Context tree - flat */
+:root[data-theme="dark-flat"] .context-tree-hint,
+[data-theme="dark-flat"] .context-tree-hint {
+  border-bottom-color: var(--border-muted, #1a1a1a);
+}
+
+/* Fade overlays - flat */
+:root[data-theme="dark-flat"] .tool-card-fade-overlay,
+[data-theme="dark-flat"] .tool-card-fade-overlay {
+  background: linear-gradient(transparent, var(--bg-primary, #0c0c0c));
+}
+
+:root[data-theme="dark-flat"] .tool-collapsible-content.collapsed::after,
+[data-theme="dark-flat"] .tool-collapsible-content.collapsed::after {
+  background: linear-gradient(transparent, var(--bg-primary, #0c0c0c));
+}

@@ -248,6 +248,8 @@ _LAZY_IMPORTS = {
     "COMMAND_DOCS": (".commands", "COMMAND_DOCS"),
     # Context
     "ContextBuilder": (".context", "ContextBuilder"),
+    "OutputFormat": (".context", "OutputFormat"),
+    "ContextResult": (".context", "ContextResult"),
     # Formatter
     "Formatter": (".formatter", "Formatter"),
     "format_edit_as_diff": (".formatter", "format_edit_as_diff"),

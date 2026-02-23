@@ -3,11 +3,14 @@
  *
  * Uses react-syntax-highlighter with a theme that matches our green-tinted UI.
  * Supports automatic language detection from file extensions.
+ * Theme-aware: uses light theme when app is in light mode.
  */
 
 import React, { useMemo } from 'react';
 import { Prism as PrismHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { useTheme } from '../../layout';
 
 // Map file extensions to Prism language identifiers
 const extensionToLanguage: Record<string, string> = {
@@ -145,8 +148,8 @@ export function getLanguageFromPath(filePath: string): string {
   return extensionToLanguage[ext] || 'text';
 }
 
-// Custom theme based on oneDark, adjusted for our green-tinted UI
-const customCodeTheme = {
+// Custom dark theme based on oneDark, adjusted for our green-tinted UI
+const customDarkCodeTheme = {
   ...oneDark,
   'pre[class*="language-"]': {
     ...oneDark['pre[class*="language-"]'],
@@ -165,11 +168,39 @@ const customCodeTheme = {
   },
 };
 
-// Custom diff theme with green/red highlighting
-const customDiffTheme = {
-  ...customCodeTheme,
+// Custom light theme based on oneLight
+const customLightCodeTheme = {
+  ...oneLight,
   'pre[class*="language-"]': {
-    ...customCodeTheme['pre[class*="language-"]'],
+    ...oneLight['pre[class*="language-"]'],
+    background: 'var(--bg-code, #f8f8f8)',
+    margin: 0,
+    padding: '8px',
+    borderRadius: '4px',
+    fontSize: '11px',
+    lineHeight: '1.4',
+  },
+  'code[class*="language-"]': {
+    ...oneLight['code[class*="language-"]'],
+    background: 'transparent',
+    fontSize: '11px',
+    lineHeight: '1.4',
+  },
+};
+
+// Custom diff themes
+const customDarkDiffTheme = {
+  ...customDarkCodeTheme,
+  'pre[class*="language-"]': {
+    ...customDarkCodeTheme['pre[class*="language-"]'],
+    padding: 0,
+  },
+};
+
+const customLightDiffTheme = {
+  ...customLightCodeTheme,
+  'pre[class*="language-"]': {
+    ...customLightCodeTheme['pre[class*="language-"]'],
     padding: 0,
   },
 };
@@ -187,6 +218,11 @@ export function SyntaxHighlightedCode({
   filePath,
   showLineNumbers = false,
 }: SyntaxHighlightedCodeProps) {
+  // Get current theme
+  const { resolvedTheme } = useTheme();
+  const isLightTheme = resolvedTheme === 'light';
+  const theme = isLightTheme ? customLightCodeTheme : customDarkCodeTheme;
+
   // Determine language from prop or file path
   const lang = useMemo(() => {
     if (language) return language;
@@ -201,7 +237,7 @@ export function SyntaxHighlightedCode({
 
   return (
     <PrismHighlighter
-      style={customCodeTheme}
+      style={theme}
       language={lang}
       PreTag="div"
       showLineNumbers={showLineNumbers}
@@ -209,7 +245,7 @@ export function SyntaxHighlightedCode({
       lineNumberStyle={{
         minWidth: '2.5em',
         paddingRight: '1em',
-        color: 'var(--text-tertiary, #5c7a5c)',
+        color: isLightTheme ? 'var(--text-tertiary, #888)' : 'var(--text-tertiary, #5c7a5c)',
         userSelect: 'none',
       }}
     >

@@ -10,7 +10,7 @@ import { SessionStatusBar } from './components/SessionStatusBar';
 import { StreamingStatusBar } from './components/StreamingStatusBar';
 import { ForkProposalTurn } from './components/ForkProposalTurn';
 import { CreateTodoModal, type CreateTodoResult } from './components/CreateTodoModal';
-import { StreamingTurnsView } from './components/StreamingTurnsView';
+import { StreamingTurnsView, type StreamingProgress } from './components/StreamingTurnsView';
 import { useWakeLock, useSoundNotifications } from './hooks';
 import { setDebugClient, createLogger } from './utils/debugLog';
 
@@ -995,6 +995,26 @@ export function App() {
   // Scroll state from chat view (for status bar indicator)
   const [scrollState, setScrollState] = useState<{ isFollowing: boolean; isAtBottom: boolean } | undefined>(undefined);
 
+  // Handle streaming progress updates from StreamingTurnsView
+  // This updates streamingTask with real-time token counts from SessionDataService
+  const handleStreamingProgressChange = useCallback((progress: StreamingProgress | null) => {
+    if (progress) {
+      setStreamingTask(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          tokensStreamed: progress.tokensStreamed,
+          currentTokenRate: progress.currentTokenRate,
+          toolName: progress.toolName,
+          toolCount: progress.toolCount,
+          model: progress.model || prev.model,
+          contextWindow: progress.contextWindow || prev.contextWindow,
+          durationSeconds: progress.durationSeconds,
+        };
+      });
+    }
+  }, []);
+
   // Persist selected session ID to localStorage
   useEffect(() => {
     if (selectedSessionId) {
@@ -1092,10 +1112,21 @@ export function App() {
     try {
       // Session events
       unsubscribers.push(
-        client.sessionData.sessionDataSessionAdded(async () => {
-          console.log('[App] sessionDataSessionAdded - refetching');
-          const sessionList = await client.sessionData.getAllSessions();
-          setSessions(sessionList);
+        client.sessionData.sessionDataSessionAdded((data) => {
+          // Add the new session directly from the event data
+          // This avoids the race condition where selectedSessionId is set
+          // but sessions[] doesn't contain it yet (causing status bar to not render)
+          console.log('[App] sessionDataSessionAdded:', data.sessionId?.slice(0, 8));
+          if (data.session) {
+            setSessions(prev => {
+              // Don't add duplicates (in case of reconnection/replay)
+              if (prev.some(s => s.id === data.sessionId)) {
+                return prev;
+              }
+              // Add at beginning (most recent)
+              return [data.session, ...prev];
+            });
+          }
         })
       );
 
@@ -2183,6 +2214,7 @@ export function App() {
                   client={clientRef.current}
                   onSelectSession={setSelectedSessionId}
                   onScrollStateChange={setScrollState}
+                  onStreamingProgressChange={handleStreamingProgressChange}
                 />
               ) : (
                 <div className="empty-state">
@@ -2600,10 +2632,10 @@ function SidebarContent({
         <button
           className="theme-toggle"
           onClick={toggleTheme}
-          aria-label={`Switch to ${resolvedTheme === 'dark' ? 'light' : 'dark'} theme`}
-          title={`Switch to ${resolvedTheme === 'dark' ? 'light' : 'dark'} theme`}
+          aria-label={`Switch theme (current: ${resolvedTheme})`}
+          title={`Theme: ${resolvedTheme} (click to cycle)`}
         >
-          {resolvedTheme === 'dark' ? '☀️' : '🌙'}
+          {resolvedTheme === 'dark' ? '🌙' : resolvedTheme === 'dark-flat' ? '⬛' : '☀️'}
         </button>
         {layoutMode === 'mobile' && (
           <button className="close-button" onClick={closeSidebar} aria-label="Close menu">
