@@ -2002,6 +2002,10 @@ class SessionManagerService:
         )
 
         self._emit_event(SessionManagerEvent.SESSION_CREATED, session.id)
+
+        # Emit session added event so React UI can display the new session
+        self._emit_session_added(session, is_streaming=False)
+
         return info
 
     @ws_expose
