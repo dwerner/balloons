@@ -1,13 +1,17 @@
 /**
  * ToolUseCard - Renders tool_use content blocks
  *
+ * Generic fallback for tool types that don't have specialized cards.
  * Shows tool name, formatted input, and streaming status.
  * Tool input is formatted based on tool type (Edit shows diff, Bash shows command, etc.)
+ *
+ * Uses BaseToolCard for consistent collapsible behavior.
  */
 
-import React, { useState } from 'react';
+import React from 'react';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
 import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
+import { BaseToolCard, calculateToolPhase } from './BaseToolCard';
 import './cards.css';
 
 interface ToolUseCardProps {
@@ -104,33 +108,6 @@ function generateDiff(oldStr: string, newStr: string, filePath: string): string[
   return result;
 }
 
-// Collapsible component
-function Collapsible({
-  title,
-  children,
-  defaultExpanded = true,
-}: {
-  title: string;
-  children: React.ReactNode;
-  defaultExpanded?: boolean;
-}) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
-
-  return (
-    <div className="collapsible">
-      <button
-        className="collapsible-header"
-        onClick={() => setExpanded(!expanded)}
-        type="button"
-      >
-        <span className="collapsible-icon">{expanded ? '▼' : '▶'}</span>
-        <span className="collapsible-title">{title}</span>
-      </button>
-      {expanded && <div className="collapsible-content">{children}</div>}
-    </div>
-  );
-}
-
 // Streaming input indicator
 function StreamingInputIndicator({ partialJson }: { partialJson: string }) {
   // Try to extract tool name or file path from partial JSON for context
@@ -171,11 +148,9 @@ function StreamingInputIndicator({ partialJson }: { partialJson: string }) {
 function FormattedToolInput({
   toolName,
   toolInput,
-  isStreaming = false,
 }: {
   toolName: string;
   toolInput: Record<string, unknown>;
-  isStreaming?: boolean;
 }) {
   // Handle streaming input - show partial JSON
   if (isStreamingInput(toolInput)) {
@@ -332,41 +307,51 @@ function FormattedToolResult({
   );
 }
 
-// Tool execution phase enum
-type ToolPhase = 'building' | 'executing' | 'waiting_result' | 'completed' | 'error';
-
-function getToolPhase(
-  streaming: boolean,
-  hasInput: boolean,
-  isInputStreaming: boolean,
-  hasResult: boolean,
-  isError: boolean
-): ToolPhase {
-  if (isError) return 'error';
-  if (hasResult) return 'completed';
-  if (!streaming) return 'completed';
-  if (isInputStreaming) return 'building';
-  if (hasInput) return 'executing';
-  return 'building';
-}
-
-function getPhaseIcon(phase: ToolPhase): string {
-  switch (phase) {
-    case 'building': return '⋯';
-    case 'executing': return '⏳';
-    case 'waiting_result': return '⏳';
-    case 'completed': return '✓';
-    case 'error': return '✗';
+// Build header content based on tool type
+function buildHeaderContent(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  inputIsStreaming: boolean
+): React.ReactNode {
+  if (inputIsStreaming) {
+    return <span className="tool-building">building...</span>;
   }
-}
 
-function getPhaseLabel(phase: ToolPhase): string {
-  switch (phase) {
-    case 'building': return 'Building input...';
-    case 'executing': return 'Executing...';
-    case 'waiting_result': return 'Waiting for result...';
-    case 'completed': return '';
-    case 'error': return 'Failed';
+  switch (toolName) {
+    case 'Edit': {
+      const filePath = (toolInput.file_path || '') as string;
+      return filePath ? <code className="tool-file-path">{filePath}</code> : null;
+    }
+    case 'Write': {
+      const filePath = (toolInput.file_path || '') as string;
+      return filePath ? <code className="tool-file-path">{filePath}</code> : null;
+    }
+    case 'Read': {
+      const filePath = (toolInput.file_path || '') as string;
+      return filePath ? <code className="tool-file-path">{filePath}</code> : null;
+    }
+    case 'Bash': {
+      const description = (toolInput.description || '') as string;
+      const command = (toolInput.command || '') as string;
+      if (description) {
+        return <span className="tool-description">{description}</span>;
+      }
+      if (command) {
+        const shortCmd = command.length > 50 ? command.slice(0, 50) + '...' : command;
+        return <code className="tool-command-preview">{shortCmd}</code>;
+      }
+      return null;
+    }
+    case 'Glob': {
+      const pattern = (toolInput.pattern || '') as string;
+      return pattern ? <code className="tool-pattern">{pattern}</code> : null;
+    }
+    case 'Grep': {
+      const pattern = (toolInput.pattern || '') as string;
+      return pattern ? <code className="tool-pattern">{pattern}</code> : null;
+    }
+    default:
+      return null;
   }
 }
 
@@ -393,47 +378,53 @@ export function ToolUseCard({ turn, result }: ToolUseCardProps) {
   const resultContent = resultBlock?.content || '';
   const isError = resultBlock?.isError || false;
 
-  // Determine tool phase
-  const phase = getToolPhase(streaming, hasInput, inputIsStreaming, hasResult, isError);
-  const phaseIcon = getPhaseIcon(phase);
-  const phaseLabel = getPhaseLabel(phase);
+  // Determine tool phase using the shared utility
+  const phase = calculateToolPhase(streaming, hasInput, inputIsStreaming, hasResult, isError);
 
-  const isActive = phase === 'building' || phase === 'executing' || phase === 'waiting_result';
-  const statusClass = isError ? 'error' : isActive ? 'executing' : 'completed';
+  // Build header content based on tool type
+  const headerContent = buildHeaderContent(toolName, toolInput, inputIsStreaming);
 
   return (
-    <div className={`turn-card tool-use-card ${statusClass} ${isActive ? 'streaming' : ''}`}>
-      <div className="turn-card-header">
-        <span className={`tool-use-status ${statusClass}`}>
-          {isActive ? <span className="tool-spinner">{phaseIcon}</span> : phaseIcon}
-        </span>
-        <span className="turn-label tool-name">{toolName}</span>
-        {phaseLabel && <span className="tool-phase-label">{phaseLabel}</span>}
-        {!isActive && tokens > 0 && <span className="turn-tokens">{tokens} tokens</span>}
-      </div>
-
-      {hasInput && (
-        <Collapsible title="Input" defaultExpanded={true}>
-          <FormattedToolInput toolName={toolName} toolInput={toolInput} isStreaming={inputIsStreaming} />
-        </Collapsible>
+    <BaseToolCard
+      toolName={toolName}
+      headerContent={headerContent}
+      phase={phase}
+      tokens={tokens}
+      className="tool-use-card-v2"
+    >
+      {/* Tool input section */}
+      {hasInput && !inputIsStreaming && (
+        <FormattedToolInput toolName={toolName} toolInput={toolInput} />
       )}
 
-      {(hasResult || resultIsStreaming) && (
-        <Collapsible title={isError ? 'Error' : 'Result'} defaultExpanded={true}>
-          {resultIsStreaming && !resultContent ? (
-            <div className="tool-result-streaming">
-              <span className="streaming-dots">
-                <span className="dot">●</span>
-                <span className="dot">●</span>
-                <span className="dot">●</span>
-              </span>
-              <span>Waiting for result...</span>
-            </div>
-          ) : (
-            <FormattedToolResult result={resultContent} isError={isError} />
-          )}
-        </Collapsible>
+      {/* Streaming input indicator */}
+      {inputIsStreaming && (
+        <StreamingInputIndicator partialJson={getStreamingJson(toolInput)} />
       )}
-    </div>
+
+      {/* Tool result */}
+      {hasResult && (
+        <div className="tool-result-section">
+          <FormattedToolResult result={resultContent} isError={isError} />
+        </div>
+      )}
+
+      {/* Waiting for result indicator */}
+      {resultIsStreaming && !resultContent && (
+        <div className="tool-result-streaming">
+          <span className="streaming-dots">
+            <span className="dot">●</span>
+            <span className="dot">●</span>
+            <span className="dot">●</span>
+          </span>
+          <span>Waiting for result...</span>
+        </div>
+      )}
+
+      {/* Executing state */}
+      {!hasResult && !resultIsStreaming && phase === 'executing' && (
+        <div className="tool-executing">Executing...</div>
+      )}
+    </BaseToolCard>
   );
 }

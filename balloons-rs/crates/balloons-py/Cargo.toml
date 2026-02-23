@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 balloons-core.workspace = true
 balloons-supervisor.workspace = true
 balloons-browser.workspace = true
+balloons-git.workspace = true
 core-executor.workspace = true
 pyo3.workspace = true
 serde_json.workspace = true

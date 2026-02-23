@@ -9,7 +9,7 @@ from typing import AsyncIterator, TYPE_CHECKING
 import base64
 
 from models import (
-    Message, TextDelta, ResultEvent, InitEvent, RawEvent,
+    Message, TextDelta, ResultEvent, InitEvent, RawEvent, ContextTokensEvent,
     ToolUseStartEvent, ToolUseEvent, ToolResultEvent,
     TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock, ContextMode,
 )
@@ -570,6 +570,23 @@ class ClaudeRunner(BaseRunner):
             images = self._pending_images if self._pending_images else None
             self._pending_images = []  # Clear pending images after use
             content = self.build_message_content(messages, prompt, images=images)
+
+            # Count actual context tokens being sent and update session
+            # This is the authoritative token count (via tiktoken), not the API's reported value
+            from tokenizer import count_tokens
+            context_text = self._content_to_text(content)
+            context_tokens = count_tokens(context_text)
+            if self._current_session:
+                self._current_session.cached_context_tokens = context_tokens
+                debug_log.info(
+                    f"Context tokens: {context_tokens} (tiktoken)",
+                    category="context",
+                    session_id=self._current_session.id[:8] if self._current_session else "",
+                )
+
+            # Emit context tokens event so the UI can display accurate token count
+            yield ContextTokensEvent(context_tokens=context_tokens)
+
             initial_msg = {
                 "type": "user",
                 "message": {
@@ -585,6 +602,28 @@ class ClaudeRunner(BaseRunner):
 
         finally:
             await self._cleanup()
+
+    def _content_to_text(self, content: list[dict]) -> str:
+        """Convert content blocks to plain text for token counting.
+
+        Extracts all text from content blocks (text, tool calls, etc.)
+        to count the actual tokens being sent to Claude.
+        """
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    parts.append(block.get("text", ""))
+                elif block.get("type") == "image":
+                    # Images contribute tokens but we can't count them via tiktoken
+                    # Estimate ~1000 tokens per image as a rough approximation
+                    parts.append("[IMAGE ~1000 tokens]")
+                else:
+                    # For other block types, serialize to get rough token count
+                    parts.append(json.dumps(block))
+            elif isinstance(block, str):
+                parts.append(block)
+        return "\n".join(parts)
 
     async def _send_message(self, msg: dict) -> None:
         """Send a JSON message to the Claude process."""

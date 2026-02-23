@@ -1959,6 +1959,33 @@ impl Browser {
     }
 }
 
+// =========================================================================
+// Git/File Browser
+// =========================================================================
+
+/// List a directory with git status information.
+///
+/// Returns a DirectoryListing with file entries enriched with git status.
+/// Hidden files (starting with '.') are excluded.
+///
+/// Args:
+///     path: Path to the directory to list
+///
+/// Returns:
+///     JSON string containing DirectoryListing with entries and git info
+#[pyfunction]
+fn list_directory(py: Python<'_>, path: &str) -> PyResult<String> {
+    let path = path.to_string();
+
+    py.allow_threads(|| {
+        let listing = balloons_git::list_directory(&path)
+            .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))?;
+
+        serde_json::to_string(&listing)
+            .map_err(|e| PyRuntimeError::new_err(format!("JSON error: {}", e)))
+    })
+}
+
 /// Python module definition
 #[pymodule]
 fn balloons_storage(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1975,5 +2002,7 @@ fn balloons_storage(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(health_check, m)?)?;
     m.add_function(wrap_pyfunction!(list_backups, m)?)?;
     m.add_function(wrap_pyfunction!(restore_from_backup, m)?)?;
+    // File browser / git functions
+    m.add_function(wrap_pyfunction!(list_directory, m)?)?;
     Ok(())
 }

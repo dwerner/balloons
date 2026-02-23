@@ -1,0 +1,26 @@
+[package]
+name = "balloons-git"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Git-aware file browsing with status integration"
+
+[dependencies]
+# Git operations
+git2 = "0.20"
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# Time handling
+chrono.workspace = true
+
+# Logging
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

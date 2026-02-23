@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-22T20:39:13.621447
+// Generated: 2026-02-23T08:00:22.707935
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -3146,6 +3146,251 @@ export class DebugLogServiceClient implements DebugLogService {
 
   async warning(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
     return this.call('warning', { message: message, category: category, sessionId: sessionId, details: details });
+  }
+
+}
+
+/**
+ * WebSocket-exposed service for file browsing with git status.
+ * 
+ * Provides directory listing with git status integration and session CWD management.
+ */
+export interface FileStateService {
+  /**
+   * Clear the CWD for a session (e.g., when session is deleted).
+   * 
+   * Args:
+   * session_id: The session ID to clear
+   */
+  clearSessionCwd(sessionId: string): Promise<null>;
+
+  /**
+   * Get all session CWDs.
+   * 
+   * Returns:
+   * List of session CWD mappings
+   */
+  getAllCwds(): Promise<Types.SessionCwd[]>;
+
+  /**
+   * Get the current working directory for a session.
+   * 
+   * Args:
+   * session_id: The session ID
+   * 
+   * Returns:
+   * The current working directory, or home directory if not set
+   */
+  getCwd(sessionId: string): Promise<string>;
+
+  /**
+   * Get the user's home directory.
+   * 
+   * Returns:
+   * The home directory path
+   */
+  getHomeDirectory(): Promise<string>;
+
+  /**
+   * Get the parent directory of a path.
+   * 
+   * Args:
+   * path: The path to get parent of
+   * 
+   * Returns:
+   * The parent directory path
+   */
+  getParentDirectory(path: string): Promise<string>;
+
+  /**
+   * Check if a path is a directory.
+   * 
+   * Args:
+   * path: The path to check
+   * 
+   * Returns:
+   * True if the path is a directory
+   */
+  isDirectory(path: string): Promise<boolean>;
+
+  /**
+   * List a directory with git status information.
+   * 
+   * Hidden files (starting with '.') are excluded from the listing.
+   * Entries are sorted with directories first, then alphabetically by name.
+   * 
+   * Args:
+   * path: Absolute path to the directory to list
+   * 
+   * Returns:
+   * DirectoryListing with entries enriched with git status
+   * 
+   * Raises:
+   * ValueError: If path doesn't exist or isn't a directory
+   */
+  listDirectory(path: string): Promise<Types.DirectoryListing>;
+
+  /**
+   * List a directory including hidden files.
+   * 
+   * Same as list_directory but includes files starting with '.'.
+   * 
+   * Args:
+   * path: Absolute path to the directory to list
+   * 
+   * Returns:
+   * DirectoryListing with all entries (including hidden)
+   */
+  listDirectoryWithHidden(path: string): Promise<Types.DirectoryListing>;
+
+  /**
+   * Check if a path exists.
+   * 
+   * Args:
+   * path: The path to check
+   * 
+   * Returns:
+   * True if the path exists
+   */
+  pathExists(path: string): Promise<boolean>;
+
+  /**
+   * Resolve a relative path against a base directory.
+   * 
+   * Args:
+   * base: The base directory
+   * relative: The relative path (can include .. and .)
+   * 
+   * Returns:
+   * The resolved absolute path
+   */
+  resolvePath(base: string, relative: string): Promise<string>;
+
+  /**
+   * Set the current working directory for a session.
+   * 
+   * Args:
+   * session_id: The session ID
+   * cwd: The new working directory (must exist)
+   * 
+   * Returns:
+   * Operation result with success/failure status
+   */
+  setCwd(sessionId: string, cwd: string): Promise<Types.FileOperationResult>;
+
+}
+
+export interface FileStateEvents {
+  /**
+   * Emitted when a session's CWD changes.
+   */
+  onCwdChanged(callback: (data: Types.CwdChangedData) => void): Unsubscribe;
+
+  /**
+   * Emitted when a watched directory's contents change.
+   * 
+   * Note: Directory watching is not yet implemented.
+   */
+  onDirectoryChanged(callback: (data: Types.DirectoryListing) => void): Unsubscribe;
+
+}
+
+export class FileStateServiceClient implements FileStateService {
+  private ws: WebSocket;
+  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
+  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
+
+  constructor(ws: WebSocket) {
+    this.ws = ws;
+    this.ws.addEventListener('message', this.handleMessage.bind(this));
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    const msg = JSON.parse(event.data);
+    if (msg.id && this.pending.has(msg.id)) {
+      const { resolve, reject } = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      if (msg.error) {
+        reject(new Error(msg.error.message));
+      } else {
+        resolve(msg.result);
+      }
+    } else if (msg.event) {
+      const handlers = this.eventHandlers.get(msg.event);
+      if (handlers) {
+        handlers.forEach(h => h(msg.data));
+      }
+    }
+  }
+
+  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const id = generateRequestId();
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, new Set());
+    }
+    this.eventHandlers.get(event)!.add(callback);
+    return () => {
+      this.eventHandlers.get(event)?.delete(callback);
+    };
+  }
+
+  async clearSessionCwd(sessionId: string): Promise<null> {
+    return this.call('clearSessionCwd', { sessionId: sessionId });
+  }
+
+  async getAllCwds(): Promise<Types.SessionCwd[]> {
+    return this.call('getAllCwds', {  });
+  }
+
+  async getCwd(sessionId: string): Promise<string> {
+    return this.call('getCwd', { sessionId: sessionId });
+  }
+
+  async getHomeDirectory(): Promise<string> {
+    return this.call('getHomeDirectory', {  });
+  }
+
+  async getParentDirectory(path: string): Promise<string> {
+    return this.call('getParentDirectory', { path: path });
+  }
+
+  async isDirectory(path: string): Promise<boolean> {
+    return this.call('isDirectory', { path: path });
+  }
+
+  async listDirectory(path: string): Promise<Types.DirectoryListing> {
+    return this.call('listDirectory', { path: path });
+  }
+
+  async listDirectoryWithHidden(path: string): Promise<Types.DirectoryListing> {
+    return this.call('listDirectoryWithHidden', { path: path });
+  }
+
+  async pathExists(path: string): Promise<boolean> {
+    return this.call('pathExists', { path: path });
+  }
+
+  async resolvePath(base: string, relative: string): Promise<string> {
+    return this.call('resolvePath', { base: base, relative: relative });
+  }
+
+  async setCwd(sessionId: string, cwd: string): Promise<Types.FileOperationResult> {
+    return this.call('setCwd', { sessionId: sessionId, cwd: cwd });
+  }
+
+  onCwdChanged(callback: (data: Types.CwdChangedData) => void): Unsubscribe {
+    return this.subscribe('cwdChanged', callback);
+  }
+
+  onDirectoryChanged(callback: (data: Types.DirectoryListing) => void): Unsubscribe {
+    return this.subscribe('directoryChanged', callback);
   }
 
 }

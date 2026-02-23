@@ -1107,27 +1107,29 @@ export function App() {
       // Session events
       unsubscribers.push(
         client.sessionData.sessionDataSessionAdded(async () => {
+          console.log('[App] sessionDataSessionAdded - refetching');
           const sessionList = await client.sessionData.getAllSessions();
           setSessions(sessionList);
         })
       );
 
       unsubscribers.push(
-        client.sessionData.sessionDataSessionUpdated(async (data) => {
-          const sessionList = await client.sessionData.getAllSessions();
-          setSessions(sessionList);
-
-          // NOTE: Do NOT refetch turns here for the selected session.
-          // Turn updates during streaming are handled by TaskStateService events
-          // (onTurnStarted, onContentDelta, onTurnFinished) which provide
-          // incremental updates without duplicating turns.
-          // Refetching here would cause duplicate turns because both event
-          // sources would be populating the turns state simultaneously.
+        client.sessionData.sessionDataSessionUpdated((data) => {
+          // Update session in place using the event data - no refetch needed
+          // The event includes the full SessionInfo with updated fields like
+          // cachedContextTokens, isStreaming, etc.
+          console.log('[App] sessionDataSessionUpdated:', data.sessionId?.slice(0,8), 'tokens:', data.session?.cachedContextTokens);
+          if (data.session) {
+            setSessions(prev => prev.map(s =>
+              s.id === data.sessionId ? data.session : s
+            ));
+          }
         })
       );
 
       unsubscribers.push(
         client.sessionData.sessionDataSessionRemoved(async (data) => {
+          console.log('[App] sessionDataSessionRemoved - refetching');
           const sessionList = await client.sessionData.getAllSessions();
           setSessions(sessionList);
 
@@ -1141,6 +1143,7 @@ export function App() {
       // Pin state changes - refresh sessions to get updated isPinned and re-sort
       unsubscribers.push(
         client.sessionData.sessionDataSessionPinned(async () => {
+          console.log('[App] sessionDataSessionPinned - refetching');
           const sessionList = await client.sessionData.getAllSessions();
           setSessions(sessionList);
         })
@@ -1298,10 +1301,9 @@ export function App() {
               return sortTurnsByIdx([...prev, newTurn]);
             });
           }
-          // Also refresh session list to update streaming indicator
-          client.sessionData.getAllSessions().then(sessionList => {
-            setSessions(sessionList);
-          });
+          // NOTE: Don't refetch sessions here - the sessionDataSessionUpdated event
+          // already provides incremental updates. Refetching would overwrite in-memory
+          // session state (like cachedContextTokens) with stale data from storage.
         })
       );
 
@@ -1355,10 +1357,17 @@ export function App() {
       );
 
       // Streaming events
+      // NOTE: Don't refetch all sessions here - the sessionDataSessionUpdated event
+      // already provides incremental updates. Refetching would overwrite in-memory
+      // session state (like cachedContextTokens) with stale data from storage.
+      // Instead, just update the isStreaming flag locally.
       unsubscribers.push(
         client.sessionData.sessionDataStreamStarted(async (data) => {
-          const sessionList = await client.sessionData.getAllSessions();
-          setSessions(sessionList);
+          console.log('[App] sessionDataStreamStarted');
+          // Update isStreaming flag for the session
+          setSessions(prev => prev.map(s =>
+            s.id === data.sessionId ? { ...s, isStreaming: true } : s
+          ));
 
           // Clear tool uses when a new streaming session starts
           if (data.sessionId === selectedSessionId) {
@@ -1369,8 +1378,15 @@ export function App() {
 
       unsubscribers.push(
         client.sessionData.sessionDataStreamDone(async (data) => {
-          const sessionList = await client.sessionData.getAllSessions();
-          setSessions(sessionList);
+          console.log('[App] sessionDataStreamDone');
+          // Update isStreaming flag for the session
+          setSessions(prev => {
+            const session = prev.find(s => s.id === data.sessionId);
+            console.log('[App] streamDone - current tokens:', session?.cachedContextTokens);
+            return prev.map(s =>
+              s.id === data.sessionId ? { ...s, isStreaming: false } : s
+            );
+          });
         })
       );
 
@@ -1415,6 +1431,35 @@ export function App() {
       unsubscribers.push(
         client.tasks.onTaskStarted(async (data) => {
           if (data.sessionId === selectedSessionId) {
+            // Immediately set a minimal task to show the status bar
+            // This prevents the race condition where isStreaming=true but streamingTask=null
+            // because the getTask() call hasn't completed yet
+            // Extract extra data from the event's data field if available
+            const extraData = data.data ?? {};
+            const minimalTask: TaskInfo = {
+              taskId: data.taskId,
+              taskType: data.taskType,
+              status: data.status,
+              sessionId: data.sessionId ?? null,
+              backendName: '',
+              startedAt: new Date().toISOString(),
+              finishedAt: null,
+              prompt: '',
+              tokensStreamed: (extraData.tokensStreamed as number) ?? 0,
+              error: data.error ?? null,
+              toolName: (extraData.toolName as string) ?? null,
+              toolCount: (extraData.toolCount as number) ?? 0,
+              inputTokens: (extraData.inputTokens as number) ?? 0,
+              outputTokens: (extraData.outputTokens as number) ?? 0,
+              contextWindow: 200000, // Default context window
+              model: '',
+              durationSeconds: 0,
+              isActive: true,
+              currentTokenRate: 0,
+            };
+            setStreamingTask(minimalTask);
+
+            // Then fetch full task info to update with complete data
             const task = await client.tasks.getTask(data.taskId);
             if (task) {
               setStreamingTask(task);

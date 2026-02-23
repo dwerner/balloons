@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-22T20:39:13.618510
+// Generated: 2026-02-23T08:00:22.704880
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -601,6 +601,8 @@ export interface SessionTurnFinishedEvent {
   role?: string;
   contentBlock?: TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock | InterruptionBlock | ErrorBlock | LinkBlock | ForkBlock | MergeBlock | MergedToBlock | ArchiveBlock | SlideBlock | ReviewBlock | ForkProposalBlock | MergeProposalBlock | null;
   finalContent?: string;
+  contextTokens?: number;
+  outputTokensTotal?: number;
 }
 
 export interface SessionStreamStartedEvent {
@@ -823,5 +825,42 @@ export interface LogEntryInput {
 export interface LogResult {
   success: boolean;
   seq?: number;
+}
+
+export interface FileEntry {
+  name: string;
+  path: string;
+  relativePath: string;
+  isDirectory: boolean;
+  size: number;
+  modified: string;
+  gitStatus: string;
+  isStaged: boolean;
+  isIgnored: boolean;
+  childrenCount?: number | null;
+}
+
+export interface DirectoryListing {
+  path: string;
+  entries: FileEntry[];
+  gitRoot?: string | null;
+  gitPath?: string | null;
+}
+
+export interface SessionCwd {
+  sessionId: string;
+  cwd: string;
+}
+
+export interface CwdChangedData {
+  sessionId: string;
+  oldCwd: string | null;
+  newCwd: string;
+}
+
+export interface FileOperationResult {
+  success: boolean;
+  message: string;
+  path?: string | null;
 }
 

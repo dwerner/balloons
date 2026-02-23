@@ -46,6 +46,7 @@ from service import (
     ImageService,
     SoundService,
     DebugLogService,
+    FileStateService,
 )
 
 
@@ -192,6 +193,7 @@ async def run_server(
     image_service = ImageService()
     sound_service = SoundService()
     debug_log_service = DebugLogService()
+    file_service = FileStateService()
 
     # Wire up event pumping for streaming
     session_service.set_task_state_service(task_service)
@@ -223,6 +225,7 @@ async def run_server(
     ws_server.register_service(image_service)
     ws_server.register_service(sound_service)
     ws_server.register_service(debug_log_service)
+    ws_server.register_service(file_service)
 
     # Start server
     await ws_server.start()

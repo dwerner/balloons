@@ -1199,6 +1199,13 @@
   color: var(--accent-tool, #ffd43b);
 }
 
+/* Tool result section (for ToolUseCard v2) */
+.tool-result-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-muted, #333);
+}
+
 /* Generic tool card specifics */
 .generic-tool-card .tool-section {
   margin-bottom: 8px;
