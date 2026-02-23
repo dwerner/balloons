@@ -17,6 +17,8 @@ export interface StreamingStatusBarProps {
   isPinned?: boolean;
   /** Callback when pin state is toggled */
   onTogglePin?: () => void;
+  /** Scroll state from chat view */
+  scrollState?: { isFollowing: boolean; isAtBottom: boolean };
 }
 
 /**
@@ -102,6 +104,7 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
   sessionContextTokens,
   isPinned = false,
   onTogglePin,
+  scrollState,
 }: StreamingStatusBarProps) {
   // Collapsed state - persist in localStorage (shared with SessionStatusBar)
   const [isCollapsed, setIsCollapsed] = useState(() => {
@@ -165,6 +168,10 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
             <span className="streaming-status-bar__toggle-icon">▲</span>
           </button>
           <span className="streaming-status-bar__indicator streaming-status-bar__indicator--mini" aria-hidden="true" />
+          {/* Scroll state indicator in collapsed view (only show when paused) */}
+          {scrollState && !scrollState.isFollowing && (
+            <span className="streaming-status-bar__scroll-state paused mini" title="Auto-scroll PAUSED">⏸</span>
+          )}
           <div className="streaming-status-bar__mini-track">
             <div
               className={`streaming-status-bar__mini-bar ${contextColorClass}`}
@@ -213,6 +220,21 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
             <div className="streaming-status-bar__timer">
               {formatDuration(duration)}
             </div>
+
+            {/* Scroll state indicator */}
+            {scrollState && (
+              <div
+                className={`streaming-status-bar__scroll-state ${scrollState.isFollowing ? 'following' : 'paused'}`}
+                title={scrollState.isFollowing
+                  ? 'Auto-scroll: following new content'
+                  : 'Auto-scroll: PAUSED (scrolled up)'}
+              >
+                {scrollState.isFollowing ? '⬇' : '⏸'}
+                <span className="streaming-status-bar__scroll-label">
+                  {scrollState.isFollowing ? 'Following' : 'PAUSED'}
+                </span>
+              </div>
+            )}
 
             {/* Pin toggle button */}
             {onTogglePin && (

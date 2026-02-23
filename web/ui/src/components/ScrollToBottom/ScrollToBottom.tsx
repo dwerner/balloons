@@ -52,12 +52,13 @@ export function ScrollToBottom({
   label,
 }: ScrollToBottomProps) {
   // Build label text
+  // Note: this button is only visible when NOT following (user scrolled up)
   let displayLabel = label;
   if (!displayLabel) {
     if (newCount && newCount > 0) {
       displayLabel = `${newCount} new`;
     } else if (isStreaming) {
-      displayLabel = 'Following...';
+      displayLabel = 'Resume following';
     } else {
       displayLabel = 'Scroll to bottom';
     }

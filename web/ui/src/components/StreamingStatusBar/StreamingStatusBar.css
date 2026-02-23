@@ -89,6 +89,44 @@
   cursor: not-allowed;
 }
 
+/* ----- Scroll State Indicator ----- */
+.streaming-status-bar__scroll-state {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.streaming-status-bar__scroll-state.following {
+  background: rgba(74, 222, 128, 0.15);
+  color: var(--color-accent-green);
+}
+
+.streaming-status-bar__scroll-state.paused {
+  background: rgba(251, 191, 36, 0.25);
+  color: var(--color-accent-yellow);
+  animation: scroll-paused-pulse 1s infinite;
+}
+
+.streaming-status-bar__scroll-state.mini {
+  padding: 2px 6px;
+  font-size: 10px;
+}
+
+.streaming-status-bar__scroll-label {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+@keyframes scroll-paused-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
 /* ----- Pin Button ----- */
 .streaming-status-bar__pin-button {
   display: flex;

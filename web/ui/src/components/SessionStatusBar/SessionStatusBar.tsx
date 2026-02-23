@@ -17,6 +17,8 @@ export interface SessionStatusBarProps {
   onTogglePin?: () => void;
   /** Callback when session title is changed */
   onTitleChange?: (newTitle: string) => void;
+  /** Scroll state from chat view */
+  scrollState?: { isFollowing: boolean; isAtBottom: boolean };
 }
 
 /**
@@ -112,6 +114,7 @@ export const SessionStatusBar = memo(function SessionStatusBar({
   onBackendChange,
   onTogglePin,
   onTitleChange,
+  scrollState,
 }: SessionStatusBarProps) {
   const contextTokens = session.cachedContextTokens ?? 0;
   const contextWindow = session.contextWindow ?? 200000;
@@ -340,6 +343,21 @@ export const SessionStatusBar = memo(function SessionStatusBar({
             </div>
 
             <div className="session-status-bar__right">
+              {/* Scroll state indicator */}
+              {scrollState && (
+                <div
+                  className={`session-status-bar__scroll-state ${scrollState.isFollowing ? 'following' : 'paused'}`}
+                  title={scrollState.isFollowing
+                    ? 'Auto-scroll: following new content'
+                    : 'Auto-scroll: PAUSED (scrolled up)'}
+                >
+                  {scrollState.isFollowing ? '⬇' : '⏸'}
+                  <span className="session-status-bar__scroll-label">
+                    {scrollState.isFollowing ? 'Following' : 'PAUSED'}
+                  </span>
+                </div>
+              )}
+
               {/* Pin toggle button */}
               {onTogglePin && (
                 <button

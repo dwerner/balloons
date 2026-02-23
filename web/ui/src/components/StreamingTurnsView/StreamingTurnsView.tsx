@@ -18,7 +18,7 @@
  * - Shows "scroll to bottom" indicator to resume following
  */
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useEffect } from 'react';
 import type { BalloonsClient } from '../../../../generated/balloons-client';
 import { useSessionData, useAutoScroll } from '../../hooks';
 import { TurnCard, ClientContext } from './cards';
@@ -29,9 +29,11 @@ interface StreamingTurnsViewProps {
   sessionId: string | null;
   client: BalloonsClient;
   onSelectSession?: (sessionId: string) => void;
+  /** Callback when scroll state changes (for status bar display) */
+  onScrollStateChange?: (state: { isFollowing: boolean; isAtBottom: boolean }) => void;
 }
 
-export function StreamingTurnsView({ sessionId, client, onSelectSession }: StreamingTurnsViewProps) {
+export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrollStateChange }: StreamingTurnsViewProps) {
   const { turns, isLoading, isSubscribed, isStreaming, streamError, error } = useSessionData(client, sessionId);
 
   // Memoize context value to prevent unnecessary re-renders
@@ -41,11 +43,18 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession }: Strea
   }), [client, onSelectSession]);
 
   // Robust autoscroll: follows stream, pauses on user scroll-up, resumes on click
-  const { scrollRef, isFollowing, scrollToBottom } = useAutoScroll({
+  const { scrollRef, isFollowing, isAtBottom, scrollToBottom } = useAutoScroll({
     deps: [turns], // Re-check scroll position when turns change
     threshold: 150, // Consider "at bottom" within 150px
     enabled: true,
   });
+
+  // Report scroll state changes to parent (for status bar indicator)
+  useEffect(() => {
+    if (onScrollStateChange) {
+      onScrollStateChange({ isFollowing, isAtBottom });
+    }
+  }, [isFollowing, isAtBottom, onScrollStateChange]);
 
   if (!sessionId) {
     return <div className="streaming-turns-view empty">No session selected</div>;
@@ -59,8 +68,8 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession }: Strea
     return <div className="streaming-turns-view error">{error}</div>;
   }
 
-  // Show scroll indicator when streaming and user scrolled away
-  const showScrollIndicator = isStreaming && !isFollowing;
+  // Show scroll-to-bottom button when user has scrolled away
+  const showScrollIndicator = !isFollowing;
 
   return (
     <ClientContext.Provider value={contextValue}>

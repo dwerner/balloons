@@ -895,20 +895,18 @@ export function App() {
   });
 
   const clientRef = useRef<BalloonsClient | null>(null);
-  const turnsEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messageInputRef = useRef<MessageInputHandle>(null);
   // Track the session we're currently loading to handle race conditions
   const loadingSessionRef = useRef<string | null>(null);
 
-  // Auto-scroll to bottom when turns update
-  // Use a small delay to allow markdown/syntax highlighting to render first
-  useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      turnsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, 50);
-    return () => clearTimeout(timeoutId);
-  }, [turns]);
+  // NOTE: Auto-scroll is handled by useAutoScroll hook in StreamingTurnsView
+  // and SimpleTurnsView. The unconditional scroll-to-bottom effect was removed
+  // because it conflicted with the user's ability to scroll up during streaming.
+  // See BUGS.md Bug #12 for details.
+
+  // Scroll state from chat view (for status bar indicator)
+  const [scrollState, setScrollState] = useState<{ isFollowing: boolean; isAtBottom: boolean } | undefined>(undefined);
 
   // Persist selected session ID to localStorage
   useEffect(() => {
@@ -2033,14 +2031,18 @@ export function App() {
               {conversationViewMode === 'simple' && clientRef.current && connectionState === 'connected' ? (
                 <SimpleTurnsView sessionId={selectedSessionId} client={clientRef.current} />
               ) : conversationViewMode === 'streaming' && clientRef.current && connectionState === 'connected' ? (
-                <StreamingTurnsView sessionId={selectedSessionId} client={clientRef.current} onSelectSession={setSelectedSessionId} />
+                <StreamingTurnsView
+                  sessionId={selectedSessionId}
+                  client={clientRef.current}
+                  onSelectSession={setSelectedSessionId}
+                  onScrollStateChange={setScrollState}
+                />
               ) : (
                 <div className="empty-state">
                   <h2>Connecting...</h2>
                   <p>Waiting for connection.</p>
                 </div>
               )}
-              <div ref={turnsEndRef} />
             </div>
 
             <div className={`input-area ${selectedSession?.isStreaming ? 'queue-mode' : ''}`}>
@@ -2053,6 +2055,7 @@ export function App() {
                   sessionContextTokens={selectedSession.cachedContextTokens}
                   isPinned={selectedSession.isPinned ?? false}
                   onTogglePin={() => handleTogglePin(selectedSession.id)}
+                  scrollState={scrollState}
                 />
               ) : selectedSession && (
                 <SessionStatusBar
@@ -2060,6 +2063,7 @@ export function App() {
                   isStreaming={selectedSession.isStreaming}
                   client={clientRef.current}
                   onTogglePin={() => handleTogglePin(selectedSession.id)}
+                  scrollState={scrollState}
                 />
               )}
               {/* Image preview area */}

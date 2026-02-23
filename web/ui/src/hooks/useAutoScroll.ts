@@ -60,9 +60,9 @@ export interface UseAutoScrollOptions {
 
 export interface UseAutoScrollReturn {
   /**
-   * Ref to attach to the scrollable container element.
+   * Callback ref to attach to the scrollable container element.
    */
-  scrollRef: React.RefObject<HTMLDivElement | null>;
+  scrollRef: (element: HTMLDivElement | null) => void;
 
   /**
    * Whether the user is currently at/near the bottom.
@@ -115,8 +115,24 @@ export function useAutoScroll(options: UseAutoScrollOptions = {}): UseAutoScroll
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Track whether user is actively following the stream
-  // Starts true - user is assumed to want to see new content
-  const [isFollowing, setIsFollowing] = useState(true);
+  // Persist to localStorage so it survives reconnects
+  const [isFollowing, setIsFollowingState] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('balloons:autoscroll-following');
+      // Default to true if not set
+      return stored !== 'false';
+    }
+    return true;
+  });
+
+  // Wrapper that persists to localStorage
+  const setIsFollowing = useCallback((value: boolean | ((prev: boolean) => boolean)) => {
+    setIsFollowingState(prev => {
+      const newValue = typeof value === 'function' ? value(prev) : value;
+      localStorage.setItem('balloons:autoscroll-following', String(newValue));
+      return newValue;
+    });
+  }, []);
 
   // Track actual scroll position (debounced)
   const [isAtBottom, setIsAtBottom] = useState(true);
@@ -253,25 +269,50 @@ export function useAutoScroll(options: UseAutoScrollOptions = {}): UseAutoScroll
   }, deps);
 
   /**
-   * Set up scroll event listener.
+   * Set up scroll event listener using a callback ref.
+   * This ensures the listener is attached when the element mounts.
    */
-  useEffect(() => {
-    const element = scrollRef.current;
+  const handleScrollRef = useRef(handleScroll);
+  handleScrollRef.current = handleScroll;
+
+  const cleanupRef = useRef<(() => void) | null>(null);
+
+  const setScrollRef = useCallback((element: HTMLDivElement | null) => {
+    // Clean up previous listener
+    if (cleanupRef.current) {
+      cleanupRef.current();
+      cleanupRef.current = null;
+    }
+
+    // Update the ref
+    (scrollRef as React.MutableRefObject<HTMLDivElement | null>).current = element;
+
     if (!element) return;
 
-    element.addEventListener('scroll', handleScroll, { passive: true });
+    // Create scroll handler that uses the ref
+    const scrollHandler = (e: Event) => handleScrollRef.current(e);
+    element.addEventListener('scroll', scrollHandler, { passive: true });
 
-    // Initial scroll position check
-    checkScrollPosition();
+    // Initial position
     lastScrollTopRef.current = element.scrollTop;
 
-    return () => {
-      element.removeEventListener('scroll', handleScroll);
+    // Store cleanup
+    cleanupRef.current = () => {
+      element.removeEventListener('scroll', scrollHandler);
       if (scrollDebounceRef.current !== null) {
         window.clearTimeout(scrollDebounceRef.current);
       }
     };
-  }, [handleScroll, checkScrollPosition]);
+  }, []);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (cleanupRef.current) {
+        cleanupRef.current();
+      }
+    };
+  }, []);
 
   /**
    * Handle window resize - re-check position.
@@ -286,7 +327,7 @@ export function useAutoScroll(options: UseAutoScrollOptions = {}): UseAutoScroll
   }, [checkScrollPosition]);
 
   return {
-    scrollRef,
+    scrollRef: setScrollRef,
     isAtBottom,
     isFollowing,
     scrollToBottom,
