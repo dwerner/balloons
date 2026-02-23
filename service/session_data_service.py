@@ -184,11 +184,14 @@ class SessionTurnFinishedEvent:
 
     session_id: str
     turn_id: str  # Stable UUID for the turn
-    tokens: int
+    tokens: int  # Token count for this turn
     order: int = 0  # Turn index for ordering (critical for tool_result turns)
     role: str = "assistant"  # Turn role
     content_block: ContentBlock | None = None  # Full structured content block (optional for backwards compat)
     final_content: str = ""  # Deprecated: use content_block instead
+    # Cumulative token counts for the exchange
+    context_tokens: int = 0  # Total context/input tokens sent to LLM
+    output_tokens_total: int = 0  # Total output tokens generated so far in this exchange
 
 
 @ws_type
@@ -359,6 +362,7 @@ class SessionInfo:
     binding_indicator: str = ""
     backend_name: str = ""
     is_pinned: bool = False
+    working_directory: str = ""
 
 
 @ws_type
@@ -1169,11 +1173,12 @@ class SessionDataService:
             fork_name=session.fork_name,
             fork_status=session.fork_status,
             parent_id=session.parent_id,
-            cached_context_tokens=getattr(session, "cached_context_tokens", 0),
+            cached_context_tokens=session.ensure_context_tokens() if hasattr(session, 'ensure_context_tokens') else getattr(session, "cached_context_tokens", 0),
             context_window=getattr(session, "context_window", 200000),
             binding_indicator=getattr(session, "binding_indicator", ""),
             backend_name=getattr(session, "backend_name", ""),
             is_pinned=is_pinned,
+            working_directory=session.working_directory or "",
         )
 
     async def _session_dict_to_info(
@@ -1201,6 +1206,12 @@ class SessionDataService:
             last_modified = datetime.fromtimestamp(last_modified, tz=timezone.utc).isoformat()
 
         session_id = data.get("id", "")
+        # Get working directory - handle both old format (single) and new format (list)
+        working_dirs = data.get("working_directories", [])
+        if not working_dirs:
+            working_dirs = [data.get("working_directory", "")] if data.get("working_directory") else []
+        working_dir = working_dirs[0] if working_dirs else ""
+
         return SessionInfo(
             id=session_id,
             title=data.get("title") or data.get("name", ""),
@@ -1218,6 +1229,7 @@ class SessionDataService:
             binding_indicator=data.get("binding_indicator", ""),
             backend_name=data.get("backend_name", ""),
             is_pinned=session_id in pinned_ids,
+            working_directory=working_dir,
         )
 
     @ws_expose
@@ -1664,6 +1676,8 @@ class SessionDataService:
         order: int = 0,
         role: str = "assistant",
         content_block: ContentBlock | None = None,
+        context_tokens: int = 0,
+        output_tokens_total: int = 0,
     ) -> None:
         """Emit a turn finished event to subscribed clients.
 
@@ -1677,6 +1691,8 @@ class SessionDataService:
             order: Turn index for ordering
             role: Turn role ("user", "assistant", "tool")
             content_block: Full structured content block (optional, preferred over final_content)
+            context_tokens: Cumulative context/input tokens sent to LLM
+            output_tokens_total: Cumulative output tokens generated so far in this exchange
         """
         subscribers = self._session_subscribers.get(session_id)
         if not subscribers:
@@ -1690,6 +1706,8 @@ class SessionDataService:
             role=role,
             content_block=content_block,
             final_content=final_content,
+            context_tokens=context_tokens,
+            output_tokens_total=output_tokens_total,
         )
         # Convert to dict for JSON serialization
         event_dict = event_data.__dict__.copy()
@@ -2010,6 +2028,8 @@ class SessionDataService:
             order=event.turn_index,
             role=event.role,
             content_block=event.content_block,
+            context_tokens=event.context_tokens,
+            output_tokens_total=event.output_tokens_total,
         )
 
     async def on_stream_started(self, event: StreamStartedEvent) -> None:

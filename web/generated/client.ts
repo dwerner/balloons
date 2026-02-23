@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-23T08:00:22.707935
+// Generated: 2026-02-23T09:30:50.371270
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -687,6 +687,18 @@ export interface SessionManagerService {
   setSessionTitle(sessionId: string, title: string): Promise<boolean>;
 
   /**
+   * Set the working directory for a session.
+   * 
+   * Args:
+   * session_id: ID of the session to update
+   * working_directory: New working directory path
+   * 
+   * Returns:
+   * True if successful, False if session not found or path invalid
+   */
+  setSessionWorkingDirectory(sessionId: string, workingDirectory: string): Promise<boolean>;
+
+  /**
    * Start archiving turns with LLM-generated summary.
    * 
    * This starts a background task to generate a summary of the turns being
@@ -971,6 +983,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   async setSessionTitle(sessionId: string, title: string): Promise<boolean> {
     return this.call('setSessionTitle', { sessionId: sessionId, title: title });
+  }
+
+  async setSessionWorkingDirectory(sessionId: string, workingDirectory: string): Promise<boolean> {
+    return this.call('setSessionWorkingDirectory', { sessionId: sessionId, workingDirectory: workingDirectory });
   }
 
   async startArchive(sessionId: string, turnIndices: number[], autoComplete?: boolean): Promise<Types.StartArchiveResult> {
@@ -3179,7 +3195,7 @@ export interface FileStateService {
    * session_id: The session ID
    * 
    * Returns:
-   * The current working directory, or home directory if not set
+   * The current working directory, or server's cwd if not set
    */
   getCwd(sessionId: string): Promise<string>;
 

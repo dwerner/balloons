@@ -385,6 +385,8 @@ class TestEventData:
             "content_block": None,  # Optional, not set in this test
             "order": 0,  # Default value
             "role": "assistant",  # Default value
+            "context_tokens": 0,  # Cumulative context tokens (default)
+            "output_tokens_total": 0,  # Cumulative output tokens (default)
         }
 
 

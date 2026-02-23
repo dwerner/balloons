@@ -174,6 +174,7 @@ class TestExecuteLinkTool:
         session.backend_name = "anthropic"
         session.cached_context_tokens = 40000  # 20% usage
         session.context_window = 200000
+        session.ensure_context_tokens.return_value = 40000  # Mock the new method
         session.is_merged.return_value = False
         session.parent_id = None
         session.get_all_merge_blocks.return_value = []
@@ -206,6 +207,7 @@ class TestExecuteLinkTool:
         session.backend_name = "openrouter"
         session.cached_context_tokens = 160000
         session.context_window = 200000
+        session.ensure_context_tokens.return_value = 160000
         session.is_merged.return_value = False
         session.parent_id = "parent-1234"
         session.get_all_merge_blocks.return_value = []
@@ -244,6 +246,7 @@ class TestExecuteLinkTool:
         session.backend_name = "anthropic"
         session.cached_context_tokens = 50000
         session.context_window = 200000
+        session.ensure_context_tokens.return_value = 50000
         session.is_merged.return_value = False
         session.parent_id = None
         session.get_merged_to_block.return_value = None
@@ -295,6 +298,7 @@ class TestExecuteLinkTool:
         session.backend_name = "anthropic"
         session.cached_context_tokens = 30000
         session.context_window = 200000
+        session.ensure_context_tokens.return_value = 30000
         session.is_merged.return_value = True
         session.parent_id = "parent-session-456"
         session.merge_point_turn = 42
@@ -341,6 +345,7 @@ class TestExecuteLinkTool:
         session.backend_name = "anthropic"
         session.cached_context_tokens = 40000
         session.context_window = 200000
+        session.ensure_context_tokens.return_value = 40000
         session.is_merged.return_value = False
         session.parent_id = None
         session.get_all_merge_blocks.return_value = []
@@ -382,6 +387,7 @@ class TestExecuteLinkTool:
         session.backend_name = None  # No explicit backend
         session.cached_context_tokens = 40000
         session.context_window = 200000
+        session.ensure_context_tokens.return_value = 40000
         session.is_merged.return_value = False
         session.parent_id = None
         session.get_all_merge_blocks.return_value = []

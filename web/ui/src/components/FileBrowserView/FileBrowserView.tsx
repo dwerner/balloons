@@ -1,0 +1,613 @@
+/**
+ * FileBrowserView - File browser with git status integration
+ *
+ * Features:
+ * - Directory tree navigation with lazy loading
+ * - Git status indicators (modified, staged, untracked, ignored)
+ * - Breadcrumb navigation
+ * - Context menu for file operations
+ * - Session CWD management
+ */
+
+import React, { useState, useCallback, useEffect, useMemo, memo } from 'react';
+import type { FileEntry, DirectoryListing } from '../../../../generated/balloons-client';
+import { createLogger } from '../../utils/debugLog';
+import './FileBrowserView.css';
+
+// Create scoped logger for this module
+const debugLog = createLogger('FileBrowserView');
+
+// Git status icons and colors
+const GIT_STATUS_CONFIG: Record<string, { icon: string; color: string; title: string }> = {
+  ' ': { icon: '', color: '', title: 'Clean' },
+  'M': { icon: 'M', color: '#facc15', title: 'Modified' },
+  'A': { icon: 'A', color: '#4ade80', title: 'Added' },
+  'D': { icon: 'D', color: '#f87171', title: 'Deleted' },
+  'R': { icon: 'R', color: '#c084fc', title: 'Renamed' },
+  '?': { icon: '?', color: '#888', title: 'Untracked' },
+  '!': { icon: '!', color: '#555', title: 'Ignored' },
+  'T': { icon: 'T', color: '#60a5fa', title: 'Type changed' },
+};
+
+// File type icons
+function getFileIcon(entry: FileEntry): string {
+  if (entry.isDirectory) {
+    return '\uD83D\uDCC1'; // folder emoji
+  }
+
+  const name = entry.name.toLowerCase();
+  const ext = name.split('.').pop() || '';
+
+  // Code files
+  if (['ts', 'tsx', 'js', 'jsx'].includes(ext)) return '\uD83D\uDCDC'; // scroll (JS/TS)
+  if (['py', 'pyw'].includes(ext)) return '\uD83D\uDC0D'; // snake (Python)
+  if (['rs'].includes(ext)) return '\u2699\uFE0F'; // gear (Rust)
+  if (['go'].includes(ext)) return '\uD83D\uDC39'; // hamster face (Go gopher-ish)
+  if (['c', 'cpp', 'h', 'hpp'].includes(ext)) return '\uD83D\uDCBB'; // laptop (C/C++)
+  if (['java', 'kt', 'scala'].includes(ext)) return '\u2615'; // coffee (Java)
+  if (['rb'].includes(ext)) return '\uD83D\uDC8E'; // gem (Ruby)
+  if (['php'].includes(ext)) return '\uD83D\uDC18'; // elephant (PHP)
+
+  // Data files
+  if (['json', 'yaml', 'yml', 'toml'].includes(ext)) return '\uD83D\uDCCB'; // clipboard
+  if (['md', 'mdx', 'txt', 'rst'].includes(ext)) return '\uD83D\uDCDD'; // memo
+  if (['csv', 'tsv'].includes(ext)) return '\uD83D\uDCCA'; // chart
+
+  // Config files
+  if (['gitignore', 'dockerignore', 'env'].includes(ext) || name.startsWith('.')) {
+    return '\u2699\uFE0F'; // gear
+  }
+  if (['dockerfile'].includes(name) || ext === 'docker') return '\uD83D\uDC33'; // whale
+
+  // Web files
+  if (['html', 'htm'].includes(ext)) return '\uD83C\uDF10'; // globe
+  if (['css', 'scss', 'less', 'sass'].includes(ext)) return '\uD83C\uDFA8'; // palette
+  if (['svg'].includes(ext)) return '\uD83D\uDDBC\uFE0F'; // framed picture
+
+  // Images
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico'].includes(ext)) return '\uD83D\uDDBC\uFE0F'; // framed picture
+
+  // Archives
+  if (['zip', 'tar', 'gz', 'bz2', 'xz', 'rar', '7z'].includes(ext)) return '\uD83D\uDCE6'; // package
+
+  // Default
+  return '\uD83D\uDCC4'; // page facing up
+}
+
+// Format file size
+function formatSize(bytes: number): string {
+  if (bytes === 0) return '';
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}K`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}M`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)}G`;
+}
+
+// Arrow icon component
+function Arrow({ open }: { open: boolean }) {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={`file-arrow ${open ? 'file-arrow--open' : ''}`}
+    >
+      <path d="M9 18l6-6-6-6" />
+    </svg>
+  );
+}
+
+// Home icon
+function HomeIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      <polyline points="9,22 9,12 15,12 15,22" />
+    </svg>
+  );
+}
+
+// Up icon for parent directory
+function UpIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M12 19V5M5 12l7-7 7 7" />
+    </svg>
+  );
+}
+
+// Refresh icon
+function RefreshIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M23 4v6h-6" />
+      <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+    </svg>
+  );
+}
+
+// Default config for unknown statuses
+const DEFAULT_STATUS_CONFIG = { icon: '', color: '', title: 'Unknown' };
+
+// Git status badge component
+function GitStatusBadge({ status, isStaged }: { status: string; isStaged: boolean }) {
+  const config = GIT_STATUS_CONFIG[status] ?? DEFAULT_STATUS_CONFIG;
+  if (!config.icon) return null;
+
+  return (
+    <span
+      className={`file-git-status ${isStaged ? 'file-git-status--staged' : ''}`}
+      style={{ color: config.color }}
+      title={`${config.title}${isStaged ? ' (staged)' : ''}`}
+    >
+      {config.icon}
+    </span>
+  );
+}
+
+// Breadcrumb navigation component
+interface BreadcrumbProps {
+  path: string;
+  onNavigate: (path: string) => void;
+  onGoHome: () => void;
+  onGoUp: () => void;
+  onRefresh: () => void;
+}
+
+function Breadcrumb({ path, onNavigate, onGoHome, onGoUp, onRefresh }: BreadcrumbProps) {
+  const parts = useMemo(() => {
+    // Split path into segments
+    const segments = path.split('/').filter(Boolean);
+    const result: { name: string; path: string }[] = [];
+
+    // Build path progressively
+    let currentPath = '';
+    for (const segment of segments) {
+      currentPath += '/' + segment;
+      result.push({ name: segment, path: currentPath });
+    }
+
+    return result;
+  }, [path]);
+
+  return (
+    <div className="file-breadcrumb">
+      <button
+        className="file-breadcrumb__button"
+        onClick={onGoHome}
+        title="Go to home directory"
+      >
+        <HomeIcon />
+      </button>
+      <button
+        className="file-breadcrumb__button"
+        onClick={onGoUp}
+        title="Go to parent directory"
+      >
+        <UpIcon />
+      </button>
+      <button
+        className="file-breadcrumb__button"
+        onClick={onRefresh}
+        title="Refresh"
+      >
+        <RefreshIcon />
+      </button>
+      <div className="file-breadcrumb__path">
+        <span className="file-breadcrumb__separator">/</span>
+        {parts.map((part, index) => (
+          <React.Fragment key={part.path}>
+            <button
+              className="file-breadcrumb__segment"
+              onClick={() => onNavigate(part.path)}
+            >
+              {part.name}
+            </button>
+            {index < parts.length - 1 && (
+              <span className="file-breadcrumb__separator">/</span>
+            )}
+          </React.Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// File tree node component
+interface FileTreeNodeProps {
+  entry: FileEntry;
+  depth: number;
+  isExpanded: boolean;
+  isLoading: boolean;
+  children: FileEntry[];
+  onToggle: () => void;
+  onSelect: () => void;
+  onNavigate: (path: string) => void;
+  expandedPaths: Set<string>;
+  loadingPaths: Set<string>;
+  childrenCache: Map<string, FileEntry[]>;
+}
+
+const FileTreeNode = memo(function FileTreeNode({
+  entry,
+  depth,
+  isExpanded,
+  isLoading,
+  children,
+  onToggle,
+  onSelect,
+  onNavigate,
+  expandedPaths,
+  loadingPaths,
+  childrenCache,
+}: FileTreeNodeProps) {
+  const hasChildren = entry.isDirectory && (entry.childrenCount ?? 0) > 0;
+  const icon = getFileIcon(entry);
+  const sizeStr = !entry.isDirectory ? formatSize(entry.size) : '';
+
+  const handleDoubleClick = useCallback(() => {
+    if (entry.isDirectory) {
+      onNavigate(entry.path);
+    }
+  }, [entry, onNavigate]);
+
+  const handleClick = useCallback(() => {
+    if (entry.isDirectory) {
+      onToggle();
+    } else {
+      onSelect();
+    }
+  }, [entry.isDirectory, onToggle, onSelect]);
+
+  const handleArrowClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    onToggle();
+  }, [onToggle]);
+
+  return (
+    <li className={`file-node ${entry.isIgnored ? 'file-node--ignored' : ''}`}>
+      <div
+        className="file-node__content"
+        style={{ paddingLeft: `${depth * 16 + 8}px` }}
+        onClick={handleClick}
+        onDoubleClick={handleDoubleClick}
+      >
+        <span className="file-node__toggle" onClick={handleArrowClick}>
+          {hasChildren ? (
+            isLoading ? (
+              <span className="file-node__spinner" />
+            ) : (
+              <Arrow open={isExpanded} />
+            )
+          ) : (
+            <span className="file-node__spacer" />
+          )}
+        </span>
+        <span className="file-node__icon">{icon}</span>
+        <span className="file-node__name">{entry.name}</span>
+        <GitStatusBadge status={entry.gitStatus} isStaged={entry.isStaged} />
+        {sizeStr && <span className="file-node__size">{sizeStr}</span>}
+        {entry.isDirectory && entry.childrenCount != null && (
+          <span className="file-node__count">{entry.childrenCount}</span>
+        )}
+      </div>
+
+      {isExpanded && children.length > 0 && (
+        <ul className="file-children">
+          {children.map(child => {
+            const childExpanded = expandedPaths.has(child.path);
+            const childLoading = loadingPaths.has(child.path);
+            const childChildren = childrenCache.get(child.path) || [];
+
+            return (
+              <FileTreeNode
+                key={child.path}
+                entry={child}
+                depth={depth + 1}
+                isExpanded={childExpanded}
+                isLoading={childLoading}
+                children={childChildren}
+                onToggle={() => { }} // Will be wired up by parent
+                onSelect={() => { }}
+                onNavigate={onNavigate}
+                expandedPaths={expandedPaths}
+                loadingPaths={loadingPaths}
+                childrenCache={childrenCache}
+              />
+            );
+          })}
+        </ul>
+      )}
+    </li>
+  );
+});
+
+// Props for main component
+export interface FileBrowserViewProps {
+  /** Initial path to show (defaults to home directory) */
+  initialPath?: string;
+
+  /** Current session ID for CWD tracking */
+  sessionId?: string;
+
+  /** Callback when a file is selected */
+  onFileSelect?: (path: string) => void;
+
+  /** Callback to list a directory (from FileStateService) */
+  listDirectory: (path: string) => Promise<DirectoryListing>;
+
+  /** Callback to get home directory */
+  getHomeDirectory: () => Promise<string>;
+
+  /** Callback to get parent directory */
+  getParentDirectory: (path: string) => Promise<string>;
+}
+
+export const FileBrowserView = memo(function FileBrowserView({
+  initialPath,
+  sessionId,
+  onFileSelect,
+  listDirectory,
+  getHomeDirectory,
+  getParentDirectory,
+}: FileBrowserViewProps) {
+  // Current directory listing
+  const [listing, setListing] = useState<DirectoryListing | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Expanded directories for lazy loading
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
+  const [loadingPaths, setLoadingPaths] = useState<Set<string>>(new Set());
+  const [childrenCache, setChildrenCache] = useState<Map<string, FileEntry[]>>(new Map());
+
+  // Home directory path
+  const [homePath, setHomePath] = useState<string>('');
+
+  // Track initialization to show better loading state
+  const [isInitializing, setIsInitializing] = useState(true);
+
+  // Load home directory on mount
+  useEffect(() => {
+    getHomeDirectory().then(setHomePath).catch(err => {
+      debugLog('Failed to get home directory', { error: err });
+    });
+  }, [getHomeDirectory]);
+
+  // Load directory
+  const loadDirectory = useCallback(async (path: string) => {
+    debugLog('Loading directory', { path });
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const result = await listDirectory(path);
+      setListing(result);
+      debugLog('Directory loaded', { path, entryCount: result.entries.length });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      debugLog('Failed to load directory', { path, error: message });
+    } finally {
+      setIsLoading(false);
+    }
+  }, [listDirectory]);
+
+  // Load initial directory - use initialPath if provided, otherwise home
+  useEffect(() => {
+    const loadInitial = async () => {
+      setIsInitializing(true);
+      try {
+        const startPath = initialPath || await getHomeDirectory();
+        debugLog('Loading initial directory', { startPath, initialPath });
+        await loadDirectory(startPath);
+      } finally {
+        setIsInitializing(false);
+      }
+    };
+    loadInitial();
+  }, [initialPath, getHomeDirectory, loadDirectory]);
+
+  // Navigate to a directory
+  const navigateTo = useCallback(async (path: string) => {
+    // Clear expansion state when navigating to new root
+    setExpandedPaths(new Set());
+    setChildrenCache(new Map());
+    await loadDirectory(path);
+  }, [loadDirectory]);
+
+  // Go to home directory
+  const goHome = useCallback(async () => {
+    const home = await getHomeDirectory();
+    await navigateTo(home);
+  }, [getHomeDirectory, navigateTo]);
+
+  // Go to parent directory
+  const goUp = useCallback(async () => {
+    if (!listing) return;
+    const parent = await getParentDirectory(listing.path);
+    if (parent !== listing.path) {
+      await navigateTo(parent);
+    }
+  }, [listing, getParentDirectory, navigateTo]);
+
+  // Refresh current directory
+  const refresh = useCallback(() => {
+    if (listing) {
+      loadDirectory(listing.path);
+    }
+  }, [listing, loadDirectory]);
+
+  // Toggle directory expansion (lazy load children)
+  const toggleExpanded = useCallback(async (entry: FileEntry) => {
+    if (!entry.isDirectory) return;
+
+    const isExpanded = expandedPaths.has(entry.path);
+
+    if (isExpanded) {
+      // Collapse
+      setExpandedPaths(prev => {
+        const next = new Set(prev);
+        next.delete(entry.path);
+        return next;
+      });
+    } else {
+      // Expand - load children if not cached
+      if (!childrenCache.has(entry.path)) {
+        setLoadingPaths(prev => new Set(prev).add(entry.path));
+        try {
+          const result = await listDirectory(entry.path);
+          setChildrenCache(prev => new Map(prev).set(entry.path, result.entries));
+        } catch (err) {
+          debugLog('Failed to load children', { path: entry.path, error: err });
+        } finally {
+          setLoadingPaths(prev => {
+            const next = new Set(prev);
+            next.delete(entry.path);
+            return next;
+          });
+        }
+      }
+
+      setExpandedPaths(prev => new Set(prev).add(entry.path));
+    }
+  }, [expandedPaths, childrenCache, listDirectory]);
+
+  // Handle file selection
+  const handleSelect = useCallback((entry: FileEntry) => {
+    if (!entry.isDirectory && onFileSelect) {
+      onFileSelect(entry.path);
+    }
+  }, [onFileSelect]);
+
+  // Render loading state
+  if ((isLoading || isInitializing) && !listing) {
+    return (
+      <div className="file-browser file-browser--loading">
+        <div className="file-browser__spinner" />
+        <span>{isInitializing ? 'Initializing...' : 'Loading directory...'}</span>
+      </div>
+    );
+  }
+
+  // Render error state
+  if (error && !listing) {
+    return (
+      <div className="file-browser file-browser--error">
+        <span className="file-browser__error-icon">!</span>
+        <span className="file-browser__error-text">{error}</span>
+        <button className="file-browser__retry" onClick={goHome}>
+          Go Home
+        </button>
+      </div>
+    );
+  }
+
+  if (!listing) {
+    return null;
+  }
+
+  return (
+    <div className="file-browser">
+      {/* Breadcrumb navigation */}
+      <Breadcrumb
+        path={listing.path}
+        onNavigate={navigateTo}
+        onGoHome={goHome}
+        onGoUp={goUp}
+        onRefresh={refresh}
+      />
+
+      {/* Git info bar */}
+      {listing.gitRoot && (
+        <div className="file-browser__git-info">
+          <span className="file-browser__git-icon">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M23.546 10.93L13.067.452c-.604-.603-1.582-.603-2.188 0L8.708 2.627l2.76 2.76c.645-.215 1.379-.07 1.889.441.516.515.658 1.258.438 1.9l2.658 2.66c.645-.223 1.387-.078 1.9.435.721.72.721 1.884 0 2.604-.719.719-1.881.719-2.6 0-.539-.541-.674-1.337-.404-1.996L12.86 8.955v6.525c.176.086.342.203.488.348.713.721.713 1.883 0 2.6-.719.721-1.889.721-2.609 0-.719-.719-.719-1.879 0-2.598.182-.18.387-.316.605-.406V8.835c-.217-.091-.424-.222-.6-.401-.545-.545-.676-1.342-.396-2.009L7.636 3.7.45 10.881c-.6.605-.6 1.584 0 2.189l10.48 10.477c.604.604 1.582.604 2.186 0l10.43-10.43c.605-.603.605-1.582 0-2.187" />
+            </svg>
+          </span>
+          <span className="file-browser__git-root">
+            {listing.gitPath || '/'}
+          </span>
+        </div>
+      )}
+
+      {/* File list */}
+      <ul className="file-list">
+        {listing.entries.length === 0 ? (
+          <li className="file-node file-node--empty">
+            <div className="file-node__content">
+              <span className="file-node__name file-node__name--muted">
+                Empty directory
+              </span>
+            </div>
+          </li>
+        ) : (
+          listing.entries.map(entry => {
+            const isExpanded = expandedPaths.has(entry.path);
+            const isEntryLoading = loadingPaths.has(entry.path);
+            const children = childrenCache.get(entry.path) || [];
+
+            return (
+              <FileTreeNode
+                key={entry.path}
+                entry={entry}
+                depth={0}
+                isExpanded={isExpanded}
+                isLoading={isEntryLoading}
+                children={children}
+                onToggle={() => toggleExpanded(entry)}
+                onSelect={() => handleSelect(entry)}
+                onNavigate={navigateTo}
+                expandedPaths={expandedPaths}
+                loadingPaths={loadingPaths}
+                childrenCache={childrenCache}
+              />
+            );
+          })
+        )}
+      </ul>
+
+      {/* Loading overlay for refresh */}
+      {isLoading && listing && (
+        <div className="file-browser__loading-overlay">
+          <div className="file-browser__spinner" />
+        </div>
+      )}
+    </div>
+  );
+});
+
+export default FileBrowserView;

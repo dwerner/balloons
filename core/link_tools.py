@@ -291,8 +291,9 @@ async def _execute_session_info(session: Session) -> tuple[str, bool]:
 
     Returns info to help the LLM understand session state and navigate the fork tree.
     """
-    # Calculate context usage
-    context_tokens = session.cached_context_tokens
+    # Always recalculate context tokens from turns to ensure accuracy
+    # This updates the cached value if it differs from the calculated value
+    context_tokens = session.ensure_context_tokens(force_recalculate=True)
     context_window = session.context_window
     context_usage_pct = (context_tokens / context_window * 100) if context_window > 0 else 0
 

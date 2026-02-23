@@ -19,6 +19,8 @@ export interface SessionStatusBarProps {
   onTitleChange?: (newTitle: string) => void;
   /** Scroll state from chat view */
   scrollState?: { isFollowing: boolean; isAtBottom: boolean };
+  /** Current working directory for the session */
+  cwd?: string;
 }
 
 /**
@@ -107,6 +109,21 @@ function getSessionDisplayName(session: SessionInfo): string {
   return session.forkName || session.title || `Session ${session.id.slice(0, 8)}`;
 }
 
+/**
+ * Format CWD for display - show abbreviated path
+ * e.g., "/home/dan/Development/balloons" -> "~/Development/balloons"
+ */
+function formatCwd(cwd: string | undefined, homePath?: string): string {
+  if (!cwd) return '';
+
+  // Replace home directory with ~
+  if (homePath && cwd.startsWith(homePath)) {
+    cwd = '~' + cwd.slice(homePath.length);
+  }
+
+  return cwd;
+}
+
 export const SessionStatusBar = memo(function SessionStatusBar({
   session,
   isStreaming = false,
@@ -115,6 +132,7 @@ export const SessionStatusBar = memo(function SessionStatusBar({
   onTogglePin,
   onTitleChange,
   scrollState,
+  cwd,
 }: SessionStatusBarProps) {
   const contextTokens = session.cachedContextTokens ?? 0;
   const contextWindow = session.contextWindow ?? 200000;
@@ -261,7 +279,7 @@ export const SessionStatusBar = memo(function SessionStatusBar({
         </div>
       ) : (
         <>
-          {/* Session title row - toggle + title + id */}
+          {/* Session title row - toggle + title + id + cwd */}
           <div className="session-status-bar__title-row">
             <button
               type="button"
@@ -281,6 +299,18 @@ export const SessionStatusBar = memo(function SessionStatusBar({
               <span className="session-status-bar__session-title">{sessionName}</span>
               <span className="session-status-bar__session-id">{session.id.slice(0, 8)}</span>
             </div>
+            {cwd && (
+              <div
+                className="session-status-bar__cwd"
+                title={`${cwd}\n(Click to copy)`}
+                onClick={() => {
+                  navigator.clipboard.writeText(cwd);
+                }}
+              >
+                <span className="session-status-bar__cwd-icon">📁</span>
+                <span className="session-status-bar__cwd-path">{formatCwd(cwd)}</span>
+              </div>
+            )}
           </div>
 
           {/* Model and context info */}

@@ -95,6 +95,59 @@ class Session:
     def total_tokens(self) -> int:
         return self.total_input_tokens + self.total_output_tokens
 
+    def calculate_context_tokens(self) -> int:
+        """Calculate context tokens by counting tokens in turn content.
+
+        Uses tiktoken to count actual tokens in each turn's content block.
+        This provides an on-demand calculation when cached_context_tokens is 0
+        or needs to be recalculated.
+
+        Returns:
+            Total token count across all turns
+        """
+        from tokenizer import count_tokens
+
+        total = 0
+        for turn in self.turns:
+            # Extract text from content block based on its type
+            block = turn.content_block
+            text = ""
+            if hasattr(block, 'text'):
+                text = block.text  # TextBlock
+            elif hasattr(block, 'content'):
+                text = block.content  # ToolResultBlock
+            elif hasattr(block, 'input'):
+                # ToolUseBlock - serialize the input
+                import json
+                text = f"{block.name}: {json.dumps(block.input)}"
+            else:
+                # Fallback - try to serialize
+                text = str(block)
+            total += count_tokens(text)
+        return total
+
+    def ensure_context_tokens(self, force_recalculate: bool = False) -> int:
+        """Ensure cached_context_tokens is populated, calculating if needed.
+
+        If cached_context_tokens is 0 but there are turns, calculates the
+        total from turn token counts and updates the cache.
+
+        Args:
+            force_recalculate: If True, always recalculate from turns even if
+                              cached value is non-zero. Useful for updating
+                              stale cached values.
+
+        Returns:
+            The cached_context_tokens value (possibly freshly calculated)
+        """
+        should_calculate = force_recalculate or (self.cached_context_tokens == 0 and self.turns)
+        if should_calculate and self.turns:
+            calculated = self.calculate_context_tokens()
+            if calculated != self.cached_context_tokens:
+                self.cached_context_tokens = calculated
+                self._metadata_dirty = True
+        return self.cached_context_tokens
+
     # =========================================================================
     # Dirty Tracking for Incremental Saves
     # =========================================================================
@@ -193,6 +246,10 @@ class Session:
             context_mode=context_mode,
         )
         self.turns.append(turn)
+        # Accumulate token count
+        if tokens > 0:
+            self.cached_context_tokens += tokens
+            self._metadata_dirty = True
         return turn
 
     def add_message(
@@ -245,9 +302,10 @@ class Session:
         self.total_cost += cost
         if context_window:
             self.context_window = context_window
-        # Update cached context tokens - input_tokens represents the full context sent to the model
-        # This is what should be shown in the status bar for context usage
-        self.cached_context_tokens = input_tokens + output_tokens
+        # NOTE: Do NOT update cached_context_tokens here!
+        # cached_context_tokens is set by the claude_runner using tiktoken
+        # which gives accurate token counts. The API's reported values are
+        # only used for cost tracking (total_input_tokens, total_output_tokens).
         self._metadata_dirty = True
 
     def add_child(self, child_id: str, prompt: str, return_condition: str = "manual", name: str = "", fork_point: int = -1) -> None:

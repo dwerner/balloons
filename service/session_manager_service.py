@@ -1253,6 +1253,11 @@ class SessionManagerService:
             turn_idx = data.get("turn_index", ctx.assistant_turn_idx) if isinstance(data, dict) else ctx.assistant_turn_idx
             turn_id = data.get("turn_id", ctx.assistant_turn_id) if isinstance(data, dict) else ctx.assistant_turn_id
 
+            # Get cumulative token counts from stream state
+            stream = self._stream_state.get_stream(ctx.exchange_id)
+            context_tokens = stream.input_tokens if stream else 0
+            output_tokens_total = stream.output_tokens if stream else 0
+
             # Notify observers with typed event
             await self._notify_observers(
                 "on_turn_finished",
@@ -1264,6 +1269,8 @@ class SessionManagerService:
                     content=text,
                     tokens=len(text) // 4,
                     content_block=TextBlock(type="text", text=text),
+                    context_tokens=context_tokens,
+                    output_tokens_total=output_tokens_total,
                 ),
             )
 
@@ -1476,6 +1483,11 @@ class SessionManagerService:
                     tool_index=tool_idx,
                 ),
             )
+            # Get cumulative token counts from stream state
+            stream = self._stream_state.get_stream(ctx.exchange_id)
+            context_tokens = stream.input_tokens if stream else 0
+            output_tokens_total = stream.output_tokens if stream else 0
+
             # Also emit turn_finished for the tool_use turn
             await self._notify_observers(
                 "on_turn_finished",
@@ -1487,6 +1499,8 @@ class SessionManagerService:
                     content="",  # Tool use turns have content_block instead
                     tokens=0,
                     content_block=tool_use_block,
+                    context_tokens=context_tokens,
+                    output_tokens_total=output_tokens_total,
                 ),
             )
 
@@ -1571,6 +1585,11 @@ class SessionManagerService:
                     tool_index=tool_idx,
                 ),
             )
+            # Get cumulative token counts from stream state
+            stream = self._stream_state.get_stream(ctx.exchange_id)
+            context_tokens = stream.input_tokens if stream else 0
+            output_tokens_total = stream.output_tokens if stream else 0
+
             # Also emit turn_finished for the tool_result turn
             await self._notify_observers(
                 "on_turn_finished",
@@ -1582,6 +1601,8 @@ class SessionManagerService:
                     content="",  # Tool result turns have content_block instead
                     tokens=0,
                     content_block=tool_result_block,
+                    context_tokens=context_tokens,
+                    output_tokens_total=output_tokens_total,
                 ),
             )
 
@@ -1629,15 +1650,28 @@ class SessionManagerService:
                 context_window=context_window,
             )
 
+        elif event_type == "context_tokens":
+            # Context tokens counted via tiktoken BEFORE sending to Claude
+            # This is the accurate token count for the context being sent
+            context_tokens = data.get("context_tokens", 0)
+            self._stream_state.update_stream(
+                ctx.exchange_id,
+                input_tokens=context_tokens,  # Use as input tokens for display
+            )
+            # Emit session updated with accurate context token count
+            session = self._manager.get_session(session_id)
+            if session:
+                self._emit_session_updated(session, is_streaming=True)
+
         elif event_type == "result":
-            # Usage stats - update stream state
-            # Note: No SessionDataService equivalent - this is metadata only
+            # Usage stats from API - update stream state
+            # Note: We prefer context_tokens event for accurate token count,
+            # but still track API-reported values for cost calculation
             input_tokens = data.get("input_tokens", 0)
             output_tokens = data.get("output_tokens", 0)
             self._stream_state.update_stream(
                 ctx.exchange_id,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
+                output_tokens=output_tokens,  # Only update output tokens from API
             )
 
         elif event_type == "done":
@@ -1661,6 +1695,8 @@ class SessionManagerService:
                     content=ctx.content,
                     tokens=len(ctx.content) // 4,
                     content_block=TextBlock(type="text", text=ctx.content),
+                    context_tokens=input_tokens,
+                    output_tokens_total=output_tokens,
                 ),
             )
             await self._notify_observers(
@@ -1771,6 +1807,11 @@ class SessionManagerService:
             # Claude is asking for input - this shouldn't happen for non-interactive frontends
             # Mark as completed since we can't respond
 
+            # Get cumulative token counts from stream state
+            stream = self._stream_state.get_stream(ctx.exchange_id)
+            context_tokens = stream.input_tokens if stream else 0
+            output_tokens_total = stream.output_tokens if stream else 0
+
             # Notify observers with typed events
             if ctx.content:
                 await self._notify_observers(
@@ -1783,6 +1824,8 @@ class SessionManagerService:
                         content=ctx.content,
                         tokens=len(ctx.content) // 4,
                         content_block=TextBlock(type="text", text=ctx.content),
+                        context_tokens=context_tokens,
+                        output_tokens_total=output_tokens_total,
                     ),
                 )
             await self._notify_observers(
@@ -2393,8 +2436,9 @@ class SessionManagerService:
                 role=proposal.bind_to.role,
             )
 
-        # Generate a unique proposal ID
-        proposal_id = str(uuid.uuid4())
+        # Use the tool_use_id as the proposal ID so frontend can reference it
+        # The tool_use_id is already unique (e.g., "balloons-4997c0708ce3")
+        proposal_id = tool_use_id
 
         # Get all exchanges for the interactive tree BEFORE adding the proposal turn
         # (excludes the current exchange which contains the proposal)
@@ -2566,8 +2610,8 @@ class SessionManagerService:
             )
             return
 
-        # Generate a unique proposal ID
-        proposal_id = str(uuid.uuid4())
+        # Use the tool_use_id as the proposal ID so frontend can reference it
+        proposal_id = tool_use_id
 
         # Add the proposal as a turn in the session
         turn = session.add_merge_proposal_turn(
@@ -4066,6 +4110,50 @@ class SessionManagerService:
             f"Session title changed to: {title}",
             category="session",
             details={"session_id": session_id, "title": title},
+        )
+        return True
+
+    @ws_expose
+    async def set_session_working_directory(
+        self, session_id: str, working_directory: str
+    ) -> bool:
+        """Set the working directory for a session.
+
+        Args:
+            session_id: ID of the session to update
+            working_directory: New working directory path
+
+        Returns:
+            True if successful, False if session not found or path invalid
+        """
+        import os
+
+        # Validate the path exists
+        if not os.path.isdir(working_directory):
+            debug_log.warn(
+                f"Invalid working directory: {working_directory}",
+                category="session",
+                details={"session_id": session_id, "path": working_directory},
+            )
+            return False
+
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                return False
+
+        # Update the working directory
+        session.set_working_directory(working_directory)
+        await session.save()
+
+        # Emit session updated event so React UI sees the change
+        self._emit_session_updated(session)
+
+        debug_log.info(
+            f"Session working directory changed to: {working_directory}",
+            category="session",
+            details={"session_id": session_id, "working_directory": working_directory},
         )
         return True
 

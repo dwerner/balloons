@@ -350,6 +350,12 @@ class TextDelta:
 
 
 @dataclass
+class ContextTokensEvent:
+    """Emitted when context tokens are counted before sending to Claude."""
+    context_tokens: int
+
+
+@dataclass
 class ResultEvent:
     input_tokens: int
     output_tokens: int

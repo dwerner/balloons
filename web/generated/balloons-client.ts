@@ -29,6 +29,7 @@ import {
   ImageServiceClient,
   SoundServiceClient,
   DebugLogServiceClient,
+  FileStateServiceClient,
 } from './client';
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -67,6 +68,7 @@ export class BalloonsClient {
   private _images: ImageServiceClient | null = null;
   private _sounds: SoundServiceClient | null = null;
   private _debugLog: DebugLogServiceClient | null = null;
+  private _files: FileStateServiceClient | null = null;
 
   constructor(url: string, options: BalloonsClientOptions = {}) {
     this.url = url;
@@ -152,6 +154,14 @@ export class BalloonsClient {
       throw new Error('Not connected. Call connect() first.');
     }
     return this._debugLog;
+  }
+
+  /** File state service (file browsing with git status) */
+  get files(): FileStateServiceClient {
+    if (!this._files) {
+      throw new Error('Not connected. Call connect() first.');
+    }
+    return this._files;
   }
 
   // --- Connection Management ---
@@ -261,6 +271,7 @@ export class BalloonsClient {
     this._images = new ImageServiceClient(this.ws);
     this._sounds = new SoundServiceClient(this.ws);
     this._debugLog = new DebugLogServiceClient(this.ws);
+    this._files = new FileStateServiceClient(this.ws);
   }
 
   private clearClients(): void {
@@ -272,6 +283,7 @@ export class BalloonsClient {
     this._images = null;
     this._sounds = null;
     this._debugLog = null;
+    this._files = null;
   }
 
   private scheduleReconnect(): void {
@@ -299,5 +311,6 @@ export {
   ImageServiceClient,
   SoundServiceClient,
   DebugLogServiceClient,
+  FileStateServiceClient,
 } from './client';
 export type { Unsubscribe } from './client';

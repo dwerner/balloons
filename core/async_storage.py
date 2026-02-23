@@ -302,8 +302,16 @@ class AsyncStorage:
             turn = self._wire_to_turn(turn_data)
             session.turns.append(turn)
 
-        # Initialize dirty tracking state - session is clean after load
-        session._metadata_dirty = False
+        # Ensure cached_context_tokens is populated from turn data if it was 0
+        # This handles sessions saved before token caching was implemented
+        if session.cached_context_tokens == 0 and session.turns:
+            session.cached_context_tokens = session.calculate_context_tokens()
+            # Mark as dirty so the calculated value gets persisted
+            session._metadata_dirty = True
+        else:
+            # Initialize dirty tracking state - session is clean after load
+            session._metadata_dirty = False
+
         session._deleted_turn_ids = set()
         session._saved_turn_order = [t.id for t in session.turns]
 

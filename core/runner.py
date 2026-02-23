@@ -12,7 +12,7 @@ from enum import Enum
 from typing import AsyncIterator, Any, Optional
 
 from models import (
-    Message, TextDelta, ResultEvent, InitEvent, RawEvent,
+    Message, TextDelta, ResultEvent, InitEvent, RawEvent, ContextTokensEvent,
     ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultEvent,
     TextBlock, ToolUseBlock, ToolResultBlock, ErrorBlock,
 )
@@ -261,8 +261,10 @@ class SessionRunner:
                 token_events=token_count,
             )
 
-            # Finalize
-            await self._finalize_stream()
+            # Finalize - emit any final turn events before done
+            final_events = await self._finalize_stream()
+            for event in final_events:
+                yield event
             yield self._make_event("done", self._result)
 
         except asyncio.CancelledError:
@@ -407,8 +409,10 @@ class SessionRunner:
                 token_events=token_count,
             )
 
-            # Finalize
-            await self._finalize_stream()
+            # Finalize - emit any final turn events before done
+            final_events = await self._finalize_stream()
+            for event in final_events:
+                await self._event_queue.put(event)
             debug_log.info("Emitting done event", category="stream", session_id=self.session.id)
             await self._event_queue.put(self._make_event("done", self._result))
             self._status = RunnerStatus.IDLE
@@ -895,6 +899,14 @@ class SessionRunner:
                     "total_cost": event.total_cost_usd,
                 })]
 
+            elif isinstance(event, ContextTokensEvent):
+                # Context tokens counted via tiktoken before sending to Claude
+                # Update session with accurate token count
+                self.session.cached_context_tokens = event.context_tokens
+                return [self._make_event("context_tokens", {
+                    "context_tokens": event.context_tokens,
+                })]
+
             return []
 
         except Exception as e:
@@ -905,11 +917,17 @@ class SessionRunner:
             )
             return []  # Skip bad event
 
-    async def _finalize_stream(self) -> None:
-        """Finalize stream and create result."""
-        # Flush remaining text as turn (also adds to legacy content_blocks)
-        # Use save_now=True to ensure the final text turn is scheduled for save
-        self._flush_text_as_turn(save_now=True)
+    async def _finalize_stream(self) -> list[StreamEvent]:
+        """Finalize stream and create result.
+
+        Returns:
+            List of events to emit (final text turn events) before the done event.
+        """
+        # Flush remaining text as turn WITH events so client gets proper turn ordering
+        # This is critical: without emit_event=True, the final text turn would have
+        # the wrong order (the initial turn's index) causing tool_use/tool_result
+        # turns to appear AFTER the final assistant text (Bug #10).
+        final_turn_events = self._flush_text_as_turn(emit_event=True, save_now=True)
 
         # Check for stream errors (truncated response, JSON decode errors)
         error_block = self._check_stream_errors()
@@ -941,6 +959,8 @@ class SessionRunner:
             turns=self._turns,
         )
         self._status = RunnerStatus.IDLE
+
+        return final_turn_events
 
     def _check_stream_errors(self) -> ErrorBlock | None:
         """Check if the stream ended with errors and create an ErrorBlock if so.

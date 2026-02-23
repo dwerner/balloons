@@ -669,6 +669,7 @@ impl StorageEngine for LmdbEngine {
                 created_at: parse_iso_to_unix(&data.created),
                 updated_at: parse_iso_to_unix(&data.last_modified),
                 turn_count,
+                working_directories: data.working_directories.clone(),
             });
         }
 

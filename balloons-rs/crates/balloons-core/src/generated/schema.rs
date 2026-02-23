@@ -75,6 +75,8 @@ pub struct SessionMetadata {
     pub created_at: i64,
     pub updated_at: i64,
     pub turn_count: i64,
+    #[serde(default)]
+    pub working_directories: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

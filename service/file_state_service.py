@@ -255,9 +255,11 @@ class FileStateService:
             session_id: The session ID
 
         Returns:
-            The current working directory, or home directory if not set
+            The current working directory, or server's cwd if not set
         """
-        return self._session_cwds.get(session_id, os.path.expanduser("~"))
+        # Default to server's CWD (where headless.py was started from)
+        # This is typically the project root, which is more useful than ~
+        return self._session_cwds.get(session_id, os.getcwd())
 
     @ws_expose
     async def set_cwd(self, session_id: str, cwd: str) -> FileOperationResult:

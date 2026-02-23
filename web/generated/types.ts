@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-23T08:00:22.704880
+// Generated: 2026-02-23T09:30:50.368150
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -705,6 +705,7 @@ export interface SessionInfo {
   bindingIndicator?: string;
   backendName?: string;
   isPinned?: boolean;
+  workingDirectory?: string;
 }
 
 export interface SessionAddedEvent {

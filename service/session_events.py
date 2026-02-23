@@ -108,8 +108,11 @@ class TurnFinishedEvent:
     turn_index: int
     role: str
     content: str  # Final accumulated text content
-    tokens: int  # Token count (0 if not counted yet)
+    tokens: int  # Token count for this turn (0 if not counted yet)
     content_block: ContentBlock | None = None  # Structured content block
+    # Cumulative token counts for the exchange (context sent to LLM + total output so far)
+    context_tokens: int = 0  # Total context/input tokens sent to LLM
+    output_tokens_total: int = 0  # Total output tokens generated so far in this exchange
 
 
 @dataclass

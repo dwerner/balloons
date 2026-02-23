@@ -25,11 +25,21 @@ SLOT_B_PORT = 8766
 
 # PID file location
 PID_DIR = Path.home() / ".balloons" / "run"
+LOG_DIR = Path.home() / ".balloons"
 
 
 def get_pid_file(port: int) -> Path:
     """Get PID file path for a port."""
     return PID_DIR / f"headless-{port}.pid"
+
+
+def get_log_file(port: int) -> Path:
+    """Get log file path for a port."""
+    if port == SLOT_A_PORT:
+        return LOG_DIR / "headless-a.log"
+    elif port == SLOT_B_PORT:
+        return LOG_DIR / "headless-b.log"
+    return LOG_DIR / f"headless-{port}.log"
 
 
 def read_pid(port: int) -> int | None:
@@ -78,13 +88,20 @@ def start_instance(port: int) -> bool:
         print(f"Error: headless.py not found at {headless_path}")
         return False
 
-    # Start the process
-    # Use nohup-style detachment
+    # Start the process with log file output
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_file = get_log_file(port)
+    log_handle = open(log_file, "a")
+
+    # Use .venv Python to ensure Rust extension is available
+    venv_python = script_dir / ".venv" / "bin" / "python"
+    python_exe = str(venv_python) if venv_python.exists() else sys.executable
+
     process = subprocess.Popen(
-        [sys.executable, str(headless_path), "--port", str(port)],
+        [python_exe, str(headless_path), "--port", str(port)],
         cwd=script_dir,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
         start_new_session=True,  # Detach from terminal
     )
 

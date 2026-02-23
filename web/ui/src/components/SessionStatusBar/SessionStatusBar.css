@@ -65,6 +65,45 @@
   flex-shrink: 0;
 }
 
+/* ----- CWD Display ----- */
+.session-status-bar__cwd {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  margin-left: auto;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  max-width: 50%;
+  overflow: hidden;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.session-status-bar__cwd:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.session-status-bar__cwd:active {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.session-status-bar__cwd-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.session-status-bar__cwd-path {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;  /* Show the end of the path when truncated */
+  text-align: left;
+}
+
 /* ----- Header Row: Model + Context Values ----- */
 .session-status-bar__header {
   display: flex;

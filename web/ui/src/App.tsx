@@ -5,6 +5,7 @@ import { MarkdownContent } from './MarkdownContent';
 import { AppLayout, useLayout, useTheme } from './components/layout';
 import { SessionTreeView } from './components/SessionTreeView';
 import { GoalTreeView } from './components/GoalTreeView';
+import { FileBrowserView } from './components/FileBrowserView';
 import { SessionStatusBar } from './components/SessionStatusBar';
 import { StreamingStatusBar } from './components/StreamingStatusBar';
 import { ForkProposalTurn } from './components/ForkProposalTurn';
@@ -2229,6 +2230,7 @@ export function App() {
                   isStreaming={selectedSession.isStreaming}
                   client={clientRef.current}
                   onTogglePin={() => handleTogglePin(selectedSession.id)}
+                  cwd={selectedSession.workingDirectory}
                   scrollState={scrollState}
                 />
               )}
@@ -2301,14 +2303,25 @@ export function App() {
         )}
       </AppLayout.Main>
 
-      {/* Detail panel (right sidebar) */}
+      {/* Detail panel (right sidebar) - File Browser */}
       <AppLayout.Detail>
-        <div style={{ padding: '16px' }}>
-          <h3 style={{ margin: '0 0 16px 0', color: 'var(--color-text-primary)' }}>Detail Panel</h3>
-          <p style={{ color: 'var(--color-text-secondary)', fontSize: '14px' }}>
-            This panel can be used for settings, session details, goals, or other contextual information.
-          </p>
-        </div>
+        {connectionState === 'connected' && clientRef.current ? (
+          <FileBrowserView
+            sessionId={selectedSessionId || undefined}
+            initialPath={selectedSession?.workingDirectory || undefined}
+            listDirectory={(path) => clientRef.current!.files.listDirectory(path)}
+            getHomeDirectory={() => clientRef.current!.files.getHomeDirectory()}
+            getParentDirectory={(path) => clientRef.current!.files.getParentDirectory(path)}
+            onFileSelect={(path) => {
+              debugLog('File selected', { path });
+              // TODO: Could insert file path into chat input, open file preview, etc.
+            }}
+          />
+        ) : (
+          <div style={{ padding: '16px', color: 'var(--color-text-secondary)' }}>
+            Connect to server to browse files
+          </div>
+        )}
       </AppLayout.Detail>
 
       {/* CreateTodoModal - rendered at App level for portal */}
