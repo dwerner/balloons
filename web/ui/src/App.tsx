@@ -10,7 +10,6 @@ import { SessionStatusBar } from './components/SessionStatusBar';
 import { StreamingStatusBar } from './components/StreamingStatusBar';
 import { ForkProposalTurn } from './components/ForkProposalTurn';
 import { CreateTodoModal, type CreateTodoResult } from './components/CreateTodoModal';
-import { SimpleTurnsView } from './components/SimpleTurnsView';
 import { StreamingTurnsView } from './components/StreamingTurnsView';
 import { useWakeLock, useSoundNotifications } from './hooks';
 import { setDebugClient, createLogger } from './utils/debugLog';
@@ -23,9 +22,7 @@ let globalClient: BalloonsClient | null = null;
 const debugLog = createLogger('App');
 
 // View mode for conversation display
-// 'simple' uses TreeStateService (server-side state)
-// 'streaming' will use SessionDataService (real-time streaming)
-type ConversationViewMode = 'simple' | 'streaming';
+// StreamingTurnsView uses SessionDataService for real-time streaming
 
 // Tool use state tracked during streaming
 interface ToolUseState {
@@ -987,25 +984,15 @@ export function App() {
     planTitle: string;
   }>({ isOpen: false, planId: '', planTitle: '' });
 
-  // Conversation view mode - 'simple' (TreeStateService) or 'streaming' (SessionDataService)
-  const [conversationViewMode, setConversationViewMode] = useState<ConversationViewMode>(() => {
-    if (typeof window !== 'undefined') {
-      const stored = localStorage.getItem('balloons:conversation-view');
-      return stored === 'streaming' ? 'streaming' : 'simple';
-    }
-    return 'simple';
-  });
-
   const clientRef = useRef<BalloonsClient | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messageInputRef = useRef<MessageInputHandle>(null);
   // Track the session we're currently loading to handle race conditions
   const loadingSessionRef = useRef<string | null>(null);
 
-  // NOTE: Auto-scroll is handled by useAutoScroll hook in StreamingTurnsView
-  // and SimpleTurnsView. The unconditional scroll-to-bottom effect was removed
-  // because it conflicted with the user's ability to scroll up during streaming.
-  // See BUGS.md Bug #12 for details.
+  // NOTE: Auto-scroll is handled by useAutoScroll hook in StreamingTurnsView.
+  // The unconditional scroll-to-bottom effect was removed because it conflicted
+  // with the user's ability to scroll up during streaming. See BUGS.md Bug #12.
 
   // Scroll state from chat view (for status bar indicator)
   const [scrollState, setScrollState] = useState<{ isFollowing: boolean; isAtBottom: boolean } | undefined>(undefined);
@@ -2188,16 +2175,11 @@ export function App() {
           </div>
         ) : (
           <>
-            {/* View mode toggle and detail panel toggle */}
-            <MainContentHeader
-              conversationViewMode={conversationViewMode}
-              setConversationViewMode={setConversationViewMode}
-            />
+            {/* Detail panel toggle */}
+            <MainContentHeader />
 
             <div className="turns-container">
-              {conversationViewMode === 'simple' && clientRef.current && connectionState === 'connected' ? (
-                <SimpleTurnsView sessionId={selectedSessionId} client={clientRef.current} />
-              ) : conversationViewMode === 'streaming' && clientRef.current && connectionState === 'connected' ? (
+              {clientRef.current && connectionState === 'connected' ? (
                 <StreamingTurnsView
                   sessionId={selectedSessionId}
                   client={clientRef.current}
@@ -2309,9 +2291,7 @@ export function App() {
           <FileBrowserView
             sessionId={selectedSessionId || undefined}
             initialPath={selectedSession?.workingDirectory || undefined}
-            listDirectory={(path) => clientRef.current!.files.listDirectory(path)}
-            getHomeDirectory={() => clientRef.current!.files.getHomeDirectory()}
-            getParentDirectory={(path) => clientRef.current!.files.getParentDirectory(path)}
+            client={clientRef.current.files}
             onFileSelect={(path) => {
               debugLog('File selected', { path });
               // TODO: Could insert file path into chat input, open file preview, etc.
@@ -2426,43 +2406,14 @@ function MobileHeader({ connectionState, selectedSession }: MobileHeaderProps) {
   );
 }
 
-// View mode type for conversation display
-type ViewMode = 'simple' | 'streaming';
-
-interface MainContentHeaderProps {
-  conversationViewMode: ViewMode;
-  setConversationViewMode: (mode: ViewMode) => void;
-}
-
 /**
- * Header bar for the main content area with view toggle and detail panel toggle
+ * Header bar for the main content area with detail panel toggle
  */
-function MainContentHeader({ conversationViewMode, setConversationViewMode }: MainContentHeaderProps) {
+function MainContentHeader() {
   const { layoutMode, isDetailCollapsed, toggleDetailCollapse } = useLayout();
 
   return (
     <div className="conversation-view-toggle">
-      <button
-        className={`view-toggle-btn ${conversationViewMode === 'simple' ? 'active' : ''}`}
-        onClick={() => {
-          setConversationViewMode('simple');
-          localStorage.setItem('balloons:conversation-view', 'simple');
-        }}
-        title="Simple view - uses TreeStateService"
-      >
-        Simple
-      </button>
-      <button
-        className={`view-toggle-btn ${conversationViewMode === 'streaming' ? 'active' : ''}`}
-        onClick={() => {
-          setConversationViewMode('streaming');
-          localStorage.setItem('balloons:conversation-view', 'streaming');
-        }}
-        title="Streaming view - uses SessionDataService (WIP)"
-      >
-        Streaming
-      </button>
-
       {/* Spacer */}
       <div style={{ flex: 1 }} />
 

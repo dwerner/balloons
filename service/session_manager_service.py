@@ -352,6 +352,9 @@ class _StreamingContext:
     tool_turn_indices: dict = field(default_factory=dict)  # (tool_use_id, turn_type) -> turn_idx
     tool_turn_ids: dict = field(default_factory=dict)  # (tool_use_id, turn_type) -> turn_id
     tool_names: dict = field(default_factory=dict)  # tool_use_id -> tool_name
+    # Parallel tool tracking - multiple tool_use events before any result = parallel
+    parallel_group_id: str | None = None  # Current parallel group (set on first tool, cleared on first result)
+    pending_tool_count: int = 0  # Tools started but not yet resulted
     # Progress event throttling
     last_progress_emit: float = 0.0  # Timestamp of last progress event emission
 
@@ -1162,6 +1165,8 @@ class SessionManagerService:
             # Initial turn_started event - update context with turn info
             ctx.assistant_turn_idx = data.get("turn_index", ctx.user_turn_idx + 1)
             ctx.assistant_turn_id = data.get("turn_id", "")
+            import sys
+            print(f"[TURN_ORDER] turn_started: order={ctx.assistant_turn_idx}, id={ctx.assistant_turn_id[:8] if ctx.assistant_turn_id else 'none'}", file=sys.stderr, flush=True)
 
             # Generate a turn_id if missing (fallback for compatibility)
             if not ctx.assistant_turn_id:
@@ -1191,7 +1196,9 @@ class SessionManagerService:
                     session_id=session_id,
                     exchange_id=ctx.exchange_id,
                     turn_index=ctx.assistant_turn_idx,
+                    turn_id=ctx.assistant_turn_id,
                     role="assistant",
+                    turn_type="text_turn",
                 )
 
         elif event_type == "text":
@@ -1221,6 +1228,7 @@ class SessionManagerService:
                     session_id=session_id,
                     exchange_id=ctx.exchange_id,
                     turn_index=ctx.assistant_turn_idx,
+                    turn_id=ctx.assistant_turn_id,
                     delta=text,
                     accumulated=ctx.content,
                 )
@@ -1252,6 +1260,8 @@ class SessionManagerService:
             text = data.get("text", "") if isinstance(data, dict) else ""
             turn_idx = data.get("turn_index", ctx.assistant_turn_idx) if isinstance(data, dict) else ctx.assistant_turn_idx
             turn_id = data.get("turn_id", ctx.assistant_turn_id) if isinstance(data, dict) else ctx.assistant_turn_id
+            import sys
+            print(f"[TURN_ORDER] text_flush: order={turn_idx}, id={turn_id[:8] if turn_id else 'none'}, len={len(text)}", file=sys.stderr, flush=True)
 
             # Get cumulative token counts from stream state
             stream = self._stream_state.get_stream(ctx.exchange_id)
@@ -1280,6 +1290,7 @@ class SessionManagerService:
                     session_id=session_id,
                     exchange_id=ctx.exchange_id,
                     turn_index=turn_idx,
+                    turn_id=turn_id,
                     role="assistant",
                     content=text,
                 )
@@ -1291,6 +1302,8 @@ class SessionManagerService:
             ctx.assistant_turn_idx = turn_idx  # Update for subsequent content deltas
             ctx.assistant_turn_id = turn_id  # Update turn_id for subsequent events
             ctx.content = ""  # Reset accumulated content for new turn
+            import sys
+            print(f"[TURN_ORDER] text_turn_started: order={turn_idx}, id={turn_id[:8] if turn_id else 'none'}", file=sys.stderr, flush=True)
 
             # Notify observers with typed event
             await self._notify_observers(
@@ -1311,7 +1324,9 @@ class SessionManagerService:
                     session_id=session_id,
                     exchange_id=ctx.exchange_id,
                     turn_index=turn_idx,
+                    turn_id=turn_id,
                     role="assistant",
+                    turn_type="text_turn",
                 )
 
         elif event_type == "tool_use_start":
@@ -1324,6 +1339,13 @@ class SessionManagerService:
             ctx.tool_count += 1
             ctx.tool_names[tool_use_id] = tool_name
 
+            # Track parallel tool calls - if this is a new batch, start a group
+            # A "batch" is multiple tool_use events before any tool_result
+            if ctx.pending_tool_count == 0:
+                # First tool in a potential parallel batch - create group ID
+                ctx.parallel_group_id = str(uuid.uuid4())
+            ctx.pending_tool_count += 1
+
             debug_log.info(
                 f"_dispatch_event: tool_use_start",
                 category="stream",
@@ -1332,6 +1354,8 @@ class SessionManagerService:
                     "tool_name": tool_name,
                     "tool_use_id": tool_use_id[:12],
                     "num_observers": len(self._observers),
+                    "parallel_group_id": ctx.parallel_group_id[:8] if ctx.parallel_group_id else None,
+                    "pending_tool_count": ctx.pending_tool_count,
                 },
             )
 
@@ -1357,14 +1381,17 @@ class SessionManagerService:
             )
 
             # TaskStateService calls (doesn't use observer pattern)
+            # Note: turn_id not yet known at tool_use_start - will be set on tool_use_turn_started
             if self._task_service:
                 self._task_service.emit_tool_use_started(
                     session_id=session_id,
                     exchange_id=ctx.exchange_id,
                     turn_index=ctx.assistant_turn_idx,
+                    turn_id="",  # Not yet known - assigned on tool_use_turn_started
                     tool_use_id=tool_use_id,
                     tool_name=tool_name,
                     tool_index=tool_idx,
+                    parallel_group_id=ctx.parallel_group_id,
                 )
 
         elif event_type == "tool_input_delta":
@@ -1384,10 +1411,13 @@ class SessionManagerService:
             )
 
             # TaskStateService calls (doesn't use observer pattern)
+            # Get turn_id if available (may not be set yet during streaming)
+            turn_id = ctx.tool_turn_ids.get((tool_use_id, "tool_use"), "")
             if self._task_service:
                 self._task_service.emit_tool_input_delta(
                     session_id=session_id,
                     exchange_id=ctx.exchange_id,
+                    turn_id=turn_id,
                     tool_use_id=tool_use_id,
                     partial_json=partial_json,
                 )
@@ -1399,6 +1429,8 @@ class SessionManagerService:
             tool_use_id = data.get("tool_use_id", "")
             ctx.tool_turn_indices[(tool_use_id, "tool_use")] = turn_idx
             ctx.tool_turn_ids[(tool_use_id, "tool_use")] = turn_id
+            import sys
+            print(f"[TURN_ORDER] tool_use_turn_started: order={turn_idx}, id={turn_id[:8] if turn_id else 'none'}, tool={data.get('tool_name', '?')}, parallel_group={ctx.parallel_group_id[:8] if ctx.parallel_group_id else 'none'}", file=sys.stderr, flush=True)
 
             # Notify observers with typed event
             await self._notify_observers(
@@ -1410,6 +1442,7 @@ class SessionManagerService:
                     role="assistant",
                     exchange_id=ctx.exchange_id,
                     content_block_type="tool_use",
+                    parallel_group_id=ctx.parallel_group_id,
                 ),
             )
 
@@ -1419,7 +1452,10 @@ class SessionManagerService:
                     session_id=session_id,
                     exchange_id=ctx.exchange_id,
                     turn_index=turn_idx,
+                    turn_id=turn_id,
                     role="assistant",
+                    turn_type="tool_use",
+                    parallel_group_id=ctx.parallel_group_id,
                 )
 
         elif event_type == "tool_use":
@@ -1510,10 +1546,12 @@ class SessionManagerService:
                     session_id=session_id,
                     exchange_id=ctx.exchange_id,
                     turn_index=turn_idx,
+                    turn_id=turn_id,
                     tool_use_id=tool_use_id,
                     tool_name=tool_name,
                     tool_input=tool_input,
                     tool_index=tool_idx,
+                    parallel_group_id=ctx.parallel_group_id,
                 )
 
         elif event_type == "tool_result_turn_started":
@@ -1523,6 +1561,8 @@ class SessionManagerService:
             tool_use_id = data.get("tool_use_id", "")
             ctx.tool_turn_indices[(tool_use_id, "tool_result")] = turn_idx
             ctx.tool_turn_ids[(tool_use_id, "tool_result")] = turn_id
+            import sys
+            print(f"[TURN_ORDER] tool_result_turn_started: order={turn_idx}, id={turn_id[:8] if turn_id else 'none'}, parallel_group={ctx.parallel_group_id[:8] if ctx.parallel_group_id else 'none'}", file=sys.stderr, flush=True)
 
             # Notify observers with typed event
             await self._notify_observers(
@@ -1534,6 +1574,7 @@ class SessionManagerService:
                     role="tool",
                     exchange_id=ctx.exchange_id,
                     content_block_type="tool_result",
+                    parallel_group_id=ctx.parallel_group_id,
                 ),
             )
 
@@ -1543,7 +1584,10 @@ class SessionManagerService:
                     session_id=session_id,
                     exchange_id=ctx.exchange_id,
                     turn_index=turn_idx,
+                    turn_id=turn_id,
                     role="tool",
+                    turn_type="tool_result",
+                    parallel_group_id=ctx.parallel_group_id,
                 )
 
         elif event_type == "tool_result":
@@ -1554,6 +1598,14 @@ class SessionManagerService:
             turn_idx = data.get("turn_index", ctx.assistant_turn_idx)
             turn_id = data.get("turn_id", ctx.tool_turn_ids.get((tool_use_id, "tool_result"), ""))
             tool_name = ctx.tool_names.get(tool_use_id, "")
+
+            # Track parallel batch completion
+            # Decrement pending count and clear group when all results received
+            ctx.pending_tool_count = max(0, ctx.pending_tool_count - 1)
+            current_parallel_group = ctx.parallel_group_id  # Save for this result's emit
+            if ctx.pending_tool_count == 0:
+                # All results received - reset for next potential parallel batch
+                ctx.parallel_group_id = None
 
             # Update stream state - back to streaming
             self._stream_state.update_stream(
@@ -1612,11 +1664,13 @@ class SessionManagerService:
                     session_id=session_id,
                     exchange_id=ctx.exchange_id,
                     turn_index=turn_idx,
+                    turn_id=turn_id,
                     tool_use_id=tool_use_id,
                     tool_name=tool_name,
                     result=result,
                     is_error=False,
                     tool_index=tool_idx,
+                    parallel_group_id=current_parallel_group,
                 )
 
             # Emit progress event after tool completion (state change)
@@ -1676,29 +1730,35 @@ class SessionManagerService:
 
         elif event_type == "done":
             # Stream complete - emit final turn_finished and clean up
-            # Always emit turnFinished to finalize the turn state (even if content is empty)
-            # This ensures the web client properly clears streaming state
+            # Only emit turn_finished if there's unflushed content.
+            # If ctx.content is empty, it means text_flush already emitted the content.
 
             # Get token counts from stream state (may have been updated by result event)
             stream = self._stream_state.get_stream(ctx.exchange_id)
             input_tokens = stream.input_tokens if stream else 0
             output_tokens = stream.output_tokens if stream else 0
+            import sys
+            print(f"[TURN_ORDER] done: order={ctx.assistant_turn_idx}, id={ctx.assistant_turn_id[:8] if ctx.assistant_turn_id else 'none'}, len={len(ctx.content)}, skipping_turn_finished={len(ctx.content) == 0}", file=sys.stderr, flush=True)
 
-            # Notify observers with typed events
-            await self._notify_observers(
-                "on_turn_finished",
-                TurnFinishedEvent(
-                    session_id=session_id,
-                    turn_id=ctx.assistant_turn_id,
-                    turn_index=ctx.assistant_turn_idx,
-                    role="assistant",
-                    content=ctx.content,
-                    tokens=len(ctx.content) // 4,
-                    content_block=TextBlock(type="text", text=ctx.content),
-                    context_tokens=input_tokens,
-                    output_tokens_total=output_tokens,
-                ),
-            )
+            # Only emit turn_finished if there's unflushed content
+            # If content was already flushed via text_flush, ctx.content will be empty
+            if ctx.content:
+                await self._notify_observers(
+                    "on_turn_finished",
+                    TurnFinishedEvent(
+                        session_id=session_id,
+                        turn_id=ctx.assistant_turn_id,
+                        turn_index=ctx.assistant_turn_idx,
+                        role="assistant",
+                        content=ctx.content,
+                        tokens=len(ctx.content) // 4,
+                        content_block=TextBlock(type="text", text=ctx.content),
+                        context_tokens=input_tokens,
+                        output_tokens_total=output_tokens,
+                    ),
+                )
+
+            # Always emit stream_done
             await self._notify_observers(
                 "on_stream_done",
                 StreamDoneEvent(
@@ -1710,11 +1770,12 @@ class SessionManagerService:
             )
 
             # TaskStateService calls (doesn't use observer pattern)
-            if self._task_service:
+            if self._task_service and ctx.content:
                 self._task_service.emit_turn_finished(
                     session_id=session_id,
                     exchange_id=ctx.exchange_id,
                     turn_index=ctx.assistant_turn_idx,
+                    turn_id=ctx.assistant_turn_id,
                     role="assistant",
                     content=ctx.content,
                 )
@@ -1842,6 +1903,7 @@ class SessionManagerService:
                     session_id=session_id,
                     exchange_id=ctx.exchange_id,
                     turn_index=ctx.assistant_turn_idx,
+                    turn_id=ctx.assistant_turn_id,
                     role="assistant",
                     content=ctx.content,
                 )
@@ -3707,12 +3769,15 @@ class SessionManagerService:
                 session_id=session_id,
                 exchange_id=exchange_id,
                 turn_index=turn_index,
+                turn_id=user_turn.id,
                 role="user",
+                turn_type="text_turn",
             )
             self._task_service.emit_turn_finished(
                 session_id=session_id,
                 exchange_id=exchange_id,
                 turn_index=turn_index,
+                turn_id=user_turn.id,
                 role="user",
                 content=content,
             )
@@ -3895,12 +3960,15 @@ class SessionManagerService:
                 session_id=session_id,
                 exchange_id=exchange_id,
                 turn_index=turn_index,
+                turn_id=user_turn.id,
                 role="user",
+                turn_type="text_turn",
             )
             self._task_service.emit_turn_finished(
                 session_id=session_id,
                 exchange_id=exchange_id,
                 turn_index=turn_index,
+                turn_id=user_turn.id,
                 role="user",
                 content=display_content,
             )

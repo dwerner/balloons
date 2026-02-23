@@ -78,6 +78,7 @@ class TurnCreatedEvent:
     role: str  # "user", "assistant", "tool"
     exchange_id: str  # Groups related turns (user prompt + assistant response)
     content_block_type: str = "text"  # "text", "tool_use", "tool_result"
+    parallel_group_id: str | None = None  # Groups parallel tool calls
 
 
 @dataclass

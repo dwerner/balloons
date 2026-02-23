@@ -679,6 +679,7 @@ class TestStreamingContentEvents:
             session_id="session-1",
             exchange_id="exchange-1",
             turn_index=1,
+            turn_id="turn-uuid-123",
             delta="Hello",
             accumulated="Hello",
         )
@@ -688,6 +689,7 @@ class TestStreamingContentEvents:
         assert events[0][1]["session_id"] == "session-1"
         assert events[0][1]["exchange_id"] == "exchange-1"
         assert events[0][1]["turn_index"] == 1
+        assert events[0][1]["turn_id"] == "turn-uuid-123"
         assert events[0][1]["delta"] == "Hello"
         assert events[0][1]["accumulated"] == "Hello"
 
@@ -704,13 +706,17 @@ class TestStreamingContentEvents:
             session_id="session-1",
             exchange_id="exchange-1",
             turn_index=0,
+            turn_id="turn-uuid-123",
             role="user",
+            turn_type="text_turn",
         )
 
         assert len(events) == 1
         assert events[0][0] == "turnStarted"
         assert events[0][1]["role"] == "user"
         assert events[0][1]["turn_index"] == 0
+        assert events[0][1]["turn_id"] == "turn-uuid-123"
+        assert events[0][1]["turn_type"] == "text_turn"
 
     def test_emit_turn_finished(self, service):
         """Test emitting turn finished events."""
@@ -725,6 +731,7 @@ class TestStreamingContentEvents:
             session_id="session-1",
             exchange_id="exchange-1",
             turn_index=1,
+            turn_id="turn-uuid-123",
             role="assistant",
             content="Hello, I'm Claude!",
         )
@@ -733,6 +740,7 @@ class TestStreamingContentEvents:
         assert events[0][0] == "turnFinished"
         assert events[0][1]["role"] == "assistant"
         assert events[0][1]["content"] == "Hello, I'm Claude!"
+        assert events[0][1]["turn_id"] == "turn-uuid-123"
 
     def test_emit_tool_use_started(self, service):
         """Test emitting tool use started events."""
@@ -747,9 +755,11 @@ class TestStreamingContentEvents:
             session_id="session-1",
             exchange_id="exchange-1",
             turn_index=2,
+            turn_id="turn-uuid-123",
             tool_use_id="tool-123",
             tool_name="Read",
             tool_index=0,
+            parallel_group_id="group-456",
         )
 
         assert len(events) == 1
@@ -757,6 +767,8 @@ class TestStreamingContentEvents:
         assert events[0][1]["tool_use_id"] == "tool-123"
         assert events[0][1]["tool_name"] == "Read"
         assert events[0][1]["tool_index"] == 0
+        assert events[0][1]["turn_id"] == "turn-uuid-123"
+        assert events[0][1]["parallel_group_id"] == "group-456"
 
     def test_emit_tool_input_delta(self, service):
         """Test emitting tool input delta events."""
@@ -770,6 +782,7 @@ class TestStreamingContentEvents:
         service.emit_tool_input_delta(
             session_id="session-1",
             exchange_id="exchange-1",
+            turn_id="turn-uuid-123",
             tool_use_id="tool-123",
             partial_json='{"file_path": "/home',
         )
@@ -778,6 +791,7 @@ class TestStreamingContentEvents:
         assert events[0][0] == "toolInputDelta"
         assert events[0][1]["tool_use_id"] == "tool-123"
         assert events[0][1]["partial_json"] == '{"file_path": "/home'
+        assert events[0][1]["turn_id"] == "turn-uuid-123"
 
     def test_emit_tool_use(self, service):
         """Test emitting tool use (input complete) events."""
@@ -792,15 +806,19 @@ class TestStreamingContentEvents:
             session_id="session-1",
             exchange_id="exchange-1",
             turn_index=2,
+            turn_id="turn-uuid-123",
             tool_use_id="tool-123",
             tool_name="Read",
             tool_input={"file_path": "/home/user/file.txt"},
             tool_index=0,
+            parallel_group_id="group-456",
         )
 
         assert len(events) == 1
         assert events[0][0] == "toolUse"
         assert events[0][1]["tool_input"] == {"file_path": "/home/user/file.txt"}
+        assert events[0][1]["turn_id"] == "turn-uuid-123"
+        assert events[0][1]["parallel_group_id"] == "group-456"
 
     def test_emit_tool_result(self, service):
         """Test emitting tool result events."""
@@ -815,17 +833,21 @@ class TestStreamingContentEvents:
             session_id="session-1",
             exchange_id="exchange-1",
             turn_index=3,
+            turn_id="turn-uuid-123",
             tool_use_id="tool-123",
             tool_name="Read",
             result="File contents here...",
             is_error=False,
             tool_index=0,
+            parallel_group_id="group-456",
         )
 
         assert len(events) == 1
         assert events[0][0] == "toolResult"
         assert events[0][1]["result"] == "File contents here..."
         assert events[0][1]["is_error"] is False
+        assert events[0][1]["turn_id"] == "turn-uuid-123"
+        assert events[0][1]["parallel_group_id"] == "group-456"
 
     def test_streaming_content_event_dataclasses(self):
         """Test that streaming event dataclasses have expected fields."""
@@ -834,73 +856,99 @@ class TestStreamingContentEvents:
             session_id="s1",
             exchange_id="e1",
             turn_index=1,
+            turn_id="turn-1",
             delta="Hello",
             accumulated="Hello World",
         )
         assert delta.delta == "Hello"
         assert delta.accumulated == "Hello World"
+        assert delta.turn_id == "turn-1"
 
         # TurnStartedEvent
         turn_started = TurnStartedEvent(
             session_id="s1",
             exchange_id="e1",
             turn_index=0,
+            turn_id="turn-1",
             role="user",
+            turn_type="text_turn",
+            parallel_group_id="group-1",
         )
         assert turn_started.role == "user"
+        assert turn_started.turn_id == "turn-1"
+        assert turn_started.turn_type == "text_turn"
+        assert turn_started.parallel_group_id == "group-1"
 
         # TurnFinishedEvent
         turn_finished = TurnFinishedEvent(
             session_id="s1",
             exchange_id="e1",
             turn_index=1,
+            turn_id="turn-1",
             role="assistant",
             content="Response",
+            parallel_group_id="group-1",
         )
         assert turn_finished.content == "Response"
+        assert turn_finished.turn_id == "turn-1"
+        assert turn_finished.parallel_group_id == "group-1"
 
         # ToolUseStartedEvent
         tool_started = ToolUseStartedEvent(
             session_id="s1",
             exchange_id="e1",
             turn_index=2,
+            turn_id="turn-2",
             tool_use_id="t1",
             tool_name="Read",
             tool_index=0,
+            parallel_group_id="group-1",
         )
         assert tool_started.tool_name == "Read"
+        assert tool_started.turn_id == "turn-2"
+        assert tool_started.parallel_group_id == "group-1"
 
         # ToolInputDeltaEvent
         tool_delta = ToolInputDeltaEvent(
             session_id="s1",
             exchange_id="e1",
+            turn_id="turn-2",
             tool_use_id="t1",
             partial_json='{"key":',
         )
         assert tool_delta.partial_json == '{"key":'
+        assert tool_delta.turn_id == "turn-2"
 
         # ToolUseEvent
         tool_use = ToolUseEvent(
             session_id="s1",
             exchange_id="e1",
             turn_index=2,
+            turn_id="turn-2",
             tool_use_id="t1",
             tool_name="Read",
             tool_input={"file_path": "/test"},
             tool_index=0,
+            parallel_group_id="group-1",
         )
         assert tool_use.tool_input == {"file_path": "/test"}
+        assert tool_use.turn_id == "turn-2"
+        assert tool_use.parallel_group_id == "group-1"
 
         # ToolResultEvent
         tool_result = ToolResultEvent(
             session_id="s1",
             exchange_id="e1",
             turn_index=3,
+            turn_id="turn-3",
             tool_use_id="t1",
             tool_name="Read",
             result="contents",
             is_error=False,
             tool_index=0,
+            parallel_group_id="group-1",
         )
         assert tool_result.result == "contents"
         assert tool_result.is_error is False
+        assert tool_result.turn_id == "turn-3"
+        assert tool_result.parallel_group_id == "group-1"

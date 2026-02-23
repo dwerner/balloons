@@ -111,6 +111,7 @@ class ContentDeltaEvent:
     session_id: str
     exchange_id: str
     turn_index: int
+    turn_id: str  # Stable UUID for this turn
     delta: str  # The new text chunk
     accumulated: str  # All text so far in this turn (for late-joining clients)
 
@@ -126,8 +127,10 @@ class TurnStartedEvent:
     session_id: str
     exchange_id: str
     turn_index: int
+    turn_id: str  # Stable UUID for this turn
     role: str  # "user", "assistant", or "tool"
     turn_type: str | None = None  # "text_turn", "tool_use", "tool_result", or None
+    parallel_group_id: str | None = None  # Groups parallel tool calls
 
 
 @ws_type
@@ -141,8 +144,10 @@ class TurnFinishedEvent:
     session_id: str
     exchange_id: str
     turn_index: int
+    turn_id: str  # Stable UUID for this turn
     role: str
     content: str  # Final content of the turn
+    parallel_group_id: str | None = None  # Groups parallel tool calls
 
 
 @ws_type
@@ -156,9 +161,11 @@ class ToolUseStartedEvent:
     session_id: str
     exchange_id: str
     turn_index: int
+    turn_id: str  # Stable UUID for this turn
     tool_use_id: str
     tool_name: str
     tool_index: int  # Order of this tool in the current exchange
+    parallel_group_id: str | None = None  # Groups parallel tool calls
 
 
 @ws_type
@@ -171,6 +178,7 @@ class ToolInputDeltaEvent:
 
     session_id: str
     exchange_id: str
+    turn_id: str  # Stable UUID for this turn
     tool_use_id: str
     partial_json: str  # The new JSON chunk
 
@@ -186,10 +194,12 @@ class ToolUseEvent:
     session_id: str
     exchange_id: str
     turn_index: int
+    turn_id: str  # Stable UUID for this turn
     tool_use_id: str
     tool_name: str
     tool_input: dict  # Complete parsed tool input
     tool_index: int
+    parallel_group_id: str | None = None  # Groups parallel tool calls
 
 
 @ws_type
@@ -203,11 +213,13 @@ class ToolResultEvent:
     session_id: str
     exchange_id: str
     turn_index: int
+    turn_id: str  # Stable UUID for this turn
     tool_use_id: str
     tool_name: str
     result: str  # Tool output as string
     is_error: bool
     tool_index: int
+    parallel_group_id: str | None = None  # Groups parallel tool calls
 
 
 def _task_to_info(task: Task) -> TaskInfo:
@@ -673,6 +685,7 @@ class TaskStateService:
         session_id: str,
         exchange_id: str,
         turn_index: int,
+        turn_id: str,
         delta: str,
         accumulated: str,
     ) -> None:
@@ -684,6 +697,7 @@ class TaskStateService:
             session_id: Session the content belongs to
             exchange_id: Exchange ID for this prompt/response
             turn_index: Index of the current turn
+            turn_id: Stable UUID for this turn
             delta: New text chunk
             accumulated: All text accumulated so far
         """
@@ -691,6 +705,7 @@ class TaskStateService:
             session_id=session_id,
             exchange_id=exchange_id,
             turn_index=turn_index,
+            turn_id=turn_id,
             delta=delta,
             accumulated=accumulated,
         )
@@ -702,8 +717,10 @@ class TaskStateService:
         session_id: str,
         exchange_id: str,
         turn_index: int,
+        turn_id: str,
         role: str,
         turn_type: str | None = None,
+        parallel_group_id: str | None = None,
     ) -> None:
         """Emit a turn started event.
 
@@ -713,8 +730,10 @@ class TaskStateService:
             session_id: Session ID
             exchange_id: Exchange ID
             turn_index: Index of the new turn
+            turn_id: Stable UUID for this turn
             role: Turn role ("user", "assistant", or "tool")
             turn_type: Content block type ("text_turn", "tool_use", "tool_result", or None)
+            parallel_group_id: Groups parallel tool calls from same LLM response
         """
         # Clear finished turns tracking for this session when a new user turn starts
         # This prevents memory leak and ensures fresh tracking for each exchange
@@ -727,8 +746,10 @@ class TaskStateService:
             session_id=session_id,
             exchange_id=exchange_id,
             turn_index=turn_index,
+            turn_id=turn_id,
             role=role,
             turn_type=turn_type,
+            parallel_group_id=parallel_group_id,
         )
         for handler in self._event_handlers:
             handler("turnStarted", event_data.__dict__)
@@ -738,8 +759,10 @@ class TaskStateService:
         session_id: str,
         exchange_id: str,
         turn_index: int,
+        turn_id: str,
         role: str,
         content: str,
+        parallel_group_id: str | None = None,
     ) -> None:
         """Emit a turn finished event.
 
@@ -749,8 +772,10 @@ class TaskStateService:
             session_id: Session ID
             exchange_id: Exchange ID
             turn_index: Index of the completed turn
+            turn_id: Stable UUID for this turn
             role: Turn role
             content: Final content of the turn
+            parallel_group_id: Groups parallel tool calls from same LLM response
         """
         content_len = len(content) if content else 0
         turn_key = (session_id, turn_index)
@@ -774,8 +799,10 @@ class TaskStateService:
             session_id=session_id,
             exchange_id=exchange_id,
             turn_index=turn_index,
+            turn_id=turn_id,
             role=role,
             content=content,
+            parallel_group_id=parallel_group_id,
         )
         for handler in self._event_handlers:
             handler("turnFinished", event_data.__dict__)
@@ -785,9 +812,11 @@ class TaskStateService:
         session_id: str,
         exchange_id: str,
         turn_index: int,
+        turn_id: str,
         tool_use_id: str,
         tool_name: str,
         tool_index: int,
+        parallel_group_id: str | None = None,
     ) -> None:
         """Emit a tool use started event.
 
@@ -797,17 +826,21 @@ class TaskStateService:
             session_id: Session ID
             exchange_id: Exchange ID
             turn_index: Index of the tool_use turn
+            turn_id: Stable UUID for this turn
             tool_use_id: Unique ID for this tool invocation
             tool_name: Name of the tool being called
             tool_index: Order of this tool in the exchange
+            parallel_group_id: Groups parallel tool calls from same LLM response
         """
         event_data = ToolUseStartedEvent(
             session_id=session_id,
             exchange_id=exchange_id,
             turn_index=turn_index,
+            turn_id=turn_id,
             tool_use_id=tool_use_id,
             tool_name=tool_name,
             tool_index=tool_index,
+            parallel_group_id=parallel_group_id,
         )
         for handler in self._event_handlers:
             handler("toolUseStarted", event_data.__dict__)
@@ -816,6 +849,7 @@ class TaskStateService:
         self,
         session_id: str,
         exchange_id: str,
+        turn_id: str,
         tool_use_id: str,
         partial_json: str,
     ) -> None:
@@ -826,12 +860,14 @@ class TaskStateService:
         Args:
             session_id: Session ID
             exchange_id: Exchange ID
+            turn_id: Stable UUID for this turn
             tool_use_id: Tool invocation ID
             partial_json: New JSON chunk
         """
         event_data = ToolInputDeltaEvent(
             session_id=session_id,
             exchange_id=exchange_id,
+            turn_id=turn_id,
             tool_use_id=tool_use_id,
             partial_json=partial_json,
         )
@@ -843,10 +879,12 @@ class TaskStateService:
         session_id: str,
         exchange_id: str,
         turn_index: int,
+        turn_id: str,
         tool_use_id: str,
         tool_name: str,
         tool_input: dict,
         tool_index: int,
+        parallel_group_id: str | None = None,
     ) -> None:
         """Emit a tool use event (input complete, ready for execution).
 
@@ -856,19 +894,23 @@ class TaskStateService:
             session_id: Session ID
             exchange_id: Exchange ID
             turn_index: Index of the tool_use turn
+            turn_id: Stable UUID for this turn
             tool_use_id: Tool invocation ID
             tool_name: Name of the tool
             tool_input: Complete parsed input
             tool_index: Order of this tool in the exchange
+            parallel_group_id: Groups parallel tool calls from same LLM response
         """
         event_data = ToolUseEvent(
             session_id=session_id,
             exchange_id=exchange_id,
             turn_index=turn_index,
+            turn_id=turn_id,
             tool_use_id=tool_use_id,
             tool_name=tool_name,
             tool_input=tool_input,
             tool_index=tool_index,
+            parallel_group_id=parallel_group_id,
         )
         for handler in self._event_handlers:
             handler("toolUse", event_data.__dict__)
@@ -878,11 +920,13 @@ class TaskStateService:
         session_id: str,
         exchange_id: str,
         turn_index: int,
+        turn_id: str,
         tool_use_id: str,
         tool_name: str,
         result: str,
         is_error: bool,
         tool_index: int,
+        parallel_group_id: str | None = None,
     ) -> None:
         """Emit a tool result event.
 
@@ -892,21 +936,25 @@ class TaskStateService:
             session_id: Session ID
             exchange_id: Exchange ID
             turn_index: Index of the tool_result turn
+            turn_id: Stable UUID for this turn
             tool_use_id: Tool invocation ID
             tool_name: Name of the tool
             result: Tool output as string
             is_error: Whether the tool errored
             tool_index: Order of this tool in the exchange
+            parallel_group_id: Groups parallel tool calls from same LLM response
         """
         event_data = ToolResultEvent(
             session_id=session_id,
             exchange_id=exchange_id,
             turn_index=turn_index,
+            turn_id=turn_id,
             tool_use_id=tool_use_id,
             tool_name=tool_name,
             result=result,
             is_error=is_error,
             tool_index=tool_index,
+            parallel_group_id=parallel_group_id,
         )
         for handler in self._event_handlers:
             handler("toolResult", event_data.__dict__)

@@ -99,6 +99,8 @@ export interface SessionDataTurn {
   contextMode: string;
   /** Exchange ID for grouping related turns */
   exchangeId?: string;
+  /** Parallel group ID for visually grouping parallel tool calls */
+  parallelGroupId?: string;
 }
 
 /**
@@ -340,7 +342,13 @@ export function useSessionData(
         debugLog('Setting up sessionDataTurnCreated handler');
         handlers.push(
           client.sessionData.sessionDataTurnCreated((event: SessionTurnCreatedEvent) => {
-            debugLog('sessionDataTurnCreated received', event);
+            debugLog('[TURN_ORDER] turnCreated received', {
+              order: event.order,
+              turnId: event.turnId?.substring(0, 8),
+              role: event.role,
+              contentBlockType: event.contentBlockType,
+              parallelGroupId: event.parallelGroupId?.substring(0, 8),
+            });
 
             if (!event || typeof event !== 'object') {
               debugLog('[useSessionData] turnCreated received invalid event:', event);
@@ -359,12 +367,21 @@ export function useSessionData(
 
             setTurnsById((prev) => {
               if (prev.has(turnId)) {
+                debugLog('[TURN_ORDER] turnCreated: turn already exists, skipping', { turnId: turnId.substring(0, 8) });
                 return prev;
               }
 
               const next = new Map(prev);
               const serverOrder = event.order ?? 0;
               const contentBlockType = event.contentBlockType ?? 'text';
+
+              debugLog('[TURN_ORDER] turnCreated: adding new turn', {
+                turnId: turnId.substring(0, 8),
+                order: serverOrder,
+                contentBlockType,
+                parallelGroupId: event.parallelGroupId?.substring(0, 8),
+                existingTurns: Array.from(prev.values()).map(t => ({ order: t.order, type: t.contentBlock?.type })),
+              });
 
               next.set(turnId, {
                 turnId,
@@ -376,6 +393,7 @@ export function useSessionData(
                 tokens: 0,
                 contextMode: 'copy',
                 exchangeId: event.exchangeId ?? undefined,
+                parallelGroupId: event.parallelGroupId ?? undefined,
               });
 
               return next;
@@ -441,6 +459,12 @@ export function useSessionData(
         // Turn finished - finalize turn with complete content block
         handlers.push(
           client.sessionData.sessionDataTurnFinished((event: SessionTurnFinishedEvent) => {
+            debugLog('[TURN_ORDER] turnFinished received', {
+              order: event.order,
+              turnId: event.turnId?.substring(0, 8),
+              role: event.role,
+              contentBlockType: event.contentBlock?.type,
+            });
 
             if (!event || typeof event !== 'object') {
               debugLog('[useSessionData] turnFinished received invalid event:', event);
@@ -472,7 +496,11 @@ export function useSessionData(
               }
 
               if (!existing) {
-                debugLog(`[useSessionData] turnFinished for unknown turn ${turnId}, creating`);
+                debugLog('[TURN_ORDER] turnFinished for unknown turn, creating', {
+                  turnId: turnId.substring(0, 8),
+                  order: event.order,
+                  existingTurns: Array.from(prev.values()).map(t => ({ order: t.order, type: t.contentBlock?.type })),
+                });
                 // Use order from event if available, otherwise fall back to maxOrder + 1
                 const serverOrder = event.order;
                 const effectiveOrder = serverOrder !== undefined && serverOrder !== null
@@ -492,6 +520,12 @@ export function useSessionData(
                 });
                 return next;
               }
+
+              debugLog('[TURN_ORDER] turnFinished updating existing turn', {
+                turnId: turnId.substring(0, 8),
+                existingOrder: existing.order,
+                eventOrder: event.order,
+              });
 
               const next = new Map(prev);
               next.set(turnId, {
@@ -557,6 +591,7 @@ export function useSessionData(
             debugLog('sessionDataToolUseStarted', event);
 
             // Find the tool_use turn by turn_index and update it with the tool info
+            // Note: parallelGroupId is already set via the turnCreated event
             setTurnsById((prev) => {
               // Find a tool_use turn at this turn_index that needs initialization
               for (const [turnId, turn] of prev.entries()) {

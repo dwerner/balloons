@@ -217,6 +217,47 @@
   background: var(--tool-bg, #fff3e0);
 }
 
+/* Parallel group styles - groups tool calls that run in parallel */
+.parallel-group {
+  border: 1px solid var(--border-color, #e0e0e0);
+  border-radius: 8px;
+  background: linear-gradient(to right, rgba(147, 51, 234, 0.05), transparent);
+  overflow: hidden;
+}
+
+.parallel-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(147, 51, 234, 0.1);
+  border-bottom: 1px solid rgba(147, 51, 234, 0.2);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary, #666);
+}
+
+.parallel-icon {
+  font-size: 12px;
+  color: rgb(147, 51, 234);
+}
+
+.parallel-label {
+  color: rgb(147, 51, 234);
+}
+
+.parallel-group-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+
+.parallel-group-content > div {
+  /* Slightly indent the grouped cards */
+  margin-left: 4px;
+}
+
 /* Mobile responsive styles */
 @media (max-width: 768px) {
   .streaming-turns-view {

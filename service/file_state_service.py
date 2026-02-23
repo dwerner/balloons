@@ -145,6 +145,12 @@ class FileStateService:
         if rust_list_directory is None:
             raise RuntimeError("balloons_storage module not available")
 
+        # Validate path before calling Rust
+        if not os.path.exists(path):
+            raise ValueError(f"Path not found: {path}")
+        if not os.path.isdir(path):
+            raise ValueError(f"Not a directory: {path}")
+
         import json
 
         # Call Rust implementation

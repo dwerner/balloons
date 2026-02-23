@@ -145,3 +145,9 @@ Fixed by immediately setting a minimal `TaskInfo` object from the event data whe
 - Should show a status bar for new sessions even before any streaming begins (with session name, empty/zero token count, etc.)
 - **Key detail**: Refreshing the page on an empty session DOES show the status bar
 - This suggests the status bar rendering condition is correct on load, but the "new session" action doesn't trigger the same state update
+
+## Bug #20: Last assistant turn shows empty body in streaming mode
+- In streaming mode, the final assistant turn (the summary/conclusion text) renders with an empty body
+- The content exists but is not being displayed
+- Possibly related to Bug #10 fix - the `_flush_text_as_turn(emit_event=True)` change may be creating a turn but the content isn't being streamed/rendered correctly
+- This is a regression from the turn ordering fix

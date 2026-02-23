@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-23T09:30:50.368150
+// Generated: 2026-02-23T12:15:32.034527
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -478,6 +478,7 @@ export interface ContentDeltaEvent {
   sessionId: string;
   exchangeId: string;
   turnIndex: number;
+  turnId: string;
   delta: string;
   accumulated: string;
 }
@@ -486,30 +487,37 @@ export interface TurnStartedEvent {
   sessionId: string;
   exchangeId: string;
   turnIndex: number;
+  turnId: string;
   role: string;
   turnType?: string | null;
+  parallelGroupId?: string | null;
 }
 
 export interface TurnFinishedEvent {
   sessionId: string;
   exchangeId: string;
   turnIndex: number;
+  turnId: string;
   role: string;
   content: string;
+  parallelGroupId?: string | null;
 }
 
 export interface ToolUseStartedEvent {
   sessionId: string;
   exchangeId: string;
   turnIndex: number;
+  turnId: string;
   toolUseId: string;
   toolName: string;
   toolIndex: number;
+  parallelGroupId?: string | null;
 }
 
 export interface ToolInputDeltaEvent {
   sessionId: string;
   exchangeId: string;
+  turnId: string;
   toolUseId: string;
   partialJson: string;
 }
@@ -518,21 +526,25 @@ export interface ToolUseEvent {
   sessionId: string;
   exchangeId: string;
   turnIndex: number;
+  turnId: string;
   toolUseId: string;
   toolName: string;
   toolInput: Record<string, unknown>;
   toolIndex: number;
+  parallelGroupId?: string | null;
 }
 
 export interface ToolResultEvent {
   sessionId: string;
   exchangeId: string;
   turnIndex: number;
+  turnId: string;
   toolUseId: string;
   toolName: string;
   result: string;
   isError: boolean;
   toolIndex: number;
+  parallelGroupId?: string | null;
 }
 
 export interface TurnDelta {
@@ -584,6 +596,7 @@ export interface SessionTurnCreatedEvent {
   order: number;
   exchangeId?: string | null;
   contentBlockType?: string;
+  parallelGroupId?: string | null;
 }
 
 export interface SessionTurnDeltaEvent {

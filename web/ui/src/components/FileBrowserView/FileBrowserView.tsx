@@ -9,8 +9,8 @@
  * - Session CWD management
  */
 
-import React, { useState, useCallback, useEffect, useMemo, memo } from 'react';
-import type { FileEntry, DirectoryListing } from '../../../../generated/balloons-client';
+import React, { useState, useCallback, useEffect, useMemo, memo, useRef } from 'react';
+import type { FileEntry, DirectoryListing, FileStateServiceClient } from '../../../../generated/balloons-client';
 import { createLogger } from '../../utils/debugLog';
 import './FileBrowserView.css';
 
@@ -365,23 +365,34 @@ export interface FileBrowserViewProps {
   /** Callback when a file is selected */
   onFileSelect?: (path: string) => void;
 
-  /** Callback to list a directory (from FileStateService) */
-  listDirectory: (path: string) => Promise<DirectoryListing>;
+  /** FileStateService client - stable reference avoids re-renders */
+  client: FileStateServiceClient;
+}
 
-  /** Callback to get home directory */
-  getHomeDirectory: () => Promise<string>;
+// Simple cache for directory listings - persists until user explicitly refreshes
+const listingCache = new Map<string, DirectoryListing>();
 
-  /** Callback to get parent directory */
-  getParentDirectory: (path: string) => Promise<string>;
+function getCachedListing(path: string): DirectoryListing | null {
+  return listingCache.get(path) ?? null;
+}
+
+function setCachedListing(path: string, listing: DirectoryListing): void {
+  listingCache.set(path, listing);
+}
+
+export function invalidateListingCache(path?: string): void {
+  if (path) {
+    listingCache.delete(path);
+  } else {
+    listingCache.clear();
+  }
 }
 
 export const FileBrowserView = memo(function FileBrowserView({
   initialPath,
   sessionId,
   onFileSelect,
-  listDirectory,
-  getHomeDirectory,
-  getParentDirectory,
+  client,
 }: FileBrowserViewProps) {
   // Current directory listing
   const [listing, setListing] = useState<DirectoryListing | null>(null);
@@ -399,21 +410,40 @@ export const FileBrowserView = memo(function FileBrowserView({
   // Track initialization to show better loading state
   const [isInitializing, setIsInitializing] = useState(true);
 
-  // Load home directory on mount
+  // Use ref to track if initial load has happened
+  const initialLoadDone = useRef(false);
+
+  // Track initial path to detect changes
+  const prevInitialPath = useRef(initialPath);
+
+  // Load home directory on mount (only once)
   useEffect(() => {
-    getHomeDirectory().then(setHomePath).catch(err => {
+    client.getHomeDirectory().then(setHomePath).catch((err: unknown) => {
       debugLog('Failed to get home directory', { error: err });
     });
-  }, [getHomeDirectory]);
+  }, [client]);
 
-  // Load directory
-  const loadDirectory = useCallback(async (path: string) => {
-    debugLog('Loading directory', { path });
+  // Load directory with caching
+  const loadDirectory = useCallback(async (path: string, skipCache = false) => {
+    debugLog('Loading directory', { path, skipCache });
+
+    // Check cache first (unless refresh requested)
+    if (!skipCache) {
+      const cached = getCachedListing(path);
+      if (cached) {
+        debugLog('Using cached listing', { path });
+        setListing(cached);
+        setIsLoading(false);
+        return;
+      }
+    }
+
     setIsLoading(true);
     setError(null);
 
     try {
-      const result = await listDirectory(path);
+      const result = await client.listDirectory(path);
+      setCachedListing(path, result);
       setListing(result);
       debugLog('Directory loaded', { path, entryCount: result.entries.length });
     } catch (err) {
@@ -423,22 +453,30 @@ export const FileBrowserView = memo(function FileBrowserView({
     } finally {
       setIsLoading(false);
     }
-  }, [listDirectory]);
+  }, [client]);
 
   // Load initial directory - use initialPath if provided, otherwise home
+  // Only runs once on mount, or when initialPath changes
   useEffect(() => {
+    // Skip if we already loaded and initialPath hasn't changed
+    if (initialLoadDone.current && prevInitialPath.current === initialPath) {
+      return;
+    }
+
     const loadInitial = async () => {
       setIsInitializing(true);
       try {
-        const startPath = initialPath || await getHomeDirectory();
+        const startPath = initialPath || await client.getHomeDirectory();
         debugLog('Loading initial directory', { startPath, initialPath });
         await loadDirectory(startPath);
+        initialLoadDone.current = true;
+        prevInitialPath.current = initialPath;
       } finally {
         setIsInitializing(false);
       }
     };
     loadInitial();
-  }, [initialPath, getHomeDirectory, loadDirectory]);
+  }, [initialPath, client, loadDirectory]);
 
   // Navigate to a directory
   const navigateTo = useCallback(async (path: string) => {
@@ -450,23 +488,24 @@ export const FileBrowserView = memo(function FileBrowserView({
 
   // Go to home directory
   const goHome = useCallback(async () => {
-    const home = await getHomeDirectory();
+    const home = await client.getHomeDirectory();
     await navigateTo(home);
-  }, [getHomeDirectory, navigateTo]);
+  }, [client, navigateTo]);
 
   // Go to parent directory
   const goUp = useCallback(async () => {
     if (!listing) return;
-    const parent = await getParentDirectory(listing.path);
+    const parent = await client.getParentDirectory(listing.path);
     if (parent !== listing.path) {
       await navigateTo(parent);
     }
-  }, [listing, getParentDirectory, navigateTo]);
+  }, [listing, client, navigateTo]);
 
-  // Refresh current directory
+  // Refresh current directory (skip cache)
   const refresh = useCallback(() => {
     if (listing) {
-      loadDirectory(listing.path);
+      invalidateListingCache(listing.path);
+      loadDirectory(listing.path, true);
     }
   }, [listing, loadDirectory]);
 
@@ -488,7 +527,8 @@ export const FileBrowserView = memo(function FileBrowserView({
       if (!childrenCache.has(entry.path)) {
         setLoadingPaths(prev => new Set(prev).add(entry.path));
         try {
-          const result = await listDirectory(entry.path);
+          const result = await client.listDirectory(entry.path);
+          setCachedListing(entry.path, result);
           setChildrenCache(prev => new Map(prev).set(entry.path, result.entries));
         } catch (err) {
           debugLog('Failed to load children', { path: entry.path, error: err });
@@ -503,7 +543,7 @@ export const FileBrowserView = memo(function FileBrowserView({
 
       setExpandedPaths(prev => new Set(prev).add(entry.path));
     }
-  }, [expandedPaths, childrenCache, listDirectory]);
+  }, [expandedPaths, childrenCache, client]);
 
   // Handle file selection
   const handleSelect = useCallback((entry: FileEntry) => {

@@ -49,6 +49,12 @@
   animation: pulse 1s infinite;
 }
 
+.done-indicator {
+  color: var(--color-success, #69db7c);
+  font-size: 12px;
+  opacity: 0.7;
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }

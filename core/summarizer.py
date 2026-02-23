@@ -161,9 +161,7 @@ class Summarizer:
         for turn in session.turns:
             role = "User" if turn.role == "user" else "Assistant"
             content = turn.content if isinstance(turn.content, str) else str(turn.content)
-            # Truncate very long messages
-            if len(content) > 2000:
-                content = content[:2000] + "... [truncated]"
+            # DON'T Truncate very long messages
             turns_text.append(f"{role}: {content}")
 
         if not turns_text:
@@ -230,9 +228,7 @@ class Summarizer:
         for turn in fork_session.turns:
             role = "User" if turn.role == "user" else "Assistant"
             content = turn.content if isinstance(turn.content, str) else str(turn.content)
-            # Truncate very long messages
-            if len(content) > 2000:
-                content = content[:2000] + "... [truncated]"
+            # DONT Truncate very long messages
             turns_text.append(f"{role}: {content}")
 
         conversation = "\n\n".join(turns_text)
@@ -362,9 +358,7 @@ Summary:"""
         for msg in messages:
             role = "User" if msg.role == "user" else "Assistant"
             content = msg.content if isinstance(msg.content, str) else str(msg.content)
-            # Truncate very long messages
-            if len(content) > 2000:
-                content = content[:2000] + "... [truncated]"
+            # DONT Truncate very long messages
             turns_text.append(f"{role}: {content}")
 
         conversation = "\n\n".join(turns_text)

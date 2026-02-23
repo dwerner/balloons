@@ -36,6 +36,7 @@ class TurnData:
     sentiment: Optional[str] = None  # "excellent", "good", "review", "poor", "terrible"
     started_at: Optional[str] = None  # ISO 8601 format, when streaming began
     ended_at: Optional[str] = None  # ISO 8601 format, when streaming completed
+    parallel_group_id: Optional[str] = None  # Groups parallel tool calls from same LLM response
 
 
 @rust_schema

@@ -27,12 +27,16 @@ export function TextCard({ turn }: TextCardProps) {
     assistant: { icon: '🤖', label: 'Assistant', className: 'assistant' },
   }[role] || { icon: '📄', label: role, className: 'other' };
 
+  // Show "done" indicator for completed assistant turns
+  const showDoneIndicator = isAssistant && !streaming && content;
+
   return (
-    <div className={`turn-card text-card ${roleConfig.className} ${streaming ? 'streaming' : ''}`}>
+    <div className={`turn-card text-card ${roleConfig.className} ${streaming ? 'streaming' : ''} ${showDoneIndicator ? 'done' : ''}`}>
       <div className="turn-card-header">
         <span className="turn-icon">{roleConfig.icon}</span>
         <span className="turn-label">{roleConfig.label}</span>
         {streaming && <span className="streaming-indicator">●</span>}
+        {showDoneIndicator && <span className="done-indicator">✓</span>}
         {!streaming && tokens > 0 && (
           <span className="turn-tokens">{tokens} tokens</span>
         )}

@@ -332,6 +332,7 @@ class TestEventData:
             "order": 5,
             "exchange_id": "exchange-123",
             "content_block_type": "code",
+            "parallel_group_id": None,
         }
 
     @pytest.mark.asyncio

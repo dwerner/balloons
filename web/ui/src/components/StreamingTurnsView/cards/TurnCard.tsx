@@ -192,83 +192,8 @@ export function TurnCard({ turn, allTurns = [], sessionId }: TurnCardProps) {
   if (blockType === 'tool_result') {
     // Check if there's a matching tool_use that will render this result
     const resultBlock = contentBlock as ToolResultBlock;
-    const toolUseId = resultBlock?.toolUseId;
-
-    // DEBUG: Log all tool_use turns and their state
-    const toolUseTurns = allTurns.filter((t) => t.contentBlock?.type === 'tool_use');
-    debugLog('tool_result matching', {
-      resultTurnId: turn.turnId?.substring(0, 8),
-      resultOrder: turn.order,
-      toolUseId,
-      exchangeId: turn.exchangeId,
-      toolUseTurnsCount: toolUseTurns.length,
-      toolUseTurns: toolUseTurns.map((t) => ({
-        turnId: t.turnId?.substring(0, 8),
-        order: t.order,
-        toolUseBlockId: (t.contentBlock as ToolUseBlock)?.id || '(empty)',
-        toolUseName: (t.contentBlock as ToolUseBlock)?.name || '(empty)',
-        exchangeId: t.exchangeId,
-      })),
-    });
-
-    const hasMatchingToolUse = allTurns.some((t) => {
-      if (t.contentBlock?.type !== 'tool_use') return false;
-      if (t.order >= turn.order) return false;
-
-      const toolBlock = t.contentBlock as ToolUseBlock;
-
-      // Match by toolUseId if available (most precise)
-      if (toolUseId && toolBlock?.id) {
-        const matches = toolBlock.id === toolUseId;
-        debugLog('tool_use match check (by ID)', {
-          toolUseTurnId: t.turnId?.substring(0, 8),
-          toolBlockId: toolBlock.id,
-          resultToolUseId: toolUseId,
-          matches,
-        });
-        return matches;
-      }
-
-      // If tool_use turn exists but has no ID yet, it's still streaming
-      // Match by exchange ID to handle the race condition where tool_result
-      // arrives before tool_use has its ID populated
-      if (!toolBlock?.id && turn.exchangeId && t.exchangeId === turn.exchangeId) {
-        debugLog('tool_use match check (streaming, empty ID, same exchange)', {
-          toolUseTurnId: t.turnId?.substring(0, 8),
-          exchangeId: turn.exchangeId,
-          streaming: t.streaming,
-        });
-        return true;
-      }
-
-      // Fall back to exchange matching for turns with IDs
-      if (turn.exchangeId) {
-        return t.exchangeId === turn.exchangeId;
-      }
-
-      return true;
-    });
-
-    // If there's a matching tool_use, skip rendering (it will include the result)
-    // DEBUG: Instead of returning null, show a collapsed debug marker
-    if (hasMatchingToolUse) {
-      return (
-        <div className="debug-skipped-turn" style={{
-          background: 'rgba(100, 100, 255, 0.1)',
-          border: '1px dashed #6464ff',
-          borderRadius: '4px',
-          padding: '4px 8px',
-          margin: '4px 0',
-          fontFamily: 'monospace',
-          fontSize: '10px',
-          color: '#6464ff',
-        }}>
-          ⏭️ tool_result skipped (rendered with tool_use) | ID: {turn.turnId?.substring(0, 8)}
-        </div>
-      );
-    }
-
-    // Standalone tool result
+    // Tool results with matching tool_use turns are filtered out at the parent level
+    // (StreamingTurnsView). If we get here, it's a standalone tool result.
     return <ToolResultCard turn={turn} />;
   }
 

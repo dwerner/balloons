@@ -164,6 +164,7 @@ class SessionTurnCreatedEvent:
     order: int  # Position in turn list (for display ordering)
     exchange_id: str | None = None
     content_block_type: str = "text"
+    parallel_group_id: str | None = None  # For grouping parallel tool calls
 
 
 @ws_type
@@ -1599,6 +1600,7 @@ class SessionDataService:
         order: int,
         exchange_id: str | None = None,
         content_block_type: str = "text",
+        parallel_group_id: str | None = None,
     ) -> None:
         """Emit a turn created event to subscribed clients.
 
@@ -1611,12 +1613,14 @@ class SessionDataService:
             order: Position in turn list (for display ordering)
             exchange_id: Exchange ID grouping related turns
             content_block_type: Type of content block
+            parallel_group_id: Group ID for parallel tool calls
         """
         from core.debug_log import debug_log
         subscribers = self._session_subscribers.get(session_id)
         debug_log.debug(
             f"emit_turn_created: session={session_id[:8]}, turn={turn_id[:8] if turn_id else 'none'}, "
-            f"role={role}, order={order}, subscribers={len(subscribers) if subscribers else 0}",
+            f"role={role}, order={order}, parallel_group={parallel_group_id[:8] if parallel_group_id else 'none'}, "
+            f"subscribers={len(subscribers) if subscribers else 0}",
             category="websocket",
         )
         if not subscribers:
@@ -1629,6 +1633,7 @@ class SessionDataService:
             order=order,
             exchange_id=exchange_id,
             content_block_type=content_block_type,
+            parallel_group_id=parallel_group_id,
         )
         self._emit_event("sessionDataTurnCreated", event_data.__dict__, subscribers)
 
@@ -2001,6 +2006,7 @@ class SessionDataService:
             order=event.turn_index,
             exchange_id=event.exchange_id,
             content_block_type=event.content_block_type,
+            parallel_group_id=event.parallel_group_id,
         )
 
     async def on_turn_delta(self, event: TurnDeltaEvent) -> None:

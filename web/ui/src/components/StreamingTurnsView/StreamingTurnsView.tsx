@@ -20,10 +20,19 @@
 
 import React, { useMemo, useEffect } from 'react';
 import type { BalloonsClient } from '../../../../generated/balloons-client';
-import { useSessionData, useAutoScroll } from '../../hooks';
+import { useSessionData, useAutoScroll, type SessionDataTurn } from '../../hooks';
 import { TurnCard, ClientContext } from './cards';
 import { ScrollToBottom } from '../ScrollToBottom';
 import './StreamingTurnsView.css';
+
+/**
+ * Represents either a single turn or a group of parallel turns
+ */
+interface TurnOrGroup {
+  type: 'single' | 'parallel';
+  turns: SessionDataTurn[];
+  parallelGroupId?: string;
+}
 
 interface StreamingTurnsViewProps {
   sessionId: string | null;
@@ -56,6 +65,73 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     }
   }, [isFollowing, isAtBottom, onScrollStateChange]);
 
+  // Filter out tool_result turns - they're rendered inline with their matching tool_use
+  // NOTE: All hooks must be called before any early returns
+  const filteredTurns = useMemo(() => {
+    return turns.filter((turn) => {
+      const blockType = turn.contentBlock?.type || 'text';
+      if (blockType !== 'tool_result' && turn.role !== 'tool') {
+        return true;
+      }
+      // Check if there's a matching tool_use turn that will render this result
+      const toolResultBlock = turn.contentBlock as { toolUseId?: string } | undefined;
+      const toolUseId = toolResultBlock?.toolUseId;
+      if (!toolUseId) return true; // No ID, render standalone
+      return !turns.some(t => {
+        const tBlockType = t.contentBlock?.type || 'text';
+        const tToolUseBlock = t.contentBlock as { id?: string } | undefined;
+        return tBlockType === 'tool_use' && tToolUseBlock?.id === toolUseId;
+      });
+    });
+  }, [turns]);
+
+  // Group consecutive turns with the same parallelGroupId
+  const turnsOrGroups = useMemo((): TurnOrGroup[] => {
+    const result: TurnOrGroup[] = [];
+    let currentGroup: SessionDataTurn[] = [];
+    let currentGroupId: string | undefined;
+
+    for (const turn of filteredTurns) {
+      const groupId = turn.parallelGroupId;
+
+      if (groupId && groupId === currentGroupId) {
+        // Continue the current parallel group
+        currentGroup.push(turn);
+      } else {
+        // Flush the previous group if any
+        if (currentGroup.length > 0) {
+          if (currentGroup.length > 1) {
+            result.push({ type: 'parallel', turns: currentGroup, parallelGroupId: currentGroupId });
+          } else {
+            result.push({ type: 'single', turns: currentGroup });
+          }
+        }
+
+        // Start a new group or single turn
+        if (groupId) {
+          currentGroup = [turn];
+          currentGroupId = groupId;
+        } else {
+          result.push({ type: 'single', turns: [turn] });
+          currentGroup = [];
+          currentGroupId = undefined;
+        }
+      }
+    }
+
+    // Flush any remaining group
+    if (currentGroup.length > 0) {
+      if (currentGroup.length > 1) {
+        result.push({ type: 'parallel', turns: currentGroup, parallelGroupId: currentGroupId });
+      } else {
+        result.push({ type: 'single', turns: currentGroup });
+      }
+    }
+
+    return result;
+  }, [filteredTurns]);
+
+  // Early returns AFTER all hooks have been called
   if (!sessionId) {
     return <div className="streaming-turns-view empty">No session selected</div>;
   }
@@ -84,11 +160,34 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
             {streamError && <span className="stream-error-badge" title={streamError}>⚠ error</span>}
           </div>
           <div className="streaming-turns-list">
-            {turns.map((turn) => (
-              <div key={turn.turnId} data-turn-order={turn.order}>
-                <TurnCard turn={turn} allTurns={turns} sessionId={sessionId || undefined} />
-              </div>
-            ))}
+            {turnsOrGroups.map((item, idx) => {
+              if (item.type === 'single') {
+                const turn = item.turns[0];
+                if (!turn) return null;
+                return (
+                  <div key={turn.turnId} data-turn-order={turn.order}>
+                    <TurnCard turn={turn} allTurns={turns} sessionId={sessionId || undefined} />
+                  </div>
+                );
+              } else {
+                // Parallel group
+                return (
+                  <div key={`parallel-${item.parallelGroupId || idx}`} className="parallel-group">
+                    <div className="parallel-group-header">
+                      <span className="parallel-icon">⚡</span>
+                      <span className="parallel-label">{item.turns.length} parallel tool calls</span>
+                    </div>
+                    <div className="parallel-group-content">
+                      {item.turns.map((turn) => (
+                        <div key={turn.turnId} data-turn-order={turn.order}>
+                          <TurnCard turn={turn} allTurns={turns} sessionId={sessionId || undefined} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              }
+            })}
             {isStreaming && turns.length === 0 && (
               <div className="streaming-placeholder">
                 <span className="streaming-dots">
