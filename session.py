@@ -245,6 +245,9 @@ class Session:
         self.total_cost += cost
         if context_window:
             self.context_window = context_window
+        # Update cached context tokens - input_tokens represents the full context sent to the model
+        # This is what should be shown in the status bar for context usage
+        self.cached_context_tokens = input_tokens + output_tokens
         self._metadata_dirty = True
 
     def add_child(self, child_id: str, prompt: str, return_condition: str = "manual", name: str = "", fork_point: int = -1) -> None:

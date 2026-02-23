@@ -288,8 +288,13 @@ class StreamState:
         """Safely call an async observer."""
         try:
             await callback(event, stream)
-        except Exception:
-            pass  # Don't let observer errors break stream tracking
+        except Exception as e:
+            # Log but don't let observer errors break stream tracking
+            from core.debug_log import debug_log
+            debug_log.error(
+                f"Stream observer error: {e} for event {event.value}",
+                category="streaming",
+            )
 
     # =========================================================================
     # Stream Registration

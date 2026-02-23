@@ -983,10 +983,8 @@ export const SessionTreeView = memo(function SessionTreeView({
     const pinned = sessions.filter(s => s.isPinned);
     const unpinned = sessions.filter(s => !s.isPinned);
 
-    // Sort pinned by last modified (current first)
+    // Sort pinned by last modified (most recent first)
     pinned.sort((a, b) => {
-      if (a.isCurrent) return -1;
-      if (b.isCurrent) return 1;
       return new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime();
     });
 
@@ -1011,11 +1009,9 @@ export const SessionTreeView = memo(function SessionTreeView({
       dayGroupMap.get(label)!.sessions.push(session);
     }
 
-    // Sort sessions within each group (current first, then by last modified)
+    // Sort sessions within each group by last modified (most recent first)
     for (const group of dayGroupMap.values()) {
       group.sessions.sort((a, b) => {
-        if (a.isCurrent) return -1;
-        if (b.isCurrent) return 1;
         return new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime();
       });
       // Update sortKey to be the most recent session in the group

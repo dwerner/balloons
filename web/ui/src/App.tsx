@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, memo, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { BalloonsClient } from '../../generated/balloons-client';
-import type { ConnectionState, SessionInfo, TurnInfo, TaskInfo, Unsubscribe, ToolUseStartedEvent, ToolInputDeltaEvent, ToolResultEvent, ContentDeltaEvent, TurnStartedEvent, TurnFinishedEvent, GoalTreeStateServiceClient } from '../../generated/balloons-client';
+import type { ConnectionState, SessionInfo, TurnInfo, TaskInfo, Unsubscribe, ToolUseStartedEvent, ToolInputDeltaEvent, ToolResultEvent, ContentDeltaEvent, TurnStartedEvent, TurnFinishedEvent, GoalTreeStateServiceClient, TurnSnapshot, SessionHistoryChunkEvent, SessionHistoryCompleteEvent } from '../../generated/balloons-client';
 import { MarkdownContent } from './MarkdownContent';
 import { AppLayout, useLayout, useTheme } from './components/layout';
 import { SessionTreeView } from './components/SessionTreeView';
@@ -459,11 +459,11 @@ const ToolUseTurn = memo(function ToolUseTurn({
           <span className={`tool-use-status ${isError ? 'error' : 'completed'}`}>
             {isError ? '✗' : '✓'}
           </span>
-          <span className="tool-use-name">{toolUse.toolName}</span>
+          <span className="tool-use-name">{toolUse.name}</span>
         </div>
-        {toolUse.toolInput && Object.keys(toolUse.toolInput).length > 0 && (
+        {toolUse.inputJson && (
           <Collapsible title="Input" defaultExpanded={true}>
-            <FormattedToolInput toolName={toolUse.toolName} toolInput={toolUse.toolInput} />
+            <FormattedToolInput toolName={toolUse.name} toolInput={toolUse.inputJson} />
           </Collapsible>
         )}
         {hasResult && (
@@ -624,7 +624,7 @@ const SimpleTurn = memo(function SimpleTurn({ turn }: { turn: TurnInfo }) {
   if (role === 'assistant') {
     // Tool use turn
     if (blockType === 'tool_use' || turn.toolUse) {
-      const toolName = turn.toolUse?.toolName || 'Tool';
+      const toolName = turn.toolUse?.name || 'Tool';
       return (
         <div className={`turn assistant tool-use-turn ${turn.streaming ? 'streaming' : ''}`}>
           <div className={`tool-use ${turn.streaming ? 'executing' : 'completed'}`}>
@@ -634,9 +634,9 @@ const SimpleTurn = memo(function SimpleTurn({ turn }: { turn: TurnInfo }) {
               </span>
               <span className="tool-use-name">{toolName}</span>
             </div>
-            {turn.toolUse?.toolInput && Object.keys(turn.toolUse.toolInput).length > 0 && (
+            {turn.toolUse?.inputJson && (
               <Collapsible title="Input" defaultExpanded={true}>
-                <FormattedToolInput toolName={toolName} toolInput={turn.toolUse.toolInput} />
+                <FormattedToolInput toolName={toolName} toolInput={turn.toolUse.inputJson} />
               </Collapsible>
             )}
           </div>
@@ -698,6 +698,107 @@ function sortTurnsByIdx(turns: TurnInfo[]): TurnInfo[] {
     byIdx.set(turn.idx, turn);
   }
   return Array.from(byIdx.values()).sort((a, b) => a.idx - b.idx);
+}
+
+// Helper to convert TurnSnapshot to TurnInfo
+function turnSnapshotToInfo(snapshot: TurnSnapshot, idx: number): TurnInfo {
+  const block = snapshot.contentBlock;
+  const blockType = block?.type || 'text';
+
+  let content = '';
+  let toolUse: TurnInfo['toolUse'] = undefined;
+  let toolResult: TurnInfo['toolResult'] = undefined;
+
+  if (blockType === 'text' && block && 'text' in block) {
+    content = block.text || '';
+  } else if (blockType === 'tool_use' && block) {
+    const tb = block as { id?: string; name?: string; input?: unknown };
+    content = JSON.stringify(tb.input || {});
+    toolUse = {
+      toolUseId: tb.id || '',
+      name: tb.name || '',
+      inputJson: content,
+    };
+  } else if (blockType === 'tool_result' && block) {
+    const tr = block as { toolUseId?: string; content?: unknown; isError?: boolean };
+    content = String(tr.content || '');
+    toolResult = {
+      toolUseId: tr.toolUseId || '',
+      content,
+      isError: tr.isError || false,
+    };
+  }
+
+  return {
+    idx,
+    role: snapshot.role,
+    content,
+    streaming: snapshot.streaming,
+    viewed: snapshot.viewed,
+    tokens: snapshot.tokens,
+    contextMode: snapshot.contextMode,
+    contentBlockType: blockType,
+    exchangeId: snapshot.exchangeId,
+    toolUse,
+    toolResult,
+  };
+}
+
+// Load turns via subscription API - subscribes, collects history chunks, returns when complete
+async function loadTurnsViaSubscription(
+  client: BalloonsClient,
+  sessionId: string,
+  clientId: string
+): Promise<TurnInfo[]> {
+  return new Promise((resolve, reject) => {
+    const collectedTurns: Map<string, TurnSnapshot> = new Map();
+    const handlers: Unsubscribe[] = [];
+    let timeoutId: ReturnType<typeof setTimeout>;
+
+    const cleanup = () => {
+      handlers.forEach(h => h());
+      clearTimeout(timeoutId);
+    };
+
+    // Set up history chunk handler
+    handlers.push(
+      client.sessionData.sessionDataHistoryChunk((event: SessionHistoryChunkEvent) => {
+        if (event.sessionId !== sessionId) return;
+        for (const turn of event.turns || []) {
+          if (turn.turnId) {
+            collectedTurns.set(turn.turnId, turn);
+          }
+        }
+      })
+    );
+
+    // Set up history complete handler
+    handlers.push(
+      client.sessionData.sessionDataHistoryComplete((event: SessionHistoryCompleteEvent) => {
+        if (event.sessionId !== sessionId) return;
+        cleanup();
+
+        // Convert to TurnInfo sorted by order
+        const snapshots = Array.from(collectedTurns.values())
+          .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+        const turns = snapshots.map((s, idx) => turnSnapshotToInfo(s, idx));
+        resolve(turns);
+      })
+    );
+
+    // Timeout after 30 seconds
+    timeoutId = setTimeout(() => {
+      cleanup();
+      reject(new Error('Timeout waiting for history'));
+    }, 30000);
+
+    // Subscribe to the session
+    client.sessionData.subscribeSession(sessionId, clientId)
+      .catch(err => {
+        cleanup();
+        reject(err);
+      });
+  });
 }
 
 // Format duration in seconds to a human-readable string
@@ -963,9 +1064,10 @@ export function App() {
             setSelectedSessionId(sessionIdToLoad);
             setIsLoadingTurns(true);
 
-            // Load all session data in parallel
+            // Load turns via subscription, other data in parallel
+            const clientId = `web-${Date.now()}`;
             const [sessionTurns, queueInfo, task] = await Promise.all([
-              client.sessionData.getTurns(sessionIdToLoad),
+              loadTurnsViaSubscription(client, sessionIdToLoad, clientId),
               client.queue.getQueue(sessionIdToLoad),
               client.tasks.getSessionTask(sessionIdToLoad),
             ]);
@@ -1203,35 +1305,50 @@ export function App() {
         })
       );
 
-      // Keep the tree-based sessionDataTurnFinished for non-streaming updates (e.g., context mode changes)
+      // Handle sessionDataTurnFinished for non-streaming updates (e.g., context mode changes)
+      // Uses contentBlock from event directly instead of fetching via getTurn
       unsubscribers.push(
         client.sessionData.sessionDataTurnFinished(async (data) => {
-          if (data.sessionId === selectedSessionId && data.order != null) {
+          if (data.sessionId === selectedSessionId && data.order != null && data.contentBlock) {
             const turnIdx = data.order;
-            // Use setTurns callback to check streaming state without stale closure
             setTurns(prev => {
               const existingTurn = prev.find(t => t.idx === turnIdx);
-              // If turn is currently streaming, skip fetch - onContentDelta handles it
+              // If turn is currently streaming, skip - onContentDelta handles it
               if (existingTurn?.streaming) {
                 return prev;
               }
-              // Fetch updated turn asynchronously and update state
-              client.sessionData.getTurn(data.sessionId, turnIdx).then(updatedTurn => {
-                if (updatedTurn) {
-                  setTurns(current => {
-                    const newTurns = [...current];
-                    const idx = newTurns.findIndex(t => t.idx === turnIdx);
-                    if (idx >= 0) {
-                      newTurns[idx] = updatedTurn;
-                    } else {
-                      newTurns.push(updatedTurn);
-                    }
-                    // Sort to ensure correct order after adding/updating
-                    return sortTurnsByIdx(newTurns);
-                  });
-                }
-              });
-              return prev;
+              // Build TurnInfo from event data
+              const contentBlock = data.contentBlock!;
+              const updatedTurn: TurnInfo = {
+                idx: turnIdx,
+                role: data.role || 'assistant',
+                content: contentBlock.type === 'text' ? (contentBlock as { text: string }).text : '',
+                streaming: false,
+                viewed: existingTurn?.viewed ?? false,
+                tokens: data.tokens,
+                contextMode: existingTurn?.contextMode || 'COPY',
+                contentBlockType: contentBlock.type,
+                exchangeId: existingTurn?.exchangeId,
+                toolUse: contentBlock.type === 'tool_use' ? {
+                  toolUseId: (contentBlock as { id: string }).id,
+                  name: (contentBlock as { name: string }).name,
+                  inputJson: JSON.stringify((contentBlock as { input: unknown }).input || {}),
+                } : undefined,
+                toolResult: contentBlock.type === 'tool_result' ? {
+                  toolUseId: (contentBlock as { toolUseId: string }).toolUseId,
+                  content: String((contentBlock as { content: unknown }).content || ''),
+                  isError: (contentBlock as { isError?: boolean }).isError || false,
+                } : undefined,
+              };
+
+              const newTurns = [...prev];
+              const idx = newTurns.findIndex(t => t.idx === turnIdx);
+              if (idx >= 0) {
+                newTurns[idx] = updatedTurn;
+              } else {
+                newTurns.push(updatedTurn);
+              }
+              return sortTurnsByIdx(newTurns);
             });
           }
         })
@@ -1321,7 +1438,8 @@ export function App() {
       // This ensures web UI matches TUI by discarding incremental streaming state
       const reloadTurnsAfterTaskEnd = async (sessionId: string) => {
         setStreamingTask(null);
-        const sessionTurns = await client.sessionData.getTurns(sessionId);
+        const clientId = `web-reload-${Date.now()}`;
+        const sessionTurns = await loadTurnsViaSubscription(client, sessionId, clientId);
         setTurns(sessionTurns);
         setToolUses([]);
       };
@@ -1364,8 +1482,8 @@ export function App() {
                     contentBlockType: 'tool_use',
                     toolUse: {
                       toolUseId: data.toolUseId,
-                      toolName: data.toolName,
-                      toolInput: {},  // Will be populated by toolInputDelta/toolUse events
+                      name: data.toolName,
+                      inputJson: '',  // Will be populated by toolInputDelta/toolUse events
                     },
                   }
                 : t
@@ -1480,7 +1598,8 @@ export function App() {
     if (!client || connectionState !== 'connected') return [];
 
     try {
-      const sessionTurns = await client.sessionData.getTurns(sessionId);
+      const clientId = `web-lazy-${Date.now()}`;
+      const sessionTurns = await loadTurnsViaSubscription(client, sessionId, clientId);
       return sessionTurns;
     } catch (err) {
       console.error('Failed to load turns for session:', sessionId, err);
@@ -1516,8 +1635,9 @@ export function App() {
 
     try {
       // Fetch all session data in parallel for faster loading
+      const clientId = `web-select-${Date.now()}`;
       const [sessionTurns, queueInfo, task] = await Promise.all([
-        client.sessionData.getTurns(sessionId),
+        loadTurnsViaSubscription(client, sessionId, clientId),
         client.queue.getQueue(sessionId),
         client.tasks.getSessionTask(sessionId),
       ]);
@@ -1851,7 +1971,8 @@ export function App() {
 
                 // Refresh turns for this session
                 if (selectedSessionId === sessionId) {
-                  const newTurns = await client.sessionData.getTurns(sessionId);
+                  const clientId = `web-delete-${Date.now()}`;
+                  const newTurns = await loadTurnsViaSubscription(client, sessionId, clientId);
                   setTurns(newTurns);
                 }
               } else if (action === 'archive') {
@@ -2388,7 +2509,7 @@ function SidebarContent({
     }
   }, [onSelectSession, closeSidebar, layoutMode]);
 
-  // Sort sessions: pinned first, then current, then by last modified (most recent first)
+  // Sort sessions: pinned first, then by last modified (most recent first)
   const sortedSessions = useMemo(() => {
     return [...sessions].sort((a, b) => {
       // Pinned sessions come first
@@ -2396,10 +2517,6 @@ function SidebarContent({
       const bPinned = b.isPinned ?? false;
       if (aPinned && !bPinned) return -1;
       if (!aPinned && bPinned) return 1;
-
-      // Within pinned/unpinned groups: current first
-      if (a.isCurrent) return -1;
-      if (b.isCurrent) return 1;
 
       // Then by last modified
       return new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime();

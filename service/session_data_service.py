@@ -51,6 +51,7 @@ from models import (
 
 if TYPE_CHECKING:
     from core.async_storage import AsyncStorage
+    from core.stream_state import StreamState
 
 # ContentBlock union for type annotations
 ContentBlock = Union[
@@ -480,6 +481,7 @@ class SessionDataService:
         self,
         session_loader: SessionLoaderCallback | None = None,
         storage: "AsyncStorage | None" = None,
+        stream_state: "StreamState | None" = None,
     ) -> None:
         """Initialize the session data service.
 
@@ -488,6 +490,8 @@ class SessionDataService:
                            Can also be set later via set_session_loader().
             storage: Optional AsyncStorage for direct LMDB access (used for chunked
                     history loading). Can also be set later via set_storage().
+            stream_state: Optional StreamState for checking streaming status.
+                         Can also be set later via set_stream_state().
         """
         # Event handlers receive: (event_name, data, target_clients)
         # target_clients is a set of client_ids that should receive the event
@@ -500,6 +504,8 @@ class SessionDataService:
         self._session_loader: SessionLoaderCallback | None = session_loader
         # AsyncStorage for direct LMDB access (chunked history loading)
         self._storage: "AsyncStorage | None" = storage
+        # StreamState for checking which sessions are streaming
+        self._stream_state: "StreamState | None" = stream_state
         # Track background history loading tasks: session_id -> task
         self._history_tasks: dict[str, asyncio.Task] = {}
 
@@ -523,6 +529,16 @@ class SessionDataService:
             storage: The AsyncStorage instance for LMDB access
         """
         self._storage = storage
+
+    def set_stream_state(self, stream_state: "StreamState") -> None:
+        """Set the StreamState for checking streaming status.
+
+        Required for accurate isStreaming field in session lists.
+
+        Args:
+            stream_state: The StreamState singleton for streaming status
+        """
+        self._stream_state = stream_state
 
     def add_event_handler(
         self, handler: Callable[[str, dict, set[str] | None], None]
@@ -1227,9 +1243,12 @@ class SessionDataService:
         sessions_data = await self._storage.list_sessions()
         pinned_ids = await self._load_pinned_session_ids()
 
-        # Get streaming session IDs from SessionManagerService if available
+        # Get streaming session IDs from StreamState if available
         streaming_ids: set[str] = set()
-        # Note: We'll need to wire this up from SessionManagerService
+        if self._stream_state:
+            for stream in self._stream_state.get_active_streams():
+                if stream.session_id:
+                    streaming_ids.add(stream.session_id)
 
         result = []
         for data in sessions_data:
@@ -1263,7 +1282,13 @@ class SessionDataService:
             return None
 
         pinned_ids = await self._load_pinned_session_ids()
-        streaming_ids: set[str] = set()  # TODO: wire from SessionManagerService
+
+        # Check streaming status from StreamState
+        streaming_ids: set[str] = set()
+        if self._stream_state:
+            stream = self._stream_state.get_session_stream(session_id)
+            if stream and stream.is_active:
+                streaming_ids.add(session_id)
 
         # Convert Session to dict format expected by _session_dict_to_info
         data = {
@@ -1285,133 +1310,10 @@ class SessionDataService:
 
         return await self._session_dict_to_info(data, pinned_ids, streaming_ids)
 
-    # --- Turn Access (backwards compatibility with TreeStateService) ---
-
-    @ws_expose
-    async def get_turns(self, session_id: str) -> list[TurnInfo]:
-        """Get all turns for a session.
-
-        DEPRECATED: This method exists for backwards compatibility with the
-        existing frontend. New code should use subscribe_session() and
-        receive turns via the historyChunk event.
-
-        Args:
-            session_id: The session ID to get turns for
-
-        Returns:
-            List of TurnInfo objects for all turns in the session
-        """
-        import json
-        from core.debug_log import debug_log
-
-        if not self._session_loader:
-            debug_log.warning(
-                "get_turns called without session_loader configured",
-                category="websocket",
-            )
-            return []
-
-        session = await self._session_loader(session_id)
-        if not session:
-            debug_log.warning(
-                f"get_turns: session {session_id[:8]} not found",
-                category="websocket",
-            )
-            return []
-
-        result: list[TurnInfo] = []
-        for idx, turn in enumerate(session.turns):
-            # Get content from content_block or fallback to content attribute
-            content_block = turn.content_block
-            content = ""
-            content_block_type = "text"
-            tool_use: ToolUseInfo | None = None
-            tool_result: ToolResultInfo | None = None
-            images: list[TurnImageInfo] = []
-
-            if content_block is not None:
-                content_block_type = getattr(content_block, "type", "text")
-
-                if isinstance(content_block, TextBlock):
-                    content = content_block.text
-                elif isinstance(content_block, ToolUseBlock):
-                    content = json.dumps(content_block.input) if content_block.input else ""
-                    tool_use = ToolUseInfo(
-                        tool_use_id=content_block.id,
-                        name=content_block.name,
-                        input_json=content,
-                    )
-                elif isinstance(content_block, ToolResultBlock):
-                    content = str(content_block.content) if content_block.content else ""
-                    tool_result = ToolResultInfo(
-                        tool_use_id=content_block.tool_use_id,
-                        content=content,
-                        is_error=getattr(content_block, "is_error", False),
-                    )
-                elif isinstance(content_block, ImageBlock):
-                    content = "[Image]"
-                    source = content_block.source
-                    if source:
-                        images.append(TurnImageInfo(
-                            source_type=source.type,
-                            media_type=source.media_type,
-                            data=source.data if hasattr(source, 'data') else "",
-                        ))
-                else:
-                    # For other block types, try to get a string representation
-                    content = str(getattr(content_block, "text", "")) or str(content_block)
-            else:
-                # Fallback to content attribute if available
-                content = getattr(turn, 'content', '') or ""
-
-            # Get context_mode as string (could be ContextMode enum or string)
-            raw_context_mode = getattr(turn, 'context_mode', None)
-            if raw_context_mode is None:
-                context_mode_str = "copy"
-            elif hasattr(raw_context_mode, 'value'):
-                # It's an enum
-                context_mode_str = raw_context_mode.value
-            else:
-                context_mode_str = str(raw_context_mode)
-
-            turn_info = TurnInfo(
-                idx=idx,
-                role=turn.role,
-                content=content,
-                streaming=False,  # Historical turns are not streaming
-                viewed=True,
-                tokens=getattr(turn, 'tokens', 0),
-                context_mode=context_mode_str,
-                content_block_type=content_block_type,
-                exchange_id=getattr(turn, 'exchange_id', None),
-                images=images,
-                tool_use=tool_use,
-                tool_result=tool_result,
-            )
-            result.append(turn_info)
-
-        debug_log.info(
-            f"get_turns: session {session_id[:8]} returned {len(result)} turns",
-            category="websocket",
-        )
-        return result
-
-    @ws_expose
-    async def get_turn(self, session_id: str, turn_idx: int) -> TurnInfo | None:
-        """Get a specific turn from a session.
-
-        Args:
-            session_id: The session ID
-            turn_idx: The turn index
-
-        Returns:
-            TurnInfo if found, None otherwise
-        """
-        turns = await self.get_turns(session_id)
-        for turn in turns:
-            if turn.idx == turn_idx:
-                return turn
-        return None
+    # --- Turn Access ---
+    # NOTE: get_turns() and get_turn() have been removed.
+    # History is loaded via the subscription API (historyChunk events).
+    # Turn updates are sent in the turnFinished event's contentBlock field.
 
     @ws_expose
     async def set_context_mode(

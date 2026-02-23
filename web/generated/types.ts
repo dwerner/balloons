@@ -1,12 +1,35 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-22T18:43:41.331327
+// Generated: 2026-02-22T20:39:13.618510
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
 //
 // To add new types, add @ws_type decorator to dataclasses in your service modules.
+
+export interface QueuedMessageInfo {
+  id: string;
+  content: string;
+  created: string;
+  paused: boolean;
+  preview: string;
+}
+
+export interface QueueInfo {
+  sessionId: string;
+  messages: QueuedMessageInfo[];
+  isBlocked: boolean;
+  firstPauseIndex: number;
+  messageCount: number;
+}
+
+export interface QueueEventData {
+  eventType: string;
+  sessionId: string;
+  messageId?: string | null;
+  data?: Record<string, unknown>;
+}
 
 export interface TextBlock {
   type?: string;
@@ -167,29 +190,6 @@ export interface ArchiveBlock {
   turnEnd?: number;
   messageCount?: number;
   tokenEstimate?: number;
-}
-
-export interface QueuedMessageInfo {
-  id: string;
-  content: string;
-  created: string;
-  paused: boolean;
-  preview: string;
-}
-
-export interface QueueInfo {
-  sessionId: string;
-  messages: QueuedMessageInfo[];
-  isBlocked: boolean;
-  firstPauseIndex: number;
-  messageCount: number;
-}
-
-export interface QueueEventData {
-  eventType: string;
-  sessionId: string;
-  messageId?: string | null;
-  data?: Record<string, unknown>;
 }
 
 export interface ManagedSessionInfo {

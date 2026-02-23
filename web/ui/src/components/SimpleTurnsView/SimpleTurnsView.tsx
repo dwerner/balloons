@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import type { BalloonsClient } from '../../../../generated/balloons-client';
+import type { BalloonsClient, TurnSnapshot, SessionHistoryChunkEvent, SessionHistoryCompleteEvent, Unsubscribe } from '../../../../generated/balloons-client';
 import { MarkdownContent } from '../../MarkdownContent';
 import { useAutoScroll } from '../../hooks';
 import { ScrollToBottom } from '../ScrollToBottom';
@@ -18,6 +18,96 @@ function createDebugLogger(client: BalloonsClient) {
 interface SimpleTurnsViewProps {
   sessionId: string | null;
   client: BalloonsClient;
+}
+
+// Helper to load turns via subscription API
+async function loadTurnsViaSubscription(
+  client: BalloonsClient,
+  sessionId: string,
+  clientId: string
+): Promise<StreamingTurn[]> {
+  return new Promise((resolve, reject) => {
+    const collectedTurns: Map<string, TurnSnapshot> = new Map();
+    const handlers: Unsubscribe[] = [];
+    let timeoutId: ReturnType<typeof setTimeout>;
+
+    const cleanup = () => {
+      handlers.forEach(h => h());
+      clearTimeout(timeoutId);
+    };
+
+    handlers.push(
+      client.sessionData.sessionDataHistoryChunk((event: SessionHistoryChunkEvent) => {
+        if (event.sessionId !== sessionId) return;
+        for (const turn of event.turns || []) {
+          if (turn.turnId) {
+            collectedTurns.set(turn.turnId, turn);
+          }
+        }
+      })
+    );
+
+    handlers.push(
+      client.sessionData.sessionDataHistoryComplete((event: SessionHistoryCompleteEvent) => {
+        if (event.sessionId !== sessionId) return;
+        cleanup();
+
+        const snapshots = Array.from(collectedTurns.values())
+          .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+        const turns: StreamingTurn[] = snapshots.map((s, idx) => {
+          const block = s.contentBlock;
+          const blockType = block?.type || 'text';
+          let content = '';
+          let toolUse: StreamingTurn['toolUse'] = undefined;
+          let toolResult: StreamingTurn['toolResult'] = undefined;
+
+          if (blockType === 'text' && block && 'text' in block) {
+            content = (block as { text?: string }).text || '';
+          } else if (blockType === 'tool_use' && block) {
+            const tb = block as { id?: string; name?: string; input?: unknown };
+            content = JSON.stringify(tb.input || {});
+            toolUse = {
+              toolUseId: tb.id || '',
+              toolName: tb.name || '',
+              toolInput: tb.input as Record<string, unknown>,
+            };
+          } else if (blockType === 'tool_result' && block) {
+            const tr = block as { toolUseId?: string; content?: unknown; isError?: boolean };
+            content = String(tr.content || '');
+            toolResult = {
+              toolUseId: tr.toolUseId || '',
+              content,
+              isError: tr.isError || false,
+            };
+          }
+
+          return {
+            idx,
+            role: s.role,
+            content,
+            contentBlockType: blockType,
+            exchangeId: s.exchangeId ?? undefined,
+            streaming: s.streaming,
+            toolUse,
+            toolResult,
+          };
+        });
+
+        resolve(turns);
+      })
+    );
+
+    timeoutId = setTimeout(() => {
+      cleanup();
+      reject(new Error('Timeout waiting for history'));
+    }, 30000);
+
+    client.sessionData.subscribeSession(sessionId, clientId).catch(err => {
+      cleanup();
+      reject(err);
+    });
+  });
 }
 
 interface StreamingTurn {
@@ -76,37 +166,9 @@ export function SimpleTurnsView({ sessionId, client }: SimpleTurnsViewProps) {
       setIsLoading(true);
       setError(null);
       try {
-        const serverTurns = await client.sessionData.getTurns(sessionId);
-        // DEBUG: Log content lengths from server on initial load
-        debugLog(`Initial load: ${serverTurns.length} turns`);
-        serverTurns.forEach(t => {
-          if (t.role === 'assistant' && t.content && t.content.length > 500) {
-            debugLog(`INITIAL Turn ${t.idx}: ${t.content.length} chars`, {
-              turnIdx: t.idx,
-              contentLength: t.content.length,
-              first100: t.content.slice(0, 100),
-              last100: t.content.slice(-100),
-            });
-          }
-        });
-        const mapped: StreamingTurn[] = serverTurns.map(t => ({
-          idx: t.idx,
-          role: t.role,
-          content: t.content || '',
-          contentBlockType: t.contentBlockType,
-          exchangeId: t.exchangeId ?? undefined,
-          streaming: t.streaming || false,
-          toolUse: t.toolUse ? {
-            toolUseId: t.toolUse.toolUseId,
-            toolName: t.toolUse.toolName,
-            toolInput: t.toolUse.toolInput,
-          } : undefined,
-          toolResult: t.toolResult ? {
-            toolUseId: t.toolResult.toolUseId,
-            content: t.toolResult.content || '',
-            isError: t.toolResult.isError || false,
-          } : undefined,
-        }));
+        const clientId = `simple-view-${Date.now()}`;
+        const mapped = await loadTurnsViaSubscription(client, sessionId, clientId);
+        debugLog(`Initial load: ${mapped.length} turns`);
         setTurns(mapped);
       } catch (err) {
         setError(`Failed to load turns: ${err}`);
@@ -455,52 +517,14 @@ export function SimpleTurnsView({ sessionId, client }: SimpleTurnsViewProps) {
 
         debugLog('TASK_COMPLETED reloading...', { event: 'task_completed' });
 
-        // Capture current state for comparison
-        setTurns(prev => {
-          debugLog('TASK_COMPLETED current state before reload', {
-            turnCount: prev.length,
-            turns: prev.map(t => ({ idx: t.idx, role: t.role, len: t.content.length, streaming: t.streaming })),
-          });
-          return prev;
-        });
-
-        const serverTurns = await client.sessionData.getTurns(sessionId);
-        // Log the last 10 turns with full details to debug missing turns
-        const lastTurns = serverTurns.slice(-10);
-        debugLog(`TASK_COMPLETED getTurns returned ${serverTurns.length} turns, last 10:`, {
-          event: 'task_completed_reload',
-          totalTurns: serverTurns.length,
-          last10: lastTurns.map(t => ({
-            idx: t.idx,
-            role: t.role,
-            contentBlockType: t.contentBlockType,
-            len: t.content?.length ?? 0,
-            contentPreview: t.content?.slice(0, 80) ?? '',
-            hasToolUse: !!t.toolUse,
-            hasToolResult: !!t.toolResult,
-            toolName: t.toolUse?.toolName,
-          })),
-        });
-
-        const mapped: StreamingTurn[] = serverTurns.map(t => ({
-          idx: t.idx,
-          role: t.role,
-          content: t.content || '',
-          contentBlockType: t.contentBlockType,
-          exchangeId: t.exchangeId ?? undefined,
-          streaming: false,
-          toolUse: t.toolUse ? {
-            toolUseId: t.toolUse.toolUseId,
-            toolName: t.toolUse.toolName,
-            toolInput: t.toolUse.toolInput,
-          } : undefined,
-          toolResult: t.toolResult ? {
-            toolUseId: t.toolResult.toolUseId,
-            content: t.toolResult.content || '',
-            isError: t.toolResult.isError || false,
-          } : undefined,
-        }));
-        setTurns(mapped);
+        try {
+          const clientId = `simple-reload-${Date.now()}`;
+          const mapped = await loadTurnsViaSubscription(client, sessionId, clientId);
+          debugLog(`TASK_COMPLETED loaded ${mapped.length} turns`);
+          setTurns(mapped);
+        } catch (err) {
+          debugLog(`TASK_COMPLETED reload failed: ${err}`);
+        }
       })
     );
 

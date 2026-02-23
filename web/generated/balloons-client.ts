@@ -10,9 +10,10 @@
  *
  *   // Access service clients
  *   const sessions = await client.sessions.listSessions();
- *   const turns = await client.sessionData.getTurns(sessionId);
  *
- *   // Subscribe to events
+ *   // Subscribe to session events and receive turns via historyChunk
+ *   client.sessionData.subscribeSession(sessionId, clientId);
+ *   client.sessionData.sessionDataHistoryChunk((chunk) => console.log('Turns:', chunk.turns));
  *   client.sessionData.sessionDataSessionUpdated((data) => console.log('Session:', data));
  *
  *   // Disconnect

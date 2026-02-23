@@ -185,7 +185,8 @@ async def run_server(
     task_service = TaskStateService(stream_state)
 
     # Initialize SessionDataService with storage for chunked history loading
-    session_data_service = SessionDataService(storage=storage)
+    # Pass stream_state so it can report accurate isStreaming status
+    session_data_service = SessionDataService(storage=storage, stream_state=stream_state)
     session_data_service.set_session_loader(load_session)
 
     image_service = ImageService()

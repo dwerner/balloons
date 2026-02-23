@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-22T18:43:41.334472
+// Generated: 2026-02-22T20:39:13.621447
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -2309,33 +2309,6 @@ export interface SessionDataService {
   getSubscribedSessions(clientId: string): Promise<string[]>;
 
   /**
-   * Get a specific turn from a session.
-   * 
-   * Args:
-   * session_id: The session ID
-   * turn_idx: The turn index
-   * 
-   * Returns:
-   * TurnInfo if found, None otherwise
-   */
-  getTurn(sessionId: string, turnIdx: number): Promise<Types.TurnInfo | null>;
-
-  /**
-   * Get all turns for a session.
-   * 
-   * DEPRECATED: This method exists for backwards compatibility with the
-   * existing frontend. New code should use subscribe_session() and
-   * receive turns via the historyChunk event.
-   * 
-   * Args:
-   * session_id: The session ID to get turns for
-   * 
-   * Returns:
-   * List of TurnInfo objects for all turns in the session
-   */
-  getTurns(sessionId: string): Promise<Types.TurnInfo[]>;
-
-  /**
    * Check if a session is pinned.
    * 
    * Args:
@@ -2615,14 +2588,6 @@ export class SessionDataServiceClient implements SessionDataService {
 
   async getSubscribedSessions(clientId: string): Promise<string[]> {
     return this.call('getSubscribedSessions', { clientId: clientId });
-  }
-
-  async getTurn(sessionId: string, turnIdx: number): Promise<Types.TurnInfo | null> {
-    return this.call('getTurn', { sessionId: sessionId, turnIdx: turnIdx });
-  }
-
-  async getTurns(sessionId: string): Promise<Types.TurnInfo[]> {
-    return this.call('getTurns', { sessionId: sessionId });
   }
 
   async isPinned(sessionId: string): Promise<boolean> {
