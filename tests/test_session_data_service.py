@@ -14,7 +14,6 @@ from service.session_data_service import (
     SessionTurnDeltaEvent,
     SessionTurnFinishedEvent,
 )
-from core.tree_state import TreeState, TurnData, SessionData
 from models import TextBlock, ToolUseBlock, ToolResultBlock, ContextMode
 
 
@@ -393,19 +392,18 @@ class TestSessionSnapshot:
     """Tests for get_session_snapshot and snapshot integration."""
 
     @pytest.fixture
-    def tree_state(self):
-        """Create a TreeState with test sessions."""
-        return TreeState()
-
-    @pytest.fixture
-    def service_with_tree_state(self, tree_state):
-        """Create service with TreeState wired up."""
-        service = SessionDataService(tree_state=tree_state)
+    def service_with_loader(self, mock_session):
+        """Create service with session_loader wired up."""
+        async def mock_loader(session_id: str):
+            if session_id == mock_session.id:
+                return mock_session
+            return None
+        service = SessionDataService(session_loader=mock_loader)
         return service
 
     @pytest.fixture
     def mock_session(self):
-        """Create a mock Session object for TreeState."""
+        """Create a mock Session object for testing."""
         @dataclass
         class MockTurn:
             role: str
@@ -474,30 +472,26 @@ class TestSessionSnapshot:
         return session
 
     @pytest.mark.asyncio
-    async def test_get_session_snapshot_returns_none_without_tree_state(self):
-        """Test that snapshot returns None when TreeState is not configured."""
-        service = SessionDataService()  # No tree_state
+    async def test_get_session_snapshot_returns_none_without_loader(self):
+        """Test that snapshot returns None when session_loader is not configured."""
+        service = SessionDataService()  # No session_loader
         snapshot = await service.get_session_snapshot("session-1")
         assert snapshot is None
 
     @pytest.mark.asyncio
     async def test_get_session_snapshot_returns_none_for_unknown_session(
-        self, service_with_tree_state
+        self, service_with_loader
     ):
-        """Test that snapshot returns None for session not in TreeState."""
-        snapshot = await service_with_tree_state.get_session_snapshot("unknown-session")
+        """Test that snapshot returns None for unknown session."""
+        snapshot = await service_with_loader.get_session_snapshot("unknown-session")
         assert snapshot is None
 
     @pytest.mark.asyncio
     async def test_get_session_snapshot_returns_full_turn_history(
-        self, service_with_tree_state, tree_state, mock_session
+        self, service_with_loader, mock_session
     ):
         """Test that snapshot includes all turns with correct data."""
-        # Load session into TreeState
-        tree_state.add_session(mock_session, is_current=True)
-        tree_state.load_session(mock_session.id, mock_session)
-
-        snapshot = await service_with_tree_state.get_session_snapshot(mock_session.id)
+        snapshot = await service_with_loader.get_session_snapshot(mock_session.id)
 
         assert snapshot is not None
         assert snapshot.session_id == mock_session.id
@@ -528,52 +522,37 @@ class TestSessionSnapshot:
         assert snapshot.turns[4].content_block.type == "tool_result"
 
     @pytest.mark.asyncio
-    async def test_snapshot_includes_context_mode(
-        self, service_with_tree_state, tree_state, mock_session
+    async def test_snapshot_context_mode_defaults_to_copy(
+        self, service_with_loader, mock_session
     ):
-        """Test that snapshot includes correct context modes."""
-        tree_state.add_session(mock_session, is_current=True)
-        tree_state.load_session(mock_session.id, mock_session)
+        """Test that snapshot context_mode defaults to copy."""
+        snapshot = await service_with_loader.get_session_snapshot(mock_session.id)
 
-        # Set a specific context mode
-        tree_state.set_context_mode(mock_session.id, 1, ContextMode.DROP)
-
-        snapshot = await service_with_tree_state.get_session_snapshot(mock_session.id)
-
-        assert snapshot.turns[1].context_mode == "drop"
+        # All turns should have default context_mode of "copy"
+        assert snapshot.turns[1].context_mode == "copy"
 
     @pytest.mark.asyncio
-    async def test_snapshot_tracks_streaming_turns(
-        self, service_with_tree_state, tree_state, mock_session
+    async def test_snapshot_streaming_status_is_false(
+        self, service_with_loader, mock_session
     ):
-        """Test that snapshot identifies streaming turns."""
-        tree_state.add_session(mock_session, is_current=True)
-        tree_state.load_session(mock_session.id, mock_session)
+        """Test that snapshot streaming status is false for persisted sessions."""
+        snapshot = await service_with_loader.get_session_snapshot(mock_session.id)
 
-        # Mark session as streaming and mark a turn as streaming
-        tree_state.start_streaming(mock_session.id)
-        session_data = tree_state.get_session(mock_session.id)
-        session_data.turns[4].streaming = True
-
-        snapshot = await service_with_tree_state.get_session_snapshot(mock_session.id)
-
-        assert snapshot.is_streaming is True
-        # current_turn_idx removed - use streaming_turn_ids instead
-        assert "turn-uuid-5" in snapshot.streaming_turn_ids
+        # Streaming status is false for sessions loaded from storage
+        # (streaming state is updated by live events, not loaded from storage)
+        assert snapshot.is_streaming is False
+        assert len(snapshot.streaming_turn_ids) == 0
 
     @pytest.mark.asyncio
     async def test_subscribe_session_returns_snapshot(
-        self, service_with_tree_state, tree_state, mock_session
+        self, service_with_loader, mock_session
     ):
         """Test that subscribe_session returns metadata-only snapshot.
 
         With chunked history loading (Phase 3), subscribe returns immediately
         with session metadata. Turns arrive via historyChunk events.
         """
-        tree_state.add_session(mock_session, is_current=True)
-        tree_state.load_session(mock_session.id, mock_session)
-
-        result = await service_with_tree_state.subscribe_session(
+        result = await service_with_loader.subscribe_session(
             mock_session.id, "client-a"
         )
 
@@ -588,44 +567,43 @@ class TestSessionSnapshot:
 
     @pytest.mark.asyncio
     async def test_subscribe_session_snapshot_is_atomic(
-        self, service_with_tree_state, tree_state, mock_session
+        self, service_with_loader, mock_session
     ):
         """Test that subscription and snapshot are atomic."""
-        tree_state.add_session(mock_session, is_current=True)
-        tree_state.load_session(mock_session.id, mock_session)
-
-        result = await service_with_tree_state.subscribe_session(
+        result = await service_with_loader.subscribe_session(
             mock_session.id, "client-a"
         )
 
         # Client should be subscribed
-        assert "client-a" in service_with_tree_state.get_session_subscribers(mock_session.id)
+        assert "client-a" in service_with_loader.get_session_subscribers(mock_session.id)
         # And have the snapshot
         assert result.snapshot is not None
 
     @pytest.mark.asyncio
-    async def test_subscribe_session_still_works_without_tree_state(self):
-        """Test that subscription works even without TreeState (no snapshot)."""
-        service = SessionDataService()  # No tree_state
+    async def test_subscribe_session_still_works_without_loader(self):
+        """Test that subscription works even without session_loader (no snapshot)."""
+        service = SessionDataService()  # No session_loader
 
         result = await service.subscribe_session("session-1", "client-a")
 
         assert result.subscribed is True
-        assert result.snapshot is None  # No snapshot without TreeState
+        assert result.snapshot is None  # No snapshot without loader
 
     @pytest.mark.asyncio
-    async def test_set_tree_state_enables_snapshots(self, tree_state, mock_session):
-        """Test that set_tree_state enables snapshot loading."""
+    async def test_set_session_loader_enables_snapshots(self, mock_session):
+        """Test that set_session_loader enables snapshot loading."""
         service = SessionDataService()
 
         # Initially no snapshots
         snapshot = await service.get_session_snapshot(mock_session.id)
         assert snapshot is None
 
-        # Wire up TreeState
-        tree_state.add_session(mock_session, is_current=True)
-        tree_state.load_session(mock_session.id, mock_session)
-        service.set_tree_state(tree_state)
+        # Wire up session_loader
+        async def mock_loader(session_id: str):
+            if session_id == mock_session.id:
+                return mock_session
+            return None
+        service.set_session_loader(mock_loader)
 
         # Now snapshots work
         snapshot = await service.get_session_snapshot(mock_session.id)
@@ -635,10 +613,6 @@ class TestSessionSnapshot:
 
 class TestSessionLoading:
     """Tests for session loading via session_loader callback."""
-
-    @pytest.fixture
-    def tree_state(self):
-        return TreeState()
 
     @pytest.fixture
     def mock_session_for_loader(self):
@@ -678,10 +652,10 @@ class TestSessionLoading:
         return session
 
     @pytest.mark.asyncio
-    async def test_session_loader_called_for_unloaded_session(
-        self, tree_state, mock_session_for_loader
+    async def test_session_loader_called_for_session(
+        self, mock_session_for_loader
     ):
-        """Test that session_loader is called when session not in TreeState."""
+        """Test that session_loader is called when requesting session."""
         loader_calls = []
 
         async def mock_loader(session_id: str):
@@ -690,9 +664,8 @@ class TestSessionLoading:
                 return mock_session_for_loader
             return None
 
-        service = SessionDataService(tree_state=tree_state, session_loader=mock_loader)
+        service = SessionDataService(session_loader=mock_loader)
 
-        # Session is not in TreeState yet
         snapshot = await service.get_session_snapshot(mock_session_for_loader.id)
 
         # Loader should have been called
@@ -703,43 +676,19 @@ class TestSessionLoading:
         assert snapshot.title == "Loaded Session"
 
     @pytest.mark.asyncio
-    async def test_session_loader_not_called_for_loaded_session(
-        self, tree_state, mock_session_for_loader
-    ):
-        """Test that session_loader is NOT called when session already loaded."""
-        loader_calls = []
-
-        async def mock_loader(session_id: str):
-            loader_calls.append(session_id)
-            return mock_session_for_loader
-
-        # Pre-load the session
-        tree_state.add_session(mock_session_for_loader, is_current=True)
-        tree_state.load_session(mock_session_for_loader.id, mock_session_for_loader)
-
-        service = SessionDataService(tree_state=tree_state, session_loader=mock_loader)
-
-        # Session is already in TreeState
-        snapshot = await service.get_session_snapshot(mock_session_for_loader.id)
-
-        # Loader should NOT have been called
-        assert len(loader_calls) == 0
-        assert snapshot is not None
-
-    @pytest.mark.asyncio
-    async def test_snapshot_returns_none_when_loader_returns_none(self, tree_state):
+    async def test_snapshot_returns_none_when_loader_returns_none(self):
         """Test that snapshot returns None when loader can't find session."""
         async def mock_loader(session_id: str):
             return None
 
-        service = SessionDataService(tree_state=tree_state, session_loader=mock_loader)
+        service = SessionDataService(session_loader=mock_loader)
 
         snapshot = await service.get_session_snapshot("nonexistent-session")
         assert snapshot is None
 
     @pytest.mark.asyncio
     async def test_subscribe_loads_session_via_loader(
-        self, tree_state, mock_session_for_loader
+        self, mock_session_for_loader
     ):
         """Test that subscribe_session uses loader when session not loaded.
 
@@ -751,7 +700,7 @@ class TestSessionLoading:
                 return mock_session_for_loader
             return None
 
-        service = SessionDataService(tree_state=tree_state, session_loader=mock_loader)
+        service = SessionDataService(session_loader=mock_loader)
 
         # Subscribe to unloaded session - should load via loader
         result = await service.subscribe_session(mock_session_for_loader.id, "client-a")
@@ -766,16 +715,8 @@ class TestSessionLoading:
 class TestTurnSnapshotFields:
     """Tests for TurnSnapshot field correctness."""
 
-    @pytest.fixture
-    def tree_state(self):
-        return TreeState()
-
-    @pytest.fixture
-    def service(self, tree_state):
-        return SessionDataService(tree_state=tree_state)
-
     @pytest.mark.asyncio
-    async def test_turn_snapshot_has_all_required_fields(self, service, tree_state):
+    async def test_turn_snapshot_has_all_required_fields(self):
         """Test TurnSnapshot includes all required fields per acceptance criteria."""
         @dataclass
         class MockTurn:
@@ -784,6 +725,7 @@ class TestTurnSnapshotFields:
             context_mode: ContextMode = ContextMode.COPY
             exchange_id: str | None = "ex-1"
             id: str = "turn-id-abc"
+            tokens: int = 0
 
             @property
             def content(self):
@@ -810,8 +752,12 @@ class TestTurnSnapshotFields:
         session = MockSession()
         session.turns = [MockTurn()]
 
-        tree_state.add_session(session, is_current=True)
-        tree_state.load_session(session.id, session)
+        async def mock_loader(session_id: str):
+            if session_id == session.id:
+                return session
+            return None
+
+        service = SessionDataService(session_loader=mock_loader)
 
         snapshot = await service.get_session_snapshot(session.id)
         turn = snapshot.turns[0]
@@ -844,10 +790,6 @@ class TestChunkedHistoryLoading:
     2. Historical turns are streamed via historyChunk events
     3. historyComplete is emitted when all chunks are sent
     """
-
-    @pytest.fixture
-    def tree_state(self):
-        return TreeState()
 
     @pytest.fixture
     def mock_storage(self):
@@ -896,13 +838,16 @@ class TestChunkedHistoryLoading:
 
     @pytest.mark.asyncio
     async def test_subscribe_returns_empty_turns(
-        self, tree_state, mock_storage, mock_session
+        self, mock_storage, mock_session
     ):
         """Test that subscribe returns metadata with empty turns list."""
-        tree_state.add_session(mock_session, is_current=True)
+        async def mock_loader(session_id: str):
+            if session_id == mock_session.id:
+                return mock_session
+            return None
 
         service = SessionDataService(
-            tree_state=tree_state,
+            session_loader=mock_loader,
             storage=mock_storage,
         )
 
@@ -915,7 +860,7 @@ class TestChunkedHistoryLoading:
 
     @pytest.mark.asyncio
     async def test_history_chunk_events_emitted(
-        self, tree_state, mock_storage, mock_session
+        self, mock_storage, mock_session
     ):
         """Test that historyChunk events are emitted for turns."""
         import asyncio
@@ -940,10 +885,13 @@ class TestChunkedHistoryLoading:
             },
         ]
 
-        tree_state.add_session(mock_session, is_current=True)
+        async def mock_loader(session_id: str):
+            if session_id == mock_session.id:
+                return mock_session
+            return None
 
         service = SessionDataService(
-            tree_state=tree_state,
+            session_loader=mock_loader,
             storage=mock_storage,
         )
 
@@ -978,16 +926,20 @@ class TestChunkedHistoryLoading:
 
     @pytest.mark.asyncio
     async def test_history_complete_emitted_for_empty_session(
-        self, tree_state, mock_storage, mock_session
+        self, mock_storage, mock_session
     ):
         """Test that historyComplete is emitted even for sessions with no turns."""
         import asyncio
 
         mock_storage.turns[mock_session.id] = []  # Empty
-        tree_state.add_session(mock_session, is_current=True)
+
+        async def mock_loader(session_id: str):
+            if session_id == mock_session.id:
+                return mock_session
+            return None
 
         service = SessionDataService(
-            tree_state=tree_state,
+            session_loader=mock_loader,
             storage=mock_storage,
         )
 
@@ -1006,14 +958,17 @@ class TestChunkedHistoryLoading:
         assert complete_event[1]["final_watermark"] == -1
 
     @pytest.mark.asyncio
-    async def test_no_history_events_without_storage(self, tree_state, mock_session):
-        """Test that history events are not emitted without storage configured."""
+    async def test_no_history_events_without_storage(self, mock_session):
+        """Test that no history events are emitted when no storage configured."""
         import asyncio
 
-        tree_state.add_session(mock_session, is_current=True)
+        async def mock_loader(session_id: str):
+            if session_id == mock_session.id:
+                return mock_session
+            return None
 
-        # No storage configured
-        service = SessionDataService(tree_state=tree_state)
+        # No storage configured - history streaming is skipped
+        service = SessionDataService(session_loader=mock_loader)
 
         events = []
         service.add_event_handler(lambda name, data, clients: events.append((name, data)))
@@ -1021,16 +976,15 @@ class TestChunkedHistoryLoading:
         await service.subscribe_session(mock_session.id, "client-a")
         await asyncio.sleep(0.1)
 
-        # Should not have any history events
+        # Without storage, no history streaming is started
         event_names = [e[0] for e in events]
         assert "sessionDataHistoryChunk" not in event_names
         assert "sessionDataHistoryComplete" not in event_names
 
     @pytest.mark.asyncio
-    async def test_turn_dict_to_snapshot_conversion(self, tree_state, mock_storage):
+    async def test_turn_dict_to_snapshot_conversion(self, mock_storage):
         """Test that turn dicts from storage are correctly converted to TurnSnapshot."""
         service = SessionDataService(
-            tree_state=tree_state,
             storage=mock_storage,
         )
 
@@ -1056,10 +1010,9 @@ class TestChunkedHistoryLoading:
         assert snapshot.content_block.text == "Hello world"
 
     @pytest.mark.asyncio
-    async def test_deserialize_content_block_types(self, tree_state, mock_storage):
+    async def test_deserialize_content_block_types(self, mock_storage):
         """Test that various content block types are correctly deserialized."""
         service = SessionDataService(
-            tree_state=tree_state,
             storage=mock_storage,
         )
 

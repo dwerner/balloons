@@ -13,11 +13,10 @@ Usage:
 
 The server exposes the same WebSocket API as the TUI mode, including:
 - SessionManagerService: Session lifecycle, streaming, fork/merge
-- TreeStateService: Session tree view state
+- SessionDataService: Subscription-based session data and streaming
 - TaskStateService: LLM streaming events
 - GoalTreeStateService: Goal/plan/todo management
 - QueueStateService: Message queue management
-- SessionDataService: Subscription-based streaming
 - ImageService: Image handling
 - SoundService: Sound state (no actual playback in headless)
 - DebugLogService: Debug log access
@@ -35,12 +34,10 @@ from core import (
 )
 from core.debug_log import debug_log
 from core.goal_tree_state import GoalTreeState
-from core.goal_tree_sync import GoalTreeSyncManager
 from core.queue_state import get_queue_state
 from core.supervisor_tools import set_supervisor, shutdown_supervisor
 from service import (
     WsServer,
-    TreeStateService,
     QueueStateService,
     SessionManagerService,
     GoalTreeStateService,
@@ -72,56 +69,46 @@ def _initialize_supervisor() -> None:
         debug_log.error(f"Failed to initialize supervisor: {e}", category="startup")
 
 
-async def _load_all_sessions_into_tree(tree_state) -> int:
-    """Load all session metadata into TreeState.
-
-    This populates the session list so the frontend can see all sessions.
-    Sessions are loaded lazily - only metadata initially, full data on access.
-    Also loads pinned session state from user preferences.
-
-    Args:
-        tree_state: The TreeState to populate
-
-    Returns:
-        Number of sessions loaded
-    """
-    from session import Session
-    from core.async_storage import get_user_prefs_storage
-
-    # Load pinned sessions from user preferences first
-    try:
-        storage = await get_user_prefs_storage()
-        prefs = await storage.load_prefs()
-        tree_state.set_pinned_sessions(prefs.pinned_session_ids)
-        debug_log.info(
-            f"Loaded {len(prefs.pinned_session_ids)} pinned sessions",
-            category="startup",
-        )
-    except Exception as e:
-        debug_log.warning(f"Failed to load pinned sessions: {e}", category="startup")
-
-    sessions = await Session.list_sessions()
-    for metadata in sessions:
-        tree_state.add_session_from_metadata(metadata, is_current=False)
-
-    debug_log.info(f"Loaded {len(sessions)} sessions into tree state", category="startup")
-    return len(sessions)
-
-
-async def _load_goal_tree_data(goal_tree_state: GoalTreeState, tree_state) -> None:
-    """Load goal tree data (goals, plans, todos, bindings) into GoalTreeState.
+async def _load_goal_tree_data(goal_tree_state: GoalTreeState) -> None:
+    """Load goal tree data (goals, plans, todos) into GoalTreeState.
 
     This populates the goal tree so the frontend can see all goals and their
-    associated plans, todos, and session bindings.
+    associated plans and todos. Session bindings are associated dynamically.
 
     Args:
         goal_tree_state: The GoalTreeState to populate
-        tree_state: The TreeState containing session data
     """
-    sync_manager = GoalTreeSyncManager(goal_tree_state, tree_state)
-    await sync_manager.initial_load()
+    from core.async_storage import get_goal_storage
+
+    storage = await get_goal_storage()
+
+    # Begin batch loading to suppress individual notifications
+    goal_tree_state.begin_batch_loading()
+
+    try:
+        # Load goals
+        goals = await storage.list_goals()
+        debug_log.info(f"Loaded {len(goals)} goals from storage", category="startup")
+        for goal in goals:
+            goal_tree_state.add_goal(goal)
+
+        # Load plans
+        plans = await storage.list_plans()
+        debug_log.info(f"Loaded {len(plans)} plans from storage", category="startup")
+        for plan in plans:
+            goal_tree_state.add_plan(plan)
+
+        # Load todos with their plan links
+        todos = await storage.list_todos(include_spikes=True)
+        debug_log.info(f"Loaded {len(todos)} todos from storage", category="startup")
+        for todo in todos:
+            plan_ids = await storage.get_plans_for_todo(todo.id)
+            goal_tree_state.add_todo(todo, plan_ids)
+    finally:
+        goal_tree_state.end_batch_loading()
+
     debug_log.info(
-        f"Loaded {len(goal_tree_state._goals)} goals into goal tree state",
+        f"Goal tree loaded: {len(goal_tree_state._goals)} goals",
         category="startup",
     )
 
@@ -184,30 +171,22 @@ async def run_server(
         stream_state=stream_state,
         queue_state=queue_state,
     )
-    tree_state = session_service.get_tree_state()
 
-    # Session loader for TreeStateService
-    async def load_session_for_tree(session_id: str):
+    # Session loader for SessionDataService
+    async def load_session(session_id: str):
         return await session_manager.load_session(session_id)
 
-    # Initialize AsyncStorage for direct LMDB queries (Phase 6)
+    # Initialize AsyncStorage for direct LMDB queries
     from core.async_storage import AsyncStorage
     storage = AsyncStorage()
 
-    # Phase 6: TreeStateService now queries storage directly for turn data
-    tree_service = TreeStateService(
-        tree_state,
-        session_loader=load_session_for_tree,
-        storage=storage,
-    )
     queue_service = QueueStateService(queue_state)
     goal_service = GoalTreeStateService(goal_tree_state)
     task_service = TaskStateService(stream_state)
 
     # Initialize SessionDataService with storage for chunked history loading
     session_data_service = SessionDataService(storage=storage)
-    session_data_service.set_session_loader(load_session_for_tree)
-    session_data_service.set_tree_state(tree_state)
+    session_data_service.set_session_loader(load_session)
 
     image_service = ImageService()
     sound_service = SoundService()
@@ -220,11 +199,8 @@ async def run_server(
     # Start event pump
     session_service.start_event_pump()
 
-    # Load all sessions into TreeState so they appear in the session list
-    await _load_all_sessions_into_tree(tree_state)
-
-    # Load goal tree data (goals, plans, todos, session bindings)
-    await _load_goal_tree_data(goal_tree_state, tree_state)
+    # Load goal tree data (goals, plans, todos)
+    await _load_goal_tree_data(goal_tree_state)
 
     # Configure WebSocket server
     ws_config = config.websocket
@@ -238,7 +214,6 @@ async def run_server(
 
     # Create and configure server
     ws_server = WsServer(config=ws_config)
-    ws_server.register_service(tree_service)
     ws_server.register_service(queue_service)
     ws_server.register_service(session_service)
     ws_server.register_service(goal_service)

@@ -54,7 +54,7 @@ from core.stream_state import (
     StreamStatus,
     get_stream_state,
 )
-from core.tree_state import TreeState, TreeEvent
+# TreeState removed in Phase 8 - events go directly to SessionDataService
 from core.queue_state import QueueState
 from models import TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, Turn, ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData, ExchangeInfo
 from service.session_events import (
@@ -405,8 +405,6 @@ class SessionManagerService:
         self._task_service = task_state_service
         self._session_data_service = session_data_service
         self._queue_state = queue_state
-        # TreeState is owned by this service - authoritative source for session tree structure
-        self._tree_state: TreeState = TreeState()
         self._event_handlers: list[Callable[[str, dict], None]] = []
 
         # Event pump state
@@ -497,6 +495,96 @@ class SessionManagerService:
                         category="websocket",
                     )
 
+    # --- Session Lifecycle Events (Phase 8) ---
+
+    def _emit_session_added(self, session: Any, is_streaming: bool = False) -> None:
+        """Emit a session added event to SessionDataService.
+
+        Called when a new session is created (fork, derive, new).
+        This is the new event path that will replace TreeState notifications.
+
+        Args:
+            session: The Session object that was added
+            is_streaming: Whether the session is currently streaming
+        """
+        if self._session_data_service is None:
+            return
+
+        session_info = self._session_data_service.session_to_info(
+            session,
+            is_pinned=False,  # New sessions are not pinned
+            is_streaming=is_streaming,
+        )
+        self._session_data_service.emit_session_added(session_info)
+
+    def _emit_session_updated(self, session: Any, is_streaming: bool | None = None) -> None:
+        """Emit a session updated event to SessionDataService.
+
+        Called when session metadata changes (title, tokens, streaming state).
+
+        Args:
+            session: The Session object that was updated
+            is_streaming: Override streaming state (None = check _streaming_contexts)
+        """
+        if self._session_data_service is None:
+            return
+
+        # Determine streaming state
+        if is_streaming is None:
+            is_streaming = session.id in self._streaming_contexts
+
+        session_info = self._session_data_service.session_to_info(
+            session,
+            is_pinned=False,  # TODO: Check actual pinned state
+            is_streaming=is_streaming,
+        )
+        self._session_data_service.emit_session_updated(session_info)
+
+    def _emit_session_removed(self, session_id: str) -> None:
+        """Emit a session removed event to SessionDataService.
+
+        Called when a session is deleted.
+
+        Args:
+            session_id: The ID of the removed session
+        """
+        if self._session_data_service is None:
+            return
+
+        self._session_data_service.emit_session_removed(session_id)
+
+    def _get_turns_grouped_by_exchange(self, session: Any) -> list[list[tuple[int, Any]]]:
+        """Group session turns by exchange_id, including their indices.
+
+        Returns a list of groups, where each group is a list of (index, Turn) tuples
+        sharing the same exchange_id. Turns without an exchange_id are
+        placed in their own single-turn group.
+
+        Args:
+            session: The Session object with turns
+
+        Returns:
+            List of turn groups as (index, turn) tuples, ordered by first turn index
+        """
+        groups: list[list[tuple[int, Any]]] = []
+        exchange_to_group: dict[str, list[tuple[int, Any]]] = {}
+
+        for idx, turn in enumerate(session.turns):
+            exchange_id = getattr(turn, 'exchange_id', None)
+            entry = (idx, turn)
+            if exchange_id:
+                if exchange_id in exchange_to_group:
+                    exchange_to_group[exchange_id].append(entry)
+                else:
+                    group = [entry]
+                    exchange_to_group[exchange_id] = group
+                    groups.append(group)
+            else:
+                # No exchange_id - own group
+                groups.append([entry])
+
+        return groups
+
     def set_task_state_service(self, task_service: "TaskStateService") -> None:
         """Set the TaskStateService for emitting streaming events.
 
@@ -511,27 +599,17 @@ class SessionManagerService:
     def set_session_data_service(self, session_data_service: "SessionDataService") -> None:
         """Set the SessionDataService for emitting session data events.
 
-        This enables the event pump to relay events to SessionDataService in parallel
-        with TaskStateService. SessionDataService provides subscription-based filtering
-        so only subscribed clients receive events.
-
-        Also wires the TreeState and session loader to SessionDataService,
-        enabling get_session_snapshot() to return full turn history.
-
-        SessionDataService is also registered as an observer to receive events
-        through the observer pattern (in addition to direct emit calls which
-        will be removed in a future refactor).
+        SessionDataService receives all session lifecycle and streaming events.
+        It provides subscription-based filtering so only subscribed clients
+        receive events.
 
         Args:
             session_data_service: The SessionDataService to emit events through
         """
         self._session_data_service = session_data_service
-        # Wire TreeState if already set
-        if self._tree_state:
-            session_data_service.set_tree_state(self._tree_state)
         # Wire session loader so SessionDataService can load sessions from storage
         session_data_service.set_session_loader(self._manager.load_session)
-        # Register as observer for the new event pattern
+        # Register as observer for the event pattern
         self.add_observer(session_data_service)
 
     def set_queue_state(self, queue_state: "QueueState") -> None:
@@ -546,34 +624,6 @@ class SessionManagerService:
             queue_state: The QueueState to use for queue draining
         """
         self._queue_state = queue_state
-
-    def get_tree_state(self) -> TreeState:
-        """Get the TreeState owned by this service.
-
-        Use this to share the TreeState with other services (e.g., TreeStateService)
-        that need to read the session tree structure.
-
-        Returns:
-            The TreeState instance owned by this service
-        """
-        return self._tree_state
-
-    def set_tree_state(self, tree_state: TreeState) -> None:
-        """DEPRECATED: Set the TreeState.
-
-        This method is deprecated. SessionManagerService now owns its own TreeState.
-        Use get_tree_state() to share the service's TreeState with other components.
-
-        This method is kept for backward compatibility but will be removed in a future version.
-        For now, it replaces the owned TreeState with the provided one.
-
-        Args:
-            tree_state: The TreeState instance to use
-        """
-        self._tree_state = tree_state
-        # Also wire to SessionDataService for snapshot loading
-        if self._session_data_service:
-            self._session_data_service.set_tree_state(tree_state)
 
     # --- Helper Runner Management ---
 
@@ -1146,12 +1196,6 @@ class SessionManagerService:
             text = data if isinstance(data, str) else str(data)
             ctx.content += text
 
-            # Update TreeState so TUI can observe streaming content
-            if self._tree_state:
-                self._tree_state.update_turn_content(
-                    session_id, ctx.assistant_turn_idx, ctx.content
-                )
-
             # Update stream state with approximate token count
             approx_tokens = len(ctx.content) // 4
             self._stream_state.update_stream(ctx.exchange_id, tokens_streamed=approx_tokens)
@@ -1595,16 +1639,10 @@ class SessionManagerService:
                 )
             # Complete the stream
             self._stream_state.complete_stream(ctx.exchange_id)
-            # Mark session as no longer streaming so React frontend hides stop button
-            if self._tree_state:
-                self._tree_state.stop_streaming(session_id)
-                # Reload TreeState from Session to pick up all turns that were added
-                # during streaming (tool_use, tool_result, text turns after tools, etc.)
-                # The SessionRunner adds turns directly to session.turns, but the event
-                # pump only emitted WebSocket events without updating TreeState.
-                session = self._manager.get_session(session_id)
-                if session:
-                    self._tree_state.load_session(session_id, session)
+            # Emit session updated so React frontend hides stop button
+            session = self._manager.get_session(session_id)
+            if session:
+                self._emit_session_updated(session, is_streaming=False)
             # Clean up context
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
@@ -1627,14 +1665,11 @@ class SessionManagerService:
                 ),
             )
 
-            # Note: No SessionDataService equivalent for error events
             self._stream_state.fail_stream(ctx.exchange_id, error_msg)
-            # Mark session as no longer streaming and reload turns
-            if self._tree_state:
-                self._tree_state.stop_streaming(session_id)
-                session = self._manager.get_session(session_id)
-                if session:
-                    self._tree_state.load_session(session_id, session)
+            # Emit session updated so React frontend hides stop button
+            session = self._manager.get_session(session_id)
+            if session:
+                self._emit_session_updated(session, is_streaming=False)
             # Clean up context
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
@@ -1655,12 +1690,10 @@ class SessionManagerService:
             )
 
             self._stream_state.fail_stream(ctx.exchange_id, f"Rate limit: {error_msg}")
-            # Mark session as no longer streaming and reload turns
-            if self._tree_state:
-                self._tree_state.stop_streaming(session_id)
-                session = self._manager.get_session(session_id)
-                if session:
-                    self._tree_state.load_session(session_id, session)
+            # Emit session updated so React frontend hides stop button
+            session = self._manager.get_session(session_id)
+            if session:
+                self._emit_session_updated(session, is_streaming=False)
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
 
@@ -1679,12 +1712,10 @@ class SessionManagerService:
             )
 
             self._stream_state.cancel_stream(ctx.exchange_id)
-            # Mark session as no longer streaming and reload turns
-            if self._tree_state:
-                self._tree_state.stop_streaming(session_id)
-                session = self._manager.get_session(session_id)
-                if session:
-                    self._tree_state.load_session(session_id, session)
+            # Emit session updated so React frontend hides stop button
+            session = self._manager.get_session(session_id)
+            if session:
+                self._emit_session_updated(session, is_streaming=False)
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
 
@@ -1727,12 +1758,10 @@ class SessionManagerService:
                     content=ctx.content,
                 )
             self._stream_state.complete_stream(ctx.exchange_id)
-            # Mark session as no longer streaming and reload turns
-            if self._tree_state:
-                self._tree_state.stop_streaming(session_id)
-                session = self._manager.get_session(session_id)
-                if session:
-                    self._tree_state.load_session(session_id, session)
+            # Emit session updated so React frontend hides stop button
+            session = self._manager.get_session(session_id)
+            if session:
+                self._emit_session_updated(session, is_streaming=False)
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
 
@@ -1758,15 +1787,10 @@ class SessionManagerService:
             StreamStateEvent.STREAM_ERROR,
             StreamStateEvent.STREAM_CANCELLED,
         ):
-            # Reload TreeState from Session so web clients see all turns via getTurns()
-            # This is critical regardless of who drove the streaming (SessionManagerService or TUI)
-            # because the session's turns are updated by the runner, and TreeState needs to
-            # pick up those changes for the web UI to display them correctly
-            if self._tree_state:
-                self._tree_state.stop_streaming(stream.session_id)
-                session = self._manager.get_session(stream.session_id)
-                if session:
-                    self._tree_state.load_session(stream.session_id, session)
+            # Emit session updated so React frontend hides stop button
+            session = self._manager.get_session(stream.session_id)
+            if session:
+                self._emit_session_updated(session, is_streaming=False)
 
             self._emit_event(
                 SessionManagerEvent.STREAMING_STOPPED,
@@ -1874,11 +1898,10 @@ class SessionManagerService:
             if not parent_session:
                 return ForkSessionResult(success=False, error=f"Parent session {parent_session_id} not found")
 
-        # Get context modes - either from parameter or from TreeState
-        from core.tree_state import ContextMode
+        # Get context modes from parameter (required when forking via UI)
+        from models import ContextMode
         tree_modes: dict[int, ContextMode] = {}
         if context_modes:
-            # Use provided context_modes
             for cm in context_modes:
                 turn_idx = cm.get("turn_index")
                 mode_str = cm.get("mode", "copy")
@@ -1888,9 +1911,7 @@ class SessionManagerService:
                     tree_modes[turn_idx] = ContextMode.DROP
                 else:
                     tree_modes[turn_idx] = ContextMode.COPY
-        elif self._tree_state:
-            # Use TreeState's context modes (set via UI)
-            tree_modes = self._tree_state.get_context_modes_for_session(parent_session_id)
+        # If no context_modes provided, all turns will default to COPY
 
         # Build indexed messages with context modes
         from models import Message
@@ -1946,27 +1967,18 @@ class SessionManagerService:
         # Register child session with manager (creates runner)
         self._manager.register_session(child_session)
 
-        # Update TreeState
-        if self._tree_state:
-            debug_log.info(
-                f"fork_session: adding child to tree_state",
-                category="fork",
-                details={
-                    "child_session_id": child_session.id[:8],
-                    "child_turn_count": len(child_session.turns),
-                    "background": background,
-                }
-            )
-            self._tree_state.add_session(child_session, is_current=not background)
-            self._tree_state.load_session(child_session.id, child_session)
-            debug_log.info(
-                f"fork_session: child added to tree_state",
-                category="fork",
-                details={
-                    "child_session_id": child_session.id[:8],
-                    "is_loaded": self._tree_state.is_session_loaded(child_session.id),
-                }
-            )
+        debug_log.info(
+            f"fork_session: child session created",
+            category="fork",
+            details={
+                "child_session_id": child_session.id[:8],
+                "child_turn_count": len(child_session.turns),
+                "background": background,
+            }
+        )
+
+        # Emit session added event so React UI can display the new session
+        self._emit_session_added(child_session, is_streaming=False)
 
         if result.needs_compression:
             # Start compression helper
@@ -2055,19 +2067,14 @@ class SessionManagerService:
 
         child_session = result.child_session
 
-        # Update TreeState with the now-populated child session
-        # This is critical: the initial load_session was called before compression completed,
-        # so tree_state has an empty turns list. We need to reload with the populated session.
-        if self._tree_state:
-            debug_log.info(
-                f"complete_fork_after_compression: updating tree_state with populated session",
-                category="fork",
-                details={
-                    "child_session_id": child_session.id[:8],
-                    "child_turn_count": len(child_session.turns),
-                }
-            )
-            self._tree_state.load_session(child_session.id, child_session)
+        debug_log.info(
+            f"complete_fork_after_compression: session populated with {len(child_session.turns)} turns",
+            category="fork",
+            details={
+                "child_session_id": child_session.id[:8],
+                "child_turn_count": len(child_session.turns),
+            }
+        )
 
         # Emit turnFinished events for each turn so subscribed clients get the data
         # This handles the case where React subscribed before compression completed
@@ -2209,11 +2216,9 @@ class SessionManagerService:
         # Update manager with saved sessions
         self._manager.register_session(parent_session)
 
-        # Update TreeState
-        if self._tree_state:
-            # Reload both sessions in tree state
-            self._tree_state.load_session(fork_session.id, fork_session)
-            self._tree_state.load_session(parent_session.id, parent_session)
+        # Emit session updated events for React UI
+        self._emit_session_updated(fork_session, is_streaming=False)
+        self._emit_session_updated(parent_session, is_streaming=False)
 
         self._emit_event(SessionManagerEvent.SESSION_UPDATED, fork_session_id)
         self._emit_event(SessionManagerEvent.SESSION_UPDATED, parent_session.id)
@@ -2253,37 +2258,32 @@ class SessionManagerService:
             if not session:
                 return []
 
-        # Ensure session is loaded in TreeState for grouping
-        if self._tree_state and not self._tree_state.is_session_loaded(session_id):
-            self._tree_state.load_session(session_id, session)
-
         summaries: list[ExchangeSummary] = []
 
-        if self._tree_state:
-            groups = self._tree_state.get_turns_grouped_by_exchange(session_id)
+        groups = self._get_turns_grouped_by_exchange(session)
 
-            # Exclude the current (proposal) exchange if requested
-            if exclude_current and groups:
-                groups = groups[:-1]
+        # Exclude the current (proposal) exchange if requested
+        if exclude_current and groups:
+            groups = groups[:-1]
 
-            for idx, group in enumerate(groups):
-                if not group:
-                    continue
-                # Get first meaningful content from the group
-                first_turn = group[0]
-                content = first_turn.content or ""
-                # Truncate for display
-                if len(content) > 60:
-                    content = content[:57] + "..."
-                # Remove newlines for single-line display
-                content = content.replace("\n", " ").strip()
-                role = first_turn.role
-                summary = f"[{role}] {content}"
-                summaries.append(ExchangeSummary(
-                    index=idx,
-                    summary=summary,
-                    mode="compress",  # Default mode
-                ))
+        for exchange_idx, group in enumerate(groups):
+            if not group:
+                continue
+            # Get first meaningful content from the group (group is list of (idx, turn) tuples)
+            _, first_turn = group[0]
+            content = getattr(first_turn, 'content', '') or ""
+            # Truncate for display
+            if len(content) > 60:
+                content = content[:57] + "..."
+            # Remove newlines for single-line display
+            content = content.replace("\n", " ").strip()
+            role = getattr(first_turn, 'role', 'user')
+            summary = f"[{role}] {content}"
+            summaries.append(ExchangeSummary(
+                index=exchange_idx,
+                summary=summary,
+                mode="compress",  # Default mode
+            ))
 
         return summaries
 
@@ -2353,7 +2353,7 @@ class SessionManagerService:
 
         # Get all exchanges for the interactive tree BEFORE adding the proposal turn
         # (excludes the current exchange which contains the proposal)
-        all_exchanges = self._get_all_exchange_info(session_id, exclude_current=True)
+        all_exchanges = await self._get_all_exchange_info(session_id, exclude_current=True)
         debug_log.info(
             f"_handle_fork_proposal: got all_exchanges",
             category="fork",
@@ -2414,7 +2414,7 @@ class SessionManagerService:
             details={"proposal_id": proposal_id, "name": proposal.name},
         )
 
-    def _get_all_exchange_info(self, session_id: str, exclude_current: bool = True) -> list[ExchangeInfo]:
+    async def _get_all_exchange_info(self, session_id: str, exclude_current: bool = True) -> list[ExchangeInfo]:
         """Get ExchangeInfo for each exchange for display in fork proposal tree.
 
         Args:
@@ -2426,18 +2426,13 @@ class SessionManagerService:
         """
         exchanges = []
 
-        # Ensure session is loaded before getting exchange groups.
-        if self._tree_state and not self._tree_state.is_session_loaded(session_id):
-            debug_log.warning(
-                f"Session not loaded in TreeState during _get_all_exchange_info - loading now",
-                category="fork",
-                details={"session_id": session_id},
-            )
-            session = self._manager.get_session(session_id)
-            if session:
-                self._tree_state.load_session(session_id, session)
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                return []
 
-        groups = self._tree_state.get_turns_grouped_by_exchange(session_id) if self._tree_state else []
+        groups = self._get_turns_grouped_by_exchange(session)
 
         debug_log.info(
             f"_get_all_exchange_info: got groups",
@@ -2452,15 +2447,17 @@ class SessionManagerService:
         if exclude_current and groups:
             groups = groups[:-1]
 
-        for idx, group in enumerate(groups):
+        for exchange_idx, group in enumerate(groups):
             if not group:
                 continue
 
-            # Get first meaningful content from the group
-            first_turn = group[0]
-            content = first_turn.content if hasattr(first_turn, 'content') else ""
+            # Get first meaningful content from the group (group is list of (idx, turn) tuples)
+            _, first_turn = group[0]
+            content = getattr(first_turn, 'content', '') or ""
             if not content:
-                content = str(first_turn.content_block.text if hasattr(first_turn.content_block, 'text') else "")
+                content_block = getattr(first_turn, 'content_block', None)
+                if content_block and hasattr(content_block, 'text'):
+                    content = str(content_block.text or "")
 
             # Truncate for display
             if len(content) > 60:
@@ -2468,11 +2465,11 @@ class SessionManagerService:
             # Remove newlines for single-line display
             content = content.replace("\n", " ").strip()
 
-            role = first_turn.role
+            role = getattr(first_turn, 'role', 'user')
             summary = f"[{role}] {content}"
 
             exchanges.append(ExchangeInfo(
-                index=idx,
+                index=exchange_idx,
                 summary=summary,
                 mode="compress",  # Default mode
             ))
@@ -2655,7 +2652,7 @@ class SessionManagerService:
         # Accept the proposal - execute the fork
         # Get the context plan (use provided or original from proposal_block)
         from core.fork import ForkProposal, ContextAssignment
-        from core.tree_state import ContextMode
+        from models import ContextMode
 
         if context_plan:
             raw_context_plan = context_plan
@@ -2682,12 +2679,8 @@ class SessionManagerService:
             initial_prompt=initial_prompt if initial_prompt is not None else (proposal_block.initial_prompt if proposal_block else ""),
         )
 
-        # Ensure session is loaded in TreeState for exchange grouping
-        if self._tree_state and not self._tree_state.is_session_loaded(session_id):
-            self._tree_state.load_session(session_id, session)
-
-        # Get exchange groups to resolve ranges
-        groups = self._tree_state.get_turns_grouped_by_exchange(session_id) if self._tree_state else []
+        # Get exchange groups to resolve ranges (list of (idx, turn) tuples per group)
+        groups = self._get_turns_grouped_by_exchange(session)
         total_exchanges = len(groups)
 
         # Resolve exchange ranges to turn indices with modes
@@ -2698,9 +2691,9 @@ class SessionManagerService:
         turn_context_modes: list[dict] = []
         for exchange_idx, mode in exchange_modes.items():
             if exchange_idx < len(groups):
-                for turn in groups[exchange_idx]:
+                for turn_idx, turn in groups[exchange_idx]:
                     turn_context_modes.append({
-                        "turn_index": turn.idx,
+                        "turn_index": turn_idx,
                         "mode": mode.value,  # "copy", "compress", "drop"
                     })
 
@@ -2712,10 +2705,10 @@ class SessionManagerService:
                 # Check if it's the last exchange (current proposal) - skip it
                 if exchange_idx == total_exchanges - 1:
                     continue
-                for turn in group:
+                for turn_idx, turn in group:
                     # Default to compress for un-mentioned exchanges
                     turn_context_modes.append({
-                        "turn_index": turn.idx,
+                        "turn_index": turn_idx,
                         "mode": "compress",
                     })
 
@@ -2917,11 +2910,10 @@ class SessionManagerService:
             if not source_session:
                 return DeriveSessionResult(success=False, error=f"Source session {source_session_id} not found")
 
-        # Get context modes - either from parameter or from TreeState
-        from core.tree_state import ContextMode
+        # Get context modes from parameter (required when deriving via UI)
+        from models import ContextMode
         tree_modes: dict[int, ContextMode] = {}
         if context_modes:
-            # Use provided context_modes
             for cm in context_modes:
                 turn_idx = cm.get("turn_index")
                 mode_str = cm.get("mode", "copy")
@@ -2931,9 +2923,7 @@ class SessionManagerService:
                     tree_modes[turn_idx] = ContextMode.DROP
                 else:
                     tree_modes[turn_idx] = ContextMode.COPY
-        elif self._tree_state:
-            # Use TreeState's context modes (set via UI)
-            tree_modes = self._tree_state.get_context_modes_for_session(source_session_id)
+        # If no context_modes provided, all turns will default to COPY
 
         # Build indexed messages with context modes
         from models import Message
@@ -2975,10 +2965,8 @@ class SessionManagerService:
         # Register new session with manager (creates runner)
         self._manager.register_session(new_session)
 
-        # Update TreeState
-        if self._tree_state:
-            self._tree_state.add_session(new_session, is_current=True)
-            self._tree_state.load_session(new_session.id, new_session)
+        # Emit session added event so React UI can display the new session
+        self._emit_session_added(new_session, is_streaming=False)
 
         if result.needs_compression:
             # Start compression helper
@@ -3240,9 +3228,8 @@ class SessionManagerService:
         session.turns = result.new_turns
         await session.save()
 
-        # Update tree state
-        if self._tree_state:
-            self._tree_state.load_session(session_id, session)
+        # Emit session updated event for React UI
+        self._emit_session_updated(session, is_streaming=False)
 
         # Clean up helper context
         self._helper_contexts.pop(helper_id, None)
@@ -3597,27 +3584,8 @@ class SessionManagerService:
         )
         await session.save()
 
-        # Update TreeState so WebSocket clients can see the new turns via getTurns()
-        if self._tree_state:
-            # Ensure session is loaded in TreeState (it might not be if TUI is viewing a different session)
-            if not self._tree_state.get_session(session_id):
-                self._tree_state.add_session(session, is_current=False)
-            if self._tree_state.get_session(session_id) and self._tree_state.get_session(session_id).turns is None:
-                self._tree_state.load_session(session_id, session)
-
-            # Add user turn to TreeState
-            self._tree_state.start_turn(session_id, turn_index, "user", exchange_id=exchange_id)
-            self._tree_state.update_turn_content(session_id, turn_index, content)
-            # Mark user turn as finished (user turns complete immediately)
-            # Note: We call finish_turn synchronously since user turns don't need async token counting
-            import asyncio
-            asyncio.create_task(self._tree_state.finish_turn(
-                session_id, turn_index, content, TextBlock(text=content), []
-            ))
-            # Start assistant turn (will be streaming)
-            self._tree_state.start_turn(session_id, turn_index + 1, "assistant", exchange_id=exchange_id)
-            # Mark session as streaming so React frontend shows stop button
-            self._tree_state.start_streaming(session_id)
+        # Emit session updated so React frontend knows we're streaming
+        self._emit_session_updated(session, is_streaming=True)
 
         # Emit user turn events via observer pattern
         await self._notify_observers(
@@ -3804,21 +3772,8 @@ class SessionManagerService:
         )
         await session.save()
 
-        # Update TreeState so WebSocket clients can see the new turns via getTurns()
-        if self._tree_state:
-            if not self._tree_state.get_session(session_id):
-                self._tree_state.add_session(session, is_current=False)
-            if self._tree_state.get_session(session_id) and self._tree_state.get_session(session_id).turns is None:
-                self._tree_state.load_session(session_id, session)
-
-            self._tree_state.start_turn(session_id, turn_index, "user", exchange_id=exchange_id)
-            self._tree_state.update_turn_content(session_id, turn_index, display_content)
-            import asyncio as aio
-            aio.create_task(self._tree_state.finish_turn(
-                session_id, turn_index, display_content, TextBlock(text=content), []
-            ))
-            self._tree_state.start_turn(session_id, turn_index + 1, "assistant", exchange_id=exchange_id)
-            self._tree_state.start_streaming(session_id)
+        # Emit session updated so React frontend knows we're streaming
+        self._emit_session_updated(session, is_streaming=True)
 
         # Emit user turn events via observer pattern
         await self._notify_observers(
@@ -4019,26 +3974,8 @@ class SessionManagerService:
             new_runner = SessionRunner(session, runner=create_runner(backend_config))
             self._manager.update_runner(session_id, new_runner)
 
-            # Update TreeState if available
-            if self._tree_state:
-                session_data = self._tree_state.get_session(session_id)
-                if session_data:
-                    # Update the SessionData cache so web UI sees the change
-                    session_data.backend_name = backend_name
-                    # Also update model and context_window from the new backend config
-                    if backend_config:
-                        if backend_config.model:
-                            session_data.model = backend_config.model
-                        session_data.context_window = backend_config.context_window
-                    if session_data.session_ref:
-                        # Also update the live Session object
-                        session_data.session_ref.backend_name = backend_name
-                        if backend_config:
-                            if backend_config.model:
-                                session_data.session_ref.model = backend_config.model
-                            session_data.session_ref.context_window = backend_config.context_window
-                # Notify observers about the session update
-                self._tree_state.notify(TreeEvent.SESSION_UPDATED, session_id)
+            # Emit session updated event so React UI sees the backend change
+            self._emit_session_updated(session)
 
             debug_log.info(
                 f"Backend changed to {backend_name}",
@@ -4077,17 +4014,8 @@ class SessionManagerService:
         session.title = title
         await session.save()
 
-        # Update TreeState if available
-        if self._tree_state:
-            session_data = self._tree_state.get_session(session_id)
-            if session_data:
-                # Update the SessionData cache so web UI sees the change
-                session_data.title = title
-                if session_data.session_ref:
-                    # Also update the live Session object
-                    session_data.session_ref.title = title
-            # Notify observers about the session update
-            self._tree_state.notify(TreeEvent.SESSION_UPDATED, session_id)
+        # Emit session updated event so React UI sees the title change
+        self._emit_session_updated(session)
 
         debug_log.info(
             f"Session title changed to: {title}",

@@ -25,17 +25,17 @@ Standard JSON-RPC error codes:
     -32603: Internal error
 
 Usage:
-    from service import TreeStateService, SessionManagerService
+    from service import SessionDataService, SessionManagerService
     from service.ws_server import WsServer
 
     # Create services
-    tree_service = TreeStateService(tree_state)
-    session_service = SessionManagerService(session_manager)
+    session_data_service = SessionDataService(session_loader)
+    session_manager_service = SessionManagerService(session_manager)
 
     # Create and start server
     server = WsServer(host="localhost", port=8765)
-    server.register_service(tree_service)
-    server.register_service(session_service)
+    server.register_service(session_data_service)
+    server.register_service(session_manager_service)
 
     await server.start()
     # ... later ...
@@ -76,8 +76,8 @@ class ServiceRegistration:
     """A registered service instance with its method specs."""
 
     instance: Any  # The service instance
-    service_name: str  # Class name (e.g., "TreeStateService")
-    wire_name: str  # camelCase name (e.g., "treeStateService")
+    service_name: str  # Class name (e.g., "SessionDataService")
+    wire_name: str  # camelCase name (e.g., "sessionDataService")
     methods: dict[str, MethodSpec]  # wire_name -> MethodSpec
 
 
@@ -100,7 +100,7 @@ class WsServer:
 
     Method routing:
     - Methods can be called by their wire name directly: "getSession"
-    - Or qualified with service: "TreeStateService.getSession"
+    - Or qualified with service: "SessionDataService.getSession"
     - If multiple services have the same method, qualified names are required
 
     Event broadcasting:
@@ -201,7 +201,7 @@ class WsServer:
 
         # Register dispatch routes
         for method_wire_name, method_spec in methods.items():
-            # Qualified name: "TreeStateService.getSession"
+            # Qualified name: "SessionDataService.getSession"
             qualified_name = f"{service_name}.{method_wire_name}"
             self._qualified_dispatch[qualified_name] = (registration, method_spec)
 

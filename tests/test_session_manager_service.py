@@ -1846,10 +1846,7 @@ class TestForkSessionService:
 
         service = SessionManagerService(mock_manager, stream_state)
         service._fork_manager = mock_fork_manager
-        service._tree_state = MagicMock()
-        service._tree_state.get_context_modes_for_session = MagicMock(return_value={})
-        service._tree_state.add_session = MagicMock()
-        service._tree_state.load_session = MagicMock()
+        # TreeState was removed in Phase 8c - context modes now stored directly in Session
         return service
 
     @pytest.mark.asyncio
@@ -2169,10 +2166,7 @@ class TestDeriveSessionService:
 
         service = SessionManagerService(mock_manager, stream_state)
         service._fork_manager = mock_fork_manager_for_derive
-        service._tree_state = MagicMock()
-        service._tree_state.get_context_modes_for_session = MagicMock(return_value={})
-        service._tree_state.add_session = MagicMock()
-        service._tree_state.load_session = MagicMock()
+        # TreeState was removed in Phase 8c - context modes now stored directly in Session
         return service
 
     @pytest.mark.asyncio

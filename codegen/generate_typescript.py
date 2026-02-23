@@ -367,7 +367,6 @@ def main():
     # Import modules containing @ws_service decorated classes
     # Add imports here for any module with services to export to TypeScript
     try:
-        import service.tree_state_service  # TreeStateService
         import service.queue_state_service  # QueueStateService
         import service.task_state_service  # TaskStateService
         import service.session_data_service  # SessionDataService

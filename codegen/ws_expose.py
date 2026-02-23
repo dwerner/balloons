@@ -18,7 +18,7 @@ Usage:
         id: str
         title: str
 
-    class TreeStateService:
+    class SessionDataService:
         @ws_expose
         async def get_session(self, session_id: str) -> SessionData | None:
             ...
@@ -272,12 +272,12 @@ def ws_service(cls: type = None, *, name: str = None):
 
     Can be used as:
         @ws_service
-        class TreeStateService:
+        class SessionDataService:
             @ws_expose
             async def get_session(self, session_id: str) -> SessionData: ...
 
-        @ws_service(name="Trees")
-        class TreeStateService: ...
+        @ws_service(name="Sessions")
+        class SessionDataService: ...
     """
 
     def decorator(service_cls: type) -> type:

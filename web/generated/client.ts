@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-22T15:07:56.938212
+// Generated: 2026-02-22T16:13:34.917529
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -23,6 +23,11 @@ export type Unsubscribe = () => void;
  * 
  * Provides read/write access to session and turn data, context mode management,
  * and real-time event subscriptions for state changes.
+ * 
+ * Phase 6 Architecture:
+ * - Data queries use AsyncStorage (LMDB) directly
+ * - TreeState is kept for observer/event pattern and runtime state
+ * - After Phase 7, TreeState will be eliminated entirely
  */
 export interface TreeStateService {
   /**
@@ -50,6 +55,8 @@ export interface TreeStateService {
 
   /**
    * Get the context mode for a turn.
+   * 
+   * Phase 6: Reads from turn storage directly when available.
    * 
    * Args:
    * session_id: The session ID
@@ -106,6 +113,8 @@ export interface TreeStateService {
   /**
    * Get a specific turn.
    * 
+   * Phase 6: Uses AsyncStorage directly when available.
+   * 
    * Args:
    * session_id: The session ID
    * turn_idx: The turn index
@@ -118,7 +127,10 @@ export interface TreeStateService {
   /**
    * Get all turns for a session.
    * 
-   * If the session exists but turns aren't loaded, and a session_loader
+   * Phase 6: Uses AsyncStorage directly when available.
+   * Falls back to TreeState if storage is not configured (for backwards compat).
+   * 
+   * If neither storage nor cached turns are available, and a session_loader
    * callback was provided, the session will be loaded automatically.
    * 
    * Args:
@@ -204,6 +216,8 @@ export interface TreeStateService {
   /**
    * Set the context mode for a turn.
    * 
+   * Phase 6: Updates turn in storage and notifies via TreeState events.
+   * 
    * Args:
    * session_id: The session ID
    * turn_idx: The turn index
@@ -224,6 +238,8 @@ export interface TreeStateService {
 
   /**
    * Toggle context mode: COPY -> COMPRESS -> DROP -> COPY.
+   * 
+   * Phase 6: Updates turn in storage and notifies via TreeState events.
    * 
    * Args:
    * session_id: The session ID
@@ -2741,6 +2757,36 @@ export class TaskStateServiceClient implements TaskStateService {
  */
 export interface SessionDataService {
   /**
+   * Get all sessions with metadata.
+   * 
+   * Returns session list directly from LMDB storage, with pinning and
+   * streaming state merged in.
+   * 
+   * Returns:
+   * List of all sessions sorted by last_modified (most recent first)
+   */
+  getAllSessions(): Promise<Types.SessionInfo[]>;
+
+  /**
+   * Get all pinned session IDs.
+   * 
+   * Returns:
+   * List of pinned session IDs
+   */
+  getPinnedSessions(): Promise<string[]>;
+
+  /**
+   * Get session metadata by ID.
+   * 
+   * Args:
+   * session_id: The session ID to look up
+   * 
+   * Returns:
+   * SessionInfo if found, None otherwise
+   */
+  getSession(sessionId: string): Promise<Types.SessionInfo | null>;
+
+  /**
    * Get a complete snapshot of the session's current state.
    * 
    * Use this when subscribing to get the initial state before
@@ -2777,6 +2823,28 @@ export interface SessionDataService {
   getSubscribedSessions(clientId: string): Promise<string[]>;
 
   /**
+   * Check if a session is pinned.
+   * 
+   * Args:
+   * session_id: The session to check
+   * 
+   * Returns:
+   * True if session is pinned
+   */
+  isPinned(sessionId: string): Promise<boolean>;
+
+  /**
+   * Pin a session to appear at top of lists.
+   * 
+   * Args:
+   * session_id: The session to pin
+   * 
+   * Returns:
+   * True if newly pinned, False if already pinned or session doesn't exist
+   */
+  pinSession(sessionId: string): Promise<boolean>;
+
+  /**
    * Subscribe to receive updates for a session.
    * 
    * Returns session metadata immediately, then streams historical turns
@@ -2800,6 +2868,28 @@ export interface SessionDataService {
    * SubscribeSessionResult with metadata-only snapshot (no turns)
    */
   subscribeSession(sessionId: string, clientId?: string): Promise<Types.SubscribeSessionResult>;
+
+  /**
+   * Toggle pin state for a session.
+   * 
+   * Args:
+   * session_id: The session to toggle
+   * 
+   * Returns:
+   * True if now pinned, False if now unpinned
+   */
+  togglePin(sessionId: string): Promise<boolean>;
+
+  /**
+   * Unpin a session.
+   * 
+   * Args:
+   * session_id: The session to unpin
+   * 
+   * Returns:
+   * True if unpinned, False if wasn't pinned
+   */
+  unpinSession(sessionId: string): Promise<boolean>;
 
   /**
    * Unsubscribe from session updates.
@@ -2832,6 +2922,37 @@ export interface SessionDataEvents {
    * all historical data and can finalize the initial render.
    */
   sessionDataHistoryComplete(callback: (data: Types.SessionHistoryCompleteEvent) => void): Unsubscribe;
+
+  /**
+   * Emitted when the pinned sessions list changes.
+   */
+  sessionDataPinnedSessionsChanged(callback: (data: Types.PinnedSessionsChangedEvent) => void): Unsubscribe;
+
+  /**
+   * Emitted when a new session is created.
+   * 
+   * Clients should add the session to their session list.
+   */
+  sessionDataSessionAdded(callback: (data: Types.SessionAddedEvent) => void): Unsubscribe;
+
+  /**
+   * Emitted when a session's pin state changes.
+   */
+  sessionDataSessionPinned(callback: (data: Types.SessionPinnedEvent) => void): Unsubscribe;
+
+  /**
+   * Emitted when a session is deleted.
+   * 
+   * Clients should remove the session from their list.
+   */
+  sessionDataSessionRemoved(callback: (data: Types.SessionRemovedEvent) => void): Unsubscribe;
+
+  /**
+   * Emitted when session metadata changes.
+   * 
+   * Clients should update their session list display.
+   */
+  sessionDataSessionUpdated(callback: (data: Types.SessionUpdatedEvent) => void): Unsubscribe;
 
   /**
    * Emitted when streaming completes successfully.
@@ -2938,6 +3059,18 @@ export class SessionDataServiceClient implements SessionDataService {
     };
   }
 
+  async getAllSessions(): Promise<Types.SessionInfo[]> {
+    return this.call('getAllSessions', {  });
+  }
+
+  async getPinnedSessions(): Promise<string[]> {
+    return this.call('getPinnedSessions', {  });
+  }
+
+  async getSession(sessionId: string): Promise<Types.SessionInfo | null> {
+    return this.call('getSession', { sessionId: sessionId });
+  }
+
   async getSessionSnapshot(sessionId: string): Promise<Types.SessionSnapshot | null> {
     return this.call('getSessionSnapshot', { sessionId: sessionId });
   }
@@ -2950,8 +3083,24 @@ export class SessionDataServiceClient implements SessionDataService {
     return this.call('getSubscribedSessions', { clientId: clientId });
   }
 
+  async isPinned(sessionId: string): Promise<boolean> {
+    return this.call('isPinned', { sessionId: sessionId });
+  }
+
+  async pinSession(sessionId: string): Promise<boolean> {
+    return this.call('pinSession', { sessionId: sessionId });
+  }
+
   async subscribeSession(sessionId: string, clientId?: string): Promise<Types.SubscribeSessionResult> {
     return this.call('subscribeSession', { sessionId: sessionId, clientId: clientId });
+  }
+
+  async togglePin(sessionId: string): Promise<boolean> {
+    return this.call('togglePin', { sessionId: sessionId });
+  }
+
+  async unpinSession(sessionId: string): Promise<boolean> {
+    return this.call('unpinSession', { sessionId: sessionId });
   }
 
   async unsubscribeSession(sessionId: string, clientId?: string): Promise<Types.SubscriptionResult> {
@@ -2964,6 +3113,26 @@ export class SessionDataServiceClient implements SessionDataService {
 
   sessionDataHistoryComplete(callback: (data: Types.SessionHistoryCompleteEvent) => void): Unsubscribe {
     return this.subscribe('sessionDataHistoryComplete', callback);
+  }
+
+  sessionDataPinnedSessionsChanged(callback: (data: Types.PinnedSessionsChangedEvent) => void): Unsubscribe {
+    return this.subscribe('sessionDataPinnedSessionsChanged', callback);
+  }
+
+  sessionDataSessionAdded(callback: (data: Types.SessionAddedEvent) => void): Unsubscribe {
+    return this.subscribe('sessionDataSessionAdded', callback);
+  }
+
+  sessionDataSessionPinned(callback: (data: Types.SessionPinnedEvent) => void): Unsubscribe {
+    return this.subscribe('sessionDataSessionPinned', callback);
+  }
+
+  sessionDataSessionRemoved(callback: (data: Types.SessionRemovedEvent) => void): Unsubscribe {
+    return this.subscribe('sessionDataSessionRemoved', callback);
+  }
+
+  sessionDataSessionUpdated(callback: (data: Types.SessionUpdatedEvent) => void): Unsubscribe {
+    return this.subscribe('sessionDataSessionUpdated', callback);
   }
 
   sessionDataStreamDone(callback: (data: Types.SessionStreamDoneEvent) => void): Unsubscribe {

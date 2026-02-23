@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-22T15:07:56.935351
+// Generated: 2026-02-22T16:13:34.914536
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -734,6 +734,48 @@ export interface SessionHistoryCompleteEvent {
   sessionId: string;
   totalTurns: number;
   finalWatermark: number;
+}
+
+export interface SessionInfo {
+  id: string;
+  title: string;
+  created: string;
+  lastModified: string;
+  model: string;
+  messageCount: number;
+  totalCost: number;
+  isStreaming: boolean;
+  forkName: string;
+  forkStatus: string;
+  parentId?: string | null;
+  cachedContextTokens?: number;
+  contextWindow?: number;
+  bindingIndicator?: string;
+  backendName?: string;
+  isPinned?: boolean;
+}
+
+export interface SessionAddedEvent {
+  sessionId: string;
+  session: SessionInfo;
+}
+
+export interface SessionUpdatedEvent {
+  sessionId: string;
+  session: SessionInfo;
+}
+
+export interface SessionRemovedEvent {
+  sessionId: string;
+}
+
+export interface SessionPinnedEvent {
+  sessionId: string;
+  isPinned: boolean;
+}
+
+export interface PinnedSessionsChangedEvent {
+  pinnedSessionIds: string[];
 }
 
 export interface ImageUploadResult {

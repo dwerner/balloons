@@ -18,7 +18,7 @@ multiple frontends (Textual TUI, future web UI, etc.) sharing a common backend.
 ┌─────────▼───────────────────────────────────────────────────▼───────────────┐
 │                           SERVICE LAYER                                      │
 │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐           │
-│  │TreeStateService  │  │SessionManager    │  │GoalTreeState     │           │
+│  │SessionDataService│  │SessionManager    │  │GoalTreeState     │           │
 │  │                  │  │Service           │  │Service           │           │
 │  └────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘           │
 │  ┌────────┴─────────┐  ┌────────┴─────────┐  ┌────────┴─────────┐           │
@@ -30,9 +30,9 @@ multiple frontends (Textual TUI, future web UI, etc.) sharing a common backend.
 ┌───────────▼──────────────────────▼──────────────────────────────────────────┐
 │                         CORE STATE MANAGERS                                  │
 │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐           │
-│  │ TreeState        │  │ SessionManager   │  │ GoalTreeState    │           │
-│  │ (core/tree_     │  │ (core/manager.py)│  │ (core/goal_tree  │           │
-│  │  state.py)       │  │                  │  │  _state.py)      │           │
+│  │ (Deleted)        │  │ SessionManager   │  │ GoalTreeState    │           │
+│  │                  │  │ (core/manager.py)│  │ (core/goal_tree  │           │
+│  │                  │  │                  │  │  _state.py)      │           │
 │  └──────────────────┘  └──────────────────┘  └──────────────────┘           │
 │  ┌──────────────────┐  ┌──────────────────┐                                 │
 │  │ QueueState       │  │ StreamState      │                                 │
@@ -65,7 +65,7 @@ All frontend interactions go through the **Service Layer**. Services:
 
 ### 2. Core State Managers Are Pure Python
 
-Core state managers (`TreeState`, `GoalTreeState`, etc.):
+Core state managers (`GoalTreeState`, `StreamState`, etc.):
 
 - Contain domain logic
 - Have no network concerns
@@ -99,19 +99,18 @@ Run `python -m codegen.generate_typescript` to regenerate:
 
 ## Available Services
 
-### TreeStateService
+### SessionDataService
 
-**Purpose**: Session/turn/context view state for the conversation tree.
+**Purpose**: Session data events and subscription-based streaming for frontends.
 
 | Method | Description |
 |--------|-------------|
-| `getSession(sessionId)` | Get session info |
-| `getAllSessions()` | List all sessions |
-| `getTurns(sessionId)` | Get turns for a session |
-| `getContextMode(sessionId, turnIdx)` | Get context mode (copy/compress/drop) |
-| `setContextMode(sessionId, turnIdx, mode)` | Set context mode |
-| `toggleContextMode(sessionId, turnIdx)` | Cycle through modes |
-| `markTurnViewed(sessionId, turnIdx)` | Mark turn as viewed |
+| `getAllSessionIds()` | Get all session IDs |
+| `subscribe(sessionId)` | Subscribe to session events |
+| `unsubscribe(sessionId)` | Unsubscribe from session |
+| `setContextMode(sessionId, turnId, mode)` | Set context mode (copy/compress/drop) |
+| `getExchangeSummaries(sessionId)` | Get exchange summaries |
+| `requestChunkedHistory(sessionId)` | Request paginated turn history |
 
 | Event | When Emitted |
 |-------|--------------|
@@ -121,7 +120,8 @@ Run `python -m codegen.generate_typescript` to regenerate:
 | `turnStarted` | New turn streaming |
 | `turnUpdated` | Turn content updated |
 | `turnFinished` | Turn completed |
-| `contextModeChanged` | Context mode toggled |
+| `historyChunk` | Paginated history chunk delivered |
+| `historyComplete` | All history chunks delivered |
 
 ### QueueStateService
 
@@ -257,29 +257,27 @@ The WebSocket server is created in `service/ws_server.py`. To start it:
 ```python
 from service import (
     WsServer,
-    TreeStateService,
+    SessionDataService,
     SessionManagerService,
     GoalTreeStateService,
     TaskStateService,
 )
-from core.tree_state import TreeState
 from core.manager import SessionManager
 # ... etc
 
 # Create state managers
-tree_state = TreeState()
 session_manager = SessionManager(backend_config)
 # ...
 
-# Create services (wrap state managers)
-tree_service = TreeStateService(tree_state)
-session_service = SessionManagerService(session_manager)
+# Create services
+session_data_service = SessionDataService(session_loader)
+session_manager_service = SessionManagerService(session_manager)
 # ...
 
 # Create and start server
 server = WsServer(config=ws_config)
-server.register_service(tree_service)
-server.register_service(session_service)
+server.register_service(session_data_service)
+server.register_service(session_manager_service)
 # ...
 
 await server.start()
@@ -289,7 +287,7 @@ await server.start()
 
 ```typescript
 import {
-  TreeStateServiceClient,
+  SessionDataServiceClient,
   SessionManagerServiceClient,
 } from './generated/client';
 
@@ -297,15 +295,15 @@ import {
 const ws = new WebSocket('ws://localhost:8765');
 
 // Create service clients
-const treeService = new TreeStateServiceClient(ws);
-const sessionService = new SessionManagerServiceClient(ws);
+const sessionDataService = new SessionDataServiceClient(ws);
+const sessionManagerService = new SessionManagerServiceClient(ws);
 
 // RPC call
-const session = await sessionService.getSession('abc123');
+const session = await sessionDataService.getSession('abc123');
 console.log(session.title);
 
 // Event subscription
-const unsubscribe = treeService.onTurnUpdated((data) => {
+const unsubscribe = sessionDataService.onTurnUpdated((data) => {
   console.log('Turn updated:', data.turnIdx);
 });
 

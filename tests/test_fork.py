@@ -812,69 +812,7 @@ class TestContextGrouper:
         assert indices == [0, 1, 2]
 
 
-class TestTreeStateContextModeForFork:
-    """Tests for TreeState context mode operations in fork scenarios."""
-
-    def test_set_context_mode_multiple_turns(self):
-        """Setting context modes for multiple turns should all be stored."""
-        from core.tree_state import TreeState
-
-        state = TreeState()
-
-        state.set_context_mode("s1", 0, ContextMode.COPY)
-        state.set_context_mode("s1", 1, ContextMode.COMPRESS)
-        state.set_context_mode("s1", 2, ContextMode.DROP)
-
-        assert state.get_context_mode("s1", 0).value == "copy"
-        assert state.get_context_mode("s1", 1).value == "compress"
-        assert state.get_context_mode("s1", 2).value == "drop"
-
-    def test_get_context_modes_for_session(self):
-        """get_context_modes_for_session should return all modes for a session."""
-        from core.tree_state import TreeState
-
-        state = TreeState()
-
-        state.set_context_mode("s1", 0, ContextMode.COPY)
-        state.set_context_mode("s1", 1, ContextMode.COMPRESS)
-        state.set_context_mode("s2", 0, ContextMode.DROP)  # Different session
-
-        modes = state.get_context_modes_for_session("s1")
-
-        assert len(modes) == 2
-        assert modes[0].value == "copy"
-        assert modes[1].value == "compress"
-        # s2 modes should not be included
-        assert 2 not in modes
-
-    def test_context_mode_overwrite(self):
-        """Setting context mode twice should overwrite the first value."""
-        from core.tree_state import TreeState
-
-        state = TreeState()
-
-        state.set_context_mode("s1", 0, ContextMode.COPY)
-        state.set_context_mode("s1", 0, ContextMode.COMPRESS)
-
-        assert state.get_context_mode("s1", 0).value == "compress"
-
-    def test_clear_context_modes_for_session(self):
-        """clear_context_modes_for_session should remove all modes for that session."""
-        from core.tree_state import TreeState
-
-        state = TreeState()
-
-        state.set_context_mode("s1", 0, ContextMode.COPY)
-        state.set_context_mode("s1", 1, ContextMode.COMPRESS)
-        state.set_context_mode("s2", 0, ContextMode.COPY)
-
-        state.clear_context_modes_for_session("s1")
-
-        # s1 modes should be cleared (back to default DROP)
-        assert state.get_context_mode("s1", 0).value == "drop"
-        assert state.get_context_mode("s1", 1).value == "drop"
-        # s2 modes should be unchanged
-        assert state.get_context_mode("s2", 0).value == "copy"
+# TestTreeStateContextModeForFork removed - TreeState deleted in Phase 8
 
 
 class TestPrepareForkWithCompression:
@@ -1028,17 +966,14 @@ class TestForkProposalContextModeIntegration:
 
     These tests verify the end-to-end flow:
     1. ForkProposal.resolve_exchange_indices maps proposal to exchange indices
-    2. Context modes are stored in TreeState
-    3. get_selected_messages_with_indices reads modes correctly
-    4. group_messages_by_context_mode separates COPY/COMPRESS
-    5. prepare_fork handles compression correctly
+    2. Context modes are passed via context_modes parameter to fork_session
+    3. group_messages_by_context_mode separates COPY/COMPRESS
+    4. prepare_fork handles compression correctly
     """
 
     def test_full_flow_proposal_to_grouped_messages(self):
         """Test full flow from proposal to grouped messages."""
-        from core.tree_state import TreeState, TurnData
         from core.context_grouper import group_messages_by_context_mode
-        from dataclasses import dataclass, field
 
         # Step 1: Create a fork proposal with context plan
         proposal = ForkProposal(
@@ -1062,40 +997,22 @@ class TestForkProposalContextModeIntegration:
             3: ContextMode.COPY,
         }
 
-        # Step 3: Apply to TreeState (simulate what app does)
-        state = TreeState()
-
-        # Simulate 4 exchanges with 2 turns each (user + assistant)
-        for exchange_idx in range(4):
-            turn_idx_user = exchange_idx * 2
-            turn_idx_assistant = exchange_idx * 2 + 1
-            mode = exchange_modes.get(exchange_idx, ContextMode.DROP)
-            state.set_context_mode("s1", turn_idx_user, mode)
-            state.set_context_mode("s1", turn_idx_assistant, mode)
-
-        # Step 4: Verify modes were stored correctly
-        assert state.get_context_mode("s1", 0).value == "copy"  # Exchange 0, user
-        assert state.get_context_mode("s1", 1).value == "copy"  # Exchange 0, assistant
-        assert state.get_context_mode("s1", 2).value == "compress"  # Exchange 1, user
-        assert state.get_context_mode("s1", 3).value == "compress"  # Exchange 1, assistant
-        assert state.get_context_mode("s1", 4).value == "compress"  # Exchange 2, user
-        assert state.get_context_mode("s1", 5).value == "compress"  # Exchange 2, assistant
-        assert state.get_context_mode("s1", 6).value == "copy"  # Exchange 3, user
-        assert state.get_context_mode("s1", 7).value == "copy"  # Exchange 3, assistant
-
-        # Step 5: Create messages with modes from TreeState
+        # Step 3: Create messages with the resolved modes
         messages = []
-        for i in range(8):
-            mode = state.get_context_mode("s1", i)
-            msg = Message(
-                role="user" if i % 2 == 0 else "assistant",
-                content=f"Content {i}",
-                content_blocks=[TextBlock(text=f"Content {i}")],
-                context_mode=mode,
-            )
-            messages.append((msg, i))
+        for exchange_idx in range(4):
+            mode = exchange_modes.get(exchange_idx, ContextMode.DROP)
+            # Two turns per exchange (user + assistant)
+            for turn_offset, role in enumerate(["user", "assistant"]):
+                turn_idx = exchange_idx * 2 + turn_offset
+                msg = Message(
+                    role=role,
+                    content=f"Content {turn_idx}",
+                    content_blocks=[TextBlock(text=f"Content {turn_idx}")],
+                    context_mode=mode,
+                )
+                messages.append((msg, turn_idx))
 
-        # Step 6: Group by context mode
+        # Step 4: Group by context mode
         groups = group_messages_by_context_mode(messages)
 
         # Should have 4 COPY items (indices 0, 1, 6, 7)
@@ -1155,20 +1072,12 @@ class TestForkProposalContextModeIntegration:
         assert not groups.needs_compression
 
     def test_context_modes_preserved_through_message_creation(self):
-        """Messages created from TreeState modes should preserve the mode attribute."""
-        from core.tree_state import TreeState
+        """Messages created with context modes should preserve the mode attribute."""
+        modes = [ContextMode.COPY, ContextMode.COMPRESS, ContextMode.DROP]
 
-        state = TreeState()
-
-        # Set context modes
-        state.set_context_mode("s1", 0, ContextMode.COPY)
-        state.set_context_mode("s1", 1, ContextMode.COMPRESS)
-        state.set_context_mode("s1", 2, ContextMode.DROP)
-
-        # Create messages with modes from TreeState (simulating get_selected_messages_with_indices)
+        # Create messages with explicit modes
         messages = []
-        for i in range(3):
-            mode = state.get_context_mode("s1", i)
+        for i, mode in enumerate(modes):
             if mode != ContextMode.DROP:
                 msg = Message(
                     role="user" if i % 2 == 0 else "assistant",
@@ -1188,7 +1097,6 @@ class TestForkProposalContextModeIntegration:
 
     def test_end_to_end_fork_proposal_creates_compression_data(self):
         """End-to-end test: fork proposal with compress mode creates ForkData for compression."""
-        from core.tree_state import TreeState
         from core.context_grouper import group_messages_by_context_mode
 
         # Step 1: Create proposal
@@ -1204,15 +1112,10 @@ class TestForkProposalContextModeIntegration:
         # Step 2: Resolve (2 exchanges)
         exchange_modes = proposal.resolve_exchange_indices(2, exclude_current=False)
 
-        # Step 3: Apply to TreeState
-        state = TreeState()
-        for exchange_idx, mode in exchange_modes.items():
-            state.set_context_mode("s1", exchange_idx, mode)
-
-        # Step 4: Build messages from TreeState modes
+        # Step 3: Build messages with resolved modes
         indexed_messages = []
         for i in range(2):
-            mode = state.get_context_mode("s1", i)
+            mode = exchange_modes.get(i, ContextMode.DROP)
             if mode != ContextMode.DROP:
                 msg = Message(
                     role="user",
@@ -1222,7 +1125,7 @@ class TestForkProposalContextModeIntegration:
                 )
                 indexed_messages.append((msg, i))
 
-        # Step 5: Group by context mode
+        # Step 4: Group by context mode
         groups = group_messages_by_context_mode(indexed_messages)
 
         # Verify the data needed for ForkManager
@@ -1233,43 +1136,7 @@ class TestForkProposalContextModeIntegration:
         assert groups.needs_compression
         assert groups.compress_group_positions == [1]
 
-    def test_session_id_mismatch_modes_still_found(self):
-        """Context modes should be found even when session_id differs from current_session_id.
-
-        This tests the fix for the bug where:
-        1. _execute_fork_proposal sets modes on session_id parameter
-        2. get_selected_messages_with_indices was looking up modes on current_session_id
-        3. If these differed, modes would default to COPY instead of proposal modes
-
-        The fix is to pass session_id explicitly to get_selected_messages_with_indices.
-        """
-        from core.tree_state import TreeState
-
-        state = TreeState()
-
-        # Simulate setting modes on a specific session (like _execute_fork_proposal does)
-        target_session_id = "session-with-proposal"
-        state.set_context_mode(target_session_id, 0, ContextMode.COPY)
-        state.set_context_mode(target_session_id, 1, ContextMode.COMPRESS)
-        state.set_context_mode(target_session_id, 2, ContextMode.DROP)
-
-        # Set a different current session (simulating user switched sessions)
-        different_session_id = "different-session"
-        state.add_session_from_metadata({"id": different_session_id, "title": "Other"}, is_current=True)
-
-        # Verify current session is different from target
-        assert state.get_current_session_id() == different_session_id
-        assert state.get_current_session_id() != target_session_id
-
-        # The fix: looking up modes by target_session_id should work
-        assert state.get_context_mode(target_session_id, 0).value == "copy"
-        assert state.get_context_mode(target_session_id, 1).value == "compress"
-        assert state.get_context_mode(target_session_id, 2).value == "drop"
-
-        # Bug scenario: looking up by current_session_id would return defaults
-        # (DROP for non-current sessions, or COPY for current session)
-        assert state.get_context_mode(different_session_id, 0).value == "copy"  # Default COPY for current
-        assert state.get_context_mode(different_session_id, 1).value == "copy"  # Default COPY for current
+    # test_session_id_mismatch_modes_still_found removed - TreeState deleted in Phase 8
 
 
 class TestBuildContextMessages:

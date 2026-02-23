@@ -12,7 +12,7 @@
 
 4. **Multi-Frontend Architecture** - Service-oriented architecture enabling multiple frontends (TUI, web, CLI) sharing a common backend. See [Multi-Frontend Architecture](docs/design/multi-frontend-architecture.md).
 
-   - **Service layer**: 5 services wrap core state managers (`TreeStateService`, `SessionManagerService`, etc.)
+   - **Service layer**: Services wrap core state managers (`SessionManagerService`, `SessionDataService`, etc.)
    - **WebSocket server**: JSON-RPC dispatch with JWT auth and TLS support
    - **TypeScript codegen**: Auto-generated clients from `@ws_expose` decorated Python services
    - **Wire protocol**: JSON-RPC 2.0 with events for real-time updates
@@ -63,14 +63,13 @@ balloons/
 ├── models.py           # Domain entities (Turn, Message, ContentBlock types)
 ├── storage_schema.py   # Storage DTOs for Rust codegen
 ├── core/               # Core state managers (no network concerns)
-│   ├── tree_state.py   # Session/turn view state
 │   ├── goal_tree_state.py  # Goal/plan/todo state
 │   ├── queue_state.py  # Message queue state
 │   ├── stream_state.py # LLM task state
 │   └── manager.py      # Session lifecycle manager
 ├── service/            # WebSocket-exposed services
-│   ├── tree_state_service.py    # Wraps TreeState
-│   ├── session_manager_service.py  # Wraps SessionManager
+│   ├── session_manager_service.py  # Session operations and LLM orchestration
+│   ├── session_data_service.py    # Session data events for frontends
 │   ├── goal_tree_state_service.py  # Wraps GoalTreeState
 │   ├── task_state_service.py    # Wraps StreamState
 │   ├── queue_state_service.py   # Wraps QueueState

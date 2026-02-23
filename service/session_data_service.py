@@ -49,7 +49,6 @@ from models import (
 )
 
 if TYPE_CHECKING:
-    from core.tree_state import TreeState
     from core.async_storage import AsyncStorage
 
 # ContentBlock union for type annotations
@@ -310,6 +309,134 @@ class SessionHistoryCompleteEvent:
     final_watermark: int  # Highest turn order across all chunks
 
 
+# --- Session Lifecycle Events (Phase 8: replaces TreeStateService events) ---
+
+
+@ws_type
+@dataclass
+class SessionInfo:
+    """Session metadata for listing and display.
+
+    This is the primary session info type used by SessionDataService.
+    Replaces TreeStateService.SessionInfo.
+    """
+
+    id: str
+    title: str
+    created: str
+    last_modified: str
+    model: str
+    message_count: int
+    total_cost: float
+    is_streaming: bool
+    fork_name: str
+    fork_status: str
+    parent_id: str | None = None
+    cached_context_tokens: int = 0
+    context_window: int = 200000
+    binding_indicator: str = ""
+    backend_name: str = ""
+    is_pinned: bool = False
+
+
+@ws_type
+@dataclass
+class SessionAddedEvent:
+    """Event payload when a new session is created."""
+
+    session_id: str
+    session: SessionInfo
+
+
+@ws_type
+@dataclass
+class SessionUpdatedEvent:
+    """Event payload when session metadata changes."""
+
+    session_id: str
+    session: SessionInfo
+
+
+@ws_type
+@dataclass
+class SessionRemovedEvent:
+    """Event payload when a session is deleted."""
+
+    session_id: str
+
+
+@ws_type
+@dataclass
+class SessionPinnedEvent:
+    """Event payload when a session is pinned."""
+
+    session_id: str
+    is_pinned: bool
+
+
+@ws_type
+@dataclass
+class PinnedSessionsChangedEvent:
+    """Event payload when the pinned sessions list changes."""
+
+    pinned_session_ids: list[str]
+
+
+@ws_type
+@dataclass
+class ToolUseInfo:
+    """Tool use information for TurnInfo backwards compatibility."""
+
+    tool_use_id: str
+    name: str
+    input_json: str  # JSON string of tool input
+
+
+@ws_type
+@dataclass
+class ToolResultInfo:
+    """Tool result information for TurnInfo backwards compatibility."""
+
+    tool_use_id: str
+    content: str
+    is_error: bool = False
+
+
+@ws_type
+@dataclass
+class TurnImageInfo:
+    """Image information for TurnInfo backwards compatibility."""
+
+    source_type: str
+    media_type: str
+    data: str  # base64 or path
+
+
+@ws_type
+@dataclass
+class TurnInfo:
+    """Turn information for backwards compatibility with TreeStateService.
+
+    This type maintains compatibility with the existing frontend which
+    expects getTurns() to return TurnInfo[] objects.
+
+    DEPRECATED: New code should use TurnSnapshot and the subscription API.
+    """
+
+    idx: int
+    role: str
+    content: str
+    streaming: bool
+    viewed: bool
+    tokens: int
+    context_mode: str
+    content_block_type: str = "text"
+    exchange_id: str | None = None
+    images: list[TurnImageInfo] = field(default_factory=list)
+    tool_use: ToolUseInfo | None = None
+    tool_result: ToolResultInfo | None = None
+
+
 @ws_service
 class SessionDataService:
     """WebSocket-exposed service for session data streaming.
@@ -330,17 +457,14 @@ class SessionDataService:
 
     def __init__(
         self,
-        tree_state: "TreeState | None" = None,
         session_loader: SessionLoaderCallback | None = None,
         storage: "AsyncStorage | None" = None,
     ) -> None:
         """Initialize the session data service.
 
         Args:
-            tree_state: Optional TreeState for loading session snapshots.
-                       Can also be set later via set_tree_state().
             session_loader: Optional async callback to load sessions from storage.
-                           Used when a session isn't already loaded in TreeState.
+                           Can also be set later via set_session_loader().
             storage: Optional AsyncStorage for direct LMDB access (used for chunked
                     history loading). Can also be set later via set_storage().
         """
@@ -351,22 +475,12 @@ class SessionDataService:
         self._subscriptions: dict[str, set[str]] = {}
         # Track reverse mapping: session_id -> set of client_ids
         self._session_subscribers: dict[str, set[str]] = {}
-        # TreeState for loading session data (temporary, to be removed in later phases)
-        self._tree_state: "TreeState | None" = tree_state
-        # Session loader callback for loading sessions not in TreeState
+        # Session loader callback for loading sessions from storage
         self._session_loader: SessionLoaderCallback | None = session_loader
         # AsyncStorage for direct LMDB access (chunked history loading)
         self._storage: "AsyncStorage | None" = storage
         # Track background history loading tasks: session_id -> task
         self._history_tasks: dict[str, asyncio.Task] = {}
-
-    def set_tree_state(self, tree_state: "TreeState") -> None:
-        """Set the TreeState for loading session snapshots.
-
-        Args:
-            tree_state: The TreeState instance to use for loading session data
-        """
-        self._tree_state = tree_state
 
     def set_session_loader(self, loader: SessionLoaderCallback) -> None:
         """Set the session loader callback.
@@ -559,94 +673,54 @@ class SessionDataService:
         """
         from core.debug_log import debug_log
 
-        if not self._tree_state:
-            debug_log.info("get_session_snapshot: no tree_state", category="fork")
+        if not self._session_loader:
+            debug_log.info("get_session_snapshot: no session_loader", category="fork")
             return None
 
-        session_data = self._tree_state.get_session(session_id)
+        # Load session from storage
+        session = await self._session_loader(session_id)
+        if not session:
+            debug_log.info(
+                f"get_session_snapshot: session {session_id[:8]} not found",
+                category="fork",
+            )
+            return None
 
         debug_log.info(
-            f"get_session_snapshot: session_id={session_id[:8]}",
+            f"get_session_snapshot: session_id={session_id[:8]}, turns={len(session.turns)}",
             category="fork",
-            details={
-                "session_data_exists": session_data is not None,
-                "session_data_turns": len(session_data.turns) if session_data and session_data.turns else None,
-                "session_ref_exists": session_data.session_ref is not None if session_data else None,
-                "session_ref_turns": len(session_data.session_ref.turns) if session_data and session_data.session_ref else None,
-            }
         )
 
-        # If session not in TreeState or turns not loaded, try to load it
-        if session_data is None or session_data.turns is None:
-            debug_log.info(
-                f"get_session_snapshot: need to load session {session_id[:8]}",
-                category="fork",
-                details={"session_data_is_none": session_data is None}
-            )
-            if self._session_loader:
-                # Load session from storage
-                session = await self._session_loader(session_id)
-                if session:
-                    debug_log.info(
-                        f"get_session_snapshot: loaded session {session_id[:8]} from storage",
-                        category="fork",
-                        details={"turn_count": len(session.turns)}
-                    )
-                    # Add/update in TreeState and load turns
-                    self._tree_state.add_session(session, is_current=False)
-                    self._tree_state.load_session(session_id, session)
-                    session_data = self._tree_state.get_session(session_id)
-
-        if not session_data:
-            return None
-
-        # Convert TreeState turns to TurnSnapshot format
-        # Turns are ordered by array position - no separate idx needed
+        # Convert Session turns to TurnSnapshot format
         turn_snapshots: list[TurnSnapshot] = []
         streaming_turn_ids: list[str] = []
 
-        if session_data.turns is not None:
-            for idx, turn in enumerate(session_data.turns):
-                # Get context mode for this turn (still uses idx internally)
-                context_mode = self._tree_state.get_context_mode(session_id, turn.idx)
+        for idx, turn in enumerate(session.turns):
+            # Use content_block if available, otherwise create TextBlock from content
+            content_block = turn.content_block
+            if content_block is None:
+                content = getattr(turn, 'content', '') or ""
+                content_block = TextBlock(type="text", text=content)
 
-                # Get turn_id from the session_ref if available (Turn has .id field)
-                turn_id = ""
-                if session_data.session_ref and hasattr(session_data.session_ref, 'turns'):
-                    session_turns = session_data.session_ref.turns
-                    if idx < len(session_turns):
-                        session_turn = session_turns[idx]
-                        if hasattr(session_turn, 'id'):
-                            turn_id = session_turn.id
-
-                # Use content_block if available, otherwise create TextBlock from content
-                content_block = turn.content_block
-                if content_block is None:
-                    content_block = TextBlock(type="text", text=turn.content or "")
-
-                turn_snapshot = TurnSnapshot(
-                    turn_id=turn_id,
-                    role=turn.role,
-                    streaming=turn.streaming,
-                    viewed=turn.viewed,
-                    tokens=turn.tokens,
-                    context_mode=context_mode.value,
-                    content_block=content_block,
-                    exchange_id=turn.exchange_id,
-                )
-                turn_snapshots.append(turn_snapshot)
-
-                # Track streaming turns by turn_id
-                if turn.streaming and turn_id:
-                    streaming_turn_ids.append(turn_id)
+            turn_snapshot = TurnSnapshot(
+                turn_id=turn.id if hasattr(turn, 'id') else "",
+                role=turn.role,
+                streaming=False,  # Not streaming when loading from storage
+                viewed=True,
+                tokens=getattr(turn, 'tokens', 0),
+                context_mode="copy",  # Default to copy
+                content_block=content_block,
+                exchange_id=getattr(turn, 'exchange_id', None),
+            )
+            turn_snapshots.append(turn_snapshot)
 
         return SessionSnapshot(
             session_id=session_id,
-            title=session_data.title,
-            model=session_data.model,
-            is_streaming=session_data.is_streaming,
+            title=session.title or "",
+            model=session.model or "",
+            is_streaming=False,  # Will be updated by streaming events
             turns=turn_snapshots,
-            streaming_turn_ids=streaming_turn_ids,
+            streaming_turn_ids=[],
         )
 
     async def _get_session_metadata_snapshot(self, session_id: str) -> SessionSnapshot | None:
@@ -664,35 +738,25 @@ class SessionDataService:
         """
         from core.debug_log import debug_log
 
-        if not self._tree_state:
-            debug_log.info("_get_session_metadata_snapshot: no tree_state", category="fork")
+        if not self._session_loader:
+            debug_log.info("_get_session_metadata_snapshot: no session_loader", category="fork")
             return None
 
-        session_data = self._tree_state.get_session(session_id)
-
-        # If session not in TreeState, try to load metadata only
-        if session_data is None:
+        # Load session from storage
+        session = await self._session_loader(session_id)
+        if not session:
             debug_log.info(
-                f"_get_session_metadata_snapshot: session {session_id[:8]} not in TreeState",
+                f"_get_session_metadata_snapshot: session {session_id[:8]} not found",
                 category="fork",
             )
-            if self._session_loader:
-                # Load session from storage (this loads metadata and turns, but we only use metadata)
-                session = await self._session_loader(session_id)
-                if session:
-                    # Add to TreeState (metadata only, turns will be loaded via chunks)
-                    self._tree_state.add_session(session, is_current=False)
-                    session_data = self._tree_state.get_session(session_id)
-
-        if not session_data:
             return None
 
         # Return metadata-only snapshot (empty turns, history streams separately)
         return SessionSnapshot(
             session_id=session_id,
-            title=session_data.title,
-            model=session_data.model,
-            is_streaming=session_data.is_streaming,
+            title=session.title or "",
+            model=session.model or "",
+            is_streaming=False,  # Will be updated by streaming events
             turns=[],  # Empty - history will stream via chunk events
             streaming_turn_ids=[],
         )
@@ -1011,6 +1075,422 @@ class SessionDataService:
         """
         return self._session_subscribers.get(session_id, set()).copy()
 
+    # --- Session Listing (Phase 8: replaces TreeStateService) ---
+
+    async def _load_pinned_session_ids(self) -> set[str]:
+        """Load pinned session IDs from UserPrefs storage."""
+        from core.async_storage import get_user_prefs_storage
+
+        try:
+            storage = await get_user_prefs_storage()
+            prefs = await storage.load_prefs()
+            return set(prefs.pinned_session_ids)
+        except Exception:
+            return set()
+
+    def session_to_info(
+        self,
+        session: Any,
+        is_pinned: bool = False,
+        is_streaming: bool = False,
+    ) -> SessionInfo:
+        """Convert a Session object to SessionInfo.
+
+        This is a synchronous method for use by SessionManagerService when
+        emitting session events. For async usage, use get_session() instead.
+
+        Args:
+            session: The Session object to convert
+            is_pinned: Whether the session is pinned
+            is_streaming: Whether the session is currently streaming
+
+        Returns:
+            SessionInfo with all fields populated
+        """
+        return SessionInfo(
+            id=session.id,
+            title=session.title,
+            created=session.created,
+            last_modified=session.last_modified,
+            model=session.model,
+            message_count=len(session.turns),
+            total_cost=session.total_cost,
+            is_streaming=is_streaming,
+            fork_name=session.fork_name,
+            fork_status=session.fork_status,
+            parent_id=session.parent_id,
+            cached_context_tokens=getattr(session, "cached_context_tokens", 0),
+            context_window=getattr(session, "context_window", 200000),
+            binding_indicator=getattr(session, "binding_indicator", ""),
+            backend_name=getattr(session, "backend_name", ""),
+            is_pinned=is_pinned,
+        )
+
+    async def _session_dict_to_info(
+        self, data: dict, pinned_ids: set[str], streaming_ids: set[str]
+    ) -> SessionInfo:
+        """Convert a session metadata dict from LMDB to SessionInfo.
+
+        Args:
+            data: Session metadata dict from storage
+            pinned_ids: Set of pinned session IDs
+            streaming_ids: Set of currently streaming session IDs
+
+        Returns:
+            SessionInfo with all fields populated
+        """
+        from datetime import datetime, timezone
+
+        # Convert Unix timestamps to ISO format
+        created = data.get("created") or data.get("created_at", "")
+        last_modified = data.get("last_modified") or data.get("updated_at", "")
+
+        if isinstance(created, (int, float)) and created > 0:
+            created = datetime.fromtimestamp(created, tz=timezone.utc).isoformat()
+        if isinstance(last_modified, (int, float)) and last_modified > 0:
+            last_modified = datetime.fromtimestamp(last_modified, tz=timezone.utc).isoformat()
+
+        session_id = data.get("id", "")
+        return SessionInfo(
+            id=session_id,
+            title=data.get("title") or data.get("name", ""),
+            created=created if isinstance(created, str) else "",
+            last_modified=last_modified if isinstance(last_modified, str) else "",
+            model=data.get("model", ""),
+            message_count=data.get("message_count") or data.get("turn_count", 0),
+            total_cost=data.get("total_cost", 0.0),
+            is_streaming=session_id in streaming_ids,
+            fork_name=data.get("fork_name", ""),
+            fork_status=data.get("fork_status", "active"),
+            parent_id=data.get("parent_id"),
+            cached_context_tokens=data.get("cached_context_tokens", 0),
+            context_window=data.get("context_window", 200000),
+            binding_indicator=data.get("binding_indicator", ""),
+            backend_name=data.get("backend_name", ""),
+            is_pinned=session_id in pinned_ids,
+        )
+
+    @ws_expose
+    async def get_all_sessions(self) -> list[SessionInfo]:
+        """Get all sessions with metadata.
+
+        Returns session list directly from LMDB storage, with pinning and
+        streaming state merged in.
+
+        Returns:
+            List of all sessions sorted by last_modified (most recent first)
+        """
+        from core.debug_log import debug_log
+
+        if not self._storage:
+            debug_log.warning(
+                "get_all_sessions called without storage configured",
+                category="websocket",
+            )
+            return []
+
+        # Load data in parallel
+        sessions_data = await self._storage.list_sessions()
+        pinned_ids = await self._load_pinned_session_ids()
+
+        # Get streaming session IDs from SessionManagerService if available
+        streaming_ids: set[str] = set()
+        # Note: We'll need to wire this up from SessionManagerService
+
+        result = []
+        for data in sessions_data:
+            info = await self._session_dict_to_info(data, pinned_ids, streaming_ids)
+            result.append(info)
+
+        return result
+
+    @ws_expose
+    async def get_session(self, session_id: str) -> SessionInfo | None:
+        """Get session metadata by ID.
+
+        Args:
+            session_id: The session ID to look up
+
+        Returns:
+            SessionInfo if found, None otherwise
+        """
+        from core.debug_log import debug_log
+
+        if not self._storage:
+            debug_log.warning(
+                "get_session called without storage configured",
+                category="websocket",
+            )
+            return None
+
+        # Load the session
+        session = await self._storage.load_session(session_id)
+        if not session:
+            return None
+
+        pinned_ids = await self._load_pinned_session_ids()
+        streaming_ids: set[str] = set()  # TODO: wire from SessionManagerService
+
+        # Convert Session to dict format expected by _session_dict_to_info
+        data = {
+            "id": session.id,
+            "title": session.title,
+            "created": session.created,
+            "last_modified": session.last_modified,
+            "model": session.model,
+            "message_count": len(session.turns),
+            "total_cost": session.total_cost,
+            "fork_name": session.fork_name,
+            "fork_status": session.fork_status,
+            "parent_id": session.parent_id,
+            "cached_context_tokens": getattr(session, "cached_context_tokens", 0),
+            "context_window": getattr(session, "context_window", 200000),
+            "binding_indicator": getattr(session, "binding_indicator", ""),
+            "backend_name": getattr(session, "backend_name", ""),
+        }
+
+        return await self._session_dict_to_info(data, pinned_ids, streaming_ids)
+
+    # --- Turn Access (backwards compatibility with TreeStateService) ---
+
+    @ws_expose
+    async def get_turns(self, session_id: str) -> list[TurnInfo]:
+        """Get all turns for a session.
+
+        DEPRECATED: This method exists for backwards compatibility with the
+        existing frontend. New code should use subscribe_session() and
+        receive turns via the historyChunk event.
+
+        Args:
+            session_id: The session ID to get turns for
+
+        Returns:
+            List of TurnInfo objects for all turns in the session
+        """
+        import json
+        from core.debug_log import debug_log
+
+        if not self._session_loader:
+            debug_log.warning(
+                "get_turns called without session_loader configured",
+                category="websocket",
+            )
+            return []
+
+        session = await self._session_loader(session_id)
+        if not session:
+            debug_log.warning(
+                f"get_turns: session {session_id[:8]} not found",
+                category="websocket",
+            )
+            return []
+
+        result: list[TurnInfo] = []
+        for idx, turn in enumerate(session.turns):
+            # Get content from content_block or fallback to content attribute
+            content_block = turn.content_block
+            content = ""
+            content_block_type = "text"
+            tool_use: ToolUseInfo | None = None
+            tool_result: ToolResultInfo | None = None
+            images: list[TurnImageInfo] = []
+
+            if content_block is not None:
+                content_block_type = getattr(content_block, "type", "text")
+
+                if isinstance(content_block, TextBlock):
+                    content = content_block.text
+                elif isinstance(content_block, ToolUseBlock):
+                    content = json.dumps(content_block.input) if content_block.input else ""
+                    tool_use = ToolUseInfo(
+                        tool_use_id=content_block.id,
+                        name=content_block.name,
+                        input_json=content,
+                    )
+                elif isinstance(content_block, ToolResultBlock):
+                    content = str(content_block.content) if content_block.content else ""
+                    tool_result = ToolResultInfo(
+                        tool_use_id=content_block.tool_use_id,
+                        content=content,
+                        is_error=getattr(content_block, "is_error", False),
+                    )
+                elif isinstance(content_block, ImageBlock):
+                    content = "[Image]"
+                    source = content_block.source
+                    if source:
+                        images.append(TurnImageInfo(
+                            source_type=source.type,
+                            media_type=source.media_type,
+                            data=source.data if hasattr(source, 'data') else "",
+                        ))
+                else:
+                    # For other block types, try to get a string representation
+                    content = str(getattr(content_block, "text", "")) or str(content_block)
+            else:
+                # Fallback to content attribute if available
+                content = getattr(turn, 'content', '') or ""
+
+            # Get context_mode as string (could be ContextMode enum or string)
+            raw_context_mode = getattr(turn, 'context_mode', None)
+            if raw_context_mode is None:
+                context_mode_str = "copy"
+            elif hasattr(raw_context_mode, 'value'):
+                # It's an enum
+                context_mode_str = raw_context_mode.value
+            else:
+                context_mode_str = str(raw_context_mode)
+
+            turn_info = TurnInfo(
+                idx=idx,
+                role=turn.role,
+                content=content,
+                streaming=False,  # Historical turns are not streaming
+                viewed=True,
+                tokens=getattr(turn, 'tokens', 0),
+                context_mode=context_mode_str,
+                content_block_type=content_block_type,
+                exchange_id=getattr(turn, 'exchange_id', None),
+                images=images,
+                tool_use=tool_use,
+                tool_result=tool_result,
+            )
+            result.append(turn_info)
+
+        debug_log.info(
+            f"get_turns: session {session_id[:8]} returned {len(result)} turns",
+            category="websocket",
+        )
+        return result
+
+    # --- Pinning Operations ---
+
+    @ws_expose
+    async def pin_session(self, session_id: str) -> bool:
+        """Pin a session to appear at top of lists.
+
+        Args:
+            session_id: The session to pin
+
+        Returns:
+            True if newly pinned, False if already pinned or session doesn't exist
+        """
+        from core.async_storage import get_user_prefs_storage
+        from core.debug_log import debug_log
+
+        try:
+            storage = await get_user_prefs_storage()
+            prefs = await storage.load_prefs()
+
+            if session_id in prefs.pinned_session_ids:
+                return False  # Already pinned
+
+            prefs.pinned_session_ids.append(session_id)
+            await storage.save_prefs(prefs)
+
+            debug_log.info(
+                f"Session pinned: {session_id[:8]}",
+                category="websocket",
+            )
+
+            # Emit events to all clients
+            self._emit_event(
+                "sessionDataSessionPinned",
+                SessionPinnedEvent(session_id=session_id, is_pinned=True).__dict__,
+            )
+            self._emit_event(
+                "sessionDataPinnedSessionsChanged",
+                PinnedSessionsChangedEvent(pinned_session_ids=prefs.pinned_session_ids).__dict__,
+            )
+
+            return True
+        except Exception as e:
+            debug_log.error(f"Failed to pin session: {e}", category="websocket")
+            return False
+
+    @ws_expose
+    async def unpin_session(self, session_id: str) -> bool:
+        """Unpin a session.
+
+        Args:
+            session_id: The session to unpin
+
+        Returns:
+            True if unpinned, False if wasn't pinned
+        """
+        from core.async_storage import get_user_prefs_storage
+        from core.debug_log import debug_log
+
+        try:
+            storage = await get_user_prefs_storage()
+            prefs = await storage.load_prefs()
+
+            if session_id not in prefs.pinned_session_ids:
+                return False  # Not pinned
+
+            prefs.pinned_session_ids.remove(session_id)
+            await storage.save_prefs(prefs)
+
+            debug_log.info(
+                f"Session unpinned: {session_id[:8]}",
+                category="websocket",
+            )
+
+            # Emit events to all clients
+            self._emit_event(
+                "sessionDataSessionPinned",
+                SessionPinnedEvent(session_id=session_id, is_pinned=False).__dict__,
+            )
+            self._emit_event(
+                "sessionDataPinnedSessionsChanged",
+                PinnedSessionsChangedEvent(pinned_session_ids=prefs.pinned_session_ids).__dict__,
+            )
+
+            return True
+        except Exception as e:
+            debug_log.error(f"Failed to unpin session: {e}", category="websocket")
+            return False
+
+    @ws_expose
+    async def toggle_pin(self, session_id: str) -> bool:
+        """Toggle pin state for a session.
+
+        Args:
+            session_id: The session to toggle
+
+        Returns:
+            True if now pinned, False if now unpinned
+        """
+        pinned_ids = await self._load_pinned_session_ids()
+        if session_id in pinned_ids:
+            await self.unpin_session(session_id)
+            return False
+        else:
+            await self.pin_session(session_id)
+            return True
+
+    @ws_expose
+    async def is_pinned(self, session_id: str) -> bool:
+        """Check if a session is pinned.
+
+        Args:
+            session_id: The session to check
+
+        Returns:
+            True if session is pinned
+        """
+        pinned_ids = await self._load_pinned_session_ids()
+        return session_id in pinned_ids
+
+    @ws_expose
+    async def get_pinned_sessions(self) -> list[str]:
+        """Get all pinned session IDs.
+
+        Returns:
+            List of pinned session IDs
+        """
+        pinned_ids = await self._load_pinned_session_ids()
+        return list(pinned_ids)
+
     # --- Client Lifecycle ---
 
     def client_disconnected(self, client_id: str) -> None:
@@ -1245,6 +1725,58 @@ class SessionDataService:
         )
         self._emit_event("sessionDataHistoryComplete", event_data.__dict__, subscribers)
 
+    # --- Session Lifecycle Emission (Phase 8) ---
+
+    def emit_session_added(self, session: SessionInfo) -> None:
+        """Emit a session added event to all clients.
+
+        Called when a new session is created (fork, derive, new).
+
+        Args:
+            session: The session info for the new session
+        """
+        from core.debug_log import debug_log
+        debug_log.info(
+            f"emit_session_added: session={session.id[:8]}, title={session.title[:20]}",
+            category="websocket",
+        )
+        event_data = SessionAddedEvent(
+            session_id=session.id,
+            session=session,
+        )
+        # Broadcast to all clients (no target filtering)
+        self._emit_event("sessionDataSessionAdded", asdict(event_data))
+
+    def emit_session_updated(self, session: SessionInfo) -> None:
+        """Emit a session updated event to all clients.
+
+        Called when session metadata changes (title, tokens, streaming state).
+
+        Args:
+            session: The updated session info
+        """
+        event_data = SessionUpdatedEvent(
+            session_id=session.id,
+            session=session,
+        )
+        self._emit_event("sessionDataSessionUpdated", asdict(event_data))
+
+    def emit_session_removed(self, session_id: str) -> None:
+        """Emit a session removed event to all clients.
+
+        Called when a session is deleted.
+
+        Args:
+            session_id: The ID of the removed session
+        """
+        from core.debug_log import debug_log
+        debug_log.info(
+            f"emit_session_removed: session={session_id[:8]}",
+            category="websocket",
+        )
+        event_data = SessionRemovedEvent(session_id=session_id)
+        self._emit_event("sessionDataSessionRemoved", event_data.__dict__)
+
     # --- Events (for TypeScript generation) ---
     # Event names are prefixed with "sessionData" to avoid collisions with
     # TaskStateService and TreeStateService which also have turn events.
@@ -1326,6 +1858,42 @@ class SessionDataService:
         After receiving this event, clients can be confident they have
         all historical data and can finalize the initial render.
         """
+        ...
+
+    # --- Session Lifecycle Events (Phase 8) ---
+
+    @ws_event(name="sessionDataSessionAdded")
+    async def on_session_data_session_added(self) -> SessionAddedEvent:
+        """Emitted when a new session is created.
+
+        Clients should add the session to their session list.
+        """
+        ...
+
+    @ws_event(name="sessionDataSessionUpdated")
+    async def on_session_data_session_updated(self) -> SessionUpdatedEvent:
+        """Emitted when session metadata changes.
+
+        Clients should update their session list display.
+        """
+        ...
+
+    @ws_event(name="sessionDataSessionRemoved")
+    async def on_session_data_session_removed(self) -> SessionRemovedEvent:
+        """Emitted when a session is deleted.
+
+        Clients should remove the session from their list.
+        """
+        ...
+
+    @ws_event(name="sessionDataSessionPinned")
+    async def on_session_data_session_pinned(self) -> SessionPinnedEvent:
+        """Emitted when a session's pin state changes."""
+        ...
+
+    @ws_event(name="sessionDataPinnedSessionsChanged")
+    async def on_session_data_pinned_sessions_changed(self) -> PinnedSessionsChangedEvent:
+        """Emitted when the pinned sessions list changes."""
         ...
 
     # --- SessionEventObserver Implementation ---

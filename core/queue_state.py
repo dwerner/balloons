@@ -1,7 +1,7 @@
 """Queue state management for Balloons.
 
 This module provides centralized message queue state with an observer pattern,
-following the same architecture as TreeState and TaskState.
+following the same architecture as GoalTreeState and StreamState.
 
 Key Design Decisions:
     - Views receive immutable snapshots, never mutate state directly

@@ -80,11 +80,10 @@ Both TUI and headless mode expose identical WebSocket APIs:
 | Service | Purpose |
 |---------|---------|
 | SessionManagerService | Session lifecycle, streaming, fork/merge |
-| TreeStateService | Session tree view state |
+| SessionDataService | Session data events, subscription-based streaming |
 | TaskStateService | LLM streaming events |
 | GoalTreeStateService | Goal/plan/todo management |
 | QueueStateService | Message queue management |
-| SessionDataService | Subscription-based streaming |
 | ImageService | Image handling |
 | SoundService | Sound state (no playback in headless) |
 | DebugLogService | Debug log access |
