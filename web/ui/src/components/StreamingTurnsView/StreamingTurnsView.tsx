@@ -403,6 +403,17 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
             })}
           </div>
 
+          {/* Empty state when no turns and not streaming */}
+          {!isStreaming && turns.length === 0 && (
+            <div className="empty-session-placeholder">
+              <div className="empty-icon">💬</div>
+              <div className="empty-title">New Session</div>
+              <div className="empty-description">
+                Send a message to start the conversation.
+              </div>
+            </div>
+          )}
+
           {/* Streaming placeholder when no turns yet */}
           {isStreaming && turns.length === 0 && (
             <div className="streaming-placeholder">

@@ -67,14 +67,9 @@ export type ContentBlock =
   | ForkProposalBlock
   | MergeProposalBlock;
 
-// Create a debug logger that uses the client's WebSocket connection
-function createDebugLog(client: BalloonsClient | null) {
-  return (message: string, data?: unknown): void => {
-    if (client?.isConnected) {
-      client.debugLog.info(message, 'web.useSessionData', '', data as Record<string, unknown> | null).catch(() => {});
-    }
-  };
-}
+// Create a debug logger that respects the global debug toggle
+import { createLogger } from '../utils/debugLog';
+const debugLog = createLogger('useSessionData');
 
 /**
  * Internal turn state maintained by the hook.
@@ -240,9 +235,6 @@ export function useSessionData(
   client: BalloonsClient | null,
   autoSubscribe?: string | null
 ): UseSessionDataReturn {
-  // Create debug logger using the client's WebSocket connection
-  const debugLog = createDebugLog(client);
-
   // State
   const [turnsById, setTurnsById] = useState<Map<string, SessionDataTurn>>(new Map());
   const [isLoading, setIsLoading] = useState(false);
@@ -312,22 +304,38 @@ export function useSessionData(
   // Subscribe to a session
   const subscribe = useCallback(
     async (newSessionId: string) => {
+      debugLog('[useSessionData] subscribe called', {
+        newSessionId,
+        hasClient: !!client,
+        currentSession: currentSessionRef.current,
+        isSubscribed,
+      });
+
       if (!client) {
+        debugLog('[useSessionData] subscribe: no client');
         setError('Client not connected');
         return;
       }
 
+      // Set loading state immediately to prevent "empty" flash during session switch
+      setIsLoading(true);
+
       // Unsubscribe from previous session if any
       if (currentSessionRef.current && currentSessionRef.current !== newSessionId) {
+        debugLog('[useSessionData] subscribe: unsubscribing from previous session', {
+          previousSession: currentSessionRef.current,
+        });
         await unsubscribe();
       }
 
       // Skip if already subscribed to this session
       if (currentSessionRef.current === newSessionId && isSubscribed) {
+        debugLog('[useSessionData] subscribe: already subscribed, skipping');
+        setIsLoading(false);  // Restore loading state since we didn't actually subscribe
         return;
       }
 
-      setIsLoading(true);
+      debugLog('[useSessionData] subscribe: proceeding with subscription');
       setError(null);
       setSessionId(newSessionId);
       currentSessionRef.current = newSessionId;
@@ -786,6 +794,12 @@ export function useSessionData(
         }
 
         // Process snapshot (metadata only - history arrives via chunks)
+        debugLog('[useSessionData] subscription result', {
+          hasSnapshot: !!result.snapshot,
+          turnCount: result.snapshot?.turns?.length ?? 0,
+          isStreaming: result.snapshot?.isStreaming,
+        });
+
         const initialTurns = new Map<string, SessionDataTurn>();
         if (result.snapshot?.turns) {
           result.snapshot.turns.forEach((turn: TurnSnapshot, arrayIndex: number) => {
@@ -804,6 +818,9 @@ export function useSessionData(
           });
         }
 
+        debugLog('[useSessionData] setting state: isSubscribed=true, isLoading=false', {
+          initialTurnsCount: initialTurns.size,
+        });
         setTurnsById(initialTurns);
         setIsSubscribed(true);
         setIsLoading(false);
@@ -832,13 +849,22 @@ export function useSessionData(
 
   // Auto-subscribe when autoSubscribe changes
   useEffect(() => {
+    debugLog('[useSessionData] useEffect triggered', {
+      hasClient: !!client,
+      autoSubscribe,
+      isSubscribed,
+      currentSession: currentSessionRef.current,
+    });
+
     if (!client || !autoSubscribe) {
       if (isSubscribed && !autoSubscribe) {
+        debugLog('[useSessionData] unsubscribing (no autoSubscribe)');
         unsubscribe();
       }
       return;
     }
 
+    debugLog('[useSessionData] calling subscribe', { autoSubscribe });
     subscribe(autoSubscribe);
 
     return () => {

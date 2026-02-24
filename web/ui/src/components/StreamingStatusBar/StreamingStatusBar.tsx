@@ -1,5 +1,7 @@
 import React, { memo, useEffect, useState, useRef, useCallback } from 'react';
-import type { TaskInfo } from '../../../../generated/balloons-client';
+import type { TaskInfo, SessionInfo, BalloonsClient } from '../../../../generated/balloons-client';
+import { useLongPress } from '../../hooks';
+import { RenameSessionModal } from '../RenameSessionModal';
 import './StreamingStatusBar.css';
 
 export interface StreamingStatusBarProps {
@@ -19,6 +21,12 @@ export interface StreamingStatusBarProps {
   onTogglePin?: () => void;
   /** Scroll state from chat view */
   scrollState?: { isFollowing: boolean; isAtBottom: boolean };
+  /** Session info for displaying/editing name */
+  session?: SessionInfo;
+  /** Balloons client for rename operations */
+  client?: BalloonsClient | null;
+  /** Callback when session title is changed */
+  onTitleChange?: (newTitle: string) => void;
 }
 
 /**
@@ -85,6 +93,13 @@ function PinIcon({ isPinned }: { isPinned: boolean }) {
 }
 
 /**
+ * Get session display name (title, forkName, or fallback to short ID)
+ */
+function getSessionDisplayName(session: SessionInfo): string {
+  return session.forkName || session.title || `Session ${session.id.slice(0, 8)}`;
+}
+
+/**
  * StreamingStatusBar - Enhanced streaming status display
  *
  * Shows:
@@ -105,6 +120,9 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
   isPinned = false,
   onTogglePin,
   scrollState,
+  session,
+  client,
+  onTitleChange,
 }: StreamingStatusBarProps) {
   // Collapsed state - persist in localStorage (shared with SessionStatusBar)
   const [isCollapsed, setIsCollapsed] = useState(() => {
@@ -119,6 +137,30 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
       return next;
     });
   }, []);
+
+  // Rename modal state
+  const [showRenameModal, setShowRenameModal] = useState(false);
+
+  // Long press handler for session title
+  const titleLongPress = useLongPress({
+    onLongPress: () => {
+      if (client?.isConnected && session) {
+        setShowRenameModal(true);
+      }
+    },
+    delay: 500,
+  });
+
+  // Handle rename completion
+  const handleRenamed = useCallback((newTitle: string) => {
+    onTitleChange?.(newTitle);
+  }, [onTitleChange]);
+
+  // Get session display name
+  const sessionName = session ? getSessionDisplayName(session) : null;
+
+  // Track connection state for dependency
+  const isConnected = client?.isConnected ?? false;
 
   // Track duration locally for smoother updates
   const [duration, setDuration] = useState(task.durationSeconds);
@@ -153,6 +195,7 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
   const hasRate = task.currentTokenRate > 0;
 
   return (
+    <>
     <div className={`streaming-status-bar ${isCollapsed ? 'streaming-status-bar--collapsed' : ''}`} role="status" aria-live="polite">
       {/* Collapsed view: toggle + minimal progress bar with streaming indicator and stop */}
       {isCollapsed ? (
@@ -198,18 +241,45 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
         </div>
       ) : (
         <>
-          {/* Top row: Toggle, Model, Duration, Stop */}
-          <div className="streaming-status-bar__header">
-            <button
-              type="button"
-              className="streaming-status-bar__toggle"
-              onClick={toggleCollapsed}
-              title="Collapse status bar"
-              aria-label="Collapse status bar"
-              aria-expanded={true}
-            >
-              <span className="streaming-status-bar__toggle-icon">▼</span>
-            </button>
+          {/* Session title row - toggle + title + id */}
+          {sessionName && (
+            <div className="streaming-status-bar__title-row">
+              <button
+                type="button"
+                className="streaming-status-bar__toggle"
+                onClick={toggleCollapsed}
+                title="Collapse status bar"
+                aria-label="Collapse status bar"
+                aria-expanded={true}
+              >
+                <span className="streaming-status-bar__toggle-icon">▼</span>
+              </button>
+              <div
+                className="streaming-status-bar__title-content"
+                title="Long press to rename session"
+                {...titleLongPress}
+              >
+                <span className="streaming-status-bar__session-title">{sessionName}</span>
+                <span className="streaming-status-bar__session-id">{session!.id.slice(0, 8)}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Model row: Model, Duration, Stop */}
+          <div className={`streaming-status-bar__header ${sessionName ? 'streaming-status-bar__header--no-toggle' : ''}`}>
+            {/* Only show toggle if we don't have a session name (it's in the title row) */}
+            {!sessionName && (
+              <button
+                type="button"
+                className="streaming-status-bar__toggle"
+                onClick={toggleCollapsed}
+                title="Collapse status bar"
+                aria-label="Collapse status bar"
+                aria-expanded={true}
+              >
+                <span className="streaming-status-bar__toggle-icon">▼</span>
+              </button>
+            )}
             <div className="streaming-status-bar__model">
               <span className="streaming-status-bar__indicator" aria-hidden="true" />
               <span className="streaming-status-bar__model-name">
@@ -328,6 +398,19 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
         </>
       )}
     </div>
+
+    {/* Rename session modal */}
+    {client && isConnected && session && (
+      <RenameSessionModal
+        isOpen={showRenameModal}
+        onClose={() => setShowRenameModal(false)}
+        sessionId={session.id}
+        currentTitle={session.title || session.forkName || ''}
+        client={client.sessions}
+        onRenamed={handleRenamed}
+      />
+    )}
+    </>
   );
 });
 

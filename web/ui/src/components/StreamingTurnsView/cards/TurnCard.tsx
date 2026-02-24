@@ -6,7 +6,7 @@
  * Also handles pairing tool_use turns with their matching tool_result.
  */
 
-import React, { useMemo, useCallback } from 'react';
+import React, { useMemo } from 'react';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
 import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
 import { TextCard } from './TextCard';
@@ -14,7 +14,7 @@ import { ToolResultCard } from './ToolResultCard';
 import { SystemCard } from './SystemCard';
 import { ForkProposalCard } from './ForkProposalCard';
 import { MergeProposalCard } from './MergeProposalCard';
-import { useClient } from './ClientContext';
+import { createLogger } from '../../../utils/debugLog';
 
 // Tool-specific cards
 import { ReadCard } from './ReadCard';
@@ -36,7 +36,7 @@ export interface TurnCardProps {
   sessionId?: string;
 }
 
-// System content block types (non-interactive)
+// System content block types (non-interactive, rendered by SystemCard)
 const SYSTEM_TYPES = new Set([
   'fork',
   'forked_from',
@@ -49,16 +49,19 @@ const SYSTEM_TYPES = new Set([
   'slide',
   'review',
   'archive',
-]);
-
-// Interactive proposal types (need special handling)
-const PROPOSAL_TYPES = new Set([
+  // Legacy proposal block types (deprecated - new proposals are tool_use blocks)
   'fork_proposal',
   'merge_proposal',
 ]);
 
+// Note: fork_proposal and merge_proposal block types are deprecated.
+// These are now rendered as tool_use blocks via TOOL_CARD_MAP.
+// The block type handlers below are kept for backwards compatibility
+// with any existing sessions that have these block types.
+
 // Map of tool names to their specific card components
-const TOOL_CARD_MAP: Record<string, React.ComponentType<{ turn: SessionDataTurn; result?: SessionDataTurn | null }>> = {
+// Note: sessionId is passed via props for tools that need API access (propose_fork, propose_merge)
+const TOOL_CARD_MAP: Record<string, React.ComponentType<{ turn: SessionDataTurn; result?: SessionDataTurn | null; sessionId?: string }>> = {
   Read: ReadCard,
   Edit: EditCard,
   Write: WriteCard,
@@ -66,19 +69,16 @@ const TOOL_CARD_MAP: Record<string, React.ComponentType<{ turn: SessionDataTurn;
   Grep: GrepCard,
   Glob: GlobCard,
   play_midi: MidiPlayerCard,
+  propose_fork: ForkProposalCard,
+  propose_merge: MergeProposalCard,
 };
+
+// Module-level logger that respects global debug toggle
+const debugLog = createLogger('TurnCard');
 
 export function TurnCard({ turn, allTurns = [], sessionId }: TurnCardProps) {
   const { role, contentBlock } = turn;
   const blockType = contentBlock?.type || 'text';
-  const client = useClient();
-
-  // Debug logger that sends to server via WebSocket
-  const debugLog = useCallback((message: string, data?: Record<string, unknown>) => {
-    if (client?.isConnected) {
-      client.debugLog.info(message, 'web.TurnCard', '', data ?? null).catch(() => {});
-    }
-  }, [client]);
 
   // Debug: log ALL system turns to understand what's coming through
   // TODO: Remove after debugging
@@ -139,51 +139,13 @@ export function TurnCard({ turn, allTurns = [], sessionId }: TurnCardProps) {
   if (blockType === 'tool_use') {
     const toolUseBlock = contentBlock as ToolUseBlock;
     const toolName = toolUseBlock?.name || '';
-    const toolUseId = toolUseBlock?.id || '';
-
-    // Special handling for propose_fork tool - render as ForkProposalCard
-    // The tool input contains the fork proposal data
-    if (toolName === 'propose_fork' && toolUseId.startsWith('balloons-')) {
-      const input = toolUseBlock?.input as Record<string, unknown> | undefined;
-      if (input && !('_streaming' in input)) {
-        // Build a synthetic fork proposal block from the tool input
-        const syntheticBlock = {
-          type: 'fork_proposal' as const,
-          proposalId: toolUseId,
-          name: (input.name as string) || '',
-          description: (input.description as string) || '',
-          contextPlan: ((input.context_plan as unknown[]) || []).map((cp: unknown) => {
-            const item = cp as Record<string, unknown>;
-            return {
-              exchangeRange: (item.exchange_range as string) || '',
-              mode: (item.mode as string) || 'compress',
-              reason: (item.reason as string) || '',
-            };
-          }),
-          initialPrompt: (input.initial_prompt as string) || '',
-          bindTo: input.bind_to && typeof input.bind_to === 'object' ? {
-            entityType: ((input.bind_to as Record<string, unknown>).entity_type as string) || '',
-            entityId: ((input.bind_to as Record<string, unknown>).entity_id as string) || '',
-            role: ((input.bind_to as Record<string, unknown>).role as string) || '',
-          } : null,
-          bindToInherit: input.bind_to === 'inherit',
-          status: 'pending' as const,
-          allExchanges: [],
-        };
-        // Create a synthetic turn with the fork proposal block
-        const syntheticTurn = {
-          ...turn,
-          contentBlock: syntheticBlock,
-        };
-        return <ForkProposalCard turn={syntheticTurn} sessionId={sessionId} />;
-      }
-    }
 
     // Try to get a tool-specific card
     const ToolCardComponent = TOOL_CARD_MAP[toolName];
 
     if (ToolCardComponent) {
-      return <ToolCardComponent turn={turn} result={matchingResult} />;
+      // Pass sessionId for tools that need API access (propose_fork, propose_merge)
+      return <ToolCardComponent turn={turn} result={matchingResult} sessionId={sessionId} />;
     }
 
     // Fall back to generic tool card
@@ -198,16 +160,10 @@ export function TurnCard({ turn, allTurns = [], sessionId }: TurnCardProps) {
     return <ToolResultCard turn={turn} />;
   }
 
-  // Interactive proposal cards
-  if (blockType === 'fork_proposal') {
-    return <ForkProposalCard turn={turn} sessionId={sessionId} />;
-  }
+  // Legacy fork_proposal and merge_proposal block types fall through to SystemCard
+  // (These are deprecated - new proposals come through as tool_use blocks)
 
-  if (blockType === 'merge_proposal') {
-    return <MergeProposalCard turn={turn} sessionId={sessionId} />;
-  }
-
-  // Non-interactive system cards
+  // Non-interactive system cards (includes legacy proposal block types)
   if (SYSTEM_TYPES.has(blockType)) {
     return <SystemCard turn={turn} />;
   }

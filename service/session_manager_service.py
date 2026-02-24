@@ -56,7 +56,7 @@ from core.stream_state import (
 )
 # TreeState removed in Phase 8 - events go directly to SessionDataService
 from core.queue_state import QueueState
-from models import TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, Turn, ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData, ExchangeInfo
+from models import TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, Turn, ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData, ExchangeInfo
 from service.session_events import (
     SessionEventObserver,
     TurnCreatedEvent,
@@ -1854,10 +1854,50 @@ class SessionManagerService:
             )
 
             self._stream_state.cancel_stream(ctx.exchange_id)
-            # Emit session updated so React frontend hides stop button
+
+            # Add an InterruptionBlock turn to the session
             session = self._manager.get_session(session_id)
             if session:
+                # Create and add the interruption turn
+                interruption_block = InterruptionBlock(reason="user_cancelled")
+                turn = session.add_turn(
+                    role="assistant",
+                    content_block=interruption_block,
+                    tokens=0,
+                    exchange_id=ctx.exchange_id,
+                )
+                turn_idx = len(session.turns) - 1
+
+                # Notify observers about the new turn
+                await self._notify_observers(
+                    "on_turn_created",
+                    TurnCreatedEvent(
+                        session_id=session_id,
+                        turn_id=turn.turn_id,
+                        turn_index=turn_idx,
+                        role="assistant",
+                        exchange_id=ctx.exchange_id,
+                        content_block_type="interruption",
+                    ),
+                )
+                await self._notify_observers(
+                    "on_turn_finished",
+                    TurnFinishedEvent(
+                        session_id=session_id,
+                        turn_id=turn.turn_id,
+                        turn_index=turn_idx,
+                        role="assistant",
+                        content="",
+                        tokens=0,
+                        content_block=interruption_block,
+                        context_tokens=0,
+                        output_tokens_total=0,
+                    ),
+                )
+
+                # Emit session updated so React frontend hides stop button
                 self._emit_session_updated(session, is_streaming=False)
+
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
 

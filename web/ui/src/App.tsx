@@ -12,7 +12,7 @@ import { ForkProposalTurn } from './components/ForkProposalTurn';
 import { CreateTodoModal, type CreateTodoResult } from './components/CreateTodoModal';
 import { StreamingTurnsView, type StreamingProgress } from './components/StreamingTurnsView';
 import { useWakeLock, useSoundNotifications } from './hooks';
-import { setDebugClient, createLogger } from './utils/debugLog';
+import { setDebugClient, createLogger, isDebugEnabled, setDebugEnabled } from './utils/debugLog';
 
 // Module-level client reference for debug logging
 // Set when client connects, cleared on disconnect
@@ -958,6 +958,14 @@ export function App() {
   // Server slot (A=8765, B=8766) - persisted to localStorage
   const [serverSlot, setServerSlot] = useState<ServerSlot>(getInitialSlot);
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
+
+  // Debug logging toggle - persisted to localStorage via debugLog module
+  const [debugEnabled, setDebugEnabledState] = useState<boolean>(isDebugEnabled);
+  const handleToggleDebug = useCallback(() => {
+    const newValue = !debugEnabled;
+    setDebugEnabledState(newValue);
+    setDebugEnabled(newValue);
+  }, [debugEnabled]);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
 
   // Persist slot to localStorage when changed
@@ -1678,11 +1686,19 @@ export function App() {
   // where streaming events for the old session could pollute the new session's state.
   // The loading state prevents rendering partial/stale data during the transition.
   const handleSelectSession = useCallback(async (sessionId: string) => {
+    debugLog('handleSelectSession called', { sessionId, connectionState, currentSelectedSessionId: selectedSessionId });
+
     const client = clientRef.current;
-    if (!client || connectionState !== 'connected') return;
+    if (!client || connectionState !== 'connected') {
+      debugLog('handleSelectSession: early return - not connected', { hasClient: !!client, connectionState });
+      return;
+    }
 
     // Skip if already selected (prevents unnecessary refetches)
-    if (sessionId === selectedSessionId) return;
+    if (sessionId === selectedSessionId) {
+      debugLog('handleSelectSession: early return - already selected', { sessionId });
+      return;
+    }
 
     // Track which session we're loading (for race condition detection)
     loadingSessionRef.current = sessionId;
@@ -1697,6 +1713,7 @@ export function App() {
 
     // Now set the new session ID - this triggers the event subscription useEffect
     // to re-subscribe with the new session ID
+    debugLog('handleSelectSession: setting selectedSessionId', { sessionId });
     setSelectedSessionId(sessionId);
 
     try {
@@ -1715,6 +1732,7 @@ export function App() {
       }
 
       // Apply the loaded data
+      debugLog('handleSelectSession: data loaded successfully', { turnCount: sessionTurns.length, queueCount: queueInfo.messageCount, hasTask: !!task });
       setTurns(sessionTurns);
       setQueuedMessageCount(queueInfo.messageCount);
       setStreamingTask(task);
@@ -2060,6 +2078,8 @@ export function App() {
           onToggleSound={() => soundNotifications.setSoundEnabled(!soundNotifications.soundEnabled)}
           serverSlot={serverSlot}
           onSlotChange={setServerSlot}
+          debugEnabled={debugEnabled}
+          onToggleDebug={handleToggleDebug}
           onNewBareSession={async () => {
             const sessionsClient = clientRef.current?.sessions;
             if (!sessionsClient || connectionState !== 'connected') return;
@@ -2282,6 +2302,12 @@ export function App() {
                   isPinned={selectedSession.isPinned ?? false}
                   onTogglePin={() => handleTogglePin(selectedSession.id)}
                   scrollState={scrollState}
+                  session={selectedSession}
+                  client={clientRef.current}
+                  onTitleChange={(newTitle) => {
+                    // Force a refresh of session data
+                    clientRef.current?.sessions.getSession(selectedSession.id).catch(console.error);
+                  }}
                 />
               ) : selectedSession && (
                 <SessionStatusBar
@@ -2325,17 +2351,19 @@ export function App() {
                   type="button"
                   className="attach-button"
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={connectionState !== 'connected' || selectedSession?.isStreaming}
+                  disabled={connectionState !== 'connected' || selectedSession?.isStreaming || isLoadingTurns}
                   title="Attach image (or paste from clipboard)"
                 >
                   📎
                 </button>
                 <MessageInput
                   ref={messageInputRef}
-                  placeholder={selectedSession?.isStreaming
-                    ? "Type to queue... (messages will be sent after streaming completes)"
-                    : "Type a message... (Enter to send, Shift+Enter for newline, Ctrl+V to paste image)"}
-                  disabled={connectionState !== 'connected'}
+                  placeholder={isLoadingTurns
+                    ? "Loading session..."
+                    : selectedSession?.isStreaming
+                      ? "Type to queue... (messages will be sent after streaming completes)"
+                      : "Type a message... (Enter to send, Shift+Enter for newline, Ctrl+V to paste image)"}
+                  disabled={connectionState !== 'connected' || isLoadingTurns}
                   onSubmit={handleSubmit}
                   onPaste={handlePaste}
                 />
@@ -2343,7 +2371,7 @@ export function App() {
                   <button
                     type="submit"
                     className="queue-button"
-                    disabled={connectionState !== 'connected'}
+                    disabled={connectionState !== 'connected' || isLoadingTurns}
                   >
                     Queue
                   </button>
@@ -2351,7 +2379,7 @@ export function App() {
                   <button
                     type="submit"
                     className="send-button"
-                    disabled={connectionState !== 'connected'}
+                    disabled={connectionState !== 'connected' || isLoadingTurns}
                   >
                     Send
                   </button>
@@ -2571,6 +2599,9 @@ interface SidebarContentProps {
   // Server slot props
   serverSlot: ServerSlot;
   onSlotChange: (slot: ServerSlot) => void;
+  // Debug logging props
+  debugEnabled?: boolean;
+  onToggleDebug?: () => void;
 }
 
 function SidebarContent({
@@ -2596,6 +2627,8 @@ function SidebarContent({
   onToggleSound,
   serverSlot,
   onSlotChange,
+  debugEnabled = false,
+  onToggleDebug,
 }: SidebarContentProps) {
   const { closeSidebar, layoutMode } = useLayout();
   const { resolvedTheme, toggleTheme } = useTheme();
@@ -2624,6 +2657,28 @@ function SidebarContent({
       closeSidebar();
     }
   }, [onSelectSession, closeSidebar, layoutMode]);
+
+  // Ref for session items - keyed by session ID
+  const sessionItemRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  // Scroll to selected session when it changes
+  useEffect(() => {
+    if (selectedSessionId && viewMode === 'list') {
+      const element = sessionItemRefs.current.get(selectedSessionId);
+      if (element) {
+        // Only scroll if the element is not fully visible
+        const rect = element.getBoundingClientRect();
+        const container = element.closest('.session-list');
+        if (container) {
+          const containerRect = container.getBoundingClientRect();
+          const isVisible = rect.top >= containerRect.top && rect.bottom <= containerRect.bottom;
+          if (!isVisible) {
+            element.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          }
+        }
+      }
+    }
+  }, [selectedSessionId, viewMode]);
 
   // Sort sessions: pinned first, then by last modified (most recent first)
   const sortedSessions = useMemo(() => {
@@ -2740,6 +2795,15 @@ function SidebarContent({
           {serverSlot}
         </button>
         <span className="slot-port">:{SLOT_PORTS[serverSlot]}</span>
+        <span className="slot-divider">|</span>
+        <span className="slot-label">Debug:</span>
+        <button
+          className={`slot-toggle ${debugEnabled ? 'slot-a' : 'slot-b'}`}
+          onClick={onToggleDebug}
+          title={debugEnabled ? 'Debug logging enabled. Click to disable.' : 'Debug logging disabled. Click to enable.'}
+        >
+          {debugEnabled ? 'ON' : 'OFF'}
+        </button>
       </div>
 
       {onNewBareSession && (
@@ -2831,7 +2895,7 @@ function SidebarContent({
           onSelectTurn={onSelectTurn}
           onTogglePin={onTogglePin}
           onLoadTurns={onLoadTurns}
-          isLoading={isLoadingTurns}
+          isLoading={connectionState !== 'connected'}
           onExchangeContextModeChange={onExchangeContextModeChange}
           onExchangeAction={onExchangeAction}
         />
@@ -2850,6 +2914,10 @@ function SidebarContent({
             return (
               <div
                 key={session.id}
+                ref={(el) => {
+                  if (el) sessionItemRefs.current.set(session.id, el);
+                  else sessionItemRefs.current.delete(session.id);
+                }}
                 className={`session-item ${isSelected ? 'selected' : ''} ${session.isStreaming ? 'streaming' : ''} ${isPinned ? 'pinned' : ''}`}
                 onClick={() => handleSelectSession(session.id)}
               >

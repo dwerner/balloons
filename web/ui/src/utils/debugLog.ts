@@ -18,6 +18,28 @@ import type { BalloonsClient } from '../../../generated/balloons-client';
 // Module-level client reference
 let _client: BalloonsClient | null = null;
 
+// Debug enabled state - persisted to localStorage
+let _debugEnabled = typeof localStorage !== 'undefined'
+  ? localStorage.getItem('balloons:debug-enabled') === 'true'
+  : false;
+
+/**
+ * Check if debug logging is enabled
+ */
+export function isDebugEnabled(): boolean {
+  return _debugEnabled;
+}
+
+/**
+ * Enable or disable debug logging
+ */
+export function setDebugEnabled(enabled: boolean): void {
+  _debugEnabled = enabled;
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('balloons:debug-enabled', String(enabled));
+  }
+}
+
 /**
  * Set the BalloonsClient for WebSocket logging.
  * Call this when the client connects, and pass null when it disconnects.
@@ -38,6 +60,8 @@ export function debugLog(
   message: string,
   data?: Record<string, unknown>
 ): void {
+  if (!_debugEnabled) return;
+
   // Always log to console with timestamp
   const timestamp = new Date().toISOString().split('T')[1]?.slice(0, 12) ?? '';
   console.log(`[${timestamp}][${category}]`, message, data ?? '');
@@ -51,7 +75,9 @@ export function debugLog(
 }
 
 // Log immediately when this module loads
-console.log('[debugLog] Module loaded, client:', _client ? 'set' : 'null');
+if (_debugEnabled) {
+  console.log('[debugLog] Module loaded, client:', _client ? 'set' : 'null');
+}
 
 /**
  * Create a scoped logger for a specific component/module.
@@ -61,7 +87,11 @@ console.log('[debugLog] Module loaded, client:', _client ? 'set' : 'null');
  *   log('Something happened', { data: 123 });
  */
 export function createLogger(category: string) {
-  return (message: string, data?: Record<string, unknown>) => {
-    debugLog(category, message, data);
+  return (message: string, data?: unknown) => {
+    // Convert to Record<string, unknown> if it's an object, otherwise wrap it
+    const dataRecord = data === undefined ? undefined
+      : (typeof data === 'object' && data !== null ? data as Record<string, unknown>
+        : { value: data });
+    debugLog(category, message, dataRecord);
   };
 }

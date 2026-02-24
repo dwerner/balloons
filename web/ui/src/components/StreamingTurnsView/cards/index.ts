@@ -26,7 +26,7 @@ export { ToolResultCard } from './ToolResultCard';
 export { SystemCard } from './SystemCard';
 export { BaseToolCard, type BaseToolCardProps, type ToolPhase } from './BaseToolCard';
 
-// Interactive proposal cards
+// Interactive proposal cards (render propose_fork/propose_merge tool_use blocks)
 export { ForkProposalCard } from './ForkProposalCard';
 export { MergeProposalCard } from './MergeProposalCard';
 export { ContextPlanTree, type ContextAssignment } from './ContextPlanTree';
@@ -39,6 +39,7 @@ export { BashCard } from './BashCard';
 export { GrepCard } from './GrepCard';
 export { GlobCard } from './GlobCard';
 export { GenericToolCard } from './GenericToolCard';
+export { MidiPlayerCard } from './MidiPlayerCard';
 
 // Syntax highlighting utilities
 export {

@@ -658,6 +658,11 @@ body {
   color: var(--color-accent-blue);
 }
 
+.slot-divider {
+  color: var(--color-text-dim);
+  margin: 0 4px;
+}
+
 /* ----- Animations ----- */
 @keyframes pulse {
   0%, 100% { opacity: 1; }

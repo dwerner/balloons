@@ -100,6 +100,34 @@
   cursor: help;
 }
 
+/* Empty session placeholder */
+.empty-session-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 48px 24px;
+  text-align: center;
+}
+
+.empty-session-placeholder .empty-icon {
+  font-size: 48px;
+  opacity: 0.6;
+}
+
+.empty-session-placeholder .empty-title {
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--text-primary, #333);
+}
+
+.empty-session-placeholder .empty-description {
+  font-size: 14px;
+  color: var(--text-secondary, #666);
+  max-width: 300px;
+}
+
 .streaming-placeholder {
   display: flex;
   align-items: center;
