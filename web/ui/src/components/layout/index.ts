@@ -16,6 +16,13 @@ export {
   useTheme,
 } from './ThemeContext';
 
+// Preferences context and hooks
+export {
+  PreferencesProvider,
+  usePreferences,
+  usePreference,
+} from './PreferencesContext';
+
 // Types
 export type {
   LayoutContextValue,
@@ -29,3 +36,8 @@ export type {
   Theme,
   ResolvedTheme,
 } from './ThemeContext';
+
+export type {
+  PreferenceKey,
+  PreferencesContextValue,
+} from './PreferencesContext';

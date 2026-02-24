@@ -11,6 +11,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { SyntaxHighlightedCode } from './SyntaxHighlighter';
+import { usePreferences } from '../../layout';
 import './cards.css';
 
 // Tool execution phase
@@ -153,20 +154,24 @@ export function BaseToolCard({
   initialDisplayMode = 'formatted',
   rawData,
 }: BaseToolCardProps) {
+  const { expandToolCards } = usePreferences();
   const isActive = phase === 'building' || phase === 'executing';
   const statusClass = phase === 'error' ? 'error' : isActive ? 'executing' : 'completed';
 
   // Internal display mode state (can be toggled by user)
   const [displayMode, setDisplayMode] = useState<ToolCardDisplayMode>(initialDisplayMode);
 
-  // Determine initial expanded state based on display mode
+  // Determine initial expanded state based on display mode and user preference
   const getInitialExpanded = () => {
     if (displayMode === 'collapsed') return false;
     if (displayMode === 'raw') return true; // Raw mode is always expanded
-    return defaultExpanded ?? isActive;
+    // Priority: explicit prop > user preference > active state
+    if (defaultExpanded !== undefined) return defaultExpanded;
+    if (expandToolCards) return true; // User preference to expand
+    return isActive; // Default: expand only while active
   };
 
-  // Active states are always expanded; completed states collapse by default
+  // Active states are always expanded; completed states collapse by default (unless preference set)
   const [expanded, setExpanded] = useState(getInitialExpanded);
   const [needsCollapse, setNeedsCollapse] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);

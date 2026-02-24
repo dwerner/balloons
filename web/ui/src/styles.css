@@ -462,6 +462,38 @@ body {
   background: rgba(250, 204, 21, 0.25);
 }
 
+/* ----- Expand Tool Cards Toggle Button ----- */
+.expand-toggle {
+  background: none;
+  border: 1px solid var(--color-border-secondary);
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 6px;
+  line-height: 1;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.expand-toggle:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-accent-blue);
+  background: rgba(96, 165, 250, 0.1);
+}
+
+.expand-toggle.active {
+  color: var(--color-accent-blue);
+  border-color: var(--color-accent-blue);
+  background: rgba(96, 165, 250, 0.15);
+}
+
+.expand-toggle.active:hover {
+  background: rgba(96, 165, 250, 0.25);
+}
+
 /* ----- Sound Notification Toggle Button ----- */
 .sound-toggle {
   background: none;
@@ -1883,13 +1915,15 @@ body {
 
 [data-theme="dark-flat"] .theme-toggle,
 [data-theme="dark-flat"] .wake-lock-toggle,
-[data-theme="dark-flat"] .sound-toggle {
+[data-theme="dark-flat"] .sound-toggle,
+[data-theme="dark-flat"] .expand-toggle {
   border-color: transparent;
 }
 
 [data-theme="dark-flat"] .theme-toggle:hover,
 [data-theme="dark-flat"] .wake-lock-toggle:hover,
-[data-theme="dark-flat"] .sound-toggle:hover {
+[data-theme="dark-flat"] .sound-toggle:hover,
+[data-theme="dark-flat"] .expand-toggle:hover {
   border-color: var(--color-border-secondary);
 }
 

@@ -1009,6 +1009,13 @@
   max-width: 300px;
 }
 
+.tool-line-range {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  color: var(--text-secondary, #888);
+  margin-left: 6px;
+}
+
 .tool-pattern {
   font-family: var(--font-mono, monospace);
   font-size: 11px;

@@ -1,6 +1,7 @@
 import React, { useEffect, useCallback, useRef, useState } from 'react';
 import { useLayout, LayoutProvider } from './LayoutContext';
 import { ThemeProvider } from './ThemeContext';
+import { PreferencesProvider } from './PreferencesContext';
 import './AppLayout.css';
 
 export interface AppLayoutProps {
@@ -85,14 +86,16 @@ function AppLayoutInner({ children }: AppLayoutProps) {
 }
 
 /**
- * AppLayout with LayoutProvider and ThemeProvider wrappers
+ * AppLayout with LayoutProvider, ThemeProvider, and PreferencesProvider wrappers
  */
 export function AppLayout({ children }: AppLayoutProps) {
   return (
     <ThemeProvider>
-      <LayoutProvider>
-        <AppLayoutInner>{children}</AppLayoutInner>
-      </LayoutProvider>
+      <PreferencesProvider>
+        <LayoutProvider>
+          <AppLayoutInner>{children}</AppLayoutInner>
+        </LayoutProvider>
+      </PreferencesProvider>
     </ThemeProvider>
   );
 }

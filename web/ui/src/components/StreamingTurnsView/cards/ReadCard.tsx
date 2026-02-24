@@ -38,20 +38,19 @@ export function ReadCard({ turn, result }: ReadCardProps) {
   const toolInput = toolUseBlock?.input || {};
   const inputIsStreaming = isStreamingInput(toolInput);
 
-  // Extract Read-specific inputs
-  const filePath = (toolInput.file_path || '') as string;
-  const offset = toolInput.offset as number | undefined;
-  const limit = toolInput.limit as number | undefined;
+  // Extract Read-specific inputs (support both snake_case and camelCase)
+  const filePath = (toolInput.file_path || toolInput.filePath || '') as string;
+  const offset = (toolInput.offset) as number | undefined;
+  const limit = (toolInput.limit) as number | undefined;
 
-  // Format line range
+  // Format line range for display
   let lineRange = '';
-  if (offset !== undefined || limit !== undefined) {
-    const start = (offset || 0) + 1; // Convert to 1-indexed
-    if (limit !== undefined) {
-      lineRange = `:${start}-${start + limit - 1}`;
-    } else if (offset !== undefined) {
-      lineRange = `:${start}+`;
-    }
+  if (offset !== undefined && limit !== undefined) {
+    lineRange = ` [${offset + 1}-${offset + limit}]`;
+  } else if (offset !== undefined) {
+    lineRange = ` [from line ${offset + 1}]`;
+  } else if (limit !== undefined) {
+    lineRange = ` [first ${limit} lines]`;
   }
 
   // Get result info
@@ -74,9 +73,10 @@ export function ReadCard({ turn, result }: ReadCardProps) {
   const headerContent = (() => {
     if (filePath) {
       return (
-        <code className="tool-file-path">
-          {displayPath}{lineRange}
-        </code>
+        <>
+          <code className="tool-file-path">{displayPath}</code>
+          {lineRange && <span className="tool-line-range">{lineRange}</span>}
+        </>
       );
     }
     if (inputIsStreaming) {

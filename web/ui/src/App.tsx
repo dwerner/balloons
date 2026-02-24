@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, memo, useMemo, forward
 import { BalloonsClient } from '../../generated/balloons-client';
 import type { ConnectionState, SessionInfo, TurnInfo, TaskInfo, Unsubscribe, ToolUseStartedEvent, ToolInputDeltaEvent, ToolResultEvent, ContentDeltaEvent, TurnStartedEvent, TurnFinishedEvent, GoalTreeStateServiceClient, TurnSnapshot, SessionHistoryChunkEvent, SessionHistoryCompleteEvent } from '../../generated/balloons-client';
 import { MarkdownContent } from './MarkdownContent';
-import { AppLayout, useLayout, useTheme } from './components/layout';
+import { AppLayout, useLayout, useTheme, usePreferences } from './components/layout';
 import { SessionTreeView } from './components/SessionTreeView';
 import { GoalTreeView } from './components/GoalTreeView';
 import { FileBrowserView } from './components/FileBrowserView';
@@ -2596,6 +2596,7 @@ function SidebarContent({
 }: SidebarContentProps) {
   const { closeSidebar, layoutMode } = useLayout();
   const { resolvedTheme, toggleTheme } = useTheme();
+  const { expandToolCards, togglePreference } = usePreferences();
   const { isActive: wakeLockActive, isSupported: wakeLockSupported, toggle: toggleWakeLock } = useWakeLock();
 
   // View mode state (persisted in localStorage)
@@ -2702,6 +2703,14 @@ function SidebarContent({
           </button>
         )}
 
+        <button
+          className={`expand-toggle ${expandToolCards ? 'active' : ''}`}
+          onClick={() => togglePreference('expandToolCards')}
+          aria-label={expandToolCards ? 'Collapse tool cards by default' : 'Expand tool cards by default'}
+          title={expandToolCards ? 'Tool cards: expanded' : 'Tool cards: collapsed'}
+        >
+          {expandToolCards ? '▼' : '▶'}
+        </button>
         <button
           className="theme-toggle"
           onClick={toggleTheme}
