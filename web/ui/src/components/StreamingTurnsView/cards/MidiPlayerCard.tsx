@@ -158,12 +158,16 @@ export function MidiPlayerCard({ turn, result }: MidiPlayerCardProps) {
     duration > 0 ? formatDuration(duration) : null,
   ].filter(Boolean).join(' | ');
 
+  // Raw data for debugging mode
+  const rawData = { turn, result };
+
   return (
     <BaseToolCard
       toolName="play_midi"
       phase={phase}
       tokens={tokens}
       className="midi-player-card"
+      rawData={rawData}
     >
       {/* Header with playback info */}
       <div className="midi-header-info">

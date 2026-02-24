@@ -84,6 +84,9 @@ export function GrepCard({ turn, result }: GrepCardProps) {
   const displayLines = truncated ? resultLines.slice(0, maxLines) : resultLines;
   const displayContent = displayLines.join('\n') + (truncated ? `\n... and ${matchCount - maxLines} more` : '');
 
+  // Raw data for debugging mode
+  const rawData = { turn, result };
+
   return (
     <BaseToolCard
       toolName="Grep"
@@ -91,6 +94,7 @@ export function GrepCard({ turn, result }: GrepCardProps) {
       phase={phase}
       tokens={tokens}
       className="grep-card"
+      rawData={rawData}
     >
       {hasResult && (
         <>

@@ -145,6 +145,9 @@ export function EditCard({ turn, result }: EditCardProps) {
     <span className="tool-building">building...</span>
   ) : null;
 
+  // Raw data for debugging mode
+  const rawData = { turn, result };
+
   return (
     <BaseToolCard
       toolName="Edit"
@@ -152,6 +155,7 @@ export function EditCard({ turn, result }: EditCardProps) {
       phase={phase}
       tokens={tokens}
       className="edit-card"
+      rawData={rawData}
     >
       {/* Show diff when we have input */}
       {diffLines.length > 0 ? (

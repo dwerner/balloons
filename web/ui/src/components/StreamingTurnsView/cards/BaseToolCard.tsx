@@ -6,6 +6,7 @@
  * - Status-based styling (executing, completed, error)
  * - Collapsible content - shows first N lines by default, expands on header tap
  * - Token count display
+ * - Three display modes: formatted (default), collapsed, raw (for debugging)
  */
 
 import React, { useState, useRef, useEffect } from 'react';
@@ -13,6 +14,9 @@ import './cards.css';
 
 // Tool execution phase
 export type ToolPhase = 'building' | 'executing' | 'completed' | 'error';
+
+// Display mode for the card
+export type ToolCardDisplayMode = 'formatted' | 'collapsed' | 'raw';
 
 export interface BaseToolCardProps {
   /** Tool name displayed in header */
@@ -23,7 +27,7 @@ export interface BaseToolCardProps {
   phase: ToolPhase;
   /** Token count (shown when completed) */
   tokens?: number;
-  /** Main body content */
+  /** Main body content (for formatted mode) */
   children?: React.ReactNode;
   /** Additional CSS class */
   className?: string;
@@ -31,6 +35,10 @@ export interface BaseToolCardProps {
   collapsedLines?: number;
   /** Start expanded (default: false for completed, true for active) */
   defaultExpanded?: boolean;
+  /** Initial display mode: formatted (default), collapsed, or raw for debugging */
+  initialDisplayMode?: ToolCardDisplayMode;
+  /** Raw data for debugging (required for mode switcher to work) */
+  rawData?: unknown;
 }
 
 // Phase to icon mapping
@@ -60,10 +68,77 @@ function ToolStatusIcon({ phase }: { phase: ToolPhase }) {
 }
 
 /**
+ * Raw JSON display for debugging
+ */
+function RawDataDisplay({ data }: { data: unknown }) {
+  const formatted = JSON.stringify(data, null, 2);
+  return (
+    <pre className="tool-raw-data">
+      <code>{formatted}</code>
+    </pre>
+  );
+}
+
+/**
+ * Mode switcher component - allows toggling between formatted and raw views
+ */
+function ModeSwitcher({
+  mode,
+  onModeChange,
+  hasRawData,
+}: {
+  mode: ToolCardDisplayMode;
+  onModeChange: (mode: ToolCardDisplayMode) => void;
+  hasRawData: boolean;
+}) {
+  if (!hasRawData) return null;
+
+  const handleFormatted = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    console.log('ModeSwitcher: switching to formatted, current mode:', mode);
+    onModeChange('formatted');
+  };
+
+  const handleRaw = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    console.log('ModeSwitcher: switching to raw, current mode:', mode);
+    onModeChange('raw');
+  };
+
+  return (
+    <div className="tool-card-mode-switcher" onClick={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        className={`mode-btn ${mode === 'formatted' ? 'active' : ''}`}
+        onClick={handleFormatted}
+        title="Formatted view"
+      >
+        <span className="mode-icon">◈</span>
+      </button>
+      <button
+        type="button"
+        className={`mode-btn ${mode === 'raw' ? 'active' : ''}`}
+        onClick={handleRaw}
+        title="Raw JSON"
+      >
+        <span className="mode-icon">{'{}'}</span>
+      </button>
+    </div>
+  );
+}
+
+/**
  * BaseToolCard - Wrapper component for tool-specific cards
  *
  * Content is collapsible - shows first N lines by default (when completed).
  * Tap/click the header to expand/collapse.
+ *
+ * Display modes:
+ * - 'formatted' (default): Shows formatted children with collapsible behavior
+ * - 'collapsed': Always starts collapsed
+ * - 'raw': Shows raw JSON data for debugging
  */
 export function BaseToolCard({
   toolName,
@@ -74,12 +149,24 @@ export function BaseToolCard({
   className = '',
   collapsedLines = 5,
   defaultExpanded,
+  initialDisplayMode = 'formatted',
+  rawData,
 }: BaseToolCardProps) {
   const isActive = phase === 'building' || phase === 'executing';
   const statusClass = phase === 'error' ? 'error' : isActive ? 'executing' : 'completed';
 
+  // Internal display mode state (can be toggled by user)
+  const [displayMode, setDisplayMode] = useState<ToolCardDisplayMode>(initialDisplayMode);
+
+  // Determine initial expanded state based on display mode
+  const getInitialExpanded = () => {
+    if (displayMode === 'collapsed') return false;
+    if (displayMode === 'raw') return true; // Raw mode is always expanded
+    return defaultExpanded ?? isActive;
+  };
+
   // Active states are always expanded; completed states collapse by default
-  const [expanded, setExpanded] = useState(defaultExpanded ?? isActive);
+  const [expanded, setExpanded] = useState(getInitialExpanded);
   const [needsCollapse, setNeedsCollapse] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -88,30 +175,47 @@ export function BaseToolCard({
   const collapsedHeight = collapsedLines * 18 + 12; // +12 for padding
 
   useEffect(() => {
-    if (bodyRef.current && !isActive) {
+    if (bodyRef.current && !isActive && displayMode !== 'raw') {
       const contentHeight = bodyRef.current.scrollHeight;
       setNeedsCollapse(contentHeight > collapsedHeight + 20); // +20 threshold
     }
-  }, [children, collapsedHeight, isActive]);
+  }, [children, collapsedHeight, isActive, displayMode]);
 
-  // Keep expanded while active
+  // Keep expanded while active (unless in raw mode which handles its own state)
   useEffect(() => {
-    if (isActive) {
+    if (isActive && displayMode !== 'raw') {
       setExpanded(true);
     }
-  }, [isActive]);
+  }, [isActive, displayMode]);
+
+  // When mode changes, adjust expanded state
+  useEffect(() => {
+    if (displayMode === 'raw') {
+      setExpanded(true);
+    }
+  }, [displayMode]);
 
   const toggleExpanded = () => {
-    if (!isActive && needsCollapse) {
+    if (displayMode === 'raw') {
+      // In raw mode, always allow toggle
+      setExpanded(!expanded);
+    } else if (!isActive && needsCollapse) {
       setExpanded(!expanded);
     }
   };
 
-  const isCollapsible = !isActive && needsCollapse;
+  const isCollapsible = displayMode === 'raw' || (!isActive && needsCollapse);
   const isCollapsed = isCollapsible && !expanded;
 
+  // Determine what content to show based on current mode
+  const bodyContent = displayMode === 'raw' && rawData !== undefined
+    ? <RawDataDisplay data={rawData} />
+    : children;
+
+  const hasRawData = rawData !== undefined;
+
   return (
-    <div className={`turn-card tool-card ${statusClass} ${isActive ? 'streaming' : ''} ${className}`}>
+    <div className={`turn-card tool-card ${statusClass} ${isActive ? 'streaming' : ''} ${displayMode === 'raw' ? 'raw-mode' : ''} ${className}`}>
       <div
         className={`tool-card-header ${isCollapsible ? 'collapsible-header-clickable' : ''}`}
         onClick={toggleExpanded}
@@ -126,21 +230,26 @@ export function BaseToolCard({
       >
         <ToolStatusIcon phase={phase} />
         <span className="tool-card-name">{toolName}</span>
-        {headerContent && <div className="tool-card-header-content">{headerContent}</div>}
+        {displayMode !== 'raw' && headerContent && <div className="tool-card-header-content">{headerContent}</div>}
         {!isActive && tokens > 0 && <span className="tool-card-tokens">{tokens} tokens</span>}
+        <ModeSwitcher
+          mode={displayMode}
+          onModeChange={setDisplayMode}
+          hasRawData={hasRawData}
+        />
         {isCollapsible && (
           <span className="tool-card-collapse-indicator">
             {expanded ? '▼' : '▶'}
           </span>
         )}
       </div>
-      {children && (
+      {bodyContent && (
         <div
           ref={bodyRef}
           className={`tool-card-body ${isCollapsed ? 'collapsed' : ''}`}
           style={isCollapsed ? { maxHeight: `${collapsedHeight}px` } : undefined}
         >
-          {children}
+          {bodyContent}
           {isCollapsed && <div className="tool-card-fade-overlay" />}
         </div>
       )}

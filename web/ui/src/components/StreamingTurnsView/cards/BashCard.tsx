@@ -82,6 +82,9 @@ export function BashCard({ turn, result }: BashCardProps) {
     ? resultContent.slice(0, maxLength) + '\n... [output truncated]'
     : resultContent;
 
+  // Raw data for debugging mode
+  const rawData = { turn, result };
+
   return (
     <BaseToolCard
       toolName="Bash"
@@ -89,6 +92,7 @@ export function BashCard({ turn, result }: BashCardProps) {
       phase={phase}
       tokens={tokens}
       className="bash-card"
+      rawData={rawData}
     >
       {/* Show full command if we have description in header, or command is long */}
       {command && (description || command.length > maxHeaderLength) && (

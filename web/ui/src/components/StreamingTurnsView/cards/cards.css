@@ -1212,6 +1212,108 @@
   border-top: 1px solid var(--border-muted, #333);
 }
 
+/* Raw mode for debugging */
+.tool-card.raw-mode {
+  border-color: var(--accent-debug, #ff79c6);
+}
+
+.tool-card.raw-mode .tool-card-header {
+  background: rgba(255, 121, 198, 0.1);
+}
+
+/* Mode switcher in card header */
+.tool-card-mode-switcher {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  padding: 0 4px;
+}
+
+.tool-card-mode-switcher .mode-btn {
+  background: var(--bg-tertiary, #252525);
+  border: 1px solid var(--border-muted, #333);
+  border-radius: 3px;
+  padding: 2px 6px;
+  cursor: pointer;
+  color: var(--text-tertiary, #555);
+  font-size: 10px;
+  line-height: 1;
+  transition: all 0.15s;
+}
+
+.tool-card-mode-switcher .mode-btn:hover {
+  color: var(--text-secondary, #888);
+}
+
+.tool-card-mode-switcher .mode-btn.active {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-primary, #e0e0e0);
+}
+
+.tool-card-mode-switcher .mode-icon {
+  display: inline-block;
+}
+
+:root[data-theme="light"] .tool-card-mode-switcher .mode-btn,
+[data-theme="light"] .tool-card-mode-switcher .mode-btn {
+  border-color: var(--border-color, #ccc);
+  color: var(--text-tertiary, #888);
+}
+
+:root[data-theme="light"] .tool-card-mode-switcher .mode-btn:hover,
+[data-theme="light"] .tool-card-mode-switcher .mode-btn:hover {
+  background: var(--bg-hover, #e8e8e8);
+  color: var(--text-primary, #333);
+}
+
+.tool-card-mode-badge {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--accent-debug, #ff79c6);
+  background: rgba(255, 121, 198, 0.2);
+  padding: 1px 5px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.tool-raw-data {
+  margin: 0;
+  padding: 8px;
+  background: var(--bg-code, #1a1a1a);
+  border-radius: 4px;
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-primary, #e0e0e0);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+:root[data-theme="light"] .tool-card.raw-mode,
+[data-theme="light"] .tool-card.raw-mode {
+  border-color: var(--accent-debug, #d63384);
+}
+
+:root[data-theme="light"] .tool-card.raw-mode .tool-card-header,
+[data-theme="light"] .tool-card.raw-mode .tool-card-header {
+  background: rgba(214, 51, 132, 0.1);
+}
+
+:root[data-theme="light"] .tool-card-mode-badge,
+[data-theme="light"] .tool-card-mode-badge {
+  color: var(--accent-debug, #d63384);
+  background: rgba(214, 51, 132, 0.15);
+}
+
+:root[data-theme="light"] .tool-raw-data,
+[data-theme="light"] .tool-raw-data {
+  background: var(--bg-code, #f8f8f8);
+  color: var(--text-primary, #333);
+}
+
 /* Generic tool card specifics */
 .generic-tool-card .tool-section {
   margin-bottom: 8px;

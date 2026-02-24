@@ -11,13 +11,15 @@
 import React from 'react';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
 import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
-import { BaseToolCard, calculateToolPhase } from './BaseToolCard';
+import { BaseToolCard, calculateToolPhase, type ToolCardDisplayMode } from './BaseToolCard';
 import './cards.css';
 
 interface ToolUseCardProps {
   turn: SessionDataTurn;
   /** Optional tool result to display inline */
   result?: SessionDataTurn | null;
+  /** Display mode: formatted (default), collapsed, or raw for debugging */
+  displayMode?: ToolCardDisplayMode;
 }
 
 // File extension to language mapping
@@ -355,7 +357,7 @@ function buildHeaderContent(
   }
 }
 
-export function ToolUseCard({ turn, result }: ToolUseCardProps) {
+export function ToolUseCard({ turn, result, displayMode = 'formatted' }: ToolUseCardProps) {
   const { contentBlock, streaming, tokens } = turn;
 
   // Extract tool info from contentBlock
@@ -384,6 +386,9 @@ export function ToolUseCard({ turn, result }: ToolUseCardProps) {
   // Build header content based on tool type
   const headerContent = buildHeaderContent(toolName, toolInput, inputIsStreaming);
 
+  // Build raw data for debugging mode (user can toggle to this via the mode switcher)
+  const rawData = { turn, result };
+
   return (
     <BaseToolCard
       toolName={toolName}
@@ -391,6 +396,8 @@ export function ToolUseCard({ turn, result }: ToolUseCardProps) {
       phase={phase}
       tokens={tokens}
       className="tool-use-card-v2"
+      initialDisplayMode={displayMode}
+      rawData={rawData}
     >
       {/* Tool input section */}
       {hasInput && !inputIsStreaming && (

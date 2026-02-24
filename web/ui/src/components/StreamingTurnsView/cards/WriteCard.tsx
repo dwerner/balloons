@@ -103,6 +103,9 @@ export function WriteCard({ turn, result }: WriteCardProps) {
     ? contentLines.slice(0, maxPreviewLines).join('\n') + '\n... [truncated]'
     : content;
 
+  // Raw data for debugging mode
+  const rawData = { turn, result };
+
   return (
     <BaseToolCard
       toolName="Write"
@@ -110,6 +113,7 @@ export function WriteCard({ turn, result }: WriteCardProps) {
       phase={phase}
       tokens={tokens}
       className="write-card"
+      rawData={rawData}
     >
       {/* Show content preview */}
       {content && (

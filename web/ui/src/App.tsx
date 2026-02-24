@@ -974,6 +974,7 @@ export function App() {
   const [imageAttachments, setImageAttachments] = useState<ImageAttachment[]>([]);
   const [isLoadingTurns, setIsLoadingTurns] = useState(false);
   const [creatingSessionFor, setCreatingSessionFor] = useState<string | null>(null); // "entityType:entityId" when creating bound session
+  const [mainContentTab, setMainContentTab] = useState<MainContentTab>('streaming');
 
   // Modal state for CreateTodoModal
   const [createTodoModalState, setCreateTodoModalState] = useState<{
@@ -2064,6 +2065,32 @@ export function App() {
               const newSession = await sessionsClient.createSession();
               debugLog('New session created', { newSessionId: newSession?.id, oldSessionId: selectedSessionId });
               if (newSession) {
+                // Convert ManagedSessionInfo to SessionInfo and add immediately
+                // This prevents the race condition where selectedSessionId is set
+                // but sessions[] doesn't contain it yet (status bar won't render)
+                const sessionInfo: SessionInfo = {
+                  id: newSession.id,
+                  title: newSession.title,
+                  created: newSession.created,
+                  lastModified: newSession.created, // Use created as initial lastModified
+                  model: newSession.model,
+                  messageCount: newSession.messageCount,
+                  totalCost: 0,
+                  isStreaming: newSession.isStreaming,
+                  forkName: '',
+                  forkStatus: '',
+                  parentId: newSession.parentId,
+                  workingDirectory: newSession.workingDirectory,
+                };
+                setSessions(prev => {
+                  // Don't add if already present (event might have arrived first)
+                  if (prev.some(s => s.id === newSession.id)) {
+                    debugLog('Session already in list (event arrived first)', { newSessionId: newSession.id });
+                    return prev;
+                  }
+                  debugLog('Adding session to list immediately', { newSessionId: newSession.id });
+                  return [sessionInfo, ...prev];
+                });
                 debugLog('Switching to new session', { newSessionId: newSession.id });
                 handleSelectSession(newSession.id);
               }
@@ -2204,22 +2231,39 @@ export function App() {
           </div>
         ) : (
           <>
-            {/* Detail panel toggle */}
-            <MainContentHeader />
+            {/* Tabs and detail panel toggle */}
+            <MainContentHeader
+              activeTab={mainContentTab}
+              onTabChange={setMainContentTab}
+            />
 
             <div className="turns-container">
-              {clientRef.current && connectionState === 'connected' ? (
-                <StreamingTurnsView
-                  sessionId={selectedSessionId}
-                  client={clientRef.current}
-                  onSelectSession={setSelectedSessionId}
-                  onScrollStateChange={setScrollState}
-                  onStreamingProgressChange={handleStreamingProgressChange}
-                />
-              ) : (
+              {mainContentTab === 'streaming' && (
+                clientRef.current && connectionState === 'connected' ? (
+                  <StreamingTurnsView
+                    sessionId={selectedSessionId}
+                    client={clientRef.current}
+                    onSelectSession={setSelectedSessionId}
+                    onScrollStateChange={setScrollState}
+                    onStreamingProgressChange={handleStreamingProgressChange}
+                  />
+                ) : (
+                  <div className="empty-state">
+                    <h2>Connecting...</h2>
+                    <p>Waiting for connection.</p>
+                  </div>
+                )
+              )}
+              {mainContentTab === 'context' && (
                 <div className="empty-state">
-                  <h2>Connecting...</h2>
-                  <p>Waiting for connection.</p>
+                  <h2>Context</h2>
+                  <p>Context view coming soon.</p>
+                </div>
+              )}
+              {mainContentTab === 'changes' && (
+                <div className="empty-state">
+                  <h2>Changes</h2>
+                  <p>Changes view coming soon.</p>
                 </div>
               )}
             </div>
@@ -2436,14 +2480,43 @@ function MobileHeader({ connectionState, selectedSession }: MobileHeaderProps) {
   );
 }
 
+// Main content tab type
+type MainContentTab = 'streaming' | 'context' | 'changes';
+
 /**
- * Header bar for the main content area with detail panel toggle
+ * Header bar for the main content area with tabs and detail panel toggle
  */
-function MainContentHeader() {
+function MainContentHeader({
+  activeTab,
+  onTabChange,
+}: {
+  activeTab: MainContentTab;
+  onTabChange: (tab: MainContentTab) => void;
+}) {
   const { layoutMode, isDetailCollapsed, toggleDetailCollapse } = useLayout();
 
   return (
     <div className="conversation-view-toggle">
+      {/* Tab buttons */}
+      <button
+        className={`view-toggle-btn ${activeTab === 'streaming' ? 'active' : ''}`}
+        onClick={() => onTabChange('streaming')}
+      >
+        Streaming
+      </button>
+      <button
+        className={`view-toggle-btn ${activeTab === 'context' ? 'active' : ''}`}
+        onClick={() => onTabChange('context')}
+      >
+        Context
+      </button>
+      <button
+        className={`view-toggle-btn ${activeTab === 'changes' ? 'active' : ''}`}
+        onClick={() => onTabChange('changes')}
+      >
+        Changes
+      </button>
+
       {/* Spacer */}
       <div style={{ flex: 1 }} />
 

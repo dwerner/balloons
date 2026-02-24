@@ -76,12 +76,16 @@ export function GenericToolCard({ turn, result }: GenericToolCardProps) {
     ? resultContent.slice(0, maxLength) + '\n... [truncated]'
     : resultContent;
 
+  // Raw data for debugging mode
+  const rawData = { turn, result };
+
   return (
     <BaseToolCard
       toolName={toolName}
       phase={phase}
       tokens={tokens}
       className="generic-tool-card"
+      rawData={rawData}
     >
       {/* Input section - collapsible */}
       {(hasInput || inputIsStreaming) && (

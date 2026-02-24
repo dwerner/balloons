@@ -117,6 +117,9 @@ export function ReadCard({ turn, result }: ReadCardProps) {
     ? strippedContent.slice(0, maxLength) + '\n... [truncated]'
     : strippedContent;
 
+  // Raw data for debugging mode
+  const rawData = { turn, result };
+
   return (
     <BaseToolCard
       toolName="Read"
@@ -124,6 +127,7 @@ export function ReadCard({ turn, result }: ReadCardProps) {
       phase={phase}
       tokens={tokens}
       className="read-card"
+      rawData={rawData}
     >
       {hasResult && (
         <SyntaxHighlightedCode

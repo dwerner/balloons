@@ -78,6 +78,9 @@ export function GlobCard({ turn, result }: GlobCardProps) {
   const truncated = fileList.length > maxFiles;
   const displayFiles = truncated ? fileList.slice(0, maxFiles) : fileList;
 
+  // Raw data for debugging mode
+  const rawData = { turn, result };
+
   return (
     <BaseToolCard
       toolName="Glob"
@@ -85,6 +88,7 @@ export function GlobCard({ turn, result }: GlobCardProps) {
       phase={phase}
       tokens={tokens}
       className="glob-card"
+      rawData={rawData}
     >
       {hasResult && (
         <>
