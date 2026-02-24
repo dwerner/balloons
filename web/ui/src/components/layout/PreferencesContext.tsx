@@ -5,7 +5,7 @@
  * Preferences include things like whether tool cards expand by default.
  */
 
-import React, { createContext, useContext, useState, useCallback, useMemo, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, useMemo, useEffect, startTransition } from 'react';
 
 // Storage key prefix
 const STORAGE_PREFIX = 'balloons:prefs:';
@@ -61,17 +61,19 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     }
   }, [expandToolCards, showTokenCounts]);
 
-  // Generic setter with persistence
+  // Generic setter with persistence - use startTransition to mark as non-urgent
   const setPreference = useCallback((key: PreferenceKey, value: boolean) => {
     savePreference(key, value);
-    switch (key) {
-      case 'expandToolCards':
-        setExpandToolCards(value);
-        break;
-      case 'showTokenCounts':
-        setShowTokenCounts(value);
-        break;
-    }
+    startTransition(() => {
+      switch (key) {
+        case 'expandToolCards':
+          setExpandToolCards(value);
+          break;
+        case 'showTokenCounts':
+          setShowTokenCounts(value);
+          break;
+      }
+    });
   }, []);
 
   // Toggle a preference

@@ -947,9 +947,12 @@ const MessageInputInner = forwardRef<MessageInputHandle, MessageInputProps>(
   }
 );
 
-// Use default memo - will re-render when callbacks change (which only happens
-// on session/state changes, not keystrokes since input is uncontrolled)
-const MessageInput = memo(MessageInputInner);
+// Custom memo comparison - only re-render for placeholder/disabled changes
+// Callbacks are stored in refs inside the component, so we can safely ignore them
+const MessageInput = memo(MessageInputInner, (prevProps, nextProps) => {
+  return prevProps.placeholder === nextProps.placeholder &&
+         prevProps.disabled === nextProps.disabled;
+});
 
 export function App() {
   // Server slot (A=8765, B=8766) - persisted to localStorage

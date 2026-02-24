@@ -9,7 +9,7 @@
  * - Three display modes: formatted (default), collapsed, raw (for debugging)
  */
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useDeferredValue } from 'react';
 import { SyntaxHighlightedCode } from './SyntaxHighlighter';
 import { usePreferences } from '../../layout';
 import './cards.css';
@@ -154,26 +154,28 @@ export function BaseToolCard({
   initialDisplayMode = 'formatted',
   rawData,
 }: BaseToolCardProps) {
-  const { expandToolCards } = usePreferences();
+  const { expandToolCards: expandToolCardsPref } = usePreferences();
+  // Use deferred value to make preference changes non-blocking
+  const expandToolCards = useDeferredValue(expandToolCardsPref);
   const isActive = phase === 'building' || phase === 'executing';
   const statusClass = phase === 'error' ? 'error' : isActive ? 'executing' : 'completed';
 
   // Internal display mode state (can be toggled by user)
   const [displayMode, setDisplayMode] = useState<ToolCardDisplayMode>(initialDisplayMode);
 
-  // Determine initial expanded state based on display mode and user preference
+  // Determine expanded state - respect user preference, don't auto-expand for streaming
   const getInitialExpanded = () => {
     if (displayMode === 'collapsed') return false;
     if (displayMode === 'raw') return true; // Raw mode is always expanded
-    // Priority: explicit prop > user preference > active state
+    // Priority: explicit prop > user preference
     if (defaultExpanded !== undefined) return defaultExpanded;
-    if (expandToolCards) return true; // User preference to expand
-    return isActive; // Default: expand only while active
+    return expandToolCards; // Respect user preference (default: false = collapsed)
   };
 
-  // Active states are always expanded; completed states collapse by default (unless preference set)
+  // Start with the correct collapsed state immediately
   const [expanded, setExpanded] = useState(getInitialExpanded);
-  const [needsCollapse, setNeedsCollapse] = useState(false);
+  // Assume content needs collapse until we measure (prevents reflow)
+  const [needsCollapse, setNeedsCollapse] = useState(!expandToolCards);
   const bodyRef = useRef<HTMLDivElement>(null);
 
   // Calculate if content is tall enough to need collapsing
@@ -181,18 +183,11 @@ export function BaseToolCard({
   const collapsedHeight = collapsedLines * 18 + 12; // +12 for padding
 
   useEffect(() => {
-    if (bodyRef.current && !isActive && displayMode !== 'raw') {
+    if (bodyRef.current && displayMode !== 'raw') {
       const contentHeight = bodyRef.current.scrollHeight;
       setNeedsCollapse(contentHeight > collapsedHeight + 20); // +20 threshold
     }
-  }, [children, collapsedHeight, isActive, displayMode]);
-
-  // Keep expanded while active (unless in raw mode which handles its own state)
-  useEffect(() => {
-    if (isActive && displayMode !== 'raw') {
-      setExpanded(true);
-    }
-  }, [isActive, displayMode]);
+  }, [children, collapsedHeight, displayMode]);
 
   // When mode changes, adjust expanded state
   useEffect(() => {
@@ -205,12 +200,15 @@ export function BaseToolCard({
     if (displayMode === 'raw') {
       // In raw mode, always allow toggle
       setExpanded(!expanded);
-    } else if (!isActive && needsCollapse) {
+    } else if (needsCollapse) {
+      // Allow toggle whenever content is tall enough to collapse
       setExpanded(!expanded);
     }
   };
 
-  const isCollapsible = displayMode === 'raw' || (!isActive && needsCollapse);
+  // Content is collapsible when it's tall enough OR in raw mode
+  const isCollapsible = displayMode === 'raw' || needsCollapse;
+  // Apply collapsed state based on user's expanded preference
   const isCollapsed = isCollapsible && !expanded;
 
   // Determine what content to show based on current mode

@@ -4,44 +4,44 @@
 
 /* ----- CSS Variables (Theme Colors) ----- */
 
-/* Dark theme (default) - Green-tinted */
+/* Dark theme (default) - Earth tones */
 :root,
 [data-theme="dark"] {
-  /* Primary background colors - green-tinted dark */
-  --color-bg-primary: #0a1210;
-  --color-bg-secondary: #0f1a16;
-  --color-bg-tertiary: #152420;
+  /* Primary background colors - earthy dark browns */
+  --color-bg-primary: #12100e;
+  --color-bg-secondary: #1a1714;
+  --color-bg-tertiary: #22201c;
 
-  /* Accent colors - Green as primary */
-  --color-accent-green: #4ade80;
-  --color-accent-green-hover: #22c55e;
-  --color-accent-red: #f87171;
-  --color-accent-red-hover: #ef4444;
-  --color-accent-yellow: #facc15;
-  --color-accent-yellow-hover: #eab308;
-  --color-accent-blue: #60a5fa;
-  --color-accent-link: #58a6ff;
+  /* Accent colors - earth palette */
+  --color-accent-green: #8fbc8f;  /* Forest green */
+  --color-accent-green-hover: #6b9b6b;
+  --color-accent-red: #cd8b76;  /* Terracotta */
+  --color-accent-red-hover: #b87860;
+  --color-accent-yellow: #d4a574;  /* Tan/sand */
+  --color-accent-yellow-hover: #c49460;
+  --color-accent-blue: #7a9bb8;  /* Slate blue */
+  --color-accent-link: #7a9bb8;
 
-  /* Text colors */
-  --color-text-primary: #e8f5e8;
-  --color-text-secondary: #8ba58b;
-  --color-text-muted: #5c7a5c;
-  --color-text-dim: #4a6b4a;
+  /* Text colors - warm off-white */
+  --color-text-primary: #e8e4df;
+  --color-text-secondary: #a09888;
+  --color-text-muted: #706858;
+  --color-text-dim: #504840;
 
-  /* Border colors - green-tinted */
-  --color-border-primary: #1f3a2f;
-  --color-border-secondary: #2a4a3a;
-  --color-border-tertiary: #243d30;
+  /* Border colors - earthy */
+  --color-border-primary: #2e2a26;
+  --color-border-secondary: #3a3632;
+  --color-border-tertiary: #32302c;
 
-  /* Code colors - green-tinted */
-  --color-code-bg: #081210;
-  --color-code-text: #a8e6a3;
-  --color-code-header: #0f1a16;
-  --color-code-comment: #6b9b6b;
+  /* Code colors - earthy */
+  --color-code-bg: #0e0c0a;
+  --color-code-text: #c8c4bc;
+  --color-code-header: #1a1714;
+  --color-code-comment: #807868;
 
   /* Button disabled state */
-  --color-button-disabled-bg: #1f3a2f;
-  --color-button-disabled-text: #4a6b4a;
+  --color-button-disabled-bg: #2a2622;
+  --color-button-disabled-text: #585048;
 
   /* Overlays */
   --color-overlay: rgba(0, 0, 0, 0.5);
@@ -54,41 +54,41 @@
    * These map to the theme system for consistent styling
    * ========================================================================= */
 
-  /* Background colors for cards - green-tinted */
-  --bg-primary: #0a1210;
-  --bg-secondary: #0f1a16;
-  --bg-tertiary: #152420;
-  --bg-code: #081210;
-  --bg-hover: #1a2e24;
+  /* Background colors for cards - earthy */
+  --bg-primary: #12100e;
+  --bg-secondary: #1a1714;
+  --bg-tertiary: #22201c;
+  --bg-code: #0e0c0a;
+  --bg-hover: #28241e;
 
   /* Text colors for cards */
-  --text-primary: #e8f5e8;
-  --text-secondary: #8ba58b;
-  --text-tertiary: #5c7a5c;
+  --text-primary: #e8e4df;
+  --text-secondary: #a09888;
+  --text-tertiary: #706858;
 
   /* Border colors for cards */
-  --border-color: #2a4a3a;
-  --border-muted: #1f3a2f;
+  --border-color: #3a3632;
+  --border-muted: #2e2a26;
 
-  /* Primary accent - GREEN */
-  --color-primary: #4ade80;
-  --accent: #f87171;  /* Assistant accent - RED */
-  --accent-active: #ef4444;
+  /* Primary accent - Forest green */
+  --color-primary: #8fbc8f;
+  --accent: #cd8b76;  /* Assistant accent - Terracotta */
+  --accent-active: #b87860;
 
-  /* Role-specific accents */
-  --accent-user: #4ade80;  /* User is green */
-  --accent-assistant: #f87171;  /* Assistant is red */
-  --accent-tool: #fbbf24;
-  --accent-success: #4ade80;
-  --accent-fork: #c084fc;
-  --accent-merge: #22d3ee;
-  --accent-link: #34d399;
-  --accent-blue: #60a5fa;
-  --error: #f87171;
+  /* Role-specific accents - earth tones */
+  --accent-user: #7eb07e;  /* User is forest green */
+  --accent-assistant: #cd8b76;  /* Assistant is terracotta */
+  --accent-tool: #d4a574;  /* Tool is tan/sand */
+  --accent-success: #8fbc8f;
+  --accent-fork: #b098c0;  /* Dusty purple */
+  --accent-merge: #7ab8b8;  /* Sage teal */
+  --accent-link: #7ab8b8;
+  --accent-blue: #7a9bb8;
+  --error: #c07070;
 
   /* Status colors */
-  --color-success: #4ade80;
-  --color-error: #f87171;
+  --color-success: #8fbc8f;
+  --color-error: #c07070;
 
   /* Typography */
   --font-mono: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
@@ -180,82 +180,82 @@
   --font-mono: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
 }
 
-/* Dark Flat theme - Minimal, borderless, muted */
+/* Dark Flat theme - Gray/brown middle ground, minimal borders */
 [data-theme="dark-flat"] {
-  /* Primary background colors - pure dark, no green tint */
-  --color-bg-primary: #0c0c0c;
-  --color-bg-secondary: #0c0c0c;
-  --color-bg-tertiary: #141414;
+  /* Primary background colors - warm gray, between light and dark */
+  --color-bg-primary: #2a2826;
+  --color-bg-secondary: #2a2826;
+  --color-bg-tertiary: #343230;
 
-  /* Accent colors - muted */
-  --color-accent-green: #6b9b6b;
-  --color-accent-green-hover: #5a8a5a;
-  --color-accent-red: #c07070;
-  --color-accent-red-hover: #a06060;
-  --color-accent-yellow: #b8a040;
-  --color-accent-yellow-hover: #a08830;
-  --color-accent-blue: #6080b0;
-  --color-accent-link: #6080b0;
+  /* Accent colors - muted, warm */
+  --color-accent-green: #7a9a7a;
+  --color-accent-green-hover: #6a8a6a;
+  --color-accent-red: #b08070;
+  --color-accent-red-hover: #987060;
+  --color-accent-yellow: #b8a070;
+  --color-accent-yellow-hover: #a89060;
+  --color-accent-blue: #708898;
+  --color-accent-link: #708898;
 
-  /* Text colors - muted contrast */
-  --color-text-primary: #c8c8c8;
-  --color-text-secondary: #808080;
-  --color-text-muted: #585858;
-  --color-text-dim: #404040;
+  /* Text colors - balanced contrast */
+  --color-text-primary: #d8d4d0;
+  --color-text-secondary: #989088;
+  --color-text-muted: #686460;
+  --color-text-dim: #504c48;
 
-  /* Border colors - very subtle, almost invisible */
-  --color-border-primary: #1a1a1a;
-  --color-border-secondary: #1a1a1a;
-  --color-border-tertiary: #1a1a1a;
+  /* Border colors - subtle warm gray */
+  --color-border-primary: #3a3836;
+  --color-border-secondary: #3a3836;
+  --color-border-tertiary: #3a3836;
 
-  /* Code colors - flat */
-  --color-code-bg: #101010;
-  --color-code-text: #a0a0a0;
-  --color-code-header: #141414;
-  --color-code-comment: #606060;
+  /* Code colors - warm gray */
+  --color-code-bg: #242220;
+  --color-code-text: #b8b4b0;
+  --color-code-header: #302e2c;
+  --color-code-comment: #787470;
 
   /* Button disabled state */
-  --color-button-disabled-bg: #1a1a1a;
-  --color-button-disabled-text: #404040;
+  --color-button-disabled-bg: #363432;
+  --color-button-disabled-text: #585450;
 
   /* Overlays */
-  --color-overlay: rgba(0, 0, 0, 0.6);
+  --color-overlay: rgba(0, 0, 0, 0.5);
 
-  /* Card System Variables - flat dark */
-  --bg-primary: #0c0c0c;
-  --bg-secondary: #0c0c0c;
-  --bg-tertiary: #141414;
-  --bg-code: #101010;
-  --bg-hover: #181818;
+  /* Card System Variables - warm gray flat */
+  --bg-primary: #2a2826;
+  --bg-secondary: #2a2826;
+  --bg-tertiary: #343230;
+  --bg-code: #242220;
+  --bg-hover: #3a3836;
 
   /* Text colors for cards */
-  --text-primary: #c8c8c8;
-  --text-secondary: #808080;
-  --text-tertiary: #585858;
+  --text-primary: #d8d4d0;
+  --text-secondary: #989088;
+  --text-tertiary: #686460;
 
-  /* Border colors for cards - minimal */
-  --border-color: #1a1a1a;
-  --border-muted: #141414;
+  /* Border colors for cards - subtle */
+  --border-color: #3e3c3a;
+  --border-muted: #363432;
 
-  /* Primary accent - muted green */
-  --color-primary: #6b9b6b;
-  --accent: #c07070;
-  --accent-active: #a06060;
+  /* Primary accent - muted sage */
+  --color-primary: #7a9a7a;
+  --accent: #b08070;
+  --accent-active: #987060;
 
-  /* Role-specific accents - all muted */
-  --accent-user: #6b9b6b;
-  --accent-assistant: #c07070;
-  --accent-tool: #b8a040;
-  --accent-success: #6b9b6b;
-  --accent-fork: #9070b0;
-  --accent-merge: #509090;
-  --accent-link: #508080;
-  --accent-blue: #6080b0;
-  --error: #c07070;
+  /* Role-specific accents - warm muted tones */
+  --accent-user: #7a9a7a;  /* Sage green */
+  --accent-assistant: #b08070;  /* Dusty coral */
+  --accent-tool: #b8a070;  /* Warm tan */
+  --accent-success: #7a9a7a;
+  --accent-fork: #9080a0;  /* Dusty lavender */
+  --accent-merge: #708888;  /* Slate teal */
+  --accent-link: #708888;
+  --accent-blue: #708898;
+  --error: #a87070;
 
   /* Status colors */
-  --color-success: #6b9b6b;
-  --color-error: #c07070;
+  --color-success: #7a9a7a;
+  --color-error: #a87070;
 
   /* Typography */
   --font-mono: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;

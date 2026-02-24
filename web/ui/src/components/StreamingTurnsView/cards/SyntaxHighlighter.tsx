@@ -6,7 +6,7 @@
  * Theme-aware: uses light theme when app is in light mode.
  */
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useDeferredValue } from 'react';
 import { Prism as PrismHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -221,8 +221,9 @@ export function SyntaxHighlightedCode({
   showLineNumbers = false,
   wrapLongLines = false,
 }: SyntaxHighlightedCodeProps) {
-  // Get current theme
-  const { resolvedTheme } = useTheme();
+  // Get current theme - use deferred value to make theme changes non-blocking
+  const { resolvedTheme: currentTheme } = useTheme();
+  const resolvedTheme = useDeferredValue(currentTheme);
   const isLightTheme = resolvedTheme === 'light';
   const theme = isLightTheme ? customLightCodeTheme : customDarkCodeTheme;
 
@@ -331,7 +332,8 @@ function DiffLine({
 }
 
 export function DiffHighlightedCode({ diffLines, language, filePath }: DiffHighlightedCodeProps) {
-  const { resolvedTheme } = useTheme();
+  const { resolvedTheme: currentTheme } = useTheme();
+  const resolvedTheme = useDeferredValue(currentTheme);
   const isLightTheme = resolvedTheme === 'light';
 
   // Determine language from props or try to extract from diff header

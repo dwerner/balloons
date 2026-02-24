@@ -1,16 +1,21 @@
 # Bug List
 
-## Bug #1: Merge turns should link back like fork turns do
-- Fork turns have clickable links to navigate to the forked session
-- Merge turns should similarly have links back to the child session that was merged
+## ~~Bug #1: Fork/merge turns should link bidirectionally~~ (FIXED)
+- ~~Fork turns have clickable links to navigate to the forked session~~
+- ~~Merge turns should similarly have links back to the child session that was merged~~
+- ~~Both sides of a fork or merge should link to the other session~~
 
-## Bug #2: Tool results and uses are grouped into the same turn
-- Tool invocations and their results are currently collapsed into a single turn
-- They should be displayed as separate turns (or at least visually distinct)
-- **Symptom**: Shows placeholder text like `tool_result skipped (rendered with tool_use) | ID: f74d2165`
-- The rendering logic is intentionally skipping tool_result turns assuming they'll be shown with tool_use
-- But this creates confusion and loses information - need to properly split these into separate rendered turns
-- **Specific case**: Edit tool shows "file modified successfully" but the actual edit content (old_string/new_string) is not displayed because the tool_result is skipped
+**Fix**: Fork and merge turns now have bidirectional links - both sides link to each other.
+
+## ~~Bug #2: Tool results and uses are grouped into the same turn~~ (FIXED)
+- ~~Tool invocations and their results are currently collapsed into a single turn~~
+- ~~They should be displayed as separate turns (or at least visually distinct)~~
+- ~~**Symptom**: Shows placeholder text like `tool_result skipped (rendered with tool_use) | ID: f74d2165`~~
+- ~~The rendering logic is intentionally skipping tool_result turns assuming they'll be shown with tool_use~~
+- ~~But this creates confusion and loses information - need to properly split these into separate rendered turns~~
+- ~~**Specific case**: Edit tool shows "file modified successfully" but the actual edit content (old_string/new_string) is not displayed because the tool_result is skipped~~
+
+**Fix**: Tool uses and tool results are now rendered as separate, visually distinct turns.
 
 ## Bug #3: Rotating progress indicator has incorrect rotation axis
 - The rotation pivot point is off, making the animation look wrong
@@ -139,18 +144,22 @@ Fixed by immediately setting a minimal `TaskInfo` object from the event data whe
 - Suspected cause: session save operation during pinning may be resetting or not preserving the token count
 - Token count should persist through pin operations
 
-## Bug #19: Status bar doesn't show for new sessions (before streaming starts)
-- When creating a new session, the status bar is not displayed
-- Status bar only appears once streaming starts
-- Should show a status bar for new sessions even before any streaming begins (with session name, empty/zero token count, etc.)
-- **Key detail**: Refreshing the page on an empty session DOES show the status bar
-- This suggests the status bar rendering condition is correct on load, but the "new session" action doesn't trigger the same state update
+## ~~Bug #19: Status bar doesn't show for new sessions (before streaming starts)~~ (FIXED)
+- ~~When creating a new session, the status bar is not displayed~~
+- ~~Status bar only appears once streaming starts~~
+- ~~Should show a status bar for new sessions even before any streaming begins (with session name, empty/zero token count, etc.)~~
+- ~~**Key detail**: Refreshing the page on an empty session DOES show the status bar~~
+- ~~This suggests the status bar rendering condition is correct on load, but the "new session" action doesn't trigger the same state update~~
 
-## Bug #20: Last assistant turn shows empty body in streaming mode
-- In streaming mode, the final assistant turn (the summary/conclusion text) renders with an empty body
-- The content exists but is not being displayed
-- Possibly related to Bug #10 fix - the `_flush_text_as_turn(emit_event=True)` change may be creating a turn but the content isn't being streamed/rendered correctly
-- This is a regression from the turn ordering fix
+**Fix**: Status bar now shows for new sessions before streaming starts.
+
+## ~~Bug #20: Last assistant turn shows empty body in streaming mode~~ (FIXED)
+- ~~In streaming mode, the final assistant turn (the summary/conclusion text) renders with an empty body~~
+- ~~The content exists but is not being displayed~~
+- ~~Possibly related to Bug #10 fix - the `_flush_text_as_turn(emit_event=True)` change may be creating a turn but the content isn't being streamed/rendered correctly~~
+- ~~This is a regression from the turn ordering fix~~
+
+**Fix**: Final assistant turn content now renders correctly in streaming mode.
 
 ## Bug #21: Tool use errors should render as error turns with single-line format
 - Errors like `<tool_use_error>File does not exist.</tool_use_error>` should be displayed as dedicated error turns
@@ -172,18 +181,22 @@ Fixed by immediately setting a minimal `TaskInfo` object from the event data whe
 - The LLM should be waiting for user input in these cases, not receiving status updates
 - These pending states are meant to block until user accepts/rejects, not to continue the conversation
 
-## Bug #25: Long messages are truncated instead of being collapsible
-- Long turn content is being truncated, which loses information
-- Turns should NOT truncate content
-- Instead, turns should be collapsible:
-  - Default/collapsed state: show first 5 lines
-  - Header bar should display the total line count (e.g., "42 lines")
-  - Expanded state: show full content when clicking header
-- This is similar to Bug #14 but applies to all turn types, not just tool use cards
+## ~~Bug #25: Long messages are truncated instead of being collapsible~~ (FIXED)
+- ~~Long turn content is being truncated, which loses information~~
+- ~~Turns should NOT truncate content~~
+- ~~Instead, turns should be collapsible:~~
+  - ~~Default/collapsed state: show first 5 lines~~
+  - ~~Header bar should display the total line count (e.g., "42 lines")~~
+  - ~~Expanded state: show full content when clicking header~~
+- ~~This is similar to Bug #14 but applies to all turn types, not just tool use cards~~
 
-## Bug #26: Turn cards should support "raw" view toggle for debugging
-- Any turn type that derives from the base turn card should provide a "raw" rendering mode
-- Should be easily toggleable (button/hotkey) to switch between:
-  - Default: special/formatted rendering (markdown, syntax highlighting, etc.)
-  - Raw: plain text/JSON representation of the turn data for debugging
-- Useful for debugging rendering issues and understanding turn data structure
+**Fix**: Turns are now collapsible with line count display.
+
+## ~~Bug #26: Turn cards should support "raw" view toggle for debugging~~ (FIXED)
+- ~~Any turn type that derives from the base turn card should provide a "raw" rendering mode~~
+- ~~Should be easily toggleable (button/hotkey) to switch between:~~
+  - ~~Default: special/formatted rendering (markdown, syntax highlighting, etc.)~~
+  - ~~Raw: plain text/JSON representation of the turn data for debugging~~
+- ~~Useful for debugging rendering issues and understanding turn data structure~~
+
+**Fix**: Turn cards now support a "raw" view toggle for debugging.

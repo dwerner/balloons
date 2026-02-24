@@ -116,7 +116,7 @@
 .streaming-turns-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 6px;
 }
 
 /* Turn highlight effect (when scrolling to a turn from tree view) */

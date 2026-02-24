@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, startTransition } from 'react';
 
 export type Theme = 'light' | 'dark' | 'dark-flat' | 'system';
 export type ResolvedTheme = 'light' | 'dark' | 'dark-flat';
@@ -58,10 +58,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     document.documentElement.setAttribute('data-theme', resolvedTheme);
   }, [resolvedTheme]);
 
-  // Persist theme to localStorage
+  // Persist theme to localStorage - use startTransition to mark as non-urgent
   const setTheme = useCallback((newTheme: Theme) => {
-    setThemeState(newTheme);
     localStorage.setItem(STORAGE_KEY, newTheme);
+    startTransition(() => {
+      setThemeState(newTheme);
+    });
   }, []);
 
   // Cycle through themes: dark -> dark-flat -> light -> dark
