@@ -195,8 +195,8 @@ function FormattedToolInput({
     const filePath = (toolInput.file_path || '') as string;
     const content = (toolInput.content || '') as string;
     const language = guessLanguage(filePath);
-    const truncated = content.length > 1000;
-    const displayContent = truncated ? content.slice(0, 1000) + '\n... [truncated]' : content;
+    // Show all content (no truncation)
+    const displayContent = content;
 
     return (
       <div className="tool-input-formatted">
@@ -299,8 +299,8 @@ function FormattedToolResult({
   result: string;
   isError?: boolean;
 }) {
-  const truncated = result.length > 5000;
-  const displayResult = truncated ? result.slice(0, 5000) + '\n... [truncated]' : result;
+  // Show all results (no truncation)
+  const displayResult = result;
 
   return (
     <pre className={`tool-result-output ${isError ? 'error' : ''}`}>

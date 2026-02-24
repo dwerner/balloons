@@ -75,12 +75,8 @@ export function BashCard({ turn, result }: BashCardProps) {
     <span className="tool-building">building...</span>
   ) : null;
 
-  // Truncate very long output
-  const maxLength = 10000;
-  const truncated = resultContent.length > maxLength;
-  const displayOutput = truncated
-    ? resultContent.slice(0, maxLength) + '\n... [output truncated]'
-    : resultContent;
+  // Show all output (no truncation)
+  const displayOutput = resultContent;
 
   // Raw data for debugging mode
   const rawData = { turn, result };

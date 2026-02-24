@@ -69,12 +69,8 @@ export function GenericToolCard({ turn, result }: GenericToolCardProps) {
     ? getStreamingJson(toolInput)
     : formatJson(toolInput);
 
-  // Truncate very long output
-  const maxLength = 5000;
-  const truncated = resultContent.length > maxLength;
-  const displayOutput = truncated
-    ? resultContent.slice(0, maxLength) + '\n... [truncated]'
-    : resultContent;
+  // Show all output (no truncation)
+  const displayOutput = resultContent;
 
   // Raw data for debugging mode
   const rawData = { turn, result };

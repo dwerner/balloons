@@ -89,11 +89,8 @@ export function ToolResultCard({ turn }: ToolResultCardProps) {
   const content = resultBlock?.content || '';
   const isError = resultBlock?.isError || false;
 
-  // Truncate long results
-  const truncated = content.length > 5000;
-  const displayContent = truncated
-    ? content.slice(0, 5000) + '\n... [truncated]'
-    : content;
+  // Show all content (no truncation)
+  const displayContent = content;
 
   // Render body content based on display mode
   const renderBody = () => {

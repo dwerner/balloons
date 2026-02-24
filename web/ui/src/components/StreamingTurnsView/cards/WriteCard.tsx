@@ -95,13 +95,8 @@ export function WriteCard({ turn, result }: WriteCardProps) {
     <span className="tool-building">building...</span>
   ) : null;
 
-  // Truncate content preview
-  const maxPreviewLines = 20;
-  const contentLines = content.split('\n');
-  const truncated = contentLines.length > maxPreviewLines;
-  const previewContent = truncated
-    ? contentLines.slice(0, maxPreviewLines).join('\n') + '\n... [truncated]'
-    : content;
+  // Show all content (no truncation)
+  const previewContent = content;
 
   // Raw data for debugging mode
   const rawData = { turn, result };

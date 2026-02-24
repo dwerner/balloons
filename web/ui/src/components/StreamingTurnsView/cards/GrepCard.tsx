@@ -78,11 +78,8 @@ export function GrepCard({ turn, result }: GrepCardProps) {
     <span className="tool-building">building...</span>
   ) : null;
 
-  // Truncate very long output
-  const maxLines = 50;
-  const truncated = resultLines.length > maxLines;
-  const displayLines = truncated ? resultLines.slice(0, maxLines) : resultLines;
-  const displayContent = displayLines.join('\n') + (truncated ? `\n... and ${matchCount - maxLines} more` : '');
+  // Show all results (no truncation)
+  const displayContent = resultContent;
 
   // Raw data for debugging mode
   const rawData = { turn, result };

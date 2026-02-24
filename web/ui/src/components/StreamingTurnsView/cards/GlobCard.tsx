@@ -73,11 +73,6 @@ export function GlobCard({ turn, result }: GlobCardProps) {
   const fileList = resultContent.split('\n').filter(line => line.trim());
   const fileCount = fileList.length;
 
-  // Truncate very long file lists
-  const maxFiles = 30;
-  const truncated = fileList.length > maxFiles;
-  const displayFiles = truncated ? fileList.slice(0, maxFiles) : fileList;
-
   // Raw data for debugging mode
   const rawData = { turn, result };
 
@@ -102,16 +97,11 @@ export function GlobCard({ turn, result }: GlobCardProps) {
               <span className="no-matches">No files found</span>
             ) : (
               <>
-                {displayFiles.map((file, idx) => (
+                {fileList.map((file, idx) => (
                   <div key={idx} className="tool-file-item">
                     <code>{formatRelativePath(file)}</code>
                   </div>
                 ))}
-                {truncated && (
-                  <div className="tool-file-item truncated">
-                    ... and {fileCount - maxFiles} more
-                  </div>
-                )}
               </>
             )}
           </div>

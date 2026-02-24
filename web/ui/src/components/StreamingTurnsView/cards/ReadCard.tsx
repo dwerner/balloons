@@ -109,13 +109,8 @@ export function ReadCard({ turn, result }: ReadCardProps) {
       .join('\n');
   };
 
-  // Truncate very long output
-  const maxLength = 10000;
-  const truncated = resultContent.length > maxLength;
-  const strippedContent = stripLineNumberPrefixes(resultContent);
-  const displayContent = truncated
-    ? strippedContent.slice(0, maxLength) + '\n... [truncated]'
-    : strippedContent;
+  // Show all content (no truncation)
+  const displayContent = stripLineNumberPrefixes(resultContent);
 
   // Raw data for debugging mode
   const rawData = { turn, result };
