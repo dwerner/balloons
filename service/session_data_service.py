@@ -44,8 +44,8 @@ from service.session_events import (
 )
 from models import (
     TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock,
-    InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock,
-    MergedToBlock, ArchiveBlock, SlideBlock, ReviewBlock,
+    InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, ForkedFromBlock,
+    MergeBlock, MergedToBlock, ArchiveBlock, SlideBlock, ReviewBlock,
     ForkProposalBlock, MergeProposalBlock
 )
 
@@ -56,8 +56,8 @@ if TYPE_CHECKING:
 # ContentBlock union for type annotations
 ContentBlock = Union[
     TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock,
-    InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock,
-    MergedToBlock, ArchiveBlock, SlideBlock, ReviewBlock,
+    InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, ForkedFromBlock,
+    MergeBlock, MergedToBlock, ArchiveBlock, SlideBlock, ReviewBlock,
     ForkProposalBlock, MergeProposalBlock
 ]
 
@@ -1048,6 +1048,16 @@ class SessionDataService:
                 message=data.get("message", ""),
                 files_changed=data.get("files_changed", []),
                 key_accomplishments=data.get("key_accomplishments", []),
+            )
+        elif block_type == "forked_from":
+            return ForkedFromBlock(
+                type="forked_from",
+                fork_id=data.get("fork_id", ""),
+                parent_session_id=data.get("parent_session_id", ""),
+                parent_name=data.get("parent_name", ""),
+                parent_turn=data.get("parent_turn", 0),
+                fork_name=data.get("fork_name", ""),
+                prompt=data.get("prompt", ""),
             )
         elif block_type == "archive":
             return ArchiveBlock(

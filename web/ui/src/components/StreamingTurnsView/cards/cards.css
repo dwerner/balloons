@@ -404,11 +404,13 @@
 }
 
 .system-card.system-fork,
+.system-card.system-forked-from,
 .system-card.system-fork-proposal {
   border-color: var(--accent-fork, #be4bdb);
 }
 
 .system-card.system-fork .turn-card-header,
+.system-card.system-forked-from .turn-card-header,
 .system-card.system-fork-proposal .turn-card-header {
   background: rgba(190, 75, 219, 0.1);
   color: var(--accent-fork, #be4bdb);
@@ -2511,6 +2513,8 @@
 
 :root[data-theme="dark-flat"] .system-card.system-fork,
 [data-theme="dark-flat"] .system-card.system-fork,
+:root[data-theme="dark-flat"] .system-card.system-forked-from,
+[data-theme="dark-flat"] .system-card.system-forked-from,
 :root[data-theme="dark-flat"] .system-card.system-fork-proposal,
 [data-theme="dark-flat"] .system-card.system-fork-proposal {
   border-left-color: var(--accent-fork, #9070b0);
@@ -2518,6 +2522,8 @@
 
 :root[data-theme="dark-flat"] .system-card.system-fork .turn-card-header,
 [data-theme="dark-flat"] .system-card.system-fork .turn-card-header,
+:root[data-theme="dark-flat"] .system-card.system-forked-from .turn-card-header,
+[data-theme="dark-flat"] .system-card.system-forked-from .turn-card-header,
 :root[data-theme="dark-flat"] .system-card.system-fork-proposal .turn-card-header,
 [data-theme="dark-flat"] .system-card.system-fork-proposal .turn-card-header {
   background: transparent;

@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-23T12:15:32.034527
+// Generated: 2026-02-23T19:43:31.699563
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -111,6 +111,16 @@ export interface MergedToBlock {
   filesChanged?: string[];
   keyAccomplishments?: string[];
   reason?: string;
+}
+
+export interface ForkedFromBlock {
+  type?: string;
+  forkId?: string;
+  parentSessionId?: string;
+  parentName?: string;
+  parentTurn?: number;
+  forkName?: string;
+  prompt?: string;
 }
 
 export interface SlideBlock {

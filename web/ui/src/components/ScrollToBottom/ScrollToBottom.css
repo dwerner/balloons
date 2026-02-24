@@ -6,12 +6,15 @@
  */
 
 .scroll-to-bottom {
-  /* Positioning */
-  position: absolute;
+  /* Positioning - sticky keeps it visible at bottom while scrolling */
+  position: sticky;
   bottom: 24px;
-  left: 50%;
-  transform: translateX(-50%) translateY(100px);
   z-index: 100;
+
+  /* Centering via margin (works with sticky, unlike left+transform) */
+  margin-left: auto;
+  margin-right: auto;
+  width: fit-content;
 
   /* Layout */
   display: flex;
@@ -35,6 +38,7 @@
   /* Animation */
   opacity: 0;
   visibility: hidden;
+  transform: translateY(100px);
   transition:
     transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
     opacity 0.3s ease,
@@ -48,7 +52,7 @@
 .scroll-to-bottom.visible {
   opacity: 1;
   visibility: visible;
-  transform: translateX(-50%) translateY(0);
+  transform: translateY(0);
 }
 
 .scroll-to-bottom:hover {
@@ -62,7 +66,7 @@
 }
 
 .scroll-to-bottom:active {
-  transform: translateX(-50%) scale(0.98);
+  transform: scale(0.98);
 }
 
 /* Icon */
@@ -167,11 +171,11 @@
   }
 
   .scroll-to-bottom.visible {
-    transform: translateX(-50%);
+    transform: none;
   }
 
   .scroll-to-bottom:active {
-    transform: translateX(-50%);
+    transform: none;
   }
 
   .scroll-to-bottom-streaming-indicator .dot {

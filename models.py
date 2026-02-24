@@ -167,6 +167,24 @@ class MergedToBlock:
 
 @ws_type
 @dataclass
+class ForkedFromBlock:
+    """Marker indicating this session was forked from a parent.
+
+    Stored as the first turn in a fork session's history when it is created.
+    This is the counterpart to ForkBlock which is stored in the parent.
+    Provides a backlink to navigate back to the parent session.
+    """
+    type: str = "forked_from"
+    fork_id: str = ""  # UUID for this fork (same as ForkBlock)
+    parent_session_id: str = ""  # The parent session this was forked from
+    parent_name: str = ""  # Name of the parent session
+    parent_turn: int = 0  # Turn index in parent where fork marker was added (fork_point)
+    fork_name: str = ""  # Name of this fork
+    prompt: str = ""  # The initial prompt for this fork
+
+
+@ws_type
+@dataclass
 class SlideBlock:
     """Slide content for presentation mode.
 
@@ -328,7 +346,7 @@ class ArchiveBlock:
 
 
 # Union type for all content block types
-ContentBlock = Union[TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, SlideBlock, ReviewBlock, ForkProposalBlock, MergeProposalBlock]
+ContentBlock = Union[TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ForkedFromBlock, ArchiveBlock, SlideBlock, ReviewBlock, ForkProposalBlock, MergeProposalBlock]
 
 
 @dataclass

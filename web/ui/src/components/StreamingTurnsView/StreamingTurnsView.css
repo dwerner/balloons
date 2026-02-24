@@ -384,3 +384,25 @@
   background: transparent;
   border-bottom: none;
 }
+
+/* Light mode - differentiate scroll area from cards */
+:root[data-theme="light"] .streaming-turns-view-container,
+[data-theme="light"] .streaming-turns-view-container {
+  background: var(--bg-secondary, #d2e0d6);
+}
+
+:root[data-theme="light"] .streaming-turns-header,
+[data-theme="light"] .streaming-turns-header {
+  background: var(--bg-tertiary, #c5d8cb);
+}
+
+:root[data-theme="light"] .parallel-group,
+[data-theme="light"] .parallel-group {
+  background: linear-gradient(to right, rgba(160, 80, 208, 0.08), transparent);
+}
+
+:root[data-theme="light"] .parallel-group-header,
+[data-theme="light"] .parallel-group-header {
+  background: rgba(160, 80, 208, 0.1);
+  border-bottom: 1px solid rgba(160, 80, 208, 0.2);
+}

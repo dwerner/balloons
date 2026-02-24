@@ -546,6 +546,42 @@ class Session:
         )
         return self.add_turn(role="system", content_block=fork_block, exchange_id=exchange_id)
 
+    def add_forked_from_turn(
+        self,
+        fork_id: str,
+        parent_session_id: str,
+        parent_name: str,
+        parent_turn: int,
+        fork_name: str,
+        prompt: str,
+        exchange_id: str | None = None,
+    ) -> "Turn":
+        """Add a 'forked from' marker as the first turn in a fork.
+
+        This records that this session was forked from a parent,
+        providing a backlink for navigation.
+        Counterpart to add_fork_turn which is called on the parent.
+
+        Args:
+            fork_id: UUID for this fork event
+            parent_session_id: The parent session this was forked from
+            parent_name: Display name of the parent session
+            parent_turn: Turn index in parent where fork marker was added
+            fork_name: Name of this fork
+            prompt: The initial prompt for this fork
+            exchange_id: If provided, groups this marker with an exchange
+        """
+        from models import ForkedFromBlock
+        forked_from_block = ForkedFromBlock(
+            fork_id=fork_id,
+            parent_session_id=parent_session_id,
+            parent_name=parent_name,
+            parent_turn=parent_turn,
+            fork_name=fork_name,
+            prompt=prompt,
+        )
+        return self.add_turn(role="system", content_block=forked_from_block, exchange_id=exchange_id)
+
     def add_merge_turn(
         self,
         merge_id: str,

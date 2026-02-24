@@ -16,6 +16,7 @@ import type {
   ForkBlock,
   MergeBlock,
   MergedToBlock,
+  ForkedFromBlock,
   LinkBlock,
   ErrorBlock,
   InterruptionBlock,
@@ -37,6 +38,7 @@ interface SystemCardProps {
 // System block type configuration
 const SYSTEM_CONFIG: Record<string, { icon: string; label: string; className: string }> = {
   fork: { icon: '⑂', label: 'Fork', className: 'system-fork' },
+  forked_from: { icon: '⤵', label: 'Forked From', className: 'system-forked-from' },
   merge: { icon: '⤴', label: 'Merge', className: 'system-merge' },
   merged_to: { icon: '⤴', label: 'Merged', className: 'system-merged-to' },
   link: { icon: '🔗', label: 'Link', className: 'system-link' },
@@ -114,6 +116,10 @@ function getDisplayContent(block: SessionDataTurn['contentBlock']): string {
     case 'fork': {
       const b = block as ForkBlock;
       return `**${b.forkName || 'Fork'}**\n\n${b.prompt || ''}`;
+    }
+    case 'forked_from': {
+      const b = block as ForkedFromBlock;
+      return `Forked from **${b.parentName}**\n\n${b.prompt || ''}`;
     }
     case 'merge': {
       const b = block as MergeBlock;

@@ -15,7 +15,7 @@ from typing import Any
 
 from models import (
     Message, Turn, TextBlock, ToolUseBlock, ToolResultBlock,
-    InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock,
+    InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, ForkedFromBlock,
     MergeBlock, MergedToBlock, ArchiveBlock, ReviewBlock, Sentiment,
     ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData,
     ExchangeInfo
@@ -122,6 +122,17 @@ class RenderMergedTo(RenderInstruction):
     files_changed: list[str] = field(default_factory=list)
     key_accomplishments: list[str] = field(default_factory=list)
     reason: str = ""
+
+
+@dataclass
+class RenderForkedFrom(RenderInstruction):
+    """Instruction to render a 'forked from parent' marker."""
+    fork_id: str = ""
+    parent_session_id: str = ""
+    parent_name: str = ""
+    parent_turn: int = 0
+    fork_name: str = ""
+    prompt: str = ""
 
 
 @dataclass
@@ -360,6 +371,17 @@ class HistoryLoader:
                 files_changed=block.files_changed,
                 key_accomplishments=block.key_accomplishments,
                 reason=block.reason,
+            )
+
+        elif isinstance(block, ForkedFromBlock):
+            return RenderForkedFrom(
+                turn_id=turn_id,
+                fork_id=block.fork_id,
+                parent_session_id=block.parent_session_id,
+                parent_name=block.parent_name,
+                parent_turn=block.parent_turn,
+                fork_name=block.fork_name,
+                prompt=block.prompt,
             )
 
         elif isinstance(block, ReviewBlock):

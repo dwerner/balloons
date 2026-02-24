@@ -396,8 +396,24 @@ class ForkManager:
         child_session.fork_status = "active"
         child_session.fork_point_turn = fork_point
 
+        # Generate fork_id to share between parent and child
+        fork_id = str(uuid.uuid4())
+
+        # Get parent display name for backlink
+        parent_name = current_session.title or current_session.fork_name or current_session.id[:8]
+
         if not groups.needs_compression:
-            # No compression - populate child immediately
+            # Add "forked from" backlink as FIRST turn in child
+            child_session.add_forked_from_turn(
+                fork_id=fork_id,
+                parent_session_id=current_session.id,
+                parent_name=parent_name,
+                parent_turn=fork_point,
+                fork_name=name or "fork",
+                prompt=prompt,
+            )
+
+            # Then populate child with copied context
             for msg, _ in sorted(groups.copy_items, key=lambda x: x[1]):
                 child_session.add_message(msg.role, msg.content, content_blocks=msg.content_blocks)
 
@@ -426,7 +442,7 @@ class ForkManager:
 
             # Add fork turn marker to parent session (part of the fork proposal exchange)
             current_session.add_fork_turn(
-                fork_id=str(uuid.uuid4()),
+                fork_id=fork_id,
                 child_session_id=child_session.id,
                 fork_name=name or "fork",
                 prompt=prompt,
@@ -505,6 +521,22 @@ class ForkManager:
         allowed_tools = fork_data.allowed_tools
         fork_point = fork_data.fork_point
 
+        # Generate fork_id to share between parent and child
+        fork_id = str(uuid.uuid4())
+
+        # Get parent display name for backlink
+        parent_name = parent_session.title or parent_session.fork_name or parent_session.id[:8]
+
+        # Add "forked from" backlink as FIRST turn in child
+        child_session.add_forked_from_turn(
+            fork_id=fork_id,
+            parent_session_id=parent_session.id,
+            parent_name=parent_name,
+            parent_turn=fork_point,
+            fork_name=name or "fork",
+            prompt=prompt,
+        )
+
         # Build messages with summary inserted at correct position
         all_items = []
 
@@ -542,7 +574,7 @@ class ForkManager:
 
         # Add fork turn marker to parent session (part of the fork proposal exchange)
         parent_session.add_fork_turn(
-            fork_id=str(uuid.uuid4()),
+            fork_id=fork_id,
             child_session_id=child_session.id,
             fork_name=name or "fork",
             prompt=prompt,

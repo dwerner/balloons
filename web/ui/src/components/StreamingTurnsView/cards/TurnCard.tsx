@@ -39,6 +39,7 @@ export interface TurnCardProps {
 // System content block types (non-interactive)
 const SYSTEM_TYPES = new Set([
   'fork',
+  'forked_from',
   'merge',
   'merged_to',
   'link',
