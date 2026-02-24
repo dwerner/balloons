@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-23T19:43:31.699563
+// Generated: 2026-02-24T14:19:39.030397
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -202,6 +202,23 @@ export interface ArchiveBlock {
   tokenEstimate?: number;
 }
 
+export interface SessionSummaryBlock {
+  type?: string;
+  summaryId?: string;
+  proposedTitle?: string;
+  markdownContent?: string;
+  filesModified?: string[];
+  decisionsMade?: string[];
+  workDone?: string;
+  nextSteps?: string[];
+  questionsRaised?: string[];
+  turnCountAtReview?: number;
+  reviewedAt?: string;
+  reviewedByBackend?: string;
+  status?: string;
+  approvedTitle?: string;
+}
+
 export interface ManagedSessionInfo {
   id: string;
   title: string;
@@ -335,6 +352,32 @@ export interface CompleteArchiveResult {
   archiveId?: string;
   turnIndex?: number;
   turnsArchived?: number;
+  error?: string;
+}
+
+export interface StartSessionReviewResult {
+  success: boolean;
+  helperId?: string;
+  sessionId?: string;
+  backendName?: string;
+  error?: string;
+}
+
+export interface CompleteSessionReviewResult {
+  success: boolean;
+  sessionId?: string;
+  summaryId?: string;
+  turnIndex?: number;
+  proposedTitle?: string;
+  markdownContent?: string;
+  error?: string;
+}
+
+export interface ApproveSessionReviewResult {
+  success: boolean;
+  sessionId?: string;
+  summaryId?: string;
+  approvedTitle?: string;
   error?: string;
 }
 
@@ -572,9 +615,10 @@ export interface TurnSnapshot {
   viewed: boolean;
   tokens: number;
   contextMode: string;
-  contentBlock: TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock | InterruptionBlock | ErrorBlock | LinkBlock | ForkBlock | MergeBlock | MergedToBlock | ArchiveBlock | SlideBlock | ReviewBlock | ForkProposalBlock | MergeProposalBlock;
+  contentBlock: TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock | InterruptionBlock | ErrorBlock | LinkBlock | ForkBlock | ForkedFromBlock | MergeBlock | MergedToBlock | ArchiveBlock | SlideBlock | ReviewBlock | ForkProposalBlock | MergeProposalBlock;
   order?: number;
   exchangeId?: string | null;
+  timestamp?: string | null;
 }
 
 export interface SessionSnapshot {
@@ -622,7 +666,7 @@ export interface SessionTurnFinishedEvent {
   tokens: number;
   order?: number;
   role?: string;
-  contentBlock?: TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock | InterruptionBlock | ErrorBlock | LinkBlock | ForkBlock | MergeBlock | MergedToBlock | ArchiveBlock | SlideBlock | ReviewBlock | ForkProposalBlock | MergeProposalBlock | null;
+  contentBlock?: TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock | InterruptionBlock | ErrorBlock | LinkBlock | ForkBlock | ForkedFromBlock | MergeBlock | MergedToBlock | ArchiveBlock | SlideBlock | ReviewBlock | ForkProposalBlock | MergeProposalBlock | null;
   finalContent?: string;
   contextTokens?: number;
   outputTokensTotal?: number;

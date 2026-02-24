@@ -94,6 +94,7 @@ export function GrepCard({ turn, result }: GrepCardProps) {
       orderEnd={result?.order}
       className="grep-card"
       rawData={rawData}
+      timestamp={turn.timestamp}
     >
       {hasResult && (
         <>

@@ -91,6 +91,7 @@ export function BashCard({ turn, result }: BashCardProps) {
       orderEnd={result?.order}
       className="bash-card"
       rawData={rawData}
+      timestamp={turn.timestamp}
     >
       {/* Show full command if we have description in header, or command is long */}
       {command && (description || command.length > maxHeaderLength) && (

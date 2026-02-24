@@ -10,6 +10,7 @@ import { SessionStatusBar } from './components/SessionStatusBar';
 import { StreamingStatusBar } from './components/StreamingStatusBar';
 import { ForkProposalTurn } from './components/ForkProposalTurn';
 import { CreateTodoModal, type CreateTodoResult } from './components/CreateTodoModal';
+import { SessionReviewModal, type SessionReview, type BackendInfo } from './components/SessionReviewModal';
 import { StreamingTurnsView, type StreamingProgress } from './components/StreamingTurnsView';
 import { useWakeLock, useSoundNotifications } from './hooks';
 import { setDebugClient, createLogger, isDebugEnabled, setDebugEnabled } from './utils/debugLog';
@@ -994,6 +995,19 @@ export function App() {
     planTitle: string;
   }>({ isOpen: false, planId: '', planTitle: '' });
 
+  // Modal state for SessionReviewModal
+  const [reviewModalState, setReviewModalState] = useState<{
+    isOpen: boolean;
+    sessionId: string;
+    sessionTitle: string;
+  }>({ isOpen: false, sessionId: '', sessionTitle: '' });
+  const [availableBackends, setAvailableBackends] = useState<BackendInfo[]>([]);
+  const [existingReviews, setExistingReviews] = useState<SessionReview[]>([]);
+  const [currentReview, setCurrentReview] = useState<SessionReview | null>(null);
+  const [isGeneratingReview, setIsGeneratingReview] = useState(false);
+  const reviewHelperIdRef = useRef<string | null>(null);
+  const reviewAccumulatedTextRef = useRef<string>('');
+
   const clientRef = useRef<BalloonsClient | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messageInputRef = useRef<MessageInputHandle>(null);
@@ -1686,6 +1700,15 @@ export function App() {
     fileBrowserRef.current?.navigateTo(cwd);
   }, []);
 
+  // Handle setting CWD when no CWD is set - opens file browser for selection
+  // The user can then right-click a folder and select "Set as working directory"
+  const handleSetCwd = useCallback(() => {
+    debugLog('Set CWD requested, opening file browser');
+    // File browser will be shown when detail panel expands (handled by onSetCwd caller)
+    // Navigate to home or a sensible default
+    fileBrowserRef.current?.navigateTo('~');
+  }, []);
+
   // Handle setting working directory from file browser context menu
   const handleSetWorkingDirectory = useCallback(async (path: string) => {
     const client = clientRef.current;
@@ -2029,6 +2052,17 @@ export function App() {
 
   const selectedSession = sessions.find(s => s.id === selectedSessionId);
 
+  // Update document title to show session name and turn count
+  useEffect(() => {
+    if (selectedSession) {
+      const sessionName = selectedSession.forkName || selectedSession.title || 'Session';
+      const turnCount = selectedSession.messageCount || 0;
+      document.title = `${sessionName} (${turnCount}) - Balloons`;
+    } else {
+      document.title = 'Balloons';
+    }
+  }, [selectedSession?.forkName, selectedSession?.title, selectedSession?.messageCount, selectedSession]);
+
   // Sound notifications for streaming events
   // This hook subscribes to sessionDataStreamDone and sessionDataStreamError events
   // and plays configured notification sounds when they occur
@@ -2116,6 +2150,45 @@ export function App() {
             } catch (err) {
               console.error(`Failed to ${action} turns:`, err);
             }
+          }}
+          onReviewSession={async (sessionId) => {
+            const client = clientRef.current;
+            if (!client || connectionState !== 'connected') return;
+
+            // Find session to get title
+            const session = sessions.find(s => s.id === sessionId);
+            const sessionTitle = session?.forkName || session?.title || `Session ${sessionId.slice(0, 8)}`;
+
+            // Load available backends
+            try {
+              const backends = await client.sessions.listBackends();
+              setAvailableBackends(backends.map(name => ({ name, displayName: name })));
+            } catch (err) {
+              console.error('Failed to load backends:', err);
+              setAvailableBackends([{ name: 'claude', displayName: 'claude' }]);
+            }
+
+            // Load existing reviews for this session
+            try {
+              const reviews = await client.sessions.getSessionReviews(sessionId);
+              setExistingReviews(reviews as unknown as SessionReview[]);
+            } catch (err) {
+              console.error('Failed to load existing reviews:', err);
+              setExistingReviews([]);
+            }
+
+            // Reset current review state
+            setCurrentReview(null);
+            setIsGeneratingReview(false);
+            reviewHelperIdRef.current = null;
+            reviewAccumulatedTextRef.current = '';
+
+            // Open the modal
+            setReviewModalState({
+              isOpen: true,
+              sessionId,
+              sessionTitle,
+            });
           }}
           soundEnabled={soundNotifications.soundEnabled}
           onToggleSound={() => soundNotifications.setSoundEnabled(!soundNotifications.soundEnabled)}
@@ -2353,6 +2426,7 @@ export function App() {
                     clientRef.current?.sessions.getSession(selectedSession.id).catch(console.error);
                   }}
                   onCwdClick={handleCwdClick}
+                  onSetCwd={handleSetCwd}
                 />
               ) : selectedSession && (
                 <SessionStatusBar
@@ -2363,6 +2437,7 @@ export function App() {
                   cwd={selectedSession.workingDirectory}
                   scrollState={scrollState}
                   onCwdClick={handleCwdClick}
+                  onSetCwd={handleSetCwd}
                 />
               )}
               {/* Image preview area */}
@@ -2526,6 +2601,126 @@ export function App() {
           }
         }}
       />
+
+      {/* SessionReviewModal - rendered at App level for portal */}
+      <SessionReviewModal
+        isOpen={reviewModalState.isOpen}
+        onClose={() => {
+          setReviewModalState({ isOpen: false, sessionId: '', sessionTitle: '' });
+          setCurrentReview(null);
+          setIsGeneratingReview(false);
+          reviewHelperIdRef.current = null;
+          reviewAccumulatedTextRef.current = '';
+        }}
+        sessionId={reviewModalState.sessionId}
+        sessionTitle={reviewModalState.sessionTitle}
+        availableBackends={availableBackends}
+        defaultBackend={availableBackends[0]?.name}
+        existingReviews={existingReviews}
+        currentReview={currentReview}
+        isGenerating={isGeneratingReview}
+        onStartReview={async (sessionId, backendName) => {
+          debugLog('onStartReview called', { sessionId, backendName });
+          const client = clientRef.current;
+          if (!client || connectionState !== 'connected') {
+            debugLog('onStartReview: client not connected');
+            return '';
+          }
+
+          setIsGeneratingReview(true);
+          setCurrentReview(null);
+          reviewAccumulatedTextRef.current = '';
+
+          // Get the current review count before starting
+          const existingReviewCount = existingReviews.length;
+          debugLog('Starting review', { existingReviewCount });
+
+          try {
+            const result = await client.sessions.startSessionReview(sessionId, backendName);
+            if (result.success && result.helperId) {
+              reviewHelperIdRef.current = result.helperId;
+              debugLog('Started session review', { sessionId, backendName, helperId: result.helperId });
+
+              // Poll for the review to appear (auto-complete will add it)
+              // Store helper ID in ref so we can check if it's still valid
+              const currentHelperId = result.helperId;
+              const pollForReview = async () => {
+                const maxAttempts = 60; // 60 seconds max
+                for (let attempt = 0; attempt < maxAttempts; attempt++) {
+                  await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+
+                  // Check if this poll is still relevant (helper ID matches)
+                  if (reviewHelperIdRef.current !== currentHelperId) {
+                    debugLog('Review helper changed, stopping poll');
+                    return;
+                  }
+
+                  try {
+                    const reviews = await client.sessions.getSessionReviews(sessionId);
+                    debugLog('Polling for reviews', { attempt, existingCount: existingReviewCount, newCount: reviews.length });
+
+                    // Check if a new review was added
+                    if (reviews.length > existingReviewCount) {
+                      // Find the newest review (first in list or last, depending on sorting)
+                      const newReview = reviews[0] as unknown as SessionReview;
+                      setExistingReviews(reviews as unknown as SessionReview[]);
+                      setCurrentReview(newReview);
+                      setIsGeneratingReview(false);
+                      debugLog('Review completed', { summaryId: newReview?.summary_id });
+                      return;
+                    }
+                  } catch (err) {
+                    console.error('Error polling for reviews:', err);
+                  }
+                }
+
+                // Timeout - generation took too long
+                setIsGeneratingReview(false);
+                console.warn('Review generation timed out');
+              };
+
+              // Start polling in background
+              pollForReview();
+
+              return result.helperId;
+            } else {
+              console.error('Failed to start session review:', result.error);
+              setIsGeneratingReview(false);
+              return '';
+            }
+          } catch (err) {
+            console.error('Failed to start session review:', err);
+            setIsGeneratingReview(false);
+            return '';
+          }
+        }}
+        onApprove={async (sessionId, summaryId, approvedTitle, editedMarkdown) => {
+          const client = clientRef.current;
+          if (!client || connectionState !== 'connected') return;
+
+          try {
+            const result = await client.sessions.approveSessionReview(
+              sessionId,
+              summaryId,
+              approvedTitle,
+              editedMarkdown
+            );
+            if (result.success) {
+              debugLog('Approved session review', { sessionId, summaryId, approvedTitle });
+              // Optionally update session title in local state
+              if (result.approvedTitle) {
+                setSessions(prev => prev.map(s =>
+                  s.id === sessionId ? { ...s, title: result.approvedTitle! } : s
+                ));
+              }
+            } else {
+              console.error('Failed to approve session review:', result.error);
+            }
+          } catch (err) {
+            console.error('Failed to approve session review:', err);
+          }
+        }}
+      />
     </AppLayout>
   );
 }
@@ -2648,6 +2843,8 @@ interface SidebarContentProps {
   // Exchange context menu callbacks
   onExchangeContextModeChange?: (sessionId: string, turnIndices: number[], mode: ContextMode) => void;
   onExchangeAction?: (sessionId: string, turnIndices: number[], action: ExchangeAction) => void;
+  // Session review callback
+  onReviewSession?: (sessionId: string) => void;
   // Sound notification props
   soundEnabled?: boolean;
   onToggleSound?: () => void;
@@ -2678,6 +2875,7 @@ function SidebarContent({
   creatingSessionFor = null,
   onExchangeContextModeChange,
   onExchangeAction,
+  onReviewSession,
   soundEnabled = true,
   onToggleSound,
   serverSlot,
@@ -2792,46 +2990,49 @@ function SidebarContent({
           </button>
         </div>
 
-        {/* Sound notification toggle */}
-        {onToggleSound && (
-          <button
-            className={`sound-toggle ${soundEnabled ? 'active' : ''}`}
-            onClick={onToggleSound}
-            aria-label={soundEnabled ? 'Disable notification sounds' : 'Enable notification sounds'}
-            title={soundEnabled ? 'Sounds: enabled' : 'Sounds: disabled'}
-          >
-            {soundEnabled ? '🔔' : '🔕'}
-          </button>
-        )}
+        {/* Settings toggles */}
+        <div className="sidebar-settings-toggle">
+          {onToggleSound && (
+            <button
+              className={`sound-toggle ${soundEnabled ? 'active' : ''}`}
+              onClick={onToggleSound}
+              aria-label={soundEnabled ? 'Disable notification sounds' : 'Enable notification sounds'}
+              title={soundEnabled ? 'Sounds: enabled' : 'Sounds: disabled'}
+            >
+              {soundEnabled ? '🔔' : '🔕'}
+            </button>
+          )}
 
-        {/* Wake lock toggle - keeps screen awake on mobile */}
-        {wakeLockSupported && (
-          <button
-            className={`wake-lock-toggle ${wakeLockActive ? 'active' : ''}`}
-            onClick={toggleWakeLock}
-            aria-label={wakeLockActive ? 'Allow screen to sleep' : 'Keep screen awake'}
-            title={wakeLockActive ? 'Screen: staying awake' : 'Screen: can sleep'}
-          >
-            {wakeLockActive ? '☀️' : '💤'}
-          </button>
-        )}
+          {wakeLockSupported && (
+            <button
+              className={`wake-lock-toggle ${wakeLockActive ? 'active' : ''}`}
+              onClick={toggleWakeLock}
+              aria-label={wakeLockActive ? 'Allow screen to sleep' : 'Keep screen awake'}
+              title={wakeLockActive ? 'Screen: staying awake' : 'Screen: can sleep'}
+            >
+              {wakeLockActive ? '☀️' : '💤'}
+            </button>
+          )}
 
-        <button
-          className={`expand-toggle ${expandToolCards ? 'active' : ''}`}
-          onClick={() => togglePreference('expandToolCards')}
-          aria-label={expandToolCards ? 'Collapse tool cards by default' : 'Expand tool cards by default'}
-          title={expandToolCards ? 'Tool cards: expanded' : 'Tool cards: collapsed'}
-        >
-          {expandToolCards ? '▼' : '▶'}
-        </button>
-        <button
-          className="theme-toggle"
-          onClick={toggleTheme}
-          aria-label={`Switch theme (current: ${resolvedTheme})`}
-          title={`Theme: ${resolvedTheme} (click to cycle)`}
-        >
-          {resolvedTheme === 'dark' ? '🌙' : resolvedTheme === 'dark-flat' ? '⬛' : '☀️'}
-        </button>
+          <button
+            className={`expand-toggle ${expandToolCards ? 'active' : ''}`}
+            onClick={() => togglePreference('expandToolCards')}
+            aria-label={expandToolCards ? 'Collapse tool cards by default' : 'Expand tool cards by default'}
+            title={expandToolCards ? 'Tool cards: expanded' : 'Tool cards: collapsed'}
+          >
+            {expandToolCards ? '▼' : '▶'}
+          </button>
+
+          <button
+            className="theme-toggle"
+            onClick={toggleTheme}
+            aria-label={`Switch theme (current: ${resolvedTheme})`}
+            title={`Theme: ${resolvedTheme} (click to cycle)`}
+          >
+            {resolvedTheme === 'dark' ? '🌙' : resolvedTheme === 'dark-flat' ? '⬛' : '☀️'}
+          </button>
+        </div>
+
         {layoutMode === 'mobile' && (
           <button className="close-button" onClick={closeSidebar} aria-label="Close menu">
             ✕
@@ -2953,6 +3154,7 @@ function SidebarContent({
           isLoading={connectionState !== 'connected'}
           onExchangeContextModeChange={onExchangeContextModeChange}
           onExchangeAction={onExchangeAction}
+          onReviewSession={onReviewSession}
         />
       ) : (
         <div className="session-list">

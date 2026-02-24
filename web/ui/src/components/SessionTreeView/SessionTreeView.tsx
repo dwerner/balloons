@@ -437,6 +437,98 @@ function ExchangeContextMenu({
   );
 }
 
+// Session-level context menu
+interface SessionMenuProps {
+  position: { x: number; y: number };
+  sessionId: string;
+  sessionTitle: string;
+  onReview: () => void;
+  onRename?: () => void;
+  onClose: () => void;
+}
+
+function SessionContextMenu({
+  position,
+  sessionId,
+  sessionTitle,
+  onReview,
+  onRename,
+  onClose,
+}: SessionMenuProps) {
+  const menuRef = React.useRef<HTMLDivElement>(null);
+
+  // Debug log when menu mounts
+  useEffect(() => {
+    debugLog('SessionContextMenu mounted', { position, sessionId });
+    return () => {
+      debugLog('SessionContextMenu unmounted');
+    };
+  }, [position, sessionId]);
+
+  // Close on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        debugLog('SessionContextMenu click outside, closing');
+        onClose();
+      }
+    };
+    const timeoutId = setTimeout(() => {
+      document.addEventListener('mousedown', handleClickOutside);
+    }, 100);
+    return () => {
+      clearTimeout(timeoutId);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [onClose]);
+
+  // Close on escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        debugLog('SessionContextMenu escape pressed, closing');
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
+  return createPortal(
+    <div
+      ref={menuRef}
+      className="exchange-context-menu session-context-menu"
+      style={{
+        position: 'fixed',
+        left: position.x,
+        top: position.y,
+        zIndex: 9999,
+      }}
+    >
+      <div className="exchange-context-menu__section">
+        <button
+          className="exchange-context-menu__item"
+          onClick={() => { onReview(); onClose(); }}
+        >
+          <span className="exchange-context-menu__icon">📋</span>
+          Review &amp; Summarize
+          <span className="exchange-context-menu__hint">Generate summary</span>
+        </button>
+        {onRename && (
+          <button
+            className="exchange-context-menu__item"
+            onClick={() => { onRename(); onClose(); }}
+          >
+            <span className="exchange-context-menu__icon">✏️</span>
+            Rename
+          </button>
+        )}
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 // Long press hook for touch devices
 function useLongPress(
   onLongPress: (position: { x: number; y: number }) => void,
@@ -639,6 +731,8 @@ function SessionNode({
   onExchangeContextModeChange,
   onExchangeAction,
   onTurnClick,
+  onReview,
+  onRename,
 }: {
   session: SessionInfo;
   index: number;
@@ -655,6 +749,8 @@ function SessionNode({
   onExchangeContextModeChange?: (turnIndices: number[], mode: ContextMode) => void;
   onExchangeAction?: (turnIndices: number[], action: ExchangeAction) => void;
   onTurnClick?: (turnIdx: number) => void;
+  onReview?: () => void;
+  onRename?: () => void;
 }) {
   const sessionColor = SESSION_COLORS[index % SESSION_COLORS.length] || '#60a5fa';
   const sessionName = session.forkName || session.title || `Session ${session.id.slice(0, 8)}`;
@@ -662,6 +758,9 @@ function SessionNode({
 
   // Use message count as indicator when not expanded
   const hasContent = session.messageCount > 0;
+
+  // Session context menu state
+  const [sessionMenuPosition, setSessionMenuPosition] = useState<{ x: number; y: number } | null>(null);
 
   // Group turns into exchanges for display
   const exchanges = useMemo(() => {
@@ -689,11 +788,19 @@ function SessionNode({
     onTogglePin?.();
   };
 
+  const handleSessionContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    debugLog('Session context menu triggered', { x: e.clientX, y: e.clientY, sessionId: session.id });
+    setSessionMenuPosition({ x: e.clientX, y: e.clientY });
+  }, [session.id]);
+
   return (
     <li className={`tree-node tree-node--session ${isPinned ? 'tree-node--pinned' : ''} ${isChecked ? 'tree-node--checked' : ''}`}>
       <div
         className={`tree-node__content ${isSelected ? 'tree-node__content--selected' : ''}`}
         onClick={onSelect}
+        onContextMenu={handleSessionContextMenu}
         style={{ borderLeftColor: sessionColor }}
       >
         {/* Checkbox for multi-selection */}
@@ -784,6 +891,18 @@ function SessionNode({
           )}
         </ul>
       )}
+
+      {/* Session context menu */}
+      {sessionMenuPosition && (
+        <SessionContextMenu
+          position={sessionMenuPosition}
+          sessionId={session.id}
+          sessionTitle={sessionName}
+          onReview={() => onReview?.()}
+          onRename={onRename}
+          onClose={() => setSessionMenuPosition(null)}
+        />
+      )}
     </li>
   );
 }
@@ -805,6 +924,8 @@ interface SessionTreeViewProps {
   onTogglePin?: (sessionId: string) => void;
   onBulkAction?: (sessionIds: string[], action: BulkAction) => void;
   onLoadTurns?: (sessionId: string) => Promise<TurnInfo[]>;
+  onReviewSession?: (sessionId: string) => void;
+  onRenameSession?: (sessionId: string) => void;
   isLoading?: boolean;
 }
 
@@ -819,6 +940,8 @@ export const SessionTreeView = memo(function SessionTreeView({
   onLoadTurns,
   onExchangeContextModeChange,
   onExchangeAction,
+  onReviewSession,
+  onRenameSession,
   isLoading = false,
 }: SessionTreeViewProps) {
   // Log on mount
@@ -1101,6 +1224,8 @@ export const SessionTreeView = memo(function SessionTreeView({
           ? (turnIndices, action) => onExchangeAction(session.id, turnIndices, action)
           : undefined}
         onTurnClick={handleTurnClick}
+        onReview={onReviewSession ? () => onReviewSession(session.id) : undefined}
+        onRename={onRenameSession ? () => onRenameSession(session.id) : undefined}
       />
     );
   };

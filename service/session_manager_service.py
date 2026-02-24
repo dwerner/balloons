@@ -56,7 +56,7 @@ from core.stream_state import (
 )
 # TreeState removed in Phase 8 - events go directly to SessionDataService
 from core.queue_state import QueueState
-from models import TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, Turn, ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData, ExchangeInfo
+from models import TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, Turn, ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData, ExchangeInfo, SessionSummaryBlock
 from service.session_events import (
     SessionEventObserver,
     TurnCreatedEvent,
@@ -328,6 +328,48 @@ class CompleteArchiveResult:
     archive_id: str = ""  # ID of the archive block created
     turn_index: int = 0  # Index of the archive turn
     turns_archived: int = 0  # Number of turns that were archived
+    error: str = ""
+
+
+@ws_type
+@dataclass
+class StartSessionReviewResult:
+    """Result of starting a session review operation.
+
+    Reviews require LLM-generated summaries, so the operation runs asynchronously.
+    The helper_id can be used to track progress via helper events.
+    """
+
+    success: bool
+    helper_id: str = ""  # ID for tracking the review helper task
+    session_id: str = ""  # Session being reviewed
+    backend_name: str = ""  # Backend generating the review
+    error: str = ""
+
+
+@ws_type
+@dataclass
+class CompleteSessionReviewResult:
+    """Result of completing a session review after summary generation."""
+
+    success: bool
+    session_id: str = ""
+    summary_id: str = ""  # ID of the SessionSummaryBlock created
+    turn_index: int = 0  # Index of the review turn
+    proposed_title: str = ""  # LLM-suggested title
+    markdown_content: str = ""  # Full markdown summary
+    error: str = ""
+
+
+@ws_type
+@dataclass
+class ApproveSessionReviewResult:
+    """Result of approving a session review."""
+
+    success: bool
+    session_id: str = ""
+    summary_id: str = ""
+    approved_title: str = ""
     error: str = ""
 
 
@@ -670,37 +712,52 @@ class SessionManagerService:
         prompt: str,
         session_id: str | None = None,
         metadata: dict | None = None,
+        backend_name: str | None = None,
     ) -> None:
         """Start a helper task for background LLM operations.
 
         Helper tasks are used for operations like context compression, merge summaries,
-        archive summaries, etc. They use the session's configured backend.
+        archive summaries, etc. They use the session's configured backend by default,
+        but can be overridden with a specific backend.
 
         Args:
             helper_id: Unique ID for this helper task
-            helper_type: Type of helper ("compress", "derive", "archive", "merge", "link", "return")
+            helper_type: Type of helper ("compress", "derive", "archive", "merge", "link", "return", "session_review")
             prompt: The prompt to send to the LLM
             session_id: Session this helper is for (determines which backend to use)
             metadata: Type-specific data to pass to completion handlers
+            backend_name: Optional explicit backend name (overrides session/default backend)
         """
         from core.runner import HelperRunner
+        from config import get_config
+        from core.runner_factory import create_runner
 
-        # Get the session to determine which backend to use
-        session = None
-        if session_id:
-            session = self._manager.get_session(session_id)
+        config = get_config()
 
-        # Create runner using session's backend (or default if no session)
-        if session:
-            runner = self._create_runner_for_session(session)
-        else:
-            # Fallback to default backend if no session
-            from config import get_config
-            from core.runner_factory import create_runner
+        # Determine which backend to use with cascade:
+        # 1. Explicit backend_name param
+        # 2. Session's configured backend
+        # 3. Global default backend
+        backend = None
+        if backend_name:
+            backend = config.get_backend(backend_name)
+            if not backend:
+                debug_log.warning(
+                    f"Requested backend '{backend_name}' not found, falling back",
+                    category="helper",
+                )
 
-            config = get_config()
+        if not backend:
+            session = None
+            if session_id:
+                session = self._manager.get_session(session_id)
+            if session:
+                backend = self._get_backend_for_session(session)
+
+        if not backend:
             backend = config.get_backend(config.default_backend)
-            runner = create_runner(backend)
+
+        runner = create_runner(backend)
 
         # Create helper runner and context
         helper_runner = HelperRunner(helper_id, runner=runner)
@@ -1105,6 +1162,32 @@ class SessionManagerService:
                     import traceback
                     traceback.print_exc()
 
+            # Auto-complete session review if flagged to do so
+            if (
+                ctx.helper_type == "session_review"
+                and ctx.metadata.get("auto_complete", False)
+            ):
+                debug_log.info(
+                    f"Auto-completing session review for helper {helper_id}",
+                    category="review",
+                )
+                try:
+                    result = await self.complete_session_review(
+                        helper_id=helper_id,
+                        result_text=ctx.content,
+                    )
+                    debug_log.info(
+                        f"Session review auto-complete result: success={result.success}, error={result.error}",
+                        category="review",
+                    )
+                except Exception as e:
+                    debug_log.warning(
+                        f"Auto-complete session review failed: {e}",
+                        category="review"
+                    )
+                    import traceback
+                    traceback.print_exc()
+
             # Clean up context
             if helper_id in self._helper_contexts:
                 del self._helper_contexts[helper_id]
@@ -1478,6 +1561,8 @@ class SessionManagerService:
 
             # Intercept propose_fork and propose_merge tools to create proposal turns
             # Only handle balloons-tool calls (id starts with "balloons-"), not native CLI tools
+            # Note: We still emit tool_use and turn_finished events below so the frontend
+            # can properly transition the tool_use turn from streaming to completed state.
             if tool_name == "propose_fork" and tool_use_id.startswith("balloons-"):
                 await self._handle_fork_proposal(
                     session_id=session_id,
@@ -1485,8 +1570,6 @@ class SessionManagerService:
                     tool_input=tool_input,
                     exchange_id=ctx.exchange_id,
                 )
-                # Don't emit regular tool events for proposal tools
-                return
 
             if tool_name == "propose_merge" and tool_use_id.startswith("balloons-"):
                 await self._handle_merge_proposal(
@@ -1495,8 +1578,6 @@ class SessionManagerService:
                     tool_input=tool_input,
                     exchange_id=ctx.exchange_id,
                 )
-                # Don't emit regular tool events for proposal tools
-                return
 
             # Create ToolUseBlock for the content
             tool_use_block = ToolUseBlock(
@@ -2955,7 +3036,39 @@ class SessionManagerService:
             session.update_fork_proposal_status(
                 proposal_id, "accepted", child_session_id=fork_result.child_session_id
             )
-            await session.save()
+
+        # Also update the tool_use turn (if it exists) with the child_session_id
+        # so the ForkProposalCard can show the link after page reload
+        tool_use_turn = None
+        tool_use_turn_idx = None
+        for idx, turn in enumerate(session.turns):
+            if isinstance(turn.content_block, ToolUseBlock):
+                if turn.content_block.id == proposal_id:
+                    tool_use_turn = turn
+                    tool_use_turn_idx = idx
+                    # Add child_session_id and status to the input
+                    if turn.content_block.input is None:
+                        turn.content_block.input = {}
+                    turn.content_block.input["_child_session_id"] = fork_result.child_session_id
+                    turn.content_block.input["_status"] = "accepted"
+                    break
+
+        await session.save()
+
+        # Emit turn_finished event so frontend gets updated with child_session_id
+        if tool_use_turn and tool_use_turn_idx is not None:
+            await self._notify_observers(
+                "on_turn_finished",
+                TurnFinishedEvent(
+                    session_id=session_id,
+                    turn_id=tool_use_turn.id,
+                    turn_index=tool_use_turn_idx,
+                    role="assistant",
+                    content="",
+                    tokens=0,
+                    content_block=tool_use_turn.content_block,
+                ),
+            )
 
         return RespondToForkProposalResult(
             success=True,
@@ -4268,6 +4381,336 @@ class SessionManagerService:
             details={"session_id": session_id, "working_directory": working_directory},
         )
         return True
+
+    # --- Session Review Methods ---
+
+    @ws_expose
+    async def start_session_review(
+        self,
+        session_id: str,
+        backend_name: str,
+    ) -> StartSessionReviewResult:
+        """Start a session review using the specified backend.
+
+        This initiates an LLM call to analyze the session and generate a
+        structured review. The review runs asynchronously; use helper events
+        to track progress and complete_session_review() when done.
+
+        Args:
+            session_id: The session to review
+            backend_name: Which backend to use for generating the review
+
+        Returns:
+            StartSessionReviewResult with helper_id for tracking progress
+        """
+        from core.summarizer import Summarizer
+
+        # Load the session
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                return StartSessionReviewResult(
+                    success=False,
+                    error=f"Session {session_id} not found"
+                )
+
+        # Validate backend exists
+        if backend_name not in self._backend_config:
+            available = list(self._backend_config.keys())
+            return StartSessionReviewResult(
+                success=False,
+                error=f"Unknown backend: {backend_name}. Available: {available}"
+            )
+
+        debug_log.info(
+            f"Starting session review: session={session_id[:8]}, backend={backend_name}",
+            category="review",
+        )
+
+        # Build review prompt
+        summarizer = Summarizer(runner=None, backend_name=backend_name)
+        review_prompt = summarizer.build_session_review_prompt(session)
+
+        if review_prompt is None:
+            return StartSessionReviewResult(
+                success=False,
+                error="Session has no conversation content to review"
+            )
+
+        # Generate helper ID
+        helper_id = f"review-{uuid.uuid4().hex[:8]}"
+
+        # Store review metadata for completion
+        review_metadata = {
+            "session_id": session_id,
+            "backend_name": backend_name,
+            "turn_count": len(session.turns),
+            "auto_complete": True,  # React UI uses auto-completion
+        }
+
+        # Start helper runner for the review
+        self.start_helper(
+            helper_id=helper_id,
+            helper_type="session_review",
+            prompt=review_prompt,
+            session_id=session_id,
+            metadata=review_metadata,
+            backend_name=backend_name,
+        )
+
+        return StartSessionReviewResult(
+            success=True,
+            helper_id=helper_id,
+            session_id=session_id,
+            backend_name=backend_name,
+        )
+
+    @ws_expose
+    async def complete_session_review(
+        self,
+        helper_id: str,
+        result_text: str,
+    ) -> CompleteSessionReviewResult:
+        """Complete a session review after LLM summary generation.
+
+        Called by the frontend after the helper runner finishes streaming
+        the review content.
+
+        Args:
+            helper_id: The helper ID from start_session_review
+            result_text: The accumulated LLM response text
+
+        Returns:
+            CompleteSessionReviewResult with the parsed review data
+        """
+        from core.summarizer import Summarizer
+        from datetime import datetime
+
+        # Get helper context
+        ctx = self._helper_contexts.get(helper_id)
+        if not ctx:
+            return CompleteSessionReviewResult(
+                success=False,
+                error=f"No active review helper: {helper_id}"
+            )
+
+        session_id = ctx.session_id
+        metadata = ctx.metadata or {}
+        backend_name = metadata.get("backend_name", "unknown")
+        turn_count = metadata.get("turn_count", 0)
+
+        # Load the session
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                return CompleteSessionReviewResult(
+                    success=False,
+                    error=f"Session {session_id} not found"
+                )
+
+        # Parse the LLM response into a SessionSummaryBlock
+        summarizer = Summarizer(runner=None, backend_name=backend_name)
+        review = summarizer._parse_session_review(result_text, session)
+
+        # Override metadata from our tracked context
+        review.turn_count_at_review = turn_count
+        review.reviewed_by_backend = backend_name
+        review.reviewed_at = datetime.now().isoformat()
+
+        # Add the review as a turn in the session
+        turn = Turn(
+            role="system",
+            content_block=review,
+        )
+        session.turns.append(turn)
+        await session.save()
+
+        turn_index = len(session.turns) - 1
+
+        debug_log.info(
+            f"Session review completed: session={session_id[:8]}, "
+            f"summary_id={review.summary_id[:8]}, title='{review.proposed_title}'",
+            category="review",
+        )
+
+        # Clean up helper context
+        self._helper_contexts.pop(helper_id, None)
+        self._helper_runners.pop(helper_id, None)
+
+        # Emit session updated event
+        self._emit_event(SessionManagerEvent.SESSION_UPDATED, session_id)
+
+        return CompleteSessionReviewResult(
+            success=True,
+            session_id=session_id,
+            summary_id=review.summary_id,
+            turn_index=turn_index,
+            proposed_title=review.proposed_title,
+            markdown_content=review.markdown_content,
+        )
+
+    @ws_expose
+    async def approve_session_review(
+        self,
+        session_id: str,
+        summary_id: str,
+        approved_title: str,
+        edited_markdown: str | None = None,
+    ) -> ApproveSessionReviewResult:
+        """Approve a session review and update the session title.
+
+        Args:
+            session_id: The session containing the review
+            summary_id: The ID of the SessionSummaryBlock to approve
+            approved_title: The final title (may differ from proposed)
+            edited_markdown: Optional edited markdown content
+
+        Returns:
+            ApproveSessionReviewResult with success status
+        """
+        # Load the session
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                return ApproveSessionReviewResult(
+                    success=False,
+                    error=f"Session {session_id} not found"
+                )
+
+        # Find the review turn
+        found = False
+        for turn in session.turns:
+            if (isinstance(turn.content_block, SessionSummaryBlock)
+                and turn.content_block.summary_id == summary_id):
+                turn.content_block.status = "approved"
+                turn.content_block.approved_title = approved_title
+                if edited_markdown is not None:
+                    turn.content_block.markdown_content = edited_markdown
+                    # Re-parse structured fields from edited markdown
+                    self._update_review_from_markdown(turn.content_block, edited_markdown)
+                found = True
+                break
+
+        if not found:
+            return ApproveSessionReviewResult(
+                success=False,
+                error=f"Review {summary_id} not found in session"
+            )
+
+        # Update session title
+        session.title = approved_title
+        await session.save()
+
+        debug_log.info(
+            f"Session review approved: session={session_id[:8]}, "
+            f"summary_id={summary_id[:8]}, title='{approved_title}'",
+            category="review",
+        )
+
+        # Emit session updated event
+        self._emit_event(SessionManagerEvent.SESSION_UPDATED, session_id)
+
+        return ApproveSessionReviewResult(
+            success=True,
+            session_id=session_id,
+            summary_id=summary_id,
+            approved_title=approved_title,
+        )
+
+    def _update_review_from_markdown(
+        self,
+        review: SessionSummaryBlock,
+        markdown: str,
+    ) -> None:
+        """Update review's structured fields from edited markdown.
+
+        Args:
+            review: The SessionSummaryBlock to update
+            markdown: The edited markdown content
+        """
+        # Parse markdown sections back to structured data
+        sections = markdown.split("## ")
+        for section in sections:
+            if not section.strip():
+                continue
+
+            lines = section.split("\n")
+            header = lines[0].strip().lower()
+            body = "\n".join(lines[1:]).strip()
+
+            if "summary" in header:
+                review.work_done = body
+            elif "files" in header:
+                review.files_modified = self._parse_list_items(body)
+            elif "decisions" in header:
+                review.decisions_made = self._parse_list_items(body)
+            elif "next" in header:
+                review.next_steps = self._parse_list_items(body)
+            elif "questions" in header:
+                review.questions_raised = self._parse_list_items(body)
+
+    def _parse_list_items(self, text: str) -> list[str]:
+        """Parse markdown list items from text."""
+        items = []
+        for line in text.split("\n"):
+            line = line.strip()
+            if line.startswith("-") or line.startswith("*"):
+                item = line[1:].strip()
+                if item and item.lower() != "none":
+                    items.append(item)
+        return items
+
+    @ws_expose
+    async def get_session_reviews(
+        self,
+        session_id: str,
+    ) -> list[dict]:
+        """Get all reviews for a session.
+
+        Returns a list of review dictionaries with summary info for display
+        in the review history sidebar.
+
+        Args:
+            session_id: The session to get reviews for
+
+        Returns:
+            List of review dictionaries
+        """
+        # Load the session
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                return []
+
+        reviews = []
+        for i, turn in enumerate(session.turns):
+            if isinstance(turn.content_block, SessionSummaryBlock):
+                block = turn.content_block
+                reviews.append({
+                    "summary_id": block.summary_id,
+                    "turn_index": i,
+                    "proposed_title": block.proposed_title,
+                    "approved_title": block.approved_title,
+                    "markdown_content": block.markdown_content,
+                    "work_done": block.work_done,
+                    "files_modified": block.files_modified,
+                    "decisions_made": block.decisions_made,
+                    "next_steps": block.next_steps,
+                    "questions_raised": block.questions_raised,
+                    "status": block.status,
+                    "reviewed_at": block.reviewed_at,
+                    "reviewed_by_backend": block.reviewed_by_backend,
+                    "turn_count_at_review": block.turn_count_at_review,
+                })
+
+        # Return newest first for history sidebar
+        reviews.reverse()
+
+        return reviews
 
     # --- Events ---
 

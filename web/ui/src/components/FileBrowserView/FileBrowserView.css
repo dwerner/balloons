@@ -444,6 +444,16 @@
   flex-shrink: 0;
 }
 
+.file-browser__context-menu-divider {
+  height: 1px;
+  margin: 4px 0;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme="light"] .file-browser__context-menu-divider {
+  background: rgba(0, 0, 0, 0.1);
+}
+
 /* Light theme context menu */
 [data-theme="light"] .file-browser__context-menu {
   background: #fff;

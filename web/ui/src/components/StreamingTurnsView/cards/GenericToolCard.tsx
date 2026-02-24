@@ -84,6 +84,7 @@ export function GenericToolCard({ turn, result }: GenericToolCardProps) {
       orderEnd={result?.order}
       className="generic-tool-card"
       rawData={rawData}
+      timestamp={turn.timestamp}
     >
       {/* Input section - collapsible */}
       {(hasInput || inputIsStreaming) && (

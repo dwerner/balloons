@@ -86,6 +86,7 @@ export function GlobCard({ turn, result }: GlobCardProps) {
       orderEnd={result?.order}
       className="glob-card"
       rawData={rawData}
+      timestamp={turn.timestamp}
     >
       {hasResult && (
         <>

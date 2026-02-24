@@ -32,6 +32,8 @@ export interface StreamingStatusBarProps {
   cwd?: string;
   /** Callback when CWD is clicked - opens file browser at that path */
   onCwdClick?: (cwd: string) => void;
+  /** Callback to set CWD when none is set - opens file browser for selection */
+  onSetCwd?: () => void;
 }
 
 /**
@@ -138,6 +140,7 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
   onTitleChange,
   cwd,
   onCwdClick,
+  onSetCwd,
 }: StreamingStatusBarProps) {
   const { expandDetail } = useLayout();
   // Collapsed state - persist in localStorage (shared with SessionStatusBar)
@@ -294,7 +297,7 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
                 <PinIcon isPinned={isPinned} />
               </button>
             )}
-            {cwd && (
+            {cwd ? (
               <div
                 className={`streaming-status-bar__cwd ${onCwdClick ? 'streaming-status-bar__cwd--clickable' : ''}`}
                 title={onCwdClick ? `${cwd}\n(Click to open in file browser)` : `${cwd}\n(Click to copy)`}
@@ -310,6 +313,19 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
                 <span className="streaming-status-bar__cwd-icon">📁</span>
                 <span className="streaming-status-bar__cwd-path">{formatCwd(cwd)}</span>
               </div>
+            ) : onSetCwd && (
+              <button
+                type="button"
+                className="streaming-status-bar__cwd streaming-status-bar__cwd--unset"
+                title="Set working directory for this session"
+                onClick={() => {
+                  expandDetail();
+                  onSetCwd();
+                }}
+              >
+                <span className="streaming-status-bar__cwd-icon">📁</span>
+                <span className="streaming-status-bar__cwd-path">Set folder...</span>
+              </button>
             )}
             {/* Spacer to push actions to the right */}
             <div className="streaming-status-bar__spacer" />

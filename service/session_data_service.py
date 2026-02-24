@@ -106,6 +106,7 @@ class TurnSnapshot:
     content_block: ContentBlock  # Full structured content block
     order: int = 0  # Turn position in session (for sorting)
     exchange_id: str | None = None
+    timestamp: str | None = None  # ISO 8601 format, when turn was created
 
 
 @ws_type
@@ -766,6 +767,7 @@ class SessionDataService:
                 context_mode="copy",  # Default to copy
                 content_block=content_block,
                 exchange_id=getattr(turn, 'exchange_id', None),
+                timestamp=getattr(turn, 'timestamp', None),
             )
             turn_snapshots.append(turn_snapshot)
 
@@ -958,6 +960,7 @@ class SessionDataService:
             content_block=content_block,
             order=order,  # Turn position for client-side sorting
             exchange_id=exchange_id,
+            timestamp=turn_dict.get("timestamp"),
         )
 
     def _deserialize_content_block(self, data: dict) -> ContentBlock:

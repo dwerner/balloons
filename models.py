@@ -345,8 +345,42 @@ class ArchiveBlock:
         return self.summary
 
 
+@ws_type
+@dataclass
+class SessionSummaryBlock:
+    """A point-in-time summary of the session state.
+
+    Created when user reviews a session via right-click context menu.
+    Stored as a turn to preserve a traceable record of what the session
+    contained at that moment. The markdown_content field is the primary
+    storage; structured fields are parsed from it for display/search.
+    """
+    type: str = "session_summary"
+    summary_id: str = ""  # UUID for this summary
+
+    # LLM-generated content (editable by user)
+    proposed_title: str = ""  # Suggested session title
+    markdown_content: str = ""  # Full summary as editable markdown (primary storage)
+
+    # Structured fields (parsed from markdown, for display/search)
+    files_modified: list[str] = field(default_factory=list)  # e.g., ["src/foo.py (created)"]
+    decisions_made: list[str] = field(default_factory=list)  # Key choices
+    work_done: str = ""  # Summary paragraph
+    next_steps: list[str] = field(default_factory=list)  # Deferred/incomplete items
+    questions_raised: list[str] = field(default_factory=list)  # Open questions
+
+    # Metadata
+    turn_count_at_review: int = 0  # Turns when reviewed (for context)
+    reviewed_at: str = ""  # ISO timestamp
+    reviewed_by_backend: str = ""  # Which backend generated this review
+
+    # Approval state
+    status: str = "pending"  # "pending", "approved", "rejected"
+    approved_title: str = ""  # Final title (may differ from proposed)
+
+
 # Union type for all content block types
-ContentBlock = Union[TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ForkedFromBlock, ArchiveBlock, SlideBlock, ReviewBlock, ForkProposalBlock, MergeProposalBlock]
+ContentBlock = Union[TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ForkedFromBlock, ArchiveBlock, SessionSummaryBlock, SlideBlock, ReviewBlock, ForkProposalBlock, MergeProposalBlock]
 
 
 @dataclass

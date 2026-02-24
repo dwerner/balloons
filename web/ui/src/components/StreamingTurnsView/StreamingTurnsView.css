@@ -111,6 +111,30 @@
   text-align: center;
 }
 
+/* Loading dots in empty session placeholder */
+.empty-session-placeholder .streaming-dots {
+  display: flex;
+  gap: 4px;
+}
+
+.empty-session-placeholder .streaming-dots .dot {
+  animation: dotPulse 1.4s infinite ease-in-out both;
+  font-size: 18px;
+  color: var(--color-primary);
+}
+
+.empty-session-placeholder .streaming-dots .dot:nth-child(1) {
+  animation-delay: -0.32s;
+}
+
+.empty-session-placeholder .streaming-dots .dot:nth-child(2) {
+  animation-delay: -0.16s;
+}
+
+.empty-session-placeholder .streaming-dots .dot:nth-child(3) {
+  animation-delay: 0s;
+}
+
 .empty-session-placeholder .empty-icon {
   font-size: 48px;
   opacity: 0.6;

@@ -24,6 +24,8 @@ export interface SessionStatusBarProps {
   cwd?: string;
   /** Callback when CWD is clicked - opens file browser at that path */
   onCwdClick?: (cwd: string) => void;
+  /** Callback to set CWD when none is set - opens file browser for selection */
+  onSetCwd?: () => void;
 }
 
 /**
@@ -137,6 +139,7 @@ export const SessionStatusBar = memo(function SessionStatusBar({
   scrollState,
   cwd,
   onCwdClick,
+  onSetCwd,
 }: SessionStatusBarProps) {
   const { expandDetail } = useLayout();
   const contextTokens = session.cachedContextTokens ?? 0;
@@ -319,7 +322,7 @@ export const SessionStatusBar = memo(function SessionStatusBar({
                 <PinIcon isPinned={isPinned} />
               </button>
             )}
-            {cwd && (
+            {cwd ? (
               <div
                 className={`session-status-bar__cwd ${onCwdClick ? 'session-status-bar__cwd--clickable' : ''}`}
                 title={onCwdClick ? `${cwd}\n(Click to open in file browser)` : `${cwd}\n(Click to copy)`}
@@ -337,6 +340,19 @@ export const SessionStatusBar = memo(function SessionStatusBar({
                 <span className="session-status-bar__cwd-icon">📁</span>
                 <span className="session-status-bar__cwd-path">{formatCwd(cwd)}</span>
               </div>
+            ) : onSetCwd && (
+              <button
+                type="button"
+                className="session-status-bar__cwd session-status-bar__cwd--unset"
+                title="Set working directory for this session"
+                onClick={() => {
+                  expandDetail();
+                  onSetCwd();
+                }}
+              >
+                <span className="session-status-bar__cwd-icon">📁</span>
+                <span className="session-status-bar__cwd-path">Set folder...</span>
+              </button>
             )}
             {/* Spacer to push actions to the right */}
             <div className="session-status-bar__spacer" />

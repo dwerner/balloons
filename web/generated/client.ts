@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-23T19:43:31.702738
+// Generated: 2026-02-24T14:19:39.033740
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -368,6 +368,20 @@ export class QueueStateServiceClient implements QueueStateService {
  */
 export interface SessionManagerService {
   /**
+   * Approve a session review and update the session title.
+   * 
+   * Args:
+   * session_id: The session containing the review
+   * summary_id: The ID of the SessionSummaryBlock to approve
+   * approved_title: The final title (may differ from proposed)
+   * edited_markdown: Optional edited markdown content
+   * 
+   * Returns:
+   * ApproveSessionReviewResult with success status
+   */
+  approveSessionReview(sessionId: string, summaryId: string, approvedTitle: string, editedMarkdown?: string | null): Promise<Types.ApproveSessionReviewResult>;
+
+  /**
    * Cancel streaming for a session.
    * 
    * Args:
@@ -421,6 +435,21 @@ export interface SessionManagerService {
    * ForkSessionResult with the completed fork info
    */
   completeForkAfterCompression(helperId: string, compressedSummary: string, startStreaming?: boolean): Promise<Types.ForkSessionResult>;
+
+  /**
+   * Complete a session review after LLM summary generation.
+   * 
+   * Called by the frontend after the helper runner finishes streaming
+   * the review content.
+   * 
+   * Args:
+   * helper_id: The helper ID from start_session_review
+   * result_text: The accumulated LLM response text
+   * 
+   * Returns:
+   * CompleteSessionReviewResult with the parsed review data
+   */
+  completeSessionReview(helperId: string, resultText: string): Promise<Types.CompleteSessionReviewResult>;
 
   /**
    * Create a new session.
@@ -563,6 +592,20 @@ export interface SessionManagerService {
    * Effective backend name (explicit or default), or None if session not found
    */
   getSessionBackend(sessionId: string): Promise<string | null>;
+
+  /**
+   * Get all reviews for a session.
+   * 
+   * Returns a list of review dictionaries with summary info for display
+   * in the review history sidebar.
+   * 
+   * Args:
+   * session_id: The session to get reviews for
+   * 
+   * Returns:
+   * List of review dictionaries
+   */
+  getSessionReviews(sessionId: string): Promise<Record<string, unknown>[]>;
 
   /**
    * Get streaming information for a session.
@@ -715,6 +758,22 @@ export interface SessionManagerService {
    * StartArchiveResult with helper_id for tracking progress
    */
   startArchive(sessionId: string, turnIndices: number[], autoComplete?: boolean): Promise<Types.StartArchiveResult>;
+
+  /**
+   * Start a session review using the specified backend.
+   * 
+   * This initiates an LLM call to analyze the session and generate a
+   * structured review. The review runs asynchronously; use helper events
+   * to track progress and complete_session_review() when done.
+   * 
+   * Args:
+   * session_id: The session to review
+   * backend_name: Which backend to use for generating the review
+   * 
+   * Returns:
+   * StartSessionReviewResult with helper_id for tracking progress
+   */
+  startSessionReview(sessionId: string, backendName: string): Promise<Types.StartSessionReviewResult>;
 
   /**
    * Submit a message to a session and start streaming the response.
@@ -893,6 +952,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
     };
   }
 
+  async approveSessionReview(sessionId: string, summaryId: string, approvedTitle: string, editedMarkdown?: string | null): Promise<Types.ApproveSessionReviewResult> {
+    return this.call('approveSessionReview', { sessionId: sessionId, summaryId: summaryId, approvedTitle: approvedTitle, editedMarkdown: editedMarkdown });
+  }
+
   async cancelStreaming(sessionId: string): Promise<boolean> {
     return this.call('cancelStreaming', { sessionId: sessionId });
   }
@@ -907,6 +970,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   async completeForkAfterCompression(helperId: string, compressedSummary: string, startStreaming?: boolean): Promise<Types.ForkSessionResult> {
     return this.call('completeForkAfterCompression', { helperId: helperId, compressedSummary: compressedSummary, startStreaming: startStreaming });
+  }
+
+  async completeSessionReview(helperId: string, resultText: string): Promise<Types.CompleteSessionReviewResult> {
+    return this.call('completeSessionReview', { helperId: helperId, resultText: resultText });
   }
 
   async createSession(workingDirectory?: string | null): Promise<Types.ManagedSessionInfo> {
@@ -947,6 +1014,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   async getSessionBackend(sessionId: string): Promise<string | null> {
     return this.call('getSessionBackend', { sessionId: sessionId });
+  }
+
+  async getSessionReviews(sessionId: string): Promise<Record<string, unknown>[]> {
+    return this.call('getSessionReviews', { sessionId: sessionId });
   }
 
   async getStreamingInfo(sessionId: string): Promise<Types.StreamingInfo | null> {
@@ -991,6 +1062,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   async startArchive(sessionId: string, turnIndices: number[], autoComplete?: boolean): Promise<Types.StartArchiveResult> {
     return this.call('startArchive', { sessionId: sessionId, turnIndices: turnIndices, autoComplete: autoComplete });
+  }
+
+  async startSessionReview(sessionId: string, backendName: string): Promise<Types.StartSessionReviewResult> {
+    return this.call('startSessionReview', { sessionId: sessionId, backendName: backendName });
   }
 
   async submitMessage(sessionId: string, content: string, messages?: unknown[] | null, queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult> {

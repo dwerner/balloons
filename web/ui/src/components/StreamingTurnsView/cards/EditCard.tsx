@@ -157,6 +157,7 @@ export function EditCard({ turn, result }: EditCardProps) {
       orderEnd={result?.order}
       className="edit-card"
       rawData={rawData}
+      timestamp={turn.timestamp}
     >
       {/* Show diff when we have input */}
       {diffLines.length > 0 ? (

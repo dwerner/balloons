@@ -56,6 +56,9 @@ function extractProposalData(input: Record<string, unknown>) {
       role: ((input.bind_to as Record<string, unknown>).role as string) || '',
     } : null,
     bindToInherit: input.bind_to === 'inherit',
+    // These fields are set by the server when a fork is accepted
+    childSessionId: (input._child_session_id as string) || '',
+    persistedStatus: (input._status as string) || '',
   };
 }
 
@@ -84,21 +87,31 @@ export function ForkProposalCard({
   const proposalData = extractProposalData(toolInput);
 
   // Local state for modifications
+  // Initialize status and childSessionId from persisted data (if fork was already accepted)
   const [contextPlan, setContextPlan] = useState<ContextAssignment[]>(proposalData.contextPlan);
   const [initialPrompt, setInitialPrompt] = useState(proposalData.initialPrompt);
   const [isEditingPrompt, setIsEditingPrompt] = useState(false);
-  const [status, setStatus] = useState<ForkStatus>('ready');
+  const [status, setStatus] = useState<ForkStatus>(
+    proposalData.persistedStatus === 'accepted' ? 'created' : 'ready'
+  );
   const [error, setError] = useState<string | null>(null);
-  const [childSessionId, setChildSessionId] = useState<string | null>(null);
+  const [childSessionId, setChildSessionId] = useState<string | null>(
+    proposalData.childSessionId || null
+  );
   const [exchanges, setExchanges] = useState<ExchangeSummary[]>([]);
 
-  // Update local state when proposal data changes (during streaming)
+  // Update local state when proposal data changes (during streaming or after fork accepted)
   useEffect(() => {
     if (!inputIsStreaming) {
       setContextPlan(proposalData.contextPlan);
       setInitialPrompt(proposalData.initialPrompt);
+      // Update status and childSessionId if the server set them (e.g., after fork accepted)
+      if (proposalData.persistedStatus === 'accepted' && proposalData.childSessionId) {
+        setStatus('created');
+        setChildSessionId(proposalData.childSessionId);
+      }
     }
-  }, [inputIsStreaming, proposalData.contextPlan.length, proposalData.initialPrompt]);
+  }, [inputIsStreaming, proposalData.contextPlan.length, proposalData.initialPrompt, proposalData.persistedStatus, proposalData.childSessionId]);
 
   // Fetch exchange summaries on mount when ready
   useEffect(() => {
@@ -189,6 +202,7 @@ export function ForkProposalCard({
       orderEnd={result?.order}
       className="fork-proposal-card"
       rawData={rawData}
+      timestamp={turn.timestamp}
       headerContent={hasInput && <code className="fork-name">{proposalData.name}</code>}
     >
       {/* Streaming indicator */}

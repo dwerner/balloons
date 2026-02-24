@@ -10,6 +10,7 @@
 
 import React, { useState } from 'react';
 import { SyntaxHighlightedCode } from './SyntaxHighlighter';
+import { formatTimestamp } from '../../../utils';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
 import type { ToolResultBlock } from '../../../../../generated/types';
 import './cards.css';
@@ -77,7 +78,7 @@ function RawDataDisplay({ data }: { data: unknown }) {
 }
 
 export function ToolResultCard({ turn }: ToolResultCardProps) {
-  const { contentBlock, streaming } = turn;
+  const { contentBlock, streaming, timestamp } = turn;
 
   // Display mode state - formatted (default) or raw JSON
   const [displayMode, setDisplayMode] = useState<DisplayMode>('formatted');
@@ -110,6 +111,7 @@ export function ToolResultCard({ turn }: ToolResultCardProps) {
       <div className="turn-card-header">
         <span className="turn-icon">{isError ? '❌' : '✓'}</span>
         <span className="turn-label">Tool Result</span>
+        {timestamp && <span className="turn-timestamp">{formatTimestamp(timestamp)}</span>}
         <ModeSwitcher mode={displayMode} onModeChange={setDisplayMode} />
       </div>
       <div className="turn-card-body">

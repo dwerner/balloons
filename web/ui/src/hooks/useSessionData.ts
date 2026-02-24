@@ -96,6 +96,8 @@ export interface SessionDataTurn {
   exchangeId?: string;
   /** Parallel group ID for visually grouping parallel tool calls */
   parallelGroupId?: string;
+  /** ISO 8601 timestamp when turn was created */
+  timestamp?: string;
 }
 
 /**
@@ -402,6 +404,7 @@ export function useSessionData(
                 contextMode: 'copy',
                 exchangeId: event.exchangeId ?? undefined,
                 parallelGroupId: event.parallelGroupId ?? undefined,
+                timestamp: new Date().toISOString(),
               });
 
               return next;
@@ -448,6 +451,7 @@ export function useSessionData(
                   viewed: false,
                   tokens: 0,
                   contextMode: 'copy',
+                  timestamp: new Date().toISOString(),
                 });
                 return next;
               }
@@ -525,6 +529,7 @@ export function useSessionData(
                   viewed: false,
                   tokens: event.tokens ?? 0,
                   contextMode: 'copy',
+                  timestamp: new Date().toISOString(),
                 });
                 return next;
               }
@@ -752,6 +757,7 @@ export function useSessionData(
                     tokens: turn.tokens || 0,
                     contextMode: turn.contextMode || 'copy',
                     exchangeId: turn.exchangeId ?? undefined,
+                    timestamp: (turn as unknown as { timestamp?: string }).timestamp ?? undefined,
                   });
                 }
               }
@@ -814,6 +820,7 @@ export function useSessionData(
               tokens: turn.tokens || 0,
               contextMode: turn.contextMode || 'copy',
               exchangeId: turn.exchangeId ?? undefined,
+              timestamp: (turn as unknown as { timestamp?: string }).timestamp ?? undefined,
             });
           });
         }

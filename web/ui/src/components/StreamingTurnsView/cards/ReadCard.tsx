@@ -125,6 +125,7 @@ export function ReadCard({ turn, result }: ReadCardProps) {
       orderEnd={result?.order}
       className="read-card"
       rawData={rawData}
+      timestamp={turn.timestamp}
     >
       {hasResult && (
         <SyntaxHighlightedCode

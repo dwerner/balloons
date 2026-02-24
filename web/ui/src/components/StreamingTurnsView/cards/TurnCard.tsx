@@ -52,6 +52,7 @@ const SYSTEM_TYPES = new Set([
   'slide',
   'review',
   'archive',
+  'session_summary',  // Session review/summary block
   // Legacy proposal block types (deprecated - new proposals are tool_use blocks)
   'fork_proposal',
   'merge_proposal',

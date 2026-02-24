@@ -12,6 +12,7 @@
 import React, { useState, useRef, useEffect, useDeferredValue } from 'react';
 import { SyntaxHighlightedCode } from './SyntaxHighlighter';
 import { usePreferences } from '../../layout';
+import { formatTimestamp } from '../../../utils';
 import './cards.css';
 
 // Tool execution phase
@@ -45,6 +46,8 @@ export interface BaseToolCardProps {
   initialDisplayMode?: ToolCardDisplayMode;
   /** Raw data for debugging (required for mode switcher to work) */
   rawData?: unknown;
+  /** ISO 8601 timestamp when turn was created */
+  timestamp?: string;
 }
 
 // Phase to icon mapping
@@ -159,6 +162,7 @@ export function BaseToolCard({
   defaultExpanded,
   initialDisplayMode = 'formatted',
   rawData,
+  timestamp,
 }: BaseToolCardProps) {
   const { expandToolCards: expandToolCardsPref } = usePreferences();
   // Use deferred value to make preference changes non-blocking
@@ -246,6 +250,7 @@ export function BaseToolCard({
         <ToolStatusIcon phase={phase} />
         <span className="tool-card-name">{toolName}</span>
         {displayMode !== 'raw' && headerContent && <div className="tool-card-header-content">{headerContent}</div>}
+        {timestamp && <span className="turn-timestamp">{formatTimestamp(timestamp)}</span>}
         {!isActive && tokens > 0 && <span className="tool-card-tokens">{tokens} tokens</span>}
         <ModeSwitcher
           mode={displayMode}

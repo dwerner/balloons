@@ -17,3 +17,4 @@ export * from './DebugPane';
 
 // Modal components
 export * from './Modal';
+export * from './SessionReviewModal';

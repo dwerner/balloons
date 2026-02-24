@@ -170,6 +170,7 @@ export function MidiPlayerCard({ turn, result }: MidiPlayerCardProps) {
       orderEnd={result?.order}
       className="midi-player-card"
       rawData={rawData}
+      timestamp={turn.timestamp}
     >
       {/* Header with playback info */}
       <div className="midi-header-info">

@@ -10,6 +10,7 @@
 import React, { useState } from 'react';
 import { MarkdownContent } from '../../../MarkdownContent';
 import { SyntaxHighlightedCode } from './SyntaxHighlighter';
+import { formatTimestamp } from '../../../utils';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
 import type { TextBlock } from '../../../../../generated/types';
 import './cards.css';
@@ -77,7 +78,7 @@ function RawDataDisplay({ data }: { data: unknown }) {
 }
 
 export function TextCard({ turn }: TextCardProps) {
-  const { role, contentBlock, streaming, tokens, order } = turn;
+  const { role, contentBlock, streaming, tokens, order, timestamp } = turn;
   const isUser = role === 'user';
   const isAssistant = role === 'assistant';
 
@@ -128,6 +129,7 @@ export function TextCard({ turn }: TextCardProps) {
         <span className="turn-order">{order}</span>
         <span className="turn-icon">{roleConfig.icon}</span>
         <span className="turn-label">{roleConfig.label}</span>
+        {timestamp && <span className="turn-timestamp">{formatTimestamp(timestamp)}</span>}
         {showDoneIndicator && <span className="done-indicator">✓</span>}
         {!streaming && tokens > 0 && (
           <span className="turn-tokens">{tokens} tokens</span>

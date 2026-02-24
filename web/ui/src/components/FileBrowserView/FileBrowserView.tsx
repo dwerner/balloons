@@ -446,8 +446,15 @@ export const FileBrowserView = memo(forwardRef<FileBrowserViewRef, FileBrowserVi
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
-    entry: FileEntry;
+    entry: FileEntry | null;  // null when right-clicking on empty space
   } | null>(null);
+
+  // Show hidden files toggle
+  const [showHidden, setShowHidden] = useState(() => {
+    // Persist preference in localStorage
+    const saved = localStorage.getItem('fileBrowser.showHidden');
+    return saved === 'true';
+  });
 
   // Load home directory on mount (only once)
   useEffect(() => {
@@ -457,14 +464,17 @@ export const FileBrowserView = memo(forwardRef<FileBrowserViewRef, FileBrowserVi
   }, [client]);
 
   // Load directory with caching
-  const loadDirectory = useCallback(async (path: string, skipCache = false) => {
-    debugLog('Loading directory', { path, skipCache });
+  const loadDirectory = useCallback(async (path: string, skipCache = false, includeHidden = showHidden) => {
+    debugLog('Loading directory', { path, skipCache, includeHidden });
+
+    // Include hidden status in cache key
+    const cacheKey = includeHidden ? `${path}:hidden` : path;
 
     // Check cache first (unless refresh requested)
     if (!skipCache) {
-      const cached = getCachedListing(path);
+      const cached = getCachedListing(cacheKey);
       if (cached) {
-        debugLog('Using cached listing', { path });
+        debugLog('Using cached listing', { path, includeHidden });
         setListing(cached);
         setIsLoading(false);
         return;
@@ -475,10 +485,12 @@ export const FileBrowserView = memo(forwardRef<FileBrowserViewRef, FileBrowserVi
     setError(null);
 
     try {
-      const result = await client.listDirectory(path);
-      setCachedListing(path, result);
+      const result = includeHidden
+        ? await client.listDirectoryWithHidden(path)
+        : await client.listDirectory(path);
+      setCachedListing(cacheKey, result);
       setListing(result);
-      debugLog('Directory loaded', { path, entryCount: result.entries.length });
+      debugLog('Directory loaded', { path, entryCount: result.entries.length, includeHidden });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
@@ -486,7 +498,7 @@ export const FileBrowserView = memo(forwardRef<FileBrowserViewRef, FileBrowserVi
     } finally {
       setIsLoading(false);
     }
-  }, [client]);
+  }, [client, showHidden]);
 
   // Load initial directory - use initialPath if provided, otherwise home
   // Only runs once on mount, or when initialPath changes
@@ -609,7 +621,7 @@ export const FileBrowserView = memo(forwardRef<FileBrowserViewRef, FileBrowserVi
 
   // Handle set working directory from context menu
   const handleSetWorkingDirectory = useCallback(() => {
-    if (contextMenu?.entry.isDirectory && onSetWorkingDirectory) {
+    if (contextMenu?.entry?.isDirectory && onSetWorkingDirectory) {
       onSetWorkingDirectory(contextMenu.entry.path);
     }
     setContextMenu(null);
@@ -617,11 +629,23 @@ export const FileBrowserView = memo(forwardRef<FileBrowserViewRef, FileBrowserVi
 
   // Handle insert path from context menu
   const handleInsertPath = useCallback(() => {
-    if (contextMenu && onInsertPath) {
+    if (contextMenu?.entry && onInsertPath) {
       onInsertPath(contextMenu.entry.path);
     }
     setContextMenu(null);
   }, [contextMenu, onInsertPath]);
+
+  // Handle toggle show hidden files
+  const handleToggleShowHidden = useCallback(() => {
+    const newValue = !showHidden;
+    setShowHidden(newValue);
+    localStorage.setItem('fileBrowser.showHidden', String(newValue));
+    // Reload current directory with new setting
+    if (listing) {
+      loadDirectory(listing.path, true, newValue);
+    }
+    setContextMenu(null);
+  }, [showHidden, listing, loadDirectory]);
 
   // Close context menu on escape or click outside
   useEffect(() => {
@@ -699,9 +723,24 @@ export const FileBrowserView = memo(forwardRef<FileBrowserViewRef, FileBrowserVi
       )}
 
       {/* File list */}
-      <ul className="file-list">
+      <ul
+        className="file-list"
+        onContextMenu={(e) => {
+          // Only trigger if clicking on the list itself, not on a file entry
+          if (e.target === e.currentTarget) {
+            e.preventDefault();
+            setContextMenu({ x: e.clientX, y: e.clientY, entry: null });
+          }
+        }}
+      >
         {listing.entries.length === 0 ? (
-          <li className="file-node file-node--empty">
+          <li
+            className="file-node file-node--empty"
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setContextMenu({ x: e.clientX, y: e.clientY, entry: null });
+            }}
+          >
             <div className="file-node__content">
               <span className="file-node__name file-node__name--muted">
                 Empty directory
@@ -753,44 +792,58 @@ export const FileBrowserView = memo(forwardRef<FileBrowserViewRef, FileBrowserVi
           }}
           onClick={(e) => e.stopPropagation()}
         >
-          {contextMenu.entry.isDirectory && onSetWorkingDirectory && (
-            <button
-              className="file-browser__context-menu-item"
-              onClick={handleSetWorkingDirectory}
-            >
-              <span className="file-browser__context-menu-icon">📁</span>
-              Set as Working Directory
-            </button>
+          {/* File/folder specific options */}
+          {contextMenu.entry && (
+            <>
+              {contextMenu.entry.isDirectory && onSetWorkingDirectory && (
+                <button
+                  className="file-browser__context-menu-item"
+                  onClick={handleSetWorkingDirectory}
+                >
+                  <span className="file-browser__context-menu-icon">📁</span>
+                  Set as Working Directory
+                </button>
+              )}
+              <button
+                className="file-browser__context-menu-item"
+                onClick={() => {
+                  navigateTo(contextMenu.entry!.isDirectory ? contextMenu.entry!.path : listing.path);
+                  closeContextMenu();
+                }}
+              >
+                <span className="file-browser__context-menu-icon">📂</span>
+                {contextMenu.entry.isDirectory ? 'Open in Browser' : 'Open Containing Folder'}
+              </button>
+              <button
+                className="file-browser__context-menu-item"
+                onClick={() => {
+                  navigator.clipboard.writeText(contextMenu.entry!.path);
+                  closeContextMenu();
+                }}
+              >
+                <span className="file-browser__context-menu-icon">📋</span>
+                Copy Path
+              </button>
+              {onInsertPath && (
+                <button
+                  className="file-browser__context-menu-item"
+                  onClick={handleInsertPath}
+                >
+                  <span className="file-browser__context-menu-icon">⌨️</span>
+                  Insert Path
+                </button>
+              )}
+              <div className="file-browser__context-menu-divider" />
+            </>
           )}
+          {/* General options (always shown) */}
           <button
             className="file-browser__context-menu-item"
-            onClick={() => {
-              navigateTo(contextMenu.entry.isDirectory ? contextMenu.entry.path : listing.path);
-              closeContextMenu();
-            }}
+            onClick={handleToggleShowHidden}
           >
-            <span className="file-browser__context-menu-icon">📂</span>
-            {contextMenu.entry.isDirectory ? 'Open in Browser' : 'Open Containing Folder'}
+            <span className="file-browser__context-menu-icon">{showHidden ? '✓' : ' '}</span>
+            Show Hidden Files
           </button>
-          <button
-            className="file-browser__context-menu-item"
-            onClick={() => {
-              navigator.clipboard.writeText(contextMenu.entry.path);
-              closeContextMenu();
-            }}
-          >
-            <span className="file-browser__context-menu-icon">📋</span>
-            Copy Path
-          </button>
-          {onInsertPath && (
-            <button
-              className="file-browser__context-menu-item"
-              onClick={handleInsertPath}
-            >
-              <span className="file-browser__context-menu-icon">⌨️</span>
-              Insert Path
-            </button>
-          )}
         </div>
       )}
     </div>

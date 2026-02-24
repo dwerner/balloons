@@ -452,8 +452,22 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
             })}
           </div>
 
-          {/* Empty state when no turns and not streaming */}
-          {!isStreaming && turns.length === 0 && (
+          {/* Loading state when session is being loaded */}
+          {isLoading && turns.length === 0 && (
+            <div className="empty-session-placeholder">
+              <div className="loading-spinner-container">
+                <span className="streaming-dots">
+                  <span className="dot">●</span>
+                  <span className="dot">●</span>
+                  <span className="dot">●</span>
+                </span>
+              </div>
+              <div className="empty-title">Loading Session...</div>
+            </div>
+          )}
+
+          {/* Empty state when no turns and not streaming/loading */}
+          {!isStreaming && !isLoading && turns.length === 0 && (
             <div className="empty-session-placeholder">
               <div className="empty-icon">💬</div>
               <div className="empty-title">New Session</div>

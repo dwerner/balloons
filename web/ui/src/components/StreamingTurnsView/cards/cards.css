@@ -57,6 +57,13 @@
   margin-left: auto;
 }
 
+.turn-timestamp {
+  font-size: 10px;
+  color: var(--text-tertiary, #666);
+  font-family: var(--font-mono, monospace);
+  opacity: 0.8;
+}
+
 .streaming-indicator {
   color: var(--color-primary);
   animation: pulse 1s infinite;
@@ -498,6 +505,15 @@
 .system-card.system-link .turn-card-header {
   background: rgba(32, 201, 151, 0.1);
   color: var(--accent-link, #20c997);
+}
+
+.system-card.system-session-summary {
+  border-color: var(--accent-summary, #ffd43b);
+}
+
+.system-card.system-session-summary .turn-card-header {
+  background: rgba(255, 212, 59, 0.1);
+  color: var(--accent-summary, #ffd43b);
 }
 
 /* ============================================================================

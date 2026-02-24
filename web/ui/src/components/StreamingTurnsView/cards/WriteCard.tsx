@@ -3,7 +3,7 @@
  *
  * Design goals:
  * - File path in header
- * - Show preview of content being written
+ * - Show preview of content being written with syntax highlighting
  * - Success/error indication
  */
 
@@ -11,6 +11,7 @@ import React from 'react';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
 import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
 import { BaseToolCard, calculateToolPhase, formatRelativePath } from './BaseToolCard';
+import { SyntaxHighlightedCode } from './SyntaxHighlighter';
 import './cards.css';
 
 interface WriteCardProps {
@@ -21,34 +22,6 @@ interface WriteCardProps {
 // Check if tool input is still streaming
 function isStreamingInput(input: Record<string, unknown>): boolean {
   return typeof input._streaming === 'string';
-}
-
-// File extension to language mapping for syntax hints
-const EXT_TO_LANGUAGE: Record<string, string> = {
-  '.py': 'python',
-  '.js': 'javascript',
-  '.ts': 'typescript',
-  '.tsx': 'tsx',
-  '.jsx': 'jsx',
-  '.rs': 'rust',
-  '.go': 'go',
-  '.rb': 'ruby',
-  '.java': 'java',
-  '.c': 'c',
-  '.cpp': 'cpp',
-  '.css': 'css',
-  '.html': 'html',
-  '.json': 'json',
-  '.yaml': 'yaml',
-  '.yml': 'yaml',
-  '.md': 'markdown',
-  '.sh': 'bash',
-  '.sql': 'sql',
-};
-
-function guessLanguage(filePath: string): string {
-  const ext = filePath.slice(filePath.lastIndexOf('.')).toLowerCase();
-  return EXT_TO_LANGUAGE[ext] || 'text';
 }
 
 export function WriteCard({ turn, result }: WriteCardProps) {
@@ -80,7 +53,6 @@ export function WriteCard({ turn, result }: WriteCardProps) {
 
   // Format display path
   const displayPath = formatRelativePath(filePath);
-  const language = guessLanguage(filePath);
 
   // Count lines for info
   const lineCount = content ? content.split('\n').length : 0;
@@ -111,12 +83,15 @@ export function WriteCard({ turn, result }: WriteCardProps) {
       orderEnd={result?.order}
       className="write-card"
       rawData={rawData}
+      timestamp={turn.timestamp}
     >
-      {/* Show content preview */}
+      {/* Show content preview with syntax highlighting */}
       {content && (
-        <pre className="tool-write-content" data-language={language}>
-          <code>{previewContent}</code>
-        </pre>
+        <SyntaxHighlightedCode
+          code={previewContent}
+          filePath={filePath}
+          showLineNumbers={true}
+        />
       )}
 
       {/* Show streaming indicator while building */}

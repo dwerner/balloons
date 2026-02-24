@@ -5,20 +5,22 @@ Extracted from app.py to enable unit testing without the UI.
 """
 
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Protocol, Optional
 
 import aiofiles
 
-from models import Message, TextDelta, ArchiveSummary
+from models import Message, TextDelta, ArchiveSummary, SessionSummaryBlock
 from session import Session
 from core.context import ContextBuilder
 from core.debug_log import debug_log
 from core.stream_state import get_stream_state, StreamType, StreamStatus
 
-# Load link summary prompt from file
+# Load prompts from files
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 _LINK_SUMMARY_PROMPT_PATH = _PROMPTS_DIR / "link-summary.md"
+_SESSION_REVIEW_PROMPT_PATH = _PROMPTS_DIR / "session-review.md"
 
 _DEFAULT_LINK_SUMMARY_PROMPT = """Summarize this conversation in one sentence (max 100 chars).
 Be specific about what was built, fixed, or discussed.
@@ -28,6 +30,33 @@ Conversation:
 
 Summary:"""
 
+_DEFAULT_SESSION_REVIEW_PROMPT = """Analyze this conversation and provide a structured session review.
+
+Respond in EXACTLY this format (keep field names exactly as shown):
+
+PROPOSED_TITLE:
+A concise, descriptive title for this session (max 50 chars)
+
+FILES_MODIFIED:
+- file1.py (created)
+
+DECISIONS_MADE:
+- Decision 1
+
+WORK_DONE:
+1-3 sentences describing what was accomplished.
+
+NEXT_STEPS:
+- Unfinished item 1
+
+QUESTIONS_RAISED:
+- Open question
+
+Conversation:
+{conversation}
+
+Session review:"""
+
 
 def _load_link_summary_prompt() -> str:
     """Load the link summary prompt from file."""
@@ -35,6 +64,14 @@ def _load_link_summary_prompt() -> str:
         return _LINK_SUMMARY_PROMPT_PATH.read_text()
     except Exception:
         return _DEFAULT_LINK_SUMMARY_PROMPT
+
+
+def _load_session_review_prompt() -> str:
+    """Load the session review prompt from file."""
+    try:
+        return _SESSION_REVIEW_PROMPT_PATH.read_text()
+    except Exception:
+        return _DEFAULT_SESSION_REVIEW_PROMPT
 
 
 async def _load_link_summary_prompt_async() -> str:
@@ -47,6 +84,7 @@ async def _load_link_summary_prompt_async() -> str:
 
 
 _LINK_SUMMARY_PROMPT = _load_link_summary_prompt()
+_SESSION_REVIEW_PROMPT = _load_session_review_prompt()
 
 
 class StreamingRunner(Protocol):
@@ -480,3 +518,210 @@ Structured summary:"""
             work_done=work_done,
             key_decisions=key_decisions,
         )
+
+    def build_session_review_prompt(self, session: Session) -> str | None:
+        """Build the prompt for session review generation.
+
+        Args:
+            session: The session to review
+
+        Returns:
+            The prompt string, or None if session is empty
+        """
+        # Build conversation context from the session
+        turns_text = []
+        for turn in session.turns:
+            role = "User" if turn.role == "user" else "Assistant"
+            content = turn.content if isinstance(turn.content, str) else str(turn.content)
+            turns_text.append(f"{role}: {content}")
+
+        if not turns_text:
+            return None
+
+        conversation = "\n\n".join(turns_text)
+        return _SESSION_REVIEW_PROMPT.format(conversation=conversation)
+
+    async def generate_session_review(self, session: Session) -> SessionSummaryBlock:
+        """Generate a structured review of a session.
+
+        Args:
+            session: The session to review
+
+        Returns:
+            SessionSummaryBlock with structured review information
+        """
+        prompt = self.build_session_review_prompt(session)
+        if prompt is None:
+            # Empty session - return minimal review
+            return SessionSummaryBlock(
+                summary_id=str(uuid.uuid4()),
+                proposed_title=session.title or "Empty session",
+                work_done="No conversation content to review.",
+                turn_count_at_review=0,
+                reviewed_at=datetime.now().isoformat(),
+                reviewed_by_backend=self._backend_name,
+                status="pending",
+            )
+
+        stream_id = self._register_stream(
+            StreamType.SESSION_REVIEW,
+            f"Reviewing: {session.title or session.id[:8]}"
+        )
+
+        response_parts = []
+        try:
+            async for event in self._runner.stream_response(
+                [], prompt, disable_tools=True
+            ):
+                if isinstance(event, TextDelta):
+                    response_parts.append(event.text)
+            self._complete_stream(stream_id)
+        except Exception as e:
+            self._fail_stream(stream_id, str(e))
+            debug_log.error(f"Session review generation failed: {e}", category="review")
+            # Return a basic review on error
+            return SessionSummaryBlock(
+                summary_id=str(uuid.uuid4()),
+                proposed_title=session.title or "Session",
+                work_done=f"Review generation failed: {e}",
+                turn_count_at_review=len(session.turns),
+                reviewed_at=datetime.now().isoformat(),
+                reviewed_by_backend=self._backend_name,
+                status="pending",
+            )
+
+        response = "".join(response_parts)
+        return self._parse_session_review(response, session)
+
+    def _parse_session_review(
+        self, response: str, session: Session
+    ) -> SessionSummaryBlock:
+        """Parse the LLM response into a SessionSummaryBlock."""
+        proposed_title = ""
+        files_modified = []
+        decisions_made = []
+        work_done = ""
+        next_steps = []
+        questions_raised = []
+
+        current_section = None
+        lines = response.strip().split("\n")
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # Detect section headers
+            if line.upper().startswith("PROPOSED_TITLE"):
+                current_section = "title"
+                # Check if title is on same line after colon
+                if ":" in line:
+                    title_part = line.split(":", 1)[1].strip()
+                    if title_part:
+                        proposed_title = title_part
+                continue
+            elif line.upper().startswith("FILES_MODIFIED"):
+                current_section = "files"
+                continue
+            elif line.upper().startswith("DECISIONS_MADE"):
+                current_section = "decisions"
+                continue
+            elif line.upper().startswith("WORK_DONE"):
+                current_section = "work"
+                continue
+            elif line.upper().startswith("NEXT_STEPS"):
+                current_section = "next"
+                continue
+            elif line.upper().startswith("QUESTIONS_RAISED"):
+                current_section = "questions"
+                continue
+
+            # Parse content based on current section
+            if current_section == "title":
+                if not proposed_title and line.lower() != "none":
+                    proposed_title = line
+            elif current_section == "files":
+                if line.startswith("-"):
+                    file_entry = line[1:].strip()
+                    if file_entry.lower() != "none":
+                        files_modified.append(file_entry)
+            elif current_section == "decisions":
+                if line.startswith("-"):
+                    decision = line[1:].strip()
+                    if decision.lower() != "none":
+                        decisions_made.append(decision)
+            elif current_section == "work":
+                if line.lower() != "none":
+                    if work_done:
+                        work_done += " " + line
+                    else:
+                        work_done = line
+            elif current_section == "next":
+                if line.startswith("-"):
+                    step = line[1:].strip()
+                    if step.lower() != "none":
+                        next_steps.append(step)
+            elif current_section == "questions":
+                if line.startswith("-"):
+                    question = line[1:].strip()
+                    if question.lower() != "none":
+                        questions_raised.append(question)
+
+        # Fallback if parsing failed
+        if not proposed_title:
+            proposed_title = session.title or "Session Review"
+        if not work_done:
+            work_done = f"Reviewed session with {len(session.turns)} turns"
+
+        # Build markdown content from structured data
+        markdown_content = self._format_review_as_markdown(
+            work_done, files_modified, decisions_made, next_steps, questions_raised
+        )
+
+        return SessionSummaryBlock(
+            summary_id=str(uuid.uuid4()),
+            proposed_title=proposed_title,
+            markdown_content=markdown_content,
+            files_modified=files_modified,
+            decisions_made=decisions_made,
+            work_done=work_done,
+            next_steps=next_steps,
+            questions_raised=questions_raised,
+            turn_count_at_review=len(session.turns),
+            reviewed_at=datetime.now().isoformat(),
+            reviewed_by_backend=self._backend_name,
+            status="pending",
+        )
+
+    def _format_review_as_markdown(
+        self,
+        work_done: str,
+        files_modified: list[str],
+        decisions_made: list[str],
+        next_steps: list[str],
+        questions_raised: list[str],
+    ) -> str:
+        """Format review data as markdown for display/editing."""
+        sections = []
+
+        if work_done:
+            sections.append(f"## Summary\n\n{work_done}")
+
+        if files_modified:
+            items = "\n".join(f"- {f}" for f in files_modified)
+            sections.append(f"## Files Modified\n\n{items}")
+
+        if decisions_made:
+            items = "\n".join(f"- {d}" for d in decisions_made)
+            sections.append(f"## Decisions Made\n\n{items}")
+
+        if next_steps:
+            items = "\n".join(f"- {n}" for n in next_steps)
+            sections.append(f"## Next Steps\n\n{items}")
+
+        if questions_raised:
+            items = "\n".join(f"- {q}" for q in questions_raised)
+            sections.append(f"## Open Questions\n\n{items}")
+
+        return "\n\n".join(sections)

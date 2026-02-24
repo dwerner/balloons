@@ -362,10 +362,12 @@ body {
   pointer-events: auto;
 }
 
+/* Sidebar header - uses flex-wrap for responsive layout */
 .sidebar-header {
-  padding: 16px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--color-border-primary);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   flex-shrink: 0; /* Don't shrink header in flex column */
@@ -375,6 +377,41 @@ body {
   font-size: 18px;
   font-weight: 600;
   flex: 1;
+  min-width: 0; /* Allow shrinking */
+}
+
+/* Settings toggle group - groups the setting buttons together */
+.sidebar-settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Mobile: force two rows using flex-basis to trigger wrap */
+@media (max-width: 767px) {
+  .sidebar-header {
+    row-gap: 10px;
+  }
+
+  /* First row: dot + title grow to push close to end, then force wrap */
+  .sidebar-header h1 {
+    flex: 1 1 auto;
+  }
+
+  /* After close button, force a line break using a pseudo-element trick */
+  .sidebar-header .close-button {
+    flex: 0 0 auto;
+  }
+
+  /* View toggle starts a new row - give it basis to ensure wrap happens */
+  .sidebar-header .view-toggle {
+    flex: 0 0 auto;
+  }
+
+  .sidebar-header .sidebar-settings-toggle {
+    flex: 0 0 auto;
+    margin-left: auto; /* Push to right side */
+  }
 }
 
 /* ----- View Toggle ----- */

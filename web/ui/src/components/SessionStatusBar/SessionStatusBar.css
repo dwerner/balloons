@@ -97,6 +97,29 @@
   background: rgba(96, 165, 250, 0.2);
 }
 
+/* Unset CWD button - prompts user to set a working directory */
+.session-status-bar__cwd--unset {
+  border: 1px dashed var(--color-border-secondary);
+  background: transparent;
+  font-family: inherit;
+  opacity: 0.7;
+}
+
+.session-status-bar__cwd--unset:hover {
+  opacity: 1;
+  border-color: rgba(96, 165, 250, 0.5);
+  background: rgba(96, 165, 250, 0.1);
+}
+
+.session-status-bar__cwd--unset:active {
+  background: rgba(96, 165, 250, 0.15);
+}
+
+.session-status-bar__cwd--unset .session-status-bar__cwd-path {
+  font-style: italic;
+  color: var(--color-text-muted);
+}
+
 .session-status-bar__cwd-icon {
   font-size: 12px;
   flex-shrink: 0;

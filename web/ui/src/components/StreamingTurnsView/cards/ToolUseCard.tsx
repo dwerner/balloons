@@ -400,6 +400,7 @@ export function ToolUseCard({ turn, result, displayMode = 'formatted' }: ToolUse
       className="tool-use-card-v2"
       initialDisplayMode={displayMode}
       rawData={rawData}
+      timestamp={turn.timestamp}
     >
       {/* Tool input section */}
       {hasInput && !inputIsStreaming && (

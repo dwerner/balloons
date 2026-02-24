@@ -125,6 +125,7 @@ export function MergeProposalCard({
       orderEnd={result?.order}
       className="merge-proposal-card"
       rawData={rawData}
+      timestamp={turn.timestamp}
       headerContent={hasInput && <span className="merge-summary-preview">{proposalData.summary.slice(0, 50)}{proposalData.summary.length > 50 ? '...' : ''}</span>}
     >
       {/* Streaming indicator */}
