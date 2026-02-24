@@ -178,9 +178,15 @@
   /* Items use absolute positioning with transform for placement */
 }
 
-/* Add spacing between virtualized items via padding on the item wrapper */
+/* Add spacing between virtualized items via padding on the item wrapper.
+ * Also use content-visibility:auto to let the browser skip rendering
+ * of off-screen items entirely - significant performance boost when
+ * scrolling through long sessions.
+ */
 .streaming-turns-list > div {
   padding-bottom: 6px;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 100px;
 }
 
 /* Turn highlight effect (when scrolling to a turn from tree view) */

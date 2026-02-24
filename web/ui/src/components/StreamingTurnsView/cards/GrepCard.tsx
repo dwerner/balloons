@@ -90,6 +90,8 @@ export function GrepCard({ turn, result }: GrepCardProps) {
       headerContent={headerContent}
       phase={phase}
       tokens={tokens}
+      order={turn.order}
+      orderEnd={result?.order}
       className="grep-card"
       rawData={rawData}
     >

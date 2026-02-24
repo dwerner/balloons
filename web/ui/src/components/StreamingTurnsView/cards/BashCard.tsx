@@ -87,6 +87,8 @@ export function BashCard({ turn, result }: BashCardProps) {
       headerContent={headerContent}
       phase={phase}
       tokens={tokens}
+      order={turn.order}
+      orderEnd={result?.order}
       className="bash-card"
       rawData={rawData}
     >

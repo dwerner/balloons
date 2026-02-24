@@ -77,7 +77,7 @@ function RawDataDisplay({ data }: { data: unknown }) {
 }
 
 export function TextCard({ turn }: TextCardProps) {
-  const { role, contentBlock, streaming, tokens } = turn;
+  const { role, contentBlock, streaming, tokens, order } = turn;
   const isUser = role === 'user';
   const isAssistant = role === 'assistant';
 
@@ -120,6 +120,7 @@ export function TextCard({ turn }: TextCardProps) {
   return (
     <div className={`turn-card text-card ${roleConfig.className} ${streaming ? 'streaming' : ''} ${showDoneIndicator ? 'done' : ''} ${displayMode === 'raw' ? 'raw-mode' : ''}`}>
       <div className="turn-card-header">
+        <span className="turn-order">{order}</span>
         <span className="turn-icon">{roleConfig.icon}</span>
         <span className="turn-label">{roleConfig.label}</span>
         {showDoneIndicator && <span className="done-indicator">✓</span>}

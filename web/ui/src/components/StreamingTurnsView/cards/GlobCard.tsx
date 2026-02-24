@@ -82,6 +82,8 @@ export function GlobCard({ turn, result }: GlobCardProps) {
       headerContent={headerContent}
       phase={phase}
       tokens={tokens}
+      order={turn.order}
+      orderEnd={result?.order}
       className="glob-card"
       rawData={rawData}
     >

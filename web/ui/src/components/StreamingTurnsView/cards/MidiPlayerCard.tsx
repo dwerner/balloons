@@ -166,6 +166,8 @@ export function MidiPlayerCard({ turn, result }: MidiPlayerCardProps) {
       toolName="play_midi"
       phase={phase}
       tokens={tokens}
+      order={turn.order}
+      orderEnd={result?.order}
       className="midi-player-card"
       rawData={rawData}
     >

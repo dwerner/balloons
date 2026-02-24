@@ -185,6 +185,8 @@ export function ForkProposalCard({
       toolName="propose_fork"
       phase={phase}
       tokens={tokens}
+      order={turn.order}
+      orderEnd={result?.order}
       className="fork-proposal-card"
       rawData={rawData}
       headerContent={hasInput && <code className="fork-name">{proposalData.name}</code>}

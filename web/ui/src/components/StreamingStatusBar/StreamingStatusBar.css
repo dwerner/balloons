@@ -5,13 +5,13 @@
 .streaming-status-bar {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 4px;
+  padding: 6px 8px;
   margin-bottom: 8px;
   background: rgba(74, 222, 128, 0.08);
   border: 1px solid rgba(74, 222, 128, 0.2);
-  border-radius: 8px;
-  font-size: 13px;
+  border-radius: 6px;
+  font-size: 12px;
 
   /* Smooth entry/exit transitions */
   animation: streaming-status-bar-enter 0.2s ease-out;
@@ -28,21 +28,19 @@
   }
 }
 
-/* ----- Title Row: Toggle + Session name ----- */
-.streaming-status-bar__title-row {
+/* ----- Generic Row ----- */
+.streaming-status-bar__row {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
 }
 
 .streaming-status-bar__title-content {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 4px;
-  flex: 1;
+  gap: 6px;
   min-width: 0;
-  padding: 4px 0;
+  padding: 2px 4px;
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
@@ -62,39 +60,83 @@
 .streaming-status-bar__session-title {
   font-weight: 600;
   color: var(--color-text-primary);
-  font-size: 14px;
+  font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1;
-  min-width: 0;
 }
 
 .streaming-status-bar__session-id {
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: 10px;
   color: var(--color-text-muted);
-  opacity: 0.7;
+  opacity: 0.6;
   flex-shrink: 0;
 }
 
-/* ----- Header Row: Model, Duration, Stop ----- */
-.streaming-status-bar__header {
+/* ----- CWD Display ----- */
+.streaming-status-bar__cwd {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 4px;
+  padding: 2px 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  max-width: 40%;
+  overflow: hidden;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  flex-shrink: 1;
+  min-width: 0;
 }
 
-/* When toggle is in title row, don't show it in header */
-.streaming-status-bar__header--no-toggle {
-  padding-left: 24px; /* Align with content when toggle is above */
+.streaming-status-bar__cwd:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.streaming-status-bar__cwd:active {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.streaming-status-bar__cwd--clickable {
+  border: 1px solid transparent;
+}
+
+.streaming-status-bar__cwd--clickable:hover {
+  background: rgba(96, 165, 250, 0.15);
+  border-color: rgba(96, 165, 250, 0.3);
+}
+
+.streaming-status-bar__cwd--clickable:active {
+  background: rgba(96, 165, 250, 0.2);
+}
+
+.streaming-status-bar__cwd-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.streaming-status-bar__cwd-path {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;  /* Show the end of the path when truncated */
+  text-align: left;
+}
+
+/* Spacer to push right-aligned items */
+.streaming-status-bar__spacer {
+  flex: 1;
 }
 
 .streaming-status-bar__model {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex: 1;
+  gap: 6px;
+  flex-shrink: 0;
   min-width: 0;
 }
 
@@ -110,16 +152,30 @@
 .streaming-status-bar__model-name {
   font-weight: 600;
   color: var(--color-accent-green);
+  font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.streaming-status-bar__timer {
+/* Inline context bar (grows to fill space) */
+.streaming-status-bar__context-inline {
+  flex: 1;
+  min-width: 60px;
+}
+
+/* Stats group (timer + tokens) */
+.streaming-status-bar__context-values {
   color: var(--color-text-secondary);
-  font-size: 12px;
   font-variant-numeric: tabular-nums;
+  font-size: 11px;
   flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.streaming-status-bar__context-percent {
+  margin-left: 2px;
+  color: var(--color-text-muted);
 }
 
 .streaming-status-bar__stop {
@@ -144,37 +200,22 @@
   cursor: not-allowed;
 }
 
-/* ----- Scroll State Indicator ----- */
+/* ----- Scroll State Indicator (only shown when paused) ----- */
 .streaming-status-bar__scroll-state {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
   border-radius: 4px;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 12px;
   flex-shrink: 0;
-}
-
-.streaming-status-bar__scroll-state.following {
-  background: rgba(74, 222, 128, 0.15);
-  color: var(--color-accent-green);
 }
 
 .streaming-status-bar__scroll-state.paused {
   background: rgba(251, 191, 36, 0.25);
   color: var(--color-accent-yellow);
   animation: scroll-paused-pulse 1s infinite;
-}
-
-.streaming-status-bar__scroll-state.mini {
-  padding: 2px 6px;
-  font-size: 10px;
-}
-
-.streaming-status-bar__scroll-label {
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 
 @keyframes scroll-paused-pulse {
@@ -214,99 +255,33 @@
   background: rgba(250, 204, 21, 0.15);
 }
 
-/* ----- Details Row: Tokens/Tool + Queue ----- */
-.streaming-status-bar__details {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding-left: 16px;
-  font-size: 12px;
-  color: var(--color-text-secondary);
-}
-
-.streaming-status-bar__tokens {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .streaming-status-bar__token-count {
   color: var(--color-text-secondary);
 }
 
 .streaming-status-bar__token-rate {
   color: var(--color-text-muted);
-  font-size: 11px;
-}
-
-.streaming-status-bar__tool {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--color-accent-yellow);
-  font-weight: 500;
-}
-
-.streaming-status-bar__tool-icon {
-  animation: spin 2s linear infinite;
+  margin-left: 2px;
 }
 
 .streaming-status-bar__tool-name {
-  max-width: 150px;
+  max-width: 120px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.streaming-status-bar__tool-count {
-  color: var(--color-text-muted);
-  font-weight: 400;
-}
-
-.streaming-status-bar__waiting {
-  color: var(--color-text-muted);
-  font-style: italic;
+  color: var(--color-accent-yellow);
+  font-weight: 500;
+  font-size: 12px;
 }
 
 .streaming-status-bar__queue-badge {
-  margin-left: auto;
   background: rgba(250, 204, 21, 0.2);
   color: var(--color-accent-yellow);
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 11px;
-  font-weight: 500;
-}
-
-/* ----- Context Usage Row ----- */
-.streaming-status-bar__context {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding-left: 16px;
-}
-
-.streaming-status-bar__context-label {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 11px;
-}
-
-.streaming-status-bar__context-text {
-  color: var(--color-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.streaming-status-bar__context-values {
-  color: var(--color-text-secondary);
-  font-variant-numeric: tabular-nums;
-}
-
-.streaming-status-bar__context-percent {
-  margin-left: 4px;
-  color: var(--color-text-muted);
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  flex-shrink: 0;
 }
 
 .streaming-status-bar__context-track {
@@ -352,31 +327,15 @@
 /* ----- Desktop Layout ----- */
 @media (min-width: 768px) {
   .streaming-status-bar {
-    padding: 12px 16px;
+    padding: 8px 12px;
   }
 
   .streaming-status-bar--collapsed {
-    padding: 4px 16px;
-  }
-
-  .streaming-status-bar__header {
-    gap: 16px;
-  }
-
-  .streaming-status-bar__details {
-    padding-left: 24px;
-  }
-
-  .streaming-status-bar__context {
-    padding-left: 24px;
+    padding: 4px 12px;
   }
 
   .streaming-status-bar__tool-name {
-    max-width: 200px;
-  }
-
-  .streaming-status-bar__stop {
-    padding: 5px 16px;
+    max-width: 180px;
   }
 }
 

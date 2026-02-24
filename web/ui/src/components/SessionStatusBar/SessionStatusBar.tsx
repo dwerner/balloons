@@ -1,6 +1,7 @@
 import React, { memo, useState, useEffect, useCallback } from 'react';
 import type { SessionInfo, BalloonsClient } from '../../../../generated/balloons-client';
 import { useLongPress } from '../../hooks';
+import { useLayout } from '../layout';
 import { RenameSessionModal } from '../RenameSessionModal';
 import './SessionStatusBar.css';
 
@@ -21,6 +22,8 @@ export interface SessionStatusBarProps {
   scrollState?: { isFollowing: boolean; isAtBottom: boolean };
   /** Current working directory for the session */
   cwd?: string;
+  /** Callback when CWD is clicked - opens file browser at that path */
+  onCwdClick?: (cwd: string) => void;
 }
 
 /**
@@ -133,7 +136,9 @@ export const SessionStatusBar = memo(function SessionStatusBar({
   onTitleChange,
   scrollState,
   cwd,
+  onCwdClick,
 }: SessionStatusBarProps) {
+  const { expandDetail } = useLayout();
   const contextTokens = session.cachedContextTokens ?? 0;
   const contextWindow = session.contextWindow ?? 200000;
 
@@ -279,8 +284,8 @@ export const SessionStatusBar = memo(function SessionStatusBar({
         </div>
       ) : (
         <>
-          {/* Session title row - toggle + title + id + cwd */}
-          <div className="session-status-bar__title-row">
+          {/* Row 1: Session identity + actions */}
+          <div className="session-status-bar__row">
             <button
               type="button"
               className="session-status-bar__toggle"
@@ -297,24 +302,57 @@ export const SessionStatusBar = memo(function SessionStatusBar({
               {...titleLongPress}
             >
               <span className="session-status-bar__session-title">{sessionName}</span>
-              <span className="session-status-bar__session-id">{session.id.slice(0, 8)}</span>
+              {/* Only show ID separately if we have a real name (not the fallback) */}
+              {(session.forkName || session.title) && (
+                <span className="session-status-bar__session-id">{session.id.slice(0, 8)}</span>
+              )}
             </div>
+            {/* Pin toggle button - right after session name */}
+            {onTogglePin && (
+              <button
+                type="button"
+                className={`session-status-bar__pin-button ${isPinned ? 'session-status-bar__pin-button--active' : ''}`}
+                onClick={onTogglePin}
+                title={isPinned ? 'Unpin session' : 'Pin session'}
+                aria-label={isPinned ? 'Unpin session' : 'Pin session'}
+              >
+                <PinIcon isPinned={isPinned} />
+              </button>
+            )}
             {cwd && (
               <div
-                className="session-status-bar__cwd"
-                title={`${cwd}\n(Click to copy)`}
+                className={`session-status-bar__cwd ${onCwdClick ? 'session-status-bar__cwd--clickable' : ''}`}
+                title={onCwdClick ? `${cwd}\n(Click to open in file browser)` : `${cwd}\n(Click to copy)`}
                 onClick={() => {
-                  navigator.clipboard.writeText(cwd);
+                  if (onCwdClick) {
+                    // Expand detail panel (shows file browser)
+                    expandDetail();
+                    // Navigate file browser to this path
+                    onCwdClick(cwd);
+                  } else {
+                    navigator.clipboard.writeText(cwd);
+                  }
                 }}
               >
                 <span className="session-status-bar__cwd-icon">📁</span>
                 <span className="session-status-bar__cwd-path">{formatCwd(cwd)}</span>
               </div>
             )}
+            {/* Spacer to push actions to the right */}
+            <div className="session-status-bar__spacer" />
+            {/* Scroll state indicator */}
+            {scrollState && !scrollState.isFollowing && (
+              <div
+                className="session-status-bar__scroll-state paused"
+                title="Auto-scroll: PAUSED (scrolled up)"
+              >
+                ⏸
+              </div>
+            )}
           </div>
 
-          {/* Model and context info */}
-          <div className="session-status-bar__header">
+          {/* Row 2: Model/backend + context bar + tokens */}
+          <div className="session-status-bar__row">
             <div className="session-status-bar__model-section">
               {/* Streaming indicator */}
               {isStreaming && (
@@ -372,55 +410,27 @@ export const SessionStatusBar = memo(function SessionStatusBar({
               </div>
             </div>
 
-            <div className="session-status-bar__right">
-              {/* Scroll state indicator */}
-              {scrollState && (
+            {/* Inline context bar */}
+            <div className="session-status-bar__context-inline">
+              <div className="session-status-bar__context-track">
                 <div
-                  className={`session-status-bar__scroll-state ${scrollState.isFollowing ? 'following' : 'paused'}`}
-                  title={scrollState.isFollowing
-                    ? 'Auto-scroll: following new content'
-                    : 'Auto-scroll: PAUSED (scrolled up)'}
-                >
-                  {scrollState.isFollowing ? '⬇' : '⏸'}
-                  <span className="session-status-bar__scroll-label">
-                    {scrollState.isFollowing ? 'Following' : 'PAUSED'}
-                  </span>
-                </div>
-              )}
-
-              {/* Pin toggle button */}
-              {onTogglePin && (
-                <button
-                  type="button"
-                  className={`session-status-bar__pin-button ${isPinned ? 'session-status-bar__pin-button--active' : ''}`}
-                  onClick={onTogglePin}
-                  title={isPinned ? 'Unpin session' : 'Pin session'}
-                  aria-label={isPinned ? 'Unpin session' : 'Pin session'}
-                >
-                  <PinIcon isPinned={isPinned} />
-                </button>
-              )}
-
-              <span className="session-status-bar__context-values">
-                {formatTokens(contextTokens)} / {formatTokens(contextWindow)}
-                <span className="session-status-bar__context-percent">
-                  ({contextUsage.toFixed(0)}%)
-                </span>
-              </span>
+                  className={`session-status-bar__context-bar ${contextColorClass}`}
+                  style={{ width: `${contextUsage}%` }}
+                  role="progressbar"
+                  aria-valuenow={contextUsage}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label={`Context usage: ${contextUsage.toFixed(0)}%`}
+                />
+              </div>
             </div>
-          </div>
 
-          {/* Context usage bar */}
-          <div className="session-status-bar__context-track">
-            <div
-              className={`session-status-bar__context-bar ${contextColorClass}`}
-              style={{ width: `${contextUsage}%` }}
-              role="progressbar"
-              aria-valuenow={contextUsage}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-label={`Context usage: ${contextUsage.toFixed(0)}%`}
-            />
+            <span className="session-status-bar__context-values">
+              {formatTokens(contextTokens)} / {formatTokens(contextWindow)}
+              <span className="session-status-bar__context-percent">
+                ({contextUsage.toFixed(0)}%)
+              </span>
+            </span>
           </div>
         </>
       )}

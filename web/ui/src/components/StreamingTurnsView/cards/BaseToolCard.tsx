@@ -29,6 +29,10 @@ export interface BaseToolCardProps {
   phase: ToolPhase;
   /** Token count (shown when completed) */
   tokens?: number;
+  /** Turn order number (for scroll position indicator) */
+  order?: number;
+  /** End of order range (for cards that combine tool_use + tool_result) */
+  orderEnd?: number;
   /** Main body content (for formatted mode) */
   children?: React.ReactNode;
   /** Additional CSS class */
@@ -147,6 +151,8 @@ export function BaseToolCard({
   headerContent,
   phase,
   tokens = 0,
+  order,
+  orderEnd,
   children,
   className = '',
   collapsedLines = 5,
@@ -232,6 +238,11 @@ export function BaseToolCard({
           }
         } : undefined}
       >
+        {order !== undefined && (
+          <span className="turn-order">
+            {orderEnd !== undefined && orderEnd !== order ? `${order}-${orderEnd}` : order}
+          </span>
+        )}
         <ToolStatusIcon phase={phase} />
         <span className="tool-card-name">{toolName}</span>
         {displayMode !== 'raw' && headerContent && <div className="tool-card-header-content">{headerContent}</div>}

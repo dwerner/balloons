@@ -80,6 +80,8 @@ export function GenericToolCard({ turn, result }: GenericToolCardProps) {
       toolName={toolName}
       phase={phase}
       tokens={tokens}
+      order={turn.order}
+      orderEnd={result?.order}
       className="generic-tool-card"
       rawData={rawData}
     >

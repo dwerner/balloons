@@ -153,6 +153,8 @@ export function EditCard({ turn, result }: EditCardProps) {
       headerContent={headerContent}
       phase={phase}
       tokens={tokens}
+      order={turn.order}
+      orderEnd={result?.order}
       className="edit-card"
       rawData={rawData}
     >

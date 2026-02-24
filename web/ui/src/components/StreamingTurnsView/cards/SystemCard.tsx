@@ -175,7 +175,7 @@ function getDisplayContent(block: SessionDataTurn['contentBlock']): string {
 }
 
 export function SystemCard({ turn }: SystemCardProps) {
-  const { contentBlock, streaming } = turn;
+  const { contentBlock, streaming, order } = turn;
   const blockType = contentBlock?.type || 'unknown';
 
   // Display mode state - formatted (default) or raw JSON
@@ -207,6 +207,7 @@ export function SystemCard({ turn }: SystemCardProps) {
   return (
     <div className={`turn-card system-card ${config.className} ${streaming ? 'streaming' : ''} ${displayMode === 'raw' ? 'raw-mode' : ''}`}>
       <div className="turn-card-header">
+        <span className="turn-order">{order}</span>
         <span className="turn-icon">{config.icon}</span>
         <span className="turn-label">{config.label}</span>
         <ModeSwitcher mode={displayMode} onModeChange={setDisplayMode} />

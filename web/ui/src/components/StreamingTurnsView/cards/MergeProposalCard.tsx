@@ -121,6 +121,8 @@ export function MergeProposalCard({
       toolName="propose_merge"
       phase={phase}
       tokens={tokens}
+      order={turn.order}
+      orderEnd={result?.order}
       className="merge-proposal-card"
       rawData={rawData}
       headerContent={hasInput && <span className="merge-summary-preview">{proposalData.summary.slice(0, 50)}{proposalData.summary.length > 50 ? '...' : ''}</span>}

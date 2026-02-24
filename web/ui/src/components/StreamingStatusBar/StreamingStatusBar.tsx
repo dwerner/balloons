@@ -1,6 +1,7 @@
 import React, { memo, useEffect, useState, useRef, useCallback } from 'react';
 import type { TaskInfo, SessionInfo, BalloonsClient } from '../../../../generated/balloons-client';
 import { useLongPress } from '../../hooks';
+import { useLayout } from '../layout';
 import { RenameSessionModal } from '../RenameSessionModal';
 import './StreamingStatusBar.css';
 
@@ -27,6 +28,10 @@ export interface StreamingStatusBarProps {
   client?: BalloonsClient | null;
   /** Callback when session title is changed */
   onTitleChange?: (newTitle: string) => void;
+  /** Current working directory for the session */
+  cwd?: string;
+  /** Callback when CWD is clicked - opens file browser at that path */
+  onCwdClick?: (cwd: string) => void;
 }
 
 /**
@@ -100,6 +105,14 @@ function getSessionDisplayName(session: SessionInfo): string {
 }
 
 /**
+ * Format CWD for display - show abbreviated path
+ */
+function formatCwd(cwd: string | undefined): string {
+  if (!cwd) return '';
+  return cwd;
+}
+
+/**
  * StreamingStatusBar - Enhanced streaming status display
  *
  * Shows:
@@ -123,7 +136,10 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
   session,
   client,
   onTitleChange,
+  cwd,
+  onCwdClick,
 }: StreamingStatusBarProps) {
+  const { expandDetail } = useLayout();
   // Collapsed state - persist in localStorage (shared with SessionStatusBar)
   const [isCollapsed, setIsCollapsed] = useState(() => {
     const stored = localStorage.getItem('sessionStatusBar.collapsed');
@@ -241,72 +257,32 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
         </div>
       ) : (
         <>
-          {/* Session title row - toggle + title + id */}
-          {sessionName && (
-            <div className="streaming-status-bar__title-row">
-              <button
-                type="button"
-                className="streaming-status-bar__toggle"
-                onClick={toggleCollapsed}
-                title="Collapse status bar"
-                aria-label="Collapse status bar"
-                aria-expanded={true}
-              >
-                <span className="streaming-status-bar__toggle-icon">▼</span>
-              </button>
+          {/* Row 1: Session identity + actions */}
+          <div className="streaming-status-bar__row">
+            <button
+              type="button"
+              className="streaming-status-bar__toggle"
+              onClick={toggleCollapsed}
+              title="Collapse status bar"
+              aria-label="Collapse status bar"
+              aria-expanded={true}
+            >
+              <span className="streaming-status-bar__toggle-icon">▼</span>
+            </button>
+            {sessionName && (
               <div
                 className="streaming-status-bar__title-content"
                 title="Long press to rename session"
                 {...titleLongPress}
               >
                 <span className="streaming-status-bar__session-title">{sessionName}</span>
-                <span className="streaming-status-bar__session-id">{session!.id.slice(0, 8)}</span>
-              </div>
-            </div>
-          )}
-
-          {/* Model row: Model, Duration, Stop */}
-          <div className={`streaming-status-bar__header ${sessionName ? 'streaming-status-bar__header--no-toggle' : ''}`}>
-            {/* Only show toggle if we don't have a session name (it's in the title row) */}
-            {!sessionName && (
-              <button
-                type="button"
-                className="streaming-status-bar__toggle"
-                onClick={toggleCollapsed}
-                title="Collapse status bar"
-                aria-label="Collapse status bar"
-                aria-expanded={true}
-              >
-                <span className="streaming-status-bar__toggle-icon">▼</span>
-              </button>
-            )}
-            <div className="streaming-status-bar__model">
-              <span className="streaming-status-bar__indicator" aria-hidden="true" />
-              <span className="streaming-status-bar__model-name">
-                {task.model || task.backendName || 'Streaming'}
-              </span>
-            </div>
-
-            <div className="streaming-status-bar__timer">
-              {formatDuration(duration)}
-            </div>
-
-            {/* Scroll state indicator */}
-            {scrollState && (
-              <div
-                className={`streaming-status-bar__scroll-state ${scrollState.isFollowing ? 'following' : 'paused'}`}
-                title={scrollState.isFollowing
-                  ? 'Auto-scroll: following new content'
-                  : 'Auto-scroll: PAUSED (scrolled up)'}
-              >
-                {scrollState.isFollowing ? '⬇' : '⏸'}
-                <span className="streaming-status-bar__scroll-label">
-                  {scrollState.isFollowing ? 'Following' : 'PAUSED'}
-                </span>
+                {/* Only show ID separately if we have a real name (not the fallback) */}
+                {session && (session.forkName || session.title) && (
+                  <span className="streaming-status-bar__session-id">{session.id.slice(0, 8)}</span>
+                )}
               </div>
             )}
-
-            {/* Pin toggle button */}
+            {/* Pin toggle button - right after session name */}
             {onTogglePin && (
               <button
                 type="button"
@@ -318,7 +294,34 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
                 <PinIcon isPinned={isPinned} />
               </button>
             )}
-
+            {cwd && (
+              <div
+                className={`streaming-status-bar__cwd ${onCwdClick ? 'streaming-status-bar__cwd--clickable' : ''}`}
+                title={onCwdClick ? `${cwd}\n(Click to open in file browser)` : `${cwd}\n(Click to copy)`}
+                onClick={() => {
+                  if (onCwdClick) {
+                    expandDetail();
+                    onCwdClick(cwd);
+                  } else {
+                    navigator.clipboard.writeText(cwd);
+                  }
+                }}
+              >
+                <span className="streaming-status-bar__cwd-icon">📁</span>
+                <span className="streaming-status-bar__cwd-path">{formatCwd(cwd)}</span>
+              </div>
+            )}
+            {/* Spacer to push actions to the right */}
+            <div className="streaming-status-bar__spacer" />
+            {/* Scroll state indicator (only when paused) */}
+            {scrollState && !scrollState.isFollowing && (
+              <div
+                className="streaming-status-bar__scroll-state paused"
+                title="Auto-scroll: PAUSED (scrolled up)"
+              >
+                ⏸
+              </div>
+            )}
             {onStop && (
               <button
                 type="button"
@@ -332,69 +335,49 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
             )}
           </div>
 
-          {/* Middle row: Tokens/Tool info */}
-          <div className="streaming-status-bar__details">
-            {isToolRunning ? (
-              <div className="streaming-status-bar__tool">
-                <span className="streaming-status-bar__tool-icon" aria-hidden="true">
-                  ⚙
-                </span>
+          {/* Row 2: Model/status + context bar + tokens */}
+          <div className="streaming-status-bar__row">
+            <div className="streaming-status-bar__model">
+              <span className="streaming-status-bar__indicator" aria-hidden="true" />
+              {isToolRunning ? (
                 <span className="streaming-status-bar__tool-name">{task.toolName}</span>
-                {task.toolCount > 1 && (
-                  <span className="streaming-status-bar__tool-count">
-                    ({task.toolCount})
-                  </span>
-                )}
-              </div>
-            ) : hasTokens ? (
-              <div className="streaming-status-bar__tokens">
-                <span className="streaming-status-bar__token-count">
-                  {formatTokens(task.tokensStreamed)} tokens
+              ) : (
+                <span className="streaming-status-bar__model-name">
+                  {task.model || task.backendName || 'Streaming'}
                 </span>
-                {hasRate && (
-                  <span className="streaming-status-bar__token-rate">
-                    {formatTokenRate(task.currentTokenRate)}/s
-                  </span>
-                )}
-              </div>
-            ) : (
-              <div className="streaming-status-bar__waiting">
-                Starting...
+              )}
+            </div>
+
+            {/* Inline context bar */}
+            {task.contextWindow > 0 && (
+              <div className="streaming-status-bar__context-inline">
+                <div className="streaming-status-bar__context-track">
+                  <div
+                    className={`streaming-status-bar__context-bar ${contextColorClass}`}
+                    style={{ width: `${contextUsage}%` }}
+                    role="progressbar"
+                    aria-valuenow={contextUsage}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-label={`Context usage: ${contextUsage.toFixed(0)}%`}
+                  />
+                </div>
               </div>
             )}
+
+            <span className="streaming-status-bar__context-values">
+              {formatTokens(totalContextTokens)} / {formatTokens(task.contextWindow)}
+              <span className="streaming-status-bar__context-percent">
+                ({contextUsage.toFixed(0)}%)
+              </span>
+            </span>
 
             {queuedMessageCount > 0 && (
               <div className="streaming-status-bar__queue-badge">
-                {queuedMessageCount} queued
+                +{queuedMessageCount}
               </div>
             )}
           </div>
-
-          {/* Bottom row: Context usage bar */}
-          {task.contextWindow > 0 && (
-            <div className="streaming-status-bar__context">
-              <div className="streaming-status-bar__context-label">
-                <span className="streaming-status-bar__context-text">Context</span>
-                <span className="streaming-status-bar__context-values">
-                  {formatTokens(totalContextTokens)} / {formatTokens(task.contextWindow)}
-                  <span className="streaming-status-bar__context-percent">
-                    ({contextUsage.toFixed(0)}%)
-                  </span>
-                </span>
-              </div>
-              <div className="streaming-status-bar__context-track">
-                <div
-                  className={`streaming-status-bar__context-bar ${contextColorClass}`}
-                  style={{ width: `${contextUsage}%` }}
-                  role="progressbar"
-                  aria-valuenow={contextUsage}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-label={`Context usage: ${contextUsage.toFixed(0)}%`}
-                />
-              </div>
-            </div>
-          )}
         </>
       )}
     </div>

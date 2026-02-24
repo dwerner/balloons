@@ -9,7 +9,7 @@
  * - Session CWD management
  */
 
-import React, { useState, useCallback, useEffect, useMemo, memo, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, memo, useRef, forwardRef, useImperativeHandle } from 'react';
 import type { FileEntry, DirectoryListing, FileStateServiceClient } from '../../../../generated/balloons-client';
 import { createLogger } from '../../utils/debugLog';
 import './FileBrowserView.css';
@@ -255,6 +255,7 @@ interface FileTreeNodeProps {
   onToggle: () => void;
   onSelect: () => void;
   onNavigate: (path: string) => void;
+  onContextMenu?: (e: React.MouseEvent, entry: FileEntry) => void;
   expandedPaths: Set<string>;
   loadingPaths: Set<string>;
   childrenCache: Map<string, FileEntry[]>;
@@ -269,6 +270,7 @@ const FileTreeNode = memo(function FileTreeNode({
   onToggle,
   onSelect,
   onNavigate,
+  onContextMenu,
   expandedPaths,
   loadingPaths,
   childrenCache,
@@ -296,6 +298,12 @@ const FileTreeNode = memo(function FileTreeNode({
     onToggle();
   }, [onToggle]);
 
+  const handleRightClick = useCallback((e: React.MouseEvent) => {
+    if (onContextMenu) {
+      onContextMenu(e, entry);
+    }
+  }, [entry, onContextMenu]);
+
   return (
     <li className={`file-node ${entry.isIgnored ? 'file-node--ignored' : ''}`}>
       <div
@@ -303,6 +311,7 @@ const FileTreeNode = memo(function FileTreeNode({
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
+        onContextMenu={handleRightClick}
       >
         <span className="file-node__toggle" onClick={handleArrowClick}>
           {hasChildren ? (
@@ -342,6 +351,7 @@ const FileTreeNode = memo(function FileTreeNode({
                 onToggle={() => { }} // Will be wired up by parent
                 onSelect={() => { }}
                 onNavigate={onNavigate}
+                onContextMenu={onContextMenu}
                 expandedPaths={expandedPaths}
                 loadingPaths={loadingPaths}
                 childrenCache={childrenCache}
@@ -365,8 +375,22 @@ export interface FileBrowserViewProps {
   /** Callback when a file is selected */
   onFileSelect?: (path: string) => void;
 
+  /** Callback when "Set as Working Directory" is selected on a folder */
+  onSetWorkingDirectory?: (path: string) => void;
+
+  /** Callback when "Insert Path" is selected - inserts path into chat input */
+  onInsertPath?: (path: string) => void;
+
   /** FileStateService client - stable reference avoids re-renders */
   client: FileStateServiceClient;
+}
+
+// Ref handle for external control
+export interface FileBrowserViewRef {
+  /** Navigate to a specific directory */
+  navigateTo: (path: string) => Promise<void>;
+  /** Get the current path */
+  getCurrentPath: () => string | null;
 }
 
 // Simple cache for directory listings - persists until user explicitly refreshes
@@ -388,12 +412,14 @@ export function invalidateListingCache(path?: string): void {
   }
 }
 
-export const FileBrowserView = memo(function FileBrowserView({
+export const FileBrowserView = memo(forwardRef<FileBrowserViewRef, FileBrowserViewProps>(function FileBrowserView({
   initialPath,
   sessionId,
   onFileSelect,
+  onSetWorkingDirectory,
+  onInsertPath,
   client,
-}: FileBrowserViewProps) {
+}, ref) {
   // Current directory listing
   const [listing, setListing] = useState<DirectoryListing | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -415,6 +441,13 @@ export const FileBrowserView = memo(function FileBrowserView({
 
   // Track initial path to detect changes
   const prevInitialPath = useRef(initialPath);
+
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    entry: FileEntry;
+  } | null>(null);
 
   // Load home directory on mount (only once)
   useEffect(() => {
@@ -486,6 +519,12 @@ export const FileBrowserView = memo(function FileBrowserView({
     await loadDirectory(path);
   }, [loadDirectory]);
 
+  // Expose methods via ref for external control
+  useImperativeHandle(ref, () => ({
+    navigateTo,
+    getCurrentPath: () => listing?.path ?? null,
+  }), [navigateTo, listing]);
+
   // Go to home directory
   const goHome = useCallback(async () => {
     const home = await client.getHomeDirectory();
@@ -551,6 +590,61 @@ export const FileBrowserView = memo(function FileBrowserView({
       onFileSelect(entry.path);
     }
   }, [onFileSelect]);
+
+  // Handle context menu
+  const handleContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      entry,
+    });
+  }, []);
+
+  // Close context menu
+  const closeContextMenu = useCallback(() => {
+    setContextMenu(null);
+  }, []);
+
+  // Handle set working directory from context menu
+  const handleSetWorkingDirectory = useCallback(() => {
+    if (contextMenu?.entry.isDirectory && onSetWorkingDirectory) {
+      onSetWorkingDirectory(contextMenu.entry.path);
+    }
+    setContextMenu(null);
+  }, [contextMenu, onSetWorkingDirectory]);
+
+  // Handle insert path from context menu
+  const handleInsertPath = useCallback(() => {
+    if (contextMenu && onInsertPath) {
+      onInsertPath(contextMenu.entry.path);
+    }
+    setContextMenu(null);
+  }, [contextMenu, onInsertPath]);
+
+  // Close context menu on escape or click outside
+  useEffect(() => {
+    if (!contextMenu) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        closeContextMenu();
+      }
+    };
+
+    const handleClick = () => {
+      closeContextMenu();
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('click', handleClick);
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('click', handleClick);
+    };
+  }, [contextMenu, closeContextMenu]);
 
   // Render loading state
   if ((isLoading || isInitializing) && !listing) {
@@ -631,6 +725,7 @@ export const FileBrowserView = memo(function FileBrowserView({
                 onToggle={() => toggleExpanded(entry)}
                 onSelect={() => handleSelect(entry)}
                 onNavigate={navigateTo}
+                onContextMenu={handleContextMenu}
                 expandedPaths={expandedPaths}
                 loadingPaths={loadingPaths}
                 childrenCache={childrenCache}
@@ -646,8 +741,60 @@ export const FileBrowserView = memo(function FileBrowserView({
           <div className="file-browser__spinner" />
         </div>
       )}
+
+      {/* Context menu */}
+      {contextMenu && (
+        <div
+          className="file-browser__context-menu"
+          style={{
+            position: 'fixed',
+            left: contextMenu.x,
+            top: contextMenu.y,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {contextMenu.entry.isDirectory && onSetWorkingDirectory && (
+            <button
+              className="file-browser__context-menu-item"
+              onClick={handleSetWorkingDirectory}
+            >
+              <span className="file-browser__context-menu-icon">📁</span>
+              Set as Working Directory
+            </button>
+          )}
+          <button
+            className="file-browser__context-menu-item"
+            onClick={() => {
+              navigateTo(contextMenu.entry.isDirectory ? contextMenu.entry.path : listing.path);
+              closeContextMenu();
+            }}
+          >
+            <span className="file-browser__context-menu-icon">📂</span>
+            {contextMenu.entry.isDirectory ? 'Open in Browser' : 'Open Containing Folder'}
+          </button>
+          <button
+            className="file-browser__context-menu-item"
+            onClick={() => {
+              navigator.clipboard.writeText(contextMenu.entry.path);
+              closeContextMenu();
+            }}
+          >
+            <span className="file-browser__context-menu-icon">📋</span>
+            Copy Path
+          </button>
+          {onInsertPath && (
+            <button
+              className="file-browser__context-menu-item"
+              onClick={handleInsertPath}
+            >
+              <span className="file-browser__context-menu-icon">⌨️</span>
+              Insert Path
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
-});
+}));
 
 export default FileBrowserView;

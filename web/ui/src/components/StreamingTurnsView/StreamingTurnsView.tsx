@@ -26,6 +26,7 @@ import React, { useMemo, useEffect, useRef, useCallback, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { BalloonsClient } from '../../../../generated/balloons-client';
 import { useSessionData, type SessionDataTurn, type StreamingProgress } from '../../hooks';
+import type { ToolUseBlock, ToolResultBlock } from '../../../../generated/types';
 import { TurnCard, ClientContext } from './cards';
 import { ScrollToBottom } from '../ScrollToBottom';
 import './StreamingTurnsView.css';
@@ -58,7 +59,8 @@ interface StreamingTurnsViewProps {
 const ESTIMATED_ITEM_HEIGHT = 100;
 
 // Overscan count - how many items to render outside the visible area
-const OVERSCAN_COUNT = 5;
+// Higher values reduce blank areas when scrolling quickly, at cost of more DOM nodes
+const OVERSCAN_COUNT = 15;
 
 // Threshold in pixels to consider "at bottom"
 const AT_BOTTOM_THRESHOLD = 150;
@@ -70,6 +72,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Track whether user is following the stream (auto-scroll enabled)
+  // Use a ref alongside state to avoid race conditions during rapid updates
   const [isFollowing, setIsFollowing] = useState(() => {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('balloons:autoscroll-following');
@@ -77,21 +80,42 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     }
     return true;
   });
+  const isFollowingRef = useRef(isFollowing);
 
   // Track whether we're at the bottom
   const [isAtBottom, setIsAtBottom] = useState(true);
 
-  // Ref to track programmatic scrolls
-  const isProgrammaticScrollRef = useRef(false);
+  // Ref to track programmatic scrolls - use a counter to handle overlapping scrolls
+  const programmaticScrollCountRef = useRef(0);
 
   // Last scroll position for direction detection
   const lastScrollTopRef = useRef(0);
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    isFollowingRef.current = isFollowing;
+  }, [isFollowing]);
 
   // Memoize context value to prevent unnecessary re-renders
   const contextValue = useMemo(() => ({
     client,
     onSelectSession,
   }), [client, onSelectSession]);
+
+  // Build a lookup map from tool_use ID to matching tool_result turn
+  // This avoids O(n²) scans when rendering each TurnCard
+  const toolResultMap = useMemo(() => {
+    const map = new Map<string, SessionDataTurn>();
+    for (const turn of turns) {
+      if (turn.contentBlock?.type === 'tool_result') {
+        const resultBlock = turn.contentBlock as ToolResultBlock;
+        if (resultBlock.toolUseId) {
+          map.set(resultBlock.toolUseId, turn);
+        }
+      }
+    }
+    return map;
+  }, [turns]);
 
   // Filter out tool_result turns - they're rendered inline with their matching tool_use
   const filteredTurns = useMemo(() => {
@@ -104,6 +128,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
       const toolResultBlock = turn.contentBlock as { toolUseId?: string } | undefined;
       const toolUseId = toolResultBlock?.toolUseId;
       if (!toolUseId) return true; // No ID, render standalone
+      // Use our pre-built map to check for matching tool_use
       return !turns.some(t => {
         const tBlockType = t.contentBlock?.type || 'text';
         const tToolUseBlock = t.contentBlock as { id?: string } | undefined;
@@ -223,8 +248,9 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
   const scrollToBottom = useCallback(() => {
     if (!scrollContainerRef.current) return;
 
-    isProgrammaticScrollRef.current = true;
+    programmaticScrollCountRef.current++;
     setIsFollowing(true);
+    isFollowingRef.current = true;
     setIsAtBottom(true);
 
     // Use virtualizer's scrollToIndex for efficiency
@@ -233,10 +259,10 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
       behavior: 'auto', // 'auto' gives instant scroll, 'smooth' animates
     });
 
-    // Reset flag after scroll
+    // Reset flag after scroll settles
     setTimeout(() => {
-      isProgrammaticScrollRef.current = false;
-    }, 50);
+      programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
+    }, 100);
   }, [virtualizer, turnsOrGroups.length]);
 
   // Handle scroll events
@@ -244,8 +270,8 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     const element = scrollContainerRef.current;
     if (!element) return;
 
-    // Skip if programmatic scroll
-    if (isProgrammaticScrollRef.current) {
+    // Skip if this is a programmatic scroll
+    if (programmaticScrollCountRef.current > 0) {
       lastScrollTopRef.current = element.scrollTop;
       return;
     }
@@ -257,13 +283,16 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     setIsAtBottom(atBottom);
 
     // User scrolled UP and away from bottom - pause following
-    if (scrollDirection < -10 && !atBottom) {
+    // Use a more significant threshold to avoid false triggers
+    if (scrollDirection < -20 && !atBottom) {
       setIsFollowing(false);
+      isFollowingRef.current = false;
     }
 
     // User scrolled to bottom - resume following
     if (atBottom) {
       setIsFollowing(true);
+      isFollowingRef.current = true;
     }
   }, [checkAtBottom]);
 
@@ -276,24 +305,39 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     return () => element.removeEventListener('scroll', handleScroll);
   }, [handleScroll]);
 
-  // Auto-scroll when content changes and we're following
+  // Auto-scroll when NEW content arrives and we're following
+  // Use ref to check following state to avoid race conditions with setState
+  const prevTurnsLengthRef = useRef(turnsOrGroups.length);
   useEffect(() => {
-    if (!isFollowing || turnsOrGroups.length === 0) return;
+    const prevLength = prevTurnsLengthRef.current;
+    const currentLength = turnsOrGroups.length;
+    prevTurnsLengthRef.current = currentLength;
 
-    isProgrammaticScrollRef.current = true;
+    // Only scroll if content was ADDED (not on initial load or removals)
+    // and user is following (check ref to avoid race conditions)
+    if (currentLength <= prevLength || currentLength === 0) return;
+    if (!isFollowingRef.current) return;
+
+    programmaticScrollCountRef.current++;
 
     // Use requestAnimationFrame to ensure DOM has updated
     requestAnimationFrame(() => {
-      virtualizer.scrollToIndex(turnsOrGroups.length - 1, {
+      // Double-check we're still following (user might have scrolled during RAF delay)
+      if (!isFollowingRef.current) {
+        programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
+        return;
+      }
+
+      virtualizer.scrollToIndex(currentLength - 1, {
         align: 'end',
-        behavior: 'auto', // 'auto' gives instant scroll
+        behavior: 'auto',
       });
 
       setTimeout(() => {
-        isProgrammaticScrollRef.current = false;
-      }, 16);
+        programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
+      }, 50);
     });
-  }, [turnsOrGroups.length, isFollowing, virtualizer]);
+  }, [turnsOrGroups.length, virtualizer]);
 
   // Re-measure items when streaming (last item may grow)
   useEffect(() => {
@@ -375,13 +419,18 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
                     <div data-turn-order={item.turns[0]?.order}>
                       <TurnCard
                         turn={item.turns[0]!}
-                        allTurns={turns}
+                        toolResultMap={toolResultMap}
                         sessionId={sessionId || undefined}
                       />
                     </div>
                   ) : (
                     <div className="parallel-group">
                       <div className="parallel-group-header">
+                        <span className="turn-order">
+                          {item.turns.length > 1
+                            ? `${item.turns[0]?.order}-${item.turns[item.turns.length - 1]?.order}`
+                            : item.turns[0]?.order}
+                        </span>
                         <span className="parallel-icon">⚡</span>
                         <span className="parallel-label">{item.turns.length} parallel tool calls</span>
                       </div>
@@ -390,7 +439,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
                           <div key={turn.turnId} data-turn-order={turn.order}>
                             <TurnCard
                               turn={turn}
-                              allTurns={turns}
+                              toolResultMap={toolResultMap}
                               sessionId={sessionId || undefined}
                             />
                           </div>

@@ -4,11 +4,14 @@
  * Routes to the appropriate card component based on contentBlock.type.
  * For tool_use blocks, further routes to tool-specific cards (Read, Edit, etc.)
  * Also handles pairing tool_use turns with their matching tool_result.
+ *
+ * Memoized to prevent unnecessary re-renders during scroll - only re-renders
+ * when turn data, toolResultMap, or sessionId actually change.
  */
 
-import React, { useMemo } from 'react';
+import React, { memo } from 'react';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
-import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
+import type { ToolUseBlock } from '../../../../../generated/types';
 import { TextCard } from './TextCard';
 import { ToolResultCard } from './ToolResultCard';
 import { SystemCard } from './SystemCard';
@@ -30,8 +33,8 @@ import './cards.css';
 
 export interface TurnCardProps {
   turn: SessionDataTurn;
-  /** All turns for finding matching tool results */
-  allTurns?: SessionDataTurn[];
+  /** Pre-computed map from tool_use ID to matching tool_result turn (O(1) lookup) */
+  toolResultMap?: Map<string, SessionDataTurn>;
   /** Session ID for proposal cards that need API access */
   sessionId?: string;
 }
@@ -76,7 +79,10 @@ const TOOL_CARD_MAP: Record<string, React.ComponentType<{ turn: SessionDataTurn;
 // Module-level logger that respects global debug toggle
 const debugLog = createLogger('TurnCard');
 
-export function TurnCard({ turn, allTurns = [], sessionId }: TurnCardProps) {
+// Empty map singleton to avoid creating new objects
+const EMPTY_MAP = new Map<string, SessionDataTurn>();
+
+export const TurnCard = memo(function TurnCard({ turn, toolResultMap = EMPTY_MAP, sessionId }: TurnCardProps) {
   const { role, contentBlock } = turn;
   const blockType = contentBlock?.type || 'text';
 
@@ -91,12 +97,10 @@ export function TurnCard({ turn, allTurns = [], sessionId }: TurnCardProps) {
     debugLog('Rendering proposal card', { blockType, sessionId, turn: turn.turnId });
   }
 
-  // Find matching tool_result for tool_use turns
-  const matchingResult = useMemo(() => {
-    if (blockType !== 'tool_use') return null;
-
-    // Get the tool_use_id for precise matching
+  // Dispatch to appropriate card type
+  if (blockType === 'tool_use') {
     const toolUseBlock = contentBlock as ToolUseBlock;
+    const toolName = toolUseBlock?.name || '';
     const toolUseId = toolUseBlock?.id;
 
     // DEBUG: Log tool_use state when looking for results
@@ -109,36 +113,8 @@ export function TurnCard({ turn, allTurns = [], sessionId }: TurnCardProps) {
       });
     }
 
-    // Look for a tool_result turn that matches
-    const turnOrder = turn.order;
-    const results = allTurns.filter((t) => {
-      if (t.contentBlock?.type !== 'tool_result') return false;
-      if (t.order <= turnOrder) return false;
-
-      const resultBlock = t.contentBlock as ToolResultBlock;
-
-      // Match by toolUseId if available (most precise)
-      if (toolUseId && resultBlock?.toolUseId) {
-        return resultBlock.toolUseId === toolUseId;
-      }
-
-      // Fall back to exchange matching
-      if (turn.exchangeId) {
-        return t.exchangeId === turn.exchangeId;
-      }
-
-      // Last resort: just match by order (first result after this tool_use)
-      return true;
-    });
-
-    // Return the first matching result
-    return results.length > 0 ? results[0] : null;
-  }, [turn, blockType, contentBlock, allTurns]);
-
-  // Dispatch to appropriate card type
-  if (blockType === 'tool_use') {
-    const toolUseBlock = contentBlock as ToolUseBlock;
-    const toolName = toolUseBlock?.name || '';
+    // O(1) lookup using pre-computed map from parent
+    const matchingResult = toolUseId ? toolResultMap.get(toolUseId) ?? null : null;
 
     // Try to get a tool-specific card
     const ToolCardComponent = TOOL_CARD_MAP[toolName];
@@ -153,8 +129,6 @@ export function TurnCard({ turn, allTurns = [], sessionId }: TurnCardProps) {
   }
 
   if (blockType === 'tool_result') {
-    // Check if there's a matching tool_use that will render this result
-    const resultBlock = contentBlock as ToolResultBlock;
     // Tool results with matching tool_use turns are filtered out at the parent level
     // (StreamingTurnsView). If we get here, it's a standalone tool result.
     return <ToolResultCard turn={turn} />;
@@ -206,6 +180,6 @@ export function TurnCard({ turn, allTurns = [], sessionId }: TurnCardProps) {
   }
 
   return <TextCard turn={turn} />;
-}
+});
 
 export default TurnCard;

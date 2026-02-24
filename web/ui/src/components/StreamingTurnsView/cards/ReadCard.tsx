@@ -121,6 +121,8 @@ export function ReadCard({ turn, result }: ReadCardProps) {
       headerContent={headerContent}
       phase={phase}
       tokens={tokens}
+      order={turn.order}
+      orderEnd={result?.order}
       className="read-card"
       rawData={rawData}
     >

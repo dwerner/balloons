@@ -107,6 +107,8 @@ export function WriteCard({ turn, result }: WriteCardProps) {
       headerContent={headerContent}
       phase={phase}
       tokens={tokens}
+      order={turn.order}
+      orderEnd={result?.order}
       className="write-card"
       rawData={rawData}
     >

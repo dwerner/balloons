@@ -5,7 +5,7 @@ import { MarkdownContent } from './MarkdownContent';
 import { AppLayout, useLayout, useTheme, usePreferences } from './components/layout';
 import { SessionTreeView } from './components/SessionTreeView';
 import { GoalTreeView } from './components/GoalTreeView';
-import { FileBrowserView } from './components/FileBrowserView';
+import { FileBrowserView, type FileBrowserViewRef } from './components/FileBrowserView';
 import { SessionStatusBar } from './components/SessionStatusBar';
 import { StreamingStatusBar } from './components/StreamingStatusBar';
 import { ForkProposalTurn } from './components/ForkProposalTurn';
@@ -997,6 +997,7 @@ export function App() {
   const clientRef = useRef<BalloonsClient | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messageInputRef = useRef<MessageInputHandle>(null);
+  const fileBrowserRef = useRef<FileBrowserViewRef>(null);
   // Track the session we're currently loading to handle race conditions
   const loadingSessionRef = useRef<string | null>(null);
 
@@ -1175,6 +1176,16 @@ export function App() {
           console.log('[App] sessionDataSessionPinned - refetching');
           const sessionList = await client.sessionData.getAllSessions();
           setSessions(sessionList);
+        })
+      );
+
+      // CWD changes - update session working directory when changed via file browser
+      unsubscribers.push(
+        client.files.onCwdChanged((data) => {
+          debugLog('CWD changed', { sessionId: data.sessionId, oldCwd: data.oldCwd, newCwd: data.newCwd });
+          setSessions(prev => prev.map(s =>
+            s.id === data.sessionId ? { ...s, workingDirectory: data.newCwd } : s
+          ));
         })
       );
 
@@ -1665,6 +1676,38 @@ export function App() {
       console.error('Failed to toggle pin:', err);
     }
   }, [connectionState]);
+
+  // Handle CWD click - open detail panel and navigate file browser
+  // Note: We need to use a callback that accesses layout context
+  // This will be called from MainContent which has access to layout
+  const handleCwdClick = useCallback((cwd: string) => {
+    debugLog('CWD clicked, navigating to', { cwd });
+    // Navigate the file browser (if it's mounted)
+    fileBrowserRef.current?.navigateTo(cwd);
+  }, []);
+
+  // Handle setting working directory from file browser context menu
+  const handleSetWorkingDirectory = useCallback(async (path: string) => {
+    const client = clientRef.current;
+    if (!client || connectionState !== 'connected' || !selectedSessionId) {
+      console.warn('Cannot set working directory: not connected or no session selected');
+      return;
+    }
+
+    try {
+      debugLog('Setting working directory', { sessionId: selectedSessionId, path });
+      // Use session manager method which properly updates the session and emits events
+      const success = await client.sessions.setSessionWorkingDirectory(selectedSessionId, path);
+      if (success) {
+        debugLog('Working directory updated', { path });
+        // The sessionDataSessionUpdated event will update the UI automatically
+      } else {
+        console.error('Failed to set working directory: invalid path or session not found');
+      }
+    } catch (err) {
+      console.error('Failed to set working directory:', err);
+    }
+  }, [connectionState, selectedSessionId]);
 
   // Load turns for a session (used by SessionTreeView for lazy loading)
   const handleLoadTurns = useCallback(async (sessionId: string): Promise<TurnInfo[]> => {
@@ -2304,10 +2347,12 @@ export function App() {
                   scrollState={scrollState}
                   session={selectedSession}
                   client={clientRef.current}
+                  cwd={selectedSession.workingDirectory}
                   onTitleChange={(newTitle) => {
                     // Force a refresh of session data
                     clientRef.current?.sessions.getSession(selectedSession.id).catch(console.error);
                   }}
+                  onCwdClick={handleCwdClick}
                 />
               ) : selectedSession && (
                 <SessionStatusBar
@@ -2317,6 +2362,7 @@ export function App() {
                   onTogglePin={() => handleTogglePin(selectedSession.id)}
                   cwd={selectedSession.workingDirectory}
                   scrollState={scrollState}
+                  onCwdClick={handleCwdClick}
                 />
               )}
               {/* Image preview area */}
@@ -2394,12 +2440,21 @@ export function App() {
       <AppLayout.Detail>
         {connectionState === 'connected' && clientRef.current ? (
           <FileBrowserView
+            ref={fileBrowserRef}
             sessionId={selectedSessionId || undefined}
             initialPath={selectedSession?.workingDirectory || undefined}
             client={clientRef.current.files}
             onFileSelect={(path) => {
               debugLog('File selected', { path });
               // TODO: Could insert file path into chat input, open file preview, etc.
+            }}
+            onSetWorkingDirectory={handleSetWorkingDirectory}
+            onInsertPath={(path) => {
+              // Insert the path into the chat input field
+              const currentValue = messageInputRef.current?.getValue() || '';
+              const newValue = currentValue ? `${currentValue} ${path}` : path;
+              messageInputRef.current?.setValue(newValue);
+              debugLog('Inserted path into input', { path });
             }}
           />
         ) : (
