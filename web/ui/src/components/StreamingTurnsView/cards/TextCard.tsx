@@ -108,7 +108,12 @@ export function TextCard({ turn }: TextCardProps) {
         return <MarkdownContent content={content} />;
       }
       if (streaming) {
-        return <span className="thinking">Thinking...</span>;
+        return (
+          <div className="thinking-indicator">
+            <span className="thinking-spinner" />
+            <span className="thinking-text">Thinking...</span>
+          </div>
+        );
       }
       return null;
     }

@@ -22,6 +22,10 @@ fn parse_iso_to_unix(iso_str: &str) -> i64 {
     if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(iso_str, "%Y-%m-%dT%H:%M:%S") {
         return dt.and_utc().timestamp();
     }
+    // Try parsing with microseconds (e.g., "2024-01-01T00:00:00.123456" from Python's isoformat())
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(iso_str, "%Y-%m-%dT%H:%M:%S%.f") {
+        return dt.and_utc().timestamp();
+    }
     // Try parsing date-only format (e.g., "2024-01-01")
     if let Ok(dt) = chrono::NaiveDate::parse_from_str(iso_str, "%Y-%m-%d") {
         return dt.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc().timestamp()).unwrap_or(0);
@@ -2025,6 +2029,10 @@ mod tests {
         assert_eq!(parse_iso_to_unix("2024-01-01T00:00:00+00:00"), 1704067200);
         // Without timezone (treated as UTC)
         assert_eq!(parse_iso_to_unix("2024-01-01T00:00:00"), 1704067200);
+        // With microseconds (Python's datetime.now().isoformat() format)
+        assert_eq!(parse_iso_to_unix("2024-01-01T00:00:00.123456"), 1704067200);
+        // With milliseconds
+        assert_eq!(parse_iso_to_unix("2024-01-01T00:00:00.123"), 1704067200);
         // Date only
         assert_eq!(parse_iso_to_unix("2024-01-01"), 1704067200);
         // Invalid format returns 0
