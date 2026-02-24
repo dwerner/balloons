@@ -20,6 +20,7 @@
   display: flex;
   flex-direction: column;
   padding: 6px;
+  min-height: min-content; /* Ensure container grows with virtualized content */
 }
 
 .streaming-turns-view.empty,
@@ -34,6 +35,36 @@
 
 .streaming-turns-view.error {
   color: var(--color-error, #dc3545);
+}
+
+/* Loading spinner */
+.loading-spinner-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 32px;
+}
+
+.loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--border-color, #e0e0e0);
+  border-top-color: var(--color-primary, #4a90d9);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.loading-text {
+  color: var(--text-secondary, #666);
+  font-style: italic;
+  font-size: 14px;
+}
+
+@keyframes spin {
+  from { transform: rotate(360deg); }
+  to { transform: rotate(0deg); }
 }
 
 .streaming-turns-header {
@@ -113,10 +144,15 @@
   }
 }
 
+/* Virtualized list container - uses absolute positioning for items */
 .streaming-turns-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  /* Position relative is set via inline style along with height */
+  /* Items use absolute positioning with transform for placement */
+}
+
+/* Add spacing between virtualized items via padding on the item wrapper */
+.streaming-turns-list > div {
+  padding-bottom: 6px;
 }
 
 /* Turn highlight effect (when scrolling to a turn from tree view) */

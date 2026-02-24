@@ -209,7 +209,6 @@ export function SystemCard({ turn }: SystemCardProps) {
       <div className="turn-card-header">
         <span className="turn-icon">{config.icon}</span>
         <span className="turn-label">{config.label}</span>
-        {streaming && <span className="streaming-indicator">●</span>}
         <ModeSwitcher mode={displayMode} onModeChange={setDisplayMode} />
       </div>
       {body && (

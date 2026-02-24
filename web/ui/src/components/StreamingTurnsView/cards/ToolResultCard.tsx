@@ -110,7 +110,6 @@ export function ToolResultCard({ turn }: ToolResultCardProps) {
       <div className="turn-card-header">
         <span className="turn-icon">{isError ? '❌' : '✓'}</span>
         <span className="turn-label">Tool Result</span>
-        {streaming && <span className="streaming-indicator">●</span>}
         <ModeSwitcher mode={displayMode} onModeChange={setDisplayMode} />
       </div>
       <div className="turn-card-body">

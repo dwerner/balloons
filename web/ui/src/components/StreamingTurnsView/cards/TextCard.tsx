@@ -122,7 +122,6 @@ export function TextCard({ turn }: TextCardProps) {
       <div className="turn-card-header">
         <span className="turn-icon">{roleConfig.icon}</span>
         <span className="turn-label">{roleConfig.label}</span>
-        {streaming && <span className="streaming-indicator">●</span>}
         {showDoneIndicator && <span className="done-indicator">✓</span>}
         {!streaming && tokens > 0 && (
           <span className="turn-tokens">{tokens} tokens</span>
