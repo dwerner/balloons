@@ -55,6 +55,102 @@
   opacity: 0.7;
 }
 
+/* ============================================================================
+ * Raw View Toggle (for all card types)
+ * ============================================================================ */
+
+.turn-card-mode-switcher {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  padding: 0 4px;
+}
+
+.turn-card-mode-switcher .mode-btn {
+  background: var(--bg-tertiary, #252525);
+  border: 1px solid var(--border-muted, #333);
+  border-radius: 3px;
+  padding: 2px 6px;
+  cursor: pointer;
+  color: var(--text-tertiary, #555);
+  font-size: 10px;
+  line-height: 1;
+  transition: all 0.15s;
+}
+
+.turn-card-mode-switcher .mode-btn:hover {
+  color: var(--text-secondary, #888);
+}
+
+.turn-card-mode-switcher .mode-btn.active {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-primary, #e0e0e0);
+}
+
+.turn-card-mode-switcher .mode-icon {
+  display: inline-block;
+}
+
+.turn-raw-data {
+  margin: 0;
+  padding: 0;
+  background: var(--bg-code, #1a1a1a);
+  border-radius: 4px;
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-primary, #e0e0e0);
+  overflow-x: hidden;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+/* Force word wrap on all syntax highlighter elements inside raw data */
+.turn-raw-data pre,
+.turn-raw-data code,
+.turn-raw-data span {
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  overflow-wrap: break-word !important;
+}
+
+.turn-card.raw-mode {
+  border-color: var(--accent-debug, #ff79c6);
+}
+
+.turn-card.raw-mode .turn-card-header {
+  background: rgba(255, 121, 198, 0.1);
+}
+
+:root[data-theme="light"] .turn-card-mode-switcher .mode-btn,
+[data-theme="light"] .turn-card-mode-switcher .mode-btn {
+  border-color: var(--border-color, #ccc);
+  color: var(--text-tertiary, #888);
+}
+
+:root[data-theme="light"] .turn-card-mode-switcher .mode-btn:hover,
+[data-theme="light"] .turn-card-mode-switcher .mode-btn:hover {
+  background: var(--bg-hover, #e8e8e8);
+  color: var(--text-primary, #333);
+}
+
+:root[data-theme="light"] .turn-raw-data,
+[data-theme="light"] .turn-raw-data {
+  background: var(--bg-code, #f8f8f8);
+  color: var(--text-primary, #333);
+}
+
+:root[data-theme="light"] .turn-card.raw-mode,
+[data-theme="light"] .turn-card.raw-mode {
+  border-color: var(--accent-debug, #d63384);
+}
+
+:root[data-theme="light"] .turn-card.raw-mode .turn-card-header,
+[data-theme="light"] .turn-card.raw-mode .turn-card-header {
+  background: rgba(214, 51, 132, 0.1);
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
@@ -473,9 +569,21 @@
 }
 
 .diff-line {
-  padding: 1px 8px;
+  padding: 2px 8px;
   white-space: pre-wrap;
   word-break: break-word;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* Diff prefix (+/-/space) */
+.diff-prefix {
+  display: inline-block;
+  width: 1.5em;
+  text-align: center;
+  user-select: none;
+  font-weight: bold;
 }
 
 .diff-header {
@@ -484,17 +592,27 @@
 }
 
 .diff-add {
-  background: rgba(81, 207, 102, 0.15);
+  background: rgba(81, 207, 102, 0.2);
+}
+
+.diff-add .diff-prefix {
   color: var(--accent-success, #51cf66);
 }
 
 .diff-remove {
-  background: rgba(255, 107, 107, 0.15);
+  background: rgba(255, 107, 107, 0.2);
+}
+
+.diff-remove .diff-prefix {
   color: var(--error, #ff6b6b);
 }
 
 .diff-context {
-  color: var(--text-primary, #e0e0e0);
+  background: transparent;
+}
+
+.diff-context .diff-prefix {
+  color: var(--text-tertiary, #666);
 }
 
 /* ============================================================================
@@ -529,6 +647,27 @@
 :root[data-theme="light"] .diff-view,
 [data-theme="light"] .diff-view {
   background: var(--bg-code, #f8f8f8);
+}
+
+/* Light mode diff colors */
+:root[data-theme="light"] .diff-add,
+[data-theme="light"] .diff-add {
+  background: rgba(40, 167, 69, 0.15);
+}
+
+:root[data-theme="light"] .diff-add .diff-prefix,
+[data-theme="light"] .diff-add .diff-prefix {
+  color: #28a745;
+}
+
+:root[data-theme="light"] .diff-remove,
+[data-theme="light"] .diff-remove {
+  background: rgba(220, 53, 69, 0.15);
+}
+
+:root[data-theme="light"] .diff-remove .diff-prefix,
+[data-theme="light"] .diff-remove .diff-prefix {
+  color: #dc3545;
 }
 
 :root[data-theme="light"] .collapsible-header,
@@ -1280,16 +1419,23 @@
 
 .tool-raw-data {
   margin: 0;
-  padding: 8px;
+  padding: 0;
   background: var(--bg-code, #1a1a1a);
   border-radius: 4px;
   font-family: var(--font-mono, monospace);
   font-size: 10px;
   line-height: 1.4;
   color: var(--text-primary, #e0e0e0);
-  overflow-x: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
+  overflow-x: hidden;
+}
+
+/* Force word wrap on all syntax highlighter elements inside tool raw data */
+.tool-raw-data pre,
+.tool-raw-data code,
+.tool-raw-data span {
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  overflow-wrap: break-word !important;
 }
 
 :root[data-theme="light"] .tool-card.raw-mode,

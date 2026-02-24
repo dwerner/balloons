@@ -107,12 +107,11 @@ export function EditCard({ turn, result }: EditCardProps) {
   const toolInput = toolUseBlock?.input || {};
   const inputIsStreaming = isStreamingInput(toolInput);
 
-  // Extract Edit-specific inputs
-  const filePath = (toolInput.file_path || '') as string;
-  const oldString = (toolInput.old_string || '') as string;
-  const newString = (toolInput.new_string || '') as string;
-
-  const replaceAll = toolInput.replace_all as boolean | undefined;
+  // Extract Edit-specific inputs (support both snake_case and camelCase)
+  const filePath = (toolInput.file_path || toolInput.filePath || '') as string;
+  const oldString = (toolInput.old_string || toolInput.oldString || '') as string;
+  const newString = (toolInput.new_string || toolInput.newString || '') as string;
+  const replaceAll = (toolInput.replace_all ?? toolInput.replaceAll) as boolean | undefined;
 
   // Get result info
   const resultBlock = result?.contentBlock?.type === 'tool_result'
@@ -159,7 +158,7 @@ export function EditCard({ turn, result }: EditCardProps) {
     >
       {/* Show diff when we have input */}
       {diffLines.length > 0 ? (
-        <DiffHighlightedCode diffLines={diffLines} />
+        <DiffHighlightedCode diffLines={diffLines} filePath={filePath} />
       ) : (oldString || newString) && !inputIsStreaming ? (
         /* Show raw strings with syntax highlighting if we have them but diff is empty */
         <div className="tool-edit-raw">

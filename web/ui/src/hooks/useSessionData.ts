@@ -521,15 +521,22 @@ export function useSessionData(
                 return next;
               }
 
+              // Use event.order if provided, otherwise keep existing order
+              const effectiveOrder = event.order !== undefined && event.order !== null
+                ? event.order
+                : existing.order;
+
               debugLog('[TURN_ORDER] turnFinished updating existing turn', {
                 turnId: turnId.substring(0, 8),
                 existingOrder: existing.order,
                 eventOrder: event.order,
+                effectiveOrder,
               });
 
               const next = new Map(prev);
               next.set(turnId, {
                 ...existing,
+                order: effectiveOrder,
                 contentBlock: finalContentBlock,
                 tokens: event.tokens ?? 0,
                 streaming: false,

@@ -124,6 +124,8 @@ class SessionRunner:
         self._current_tool_use_id: str = ""
         self._tool_index: int = 0  # Track tool order within turn
         self._turn_index: int = 0  # Track current turn in session
+        self._last_tool_index_for_text: int = 0  # Track if text is post-tool (for new turn events)
+        self._pending_text_turn_id: str | None = None  # Turn ID for post-tool text (sent in text_turn_started)
 
         # New per-turn tracking
         self._exchange_id: str = ""  # UUID for current exchange
@@ -527,6 +529,8 @@ class SessionRunner:
         self._text_buffer = ""
         self._current_tool_use_id = ""
         self._tool_index = 0
+        self._last_tool_index_for_text = 0  # Reset post-tool tracking
+        self._pending_text_turn_id = None  # Reset pending turn ID
         self._result = None
         # New per-turn tracking
         self._exchange_id = str(uuid.uuid4())
@@ -664,9 +668,18 @@ class SessionRunner:
             # Get turn index for this text turn
             text_turn_idx = len(self.session.turns)
 
-            # For the first text turn (matching turn_started event), use the pre-generated ID
-            # This ensures web UI can track from turn_started through turn_finished
-            use_initial_id = self._initial_turn_id is not None and len(self._turns) == 0
+            # Determine which turn ID to use:
+            # 1. If there's a pending post-tool turn ID, use that (matches text_turn_started event)
+            # 2. For the first text turn, use the pre-generated initial ID
+            # 3. Otherwise, let _create_turn generate a new one
+            use_pending_id = self._pending_text_turn_id is not None
+            use_initial_id = not use_pending_id and self._initial_turn_id is not None and len(self._turns) == 0
+
+            turn_id_to_use = None
+            if use_pending_id:
+                turn_id_to_use = self._pending_text_turn_id
+            elif use_initial_id:
+                turn_id_to_use = self._initial_turn_id
 
             # Create turn with timing info and save to session
             turn = self._create_turn(
@@ -674,26 +687,32 @@ class SessionRunner:
                 flushed_text,
                 [text_block],
                 started_at=self._text_turn_started_at,
-                turn_id=self._initial_turn_id if use_initial_id else None,
+                turn_id=turn_id_to_use,
             )
             self._turns.append(turn)
             self._save_turn_to_session(turn, save_now=save_now)
             self._text_buffer = ""
             self._text_turn_started_at = None  # Reset for next text turn
+
+            # Clear pending turn ID after use (post-tool text was flushed)
+            if use_pending_id:
+                self._pending_text_turn_id = None
             # Clear initial turn ID after first use so subsequent turns get new IDs
             if use_initial_id:
                 self._initial_turn_id = None
 
             if emit_event:
-                # Emit turn_started for this text turn so UI creates a new node
-                events.append(self._make_event("text_turn_started", {
-                    "turn_index": text_turn_idx,
-                    "turn_id": turn.id,
-                    "exchange_id": self._exchange_id,
-                    "role": "assistant",
-                    "turn_type": "text",
-                    "text_preview": flushed_text[:50] + "..." if len(flushed_text) > 50 else flushed_text,
-                }))
+                # Only emit text_turn_started if we didn't already send it in TextDelta handler
+                # (use_pending_id means we already sent text_turn_started for post-tool text)
+                if not use_pending_id:
+                    events.append(self._make_event("text_turn_started", {
+                        "turn_index": text_turn_idx,
+                        "turn_id": turn.id,
+                        "exchange_id": self._exchange_id,
+                        "role": "assistant",
+                        "turn_type": "text",
+                        "text_preview": flushed_text[:50] + "..." if len(flushed_text) > 50 else flushed_text,
+                    }))
                 events.append(self._make_event("text_flush", {
                     "text": flushed_text,
                     "turn_index": text_turn_idx,
@@ -724,11 +743,55 @@ class SessionRunner:
                 })]
 
             elif isinstance(event, TextDelta):
+                events = []
+
+                # Check if this is the start of a NEW text segment after tool execution
+                # If tool_index has increased since our last text, we need to signal a new turn
+                is_post_tool_text = (
+                    self._tool_index > self._last_tool_index_for_text
+                    and self._text_buffer == ""  # Starting fresh text buffer
+                )
+
+                if is_post_tool_text:
+                    # Generate a new turn ID for this post-tool text segment
+                    new_turn_id = str(uuid.uuid4())
+                    text_turn_idx = len(self.session.turns)
+
+                    debug_log.info(
+                        f"Post-tool text starting - new turn {new_turn_id[:8]}",
+                        category="stream",
+                        session_id=self.session.id,
+                        details={
+                            "tool_index": self._tool_index,
+                            "last_tool_index_for_text": self._last_tool_index_for_text,
+                            "turn_idx": text_turn_idx,
+                        },
+                    )
+
+                    # Update tracking so subsequent text deltas know they're not starting a new turn
+                    self._last_tool_index_for_text = self._tool_index
+
+                    # Store the turn ID so _flush_text_as_turn can use it later
+                    self._pending_text_turn_id = new_turn_id
+
+                    # Emit text_turn_started so frontend creates new turn with correct ID
+                    events.append(self._make_event("text_turn_started", {
+                        "turn_index": text_turn_idx,
+                        "turn_id": new_turn_id,
+                        "exchange_id": self._exchange_id,
+                        "role": "assistant",
+                        "turn_type": "text",
+                        "text_preview": "",  # Preview will be filled in when we have text
+                        "post_tool": True,  # Flag to help debugging
+                    }))
+
                 # Track when text streaming started (first text delta)
                 if not self._text_turn_started_at and self._text_buffer == "":
                     self._text_turn_started_at = datetime.now().isoformat()
+
                 self._text_buffer += event.text
-                return [self._make_event("text", event.text)]
+                events.append(self._make_event("text", event.text))
+                return events
 
             elif isinstance(event, ToolUseStartEvent):
                 # Tool use started - input is still streaming

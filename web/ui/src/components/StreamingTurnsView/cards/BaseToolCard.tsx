@@ -10,6 +10,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
+import { SyntaxHighlightedCode } from './SyntaxHighlighter';
 import './cards.css';
 
 // Tool execution phase
@@ -68,14 +69,14 @@ function ToolStatusIcon({ phase }: { phase: ToolPhase }) {
 }
 
 /**
- * Raw JSON display for debugging
+ * Raw JSON display for debugging - with syntax highlighting
  */
 function RawDataDisplay({ data }: { data: unknown }) {
   const formatted = JSON.stringify(data, null, 2);
   return (
-    <pre className="tool-raw-data">
-      <code>{formatted}</code>
-    </pre>
+    <div className="tool-raw-data">
+      <SyntaxHighlightedCode code={formatted} language="json" wrapLongLines />
+    </div>
   );
 }
 

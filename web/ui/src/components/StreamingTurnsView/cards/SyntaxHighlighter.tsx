@@ -210,6 +210,8 @@ interface SyntaxHighlightedCodeProps {
   language?: string;
   filePath?: string;
   showLineNumbers?: boolean;
+  /** Wrap long lines instead of horizontal scroll (useful for JSON) */
+  wrapLongLines?: boolean;
 }
 
 export function SyntaxHighlightedCode({
@@ -217,6 +219,7 @@ export function SyntaxHighlightedCode({
   language,
   filePath,
   showLineNumbers = false,
+  wrapLongLines = false,
 }: SyntaxHighlightedCodeProps) {
   // Get current theme
   const { resolvedTheme } = useTheme();
@@ -242,12 +245,25 @@ export function SyntaxHighlightedCode({
       PreTag="div"
       showLineNumbers={showLineNumbers}
       wrapLines={true}
+      wrapLongLines={wrapLongLines}
       lineNumberStyle={{
         minWidth: '2.5em',
         paddingRight: '1em',
         color: isLightTheme ? 'var(--text-tertiary, #888)' : 'var(--text-tertiary, #5c7a5c)',
         userSelect: 'none',
       }}
+      customStyle={wrapLongLines ? {
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        overflowWrap: 'break-word',
+      } : undefined}
+      codeTagProps={wrapLongLines ? {
+        style: {
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+          overflowWrap: 'break-word',
+        }
+      } : undefined}
     >
       {code}
     </PrismHighlighter>
@@ -256,28 +272,112 @@ export function SyntaxHighlightedCode({
 
 interface DiffHighlightedCodeProps {
   diffLines: string[];
+  /** Language for syntax highlighting (inferred from file extension in header) */
+  language?: string;
+  /** File path for language detection */
+  filePath?: string;
 }
 
-export function DiffHighlightedCode({ diffLines }: DiffHighlightedCodeProps) {
+/**
+ * Single diff line with syntax highlighting
+ */
+function DiffLine({
+  type,
+  prefix,
+  content,
+  language,
+  isLightTheme,
+}: {
+  type: 'header' | 'add' | 'remove' | 'context';
+  prefix: string;
+  content: string;
+  language: string;
+  isLightTheme: boolean;
+}) {
+  const theme = isLightTheme ? customLightDiffTheme : customDarkDiffTheme;
+
+  let className = 'diff-line diff-context';
+  if (type === 'header') className = 'diff-line diff-header';
+  else if (type === 'add') className = 'diff-line diff-add';
+  else if (type === 'remove') className = 'diff-line diff-remove';
+
+  // Header lines don't get syntax highlighting
+  if (type === 'header') {
+    return (
+      <div className={className}>
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <div className={className}>
+      <span className="diff-prefix">{prefix}</span>
+      <PrismHighlighter
+        style={theme}
+        language={language}
+        PreTag="span"
+        customStyle={{
+          display: 'inline',
+          margin: 0,
+          padding: 0,
+          background: 'transparent',
+        }}
+      >
+        {content || ' '}
+      </PrismHighlighter>
+    </div>
+  );
+}
+
+export function DiffHighlightedCode({ diffLines, language, filePath }: DiffHighlightedCodeProps) {
+  const { resolvedTheme } = useTheme();
+  const isLightTheme = resolvedTheme === 'light';
+
+  // Determine language from props or try to extract from diff header
+  const lang = useMemo(() => {
+    if (language) return language;
+    if (filePath) return getLanguageFromPath(filePath);
+    // Try to extract from diff header (--- a/file.tsx or +++ b/file.tsx)
+    for (const line of diffLines) {
+      if (line.startsWith('---') || line.startsWith('+++')) {
+        const match = line.match(/[ab]\/(.+)$/);
+        if (match && match[1]) {
+          return getLanguageFromPath(match[1]);
+        }
+      }
+    }
+    return 'text';
+  }, [language, filePath, diffLines]);
+
   if (diffLines.length === 0) return null;
+
+  // Parse each line into type, prefix, and content
+  const processedLines = diffLines.map(line => {
+    if (line.startsWith('+++') || line.startsWith('---')) {
+      return { type: 'header' as const, prefix: '', content: line };
+    } else if (line.startsWith('+')) {
+      return { type: 'add' as const, prefix: '+', content: line.slice(1) };
+    } else if (line.startsWith('-')) {
+      return { type: 'remove' as const, prefix: '-', content: line.slice(1) };
+    } else if (line.startsWith(' ')) {
+      return { type: 'context' as const, prefix: ' ', content: line.slice(1) };
+    }
+    return { type: 'context' as const, prefix: ' ', content: line };
+  });
 
   return (
     <div className="tool-diff-view">
-      {diffLines.map((line, idx) => {
-        let className = 'diff-line diff-context';
-        if (line.startsWith('+++') || line.startsWith('---')) {
-          className = 'diff-line diff-header';
-        } else if (line.startsWith('+')) {
-          className = 'diff-line diff-add';
-        } else if (line.startsWith('-')) {
-          className = 'diff-line diff-remove';
-        }
-        return (
-          <div key={idx} className={className}>
-            {line}
-          </div>
-        );
-      })}
+      {processedLines.map((line, idx) => (
+        <DiffLine
+          key={idx}
+          type={line.type}
+          prefix={line.prefix}
+          content={line.content}
+          language={lang}
+          isLightTheme={isLightTheme}
+        />
+      ))}
     </div>
   );
 }
