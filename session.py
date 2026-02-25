@@ -55,7 +55,7 @@ class Session:
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     total_cost: float = 0.0
-    context_window: int = 200000
+    context_window: int = 150000
     # Session forking fields
     parent_id: Optional[str] = None
     children: list[dict] = field(default_factory=list)  # [{session_id, status, return_condition, prompt}]
@@ -1508,7 +1508,7 @@ class Session:
             total_input_tokens=data.get("total_input_tokens", 0),
             total_output_tokens=data.get("total_output_tokens", 0),
             total_cost=data.get("total_cost", 0.0),
-            context_window=data.get("context_window", 200000),
+            context_window=data.get("context_window", 150000),
             parent_id=data.get("parent_id"),
             children=data.get("children", []),
             returned=data.get("returned", False),

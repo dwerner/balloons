@@ -2,7 +2,7 @@
 //!
 //! Generated from Python domain entities marked with @rust_schema.
 //! Source: models.py and other domain modules
-//! Generated: 2026-02-24T16:32:25.045451
+//! Generated: 2026-02-25T13:44:47.579711
 //!
 //! To regenerate:
 //!     python -m codegen.generate_rust
@@ -77,6 +77,10 @@ pub struct SessionMetadata {
     pub created_at: i64,
     pub updated_at: i64,
     pub turn_count: i64,
+    pub cached_context_tokens: i64,
+    pub context_window: i64,
+    #[serde(default)]
+    pub working_directories: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

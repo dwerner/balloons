@@ -428,7 +428,7 @@ class ResultEvent:
     input_tokens: int
     output_tokens: int
     total_cost_usd: float
-    context_window: int = 200000
+    context_window: int = 150000
     raw: dict = field(default_factory=dict)
 
 

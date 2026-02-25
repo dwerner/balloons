@@ -143,7 +143,7 @@ export const SessionStatusBar = memo(function SessionStatusBar({
 }: SessionStatusBarProps) {
   const { expandDetail } = useLayout();
   const contextTokens = session.cachedContextTokens ?? 0;
-  const contextWindow = session.contextWindow ?? 200000;
+  const contextWindow = session.contextWindow ?? 150000;
 
   const contextUsage = contextWindow > 0
     ? Math.min(100, (contextTokens / contextWindow) * 100)

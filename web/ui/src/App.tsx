@@ -1525,7 +1525,7 @@ function AppContent() {
               toolCount: (extraData.toolCount as number) ?? 0,
               inputTokens: (extraData.inputTokens as number) ?? 0,
               outputTokens: (extraData.outputTokens as number) ?? 0,
-              contextWindow: 200000, // Default context window
+              contextWindow: 150000, // Default context window
               model: '',
               durationSeconds: 0,
               isActive: true,

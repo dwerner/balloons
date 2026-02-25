@@ -67,39 +67,6 @@
   to { transform: rotate(0deg); }
 }
 
-.streaming-turns-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  margin-bottom: 16px;
-  font-size: 12px;
-  color: var(--text-secondary, #666);
-  background: var(--bg-secondary, #f5f5f5);
-  border-radius: 6px;
-}
-
-.session-info {
-  flex: 1;
-}
-
-.subscribed-badge {
-  color: var(--color-success, #28a745);
-  font-weight: 500;
-}
-
-.streaming-badge {
-  color: var(--color-primary);
-  font-weight: 500;
-  animation: pulse 1s infinite;
-}
-
-.stream-error-badge {
-  color: var(--color-error, #dc3545);
-  font-weight: 500;
-  cursor: help;
-}
-
 /* Empty session placeholder */
 .empty-session-placeholder {
   display: flex;
@@ -358,12 +325,6 @@
     padding: 4px;
   }
 
-  .streaming-turns-header {
-    padding: 4px 6px;
-    margin-bottom: 6px;
-    font-size: 11px;
-  }
-
   .streaming-turns-list {
     gap: 6px;
   }
@@ -378,11 +339,6 @@
 :root[data-theme="dark"] .streaming-turns-view,
 [data-theme="dark"] .streaming-turns-view {
   background: var(--bg-primary);
-}
-
-:root[data-theme="dark"] .streaming-turns-header,
-[data-theme="dark"] .streaming-turns-header {
-  background: var(--bg-secondary);
 }
 
 :root[data-theme="dark"] .streaming-turn-card,
@@ -483,11 +439,6 @@
 :root[data-theme="light"] .streaming-turns-view-container,
 [data-theme="light"] .streaming-turns-view-container {
   background: var(--bg-secondary, #d2e0d6);
-}
-
-:root[data-theme="light"] .streaming-turns-header,
-[data-theme="light"] .streaming-turns-header {
-  background: var(--bg-tertiary, #c5d8cb);
 }
 
 :root[data-theme="light"] .parallel-group,

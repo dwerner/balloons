@@ -360,7 +360,7 @@ class SessionInfo:
     fork_status: str
     parent_id: str | None = None
     cached_context_tokens: int = 0
-    context_window: int = 200000
+    context_window: int = 150000
     binding_indicator: str = ""
     backend_name: str = ""
     is_pinned: bool = False
@@ -1190,7 +1190,7 @@ class SessionDataService:
             fork_status=session.fork_status,
             parent_id=session.parent_id,
             cached_context_tokens=session.ensure_context_tokens() if hasattr(session, 'ensure_context_tokens') else getattr(session, "cached_context_tokens", 0),
-            context_window=getattr(session, "context_window", 200000),
+            context_window=getattr(session, "context_window", 150000),
             binding_indicator=getattr(session, "binding_indicator", ""),
             backend_name=getattr(session, "backend_name", ""),
             is_pinned=is_pinned,
@@ -1241,7 +1241,7 @@ class SessionDataService:
             fork_status=data.get("fork_status", "active"),
             parent_id=data.get("parent_id"),
             cached_context_tokens=data.get("cached_context_tokens", 0),
-            context_window=data.get("context_window", 200000),
+            context_window=data.get("context_window", 150000),
             binding_indicator=data.get("binding_indicator", ""),
             backend_name=data.get("backend_name", ""),
             is_pinned=session_id in pinned_ids,
@@ -1331,7 +1331,7 @@ class SessionDataService:
             "fork_status": session.fork_status,
             "parent_id": session.parent_id,
             "cached_context_tokens": getattr(session, "cached_context_tokens", 0),
-            "context_window": getattr(session, "context_window", 200000),
+            "context_window": getattr(session, "context_window", 150000),
             "binding_indicator": getattr(session, "binding_indicator", ""),
             "backend_name": getattr(session, "backend_name", ""),
         }

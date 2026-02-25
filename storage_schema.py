@@ -109,6 +109,9 @@ class SessionMetadata:
     created_at: int  # Unix timestamp
     updated_at: int  # Unix timestamp
     turn_count: int
+    cached_context_tokens: int = 0  # Context tokens for display in session tree
+    context_window: int = 150000  # Model's context window for percentage calculation
+    working_directories: list[str] = field(default_factory=list)  # Working directories for the session
 
 
 @rust_schema

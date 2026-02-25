@@ -66,7 +66,7 @@ const OVERSCAN_COUNT = 15;
 const AT_BOTTOM_THRESHOLD = 150;
 
 export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrollStateChange, onStreamingProgressChange }: StreamingTurnsViewProps) {
-  const { turns, isLoading, isSubscribed, isStreaming, streamError, error, streamingProgress } = useSessionData(client, sessionId);
+  const { turns, isLoading, isStreaming, streamError, error, streamingProgress } = useSessionData(client, sessionId);
 
   // Ref for the scrollable container
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -426,15 +426,6 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         ref={scrollContainerRef}
       >
         <div className="streaming-turns-view">
-          <div className="streaming-turns-header">
-            <span className="session-info">
-              Session: {sessionId?.substring(0, 8)}... ({turns.length} turns)
-            </span>
-            {isSubscribed && <span className="subscribed-badge">● subscribed</span>}
-            {isStreaming && <span className="streaming-badge">● streaming</span>}
-            {streamError && <span className="stream-error-badge" title={streamError}>⚠ error</span>}
-          </div>
-
           {/* Virtualized list */}
           <div
             className="streaming-turns-list"

@@ -676,7 +676,7 @@ mod tests {
             total_input_tokens: 100,
             total_output_tokens: 50,
             total_cost: 0.01,
-            context_window: 200000,
+            context_window: 150000,
             parent_id: None,
             children: vec![],
             returned: false,

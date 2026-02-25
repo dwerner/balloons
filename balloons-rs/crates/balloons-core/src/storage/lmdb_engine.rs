@@ -674,6 +674,8 @@ impl StorageEngine for LmdbEngine {
                 updated_at: parse_iso_to_unix(&data.last_modified),
                 turn_count,
                 working_directories: data.working_directories.clone(),
+                cached_context_tokens: data.cached_context_tokens,
+                context_window: data.context_window,
             });
         }
 
@@ -1776,7 +1778,7 @@ mod tests {
             total_input_tokens: 0,
             total_output_tokens: 0,
             total_cost: 0.0,
-            context_window: 200000,
+            context_window: 150000,
             parent_id: None,
             children: vec![],
             returned: false,
