@@ -77,7 +77,7 @@ function RawDataDisplay({ data }: { data: unknown }) {
   );
 }
 
-export function ToolResultCard({ turn }: ToolResultCardProps) {
+export const ToolResultCard = React.memo(function ToolResultCard({ turn }: ToolResultCardProps) {
   const { contentBlock, streaming, timestamp } = turn;
 
   // Display mode state - formatted (default) or raw JSON
@@ -119,4 +119,4 @@ export function ToolResultCard({ turn }: ToolResultCardProps) {
       </div>
     </div>
   );
-}
+});

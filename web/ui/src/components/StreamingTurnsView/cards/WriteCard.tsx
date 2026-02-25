@@ -24,7 +24,7 @@ function isStreamingInput(input: Record<string, unknown>): boolean {
   return typeof input._streaming === 'string';
 }
 
-export function WriteCard({ turn, result }: WriteCardProps) {
+export const WriteCard = React.memo(function WriteCard({ turn, result }: WriteCardProps) {
   const { contentBlock, streaming, tokens } = turn;
 
   // Extract tool info
@@ -119,6 +119,6 @@ export function WriteCard({ turn, result }: WriteCardProps) {
       )}
     </BaseToolCard>
   );
-}
+});
 
 export default WriteCard;

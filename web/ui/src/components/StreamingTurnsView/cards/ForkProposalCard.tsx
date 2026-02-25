@@ -73,7 +73,7 @@ function extractProposalData(input: Record<string, unknown>) {
 /**
  * ForkProposalCard - Renders propose_fork tool_use with interactive UI
  */
-export function ForkProposalCard({
+export const ForkProposalCard = React.memo(function ForkProposalCard({
   turn,
   result,
   sessionId,
@@ -555,6 +555,6 @@ export function ForkProposalCard({
       `}</style>
     </BaseToolCard>
   );
-}
+});
 
 export default ForkProposalCard;

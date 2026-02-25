@@ -357,7 +357,7 @@ function buildHeaderContent(
   }
 }
 
-export function ToolUseCard({ turn, result, displayMode = 'formatted' }: ToolUseCardProps) {
+export const ToolUseCard = React.memo(function ToolUseCard({ turn, result, displayMode = 'formatted' }: ToolUseCardProps) {
   const { contentBlock, streaming, tokens } = turn;
 
   // Extract tool info from contentBlock
@@ -437,4 +437,4 @@ export function ToolUseCard({ turn, result, displayMode = 'formatted' }: ToolUse
       )}
     </BaseToolCard>
   );
-}
+});

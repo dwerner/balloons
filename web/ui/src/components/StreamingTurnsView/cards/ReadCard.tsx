@@ -27,7 +27,7 @@ function isStreamingInput(input: Record<string, unknown>): boolean {
   return typeof input._streaming === 'string';
 }
 
-export function ReadCard({ turn, result }: ReadCardProps) {
+export const ReadCard = React.memo(function ReadCard({ turn, result }: ReadCardProps) {
   const { contentBlock, streaming, tokens } = turn;
 
   // Extract tool info
@@ -139,6 +139,6 @@ export function ReadCard({ turn, result }: ReadCardProps) {
       )}
     </BaseToolCard>
   );
-}
+});
 
 export default ReadCard;

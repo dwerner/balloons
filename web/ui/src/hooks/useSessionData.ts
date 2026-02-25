@@ -260,6 +260,12 @@ export function useSessionData(
   const unsubscribersRef = useRef<Unsubscribe[]>([]);
   const currentSessionRef = useRef<string | null>(null);
 
+  // Batched delta updates - accumulate deltas and flush periodically
+  // This reduces re-renders during high-frequency streaming
+  const pendingDeltasRef = useRef<Map<string, string>>(new Map());
+  const flushIntervalRef = useRef<number | null>(null);
+  const DELTA_FLUSH_INTERVAL_MS = 50; // Flush every 50ms
+
   // Derive sorted turns array from map (sorted by insertion order)
   const turns = useMemo(() => {
     return Array.from(turnsById.values()).sort((a, b) => a.order - b.order);
@@ -273,8 +279,61 @@ export function useSessionData(
     [turnsById]
   );
 
+  // Flush accumulated deltas to state
+  const flushPendingDeltas = useCallback(() => {
+    if (pendingDeltasRef.current.size === 0) return;
+
+    const deltas = new Map(pendingDeltasRef.current);
+    pendingDeltasRef.current.clear();
+
+    debugLog('[useSessionData] flushing batched deltas', { count: deltas.size });
+
+    setTurnsById((prev) => {
+      let hasChanges = false;
+      const next = new Map(prev);
+
+      for (const [turnId, accumulatedDelta] of deltas) {
+        const existing = next.get(turnId);
+        if (!existing) {
+          // Turn not found - create it with text block
+          debugLog(`[useSessionData] batched delta for unknown turn ${turnId}, creating`);
+          const maxOrder = Math.max(-1, ...Array.from(next.values()).map((t) => t.order));
+          next.set(turnId, {
+            turnId,
+            order: maxOrder + 1,
+            role: 'assistant',
+            contentBlock: { type: 'text', text: accumulatedDelta } as TextBlock,
+            streaming: true,
+            viewed: false,
+            tokens: 0,
+            contextMode: 'copy',
+            timestamp: new Date().toISOString(),
+          });
+          hasChanges = true;
+        } else {
+          // Append accumulated delta to existing turn
+          next.set(turnId, {
+            ...existing,
+            contentBlock: appendTextDelta(existing.contentBlock, accumulatedDelta),
+            streaming: true,
+          });
+          hasChanges = true;
+        }
+      }
+
+      return hasChanges ? next : prev;
+    });
+  }, []);
+
   // Clear all state
   const clear = useCallback(() => {
+    // Clear pending deltas and stop flush interval
+    pendingDeltasRef.current.clear();
+    if (flushIntervalRef.current !== null) {
+      window.clearInterval(flushIntervalRef.current);
+      flushIntervalRef.current = null;
+    }
+
     setTurnsById(new Map());
     setIsLoading(false);
     setIsSubscribed(false);
@@ -419,11 +478,11 @@ export function useSessionData(
           })
         );
 
-        // Turn delta - update content (for text blocks)
-        debugLog('Setting up sessionDataTurnDelta handler');
+        // Turn delta - accumulate deltas for batched updates (reduces re-renders)
+        debugLog('Setting up sessionDataTurnDelta handler (batched)');
         handlers.push(
           client.sessionData.sessionDataTurnDelta((event: SessionTurnDeltaEvent) => {
-            debugLog('sessionDataTurnDelta received', event);
+            debugLog('sessionDataTurnDelta received (batching)', event);
 
             if (!event || typeof event !== 'object') {
               return;
@@ -441,37 +500,9 @@ export function useSessionData(
               return;
             }
 
-            setTurnsById((prev) => {
-              const existing = prev.get(turnId);
-              if (!existing) {
-                // Turn not found - create it with text block
-                debugLog(`[useSessionData] turnDelta for unknown turn ${turnId}, creating`);
-                const maxOrder = Math.max(-1, ...Array.from(prev.values()).map((t) => t.order));
-
-                const next = new Map(prev);
-                next.set(turnId, {
-                  turnId,
-                  order: maxOrder + 1,
-                  role: 'assistant',
-                  contentBlock: { type: 'text', text: delta } as TextBlock,
-                  streaming: true,
-                  viewed: false,
-                  tokens: 0,
-                  contextMode: 'copy',
-                  timestamp: new Date().toISOString(),
-                });
-                return next;
-              }
-
-              // Append delta to existing turn's content block
-              const next = new Map(prev);
-              next.set(turnId, {
-                ...existing,
-                contentBlock: appendTextDelta(existing.contentBlock, delta),
-                streaming: true,
-              });
-              return next;
-            });
+            // Accumulate delta instead of immediately updating state
+            const existing = pendingDeltasRef.current.get(turnId) ?? '';
+            pendingDeltasRef.current.set(turnId, existing + delta);
           })
         );
 
@@ -922,9 +953,38 @@ export function useSessionData(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client, autoSubscribe]);
 
+  // Start/stop delta flush interval based on streaming state
+  useEffect(() => {
+    if (isStreaming) {
+      // Start the flush interval when streaming begins
+      if (flushIntervalRef.current === null) {
+        debugLog('[useSessionData] Starting delta flush interval');
+        flushIntervalRef.current = window.setInterval(
+          flushPendingDeltas,
+          DELTA_FLUSH_INTERVAL_MS
+        );
+      }
+    } else {
+      // Flush any remaining deltas and stop interval when streaming ends
+      if (flushIntervalRef.current !== null) {
+        debugLog('[useSessionData] Stopping delta flush interval');
+        flushPendingDeltas(); // Final flush
+        window.clearInterval(flushIntervalRef.current);
+        flushIntervalRef.current = null;
+      }
+    }
+  }, [isStreaming, flushPendingDeltas]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      // Cleanup flush interval
+      if (flushIntervalRef.current !== null) {
+        window.clearInterval(flushIntervalRef.current);
+        flushIntervalRef.current = null;
+      }
+      pendingDeltasRef.current.clear();
+
       unsubscribersRef.current.forEach((unsub) => unsub());
       unsubscribersRef.current = [];
     };

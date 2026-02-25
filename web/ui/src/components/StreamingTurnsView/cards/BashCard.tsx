@@ -25,7 +25,7 @@ function isStreamingInput(input: Record<string, unknown>): boolean {
   return typeof input._streaming === 'string';
 }
 
-export function BashCard({ turn, result }: BashCardProps) {
+export const BashCard = React.memo(function BashCard({ turn, result }: BashCardProps) {
   const { contentBlock, streaming, tokens } = turn;
 
   // Extract tool info
@@ -132,6 +132,6 @@ export function BashCard({ turn, result }: BashCardProps) {
       )}
     </BaseToolCard>
   );
-}
+});
 
 export default BashCard;

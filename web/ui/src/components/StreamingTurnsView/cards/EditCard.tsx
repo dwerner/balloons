@@ -96,7 +96,7 @@ function generateUnifiedDiff(oldStr: string, newStr: string, filePath: string): 
   return result;
 }
 
-export function EditCard({ turn, result }: EditCardProps) {
+export const EditCard = React.memo(function EditCard({ turn, result }: EditCardProps) {
   const { contentBlock, streaming, tokens } = turn;
 
   // Extract tool info
@@ -217,6 +217,6 @@ export function EditCard({ turn, result }: EditCardProps) {
       )}
     </BaseToolCard>
   );
-}
+});
 
 export default EditCard;

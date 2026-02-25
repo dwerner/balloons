@@ -149,7 +149,7 @@ function ModeSwitcher({
  * - 'collapsed': Always starts collapsed
  * - 'raw': Shows raw JSON data for debugging
  */
-export function BaseToolCard({
+export const BaseToolCard = React.memo(function BaseToolCard({
   toolName,
   headerContent,
   phase,
@@ -275,7 +275,7 @@ export function BaseToolCard({
       )}
     </div>
   );
-}
+});
 
 /**
  * CollapsibleContent - Optional collapsible section for tool output

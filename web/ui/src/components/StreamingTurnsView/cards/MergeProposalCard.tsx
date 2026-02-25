@@ -46,7 +46,7 @@ function extractProposalData(input: Record<string, unknown>) {
 /**
  * MergeProposalCard - Renders propose_merge tool_use with interactive UI
  */
-export function MergeProposalCard({
+export const MergeProposalCard = React.memo(function MergeProposalCard({
   turn,
   result,
   sessionId,
@@ -440,6 +440,6 @@ export function MergeProposalCard({
       `}</style>
     </BaseToolCard>
   );
-}
+});
 
 export default MergeProposalCard;

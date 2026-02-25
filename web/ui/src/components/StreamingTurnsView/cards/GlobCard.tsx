@@ -24,7 +24,7 @@ function isStreamingInput(input: Record<string, unknown>): boolean {
   return typeof input._streaming === 'string';
 }
 
-export function GlobCard({ turn, result }: GlobCardProps) {
+export const GlobCard = React.memo(function GlobCard({ turn, result }: GlobCardProps) {
   const { contentBlock, streaming, tokens } = turn;
 
   // Extract tool info
@@ -115,6 +115,6 @@ export function GlobCard({ turn, result }: GlobCardProps) {
       )}
     </BaseToolCard>
   );
-}
+});
 
 export default GlobCard;

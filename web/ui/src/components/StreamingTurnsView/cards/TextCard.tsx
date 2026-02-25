@@ -81,7 +81,7 @@ function RawDataDisplay({ data }: { data: unknown }) {
   );
 }
 
-export function TextCard({ turn }: TextCardProps) {
+export const TextCard = React.memo(function TextCard({ turn }: TextCardProps) {
   const { role, contentBlock, streaming, tokens, order, timestamp } = turn;
   const isUser = role === 'user';
   const isAssistant = role === 'assistant';
@@ -162,4 +162,4 @@ export function TextCard({ turn }: TextCardProps) {
       </div>
     </div>
   );
-}
+});

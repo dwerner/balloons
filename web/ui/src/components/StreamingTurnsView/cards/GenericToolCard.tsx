@@ -39,7 +39,7 @@ function formatJson(json: string | Record<string, unknown>): string {
   }
 }
 
-export function GenericToolCard({ turn, result }: GenericToolCardProps) {
+export const GenericToolCard = React.memo(function GenericToolCard({ turn, result }: GenericToolCardProps) {
   const { contentBlock, streaming, tokens } = turn;
   const [inputExpanded, setInputExpanded] = useState(false);
 
@@ -130,6 +130,6 @@ export function GenericToolCard({ turn, result }: GenericToolCardProps) {
       )}
     </BaseToolCard>
   );
-}
+});
 
 export default GenericToolCard;

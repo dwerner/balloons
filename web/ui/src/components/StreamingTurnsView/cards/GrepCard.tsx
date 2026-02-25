@@ -26,7 +26,7 @@ function isStreamingInput(input: Record<string, unknown>): boolean {
   return typeof input._streaming === 'string';
 }
 
-export function GrepCard({ turn, result }: GrepCardProps) {
+export const GrepCard = React.memo(function GrepCard({ turn, result }: GrepCardProps) {
   const { contentBlock, streaming, tokens } = turn;
 
   // Extract tool info
@@ -115,6 +115,6 @@ export function GrepCard({ turn, result }: GrepCardProps) {
       )}
     </BaseToolCard>
   );
-}
+});
 
 export default GrepCard;

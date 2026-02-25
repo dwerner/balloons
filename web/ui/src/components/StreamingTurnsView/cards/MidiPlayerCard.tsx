@@ -33,7 +33,7 @@ function isStreamingInput(input: Record<string, unknown>): boolean {
   return typeof input._streaming === 'string';
 }
 
-export function MidiPlayerCard({ turn, result }: MidiPlayerCardProps) {
+export const MidiPlayerCard = React.memo(function MidiPlayerCard({ turn, result }: MidiPlayerCardProps) {
   const { contentBlock, streaming, tokens } = turn;
 
   // Playback state
@@ -380,6 +380,6 @@ export function MidiPlayerCard({ turn, result }: MidiPlayerCardProps) {
       `}</style>
     </BaseToolCard>
   );
-}
+});
 
 export default MidiPlayerCard;

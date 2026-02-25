@@ -204,7 +204,7 @@ function getDisplayContent(block: SessionDataTurn['contentBlock']): string {
   }
 }
 
-export function SystemCard({ turn }: SystemCardProps) {
+export const SystemCard = React.memo(function SystemCard({ turn }: SystemCardProps) {
   const { contentBlock, streaming, order, timestamp } = turn;
   const blockType = contentBlock?.type || 'unknown';
 
@@ -250,4 +250,4 @@ export function SystemCard({ turn }: SystemCardProps) {
       )}
     </div>
   );
-}
+});
