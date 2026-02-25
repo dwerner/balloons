@@ -154,6 +154,30 @@
   accent-color: var(--color-accent, #22d3ee);
 }
 
+/* Generating indicator */
+.commit-modal__generating {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-accent, #22d3ee);
+}
+
+.commit-modal__spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(34, 211, 238, 0.3);
+  border-top-color: var(--color-accent, #22d3ee);
+  border-radius: 50%;
+  animation: commit-modal-spin 0.8s linear infinite;
+}
+
+@keyframes commit-modal-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* Commit message textarea */
 .commit-modal__message {
   width: 100%;

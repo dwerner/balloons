@@ -32,8 +32,8 @@ export interface CommitModalProps {
   /** Callback when commit is successful */
   onCommitSuccess?: (commitHash: string) => void;
 
-  /** Optional: callback to generate AI commit message */
-  onRequestAIMessage?: (stagedFiles: string[]) => Promise<string>;
+  /** Optional: callback to generate AI commit message using the staged diff */
+  onRequestAIMessage?: (gitRoot: string, stagedDiff: string) => Promise<string>;
 }
 
 // Status icons and colors
@@ -97,15 +97,36 @@ export const CommitModal = memo(function CommitModal({
       setError(null);
 
       try {
-        const selectedPaths = Array.from(selectedFiles);
-
         // Try AI message first if available
         if (onRequestAIMessage) {
-          const aiMessage = await onRequestAIMessage(selectedPaths);
-          if (aiMessage) {
-            setMessage(aiMessage);
-            setIsGenerating(false);
-            return;
+          // Get the staged diff for the selected files
+          // First, stage the selected files
+          const selectedPaths = Array.from(selectedFiles);
+          await client.stageFiles(gitRoot, selectedPaths);
+
+          // Get the staged diff
+          const stagedDiffResult = await client.getStagedDiff(gitRoot);
+
+          // Build a simple diff string from the staged files
+          let diffText = '';
+          for (const file of stagedDiffResult.files) {
+            diffText += `\n--- a/${file.path}\n+++ b/${file.path}\n`;
+            for (const hunk of file.hunks) {
+              diffText += hunk.header + '\n';
+              for (const change of hunk.changes) {
+                const prefix = change.type === 'insert' ? '+' : change.type === 'delete' ? '-' : ' ';
+                diffText += prefix + change.content + '\n';
+              }
+            }
+          }
+
+          if (diffText) {
+            const aiMessage = await onRequestAIMessage(gitRoot, diffText);
+            if (aiMessage) {
+              setMessage(aiMessage);
+              setIsGenerating(false);
+              return;
+            }
           }
         }
 
@@ -299,14 +320,21 @@ export const CommitModal = memo(function CommitModal({
         <div className="commit-modal__section">
           <div className="commit-modal__section-header">
             <span className="commit-modal__section-title">Commit message</span>
-            <label className="commit-modal__auto-generate">
-              <input
-                type="checkbox"
-                checked={autoGenerate}
-                onChange={(e) => setAutoGenerate(e.target.checked)}
-              />
-              <span>Auto-generate</span>
-            </label>
+            {isGenerating ? (
+              <div className="commit-modal__generating">
+                <div className="commit-modal__spinner" />
+                <span>Generating with AI...</span>
+              </div>
+            ) : (
+              <label className="commit-modal__auto-generate">
+                <input
+                  type="checkbox"
+                  checked={autoGenerate}
+                  onChange={(e) => setAutoGenerate(e.target.checked)}
+                />
+                <span>Auto-generate</span>
+              </label>
+            )}
           </div>
 
           <textarea
@@ -316,7 +344,7 @@ export const CommitModal = memo(function CommitModal({
             value={message}
             onChange={(e) => setMessage(e.target.value)}
             onKeyDown={handleKeyDown}
-            disabled={isCommitting}
+            disabled={isCommitting || isGenerating}
             rows={4}
           />
           <div className="commit-modal__hint">

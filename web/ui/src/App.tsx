@@ -2523,6 +2523,28 @@ function AppContent() {
                       }
                       setMainContentTab('streaming');
                     }}
+                    onRequestAICommitMessage={async (gitRoot, stagedDiff) => {
+                      const client = clientRef.current;
+                      if (!client || connectionState !== 'connected') {
+                        return '';
+                      }
+
+                      try {
+                        // Start the commit message generation
+                        const result = await client.sessions.generateCommitMessage(gitRoot, stagedDiff);
+                        if (!result.success || !result.helperId) {
+                          console.error('Failed to start commit message generation:', result.error);
+                          return '';
+                        }
+
+                        // Wait for the helper to complete and get the result
+                        const message = await client.sessions.awaitHelperResult(result.helperId, 30);
+                        return message;
+                      } catch (err) {
+                        console.error('Failed to generate AI commit message:', err);
+                        return '';
+                      }
+                    }}
                   />
                 ) : (
                   <div className="empty-state">

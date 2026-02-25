@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-25T13:56:34.418672
+// Generated: 2026-02-25T14:24:44.175930
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -382,6 +382,22 @@ export interface SessionManagerService {
   approveSessionReview(sessionId: string, summaryId: string, approvedTitle: string, editedMarkdown?: string | null): Promise<Types.ApproveSessionReviewResult>;
 
   /**
+   * Wait for a helper task to complete and return its result.
+   * 
+   * Polls the helper every 100ms until it completes or times out.
+   * This is a convenience method for frontends that don't want to
+   * handle helper events.
+   * 
+   * Args:
+   * helper_id: ID of the helper to wait for
+   * timeout_seconds: Maximum time to wait (default 30s)
+   * 
+   * Returns:
+   * The helper's accumulated text result, or empty string on timeout/error
+   */
+  awaitHelperResult(helperId: string, timeoutSeconds?: number): Promise<string>;
+
+  /**
    * Cancel streaming for a session.
    * 
    * Args:
@@ -536,6 +552,22 @@ export interface SessionManagerService {
    * ForkSessionResult with child session info and streaming state
    */
   forkSession(parentSessionId: string, prompt: string, name?: string, background?: boolean, contextModes?: Record<string, unknown>[] | null, allowedTools?: string[] | null, startStreaming?: boolean, autoCompleteCompression?: boolean): Promise<Types.ForkSessionResult>;
+
+  /**
+   * Generate a commit message using the LLM.
+   * 
+   * Starts a background helper task to generate a commit message based on
+   * the staged git diff. The helper_id can be used to track progress via
+   * helper events (helperDelta, helperDone).
+   * 
+   * Args:
+   * git_root: Path to the git repository root
+   * staged_diff: The staged diff output (from git diff --cached)
+   * 
+   * Returns:
+   * GenerateCommitMessageResult with helper_id for tracking progress
+   */
+  generateCommitMessage(gitRoot: string, stagedDiff: string): Promise<Types.GenerateCommitMessageResult>;
 
   /**
    * Get the ID of the currently active session.
@@ -977,6 +1009,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.call('approveSessionReview', { sessionId: sessionId, summaryId: summaryId, approvedTitle: approvedTitle, editedMarkdown: editedMarkdown });
   }
 
+  async awaitHelperResult(helperId: string, timeoutSeconds?: number): Promise<string> {
+    return this.call('awaitHelperResult', { helperId: helperId, timeoutSeconds: timeoutSeconds });
+  }
+
   async cancelStreaming(sessionId: string): Promise<boolean> {
     return this.call('cancelStreaming', { sessionId: sessionId });
   }
@@ -1015,6 +1051,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   async forkSession(parentSessionId: string, prompt: string, name?: string, background?: boolean, contextModes?: Record<string, unknown>[] | null, allowedTools?: string[] | null, startStreaming?: boolean, autoCompleteCompression?: boolean): Promise<Types.ForkSessionResult> {
     return this.call('forkSession', { parentSessionId: parentSessionId, prompt: prompt, name: name, background: background, contextModes: contextModes, allowedTools: allowedTools, startStreaming: startStreaming, autoCompleteCompression: autoCompleteCompression });
+  }
+
+  async generateCommitMessage(gitRoot: string, stagedDiff: string): Promise<Types.GenerateCommitMessageResult> {
+    return this.call('generateCommitMessage', { gitRoot: gitRoot, stagedDiff: stagedDiff });
   }
 
   async getActiveSessionId(): Promise<string | null> {

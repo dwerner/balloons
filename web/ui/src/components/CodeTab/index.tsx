@@ -38,6 +38,8 @@ export interface CodeTabProps {
   client?: FileStateServiceClient;
   /** Callback when a review is submitted */
   onSubmitReview?: (review: CodeReview) => void;
+  /** Callback to generate AI commit message - receives staged files and returns message */
+  onRequestAICommitMessage?: (gitRoot: string, stagedDiff: string) => Promise<string>;
 }
 
 /** Handle exposed to parent for external control */
@@ -144,6 +146,7 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
   cwd,
   client,
   onSubmitReview,
+  onRequestAICommitMessage,
 }, ref) {
   // Dialog hook for confirm/alert dialogs
   const { confirm, alert } = useDialog();
@@ -688,6 +691,7 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
           changedFiles={diffResult.files}
           client={client}
           onCommitSuccess={handleCommitSuccess}
+          onRequestAIMessage={onRequestAICommitMessage}
         />
       )}
     </div>

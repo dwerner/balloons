@@ -373,6 +373,20 @@ class ApproveSessionReviewResult:
     error: str = ""
 
 
+@ws_type
+@dataclass
+class GenerateCommitMessageResult:
+    """Result of starting commit message generation.
+
+    Commit message generation runs asynchronously via a helper task.
+    The helper_id can be used to track progress via helper events.
+    """
+
+    success: bool
+    helper_id: str = ""  # ID for tracking the helper task
+    error: str = ""
+
+
 @dataclass
 class _StreamingContext:
     """Internal context for tracking streaming state per session.
@@ -812,6 +826,58 @@ class SessionManagerService:
         """
         ctx = self._helper_contexts.get(helper_id)
         return ctx.content if ctx else None
+
+    @ws_expose
+    async def await_helper_result(
+        self,
+        helper_id: str,
+        timeout_seconds: float = 30.0,
+    ) -> str:
+        """Wait for a helper task to complete and return its result.
+
+        Polls the helper every 100ms until it completes or times out.
+        This is a convenience method for frontends that don't want to
+        handle helper events.
+
+        Args:
+            helper_id: ID of the helper to wait for
+            timeout_seconds: Maximum time to wait (default 30s)
+
+        Returns:
+            The helper's accumulated text result, or empty string on timeout/error
+        """
+        import time
+
+        start_time = time.time()
+        poll_interval = 0.1  # 100ms
+
+        while time.time() - start_time < timeout_seconds:
+            # Check if helper exists
+            ctx = self._helper_contexts.get(helper_id)
+            if not ctx:
+                # Helper not found or already cleaned up
+                return ""
+
+            # Check if helper runner is done
+            runner = self._helper_runners.get(helper_id)
+            if runner and runner.is_done:
+                # Done - return accumulated content
+                result = ctx.content.strip()
+                # Clean up
+                self._helper_contexts.pop(helper_id, None)
+                self._helper_runners.pop(helper_id, None)
+                return result
+
+            # Wait a bit before polling again
+            await asyncio.sleep(poll_interval)
+
+        # Timeout - return whatever we have
+        ctx = self._helper_contexts.get(helper_id)
+        result = ctx.content.strip() if ctx else ""
+        # Clean up
+        self._helper_contexts.pop(helper_id, None)
+        self._helper_runners.pop(helper_id, None)
+        return result
 
     def start_event_pump(self) -> None:
         """Start the event pump for relaying streaming events.
@@ -4874,6 +4940,73 @@ class SessionManagerService:
         reviews.reverse()
 
         return reviews
+
+    # --- Git Commit Message Generation ---
+
+    @ws_expose
+    async def generate_commit_message(
+        self,
+        git_root: str,
+        staged_diff: str,
+    ) -> GenerateCommitMessageResult:
+        """Generate a commit message using the LLM.
+
+        Starts a background helper task to generate a commit message based on
+        the staged git diff. The helper_id can be used to track progress via
+        helper events (helperDelta, helperDone).
+
+        Args:
+            git_root: Path to the git repository root
+            staged_diff: The staged diff output (from git diff --cached)
+
+        Returns:
+            GenerateCommitMessageResult with helper_id for tracking progress
+        """
+        if not staged_diff.strip():
+            return GenerateCommitMessageResult(
+                success=False,
+                error="No staged changes to generate commit message for"
+            )
+
+        # Build the commit message prompt
+        prompt = f"""Generate a concise git commit message for the following staged changes.
+
+Follow these conventions:
+- Start with a brief summary line (50 chars or less)
+- Use imperative mood ("Add feature" not "Added feature")
+- Focus on what changed and why, not how
+- If there are multiple changes, list the most important ones
+
+Staged diff:
+```
+{staged_diff[:8000]}
+```
+
+{"(diff truncated due to size)" if len(staged_diff) > 8000 else ""}
+
+Commit message:"""
+
+        # Generate helper ID
+        helper_id = f"commit-msg-{uuid.uuid4().hex[:8]}"
+
+        debug_log.info(
+            f"Starting commit message generation: helper_id={helper_id}",
+            category="git",
+        )
+
+        # Start helper task (no session_id since this isn't tied to a session)
+        self.start_helper(
+            helper_id=helper_id,
+            helper_type="commit_message",
+            prompt=prompt,
+            session_id=None,
+            metadata={"git_root": git_root},
+        )
+
+        return GenerateCommitMessageResult(
+            success=True,
+            helper_id=helper_id,
+        )
 
     # --- Events ---
 

@@ -478,317 +478,8 @@
   color: #f87171;
 }
 
-/* react-diff-view overrides */
-.code-diff-view .diff-unified {
-  background: var(--color-bg);
-  border: none;
-}
-
-.code-diff-view .diff {
-  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.code-diff-view .diff-gutter-col {
-  width: 60px;
-}
-
-.code-diff-view .diff-gutter {
-  background: var(--color-bg-secondary);
-  color: var(--color-text-secondary);
-  padding: 0 8px;
-  text-align: right;
-  user-select: none;
-}
-
-.code-diff-view .diff-code {
-  background: var(--color-bg);
-  padding: 0 12px;
-}
-
-.code-diff-view .diff-line {
-  border: none;
-}
-
-.code-diff-view .diff-line:hover {
-  background: var(--color-bg-hover);
-}
-
-/* Diff colors */
-.code-diff-view .diff-code-insert {
-  background: rgba(74, 222, 128, 0.15);
-}
-
-.code-diff-view .diff-code-delete {
-  background: rgba(248, 113, 113, 0.15);
-}
-
-.code-diff-view .diff-gutter-insert {
-  background: rgba(74, 222, 128, 0.2);
-}
-
-.code-diff-view .diff-gutter-delete {
-  background: rgba(248, 113, 113, 0.2);
-}
-
-/* Hunk header */
-.code-diff-view .diff-hunk-header {
-  background: var(--color-bg-secondary);
-  color: var(--color-text-secondary);
-  border-top: 1px solid var(--color-border);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.code-diff-view .diff-hunk-header-gutter {
-  background: var(--color-bg-secondary);
-}
-
-.code-diff-view .diff-hunk-header-content {
-  padding: 4px 12px;
-  font-family: monospace;
-  font-size: 11px;
-}
-
-/* ============================================================================
- * Syntax Highlighting for Diff View (via refractor/Prism tokens)
- * ============================================================================ */
-
-/* Dark theme syntax highlighting (default) */
-.diff-syntax-dark .token.comment,
-.diff-syntax-dark .token.prolog,
-.diff-syntax-dark .token.doctype,
-.diff-syntax-dark .token.cdata {
-  color: #7c858c;
-}
-
-.diff-syntax-dark .token.punctuation {
-  color: #abb2bf;
-}
-
-.diff-syntax-dark .token.property,
-.diff-syntax-dark .token.tag,
-.diff-syntax-dark .token.boolean,
-.diff-syntax-dark .token.number,
-.diff-syntax-dark .token.constant,
-.diff-syntax-dark .token.symbol,
-.diff-syntax-dark .token.deleted {
-  color: #e06c75;
-}
-
-.diff-syntax-dark .token.selector,
-.diff-syntax-dark .token.attr-name,
-.diff-syntax-dark .token.string,
-.diff-syntax-dark .token.char,
-.diff-syntax-dark .token.builtin,
-.diff-syntax-dark .token.inserted {
-  color: #98c379;
-}
-
-.diff-syntax-dark .token.operator,
-.diff-syntax-dark .token.entity,
-.diff-syntax-dark .token.url,
-.diff-syntax-dark .language-css .token.string,
-.diff-syntax-dark .style .token.string {
-  color: #56b6c2;
-}
-
-.diff-syntax-dark .token.atrule,
-.diff-syntax-dark .token.attr-value,
-.diff-syntax-dark .token.keyword {
-  color: #c678dd;
-}
-
-.diff-syntax-dark .token.function,
-.diff-syntax-dark .token.class-name {
-  color: #61afef;
-}
-
-.diff-syntax-dark .token.regex,
-.diff-syntax-dark .token.important,
-.diff-syntax-dark .token.variable {
-  color: #d19a66;
-}
-
-/* Light theme syntax highlighting */
-.diff-syntax-light .token.comment,
-.diff-syntax-light .token.prolog,
-.diff-syntax-light .token.doctype,
-.diff-syntax-light .token.cdata {
-  color: #6a737d;
-}
-
-.diff-syntax-light .token.punctuation {
-  color: #24292e;
-}
-
-.diff-syntax-light .token.property,
-.diff-syntax-light .token.tag,
-.diff-syntax-light .token.boolean,
-.diff-syntax-light .token.number,
-.diff-syntax-light .token.constant,
-.diff-syntax-light .token.symbol,
-.diff-syntax-light .token.deleted {
-  color: #d73a49;
-}
-
-.diff-syntax-light .token.selector,
-.diff-syntax-light .token.attr-name,
-.diff-syntax-light .token.string,
-.diff-syntax-light .token.char,
-.diff-syntax-light .token.builtin,
-.diff-syntax-light .token.inserted {
-  color: #22863a;
-}
-
-.diff-syntax-light .token.operator,
-.diff-syntax-light .token.entity,
-.diff-syntax-light .token.url,
-.diff-syntax-light .language-css .token.string,
-.diff-syntax-light .style .token.string {
-  color: #032f62;
-}
-
-.diff-syntax-light .token.atrule,
-.diff-syntax-light .token.attr-value,
-.diff-syntax-light .token.keyword {
-  color: #d73a49;
-}
-
-.diff-syntax-light .token.function,
-.diff-syntax-light .token.class-name {
-  color: #6f42c1;
-}
-
-.diff-syntax-light .token.regex,
-.diff-syntax-light .token.important,
-.diff-syntax-light .token.variable {
-  color: #e36209;
-}
-
-/* Add comment button on hover */
-.code-diff-gutter--hover {
-  position: relative;
-}
-
-.code-diff-add-comment {
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--color-accent);
-  color: white;
-  border: none;
-  cursor: pointer;
-  font-size: 12px;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.code-diff-add-comment:hover {
-  opacity: 0.9;
-}
-
-/* Review mode styling - make lines clickable */
-.code-diff-view--review-mode .diff-line {
-  cursor: pointer;
-}
-
-.code-diff-view--review-mode .diff-line:hover {
-  background: rgba(59, 130, 246, 0.15) !important;
-}
-
-.code-diff-view--review-mode .diff-line:hover .diff-gutter {
-  background: rgba(59, 130, 246, 0.25) !important;
-}
-
-/* Disable text selection in review mode */
-.code-diff-view--review-mode {
-  -webkit-user-select: none;
-  -moz-user-select: none;
-  -ms-user-select: none;
-  user-select: none;
-  -webkit-touch-callout: none;
-}
-
-/* Re-enable in comment form */
-.code-diff-view--review-mode .code-comment-form {
-  -webkit-user-select: text;
-  -moz-user-select: text;
-  -ms-user-select: text;
-  user-select: text;
-}
-
-/* Visual hint that lines are clickable */
-.code-diff-view--review-mode .diff-gutter::before {
-  content: "+";
-  position: absolute;
-  left: 2px;
-  opacity: 0;
-  color: var(--color-accent);
-  font-weight: bold;
-  font-size: 10px;
-  transition: opacity 0.1s;
-}
-
-.code-diff-view--review-mode .diff-line:hover .diff-gutter::before {
-  opacity: 0.7;
-}
-
-/* Make gutter position relative for the + icon */
-.code-diff-view--review-mode .diff-gutter {
-  position: relative;
-}
-
-/* Selection mode - show crosshair cursor when selecting range */
-.code-diff-view--selecting .diff-line {
-  cursor: crosshair !important;
-}
-
-/* Highlight lines that have existing comments (subtle blue) */
-.diff-line--commented {
-  background: rgba(59, 130, 246, 0.15) !important;
-}
-
-.diff-line--commented .diff-gutter {
-  background: rgba(59, 130, 246, 0.2) !important;
-  border-left: 3px solid rgba(59, 130, 246, 0.6);
-}
-
-.diff-line--commented .diff-code {
-  background: rgba(59, 130, 246, 0.1) !important;
-}
-
-/* Highlight lines in the active selection range (amber) */
-.diff-line--in-range {
-  background: rgba(234, 179, 8, 0.2) !important;
-}
-
-.diff-line--in-range .diff-gutter {
-  background: rgba(234, 179, 8, 0.3) !important;
-}
-
-.diff-line--in-range .diff-code {
-  background: rgba(234, 179, 8, 0.15) !important;
-}
-
-/* Highlight the selection start line with stronger amber */
-.diff-line--range-start {
-  background: rgba(234, 179, 8, 0.35) !important;
-}
-
-.diff-line--range-start .diff-gutter {
-  background: rgba(234, 179, 8, 0.5) !important;
-}
-
-.diff-line--range-start .diff-code {
-  background: rgba(234, 179, 8, 0.25) !important;
-}
+/* Note: react-diff-viewer-continued styles are applied via the component's styles prop
+ * and syntax highlighting is handled by react-syntax-highlighter with inline styles */
 
 /* Range label on comment */
 .code-review-comment__range {
@@ -935,6 +626,152 @@
 
 .file-content-view .code-review-comment {
   margin: 6px 12px 6px 12px;
+}
+
+/* ============================================================================
+ * react-diff-viewer-continued styles
+ * ============================================================================ */
+
+/* Make the diff viewer fill the container */
+.code-diff-view > div:nth-child(2) {
+  overflow: auto;
+}
+
+/* Comment form overlay for diff view */
+.diff-comment-form {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 400px;
+  max-width: 90vw;
+  padding: 16px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+}
+
+.diff-comment-form__header {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  margin-bottom: 12px;
+  font-family: monospace;
+}
+
+.diff-comment-form__input {
+  width: 100%;
+  min-height: 80px;
+  padding: 10px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 14px;
+  resize: vertical;
+}
+
+.diff-comment-form__input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.diff-comment-form__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.diff-comment-form__cancel,
+.diff-comment-form__submit {
+  padding: 8px 16px;
+  font-size: 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+  color: var(--color-text);
+  transition: all 0.15s ease;
+}
+
+.diff-comment-form__cancel:hover {
+  background: var(--color-bg-hover);
+}
+
+.diff-comment-form__submit {
+  background: var(--color-accent);
+  color: white;
+  border-color: var(--color-accent);
+}
+
+.diff-comment-form__submit:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.diff-comment-form__submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Comments list below the diff */
+.diff-comments-list {
+  border-top: 1px solid var(--color-border);
+  padding: 12px;
+}
+
+.diff-comment-row {
+  display: flex;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--color-border-subtle, rgba(255,255,255,0.05));
+}
+
+.diff-comment-row:last-child {
+  border-bottom: none;
+}
+
+.diff-comment-row__line {
+  flex-shrink: 0;
+  width: 80px;
+  font-size: 12px;
+  font-family: monospace;
+  color: var(--color-text-secondary);
+}
+
+.diff-comment-widget {
+  flex: 1;
+}
+
+.diff-comment-widget__content {
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  margin-bottom: 8px;
+}
+
+.diff-comment-widget__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.diff-comment-widget__actions button {
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text-secondary);
+  transition: all 0.15s ease;
+}
+
+.diff-comment-widget__actions button:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text);
 }
 
 /* ============================================================================

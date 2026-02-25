@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-25T13:56:34.414847
+// Generated: 2026-02-25T14:24:44.172189
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -383,6 +383,12 @@ export interface ApproveSessionReviewResult {
   sessionId?: string;
   summaryId?: string;
   approvedTitle?: string;
+  error?: string;
+}
+
+export interface GenerateCommitMessageResult {
+  success: boolean;
+  helperId?: string;
   error?: string;
 }
 
