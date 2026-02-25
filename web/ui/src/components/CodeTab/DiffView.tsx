@@ -4,6 +4,8 @@
  * Interaction modes:
  * - Desktop: Click for single line, drag (mousedown->mouseup) for range
  * - Mobile: Tap for single line, long-press to start range, then tap another line to complete
+ *
+ * Supports syntax highlighting for known file types via refractor/Prism.
  */
 
 import React, { memo, useMemo, useState, useCallback, useRef, useEffect } from 'react';
@@ -11,6 +13,11 @@ import { Diff, Hunk, parseDiff, getChangeKey } from 'react-diff-view';
 import type { DiffFile } from '../../../../generated/balloons-client';
 import type { CodeReviewComment, ReviewState } from './types';
 import { createLogger } from '../../utils/debugLog';
+
+// NOTE: Syntax highlighting in diff view is not currently supported.
+// react-diff-view's tokenize function is incompatible with refractor v5
+// (which is required by react-syntax-highlighter). When react-diff-view
+// updates to support newer refractor, we can enable syntax highlighting.
 
 // Import react-diff-view styles
 import 'react-diff-view/style/index.css';
@@ -242,7 +249,7 @@ export const DiffView = memo(function DiffView({
       }
       return parsed;
     } catch (e) {
-      console.error('Failed to parse diff:', e);
+      log('parseDiff: failed', { error: e });
       return null;
     }
   }, [diffText]);

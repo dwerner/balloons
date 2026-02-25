@@ -16,6 +16,7 @@ import { FileList } from './FileList';
 import { DiffView } from './DiffView';
 import { OpenFilesList, type OpenFile } from './OpenFilesList';
 import { FileContentView } from './FileContentView';
+import { CommitModal } from '../CommitModal';
 import { useDialog } from '../Dialog';
 import { createLogger } from '../../utils/debugLog';
 import './CodeTab.css';
@@ -167,6 +168,9 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
 
   // Comments - shared between both tabs
   const [comments, setComments] = useState<CodeReviewComment[]>(loadComments);
+
+  // Commit modal state
+  const [isCommitModalOpen, setIsCommitModalOpen] = useState(false);
 
   // Save comments to localStorage whenever they change
   useEffect(() => {
@@ -458,6 +462,13 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
     loadDiff();
   }, [loadDiff, selectedDiffPath, diffResult]);
 
+  // Handle commit success - refresh the diff
+  const handleCommitSuccess = useCallback((commitHash: string) => {
+    log('Commit successful', { commitHash });
+    // Refresh the diff to show updated state
+    loadDiff();
+  }, [loadDiff]);
+
   // Build a ReviewState for views
   const reviewState = useMemo(() => ({
     active: true, // Always active - selection always enabled
@@ -559,6 +570,17 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
             </button>
           )}
 
+          {/* Commit button (only for changes tab with files) */}
+          {activeSubTab === 'changes' && diffResult && diffResult.files.length > 0 && (
+            <button
+              className="code-tab__commit"
+              onClick={() => setIsCommitModalOpen(true)}
+              title="Commit changes"
+            >
+              Commit
+            </button>
+          )}
+
           {/* Clear comments */}
           {commentCount > 0 && (
             <button
@@ -656,6 +678,18 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
           </>
         )}
       </div>
+
+      {/* Commit Modal */}
+      {diffResult && (
+        <CommitModal
+          isOpen={isCommitModalOpen}
+          onClose={() => setIsCommitModalOpen(false)}
+          gitRoot={diffResult.gitRoot}
+          changedFiles={diffResult.files}
+          client={client}
+          onCommitSuccess={handleCommitSuccess}
+        />
+      )}
     </div>
   );
 }));

@@ -191,6 +191,21 @@
   cursor: not-allowed;
 }
 
+.code-tab__commit {
+  background: var(--color-accent, #22d3ee);
+  color: #000;
+  font-weight: 500;
+}
+
+.code-tab__commit:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.code-tab__commit:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* Main content area */
 .code-tab__content {
   display: flex;
@@ -533,6 +548,122 @@
   padding: 4px 12px;
   font-family: monospace;
   font-size: 11px;
+}
+
+/* ============================================================================
+ * Syntax Highlighting for Diff View (via refractor/Prism tokens)
+ * ============================================================================ */
+
+/* Dark theme syntax highlighting (default) */
+.diff-syntax-dark .token.comment,
+.diff-syntax-dark .token.prolog,
+.diff-syntax-dark .token.doctype,
+.diff-syntax-dark .token.cdata {
+  color: #7c858c;
+}
+
+.diff-syntax-dark .token.punctuation {
+  color: #abb2bf;
+}
+
+.diff-syntax-dark .token.property,
+.diff-syntax-dark .token.tag,
+.diff-syntax-dark .token.boolean,
+.diff-syntax-dark .token.number,
+.diff-syntax-dark .token.constant,
+.diff-syntax-dark .token.symbol,
+.diff-syntax-dark .token.deleted {
+  color: #e06c75;
+}
+
+.diff-syntax-dark .token.selector,
+.diff-syntax-dark .token.attr-name,
+.diff-syntax-dark .token.string,
+.diff-syntax-dark .token.char,
+.diff-syntax-dark .token.builtin,
+.diff-syntax-dark .token.inserted {
+  color: #98c379;
+}
+
+.diff-syntax-dark .token.operator,
+.diff-syntax-dark .token.entity,
+.diff-syntax-dark .token.url,
+.diff-syntax-dark .language-css .token.string,
+.diff-syntax-dark .style .token.string {
+  color: #56b6c2;
+}
+
+.diff-syntax-dark .token.atrule,
+.diff-syntax-dark .token.attr-value,
+.diff-syntax-dark .token.keyword {
+  color: #c678dd;
+}
+
+.diff-syntax-dark .token.function,
+.diff-syntax-dark .token.class-name {
+  color: #61afef;
+}
+
+.diff-syntax-dark .token.regex,
+.diff-syntax-dark .token.important,
+.diff-syntax-dark .token.variable {
+  color: #d19a66;
+}
+
+/* Light theme syntax highlighting */
+.diff-syntax-light .token.comment,
+.diff-syntax-light .token.prolog,
+.diff-syntax-light .token.doctype,
+.diff-syntax-light .token.cdata {
+  color: #6a737d;
+}
+
+.diff-syntax-light .token.punctuation {
+  color: #24292e;
+}
+
+.diff-syntax-light .token.property,
+.diff-syntax-light .token.tag,
+.diff-syntax-light .token.boolean,
+.diff-syntax-light .token.number,
+.diff-syntax-light .token.constant,
+.diff-syntax-light .token.symbol,
+.diff-syntax-light .token.deleted {
+  color: #d73a49;
+}
+
+.diff-syntax-light .token.selector,
+.diff-syntax-light .token.attr-name,
+.diff-syntax-light .token.string,
+.diff-syntax-light .token.char,
+.diff-syntax-light .token.builtin,
+.diff-syntax-light .token.inserted {
+  color: #22863a;
+}
+
+.diff-syntax-light .token.operator,
+.diff-syntax-light .token.entity,
+.diff-syntax-light .token.url,
+.diff-syntax-light .language-css .token.string,
+.diff-syntax-light .style .token.string {
+  color: #032f62;
+}
+
+.diff-syntax-light .token.atrule,
+.diff-syntax-light .token.attr-value,
+.diff-syntax-light .token.keyword {
+  color: #d73a49;
+}
+
+.diff-syntax-light .token.function,
+.diff-syntax-light .token.class-name {
+  color: #6f42c1;
+}
+
+.diff-syntax-light .token.regex,
+.diff-syntax-light .token.important,
+.diff-syntax-light .token.variable {
+  color: #e36209;
 }
 
 /* Add comment button on hover */
@@ -891,6 +1022,18 @@
   margin: 0;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+/* Syntax highlighted code - Prism uses span with code children */
+.file-line__code > span {
+  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.file-line__code code {
+  font-family: inherit;
+  background: transparent;
 }
 
 .file-line__widget-row td {

@@ -1986,6 +1986,137 @@ fn list_directory(py: Python<'_>, path: &str) -> PyResult<String> {
     })
 }
 
+/// Stage files for git commit.
+///
+/// Args:
+///     repo_path: Path to the git repository (or a path within it)
+///     paths: JSON array of file paths (relative to repo root) to stage
+///
+/// Returns:
+///     Number of files staged
+#[pyfunction]
+fn git_stage_files(py: Python<'_>, repo_path: &str, paths_json: &str) -> PyResult<usize> {
+    let paths: Vec<String> = serde_json::from_str(paths_json)
+        .map_err(|e| PyRuntimeError::new_err(format!("JSON error: {}", e)))?;
+
+    py.allow_threads(|| {
+        let repo = balloons_git::GitRepo::open(repo_path)
+            .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))?;
+
+        let path_refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
+        repo.stage_files(&path_refs)
+            .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))
+    })
+}
+
+/// Stage all changes for git commit.
+///
+/// Args:
+///     repo_path: Path to the git repository (or a path within it)
+///
+/// Returns:
+///     Number of index entries after staging
+#[pyfunction]
+fn git_stage_all(py: Python<'_>, repo_path: &str) -> PyResult<usize> {
+    py.allow_threads(|| {
+        let repo = balloons_git::GitRepo::open(repo_path)
+            .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))?;
+
+        repo.stage_all()
+            .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))
+    })
+}
+
+/// Unstage files (remove from index).
+///
+/// Args:
+///     repo_path: Path to the git repository (or a path within it)
+///     paths: JSON array of file paths (relative to repo root) to unstage
+///
+/// Returns:
+///     Number of files unstaged
+#[pyfunction]
+fn git_unstage_files(py: Python<'_>, repo_path: &str, paths_json: &str) -> PyResult<usize> {
+    let paths: Vec<String> = serde_json::from_str(paths_json)
+        .map_err(|e| PyRuntimeError::new_err(format!("JSON error: {}", e)))?;
+
+    py.allow_threads(|| {
+        let repo = balloons_git::GitRepo::open(repo_path)
+            .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))?;
+
+        let path_refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
+        repo.unstage_files(&path_refs)
+            .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))
+    })
+}
+
+/// Create a git commit with staged changes.
+///
+/// Args:
+///     repo_path: Path to the git repository (or a path within it)
+///     message: The commit message
+///
+/// Returns:
+///     JSON object with short_hash and full_hash
+#[pyfunction]
+fn git_commit(py: Python<'_>, repo_path: &str, message: &str) -> PyResult<String> {
+    let message = message.to_string();
+
+    py.allow_threads(|| {
+        let repo = balloons_git::GitRepo::open(repo_path)
+            .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))?;
+
+        let result = repo.commit(&message)
+            .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))?;
+
+        // Return as JSON
+        serde_json::to_string(&serde_json::json!({
+            "short_hash": result.short_hash,
+            "full_hash": result.full_hash,
+        }))
+        .map_err(|e| PyRuntimeError::new_err(format!("JSON error: {}", e)))
+    })
+}
+
+/// Check if there are staged changes.
+///
+/// Args:
+///     repo_path: Path to the git repository (or a path within it)
+///
+/// Returns:
+///     True if there are staged changes ready to commit
+#[pyfunction]
+fn git_has_staged_changes(py: Python<'_>, repo_path: &str) -> PyResult<bool> {
+    py.allow_threads(|| {
+        let repo = balloons_git::GitRepo::open(repo_path)
+            .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))?;
+
+        repo.has_staged_changes()
+            .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))
+    })
+}
+
+/// Get list of staged file paths.
+///
+/// Args:
+///     repo_path: Path to the git repository (or a path within it)
+///
+/// Returns:
+///     JSON array of staged file paths
+#[pyfunction]
+fn git_staged_files(py: Python<'_>, repo_path: &str) -> PyResult<String> {
+    py.allow_threads(|| {
+        let repo = balloons_git::GitRepo::open(repo_path)
+            .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))?;
+
+        let files = repo.staged_files()
+            .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))?;
+
+        serde_json::to_string(&files)
+            .map_err(|e| PyRuntimeError::new_err(format!("JSON error: {}", e)))
+    })
+}
+
 /// Python module definition
 #[pymodule]
 fn balloons_storage(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -2004,5 +2135,11 @@ fn balloons_storage(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(restore_from_backup, m)?)?;
     // File browser / git functions
     m.add_function(wrap_pyfunction!(list_directory, m)?)?;
+    m.add_function(wrap_pyfunction!(git_stage_files, m)?)?;
+    m.add_function(wrap_pyfunction!(git_stage_all, m)?)?;
+    m.add_function(wrap_pyfunction!(git_unstage_files, m)?)?;
+    m.add_function(wrap_pyfunction!(git_commit, m)?)?;
+    m.add_function(wrap_pyfunction!(git_has_staged_changes, m)?)?;
+    m.add_function(wrap_pyfunction!(git_staged_files, m)?)?;
     Ok(())
 }

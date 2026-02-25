@@ -8,7 +8,7 @@ mod repo;
 mod status;
 
 pub use listing::{list_directory, DirectoryListing, FileEntry};
-pub use repo::GitRepo;
+pub use repo::{CommitResult, GitRepo};
 pub use status::FileStatus;
 
 use thiserror::Error;

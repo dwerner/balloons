@@ -3,11 +3,20 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use git2::Repository;
+use git2::{IndexAddOption, Repository, Signature};
 use tracing::debug;
 
 use crate::status::FileStatus;
 use crate::Result;
+
+/// Result of a git commit operation.
+#[derive(Debug, Clone)]
+pub struct CommitResult {
+    /// Short commit hash (first 8 chars).
+    pub short_hash: String,
+    /// Full commit hash.
+    pub full_hash: String,
+}
 
 /// Wrapper around a git repository providing file status operations.
 pub struct GitRepo {
@@ -75,6 +84,137 @@ impl GitRepo {
         path.strip_prefix(root)
             .ok()
             .map(|p| p.to_string_lossy().into_owned())
+    }
+
+    /// Stage specific files for commit.
+    ///
+    /// Paths should be relative to the repository root.
+    pub fn stage_files(&self, paths: &[&str]) -> Result<usize> {
+        let mut index = self.repo.index()?;
+        let mut staged = 0;
+
+        for path in paths {
+            debug!(?path, "Staging file");
+            index.add_path(Path::new(path))?;
+            staged += 1;
+        }
+
+        index.write()?;
+        debug!(count = staged, "Staged files");
+        Ok(staged)
+    }
+
+    /// Stage all changes (tracked modified files and untracked files).
+    pub fn stage_all(&self) -> Result<usize> {
+        let mut index = self.repo.index()?;
+
+        // Add all changes using a callback (similar to `git add -A`)
+        index.add_all(["*"].iter(), IndexAddOption::DEFAULT, None)?;
+        index.write()?;
+
+        // Return count of entries
+        let count = index.len();
+        debug!(count, "Staged all changes");
+        Ok(count)
+    }
+
+    /// Unstage specific files (remove from index, keeping working tree changes).
+    ///
+    /// Paths should be relative to the repository root.
+    pub fn unstage_files(&self, paths: &[&str]) -> Result<usize> {
+        let mut index = self.repo.index()?;
+        let head = self.repo.head()?.peel_to_commit()?;
+        let head_tree = head.tree()?;
+        let mut unstaged = 0;
+
+        for path in paths {
+            debug!(?path, "Unstaging file");
+            // Reset to HEAD for this path
+            if head_tree.get_path(Path::new(path)).is_ok() {
+                // File exists in HEAD - reset to that version
+                let entry = head_tree.get_path(Path::new(path))?;
+                let index_entry = git2::IndexEntry {
+                    ctime: git2::IndexTime::new(0, 0),
+                    mtime: git2::IndexTime::new(0, 0),
+                    dev: 0,
+                    ino: 0,
+                    mode: entry.filemode() as u32,
+                    uid: 0,
+                    gid: 0,
+                    file_size: 0,
+                    id: entry.id(),
+                    flags: 0,
+                    flags_extended: 0,
+                    path: path.as_bytes().to_vec(),
+                };
+                index.add(&index_entry)?;
+            } else {
+                // File doesn't exist in HEAD - remove from index entirely
+                index.remove_path(Path::new(path))?;
+            }
+            unstaged += 1;
+        }
+
+        index.write()?;
+        debug!(count = unstaged, "Unstaged files");
+        Ok(unstaged)
+    }
+
+    /// Create a commit with the currently staged changes.
+    ///
+    /// Returns the commit hash on success.
+    pub fn commit(&self, message: &str) -> Result<CommitResult> {
+        let mut index = self.repo.index()?;
+        let tree_id = index.write_tree()?;
+        let tree = self.repo.find_tree(tree_id)?;
+
+        // Get signature from git config or use defaults
+        let sig = self.repo.signature().unwrap_or_else(|_| {
+            Signature::now("Balloons User", "user@balloons.local").unwrap()
+        });
+
+        // Get parent commit (HEAD)
+        let parent = match self.repo.head() {
+            Ok(head) => Some(head.peel_to_commit()?),
+            Err(e) if e.code() == git2::ErrorCode::UnbornBranch => None,
+            Err(e) => return Err(e.into()),
+        };
+
+        let parents: Vec<&git2::Commit> = parent.as_ref().map(|p| vec![p]).unwrap_or_default();
+
+        let commit_id = self.repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            message,
+            &tree,
+            &parents,
+        )?;
+
+        let full_hash = commit_id.to_string();
+        let short_hash = full_hash[..8.min(full_hash.len())].to_string();
+
+        debug!(?short_hash, "Created commit");
+        Ok(CommitResult {
+            short_hash,
+            full_hash,
+        })
+    }
+
+    /// Check if there are staged changes ready to commit.
+    pub fn has_staged_changes(&self) -> Result<bool> {
+        let statuses = self.status_all()?;
+        Ok(statuses.values().any(|s| s.is_staged))
+    }
+
+    /// Get a list of staged file paths.
+    pub fn staged_files(&self) -> Result<Vec<String>> {
+        let statuses = self.status_all()?;
+        Ok(statuses
+            .into_iter()
+            .filter(|(_, s)| s.is_staged)
+            .map(|(path, _)| path)
+            .collect())
     }
 }
 

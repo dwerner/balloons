@@ -686,6 +686,184 @@ class FileStateService:
         with open(path, 'r', encoding='utf-8', errors='replace') as f:
             return f.read()
 
+    # --- Git Staging and Commit (via Rust bindings) ---
+
+    @ws_expose
+    async def stage_files(self, git_root: str, paths: list[str]) -> FileOperationResult:
+        """Stage files for commit using git2 (libgit2).
+
+        Args:
+            git_root: The git repository root directory
+            paths: List of file paths (relative to git root) to stage
+
+        Returns:
+            Operation result with success/failure status
+        """
+        try:
+            from balloons_storage import git_stage_files
+            import json
+
+            if not paths:
+                return FileOperationResult(
+                    success=False,
+                    message="No files provided to stage",
+                )
+
+            count = git_stage_files(git_root, json.dumps(paths))
+            return FileOperationResult(
+                success=True,
+                message=f"Staged {count} file(s)",
+            )
+        except Exception as e:
+            return FileOperationResult(
+                success=False,
+                message=f"Failed to stage files: {e}",
+            )
+
+    @ws_expose
+    async def unstage_files(self, git_root: str, paths: list[str]) -> FileOperationResult:
+        """Unstage files (remove from staging area) using git2.
+
+        Args:
+            git_root: The git repository root directory
+            paths: List of file paths (relative to git root) to unstage
+
+        Returns:
+            Operation result with success/failure status
+        """
+        try:
+            from balloons_storage import git_unstage_files
+            import json
+
+            if not paths:
+                return FileOperationResult(
+                    success=False,
+                    message="No files provided to unstage",
+                )
+
+            count = git_unstage_files(git_root, json.dumps(paths))
+            return FileOperationResult(
+                success=True,
+                message=f"Unstaged {count} file(s)",
+            )
+        except Exception as e:
+            return FileOperationResult(
+                success=False,
+                message=f"Failed to unstage files: {e}",
+            )
+
+    @ws_expose
+    async def stage_all_changes(self, git_root: str) -> FileOperationResult:
+        """Stage all changes (tracked and untracked files) using git2.
+
+        Args:
+            git_root: The git repository root directory
+
+        Returns:
+            Operation result with success/failure status
+        """
+        try:
+            from balloons_storage import git_stage_all
+
+            count = git_stage_all(git_root)
+            return FileOperationResult(
+                success=True,
+                message=f"Staged all changes ({count} index entries)",
+            )
+        except Exception as e:
+            return FileOperationResult(
+                success=False,
+                message=f"Failed to stage changes: {e}",
+            )
+
+    @ws_expose
+    async def git_commit(self, git_root: str, message: str) -> FileOperationResult:
+        """Create a git commit with the staged changes using git2.
+
+        Args:
+            git_root: The git repository root directory
+            message: The commit message
+
+        Returns:
+            Operation result with success/failure status and commit hash
+        """
+        try:
+            from balloons_storage import git_commit, git_has_staged_changes
+            import json
+
+            if not message.strip():
+                return FileOperationResult(
+                    success=False,
+                    message="Commit message cannot be empty",
+                )
+
+            # Check if there are staged changes
+            if not git_has_staged_changes(git_root):
+                return FileOperationResult(
+                    success=False,
+                    message="Nothing to commit - no staged changes",
+                )
+
+            result_json = git_commit(git_root, message)
+            result = json.loads(result_json)
+
+            return FileOperationResult(
+                success=True,
+                message=f"Created commit {result['short_hash']}",
+                path=result['short_hash'],
+            )
+        except Exception as e:
+            return FileOperationResult(
+                success=False,
+                message=f"Failed to commit: {e}",
+            )
+
+    @ws_expose
+    async def get_staged_diff(self, git_root: str) -> GitDiffResult:
+        """Get the diff of staged changes.
+
+        Args:
+            git_root: The git repository root directory
+
+        Returns:
+            GitDiffResult with staged changes
+        """
+        return await self.get_git_diff(git_root, staged=True)
+
+    @ws_expose
+    async def generate_commit_message(self, git_root: str) -> str:
+        """Generate a simple commit message based on staged changes.
+
+        This creates a basic summary of the staged changes.
+        For AI-powered commit messages, the frontend should call
+        the session's agent with the diff.
+
+        Args:
+            git_root: The git repository root directory
+
+        Returns:
+            A suggested commit message
+        """
+        try:
+            from balloons_storage import git_staged_files
+            import json
+
+            files_json = git_staged_files(git_root)
+            file_names = json.loads(files_json)
+
+            if not file_names:
+                return ""
+
+            # Create a simple message
+            if len(file_names) == 1:
+                return f"Update {file_names[0]}"
+            elif len(file_names) <= 3:
+                return f"Update {', '.join(file_names)}"
+            else:
+                return f"Update {len(file_names)} files"
+        except Exception:
+            return ""
+
     # --- Events ---
 
     @ws_event

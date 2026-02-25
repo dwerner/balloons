@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-25T13:06:34.681550
+// Generated: 2026-02-25T13:56:34.418672
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -3281,6 +3281,21 @@ export interface FileStateService {
   clearSessionCwd(sessionId: string): Promise<null>;
 
   /**
+   * Generate a simple commit message based on staged changes.
+   * 
+   * This creates a basic summary of the staged changes.
+   * For AI-powered commit messages, the frontend should call
+   * the session's agent with the diff.
+   * 
+   * Args:
+   * git_root: The git repository root directory
+   * 
+   * Returns:
+   * A suggested commit message
+   */
+  generateCommitMessage(gitRoot: string): Promise<string>;
+
+  /**
    * Get all session CWDs.
    * 
    * Returns:
@@ -3335,6 +3350,29 @@ export interface FileStateService {
    * The parent directory path
    */
   getParentDirectory(path: string): Promise<string>;
+
+  /**
+   * Get the diff of staged changes.
+   * 
+   * Args:
+   * git_root: The git repository root directory
+   * 
+   * Returns:
+   * GitDiffResult with staged changes
+   */
+  getStagedDiff(gitRoot: string): Promise<Types.GitDiffResult>;
+
+  /**
+   * Create a git commit with the staged changes using git2.
+   * 
+   * Args:
+   * git_root: The git repository root directory
+   * message: The commit message
+   * 
+   * Returns:
+   * Operation result with success/failure status and commit hash
+   */
+  gitCommit(gitRoot: string, message: string): Promise<Types.FileOperationResult>;
 
   /**
    * Check if a path is a directory.
@@ -3426,6 +3464,41 @@ export interface FileStateService {
    */
   setCwd(sessionId: string, cwd: string): Promise<Types.FileOperationResult>;
 
+  /**
+   * Stage all changes (tracked and untracked files) using git2.
+   * 
+   * Args:
+   * git_root: The git repository root directory
+   * 
+   * Returns:
+   * Operation result with success/failure status
+   */
+  stageAllChanges(gitRoot: string): Promise<Types.FileOperationResult>;
+
+  /**
+   * Stage files for commit using git2 (libgit2).
+   * 
+   * Args:
+   * git_root: The git repository root directory
+   * paths: List of file paths (relative to git root) to stage
+   * 
+   * Returns:
+   * Operation result with success/failure status
+   */
+  stageFiles(gitRoot: string, paths: string[]): Promise<Types.FileOperationResult>;
+
+  /**
+   * Unstage files (remove from staging area) using git2.
+   * 
+   * Args:
+   * git_root: The git repository root directory
+   * paths: List of file paths (relative to git root) to unstage
+   * 
+   * Returns:
+   * Operation result with success/failure status
+   */
+  unstageFiles(gitRoot: string, paths: string[]): Promise<Types.FileOperationResult>;
+
 }
 
 export interface FileStateEvents {
@@ -3493,6 +3566,10 @@ export class FileStateServiceClient implements FileStateService {
     return this.call('clearSessionCwd', { sessionId: sessionId });
   }
 
+  async generateCommitMessage(gitRoot: string): Promise<string> {
+    return this.call('generateCommitMessage', { gitRoot: gitRoot });
+  }
+
   async getAllCwds(): Promise<Types.SessionCwd[]> {
     return this.call('getAllCwds', {  });
   }
@@ -3511,6 +3588,14 @@ export class FileStateServiceClient implements FileStateService {
 
   async getParentDirectory(path: string): Promise<string> {
     return this.call('getParentDirectory', { path: path });
+  }
+
+  async getStagedDiff(gitRoot: string): Promise<Types.GitDiffResult> {
+    return this.call('getStagedDiff', { gitRoot: gitRoot });
+  }
+
+  async gitCommit(gitRoot: string, message: string): Promise<Types.FileOperationResult> {
+    return this.call('gitCommit', { gitRoot: gitRoot, message: message });
   }
 
   async isDirectory(path: string): Promise<boolean> {
@@ -3539,6 +3624,18 @@ export class FileStateServiceClient implements FileStateService {
 
   async setCwd(sessionId: string, cwd: string): Promise<Types.FileOperationResult> {
     return this.call('setCwd', { sessionId: sessionId, cwd: cwd });
+  }
+
+  async stageAllChanges(gitRoot: string): Promise<Types.FileOperationResult> {
+    return this.call('stageAllChanges', { gitRoot: gitRoot });
+  }
+
+  async stageFiles(gitRoot: string, paths: string[]): Promise<Types.FileOperationResult> {
+    return this.call('stageFiles', { gitRoot: gitRoot, paths: paths });
+  }
+
+  async unstageFiles(gitRoot: string, paths: string[]): Promise<Types.FileOperationResult> {
+    return this.call('unstageFiles', { gitRoot: gitRoot, paths: paths });
   }
 
   onCwdChanged(callback: (data: Types.CwdChangedData) => void): Unsubscribe {

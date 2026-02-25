@@ -1,0 +1,216 @@
+/**
+ * CommitModal styles
+ */
+
+.commit-modal__content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Error message */
+.commit-modal__error {
+  padding: 10px 14px;
+  background: rgba(248, 113, 113, 0.15);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  border-radius: 6px;
+  color: #f87171;
+  font-size: 14px;
+}
+
+/* Section styling */
+.commit-modal__section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.commit-modal__section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.commit-modal__section-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text-secondary, #888);
+}
+
+/* Select all/none buttons */
+.commit-modal__select-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.commit-modal__select-btn {
+  padding: 3px 10px;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.1));
+  background: transparent;
+  color: var(--color-text-secondary, #888);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.commit-modal__select-btn:hover:not(:disabled) {
+  background: var(--color-bg-hover, rgba(255, 255, 255, 0.05));
+  color: var(--color-text, #fff);
+}
+
+.commit-modal__select-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* File list */
+.commit-modal__file-list {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.1));
+  border-radius: 6px;
+  background: var(--color-bg, #1e1e1e);
+}
+
+.commit-modal__file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.05));
+  transition: background 0.1s ease;
+}
+
+.commit-modal__file:last-child {
+  border-bottom: none;
+}
+
+.commit-modal__file:hover {
+  background: var(--color-bg-hover, rgba(255, 255, 255, 0.05));
+}
+
+.commit-modal__file--selected {
+  background: rgba(74, 222, 128, 0.1);
+}
+
+.commit-modal__file--selected:hover {
+  background: rgba(74, 222, 128, 0.15);
+}
+
+.commit-modal__checkbox {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-accent-green, #4ade80);
+}
+
+.commit-modal__file-status {
+  flex-shrink: 0;
+  font-family: monospace;
+  font-weight: bold;
+  width: 14px;
+  text-align: center;
+}
+
+.commit-modal__file-path {
+  flex: 1;
+  font-family: monospace;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text, #fff);
+}
+
+.commit-modal__file-stats {
+  flex-shrink: 0;
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.commit-modal__additions {
+  color: #4ade80;
+  margin-right: 6px;
+}
+
+.commit-modal__deletions {
+  color: #f87171;
+}
+
+/* Auto-generate checkbox */
+.commit-modal__auto-generate {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--color-text-secondary, #888);
+  cursor: pointer;
+}
+
+.commit-modal__auto-generate input {
+  accent-color: var(--color-accent, #22d3ee);
+}
+
+/* Commit message textarea */
+.commit-modal__message {
+  width: 100%;
+  min-height: 100px;
+  padding: 12px;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  background: var(--color-bg, #1e1e1e);
+  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.1));
+  border-radius: 6px;
+  color: var(--color-text, #fff);
+  resize: vertical;
+}
+
+.commit-modal__message:focus {
+  outline: none;
+  border-color: var(--color-accent, #22d3ee);
+}
+
+.commit-modal__message::placeholder {
+  color: var(--color-text-secondary, #888);
+}
+
+.commit-modal__message:disabled {
+  opacity: 0.6;
+}
+
+/* Hint text */
+.commit-modal__hint {
+  font-size: 12px;
+  color: var(--color-text-secondary, #888);
+  text-align: right;
+}
+
+/* Mobile responsive */
+@media (max-width: 767px) {
+  .commit-modal__file-list {
+    max-height: 150px;
+  }
+
+  .commit-modal__file {
+    padding: 10px 12px;
+  }
+
+  .commit-modal__file-path {
+    font-size: 12px;
+  }
+
+  .commit-modal__message {
+    font-size: 16px; /* Prevent iOS zoom */
+    min-height: 80px;
+  }
+
+  .commit-modal__section-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+}

@@ -4,11 +4,17 @@
  * Similar interaction modes to DiffView:
  * - Desktop: Click for single line, drag (mousedown->mouseup) for range
  * - Mobile: Tap for single line, long-press to start range, then tap another line
+ *
+ * Supports syntax highlighting for known file types via Prism.
  */
 
-import React, { memo, useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import React, { memo, useState, useCallback, useRef, useEffect, useMemo, useDeferredValue } from 'react';
+import { Prism as PrismHighlighter } from 'react-syntax-highlighter';
+import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import type { CodeReviewComment, ReviewState } from './types';
 import { createLogger } from '../../utils/debugLog';
+import { useTheme } from '../layout';
+import { getLanguageFromPath } from '../StreamingTurnsView/cards/SyntaxHighlighter';
 
 interface FileContentViewProps {
   /** Absolute path to the file */
@@ -48,19 +54,79 @@ const LONG_PRESS_MS = 400;
 // Scoped logger
 const log = createLogger('FileContentView');
 
-/** Get language from file extension for syntax hint */
-function getLanguageFromPath(filePath: string): string {
-  const ext = filePath.split('.').pop()?.toLowerCase() || '';
-  const langMap: Record<string, string> = {
-    ts: 'typescript', tsx: 'tsx', js: 'javascript', jsx: 'jsx',
-    py: 'python', rs: 'rust', go: 'go', rb: 'ruby',
-    java: 'java', c: 'c', cpp: 'cpp', h: 'c', hpp: 'cpp',
-    css: 'css', html: 'html', json: 'json', yaml: 'yaml', yml: 'yaml',
-    md: 'markdown', sh: 'bash', bash: 'bash', zsh: 'bash',
-    sql: 'sql', xml: 'xml', toml: 'toml',
-  };
-  return langMap[ext] || ext;
-}
+// Custom dark theme for file viewer - matches the app's green-tinted UI
+const customDarkTheme = {
+  ...oneDark,
+  'pre[class*="language-"]': {
+    ...oneDark['pre[class*="language-"]'],
+    background: 'transparent',
+    margin: 0,
+    padding: 0,
+    fontSize: '12px',
+    lineHeight: '1.5',
+  },
+  'code[class*="language-"]': {
+    ...oneDark['code[class*="language-"]'],
+    background: 'transparent',
+    fontSize: '12px',
+    lineHeight: '1.5',
+  },
+};
+
+// Custom light theme
+const customLightTheme = {
+  ...oneLight,
+  'pre[class*="language-"]': {
+    ...oneLight['pre[class*="language-"]'],
+    background: 'transparent',
+    margin: 0,
+    padding: 0,
+    fontSize: '12px',
+    lineHeight: '1.5',
+  },
+  'code[class*="language-"]': {
+    ...oneLight['code[class*="language-"]'],
+    background: 'transparent',
+    fontSize: '12px',
+    lineHeight: '1.5',
+  },
+};
+
+/** Renders a single line with syntax highlighting */
+const SyntaxHighlightedLine = memo(function SyntaxHighlightedLine({
+  code,
+  language,
+  isLightTheme,
+}: {
+  code: string;
+  language: string;
+  isLightTheme: boolean;
+}) {
+  const theme = isLightTheme ? customLightTheme : customDarkTheme;
+
+  // Empty lines need a space to maintain height
+  if (!code) {
+    return <pre style={{ margin: 0 }}>{' '}</pre>;
+  }
+
+  return (
+    <PrismHighlighter
+      style={theme}
+      language={language}
+      PreTag="span"
+      customStyle={{
+        display: 'inline',
+        margin: 0,
+        padding: 0,
+        background: 'transparent',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-all',
+      }}
+    >
+      {code}
+    </PrismHighlighter>
+  );
+});
 
 /** Inline comment input form */
 function CommentForm({
@@ -154,6 +220,11 @@ export const FileContentView = memo(function FileContentView({
   onEditComment,
   onDeleteComment,
 }: FileContentViewProps) {
+  // Get current theme for syntax highlighting - use deferred value for non-blocking theme changes
+  const { resolvedTheme: currentTheme } = useTheme();
+  const resolvedTheme = useDeferredValue(currentTheme);
+  const isLightTheme = resolvedTheme === 'light';
+
   // Parse content into lines
   const lines = useMemo(() => content.split('\n'), [content]);
 
@@ -473,7 +544,11 @@ export const FileContentView = memo(function FileContentView({
                   >
                     <td className="file-line__gutter">{lineNumber}</td>
                     <td className="file-line__code">
-                      <pre>{line || ' '}</pre>
+                      <SyntaxHighlightedLine
+                        code={line}
+                        language={language}
+                        isLightTheme={isLightTheme}
+                      />
                     </td>
                   </tr>
                   {/* Render comments at this line */}
