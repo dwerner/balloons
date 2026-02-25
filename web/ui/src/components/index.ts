@@ -18,3 +18,6 @@ export * from './DebugPane';
 // Modal components
 export * from './Modal';
 export * from './SessionReviewModal';
+
+// Dialog components (confirm/alert)
+export * from './Dialog';

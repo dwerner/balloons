@@ -10,6 +10,7 @@ import type { GitDiffResult, DiffFile, FileStateServiceClient } from '../../../.
 import type { ReviewState, CodeReview, CodeReviewComment } from './types';
 import { FileList } from './FileList';
 import { DiffView } from './DiffView';
+import { useDialog } from '../Dialog';
 import './CodeTab.css';
 
 export interface CodeTabProps {
@@ -26,11 +27,17 @@ function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 }
 
+// LocalStorage key for persisting review state
+const REVIEW_STORAGE_KEY = 'balloons:code-review';
+
 export const CodeTab = memo(function CodeTab({
   cwd,
   client,
   onSubmitReview,
 }: CodeTabProps) {
+  // Dialog hook for confirm/alert dialogs
+  const { confirm, alert } = useDialog();
+
   // Diff state
   const [diffResult, setDiffResult] = useState<GitDiffResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -39,10 +46,21 @@ export const CodeTab = memo(function CodeTab({
   // Selected file
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
 
-  // Review state
-  const [reviewState, setReviewState] = useState<ReviewState>({
-    active: false,
-    review: null,
+  // Review state - initialize from localStorage if available
+  const [reviewState, setReviewState] = useState<ReviewState>(() => {
+    try {
+      const saved = localStorage.getItem(REVIEW_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved) as ReviewState;
+        // Validate structure
+        if (parsed.active && parsed.review && Array.isArray(parsed.review.comments)) {
+          return parsed;
+        }
+      }
+    } catch {
+      // Ignore parse errors
+    }
+    return { active: false, review: null };
   });
 
   // Show staged vs unstaged
@@ -80,6 +98,15 @@ export const CodeTab = memo(function CodeTab({
     loadDiff();
   }, [loadDiff]);
 
+  // Persist review state to localStorage when it changes
+  useEffect(() => {
+    if (reviewState.active && reviewState.review) {
+      localStorage.setItem(REVIEW_STORAGE_KEY, JSON.stringify(reviewState));
+    } else {
+      localStorage.removeItem(REVIEW_STORAGE_KEY);
+    }
+  }, [reviewState]);
+
   // Get the selected file
   const selectedFile = useMemo(() => {
     if (!diffResult || !selectedFilePath) return null;
@@ -104,14 +131,21 @@ export const CodeTab = memo(function CodeTab({
   }, []);
 
   // Cancel a review
-  const handleCancelReview = useCallback(() => {
+  const handleCancelReview = useCallback(async () => {
     if (reviewState.review && reviewState.review.comments.length > 0) {
-      if (!confirm('Discard review with comments?')) {
+      const confirmed = await confirm({
+        title: 'Discard Review?',
+        message: `You have ${reviewState.review.comments.length} comment${reviewState.review.comments.length > 1 ? 's' : ''} that will be lost.`,
+        confirmText: 'Discard',
+        cancelText: 'Keep Editing',
+        variant: 'warning',
+      });
+      if (!confirmed) {
         return;
       }
     }
     setReviewState({ active: false, review: null });
-  }, [reviewState]);
+  }, [reviewState, confirm]);
 
   // Add a comment to the review
   const handleAddComment = useCallback((comment: Omit<CodeReviewComment, 'id'>) => {
@@ -133,12 +167,47 @@ export const CodeTab = memo(function CodeTab({
     }));
   }, [reviewState.active, reviewState.review]);
 
+  // Edit an existing comment
+  const handleEditComment = useCallback((commentId: string, newText: string) => {
+    if (!reviewState.active || !reviewState.review) return;
+
+    setReviewState((prev) => ({
+      ...prev,
+      review: prev.review
+        ? {
+            ...prev.review,
+            comments: prev.review.comments.map((c) =>
+              c.id === commentId ? { ...c, comment: newText } : c
+            ),
+          }
+        : null,
+    }));
+  }, [reviewState.active, reviewState.review]);
+
+  // Delete a comment
+  const handleDeleteComment = useCallback((commentId: string) => {
+    if (!reviewState.active || !reviewState.review) return;
+
+    setReviewState((prev) => ({
+      ...prev,
+      review: prev.review
+        ? {
+            ...prev.review,
+            comments: prev.review.comments.filter((c) => c.id !== commentId),
+          }
+        : null,
+    }));
+  }, [reviewState.active, reviewState.review]);
+
   // Submit a review
-  const handleSubmitReview = useCallback(() => {
+  const handleSubmitReview = useCallback(async () => {
     if (!reviewState.review) return;
 
     if (reviewState.review.comments.length === 0) {
-      alert('Add at least one comment before submitting.');
+      await alert({
+        title: 'No Comments',
+        message: 'Add at least one comment before submitting the review.',
+      });
       return;
     }
 
@@ -148,7 +217,7 @@ export const CodeTab = memo(function CodeTab({
 
     // Clear review state
     setReviewState({ active: false, review: null });
-  }, [reviewState, onSubmitReview]);
+  }, [reviewState, onSubmitReview, alert]);
 
   // Refresh diff
   const handleRefresh = useCallback(() => {
@@ -303,6 +372,8 @@ export const CodeTab = memo(function CodeTab({
               file={selectedFile}
               reviewState={reviewState}
               onAddComment={handleAddComment}
+              onEditComment={handleEditComment}
+              onDeleteComment={handleDeleteComment}
             />
           ) : (
             <div className="code-tab__no-selection">

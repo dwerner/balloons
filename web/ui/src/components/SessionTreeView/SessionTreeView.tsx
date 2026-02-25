@@ -165,7 +165,8 @@ function Arrow({ open, color }: { open: boolean; color?: string }) {
       strokeLinejoin="round"
       className={`tree-arrow ${open ? 'tree-arrow--open' : ''}`}
     >
-      <path d="M9 18l6-6-6-6" />
+      {/* Down arrow: points down when closed, rotates to point right when open */}
+      <path d="M6 9l6 6 6-6" />
     </svg>
   );
 }

@@ -170,6 +170,23 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
     delay: 500,
   });
 
+  // Long press handler for working directory - long press opens file browser
+  const cwdLongPress = useLongPress({
+    onLongPress: () => {
+      if (cwd && onCwdClick) {
+        expandDetail();
+        onCwdClick(cwd);
+      }
+    },
+    onClick: () => {
+      // Regular click copies to clipboard
+      if (cwd) {
+        navigator.clipboard.writeText(cwd);
+      }
+    },
+    delay: 500,
+  });
+
   // Handle rename completion
   const handleRenamed = useCallback((newTitle: string) => {
     onTitleChange?.(newTitle);
@@ -300,15 +317,8 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
             {cwd ? (
               <div
                 className={`streaming-status-bar__cwd ${onCwdClick ? 'streaming-status-bar__cwd--clickable' : ''}`}
-                title={onCwdClick ? `${cwd}\n(Click to open in file browser)` : `${cwd}\n(Click to copy)`}
-                onClick={() => {
-                  if (onCwdClick) {
-                    expandDetail();
-                    onCwdClick(cwd);
-                  } else {
-                    navigator.clipboard.writeText(cwd);
-                  }
-                }}
+                title={onCwdClick ? `${cwd}\n(Tap to copy, long-press to open in file browser)` : `${cwd}\n(Tap to copy)`}
+                {...cwdLongPress}
               >
                 <span className="streaming-status-bar__cwd-icon">📁</span>
                 <span className="streaming-status-bar__cwd-path">{formatCwd(cwd)}</span>

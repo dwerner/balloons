@@ -1,0 +1,42 @@
+/**
+ * Dialog CSS
+ *
+ * Styling specific to confirm/alert dialogs.
+ * Uses Modal as the base component.
+ */
+
+/* Dialog message content */
+.dialog-message {
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--color-text-primary, #fff);
+}
+
+/* Variant-specific styling */
+.dialog-modal--danger .modal-title {
+  color: var(--color-accent-red, #f87171);
+}
+
+.dialog-modal--warning .modal-title {
+  color: var(--color-accent-orange, #fb923c);
+}
+
+.dialog-modal--success .modal-title {
+  color: var(--color-accent-green, #4ade80);
+}
+
+/* Button styling (btn-warning is not in Modal.css, add it here) */
+.modal-footer .btn-warning {
+  background: var(--color-accent-orange, #fb923c);
+  color: #000;
+  border: none;
+}
+
+.modal-footer .btn-warning:hover:not(:disabled) {
+  background: var(--color-accent-orange-hover, #f97316);
+}
+
+/* Light theme adjustments */
+[data-theme="light"] .dialog-message {
+  color: var(--color-text-primary, #1f2937);
+}

@@ -14,9 +14,9 @@ export interface CodeReviewComment {
   id: string;
   /** Absolute path to the file */
   file_path: string;
-  /** Starting line number (1-indexed) */
+  /** Starting line number (1-indexed) - for display */
   line_start: number;
-  /** Ending line number for multi-line selections (1-indexed, optional) */
+  /** Ending line number for multi-line selections (1-indexed, optional) - for display */
   line_end?: number;
   /** User's freeform comment text */
   comment: string;
@@ -30,6 +30,8 @@ export interface CodeReviewComment {
   diff_hunk?: string;
   /** For diffs only: type of change */
   change_type?: 'add' | 'delete' | 'modify' | 'context';
+  /** For diffs only: the react-diff-view key for the target line (e.g., 'N123', 'I45', 'D67') */
+  line_key?: string;
 }
 
 /**

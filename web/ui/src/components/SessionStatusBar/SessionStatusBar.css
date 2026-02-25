@@ -223,19 +223,19 @@
   transform: rotate(180deg);
 }
 
-/* Backend dropdown menu - floats upward since status bar is at bottom */
+/* Backend dropdown menu - floats downward from status bar */
 .session-status-bar__backend-dropdown {
   position: absolute;
-  bottom: 100%;
+  top: 100%;
   left: 0;
-  margin-bottom: 8px;
+  margin-top: 8px;
   min-width: 180px;
   max-height: 300px;
   overflow-y: auto;
   background: var(--color-bg-secondary);
   border: 1px solid var(--color-border-secondary);
   border-radius: 8px;
-  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
   z-index: 100;
 }
 

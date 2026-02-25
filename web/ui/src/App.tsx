@@ -13,6 +13,7 @@ import { ForkProposalTurn } from './components/ForkProposalTurn';
 import { CreateTodoModal, type CreateTodoResult } from './components/CreateTodoModal';
 import { SessionReviewModal, type SessionReview, type BackendInfo } from './components/SessionReviewModal';
 import { StreamingTurnsView, type StreamingProgress } from './components/StreamingTurnsView';
+import { DialogProvider, useDialog } from './components/Dialog';
 import { useWakeLock, useSoundNotifications } from './hooks';
 import { setDebugClient, createLogger, isDebugEnabled, setDebugEnabled } from './utils/debugLog';
 
@@ -956,7 +957,24 @@ const MessageInput = memo(MessageInputInner, (prevProps, nextProps) => {
          prevProps.disabled === nextProps.disabled;
 });
 
+/**
+ * Main App component - wraps AppContent with DialogProvider
+ */
 export function App() {
+  return (
+    <DialogProvider>
+      <AppContent />
+    </DialogProvider>
+  );
+}
+
+/**
+ * AppContent - the actual app implementation (wrapped by DialogProvider)
+ */
+function AppContent() {
+  // Dialog hook for confirm/alert dialogs
+  const { confirm } = useDialog();
+
   // Server slot (A=8765, B=8766) - persisted to localStorage
   const [serverSlot, setServerSlot] = useState<ServerSlot>(getInitialSlot);
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
@@ -2123,9 +2141,13 @@ export function App() {
               if (action === 'delete') {
                 // Confirm before deleting
                 const turnCount = turnIndices.length;
-                const confirmed = window.confirm(
-                  `Delete ${turnCount} turn${turnCount > 1 ? 's' : ''}? This cannot be undone.`
-                );
+                const confirmed = await confirm({
+                  title: 'Delete Turns?',
+                  message: `Delete ${turnCount} turn${turnCount > 1 ? 's' : ''}? This action cannot be undone.`,
+                  confirmText: 'Delete',
+                  cancelText: 'Cancel',
+                  variant: 'danger',
+                });
                 if (!confirmed) return;
 
                 const deletedCount = await client.sessionData.deleteTurns(sessionId, turnIndices);
@@ -2377,6 +2399,40 @@ export function App() {
               onTabChange={setMainContentTab}
             />
 
+            {/* Status bar - always visible under tabs */}
+            {selectedSession?.isStreaming && streamingTask ? (
+              <StreamingStatusBar
+                task={streamingTask}
+                queuedMessageCount={queuedMessageCount}
+                onStop={handleStopStreaming}
+                stopDisabled={connectionState !== 'connected'}
+                sessionContextTokens={selectedSession.cachedContextTokens}
+                isPinned={selectedSession.isPinned ?? false}
+                onTogglePin={() => handleTogglePin(selectedSession.id)}
+                scrollState={scrollState}
+                session={selectedSession}
+                client={clientRef.current}
+                cwd={selectedSession.workingDirectory}
+                onTitleChange={(newTitle) => {
+                  // Force a refresh of session data
+                  clientRef.current?.sessions.getSession(selectedSession.id).catch(console.error);
+                }}
+                onCwdClick={handleCwdClick}
+                onSetCwd={handleSetCwd}
+              />
+            ) : selectedSession && (
+              <SessionStatusBar
+                session={selectedSession}
+                isStreaming={selectedSession.isStreaming}
+                client={clientRef.current}
+                onTogglePin={() => handleTogglePin(selectedSession.id)}
+                cwd={selectedSession.workingDirectory}
+                scrollState={scrollState}
+                onCwdClick={handleCwdClick}
+                onSetCwd={handleSetCwd}
+              />
+            )}
+
             <div className="turns-container">
               {mainContentTab === 'streaming' && (
                 clientRef.current && connectionState === 'connected' ? (
@@ -2406,8 +2462,56 @@ export function App() {
                     cwd={selectedSession?.workingDirectory}
                     client={clientRef.current.files}
                     onSubmitReview={(review) => {
-                      // TODO: Convert review to message and send to chat
-                      console.log('Review submitted:', review);
+                      // Format the review as markdown and send to chat
+                      const formatReviewAsMarkdown = (review: CodeReview): string => {
+                        const lines: string[] = [];
+                        lines.push('## Code Review\n');
+
+                        // Group comments by file
+                        const commentsByFile = new Map<string, typeof review.comments>();
+                        for (const comment of review.comments) {
+                          const existing = commentsByFile.get(comment.file_path) || [];
+                          existing.push(comment);
+                          commentsByFile.set(comment.file_path, existing);
+                        }
+
+                        for (const [filePath, comments] of commentsByFile) {
+                          lines.push(`### ${filePath}\n`);
+                          for (const comment of comments) {
+                            // Line range
+                            const lineRange = comment.line_end && comment.line_end !== comment.line_start
+                              ? `Lines ${comment.line_start}-${comment.line_end}`
+                              : `Line ${comment.line_start}`;
+                            lines.push(`**${lineRange}**`);
+
+                            // Code context in a code block
+                            if (comment.context_lines && comment.context_lines.length > 0) {
+                              // Try to infer language from file extension
+                              const ext = filePath.split('.').pop() || '';
+                              const langMap: Record<string, string> = {
+                                ts: 'typescript', tsx: 'tsx', js: 'javascript', jsx: 'jsx',
+                                py: 'python', rs: 'rust', go: 'go', rb: 'ruby',
+                                java: 'java', c: 'c', cpp: 'cpp', h: 'c', hpp: 'cpp',
+                                css: 'css', html: 'html', json: 'json', yaml: 'yaml', yml: 'yaml',
+                                md: 'markdown', sh: 'bash', bash: 'bash', zsh: 'bash',
+                              };
+                              const lang = langMap[ext] || ext;
+                              lines.push(`\`\`\`${lang}`);
+                              lines.push(...comment.context_lines);
+                              lines.push('```');
+                            }
+
+                            // The actual comment
+                            lines.push(`\n${comment.comment}\n`);
+                          }
+                        }
+
+                        return lines.join('\n');
+                      };
+
+                      const message = formatReviewAsMarkdown(review);
+                      handleSubmit(message);
+                      setMainContentTab('streaming');
                     }}
                   />
                 ) : (
@@ -2422,38 +2526,6 @@ export function App() {
             {/* Input area - only show on streaming tab */}
             {mainContentTab === 'streaming' && (
               <div className={`input-area ${selectedSession?.isStreaming ? 'queue-mode' : ''}`}>
-                {selectedSession?.isStreaming && streamingTask ? (
-                  <StreamingStatusBar
-                    task={streamingTask}
-                    queuedMessageCount={queuedMessageCount}
-                    onStop={handleStopStreaming}
-                    stopDisabled={connectionState !== 'connected'}
-                    sessionContextTokens={selectedSession.cachedContextTokens}
-                    isPinned={selectedSession.isPinned ?? false}
-                    onTogglePin={() => handleTogglePin(selectedSession.id)}
-                    scrollState={scrollState}
-                    session={selectedSession}
-                    client={clientRef.current}
-                    cwd={selectedSession.workingDirectory}
-                    onTitleChange={(newTitle) => {
-                      // Force a refresh of session data
-                      clientRef.current?.sessions.getSession(selectedSession.id).catch(console.error);
-                    }}
-                    onCwdClick={handleCwdClick}
-                    onSetCwd={handleSetCwd}
-                  />
-                ) : selectedSession && (
-                  <SessionStatusBar
-                    session={selectedSession}
-                    isStreaming={selectedSession.isStreaming}
-                    client={clientRef.current}
-                    onTogglePin={() => handleTogglePin(selectedSession.id)}
-                    cwd={selectedSession.workingDirectory}
-                    scrollState={scrollState}
-                    onCwdClick={handleCwdClick}
-                    onSetCwd={handleSetCwd}
-                  />
-                )}
                 {/* Image preview area */}
                 {imageAttachments.length > 0 && (
                   <div className="image-preview-area">
