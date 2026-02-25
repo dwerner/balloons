@@ -395,6 +395,9 @@ class ForkManager:
         child_session.fork_name = name
         child_session.fork_status = "active"
         child_session.fork_point_turn = fork_point
+        # Inherit working directory from parent
+        if current_session.working_directories:
+            child_session.working_directories = current_session.working_directories.copy()
 
         # Generate fork_id to share between parent and child
         fork_id = str(uuid.uuid4())
