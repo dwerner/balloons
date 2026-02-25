@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-24T16:32:24.943343
+// Generated: 2026-02-25T08:55:41.153728
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -930,5 +930,39 @@ export interface FileOperationResult {
   success: boolean;
   message: string;
   path?: string | null;
+}
+
+export interface DiffChange {
+  type: string;
+  oldLineNumber: number | null;
+  newLineNumber: number | null;
+  content: string;
+}
+
+export interface DiffHunk {
+  header: string;
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  changes: DiffChange[];
+}
+
+export interface DiffFile {
+  path: string;
+  absolutePath: string;
+  oldPath: string | null;
+  status: string;
+  additions: number;
+  deletions: number;
+  isBinary: boolean;
+  hunks: DiffHunk[];
+}
+
+export interface GitDiffResult {
+  gitRoot: string;
+  files: DiffFile[];
+  hasUnstaged: boolean;
+  hasStaged: boolean;
 }
 

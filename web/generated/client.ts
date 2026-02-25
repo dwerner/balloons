@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-24T16:32:24.946684
+// Generated: 2026-02-25T08:55:41.157604
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -3275,6 +3275,24 @@ export interface FileStateService {
   getCwd(sessionId: string): Promise<string>;
 
   /**
+   * Get git diff for a directory.
+   * 
+   * Returns the unstaged (or staged) changes in a git repository.
+   * Parses the unified diff format into structured data.
+   * 
+   * Args:
+   * path: Path to a directory inside a git repository
+   * staged: If True, show staged changes; if False, show unstaged changes
+   * 
+   * Returns:
+   * GitDiffResult with parsed diff information
+   * 
+   * Raises:
+   * ValueError: If path is not in a git repository
+   */
+  getGitDiff(path: string, staged?: boolean): Promise<Types.GitDiffResult>;
+
+  /**
    * Get the user's home directory.
    * 
    * Returns:
@@ -3344,6 +3362,20 @@ export interface FileStateService {
    * True if the path exists
    */
   pathExists(path: string): Promise<boolean>;
+
+  /**
+   * Read a file's content.
+   * 
+   * Args:
+   * path: Absolute path to the file
+   * 
+   * Returns:
+   * The file content as a string
+   * 
+   * Raises:
+   * ValueError: If path doesn't exist or is a directory
+   */
+  readFile(path: string): Promise<string>;
 
   /**
    * Resolve a relative path against a base directory.
@@ -3444,6 +3476,10 @@ export class FileStateServiceClient implements FileStateService {
     return this.call('getCwd', { sessionId: sessionId });
   }
 
+  async getGitDiff(path: string, staged?: boolean): Promise<Types.GitDiffResult> {
+    return this.call('getGitDiff', { path: path, staged: staged });
+  }
+
   async getHomeDirectory(): Promise<string> {
     return this.call('getHomeDirectory', {  });
   }
@@ -3466,6 +3502,10 @@ export class FileStateServiceClient implements FileStateService {
 
   async pathExists(path: string): Promise<boolean> {
     return this.call('pathExists', { path: path });
+  }
+
+  async readFile(path: string): Promise<string> {
+    return this.call('readFile', { path: path });
   }
 
   async resolvePath(base: string, relative: string): Promise<string> {

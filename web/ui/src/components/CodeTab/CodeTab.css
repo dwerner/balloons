@@ -1,0 +1,863 @@
+/**
+ * CodeTab styles
+ */
+
+/* Main container */
+.code-tab {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+/* Loading/Error/Empty states */
+.code-tab--loading,
+.code-tab--error,
+.code-tab--empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 12px;
+  color: var(--color-text-secondary);
+}
+
+.code-tab__spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.code-tab__error-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--color-error);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  font-weight: bold;
+}
+
+.code-tab__error-message {
+  max-width: 400px;
+  text-align: center;
+}
+
+.code-tab__retry {
+  padding: 8px 16px;
+  border-radius: 4px;
+  background: var(--color-accent);
+  color: white;
+  border: none;
+  cursor: pointer;
+}
+
+.code-tab__retry:hover {
+  opacity: 0.9;
+}
+
+/* Header */
+.code-tab__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border);
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.code-tab__title {
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.code-tab__stats {
+  font-size: 0.85em;
+  font-weight: normal;
+}
+
+.code-tab__additions {
+  color: #4ade80;
+  margin-right: 4px;
+}
+
+.code-tab__deletions {
+  color: #f87171;
+}
+
+.code-tab__actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Toggle buttons */
+.code-tab__toggle {
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 0.85em;
+}
+
+.code-tab__toggle:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+
+.code-tab__toggle--active {
+  background: var(--color-accent);
+  color: white;
+  border-color: var(--color-accent);
+}
+
+.code-tab__toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Action buttons */
+.code-tab__refresh,
+.code-tab__start-review,
+.code-tab__cancel-review,
+.code-tab__submit-review {
+  padding: 6px 12px;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  font-size: 0.85em;
+}
+
+.code-tab__refresh {
+  background: var(--color-bg-secondary);
+  color: var(--color-text);
+}
+
+.code-tab__refresh:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+
+.code-tab__start-review {
+  background: var(--color-accent);
+  color: white;
+}
+
+.code-tab__start-review:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.code-tab__start-review:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.code-tab__cancel-review {
+  background: var(--color-bg-secondary);
+  color: var(--color-text);
+}
+
+.code-tab__cancel-review:hover {
+  background: var(--color-bg-hover);
+}
+
+.code-tab__submit-review {
+  background: #4ade80;
+  color: #000;
+}
+
+.code-tab__submit-review:hover {
+  opacity: 0.9;
+}
+
+/* Review banner */
+.code-tab__review-banner {
+  padding: 8px 12px;
+  background: #4ade80;
+  color: #000;
+  font-size: 0.9em;
+  font-weight: 500;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+/* Main content area */
+.code-tab__content {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Sidebar (file list) */
+.code-tab__sidebar {
+  width: 250px;
+  min-width: 200px;
+  max-width: 400px;
+  border-right: 1px solid var(--color-border);
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+/* Main diff view */
+.code-tab__main {
+  flex: 1;
+  overflow: auto;
+}
+
+.code-tab__no-selection {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--color-text-secondary);
+}
+
+/* ============================================================================
+ * FileList styles
+ * ============================================================================ */
+
+.code-file-list {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.code-file-list--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-secondary);
+  padding: 24px;
+  text-align: center;
+}
+
+.code-file-list__header {
+  padding: 8px 12px;
+  font-size: 0.85em;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.code-file-list__items {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.code-file-list__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+  border-bottom: 1px solid var(--color-border-subtle, rgba(255,255,255,0.05));
+}
+
+.code-file-list__item:hover {
+  background: var(--color-bg-hover);
+}
+
+.code-file-list__item--selected {
+  background: var(--color-bg-selected, rgba(59, 130, 246, 0.2));
+}
+
+.code-file-list__status {
+  font-family: monospace;
+  font-weight: bold;
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.code-file-list__name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.9em;
+}
+
+.code-file-list__dir {
+  font-size: 0.8em;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100px;
+}
+
+.code-file-list__stats {
+  font-size: 0.8em;
+  font-family: monospace;
+  flex-shrink: 0;
+}
+
+.code-file-list__additions {
+  color: #4ade80;
+  margin-right: 4px;
+}
+
+.code-file-list__deletions {
+  color: #f87171;
+}
+
+/* ============================================================================
+ * DiffView styles
+ * ============================================================================ */
+
+.code-diff-view {
+  min-height: 100%;
+}
+
+.code-diff-view--error,
+.code-diff-view--binary,
+.code-diff-view--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--color-text-secondary);
+  padding: 24px;
+}
+
+.code-diff-view__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--color-bg-secondary);
+  border-bottom: 1px solid var(--color-border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.code-diff-view__path {
+  font-family: monospace;
+  font-size: 0.9em;
+}
+
+.code-diff-view__stats {
+  font-size: 0.85em;
+  font-family: monospace;
+}
+
+.code-diff-view__additions {
+  color: #4ade80;
+  margin-right: 8px;
+}
+
+.code-diff-view__deletions {
+  color: #f87171;
+}
+
+/* react-diff-view overrides */
+.code-diff-view .diff-unified {
+  background: var(--color-bg);
+  border: none;
+}
+
+.code-diff-view .diff {
+  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.code-diff-view .diff-gutter-col {
+  width: 60px;
+}
+
+.code-diff-view .diff-gutter {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  padding: 0 8px;
+  text-align: right;
+  user-select: none;
+}
+
+.code-diff-view .diff-code {
+  background: var(--color-bg);
+  padding: 0 12px;
+}
+
+.code-diff-view .diff-line {
+  border: none;
+}
+
+.code-diff-view .diff-line:hover {
+  background: var(--color-bg-hover);
+}
+
+/* Diff colors */
+.code-diff-view .diff-code-insert {
+  background: rgba(74, 222, 128, 0.15);
+}
+
+.code-diff-view .diff-code-delete {
+  background: rgba(248, 113, 113, 0.15);
+}
+
+.code-diff-view .diff-gutter-insert {
+  background: rgba(74, 222, 128, 0.2);
+}
+
+.code-diff-view .diff-gutter-delete {
+  background: rgba(248, 113, 113, 0.2);
+}
+
+/* Hunk header */
+.code-diff-view .diff-hunk-header {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.code-diff-view .diff-hunk-header-gutter {
+  background: var(--color-bg-secondary);
+}
+
+.code-diff-view .diff-hunk-header-content {
+  padding: 4px 12px;
+  font-family: monospace;
+  font-size: 11px;
+}
+
+/* Add comment button on hover */
+.code-diff-gutter--hover {
+  position: relative;
+}
+
+.code-diff-add-comment {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  color: white;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.code-diff-add-comment:hover {
+  opacity: 0.9;
+}
+
+/* Review mode styling - make lines clickable */
+.code-diff-view--review-mode .diff-line {
+  cursor: pointer;
+}
+
+.code-diff-view--review-mode .diff-line:hover {
+  background: rgba(59, 130, 246, 0.15) !important;
+}
+
+.code-diff-view--review-mode .diff-line:hover .diff-gutter {
+  background: rgba(59, 130, 246, 0.25) !important;
+}
+
+/* Visual hint that lines are clickable */
+.code-diff-view--review-mode .diff-gutter::before {
+  content: "+";
+  position: absolute;
+  left: 2px;
+  opacity: 0;
+  color: var(--color-accent);
+  font-weight: bold;
+  font-size: 10px;
+  transition: opacity 0.1s;
+}
+
+.code-diff-view--review-mode .diff-line:hover .diff-gutter::before {
+  opacity: 0.7;
+}
+
+/* Make gutter position relative for the + icon */
+.code-diff-view--review-mode .diff-gutter {
+  position: relative;
+}
+
+/* Review comment widget */
+.code-review-comment {
+  padding: 8px 12px;
+  margin: 4px 0 4px 60px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  border-left: 3px solid var(--color-accent);
+}
+
+.code-review-comment__content {
+  font-size: 0.9em;
+  white-space: pre-wrap;
+}
+
+/* Comment input form */
+.code-comment-form {
+  margin: 4px 0 4px 60px;
+  padding: 8px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-accent);
+  border-radius: 4px;
+}
+
+.code-comment-form__input {
+  width: 100%;
+  min-height: 60px;
+  padding: 8px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 0.9em;
+  resize: vertical;
+}
+
+.code-comment-form__input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.code-comment-form__input::placeholder {
+  color: var(--color-text-secondary);
+}
+
+.code-comment-form__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.code-comment-form__cancel,
+.code-comment-form__submit {
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 0.85em;
+  cursor: pointer;
+  border: none;
+}
+
+.code-comment-form__cancel {
+  background: var(--color-bg);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+}
+
+.code-comment-form__cancel:hover {
+  background: var(--color-bg-hover);
+}
+
+.code-comment-form__submit {
+  background: var(--color-accent);
+  color: white;
+}
+
+.code-comment-form__submit:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.code-comment-form__submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ============================================================================
+ * Mobile Responsive Styles
+ * Priority: maximize diff area, minimize chrome
+ * ============================================================================ */
+
+@media (max-width: 768px) {
+  /* Minimal header bar - 28px total height */
+  .code-tab__header {
+    padding: 2px 6px;
+    gap: 6px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    min-height: 28px;
+    max-height: 28px;
+  }
+
+  /* Abbreviated title */
+  .code-tab__title {
+    font-size: 0.7em;
+    white-space: nowrap;
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .code-tab__stats {
+    font-size: 0.65em;
+  }
+
+  .code-tab__actions {
+    gap: 3px;
+    flex-shrink: 0;
+  }
+
+  /* Micro buttons */
+  .code-tab__toggle,
+  .code-tab__refresh,
+  .code-tab__start-review,
+  .code-tab__cancel-review,
+  .code-tab__submit-review {
+    padding: 1px 5px;
+    font-size: 0.6em;
+    border-radius: 2px;
+    line-height: 1.4;
+  }
+
+  /* Review banner - minimal */
+  .code-tab__review-banner {
+    padding: 2px 6px;
+    font-size: 0.65em;
+  }
+
+  /* Stack sidebar above diff view on mobile */
+  .code-tab__content {
+    flex-direction: column;
+  }
+
+  /* Thin horizontal file strip - 32px */
+  .code-tab__sidebar {
+    width: 100%;
+    min-width: unset;
+    max-width: unset;
+    border-right: none;
+    border-bottom: 1px solid var(--color-border);
+    height: 32px;
+    max-height: 32px;
+    overflow-y: hidden;
+    flex-shrink: 0;
+  }
+
+  .code-file-list {
+    height: 32px;
+    max-height: 32px;
+  }
+
+  /* Hide the "Files" header on mobile */
+  .code-file-list__header {
+    display: none;
+  }
+
+  /* Horizontal scrolling file chips */
+  .code-file-list__items {
+    display: flex;
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+    gap: 0;
+    height: 32px;
+    align-items: stretch;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .code-file-list__items::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Compact file chips */
+  .code-file-list__item {
+    flex-direction: row;
+    align-items: center;
+    min-width: auto;
+    max-width: none;
+    padding: 0 8px;
+    border-bottom: none;
+    border-right: 1px solid var(--color-border-subtle, rgba(255,255,255,0.08));
+    gap: 4px;
+    white-space: nowrap;
+    height: 32px;
+  }
+
+  .code-file-list__item--selected {
+    background: var(--color-bg-selected, rgba(59, 130, 246, 0.3));
+  }
+
+  .code-file-list__status {
+    font-size: 0.65em;
+    width: 10px;
+  }
+
+  .code-file-list__name {
+    font-size: 0.65em;
+    max-width: 70px;
+  }
+
+  /* Hide directory and stats on mobile */
+  .code-file-list__dir,
+  .code-file-list__stats {
+    display: none;
+  }
+
+  /* Main diff takes all remaining space */
+  .code-tab__main {
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* Compact diff header - keep file path visible */
+  .code-diff-view__header {
+    padding: 3px 8px;
+  }
+
+  .code-diff-view__path {
+    font-size: 0.7em;
+    word-break: break-all;
+  }
+
+  .code-diff-view__stats {
+    font-size: 0.6em;
+    flex-shrink: 0;
+  }
+
+  /* Readable diff - don't shrink this */
+  .code-diff-view .diff {
+    font-size: 11px;
+    line-height: 1.4;
+  }
+
+  .code-diff-view .diff-gutter-col {
+    width: 30px;
+  }
+
+  .code-diff-view .diff-gutter {
+    padding: 0 2px;
+    font-size: 9px;
+  }
+
+  .code-diff-view .diff-code {
+    padding: 0 6px;
+  }
+
+  .code-diff-view .diff-hunk-header-content {
+    padding: 2px 6px;
+    font-size: 9px;
+  }
+
+  /* Comment widget */
+  .code-review-comment {
+    margin: 2px 4px 2px 30px;
+    padding: 4px 8px;
+  }
+
+  .code-review-comment__content {
+    font-size: 0.8em;
+  }
+
+  /* Comment form on mobile */
+  .code-comment-form {
+    margin: 2px 4px 2px 30px;
+    padding: 6px;
+  }
+
+  .code-comment-form__input {
+    min-height: 50px;
+    padding: 6px;
+    font-size: 0.85em;
+  }
+
+  .code-comment-form__actions {
+    gap: 6px;
+    margin-top: 6px;
+  }
+
+  .code-comment-form__cancel,
+  .code-comment-form__submit {
+    padding: 4px 10px;
+    font-size: 0.8em;
+  }
+}
+
+/* Extra small screens - squeeze more */
+@media (max-width: 480px) {
+  .code-tab__header {
+    padding: 2px 4px;
+    gap: 4px;
+    min-height: 24px;
+    max-height: 24px;
+  }
+
+  .code-tab__title {
+    font-size: 0.65em;
+  }
+
+  .code-tab__toggle,
+  .code-tab__refresh,
+  .code-tab__start-review,
+  .code-tab__cancel-review,
+  .code-tab__submit-review {
+    padding: 1px 4px;
+    font-size: 0.55em;
+  }
+
+  /* Thinner file strip */
+  .code-tab__sidebar {
+    height: 28px;
+    max-height: 28px;
+  }
+
+  .code-file-list {
+    height: 28px;
+    max-height: 28px;
+  }
+
+  .code-file-list__item {
+    padding: 0 6px;
+    height: 28px;
+    gap: 3px;
+  }
+
+  .code-file-list__name {
+    font-size: 0.6em;
+    max-width: 55px;
+  }
+
+  .code-diff-view .diff-gutter-col {
+    width: 26px;
+  }
+
+  .code-diff-view .diff-gutter {
+    font-size: 8px;
+  }
+
+  .code-review-comment {
+    margin-left: 26px;
+  }
+}

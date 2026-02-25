@@ -6,6 +6,7 @@ import { AppLayout, useLayout, useTheme, usePreferences } from './components/lay
 import { SessionTreeView } from './components/SessionTreeView';
 import { GoalTreeView } from './components/GoalTreeView';
 import { FileBrowserView, type FileBrowserViewRef } from './components/FileBrowserView';
+import { CodeTab, type CodeReview } from './components/CodeTab';
 import { SessionStatusBar } from './components/SessionStatusBar';
 import { StreamingStatusBar } from './components/StreamingStatusBar';
 import { ForkProposalTurn } from './components/ForkProposalTurn';
@@ -2399,114 +2400,128 @@ export function App() {
                   <p>Context view coming soon.</p>
                 </div>
               )}
-              {mainContentTab === 'changes' && (
-                <div className="empty-state">
-                  <h2>Changes</h2>
-                  <p>Changes view coming soon.</p>
-                </div>
+              {mainContentTab === 'code' && (
+                connectionState === 'connected' && clientRef.current ? (
+                  <CodeTab
+                    cwd={selectedSession?.workingDirectory}
+                    client={clientRef.current.files}
+                    onSubmitReview={(review) => {
+                      // TODO: Convert review to message and send to chat
+                      console.log('Review submitted:', review);
+                    }}
+                  />
+                ) : (
+                  <div className="empty-state">
+                    <h2>Code</h2>
+                    <p>Connect to server to view changes.</p>
+                  </div>
+                )
               )}
             </div>
 
-            <div className={`input-area ${selectedSession?.isStreaming ? 'queue-mode' : ''}`}>
-              {selectedSession?.isStreaming && streamingTask ? (
-                <StreamingStatusBar
-                  task={streamingTask}
-                  queuedMessageCount={queuedMessageCount}
-                  onStop={handleStopStreaming}
-                  stopDisabled={connectionState !== 'connected'}
-                  sessionContextTokens={selectedSession.cachedContextTokens}
-                  isPinned={selectedSession.isPinned ?? false}
-                  onTogglePin={() => handleTogglePin(selectedSession.id)}
-                  scrollState={scrollState}
-                  session={selectedSession}
-                  client={clientRef.current}
-                  cwd={selectedSession.workingDirectory}
-                  onTitleChange={(newTitle) => {
-                    // Force a refresh of session data
-                    clientRef.current?.sessions.getSession(selectedSession.id).catch(console.error);
-                  }}
-                  onCwdClick={handleCwdClick}
-                  onSetCwd={handleSetCwd}
-                />
-              ) : selectedSession && (
-                <SessionStatusBar
-                  session={selectedSession}
-                  isStreaming={selectedSession.isStreaming}
-                  client={clientRef.current}
-                  onTogglePin={() => handleTogglePin(selectedSession.id)}
-                  cwd={selectedSession.workingDirectory}
-                  scrollState={scrollState}
-                  onCwdClick={handleCwdClick}
-                  onSetCwd={handleSetCwd}
-                />
-              )}
-              {/* Image preview area */}
-              {imageAttachments.length > 0 && (
-                <div className="image-preview-area">
-                  {imageAttachments.map(img => (
-                    <div key={img.id} className={`image-preview ${img.error ? 'error' : ''}`}>
-                      <img src={img.previewUrl} alt={img.file.name} />
-                      <button
-                        type="button"
-                        className="image-remove-button"
-                        onClick={() => removeImageAttachment(img.id)}
-                        title="Remove image"
-                      >
-                        ×
-                      </button>
-                      {img.error && <span className="image-error">{img.error}</span>}
-                    </div>
-                  ))}
-                </div>
-              )}
-              <form className="input-form" onSubmit={handleSubmit}>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/png,image/jpeg,image/gif,image/webp"
-                  multiple
-                  onChange={handleFileInputChange}
-                  style={{ display: 'none' }}
-                />
-                <button
-                  type="button"
-                  className="attach-button"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={connectionState !== 'connected' || selectedSession?.isStreaming || isLoadingTurns}
-                  title="Attach image (or paste from clipboard)"
-                >
-                  📎
-                </button>
-                <MessageInput
-                  ref={messageInputRef}
-                  placeholder={isLoadingTurns
-                    ? "Loading session..."
-                    : selectedSession?.isStreaming
-                      ? "Type to queue... (messages will be sent after streaming completes)"
-                      : "Type a message... (Enter to send, Shift+Enter for newline, Ctrl+V to paste image)"}
-                  disabled={connectionState !== 'connected' || isLoadingTurns}
-                  onSubmit={handleSubmit}
-                  onPaste={handlePaste}
-                />
-                {selectedSession?.isStreaming ? (
-                  <button
-                    type="submit"
-                    className="queue-button"
-                    disabled={connectionState !== 'connected' || isLoadingTurns}
-                  >
-                    Queue
-                  </button>
-                ) : (
-                  <button
-                    type="submit"
-                    className="send-button"
-                    disabled={connectionState !== 'connected' || isLoadingTurns}
-                  >
-                    Send
-                  </button>
+            {/* Input area - only show on streaming tab */}
+            {mainContentTab === 'streaming' && (
+              <div className={`input-area ${selectedSession?.isStreaming ? 'queue-mode' : ''}`}>
+                {selectedSession?.isStreaming && streamingTask ? (
+                  <StreamingStatusBar
+                    task={streamingTask}
+                    queuedMessageCount={queuedMessageCount}
+                    onStop={handleStopStreaming}
+                    stopDisabled={connectionState !== 'connected'}
+                    sessionContextTokens={selectedSession.cachedContextTokens}
+                    isPinned={selectedSession.isPinned ?? false}
+                    onTogglePin={() => handleTogglePin(selectedSession.id)}
+                    scrollState={scrollState}
+                    session={selectedSession}
+                    client={clientRef.current}
+                    cwd={selectedSession.workingDirectory}
+                    onTitleChange={(newTitle) => {
+                      // Force a refresh of session data
+                      clientRef.current?.sessions.getSession(selectedSession.id).catch(console.error);
+                    }}
+                    onCwdClick={handleCwdClick}
+                    onSetCwd={handleSetCwd}
+                  />
+                ) : selectedSession && (
+                  <SessionStatusBar
+                    session={selectedSession}
+                    isStreaming={selectedSession.isStreaming}
+                    client={clientRef.current}
+                    onTogglePin={() => handleTogglePin(selectedSession.id)}
+                    cwd={selectedSession.workingDirectory}
+                    scrollState={scrollState}
+                    onCwdClick={handleCwdClick}
+                    onSetCwd={handleSetCwd}
+                  />
                 )}
-              </form>
-            </div>
+                {/* Image preview area */}
+                {imageAttachments.length > 0 && (
+                  <div className="image-preview-area">
+                    {imageAttachments.map(img => (
+                      <div key={img.id} className={`image-preview ${img.error ? 'error' : ''}`}>
+                        <img src={img.previewUrl} alt={img.file.name} />
+                        <button
+                          type="button"
+                          className="image-remove-button"
+                          onClick={() => removeImageAttachment(img.id)}
+                          title="Remove image"
+                        >
+                          ×
+                        </button>
+                        {img.error && <span className="image-error">{img.error}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <form className="input-form" onSubmit={handleSubmit}>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/gif,image/webp"
+                    multiple
+                    onChange={handleFileInputChange}
+                    style={{ display: 'none' }}
+                  />
+                  <button
+                    type="button"
+                    className="attach-button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={connectionState !== 'connected' || selectedSession?.isStreaming || isLoadingTurns}
+                    title="Attach image (or paste from clipboard)"
+                  >
+                    📎
+                  </button>
+                  <MessageInput
+                    ref={messageInputRef}
+                    placeholder={isLoadingTurns
+                      ? "Loading session..."
+                      : selectedSession?.isStreaming
+                        ? "Type to queue... (messages will be sent after streaming completes)"
+                        : "Type a message... (Enter to send, Shift+Enter for newline, Ctrl+V to paste image)"}
+                    disabled={connectionState !== 'connected' || isLoadingTurns}
+                    onSubmit={handleSubmit}
+                    onPaste={handlePaste}
+                  />
+                  {selectedSession?.isStreaming ? (
+                    <button
+                      type="submit"
+                      className="queue-button"
+                      disabled={connectionState !== 'connected' || isLoadingTurns}
+                    >
+                      Queue
+                    </button>
+                  ) : (
+                    <button
+                      type="submit"
+                      className="send-button"
+                      disabled={connectionState !== 'connected' || isLoadingTurns}
+                    >
+                      Send
+                    </button>
+                  )}
+                </form>
+              </div>
+            )}
           </>
         )}
       </AppLayout.Main>
@@ -2762,7 +2777,7 @@ function MobileHeader({ connectionState, selectedSession }: MobileHeaderProps) {
 }
 
 // Main content tab type
-type MainContentTab = 'streaming' | 'context' | 'changes';
+type MainContentTab = 'streaming' | 'context' | 'code';
 
 /**
  * Header bar for the main content area with tabs and detail panel toggle
@@ -2792,10 +2807,10 @@ function MainContentHeader({
         Context
       </button>
       <button
-        className={`view-toggle-btn ${activeTab === 'changes' ? 'active' : ''}`}
-        onClick={() => onTabChange('changes')}
+        className={`view-toggle-btn ${activeTab === 'code' ? 'active' : ''}`}
+        onClick={() => onTabChange('code')}
       >
-        Changes
+        Code
       </button>
 
       {/* Spacer */}

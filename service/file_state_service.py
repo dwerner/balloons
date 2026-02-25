@@ -90,6 +90,61 @@ class FileOperationResult:
 
 
 # =============================================================================
+# Git Diff Types
+# =============================================================================
+
+
+@ws_type
+@dataclass
+class DiffChange:
+    """A single line change in a diff."""
+
+    type: str  # 'normal', 'insert', or 'delete'
+    old_line_number: int | None  # null for inserts
+    new_line_number: int | None  # null for deletes
+    content: str  # line content without +/- prefix
+
+
+@ws_type
+@dataclass
+class DiffHunk:
+    """A hunk in a unified diff."""
+
+    header: str  # e.g., "@@ -1,5 +1,6 @@"
+    old_start: int
+    old_lines: int
+    new_start: int
+    new_lines: int
+    changes: list[DiffChange]
+
+
+@ws_type
+@dataclass
+class DiffFile:
+    """A file with changes in the git diff."""
+
+    path: str  # relative path from git root
+    absolute_path: str
+    old_path: str | None  # for renames
+    status: str  # 'added', 'modified', 'deleted', 'renamed', 'copied'
+    additions: int
+    deletions: int
+    is_binary: bool
+    hunks: list[DiffHunk]
+
+
+@ws_type
+@dataclass
+class GitDiffResult:
+    """Result of getting git diff."""
+
+    git_root: str
+    files: list[DiffFile]
+    has_unstaged: bool
+    has_staged: bool
+
+
+# =============================================================================
 # Service Class
 # =============================================================================
 
@@ -389,6 +444,247 @@ class FileStateService:
             The home directory path
         """
         return os.path.expanduser("~")
+
+    # --- Git Diff ---
+
+    @ws_expose
+    async def get_git_diff(self, path: str, staged: bool = False) -> GitDiffResult:
+        """Get git diff for a directory.
+
+        Returns the unstaged (or staged) changes in a git repository.
+        Parses the unified diff format into structured data.
+
+        Args:
+            path: Path to a directory inside a git repository
+            staged: If True, show staged changes; if False, show unstaged changes
+
+        Returns:
+            GitDiffResult with parsed diff information
+
+        Raises:
+            ValueError: If path is not in a git repository
+        """
+        import subprocess
+        import re
+
+        # Find git root
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=path,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            git_root = result.stdout.strip()
+        except subprocess.CalledProcessError:
+            raise ValueError(f"Not a git repository: {path}")
+
+        # Get diff
+        diff_cmd = ["git", "diff"]
+        if staged:
+            diff_cmd.append("--cached")
+        diff_cmd.extend(["--no-color", "--unified=3"])
+
+        result = subprocess.run(
+            diff_cmd,
+            cwd=git_root,
+            capture_output=True,
+            text=True,
+        )
+        diff_output = result.stdout
+
+        # Check for staged/unstaged changes
+        has_staged = False
+        has_unstaged = False
+
+        status_result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=git_root,
+            capture_output=True,
+            text=True,
+        )
+        for line in status_result.stdout.splitlines():
+            if len(line) >= 2:
+                index_status = line[0]
+                worktree_status = line[1]
+                if index_status not in (' ', '?'):
+                    has_staged = True
+                if worktree_status not in (' ', '?'):
+                    has_unstaged = True
+
+        # Parse the diff output
+        files = self._parse_diff_output(diff_output, git_root)
+
+        return GitDiffResult(
+            git_root=git_root,
+            files=files,
+            has_unstaged=has_unstaged,
+            has_staged=has_staged,
+        )
+
+    def _parse_diff_output(self, diff_output: str, git_root: str) -> list[DiffFile]:
+        """Parse unified diff output into structured DiffFile objects."""
+        import re
+
+        files: list[DiffFile] = []
+        current_file: DiffFile | None = None
+        current_hunk: DiffHunk | None = None
+
+        # Regex patterns
+        diff_header = re.compile(r'^diff --git a/(.+) b/(.+)$')
+        old_file = re.compile(r'^--- (?:a/)?(.+)$')
+        new_file = re.compile(r'^\+\+\+ (?:b/)?(.+)$')
+        hunk_header = re.compile(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@')
+        index_line = re.compile(r'^index [0-9a-f]+\.\.[0-9a-f]+')
+        mode_line = re.compile(r'^(new|deleted|old|new file|deleted file|similarity|rename|copy)')
+        binary_line = re.compile(r'^Binary files')
+
+        old_line_num = 0
+        new_line_num = 0
+
+        for line in diff_output.splitlines():
+            # Check for diff header (new file)
+            m = diff_header.match(line)
+            if m:
+                # Save previous file if exists
+                if current_file is not None:
+                    if current_hunk is not None:
+                        current_file.hunks.append(current_hunk)
+                    files.append(current_file)
+
+                old_path = m.group(1)
+                new_path = m.group(2)
+
+                current_file = DiffFile(
+                    path=new_path,
+                    absolute_path=os.path.join(git_root, new_path),
+                    old_path=old_path if old_path != new_path else None,
+                    status='modified',  # Will be updated based on mode lines
+                    additions=0,
+                    deletions=0,
+                    is_binary=False,
+                    hunks=[],
+                )
+                current_hunk = None
+                continue
+
+            # Skip index and mode lines but extract status
+            if index_line.match(line):
+                continue
+
+            if mode_line.match(line):
+                if current_file:
+                    if 'new file' in line:
+                        current_file.status = 'added'
+                    elif 'deleted file' in line:
+                        current_file.status = 'deleted'
+                    elif 'rename' in line:
+                        current_file.status = 'renamed'
+                    elif 'copy' in line:
+                        current_file.status = 'copied'
+                continue
+
+            # Check for binary file
+            if binary_line.match(line):
+                if current_file:
+                    current_file.is_binary = True
+                continue
+
+            # Skip old/new file headers
+            if old_file.match(line) or new_file.match(line):
+                continue
+
+            # Check for hunk header
+            m = hunk_header.match(line)
+            if m:
+                # Save previous hunk
+                if current_hunk is not None and current_file is not None:
+                    current_file.hunks.append(current_hunk)
+
+                old_start = int(m.group(1))
+                old_lines = int(m.group(2)) if m.group(2) else 1
+                new_start = int(m.group(3))
+                new_lines = int(m.group(4)) if m.group(4) else 1
+
+                current_hunk = DiffHunk(
+                    header=line,
+                    old_start=old_start,
+                    old_lines=old_lines,
+                    new_start=new_start,
+                    new_lines=new_lines,
+                    changes=[],
+                )
+                old_line_num = old_start
+                new_line_num = new_start
+                continue
+
+            # Parse change lines (within a hunk)
+            if current_hunk is not None:
+                if line.startswith('+'):
+                    change = DiffChange(
+                        type='insert',
+                        old_line_number=None,
+                        new_line_number=new_line_num,
+                        content=line[1:],  # Remove + prefix
+                    )
+                    current_hunk.changes.append(change)
+                    if current_file:
+                        current_file.additions += 1
+                    new_line_num += 1
+                elif line.startswith('-'):
+                    change = DiffChange(
+                        type='delete',
+                        old_line_number=old_line_num,
+                        new_line_number=None,
+                        content=line[1:],  # Remove - prefix
+                    )
+                    current_hunk.changes.append(change)
+                    if current_file:
+                        current_file.deletions += 1
+                    old_line_num += 1
+                elif line.startswith(' ') or line == '':
+                    # Context line
+                    content = line[1:] if line.startswith(' ') else ''
+                    change = DiffChange(
+                        type='normal',
+                        old_line_number=old_line_num,
+                        new_line_number=new_line_num,
+                        content=content,
+                    )
+                    current_hunk.changes.append(change)
+                    old_line_num += 1
+                    new_line_num += 1
+                # Ignore \ No newline at end of file and other special lines
+
+        # Don't forget the last file/hunk
+        if current_file is not None:
+            if current_hunk is not None:
+                current_file.hunks.append(current_hunk)
+            files.append(current_file)
+
+        return files
+
+    @ws_expose
+    async def read_file(self, path: str) -> str:
+        """Read a file's content.
+
+        Args:
+            path: Absolute path to the file
+
+        Returns:
+            The file content as a string
+
+        Raises:
+            ValueError: If path doesn't exist or is a directory
+        """
+        if not os.path.exists(path):
+            raise ValueError(f"File not found: {path}")
+        if os.path.isdir(path):
+            raise ValueError(f"Path is a directory: {path}")
+
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            return f.read()
 
     # --- Events ---
 
