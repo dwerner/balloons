@@ -2,7 +2,7 @@
 //!
 //! Generated from Python domain entities marked with @rust_schema.
 //! Source: models.py and other domain modules
-//! Generated: 2026-02-19T17:35:55.818505
+//! Generated: 2026-02-24T16:32:25.045451
 //!
 //! To regenerate:
 //!     python -m codegen.generate_rust
@@ -29,6 +29,8 @@ pub struct TurnData {
     pub started_at: Option<String>,
     #[serde(default)]
     pub ended_at: Option<String>,
+    #[serde(default)]
+    pub parallel_group_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,8 +77,6 @@ pub struct SessionMetadata {
     pub created_at: i64,
     pub updated_at: i64,
     pub turn_count: i64,
-    #[serde(default)]
-    pub working_directories: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
