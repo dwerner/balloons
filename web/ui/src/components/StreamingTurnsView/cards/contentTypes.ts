@@ -6,6 +6,7 @@
 
 import type {
   TextBlock,
+  MarkdownBlock,
   ImageBlock,
   ToolUseBlock,
   ToolResultBlock,
@@ -25,6 +26,7 @@ import type {
 // Re-export individual block types
 export type {
   TextBlock,
+  MarkdownBlock,
   ImageBlock,
   ToolUseBlock,
   ToolResultBlock,
@@ -46,6 +48,7 @@ export type {
  */
 export type ContentBlock =
   | TextBlock
+  | MarkdownBlock
   | ImageBlock
   | ToolUseBlock
   | ToolResultBlock
@@ -66,6 +69,7 @@ export type ContentBlock =
  */
 export type ContentBlockType =
   | 'text'
+  | 'markdown'
   | 'image'
   | 'tool_use'
   | 'tool_result'
@@ -94,6 +98,10 @@ export function isBlockType<T extends ContentBlock>(
 // Specific type guards
 export function isTextBlock(block: ContentBlock | null | undefined): block is TextBlock {
   return isBlockType(block, 'text');
+}
+
+export function isMarkdownBlock(block: ContentBlock | null | undefined): block is MarkdownBlock {
+  return isBlockType(block, 'markdown');
 }
 
 export function isToolUseBlock(block: ContentBlock | null | undefined): block is ToolUseBlock {

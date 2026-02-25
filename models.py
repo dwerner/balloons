@@ -43,6 +43,22 @@ class TextBlock:
 
 @ws_type
 @dataclass
+class MarkdownBlock:
+    """Markdown content - rendered with full formatting.
+
+    Use this instead of TextBlock when the content should be rendered
+    as Markdown (with syntax highlighting, tables, etc.) regardless of
+    the turn's role. Useful for:
+    - File review injections
+    - Formatted system content
+    - Rich user-provided content
+    """
+    type: str = "markdown"
+    text: str = ""
+
+
+@ws_type
+@dataclass
 class ImageBlock:
     """Image content - stores reference to uploaded image.
 
@@ -380,7 +396,7 @@ class SessionSummaryBlock:
 
 
 # Union type for all content block types
-ContentBlock = Union[TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ForkedFromBlock, ArchiveBlock, SessionSummaryBlock, SlideBlock, ReviewBlock, ForkProposalBlock, MergeProposalBlock]
+ContentBlock = Union[TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ForkedFromBlock, ArchiveBlock, SessionSummaryBlock, SlideBlock, ReviewBlock, ForkProposalBlock, MergeProposalBlock]
 
 
 @dataclass

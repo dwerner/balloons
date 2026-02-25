@@ -43,7 +43,7 @@ from service.session_events import (
     ToolResultEvent,
 )
 from models import (
-    TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock,
+    TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock,
     InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, ForkedFromBlock,
     MergeBlock, MergedToBlock, ArchiveBlock, SlideBlock, ReviewBlock,
     ForkProposalBlock, MergeProposalBlock
@@ -55,7 +55,7 @@ if TYPE_CHECKING:
 
 # ContentBlock union for type annotations
 ContentBlock = Union[
-    TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock,
+    TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock,
     InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, ForkedFromBlock,
     MergeBlock, MergedToBlock, ArchiveBlock, SlideBlock, ReviewBlock,
     ForkProposalBlock, MergeProposalBlock

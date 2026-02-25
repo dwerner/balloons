@@ -10,7 +10,7 @@ from typing import Optional, AsyncIterator
 
 import aiofiles
 
-from models import Message, TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, ArchiveSummary, SlideBlock, ReviewBlock, ContentBlock, ContextMode, QueuedMessage, MessageQueue, Turn, ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData, ExchangeInfo
+from models import Message, TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, ArchiveSummary, SlideBlock, ReviewBlock, ContentBlock, ContextMode, QueuedMessage, MessageQueue, Turn, ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData, ExchangeInfo
 
 # Rust storage availability (checked lazily to avoid circular imports)
 _rust_storage_checked = False

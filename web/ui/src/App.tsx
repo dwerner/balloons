@@ -6,7 +6,7 @@ import { AppLayout, useLayout, useTheme, usePreferences } from './components/lay
 import { SessionTreeView } from './components/SessionTreeView';
 import { GoalTreeView } from './components/GoalTreeView';
 import { FileBrowserView, type FileBrowserViewRef } from './components/FileBrowserView';
-import { CodeTab, type CodeReview } from './components/CodeTab';
+import { CodeTab, type CodeReview, type CodeTabHandle } from './components/CodeTab';
 import { SessionStatusBar } from './components/SessionStatusBar';
 import { StreamingStatusBar } from './components/StreamingStatusBar';
 import { ForkProposalTurn } from './components/ForkProposalTurn';
@@ -1031,6 +1031,7 @@ function AppContent() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messageInputRef = useRef<MessageInputHandle>(null);
   const fileBrowserRef = useRef<FileBrowserViewRef>(null);
+  const codeTabRef = useRef<CodeTabHandle>(null);
   // Track the session we're currently loading to handle race conditions
   const loadingSessionRef = useRef<string | null>(null);
 
@@ -2459,6 +2460,7 @@ function AppContent() {
               {mainContentTab === 'code' && (
                 connectionState === 'connected' && clientRef.current ? (
                   <CodeTab
+                    ref={codeTabRef}
                     cwd={selectedSession?.workingDirectory}
                     client={clientRef.current.files}
                     onSubmitReview={(review) => {
@@ -2608,7 +2610,8 @@ function AppContent() {
             client={clientRef.current.files}
             onFileSelect={(path) => {
               debugLog('File selected', { path });
-              // TODO: Could insert file path into chat input, open file preview, etc.
+              // Open the file in the Code tab
+              codeTabRef.current?.openFile(path);
             }}
             onSetWorkingDirectory={handleSetWorkingDirectory}
             onInsertPath={(path) => {

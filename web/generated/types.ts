@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-25T08:55:41.153728
+// Generated: 2026-02-25T13:00:25.316946
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -32,6 +32,11 @@ export interface QueueEventData {
 }
 
 export interface TextBlock {
+  type?: string;
+  text?: string;
+}
+
+export interface MarkdownBlock {
   type?: string;
   text?: string;
 }
@@ -615,7 +620,7 @@ export interface TurnSnapshot {
   viewed: boolean;
   tokens: number;
   contextMode: string;
-  contentBlock: TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock | InterruptionBlock | ErrorBlock | LinkBlock | ForkBlock | ForkedFromBlock | MergeBlock | MergedToBlock | ArchiveBlock | SlideBlock | ReviewBlock | ForkProposalBlock | MergeProposalBlock;
+  contentBlock: TextBlock | MarkdownBlock | ImageBlock | ToolUseBlock | ToolResultBlock | InterruptionBlock | ErrorBlock | LinkBlock | ForkBlock | ForkedFromBlock | MergeBlock | MergedToBlock | ArchiveBlock | SlideBlock | ReviewBlock | ForkProposalBlock | MergeProposalBlock;
   order?: number;
   exchangeId?: string | null;
   timestamp?: string | null;
@@ -666,7 +671,7 @@ export interface SessionTurnFinishedEvent {
   tokens: number;
   order?: number;
   role?: string;
-  contentBlock?: TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock | InterruptionBlock | ErrorBlock | LinkBlock | ForkBlock | ForkedFromBlock | MergeBlock | MergedToBlock | ArchiveBlock | SlideBlock | ReviewBlock | ForkProposalBlock | MergeProposalBlock | null;
+  contentBlock?: TextBlock | MarkdownBlock | ImageBlock | ToolUseBlock | ToolResultBlock | InterruptionBlock | ErrorBlock | LinkBlock | ForkBlock | ForkedFromBlock | MergeBlock | MergedToBlock | ArchiveBlock | SlideBlock | ReviewBlock | ForkProposalBlock | MergeProposalBlock | null;
   finalContent?: string;
   contextTokens?: number;
   outputTokensTotal?: number;

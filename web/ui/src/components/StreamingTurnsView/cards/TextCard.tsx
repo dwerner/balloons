@@ -1,10 +1,14 @@
 /**
- * TextCard - Renders text content blocks (user or assistant)
+ * TextCard - Renders text and markdown content blocks
  *
  * Features:
- * - Markdown rendering for assistant responses
- * - Plain text for user messages
+ * - Markdown rendering for assistant responses and markdown blocks
+ * - Plain text for user messages (unless block type is 'markdown')
  * - Raw JSON view toggle for debugging turn data
+ *
+ * Block types handled:
+ * - 'text': Plain text (user) or markdown (assistant)
+ * - 'markdown': Always rendered as markdown regardless of role
  */
 
 import React, { useState } from 'react';
@@ -12,7 +16,7 @@ import { MarkdownContent } from '../../../MarkdownContent';
 import { SyntaxHighlightedCode } from './SyntaxHighlighter';
 import { formatTimestamp } from '../../../utils';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
-import type { TextBlock } from '../../../../../generated/types';
+import type { TextBlock, MarkdownBlock } from '../../../../../generated/types';
 import './cards.css';
 
 type DisplayMode = 'formatted' | 'raw';
@@ -81,13 +85,14 @@ export function TextCard({ turn }: TextCardProps) {
   const { role, contentBlock, streaming, tokens, order, timestamp } = turn;
   const isUser = role === 'user';
   const isAssistant = role === 'assistant';
+  const isMarkdownBlock = contentBlock?.type === 'markdown';
 
   // Display mode state - formatted (default) or raw JSON
   const [displayMode, setDisplayMode] = useState<DisplayMode>('formatted');
 
-  // Extract text from content block
-  const content = contentBlock?.type === 'text'
-    ? (contentBlock as TextBlock).text ?? ''
+  // Extract text from content block (works for both 'text' and 'markdown' types)
+  const content = (contentBlock?.type === 'text' || contentBlock?.type === 'markdown')
+    ? ((contentBlock as TextBlock | MarkdownBlock).text ?? '')
     : '';
 
   const roleConfig = {
@@ -102,6 +107,22 @@ export function TextCard({ turn }: TextCardProps) {
   const renderBody = () => {
     if (displayMode === 'raw') {
       return <RawDataDisplay data={turn} />;
+    }
+
+    // Markdown blocks are always rendered as markdown regardless of role
+    if (isMarkdownBlock) {
+      if (content) {
+        return <MarkdownContent content={content} />;
+      }
+      if (streaming) {
+        return (
+          <div className="thinking-indicator">
+            <span className="thinking-spinner" />
+            <span className="thinking-text">Loading...</span>
+          </div>
+        );
+      }
+      return null;
     }
 
     if (isAssistant) {

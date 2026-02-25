@@ -57,6 +57,7 @@ export type {
   ContentBlock,
   ContentBlockType,
   TextBlock,
+  MarkdownBlock,
   ToolUseBlock,
   ToolResultBlock,
   ImageBlock,
@@ -75,6 +76,7 @@ export type {
 
 export {
   isTextBlock,
+  isMarkdownBlock,
   isToolUseBlock,
   isToolResultBlock,
   isForkBlock,
