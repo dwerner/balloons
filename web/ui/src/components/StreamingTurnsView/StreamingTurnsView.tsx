@@ -88,6 +88,11 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
   // Ref to track programmatic scrolls - use a counter to handle overlapping scrolls
   const programmaticScrollCountRef = useRef(0);
 
+  // Track if user is actively scrolling via wheel/touch (direct user input)
+  // This takes priority over programmatic scroll detection
+  const userScrollingRef = useRef(false);
+  const userScrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Last scroll position for direction detection
   const lastScrollTopRef = useRef(0);
 
@@ -265,22 +270,50 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     }, 100);
   }, [virtualizer, turnsOrGroups.length]);
 
-  // Handle scroll events
+  // Mark user as actively scrolling - used by wheel and touch handlers
+  const markUserScrolling = useCallback(() => {
+    userScrollingRef.current = true;
+    if (userScrollTimeoutRef.current) {
+      clearTimeout(userScrollTimeoutRef.current);
+    }
+    // Clear the flag after user stops scrolling for a bit
+    userScrollTimeoutRef.current = setTimeout(() => {
+      userScrollingRef.current = false;
+    }, 150);
+  }, []);
+
+  // Handle wheel events - direct user input, should always take priority
+  const handleWheel = useCallback((e: WheelEvent) => {
+    // Any upward wheel movement (negative deltaY = scrolling up) immediately stops following
+    if (e.deltaY < 0) {
+      setIsFollowing(false);
+      isFollowingRef.current = false;
+    }
+    markUserScrolling();
+  }, [markUserScrolling]);
+
+  // Handle touch events - for mobile scroll support
+  const handleTouchStart = useCallback(() => {
+    // User touching the screen = they might scroll, prepare to respect their intent
+    markUserScrolling();
+  }, [markUserScrolling]);
+
+  // Handle scroll events (fires for both user and programmatic scrolls)
   const handleScroll = useCallback(() => {
     const element = scrollContainerRef.current;
     if (!element) return;
-
-    // Skip if this is a programmatic scroll
-    if (programmaticScrollCountRef.current > 0) {
-      lastScrollTopRef.current = element.scrollTop;
-      return;
-    }
 
     const atBottom = checkAtBottom();
     const scrollDirection = element.scrollTop - lastScrollTopRef.current;
     lastScrollTopRef.current = element.scrollTop;
 
     setIsAtBottom(atBottom);
+
+    // Skip following-state changes if this is a programmatic scroll
+    // BUT only if user isn't actively scrolling (wheel takes priority)
+    if (programmaticScrollCountRef.current > 0 && !userScrollingRef.current) {
+      return;
+    }
 
     // User scrolled UP and away from bottom - pause following
     // Use a more significant threshold to avoid false triggers
@@ -296,14 +329,24 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     }
   }, [checkAtBottom]);
 
-  // Attach scroll listener
+  // Attach scroll, wheel, and touch listeners
   useEffect(() => {
     const element = scrollContainerRef.current;
     if (!element) return;
 
     element.addEventListener('scroll', handleScroll, { passive: true });
-    return () => element.removeEventListener('scroll', handleScroll);
-  }, [handleScroll]);
+    element.addEventListener('wheel', handleWheel, { passive: true });
+    element.addEventListener('touchstart', handleTouchStart, { passive: true });
+
+    return () => {
+      element.removeEventListener('scroll', handleScroll);
+      element.removeEventListener('wheel', handleWheel);
+      element.removeEventListener('touchstart', handleTouchStart);
+      if (userScrollTimeoutRef.current) {
+        clearTimeout(userScrollTimeoutRef.current);
+      }
+    };
+  }, [handleScroll, handleWheel, handleTouchStart]);
 
   // Auto-scroll when NEW content arrives and we're following
   // Use ref to check following state to avoid race conditions with setState
@@ -318,12 +361,15 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     if (currentLength <= prevLength || currentLength === 0) return;
     if (!isFollowingRef.current) return;
 
+    // Don't fight with user - if they're actively scrolling, skip this update
+    if (userScrollingRef.current) return;
+
     programmaticScrollCountRef.current++;
 
     // Use requestAnimationFrame to ensure DOM has updated
     requestAnimationFrame(() => {
-      // Double-check we're still following (user might have scrolled during RAF delay)
-      if (!isFollowingRef.current) {
+      // Double-check we're still following and user isn't scrolling
+      if (!isFollowingRef.current || userScrollingRef.current) {
         programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
         return;
       }

@@ -239,6 +239,11 @@
   color: var(--accent-user, #69db7c);
 }
 
+/* Preserve user-entered newlines in user messages */
+.text-card.user .turn-card-body {
+  white-space: pre-wrap;
+}
+
 .text-card.assistant {
   border-color: var(--accent-assistant, #f87171);
 }
@@ -1072,10 +1077,7 @@
   background: var(--bg-code, #1a1a1a);
   padding: 2px 6px;
   border-radius: 3px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 300px;
+  word-break: break-all;
 }
 
 .tool-line-range {
@@ -1658,12 +1660,27 @@
     gap: 4px;
   }
 
+  /* On mobile, let header content (file path) use remaining width on first row,
+     then push timestamp/tokens to a second row */
+  .tool-card-header .turn-timestamp {
+    /* Force timestamp to new line by giving it full width basis */
+    flex-basis: 100%;
+    order: 100;
+    margin-top: 2px;
+    font-size: 9px;
+  }
+
+  .tool-card-header .tool-card-tokens {
+    order: 101;
+    margin-top: 2px;
+    margin-left: 0;
+  }
+
   .tool-card-body {
     padding: 6px 6px;
   }
 
   .tool-file-path {
-    max-width: none; /* Let it use available width */
     font-size: 10px;
   }
 

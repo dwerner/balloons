@@ -177,10 +177,20 @@ class ContextBuilder:
                 self._process_system_message(msg, history_parts)
                 continue
 
-            # Use summary if in SUMMARIZE mode
+            # Use summary if in SUMMARIZE mode, but preserve image references
             if msg.context_mode == ContextMode.SUMMARIZE and msg.summary:
                 role_name = "user" if msg.role == "user" else "assistant"
-                history_parts.append(f"<{role_name}>\n[Summary] {msg.summary}\n</{role_name}>")
+                # Extract any image references from this message
+                image_refs = []
+                if msg.content_blocks:
+                    for block in msg.content_blocks:
+                        if isinstance(block, ImageBlock) and block.file_path:
+                            image_refs.append(f"Image file: {block.file_path}")
+                # Include summary and image refs
+                summary_text = f"[Summary] {msg.summary}"
+                if image_refs:
+                    summary_text += "\n" + "\n".join(image_refs)
+                history_parts.append(f"<{role_name}>\n{summary_text}\n</{role_name}>")
                 continue
 
             # Build content from blocks
@@ -244,9 +254,8 @@ class ContextBuilder:
             return None
 
         elif block_type == 'image' or isinstance(block, ImageBlock):
-            # Collect images to add as proper content blocks
-            history_images.append(block)
-            return None
+            # Return text reference to the image file - Claude can use Read tool to view it again
+            return f"Image file: {block.file_path}"
 
         elif block_type == 'tool_use' or isinstance(block, ToolUseBlock):
             input_str = json.dumps(block.input, indent=2)
@@ -282,6 +291,9 @@ class ContextBuilder:
         self, history_parts: list[str], history_images: list[ImageBlock]
     ) -> ContextResult:
         """Build structured content blocks for API calls."""
+        import base64
+        from pathlib import Path
+
         content: list[dict] = []
 
         # Add history as a single text block if we have any
@@ -289,25 +301,26 @@ class ContextBuilder:
             history_text = "<conversation_history>\n" + "\n\n".join(history_parts) + "\n</conversation_history>"
             content.append({"type": "text", "text": history_text})
 
-        # Add images from history as proper content blocks
-        for img_block in history_images:
-            content.append({
-                "type": "image",
-                "source": {
-                    "type": "url",
-                    "url": f"file://{img_block.file_path}",
-                }
-            })
+        # History images are now included as text references in history_parts
+        # (handled by _format_block returning "[Image file: path]")
 
-        # Add images for the current message
+        # Add images for the current message as base64 (for initial upload)
         for img_block in self._images:
-            content.append({
-                "type": "image",
-                "source": {
-                    "type": "url",
-                    "url": f"file://{img_block.file_path}",
-                }
-            })
+            try:
+                path = Path(img_block.file_path)
+                if path.exists():
+                    data = path.read_bytes()
+                    data_base64 = base64.b64encode(data).decode("ascii")
+                    content.append({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": img_block.media_type,
+                            "data": data_base64,
+                        }
+                    })
+            except Exception:
+                pass  # Skip images that can't be read
 
         # Add the new prompt
         if self._prompt:
@@ -315,7 +328,7 @@ class ContextBuilder:
 
         return ContextResult(
             content=content,
-            history_images=history_images + self._images,
+            history_images=self._images,  # Only current message images
         )
 
     def _build_text(self, history_parts: list[str], wrap: bool = True) -> ContextResult:

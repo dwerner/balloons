@@ -37,25 +37,33 @@ function isStreamingInput(input: Record<string, unknown>): boolean {
 }
 
 // Extract proposal data from tool input
+// Handles both camelCase (wire format) and snake_case (legacy) keys
 function extractProposalData(input: Record<string, unknown>) {
+  // Get context plan from either camelCase or snake_case key
+  const rawContextPlan = (input.contextPlan || input.context_plan) as unknown[] || [];
+
+  // Get bind_to from either format
+  const bindToRaw = input.bindTo ?? input.bind_to;
+
   return {
     name: (input.name as string) || '',
     description: (input.description as string) || '',
-    contextPlan: ((input.context_plan as unknown[]) || []).map((cp: unknown) => {
+    contextPlan: rawContextPlan.map((cp: unknown) => {
       const item = cp as Record<string, unknown>;
       return {
-        exchangeRange: (item.exchange_range as string) || '',
+        // Handle both camelCase and snake_case keys within each item
+        exchangeRange: (item.exchangeRange as string) || (item.exchange_range as string) || '',
         mode: ((item.mode as string) || 'compress').toLowerCase() as ContextMode,
         reason: (item.reason as string) || '',
       };
     }),
-    initialPrompt: (input.initial_prompt as string) || '',
-    bindTo: input.bind_to && typeof input.bind_to === 'object' ? {
-      entityType: ((input.bind_to as Record<string, unknown>).entity_type as string) || '',
-      entityId: ((input.bind_to as Record<string, unknown>).entity_id as string) || '',
-      role: ((input.bind_to as Record<string, unknown>).role as string) || '',
+    initialPrompt: (input.initialPrompt as string) || (input.initial_prompt as string) || '',
+    bindTo: bindToRaw && typeof bindToRaw === 'object' ? {
+      entityType: ((bindToRaw as Record<string, unknown>).entityType as string) || ((bindToRaw as Record<string, unknown>).entity_type as string) || '',
+      entityId: ((bindToRaw as Record<string, unknown>).entityId as string) || ((bindToRaw as Record<string, unknown>).entity_id as string) || '',
+      role: ((bindToRaw as Record<string, unknown>).role as string) || '',
     } : null,
-    bindToInherit: input.bind_to === 'inherit',
+    bindToInherit: bindToRaw === 'inherit',
     // These fields are set by the server when a fork is accepted
     childSessionId: (input._child_session_id as string) || '',
     persistedStatus: (input._status as string) || '',
@@ -220,27 +228,67 @@ export function ForkProposalCard({
       {/* Proposal content when ready */}
       {hasInput && (
         <div className="fork-proposal-content">
-          {/* Fork details */}
-          <div className="fork-proposal-details">
+          {/* Summary row - always visible (description + action) */}
+          <div className="fork-proposal-summary">
             <div className="fork-proposal-description">
               {proposalData.description}
             </div>
 
-            {/* Binding info */}
-            {(proposalData.bindTo || proposalData.bindToInherit) && (
-              <div className="fork-proposal-binding">
-                <span className="label">Bind to:</span>
-                {proposalData.bindToInherit ? (
-                  <span className="value binding-inherit">inherit from parent</span>
-                ) : proposalData.bindTo ? (
-                  <span className="value">
-                    {proposalData.bindTo.entityType} <code>{proposalData.bindTo.entityId.slice(0, 8)}...</code>
-                    {proposalData.bindTo.role && ` (${proposalData.bindTo.role})`}
-                  </span>
-                ) : null}
-              </div>
+            {/* Action buttons inline with description */}
+            {isReady && (
+              <button
+                className="btn btn-primary begin-fork-btn"
+                onClick={handleBeginFork}
+                disabled={!client}
+                type="button"
+              >
+                Begin Fork
+              </button>
+            )}
+
+            {isCreating && (
+              <span className="loading-indicator">Creating fork...</span>
+            )}
+
+            {status === 'created' && childSessionId && selectSession && (
+              <button
+                className="btn btn-primary btn-small go-to-fork-btn"
+                onClick={handleGoToFork}
+                type="button"
+              >
+                Go to fork
+              </button>
             )}
           </div>
+
+          {/* Completion state message */}
+          {status === 'created' && (
+            <div className="fork-proposal-resolution status-created">
+              <span>✓ Fork created successfully</span>
+            </div>
+          )}
+
+          {/* Error message */}
+          {error && (
+            <div className="fork-proposal-error">
+              {error}
+            </div>
+          )}
+
+          {/* Binding info */}
+          {(proposalData.bindTo || proposalData.bindToInherit) && (
+            <div className="fork-proposal-binding">
+              <span className="label">Bind to:</span>
+              {proposalData.bindToInherit ? (
+                <span className="value binding-inherit">inherit from parent</span>
+              ) : proposalData.bindTo ? (
+                <span className="value">
+                  {proposalData.bindTo.entityType} <code>{proposalData.bindTo.entityId.slice(0, 8)}...</code>
+                  {proposalData.bindTo.role && ` (${proposalData.bindTo.role})`}
+                </span>
+              ) : null}
+            </div>
+          )}
 
           {/* Context plan section - interactive tree */}
           <div className="fork-proposal-section">
@@ -295,49 +343,6 @@ export function ForkProposalCard({
               </div>
             )}
           </div>
-
-          {/* Error message */}
-          {error && (
-            <div className="fork-proposal-error">
-              {error}
-            </div>
-          )}
-
-          {/* Action button */}
-          {isReady && (
-            <div className="fork-proposal-actions">
-              <button
-                className="btn btn-primary begin-fork-btn"
-                onClick={handleBeginFork}
-                disabled={!client}
-                type="button"
-              >
-                Begin Fork
-              </button>
-            </div>
-          )}
-
-          {isCreating && (
-            <div className="fork-proposal-actions">
-              <span className="loading-indicator">Creating fork...</span>
-            </div>
-          )}
-
-          {/* Completion state */}
-          {status === 'created' && (
-            <div className="fork-proposal-resolution status-created">
-              <span>Fork created successfully</span>
-              {childSessionId && selectSession && (
-                <button
-                  className="btn btn-primary btn-small go-to-fork-btn"
-                  onClick={handleGoToFork}
-                  type="button"
-                >
-                  Go to fork
-                </button>
-              )}
-            </div>
-          )}
         </div>
       )}
 
@@ -353,6 +358,29 @@ export function ForkProposalCard({
           gap: 12px;
         }
 
+        .fork-proposal-card .fork-proposal-summary {
+          display: flex;
+          align-items: flex-start;
+          gap: 12px;
+          justify-content: space-between;
+        }
+
+        .fork-proposal-card .fork-proposal-summary .fork-proposal-description {
+          flex: 1;
+          min-width: 0;
+        }
+
+        .fork-proposal-card .fork-proposal-summary .begin-fork-btn,
+        .fork-proposal-card .fork-proposal-summary .go-to-fork-btn {
+          flex-shrink: 0;
+        }
+
+        .fork-proposal-card .fork-proposal-summary .loading-indicator {
+          flex-shrink: 0;
+          color: #9ca3af;
+          font-size: 13px;
+        }
+
         .fork-proposal-card .fork-proposal-details {
           display: flex;
           flex-direction: column;
@@ -360,7 +388,7 @@ export function ForkProposalCard({
         }
 
         .fork-proposal-card .fork-proposal-description {
-          color: #e5e7eb;
+          color: #1f2937;
           font-size: 14px;
           line-height: 1.5;
         }

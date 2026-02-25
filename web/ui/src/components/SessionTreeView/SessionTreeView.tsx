@@ -14,7 +14,7 @@
  * - Archive/delete bulk actions
  */
 
-import React, { useState, useCallback, useMemo, memo, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, memo, useEffect, useImperativeHandle, forwardRef } from 'react';
 import { createPortal } from 'react-dom';
 import type { SessionInfo, TurnInfo } from '../../../../generated/balloons-client';
 import { createLogger } from '../../utils/debugLog';
@@ -910,6 +910,16 @@ function SessionNode({
 // Bulk action type
 export type BulkAction = 'archive' | 'delete' | 'unarchive';
 
+// Imperative handle for external control
+export interface SessionTreeViewHandle {
+  /** Update or add a turn in the cache for a specific session */
+  updateTurn: (sessionId: string, turn: TurnInfo) => void;
+  /** Invalidate the cache for a session, forcing reload on next expand */
+  invalidateCache: (sessionId: string) => void;
+  /** Check if a session's turns are currently cached */
+  isCached: (sessionId: string) => boolean;
+}
+
 // Props for main component
 interface SessionTreeViewProps {
   sessions: SessionInfo[];
@@ -929,7 +939,12 @@ interface SessionTreeViewProps {
   isLoading?: boolean;
 }
 
-export const SessionTreeView = memo(function SessionTreeView({
+// Helper to sort turns by index
+function sortTurnsByIdx(turns: TurnInfo[]): TurnInfo[] {
+  return [...turns].sort((a, b) => a.idx - b.idx);
+}
+
+export const SessionTreeView = memo(forwardRef<SessionTreeViewHandle, SessionTreeViewProps>(function SessionTreeView({
   sessions,
   selectedSessionId,
   turns,
@@ -943,7 +958,7 @@ export const SessionTreeView = memo(function SessionTreeView({
   onReviewSession,
   onRenameSession,
   isLoading = false,
-}: SessionTreeViewProps) {
+}, ref) {
   // Log on mount
   useEffect(() => {
     debugLog('SessionTreeView mounted', { sessionCount: sessions.length });
@@ -967,6 +982,41 @@ export const SessionTreeView = memo(function SessionTreeView({
   const [lastClickedSessionId, setLastClickedSessionId] = useState<string | null>(null);
   const [loadingTurns, setLoadingTurns] = useState<Set<string>>(new Set());
   const [sessionTurnsCache, setSessionTurnsCache] = useState<Map<string, TurnInfo[]>>(new Map());
+
+  // Expose imperative methods for external cache updates
+  useImperativeHandle(ref, () => ({
+    updateTurn: (sessionId: string, turn: TurnInfo) => {
+      // Only update if we have this session cached (don't create cache entries for non-expanded sessions)
+      setSessionTurnsCache(prev => {
+        if (!prev.has(sessionId)) {
+          return prev; // Don't cache if not already cached
+        }
+        const existingTurns = prev.get(sessionId) || [];
+        const turnIndex = existingTurns.findIndex(t => t.idx === turn.idx);
+        let newTurns: TurnInfo[];
+        if (turnIndex >= 0) {
+          // Update existing turn
+          newTurns = [...existingTurns];
+          newTurns[turnIndex] = turn;
+        } else {
+          // Add new turn
+          newTurns = sortTurnsByIdx([...existingTurns, turn]);
+        }
+        return new Map(prev).set(sessionId, newTurns);
+      });
+    },
+    invalidateCache: (sessionId: string) => {
+      setSessionTurnsCache(prev => {
+        if (!prev.has(sessionId)) return prev;
+        const next = new Map(prev);
+        next.delete(sessionId);
+        return next;
+      });
+    },
+    isCached: (sessionId: string) => {
+      return sessionTurnsCache.has(sessionId);
+    },
+  }), [sessionTurnsCache]);
 
   // Show checkboxes when any session is checked
   const showCheckboxes = checkedSessions.size > 0;
@@ -1290,6 +1340,6 @@ export const SessionTreeView = memo(function SessionTreeView({
       </ul>
     </div>
   );
-});
+}));
 
 export default SessionTreeView;

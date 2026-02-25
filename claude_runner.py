@@ -122,6 +122,7 @@ class ClaudeRunner(BaseRunner):
         self._current_session: "Session | None" = None  # Session for tool execution
         self._text_buffer: str = ""  # Buffer for detecting balloons-tool blocks
         self._pending_images: list[ImageBlock] = []  # Images to send with next message
+        self._sent_continuation: bool = False  # Whether _handle_balloons_tools sent a continuation
 
     def _parse_balloons_tools(self, text: str) -> list[tuple[str, str, dict]]:
         """Parse all <balloons-tool> blocks from text.
@@ -260,8 +261,14 @@ class ClaudeRunner(BaseRunner):
             run_id=self._run_id,
         )
 
+        # Tools that are "terminal" - they create UI elements for user interaction
+        # and don't need Claude to respond to a tool result. The conversation
+        # continues based on user action (accept/reject), not Claude's response.
+        TERMINAL_TOOLS = {"propose_fork", "propose_merge"}
+
         # Process all tool calls and collect results
         all_results = []
+        has_terminal_tool = False
         for tool_name, tool_id, tool_args in tool_calls:
             # Yield tool use events so UI can display them
             yield ToolUseStartEvent(tool_use_id=tool_id, tool_name=tool_name)
@@ -270,6 +277,13 @@ class ClaudeRunner(BaseRunner):
                 tool_name=tool_name,
                 tool_input=tool_args,
             )
+
+            # Check if this is a terminal tool
+            if tool_name in TERMINAL_TOOLS:
+                has_terminal_tool = True
+                # For terminal tools, just yield the event - don't execute or collect result
+                # The session_manager_service intercepts these and creates UI elements
+                continue
 
             # Execute the tool
             result, is_error = await execute_tool(
@@ -286,7 +300,13 @@ class ClaudeRunner(BaseRunner):
             # Collect result for batch continuation
             all_results.append((tool_name, tool_id, result))
 
+        # If all tools were terminal, don't send any continuation
+        if has_terminal_tool and not all_results:
+            self._sent_continuation = False
+            return
+
         # Send all results back to Claude as a single continuation message
+        self._sent_continuation = True
         result_blocks = []
         for tool_name, tool_id, result in all_results:
             result_blocks.append(f"<balloons-tool-result tool=\"{tool_name}\" id=\"{tool_id}\">\n{result}\n</balloons-tool-result>")
@@ -414,6 +434,7 @@ class ClaudeRunner(BaseRunner):
         self._json_errors = []
         self._current_tool_use = None
         self._text_buffer = ""  # Reset text buffer for balloons-tool detection
+        self._sent_continuation = False  # Reset continuation flag
 
         # Build command with bidirectional JSON streaming
         cmd = [
@@ -659,8 +680,10 @@ class ClaudeRunner(BaseRunner):
                                         )
                                         async for event in self._handle_balloons_tools(self._text_buffer, working_dir):
                                             yield event
-                                        # Mark that we're waiting for Claude to respond to the tool result
-                                        awaiting_balloons_tool_response = True
+                                        # Only wait for response if we actually sent a continuation
+                                        # (terminal tools like propose_fork don't send continuations)
+                                        if self._sent_continuation:
+                                            awaiting_balloons_tool_response = True
                                     else:
                                         debug_log.info(
                                             f"All {opening_count} balloons-tool blocks were examples (in code fences), not executing",

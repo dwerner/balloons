@@ -33,12 +33,13 @@ function isStreamingInput(input: Record<string, unknown>): boolean {
 }
 
 // Extract proposal data from tool input
+// Handles both camelCase (wire format) and snake_case (legacy) keys
 function extractProposalData(input: Record<string, unknown>) {
   return {
     summary: (input.summary as string) || '',
     reason: (input.reason as string) || '',
-    filesChanged: (input.files_changed as string[]) || [],
-    keyAccomplishments: (input.key_accomplishments as string[]) || [],
+    filesChanged: (input.filesChanged as string[]) || (input.files_changed as string[]) || [],
+    keyAccomplishments: (input.keyAccomplishments as string[]) || (input.key_accomplishments as string[]) || [],
   };
 }
 
