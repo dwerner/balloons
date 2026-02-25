@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-25T13:00:25.320483
+// Generated: 2026-02-25T13:06:34.681550
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -776,6 +776,27 @@ export interface SessionManagerService {
   startSessionReview(sessionId: string, backendName: string): Promise<Types.StartSessionReviewResult>;
 
   /**
+   * Submit a markdown message to a session and start streaming the response.
+   * 
+   * Similar to submit_message but the user turn is stored and displayed as
+   * a MarkdownBlock instead of TextBlock, allowing rich formatting (code blocks,
+   * tables, etc.) in user-submitted content like code reviews.
+   * 
+   * Args:
+   * session_id: ID of the session to submit to
+   * content: The markdown content (user prompt)
+   * queue: If True, queue the message instead of starting immediately.
+   * allowed_tools: List of tool names to allow, or None for all tools
+   * 
+   * Returns:
+   * SubmitMessageResult with IDs for tracking the stream
+   * 
+   * Raises:
+   * ValueError: If session not found or already streaming (when queue=False)
+   */
+  submitMarkdownMessage(sessionId: string, content: string, queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult>;
+
+  /**
    * Submit a message to a session and start streaming the response.
    * 
    * This is the primary way for frontends to interact with the LLM.
@@ -1066,6 +1087,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   async startSessionReview(sessionId: string, backendName: string): Promise<Types.StartSessionReviewResult> {
     return this.call('startSessionReview', { sessionId: sessionId, backendName: backendName });
+  }
+
+  async submitMarkdownMessage(sessionId: string, content: string, queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult> {
+    return this.call('submitMarkdownMessage', { sessionId: sessionId, content: content, queue: queue, allowedTools: allowedTools });
   }
 
   async submitMessage(sessionId: string, content: string, messages?: unknown[] | null, queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult> {

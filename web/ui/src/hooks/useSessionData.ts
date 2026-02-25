@@ -31,6 +31,7 @@ import type {
   SessionHistoryCompleteEvent,
   TurnSnapshot,
   TextBlock,
+  MarkdownBlock,
   ToolUseBlock,
   ToolResultBlock,
   ImageBlock,
@@ -180,6 +181,8 @@ function createInitialBlock(contentBlockType: string): ContentBlock {
   switch (contentBlockType) {
     case 'text':
       return { type: 'text', text: '' } as TextBlock;
+    case 'markdown':
+      return { type: 'markdown', text: '' } as MarkdownBlock;
     case 'tool_use':
       return { type: 'tool_use', id: '', name: '', input: {} } as ToolUseBlock;
     case 'tool_result':
@@ -221,6 +224,10 @@ function appendTextDelta(block: ContentBlock, delta: string): ContentBlock {
   if (block.type === 'text') {
     const textBlock = block as TextBlock;
     return { ...textBlock, text: (textBlock.text ?? '') + delta };
+  }
+  if (block.type === 'markdown') {
+    const markdownBlock = block as MarkdownBlock;
+    return { ...markdownBlock, text: (markdownBlock.text ?? '') + delta };
   }
   // For non-text blocks during streaming, we can't really append
   // This shouldn't happen normally - tool input streams via separate events

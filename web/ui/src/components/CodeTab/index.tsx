@@ -338,10 +338,52 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
     setSelectedDiffPath(path);
   }, []);
 
-  // Handle open file selection
-  const handleSelectOpenFile = useCallback((path: string) => {
+  // Handle open file selection - loads content if not cached
+  const handleSelectOpenFile = useCallback(async (path: string) => {
     setSelectedFilePath(path);
-  }, []);
+
+    // If content is already cached, nothing more to do
+    if (fileContents.has(path)) {
+      return;
+    }
+
+    // Content not cached - need to load it
+    if (!client) return;
+
+    setLoadingFile(path);
+    setFileError(null);
+
+    try {
+      const content = await client.readFile(path);
+
+      // Check for binary content
+      if (isBinaryContent(content)) {
+        await alert({
+          title: 'Binary File',
+          message: 'This appears to be a binary file and cannot be displayed as text.',
+        });
+        // Remove from open files since we can't display it
+        setOpenFiles(prev => prev.filter(f => f.path !== path));
+        setSelectedFilePath(null);
+        setLoadingFile(null);
+        return;
+      }
+
+      setFileContents(prev => new Map(prev).set(path, content));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setFileError(message);
+      await alert({
+        title: 'Error Reading File',
+        message,
+      });
+      // Remove from open files since we can't read it
+      setOpenFiles(prev => prev.filter(f => f.path !== path));
+      setSelectedFilePath(null);
+    } finally {
+      setLoadingFile(null);
+    }
+  }, [client, fileContents, alert]);
 
   // Add a comment
   const handleAddComment = useCallback((comment: Omit<CodeReviewComment, 'id'>) => {

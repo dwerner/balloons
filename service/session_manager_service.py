@@ -56,7 +56,7 @@ from core.stream_state import (
 )
 # TreeState removed in Phase 8 - events go directly to SessionDataService
 from core.queue_state import QueueState
-from models import TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, Turn, ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData, ExchangeInfo, SessionSummaryBlock
+from models import TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, Turn, ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData, ExchangeInfo, SessionSummaryBlock
 from service.session_events import (
     SessionEventObserver,
     TurnCreatedEvent,
@@ -4184,6 +4184,169 @@ class SessionManagerService:
         if hasattr(runner._runner, 'set_pending_images'):
             runner._runner.set_pending_images(image_blocks)
 
+        runner.start_background(
+            prompt=content,
+            messages=session.turns,
+            allowed_tools=allowed_tools,
+        )
+
+        return SubmitMessageResult(
+            session_id=session_id,
+            exchange_id=exchange_id,
+            turn_index=turn_index,
+            status="started",
+        )
+
+    @ws_expose
+    async def submit_markdown_message(
+        self,
+        session_id: str,
+        content: str,
+        queue: bool = False,
+        allowed_tools: list[str] | None = None,
+    ) -> SubmitMessageResult:
+        """Submit a markdown message to a session and start streaming the response.
+
+        Similar to submit_message but the user turn is stored and displayed as
+        a MarkdownBlock instead of TextBlock, allowing rich formatting (code blocks,
+        tables, etc.) in user-submitted content like code reviews.
+
+        Args:
+            session_id: ID of the session to submit to
+            content: The markdown content (user prompt)
+            queue: If True, queue the message instead of starting immediately.
+            allowed_tools: List of tool names to allow, or None for all tools
+
+        Returns:
+            SubmitMessageResult with IDs for tracking the stream
+
+        Raises:
+            ValueError: If session not found or already streaming (when queue=False)
+        """
+        # Get or load session
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                raise ValueError(f"Session {session_id} not found")
+
+        # Get runner
+        runner = self._manager.get_runner(session_id)
+        if not runner:
+            raise ValueError(f"No runner for session {session_id}")
+
+        # Check if already streaming
+        if runner.is_streaming:
+            if not queue:
+                raise ValueError(
+                    f"Session {session_id} is already streaming. "
+                    "Use queue=True to queue this message."
+                )
+            raise ValueError("Message queueing not yet implemented")
+
+        # Generate exchange ID for this user prompt + assistant response
+        exchange_id = str(uuid.uuid4())
+
+        # Add user message to session (persists immediately)
+        # Use MarkdownBlock instead of TextBlock for rich rendering
+        turn_index = len(session.turns)
+        user_blocks = [MarkdownBlock(text=content)]
+        user_turn = session.add_message(
+            "user", content, content_blocks=user_blocks, exchange_id=exchange_id
+        )
+        await session.save()
+
+        # Emit session updated so React frontend knows we're streaming
+        self._emit_session_updated(session, is_streaming=True)
+
+        # Emit user turn events via observer pattern
+        await self._notify_observers(
+            "on_turn_created",
+            TurnCreatedEvent(
+                session_id=session_id,
+                turn_id=user_turn.id,
+                turn_index=turn_index,
+                role="user",
+                exchange_id=exchange_id,
+                content_block_type="markdown",  # Key difference: markdown instead of text
+            ),
+        )
+        await self._notify_observers(
+            "on_turn_finished",
+            TurnFinishedEvent(
+                session_id=session_id,
+                turn_id=user_turn.id,
+                turn_index=turn_index,
+                role="user",
+                content=content,
+                tokens=0,  # User turns don't have token counts
+                content_block=MarkdownBlock(type="markdown", text=content),  # Key difference
+            ),
+        )
+
+        # TaskStateService calls
+        if self._task_service:
+            self._task_service.emit_turn_started(
+                session_id=session_id,
+                exchange_id=exchange_id,
+                turn_index=turn_index,
+                turn_id=user_turn.id,
+                role="user",
+                turn_type="markdown_turn",  # Different turn type for tracking
+            )
+            self._task_service.emit_turn_finished(
+                session_id=session_id,
+                exchange_id=exchange_id,
+                turn_index=turn_index,
+                turn_id=user_turn.id,
+                role="user",
+                content=content,
+            )
+
+        # Generate assistant turn ID for tracking streaming events
+        assistant_turn_id = str(uuid.uuid4())
+
+        # Register the stream in StreamState for tracking
+        self._stream_state.register_session_stream(
+            session_id=session_id,
+            exchange_id=exchange_id,
+            prompt=content,
+            backend_name=runner._runner.__class__.__name__ if hasattr(runner, '_runner') else "unknown",
+        )
+
+        # Create streaming context for event pump
+        self._streaming_contexts[session_id] = _StreamingContext(
+            session_id=session_id,
+            exchange_id=exchange_id,
+            user_turn_idx=turn_index,
+            user_turn_id=user_turn.id,
+            assistant_turn_idx=turn_index + 1,
+            assistant_turn_id=assistant_turn_id,
+        )
+
+        # Notify observers that streaming is starting
+        await self._notify_observers(
+            "on_stream_started",
+            StreamStartedEvent(
+                session_id=session_id,
+                exchange_id=exchange_id,
+                prompt=content,
+            ),
+        )
+
+        # Emit message submitted event BEFORE starting the runner
+        self._emit_event(
+            SessionManagerEvent.MESSAGE_SUBMITTED,
+            session_id,
+            {
+                "exchange_id": exchange_id,
+                "turn_index": turn_index,
+                "content": content,
+                "content_type": "markdown",
+            },
+        )
+
+        # Start background streaming
         runner.start_background(
             prompt=content,
             messages=session.turns,

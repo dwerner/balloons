@@ -180,13 +180,14 @@ function GitStatusBadge({ status, isStaged }: { status: string; isStaged: boolea
 // Breadcrumb navigation component
 interface BreadcrumbProps {
   path: string;
+  isLoading?: boolean;
   onNavigate: (path: string) => void;
   onGoHome: () => void;
   onGoUp: () => void;
   onRefresh: () => void;
 }
 
-function Breadcrumb({ path, onNavigate, onGoHome, onGoUp, onRefresh }: BreadcrumbProps) {
+function Breadcrumb({ path, isLoading, onNavigate, onGoHome, onGoUp, onRefresh }: BreadcrumbProps) {
   const parts = useMemo(() => {
     // Split path into segments
     const segments = path.split('/').filter(Boolean);
@@ -208,6 +209,7 @@ function Breadcrumb({ path, onNavigate, onGoHome, onGoUp, onRefresh }: Breadcrum
         className="file-breadcrumb__button"
         onClick={onGoHome}
         title="Go to home directory"
+        disabled={isLoading}
       >
         <HomeIcon />
       </button>
@@ -215,6 +217,7 @@ function Breadcrumb({ path, onNavigate, onGoHome, onGoUp, onRefresh }: Breadcrum
         className="file-breadcrumb__button"
         onClick={onGoUp}
         title="Go to parent directory"
+        disabled={isLoading}
       >
         <UpIcon />
       </button>
@@ -222,8 +225,13 @@ function Breadcrumb({ path, onNavigate, onGoHome, onGoUp, onRefresh }: Breadcrum
         className="file-breadcrumb__button"
         onClick={onRefresh}
         title="Refresh"
+        disabled={isLoading}
       >
-        <RefreshIcon />
+        {isLoading ? (
+          <span className="file-breadcrumb__spinner" />
+        ) : (
+          <RefreshIcon />
+        )}
       </button>
       <div className="file-breadcrumb__path">
         <span className="file-breadcrumb__separator">/</span>
@@ -232,6 +240,7 @@ function Breadcrumb({ path, onNavigate, onGoHome, onGoUp, onRefresh }: Breadcrum
             <button
               className="file-breadcrumb__segment"
               onClick={() => onNavigate(part.path)}
+              disabled={isLoading}
             >
               {part.name}
             </button>
@@ -702,6 +711,7 @@ export const FileBrowserView = memo(forwardRef<FileBrowserViewRef, FileBrowserVi
       {/* Breadcrumb navigation */}
       <Breadcrumb
         path={listing.path}
+        isLoading={isLoading}
         onNavigate={navigateTo}
         onGoHome={goHome}
         onGoUp={goUp}

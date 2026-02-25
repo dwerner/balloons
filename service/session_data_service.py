@@ -976,6 +976,8 @@ class SessionDataService:
 
         if block_type == "text":
             return TextBlock(type="text", text=data.get("text", ""))
+        elif block_type == "markdown":
+            return MarkdownBlock(type="markdown", text=data.get("text", ""))
         elif block_type == "image":
             return ImageBlock(
                 type="image",

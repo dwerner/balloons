@@ -604,13 +604,15 @@ class AsyncStorage:
         This matches the JSON structure expected by Rust's serde_json::Value.
         """
         from models import (
-            TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock,
+            TextBlock, MarkdownBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock,
             ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock,
             ArchiveBlock, SlideBlock, ReviewBlock, ForkProposalBlock, MergeProposalBlock
         )
 
         if isinstance(block, TextBlock):
             return {"type": "text", "text": block.text}
+        elif isinstance(block, MarkdownBlock):
+            return {"type": "markdown", "text": block.text}
         elif isinstance(block, ToolUseBlock):
             return {"type": "tool_use", "id": block.id, "name": block.name, "input": block.input}
         elif isinstance(block, ToolResultBlock):
@@ -839,7 +841,7 @@ class AsyncStorage:
     def _deserialize_content_block(self, data: dict) -> ContentBlock:
         """Deserialize a content block from a dict."""
         from models import (
-            TextBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock,
+            TextBlock, MarkdownBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock,
             ErrorBlock, LinkBlock, ForkBlock, MergeBlock, ArchiveBlock, SlideBlock,
             ReviewBlock, ArchiveSummary, ForkProposalBlock, MergeProposalBlock,
             ContextAssignmentData, ForkBindingData, ExchangeInfo
@@ -849,6 +851,8 @@ class AsyncStorage:
 
         if block_type == "text":
             return TextBlock(text=data.get("text", ""))
+        elif block_type == "markdown":
+            return MarkdownBlock(text=data.get("text", ""))
         elif block_type == "tool_use":
             return ToolUseBlock(
                 id=data.get("id", ""),

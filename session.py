@@ -1076,6 +1076,8 @@ class Session:
         """Serialize a content block to a dict."""
         if isinstance(block, TextBlock):
             return {"type": "text", "text": block.text}
+        elif isinstance(block, MarkdownBlock):
+            return {"type": "markdown", "text": block.text}
         elif isinstance(block, ImageBlock):
             # Store only file_path reference - actual image data stays on disk
             return {
@@ -1305,6 +1307,8 @@ class Session:
         block_type = data.get("type", "text")
         if block_type == "text":
             return TextBlock(text=data.get("text", ""))
+        elif block_type == "markdown":
+            return MarkdownBlock(text=data.get("text", ""))
         elif block_type == "image":
             # Image data stays on disk - we only store the file_path reference
             return ImageBlock(

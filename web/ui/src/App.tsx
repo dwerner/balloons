@@ -2512,7 +2512,15 @@ function AppContent() {
                       };
 
                       const message = formatReviewAsMarkdown(review);
-                      handleSubmit(message);
+                      // Submit as markdown message so it renders nicely
+                      const client = clientRef.current;
+                      if (client && selectedSessionId) {
+                        client.sessions.submitMarkdownMessage(selectedSessionId, message)
+                          .catch(err => {
+                            console.error('Failed to submit code review:', err);
+                            setError(`Failed to submit code review: ${err}`);
+                          });
+                      }
                       setMainContentTab('streaming');
                     }}
                   />
