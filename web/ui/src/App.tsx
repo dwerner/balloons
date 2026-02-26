@@ -6,7 +6,7 @@ import { AppLayout, useLayout, useTheme, usePreferences } from './components/lay
 import { SessionTreeView } from './components/SessionTreeView';
 import { GoalTreeView } from './components/GoalTreeView';
 import { FileBrowserView, type FileBrowserViewRef } from './components/FileBrowserView';
-import { CodeTab, type CodeReview, type CodeTabHandle } from './components/CodeTab';
+import { CodeTab, type CodeReview, type CodeTabHandle, type GitStatusInfo } from './components/CodeTab';
 import { SessionStatusBar } from './components/SessionStatusBar';
 import { StreamingStatusBar } from './components/StreamingStatusBar';
 import { ForkProposalTurn } from './components/ForkProposalTurn';
@@ -1006,6 +1006,7 @@ function AppContent() {
   const [isLoadingTurns, setIsLoadingTurns] = useState(false);
   const [creatingSessionFor, setCreatingSessionFor] = useState<string | null>(null); // "entityType:entityId" when creating bound session
   const [mainContentTab, setMainContentTab] = useState<MainContentTab>('streaming');
+  const [gitStatus, setGitStatus] = useState<GitStatusInfo | null>(null);
 
   // Modal state for CreateTodoModal
   const [createTodoModalState, setCreateTodoModalState] = useState<{
@@ -2398,6 +2399,7 @@ function AppContent() {
             <MainContentHeader
               activeTab={mainContentTab}
               onTabChange={setMainContentTab}
+              gitStatus={gitStatus}
             />
 
             {/* Status bar - always visible under tabs */}
@@ -2457,8 +2459,9 @@ function AppContent() {
                   <p>Context view coming soon.</p>
                 </div>
               )}
-              {mainContentTab === 'code' && (
-                connectionState === 'connected' && clientRef.current ? (
+              {/* CodeTab is always mounted (hidden when not active) so it can report git status */}
+              <div style={{ display: mainContentTab === 'code' ? 'contents' : 'none' }}>
+                {connectionState === 'connected' && clientRef.current ? (
                   <CodeTab
                     ref={codeTabRef}
                     cwd={selectedSession?.workingDirectory}
@@ -2545,14 +2548,15 @@ function AppContent() {
                         return '';
                       }
                     }}
+                    onGitStatusChange={setGitStatus}
                   />
                 ) : (
                   <div className="empty-state">
                     <h2>Code</h2>
                     <p>Connect to server to view changes.</p>
                   </div>
-                )
-              )}
+                )}
+              </div>
             </div>
 
             {/* Input area - only show on streaming tab */}
@@ -2890,11 +2894,16 @@ type MainContentTab = 'streaming' | 'context' | 'code';
 function MainContentHeader({
   activeTab,
   onTabChange,
+  gitStatus,
 }: {
   activeTab: MainContentTab;
   onTabChange: (tab: MainContentTab) => void;
+  gitStatus?: GitStatusInfo | null;
 }) {
   const { layoutMode, isDetailCollapsed, toggleDetailCollapse } = useLayout();
+
+  // Show badge if there are git changes (unstaged or staged)
+  const hasGitChanges = gitStatus && (gitStatus.hasUnstaged || gitStatus.hasStaged);
 
   return (
     <div className="conversation-view-toggle">
@@ -2914,8 +2923,12 @@ function MainContentHeader({
       <button
         className={`view-toggle-btn ${activeTab === 'code' ? 'active' : ''}`}
         onClick={() => onTabChange('code')}
+        title={hasGitChanges ? `${gitStatus.fileCount} uncommitted change${gitStatus.fileCount !== 1 ? 's' : ''}` : undefined}
       >
         Code
+        {hasGitChanges && (
+          <span className="code-tab-changes-indicator" />
+        )}
       </button>
 
       {/* Spacer */}

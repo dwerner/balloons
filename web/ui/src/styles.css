@@ -871,6 +871,31 @@ body {
   border-color: var(--color-accent-green);
 }
 
+/* Code tab changes indicator (red dot) */
+.code-tab-changes-indicator {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  background: #ef4444;
+  border-radius: 50%;
+  margin-left: 6px;
+  animation: code-tab-pulse 2s ease-in-out infinite;
+}
+
+@keyframes code-tab-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Hide the indicator when tab is active (user is already viewing it) */
+.conversation-view-toggle .view-toggle-btn.active .code-tab-changes-indicator {
+  display: none;
+}
+
 /* ----- Turns Container ----- */
 /* NOTE: overflow-y removed - the child StreamingTurnsView/SimpleTurnsView handles
  * scrolling via useAutoScroll hook. Having two nested scrollable containers

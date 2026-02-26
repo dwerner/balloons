@@ -31,6 +31,13 @@ const COMMENTS_STORAGE_KEY = 'balloons:code-comments';
 const OLD_REVIEW_STORAGE_KEY = 'balloons:code-review';
 const OPEN_FILES_STORAGE_KEY = 'balloons:code-open-files';
 
+/** Git status info for parent components */
+export interface GitStatusInfo {
+  hasUnstaged: boolean;
+  hasStaged: boolean;
+  fileCount: number;
+}
+
 export interface CodeTabProps {
   /** Current working directory / git root */
   cwd?: string;
@@ -40,6 +47,8 @@ export interface CodeTabProps {
   onSubmitReview?: (review: CodeReview) => void;
   /** Callback to generate AI commit message - receives staged files and returns message */
   onRequestAICommitMessage?: (gitRoot: string, stagedDiff: string) => Promise<string>;
+  /** Callback when git status changes (for showing badge on Code tab) */
+  onGitStatusChange?: (status: GitStatusInfo | null) => void;
 }
 
 /** Handle exposed to parent for external control */
@@ -147,6 +156,7 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
   client,
   onSubmitReview,
   onRequestAICommitMessage,
+  onGitStatusChange,
 }, ref) {
   // Dialog hook for confirm/alert dialogs
   const { confirm, alert } = useDialog();
@@ -217,6 +227,21 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
   useEffect(() => {
     loadDiff();
   }, [loadDiff]);
+
+  // Report git status changes to parent
+  useEffect(() => {
+    if (onGitStatusChange) {
+      if (diffResult) {
+        onGitStatusChange({
+          hasUnstaged: diffResult.hasUnstaged,
+          hasStaged: diffResult.hasStaged,
+          fileCount: diffResult.files.length,
+        });
+      } else {
+        onGitStatusChange(null);
+      }
+    }
+  }, [diffResult, onGitStatusChange]);
 
   // Open a file in the Files tab
   const openFile = useCallback(async (path: string) => {

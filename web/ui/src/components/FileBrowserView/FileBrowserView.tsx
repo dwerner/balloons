@@ -261,8 +261,8 @@ interface FileTreeNodeProps {
   isExpanded: boolean;
   isLoading: boolean;
   children: FileEntry[];
-  onToggle: () => void;
-  onSelect: () => void;
+  onToggleEntry: (entry: FileEntry) => void;
+  onSelectEntry: (entry: FileEntry) => void;
   onNavigate: (path: string) => void;
   onContextMenu?: (e: React.MouseEvent, entry: FileEntry) => void;
   expandedPaths: Set<string>;
@@ -276,8 +276,8 @@ const FileTreeNode = memo(function FileTreeNode({
   isExpanded,
   isLoading,
   children,
-  onToggle,
-  onSelect,
+  onToggleEntry,
+  onSelectEntry,
   onNavigate,
   onContextMenu,
   expandedPaths,
@@ -296,16 +296,16 @@ const FileTreeNode = memo(function FileTreeNode({
 
   const handleClick = useCallback(() => {
     if (entry.isDirectory) {
-      onToggle();
+      onToggleEntry(entry);
     } else {
-      onSelect();
+      onSelectEntry(entry);
     }
-  }, [entry.isDirectory, onToggle, onSelect]);
+  }, [entry, onToggleEntry, onSelectEntry]);
 
   const handleArrowClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    onToggle();
-  }, [onToggle]);
+    onToggleEntry(entry);
+  }, [entry, onToggleEntry]);
 
   const handleRightClick = useCallback((e: React.MouseEvent) => {
     if (onContextMenu) {
@@ -357,8 +357,8 @@ const FileTreeNode = memo(function FileTreeNode({
                 isExpanded={childExpanded}
                 isLoading={childLoading}
                 children={childChildren}
-                onToggle={() => { }} // Will be wired up by parent
-                onSelect={() => { }}
+                onToggleEntry={onToggleEntry}
+                onSelectEntry={onSelectEntry}
                 onNavigate={onNavigate}
                 onContextMenu={onContextMenu}
                 expandedPaths={expandedPaths}
@@ -771,8 +771,8 @@ export const FileBrowserView = memo(forwardRef<FileBrowserViewRef, FileBrowserVi
                 isExpanded={isExpanded}
                 isLoading={isEntryLoading}
                 children={children}
-                onToggle={() => toggleExpanded(entry)}
-                onSelect={() => handleSelect(entry)}
+                onToggleEntry={toggleExpanded}
+                onSelectEntry={handleSelect}
                 onNavigate={navigateTo}
                 onContextMenu={handleContextMenu}
                 expandedPaths={expandedPaths}
