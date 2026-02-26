@@ -3583,7 +3583,7 @@ class SessionManagerService:
         Returns:
             CompleteArchiveResult with archive details
         """
-        from core.commands import CommandExecutor
+        from core.command_executor import CommandExecutor
 
         # Get helper context
         helper_ctx = self._helper_contexts.get(helper_id)
