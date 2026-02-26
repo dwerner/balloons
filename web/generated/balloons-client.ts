@@ -30,6 +30,7 @@ import {
   SoundServiceClient,
   DebugLogServiceClient,
   FileStateServiceClient,
+  SupervisorStateServiceClient,
 } from './client';
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -69,6 +70,7 @@ export class BalloonsClient {
   private _sounds: SoundServiceClient | null = null;
   private _debugLog: DebugLogServiceClient | null = null;
   private _files: FileStateServiceClient | null = null;
+  private _supervisor: SupervisorStateServiceClient | null = null;
 
   constructor(url: string, options: BalloonsClientOptions = {}) {
     this.url = url;
@@ -162,6 +164,14 @@ export class BalloonsClient {
       throw new Error('Not connected. Call connect() first.');
     }
     return this._files;
+  }
+
+  /** Supervisor state service (hosts, processes, backends) */
+  get supervisor(): SupervisorStateServiceClient {
+    if (!this._supervisor) {
+      throw new Error('Not connected. Call connect() first.');
+    }
+    return this._supervisor;
   }
 
   // --- Connection Management ---
@@ -272,6 +282,7 @@ export class BalloonsClient {
     this._sounds = new SoundServiceClient(this.ws);
     this._debugLog = new DebugLogServiceClient(this.ws);
     this._files = new FileStateServiceClient(this.ws);
+    this._supervisor = new SupervisorStateServiceClient(this.ws);
   }
 
   private clearClients(): void {
@@ -284,6 +295,7 @@ export class BalloonsClient {
     this._sounds = null;
     this._debugLog = null;
     this._files = null;
+    this._supervisor = null;
   }
 
   private scheduleReconnect(): void {
@@ -312,5 +324,6 @@ export {
   SoundServiceClient,
   DebugLogServiceClient,
   FileStateServiceClient,
+  SupervisorStateServiceClient,
 } from './client';
 export type { Unsubscribe } from './client';

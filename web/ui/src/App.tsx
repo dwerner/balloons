@@ -6,6 +6,7 @@ import { AppLayout, useLayout, useTheme, usePreferences } from './components/lay
 import { SessionTreeView } from './components/SessionTreeView';
 import { GoalTreeView } from './components/GoalTreeView';
 import { FileBrowserView, type FileBrowserViewRef } from './components/FileBrowserView';
+import { SupervisorTab } from './components/SupervisorTab';
 import { CodeTab, type CodeReview, type CodeTabHandle, type GitStatusInfo } from './components/CodeTab';
 import { SessionStatusBar } from './components/SessionStatusBar';
 import { StreamingStatusBar } from './components/StreamingStatusBar';
@@ -730,6 +731,28 @@ function turnSnapshotToInfo(snapshot: TurnSnapshot, idx: number): TurnInfo {
       content,
       isError: tr.isError || false,
     };
+  } else if (blockType === 'archive' && block) {
+    // Archive block - extract summary for display
+    const ab = block as { summary?: string; messageCount?: number };
+    content = ab.summary || `Archived ${ab.messageCount || 0} messages`;
+  } else if (blockType === 'fork' && block) {
+    const fb = block as { forkName?: string; prompt?: string };
+    content = fb.forkName ? `**${fb.forkName}**\n\n${fb.prompt || ''}` : fb.prompt || 'Forked session';
+  } else if (blockType === 'merge' && block) {
+    const mb = block as { forkName?: string; message?: string };
+    content = mb.message || `Merged from ${mb.forkName || 'fork'}`;
+  } else if (blockType === 'merged_to' && block) {
+    const mtb = block as { parentName?: string; message?: string };
+    content = mtb.message || `Merged to ${mtb.parentName || 'parent'}`;
+  } else if (blockType === 'link' && block) {
+    const lb = block as { summary?: string };
+    content = lb.summary || 'Linked session';
+  } else if (blockType === 'interruption' && block) {
+    const ib = block as { reason?: string };
+    content = ib.reason || 'User cancelled';
+  } else if (blockType === 'error' && block) {
+    const eb = block as { reason?: string; details?: string };
+    content = `**${eb.reason || 'Error'}**\n\n${eb.details || ''}`;
   }
 
   return {
@@ -1057,6 +1080,19 @@ function AppContent() {
   const [toolUses, setToolUses] = useState<ToolUseState[]>([]);
   const [imageAttachments, setImageAttachments] = useState<ImageAttachment[]>([]);
   const [isLoadingTurns, setIsLoadingTurns] = useState(false);
+  // Track turn indices being archived (for showing spinners)
+  // Track archiving state: Map from helperId to Set of turn indices being archived
+  const [archivingByHelper, setArchivingByHelper] = useState<Map<string, Set<number>>>(new Map());
+  // Derived: all turn indices currently being archived
+  const archivingTurnIndices = useMemo(() => {
+    const allIndices = new Set<number>();
+    for (const indices of archivingByHelper.values()) {
+      for (const idx of indices) {
+        allIndices.add(idx);
+      }
+    }
+    return allIndices;
+  }, [archivingByHelper]);
   const [creatingSessionFor, setCreatingSessionFor] = useState<string | null>(null); // "entityType:entityId" when creating bound session
   const [mainContentTab, setMainContentTab] = useState<MainContentTab>('streaming');
   const [gitStatus, setGitStatus] = useState<GitStatusInfo | null>(null);
@@ -1086,6 +1122,11 @@ function AppContent() {
   const messageInputRef = useRef<MessageInputHandle>(null);
   const fileBrowserRef = useRef<FileBrowserViewRef>(null);
   const codeTabRef = useRef<CodeTabHandle>(null);
+
+  // Detail panel tab state ('files' or 'supervisor')
+  type DetailTab = 'files' | 'supervisor';
+  const [detailTab, setDetailTab] = useState<DetailTab>('files');
+
   // Track the session we're currently loading to handle race conditions
   const loadingSessionRef = useRef<string | null>(null);
 
@@ -1254,6 +1295,7 @@ function AppContent() {
           if (data.sessionId === selectedSessionId) {
             setSelectedSessionId(null);
             setTurns([]);
+            setArchivingByHelper(new Map()); // Clear session-specific archiving state
           }
         })
       );
@@ -1641,6 +1683,29 @@ function AppContent() {
         })
       );
 
+      // Archive completion - reload turns to show the archive block
+      unsubscribers.push(
+        client.sessions.onArchiveCompleted(async (data) => {
+          debugLog('Archive completed', { sessionId: data.sessionId, turnsArchived: data.turnsArchived, helperId: data.helperId });
+          // Clear archiving spinner state for this specific helper
+          if (data.helperId) {
+            setArchivingByHelper(prev => {
+              const next = new Map(prev);
+              next.delete(data.helperId!);
+              return next;
+            });
+          } else {
+            // Fallback: clear all if no helperId (backwards compatibility)
+            setArchivingByHelper(new Map());
+          }
+          if (data.sessionId && data.sessionId === selectedSessionId) {
+            const clientId = `web-archive-${Date.now()}`;
+            const sessionTurns = await loadTurnsViaSubscription(client, data.sessionId, clientId);
+            setTurns(sessionTurns);
+          }
+        })
+      );
+
       // Tool use events - for visualizing tool calls during streaming
       unsubscribers.push(
         client.tasks.onToolUseStarted((data: ToolUseStartedEvent) => {
@@ -1850,6 +1915,8 @@ function AppContent() {
     setStreamingTask(null);
     setQueuedMessageCount(0);
     setError(null);
+    // Clear archiving state - it's session-specific and shouldn't persist across session switches
+    setArchivingByHelper(new Map());
 
     // Now set the new session ID - this triggers the event subscription useEffect
     // to re-subscribe with the new session ID
@@ -2217,10 +2284,16 @@ function AppContent() {
               } else if (action === 'archive') {
                 // Start archive (with auto-completion after LLM generates summary)
                 const result = await client.sessions.startArchive(sessionId, turnIndices, true);
-                if (result.success) {
+                if (result.success && result.helperId) {
                   debugLog('Archive started', { sessionId, turnIndices, helperId: result.helperId });
+                  // Track archiving turns by helper ID for concurrent archive support
+                  setArchivingByHelper(prev => {
+                    const next = new Map(prev);
+                    next.set(result.helperId, new Set(turnIndices));
+                    return next;
+                  });
                   // The archive will auto-complete after LLM generates summary
-                  // Session will be updated via events
+                  // archivingByHelper cleared on completion via onArchiveCompleted event
                 } else {
                   console.warn('Archive request failed:', result.error);
                 }
@@ -2434,6 +2507,7 @@ function AppContent() {
               setCreatingSessionFor(null);
             }
           }}
+          archivingTurnIndices={archivingTurnIndices}
         />
       </AppLayout.Sidebar>
 
@@ -2502,6 +2576,7 @@ function AppContent() {
                     onSelectSession={setSelectedSessionId}
                     onScrollStateChange={setScrollState}
                     onStreamingProgressChange={handleStreamingProgressChange}
+                    archivingTurnIndices={archivingTurnIndices}
                   />
                 ) : (
                   <div className="empty-state">
@@ -2691,33 +2766,69 @@ function AppContent() {
         )}
       </AppLayout.Main>
 
-      {/* Detail panel (right sidebar) - File Browser */}
+      {/* Detail panel (right sidebar) - Tabbed: Files / Supervisor */}
       <AppLayout.Detail>
-        {connectionState === 'connected' && clientRef.current ? (
-          <FileBrowserView
-            ref={fileBrowserRef}
-            sessionId={selectedSessionId || undefined}
-            initialPath={selectedSession?.workingDirectory || undefined}
-            client={clientRef.current.files}
-            onFileSelect={(path) => {
-              debugLog('File selected', { path });
-              // Open the file in the Code tab
-              codeTabRef.current?.openFile(path);
-            }}
-            onSetWorkingDirectory={handleSetWorkingDirectory}
-            onInsertPath={(path) => {
-              // Insert the path into the chat input field
-              const currentValue = messageInputRef.current?.getValue() || '';
-              const newValue = currentValue ? `${currentValue} ${path}` : path;
-              messageInputRef.current?.setValue(newValue);
-              debugLog('Inserted path into input', { path });
-            }}
-          />
-        ) : (
-          <div style={{ padding: '16px', color: 'var(--color-text-secondary)' }}>
-            Connect to server to browse files
-          </div>
-        )}
+        {/* Detail panel tabs */}
+        <div className="detail-panel-tabs">
+          <button
+            className={`detail-panel-tab ${detailTab === 'files' ? 'active' : ''}`}
+            onClick={() => setDetailTab('files')}
+          >
+            Files
+          </button>
+          <button
+            className={`detail-panel-tab ${detailTab === 'supervisor' ? 'active' : ''}`}
+            onClick={() => setDetailTab('supervisor')}
+          >
+            Supervisor
+          </button>
+        </div>
+
+        {/* Tab content */}
+        <div className="detail-panel-content">
+          {detailTab === 'files' && (
+            connectionState === 'connected' && clientRef.current ? (
+              <FileBrowserView
+                ref={fileBrowserRef}
+                sessionId={selectedSessionId || undefined}
+                initialPath={selectedSession?.workingDirectory || undefined}
+                client={clientRef.current.files}
+                onFileSelect={(path) => {
+                  debugLog('File selected', { path });
+                  // Open the file in the Code tab
+                  codeTabRef.current?.openFile(path);
+                }}
+                onSetWorkingDirectory={handleSetWorkingDirectory}
+                onInsertPath={(path) => {
+                  // Insert the path into the chat input field
+                  const currentValue = messageInputRef.current?.getValue() || '';
+                  const newValue = currentValue ? `${currentValue} ${path}` : path;
+                  messageInputRef.current?.setValue(newValue);
+                  debugLog('Inserted path into input', { path });
+                }}
+              />
+            ) : (
+              <div style={{ padding: '16px', color: 'var(--color-text-secondary)' }}>
+                Connect to server to browse files
+              </div>
+            )
+          )}
+
+          {detailTab === 'supervisor' && (
+            <SupervisorTab
+              supervisorClient={connectionState === 'connected' ? clientRef.current?.supervisor : undefined}
+              isLoading={connectionState !== 'connected'}
+              onViewLogs={(processId) => {
+                debugLog('View logs for process', { processId });
+                // TODO: Open process logs in a modal or new tab
+              }}
+              onStopProcess={(processId) => {
+                debugLog('Stop process', { processId });
+                // TODO: Call supervisor to stop process
+              }}
+            />
+          )}
+        </div>
       </AppLayout.Detail>
 
       {/* CreateTodoModal - rendered at App level for portal */}
@@ -3046,6 +3157,8 @@ interface SidebarContentProps {
   onToggleDebug?: () => void;
   // Auth
   onLogout?: () => void;
+  // Archiving state
+  archivingTurnIndices?: Set<number>;
 }
 
 function SidebarContent({
@@ -3075,6 +3188,7 @@ function SidebarContent({
   debugEnabled = false,
   onToggleDebug,
   onLogout,
+  archivingTurnIndices,
 }: SidebarContentProps) {
   const { closeSidebar, layoutMode } = useLayout();
   const { resolvedTheme, toggleTheme } = useTheme();
@@ -3360,6 +3474,7 @@ function SidebarContent({
           onExchangeContextModeChange={onExchangeContextModeChange}
           onExchangeAction={onExchangeAction}
           onReviewSession={onReviewSession}
+          archivingTurnIndices={archivingTurnIndices}
         />
       ) : (
         <div className="session-list">

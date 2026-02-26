@@ -74,6 +74,7 @@ from service.image_service import ImageService
 from service.sound_service import SoundService
 from service.debug_log_service import DebugLogService
 from service.file_state_service import FileStateService
+from service.supervisor_state_service import SupervisorStateService
 from service.ws_server import WsServer, create_server
 from service.jwt_auth import JWTAuth, JWTConfig, TokenClaims
 from service.user_auth import (
@@ -100,6 +101,7 @@ __all__ = [
     "SoundService",
     "DebugLogService",
     "FileStateService",
+    "SupervisorStateService",
     "WsServer",
     "create_server",
     "JWTAuth",

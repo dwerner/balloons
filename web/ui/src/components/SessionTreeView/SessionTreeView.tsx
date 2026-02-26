@@ -35,53 +35,76 @@ export interface Exchange {
 }
 
 // Group turns into exchanges
+// Uses exchangeId when available to group related turns
 function groupTurnsIntoExchanges(turns: TurnInfo[]): Exchange[] {
   const exchanges: Exchange[] = [];
-  let currentExchange: Exchange | null = null;
+  const exchangeMap = new Map<string, Exchange>();
   let exchangeIndex = 0;
+  let currentExchangeId: string | null = null;
 
   for (const turn of turns) {
+    // Check if this turn has its own exchangeId
+    const turnExchangeId = turn.exchangeId;
+
     if (turn.role === 'user') {
-      // Start a new exchange
-      if (currentExchange) {
-        exchanges.push(currentExchange);
-      }
-      currentExchange = {
-        id: `exchange-${exchangeIndex++}`,
+      // User turn starts a new exchange
+      const exchangeId = turnExchangeId || `exchange-${exchangeIndex++}`;
+      const exchange: Exchange = {
+        id: exchangeId,
         userTurn: turn,
         assistantTurns: [],
         systemTurns: [],
       };
+      exchangeMap.set(exchangeId, exchange);
+      exchanges.push(exchange);
+      currentExchangeId = exchangeId;
     } else if (turn.role === 'assistant') {
-      if (!currentExchange) {
-        // Assistant turn without user turn (shouldn't happen normally)
-        currentExchange = {
-          id: `exchange-${exchangeIndex++}`,
+      // Assistant turns belong to current exchange or create new one
+      const exchangeId = turnExchangeId || currentExchangeId || `exchange-${exchangeIndex++}`;
+      let exchange = exchangeMap.get(exchangeId);
+      if (!exchange) {
+        exchange = {
+          id: exchangeId,
           userTurn: null,
           assistantTurns: [],
           systemTurns: [],
         };
+        exchangeMap.set(exchangeId, exchange);
+        exchanges.push(exchange);
+        currentExchangeId = exchangeId;
       }
-      currentExchange.assistantTurns.push(turn);
+      exchange.assistantTurns.push(turn);
     } else {
-      // System turn
-      if (currentExchange) {
-        currentExchange.systemTurns.push(turn);
-      } else {
-        // System turn at start - create exchange for it
-        exchanges.push({
-          id: `exchange-${exchangeIndex++}`,
+      // System turn - check if it has its own exchangeId (e.g., archive)
+      if (turnExchangeId && turnExchangeId !== currentExchangeId) {
+        // System turn with unique exchangeId - create its own exchange
+        const exchange: Exchange = {
+          id: turnExchangeId,
           userTurn: null,
           assistantTurns: [],
           systemTurns: [turn],
-        });
+        };
+        exchangeMap.set(turnExchangeId, exchange);
+        exchanges.push(exchange);
+      } else if (currentExchangeId) {
+        // Add to current exchange
+        const exchange = exchangeMap.get(currentExchangeId);
+        if (exchange) {
+          exchange.systemTurns.push(turn);
+        }
+      } else {
+        // System turn at start - create exchange for it
+        const exchangeId = turnExchangeId || `exchange-${exchangeIndex++}`;
+        const exchange: Exchange = {
+          id: exchangeId,
+          userTurn: null,
+          assistantTurns: [],
+          systemTurns: [turn],
+        };
+        exchangeMap.set(exchangeId, exchange);
+        exchanges.push(exchange);
       }
     }
-  }
-
-  // Don't forget the last exchange
-  if (currentExchange) {
-    exchanges.push(currentExchange);
   }
 
   return exchanges;
@@ -271,8 +294,24 @@ function TurnNode({
   indent?: boolean;
   onClick?: (turnIdx: number) => void;
 }) {
-  const icon = turn.role === 'user' ? '👤' :
-               turn.role === 'assistant' ? '🤖' : '⚙';
+  // Get icon based on role and content block type
+  const getIcon = () => {
+    if (turn.role === 'user') return '👤';
+    if (turn.role === 'assistant') return '🤖';
+    // System role - check content block type
+    const blockType = turn.contentBlockType;
+    switch (blockType) {
+      case 'archive': return '📦';
+      case 'fork': return '⑂';
+      case 'merge': return '⤴';
+      case 'merged_to': return '⤴';
+      case 'link': return '🔗';
+      case 'interruption': return '⚠';
+      case 'error': return '✗';
+      default: return '⚙';
+    }
+  };
+  const icon = getIcon();
   const preview = (turn.content || '').slice(0, 60).replace(/\n/g, ' ');
   const tokenStr = formatKt(turn.tokens);
 
@@ -288,6 +327,7 @@ function TurnNode({
         onClick={onClick ? handleClick : undefined}
       >
         <span key="spacer" className="tree-node__spacer" />
+        <span key="turnNum" className="tree-node__turn-num">{turn.idx}</span>
         <span key="icon" className="tree-node__icon">{icon}</span>
         <span key="label" className="tree-node__label tree-node__label--muted">
           {preview || '\u00A0'}
@@ -590,6 +630,7 @@ function ExchangeNode({
   exchange,
   isExpanded,
   contextMode,
+  isArchiving,
   onToggle,
   onContextModeChange,
   onArchive,
@@ -599,6 +640,7 @@ function ExchangeNode({
   exchange: Exchange;
   isExpanded: boolean;
   contextMode?: ContextMode;
+  isArchiving?: boolean;
   onToggle: () => void;
   onContextModeChange?: (mode: ContextMode) => void;
   onArchive?: () => void;
@@ -614,9 +656,35 @@ function ExchangeNode({
     }
   }, [menuPosition, exchange.id]);
 
+  // Check if this is a system-only exchange (like archive, fork, merge)
+  const isSystemOnly = !exchange.userTurn && exchange.assistantTurns.length === 0 && exchange.systemTurns.length > 0;
+  const firstSystemTurn = exchange.systemTurns[0];
+  const systemBlockType = firstSystemTurn?.contentBlockType;
+
+  // Get exchange icon based on content
+  const getExchangeIcon = () => {
+    if (exchange.userTurn) return '💬';
+    if (isSystemOnly && systemBlockType) {
+      switch (systemBlockType) {
+        case 'archive': return '📦';
+        case 'fork': return '⑂';
+        case 'merge': return '⤴';
+        case 'merged_to': return '⤴';
+        case 'link': return '🔗';
+        case 'interruption': return '⚠';
+        case 'error': return '✗';
+      }
+    }
+    return '💬';
+  };
+  const exchangeIcon = getExchangeIcon();
+
+  // Get preview text
   const userPreview = exchange.userTurn
     ? (exchange.userTurn.content || '').slice(0, 50).replace(/\n/g, ' ')
-    : null;
+    : isSystemOnly
+      ? (firstSystemTurn?.content || '').slice(0, 50).replace(/\n/g, ' ')
+      : null;
 
   const totalTokens = (exchange.userTurn?.tokens || 0) +
     exchange.assistantTurns.reduce((sum, t) => sum + (t.tokens || 0), 0) +
@@ -648,7 +716,21 @@ function ExchangeNode({
     setMenuPosition({ x: e.clientX, y: e.clientY });
   }, [exchange.id]);
 
-  const longPressHandlers = useLongPress(handleLongPress, onToggle, { delay: 500 });
+  // Get the first turn index for jumping to the exchange
+  const firstTurnIdx = exchange.systemTurns[0]?.idx
+    ?? exchange.userTurn?.idx
+    ?? exchange.assistantTurns[0]?.idx;
+
+  const handleClick = useCallback(() => {
+    // Jump to first turn in exchange
+    if (firstTurnIdx !== undefined && onTurnClick) {
+      onTurnClick(firstTurnIdx);
+    }
+    // Also toggle expansion
+    onToggle();
+  }, [firstTurnIdx, onTurnClick, onToggle]);
+
+  const longPressHandlers = useLongPress(handleLongPress, handleClick, { delay: 500 });
 
   return (
     <li className="tree-node tree-node--exchange">
@@ -660,7 +742,10 @@ function ExchangeNode({
         <span className="tree-node__toggle" onClick={(e) => { e.stopPropagation(); onToggle(); }}>
           {hasChildren ? <Arrow open={isExpanded} /> : <span className="tree-node__spacer" />}
         </span>
-        <span className="tree-node__icon">💬</span>
+        <span className="tree-node__turn-num">{firstTurnIdx}</span>
+        <span className="tree-node__icon">
+          {isArchiving ? <span className="tree-node__spinner">⏳</span> : exchangeIcon}
+        </span>
         {contextMode && (
           <span
             className="tree-node__mode-badge"
@@ -671,7 +756,7 @@ function ExchangeNode({
           </span>
         )}
         <span className="tree-node__label tree-node__label--muted">
-          {userPreview || 'System'}
+          {userPreview || (isSystemOnly ? (systemBlockType || 'System') : 'System')}
           {userPreview && userPreview.length >= 50 ? '...' : ''}
         </span>
         <span className="tree-node__meta">
@@ -734,6 +819,7 @@ function SessionNode({
   onTurnClick,
   onReview,
   onRename,
+  archivingTurnIndices,
 }: {
   session: SessionInfo;
   index: number;
@@ -752,6 +838,7 @@ function SessionNode({
   onTurnClick?: (turnIdx: number) => void;
   onReview?: () => void;
   onRename?: () => void;
+  archivingTurnIndices?: Set<number>;
 }) {
   const sessionColor = SESSION_COLORS[index % SESSION_COLORS.length] || '#60a5fa';
   const sessionName = session.forkName || session.title || `Session ${session.id.slice(0, 8)}`;
@@ -862,12 +949,16 @@ function SessionNode({
               const firstTurn = exchange.userTurn || exchange.assistantTurns[0] || exchange.systemTurns[0];
               const contextMode = firstTurn?.contextMode as ContextMode | undefined;
 
+              // Check if any turns in this exchange are being archived
+              const isArchiving = archivingTurnIndices && turnIndices.some(idx => archivingTurnIndices.has(idx));
+
               return (
                 <ExchangeNode
                   key={exchange.id}
                   exchange={exchange}
                   isExpanded={expandedExchanges.has(exchange.id)}
                   contextMode={contextMode}
+                  isArchiving={isArchiving}
                   onToggle={() => toggleExchange(exchange.id)}
                   onContextModeChange={onExchangeContextModeChange
                     ? (mode) => onExchangeContextModeChange(turnIndices, mode)
@@ -938,6 +1029,8 @@ interface SessionTreeViewProps {
   onReviewSession?: (sessionId: string) => void;
   onRenameSession?: (sessionId: string) => void;
   isLoading?: boolean;
+  /** Turn indices currently being archived (show spinner) */
+  archivingTurnIndices?: Set<number>;
 }
 
 // Helper to sort turns by index
@@ -959,6 +1052,7 @@ export const SessionTreeView = memo(forwardRef<SessionTreeViewHandle, SessionTre
   onReviewSession,
   onRenameSession,
   isLoading = false,
+  archivingTurnIndices,
 }, ref) {
   // Log on mount
   useEffect(() => {
@@ -1277,6 +1371,7 @@ export const SessionTreeView = memo(forwardRef<SessionTreeViewHandle, SessionTre
         onTurnClick={handleTurnClick}
         onReview={onReviewSession ? () => onReviewSession(session.id) : undefined}
         onRename={onRenameSession ? () => onRenameSession(session.id) : undefined}
+        archivingTurnIndices={isSelected ? archivingTurnIndices : undefined}
       />
     );
   };

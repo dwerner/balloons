@@ -87,16 +87,6 @@ export const TurnCard = memo(function TurnCard({ turn, toolResultMap = EMPTY_MAP
   const { role, contentBlock } = turn;
   const blockType = contentBlock?.type || 'text';
 
-  // Debug: log ALL system turns to understand what's coming through
-  // TODO: Remove after debugging
-  if (role === 'system') {
-    debugLog('System turn', { role, blockType, hasContentBlock: !!contentBlock, contentBlockKeys: contentBlock ? Object.keys(contentBlock) : [], turnId: turn.turnId });
-  }
-
-  // Debug: log when we see proposal-related blocks
-  if (blockType === 'fork_proposal' || blockType === 'merge_proposal') {
-    debugLog('Rendering proposal card', { blockType, sessionId, turn: turn.turnId });
-  }
 
   // Dispatch to appropriate card type
   if (blockType === 'tool_use') {

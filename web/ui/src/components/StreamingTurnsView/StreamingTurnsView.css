@@ -67,6 +67,168 @@
   to { transform: rotate(0deg); }
 }
 
+/* Exchange groups - visual grouping of related turns */
+.exchange-group {
+  margin-bottom: 12px;
+  border-radius: 8px;
+  padding: 4px 8px;
+  border-left: 3px solid transparent;
+  transition: background-color 0.2s ease;
+}
+
+/* Exchange header */
+.exchange-group__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 2px 4px 4px 4px;
+  font-size: 10px;
+  color: var(--text-tertiary, #888);
+  border-bottom: 1px solid rgba(128, 128, 128, 0.15);
+  margin-bottom: 4px;
+}
+
+.exchange-group__turn-range {
+  font-family: ui-monospace, 'SF Mono', Monaco, monospace;
+  font-weight: 500;
+}
+
+.exchange-group__timestamp {
+  opacity: 0.7;
+}
+
+/* Exchange footer */
+.exchange-group__footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 4px 2px 4px;
+  font-size: 10px;
+  color: var(--text-tertiary, #888);
+  border-top: 1px solid rgba(128, 128, 128, 0.15);
+  margin-top: 4px;
+}
+
+.exchange-group__turn-count {
+  opacity: 0.7;
+}
+
+.exchange-group__tokens {
+  font-family: ui-monospace, 'SF Mono', Monaco, monospace;
+  opacity: 0.7;
+}
+
+/* Archiving state */
+.exchange-group--archiving {
+  position: relative;
+  pointer-events: none;
+}
+
+/* Animated diagonal stripes overlay - covers entire exchange */
+.exchange-group--archiving::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 5;
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 10px,
+    rgba(251, 191, 36, 0.2) 10px,
+    rgba(251, 191, 36, 0.2) 20px
+  );
+  background-size: 28.28px 28.28px; /* sqrt(2) * 20px for seamless diagonal */
+  animation: archiveStripes 0.8s linear infinite;
+  border-radius: 8px;
+}
+
+@keyframes archiveStripes {
+  0% { background-position: 0 0; }
+  100% { background-position: 28.28px 0; }
+}
+
+/* Archiving banner - sticky at top */
+.exchange-group__archiving-overlay {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  z-index: 10;
+  background: rgba(251, 191, 36, 0.95);
+  color: #000;
+  padding: 6px 12px;
+  border-radius: 4px;
+  margin-bottom: 8px;
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.exchange-group__archiving-icon {
+  font-size: 16px;
+  animation: archivePulse 1.2s ease-in-out infinite;
+}
+
+.exchange-group__archiving-text {
+  /* Inherits from overlay */
+}
+
+@keyframes archivePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Exchange group colors - subtle left border and background tint */
+.exchange-group--color-0 {
+  border-left-color: rgba(96, 165, 250, 0.6);
+  background: rgba(96, 165, 250, 0.05);
+}
+.exchange-group--color-1 {
+  border-left-color: rgba(167, 139, 250, 0.6);
+  background: rgba(167, 139, 250, 0.05);
+}
+.exchange-group--color-2 {
+  border-left-color: rgba(52, 211, 153, 0.6);
+  background: rgba(52, 211, 153, 0.05);
+}
+.exchange-group--color-3 {
+  border-left-color: rgba(251, 191, 36, 0.6);
+  background: rgba(251, 191, 36, 0.05);
+}
+.exchange-group--color-4 {
+  border-left-color: rgba(244, 114, 182, 0.6);
+  background: rgba(244, 114, 182, 0.05);
+}
+.exchange-group--color-5 {
+  border-left-color: rgba(45, 212, 191, 0.6);
+  background: rgba(45, 212, 191, 0.05);
+}
+
+/* Light theme adjustments */
+[data-theme="light"] .exchange-group--color-0 {
+  background: rgba(96, 165, 250, 0.08);
+}
+[data-theme="light"] .exchange-group--color-1 {
+  background: rgba(167, 139, 250, 0.08);
+}
+[data-theme="light"] .exchange-group--color-2 {
+  background: rgba(52, 211, 153, 0.08);
+}
+[data-theme="light"] .exchange-group--color-3 {
+  background: rgba(251, 191, 36, 0.08);
+}
+[data-theme="light"] .exchange-group--color-4 {
+  background: rgba(244, 114, 182, 0.08);
+}
+[data-theme="light"] .exchange-group--color-5 {
+  background: rgba(45, 212, 191, 0.08);
+}
+
 /* Empty session placeholder */
 .empty-session-placeholder {
   display: flex;
@@ -181,19 +343,18 @@
 
 /* Turn highlight effect (when scrolling to a turn from tree view) */
 .turn-highlight {
-  animation: turnHighlight 1.5s ease-out;
+  animation: turnHighlight 2.5s ease-out;
+  border-radius: 8px;
 }
 
 @keyframes turnHighlight {
-  0% {
-    background: rgba(96, 165, 250, 0.3);
-    outline: 2px solid rgba(96, 165, 250, 0.6);
-    outline-offset: 2px;
+  0%, 50% {
+    background: rgba(250, 204, 21, 0.4) !important;
+    box-shadow: inset 0 0 0 2000px rgba(250, 204, 21, 0.4);
   }
   100% {
-    background: transparent;
-    outline: 2px solid transparent;
-    outline-offset: 2px;
+    background: transparent !important;
+    box-shadow: none;
   }
 }
 

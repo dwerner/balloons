@@ -378,9 +378,11 @@ class Archiver:
         )
 
         # Create archive marker turn with display summary
+        # Give it its own exchange_id so it shows in the context tree
         archive_turn = Turn(
             role="system",
             content_block=archive_block,
+            exchange_id=f"archive-{archive_id}",
         )
 
         # Build new turn list: before + archive marker + after
@@ -595,9 +597,11 @@ class Archiver:
             token_estimate=token_estimate,
         )
 
+        # Give it its own exchange_id so it shows in the context tree
         archive_turn = Turn(
             role="system",
             content_block=archive_block,
+            exchange_id=f"archive-{archive_id}",
         )
 
         new_turns = turns[:turn_start] + [archive_turn] + turns[turn_end:]

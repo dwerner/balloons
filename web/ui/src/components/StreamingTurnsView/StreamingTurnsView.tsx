@@ -44,6 +44,16 @@ interface TurnOrGroup {
   key: string;
 }
 
+/**
+ * Represents a group of turns belonging to the same exchange
+ */
+interface ExchangeGroup {
+  exchangeId: string;
+  items: TurnOrGroup[];
+  /** Color index for visual distinction */
+  colorIndex: number;
+}
+
 interface StreamingTurnsViewProps {
   sessionId: string | null;
   client: BalloonsClient;
@@ -52,12 +62,14 @@ interface StreamingTurnsViewProps {
   onScrollStateChange?: (state: { isFollowing: boolean; isAtBottom: boolean }) => void;
   /** Callback when streaming progress updates (for status bar token counts) */
   onStreamingProgressChange?: (progress: StreamingProgress | null) => void;
+  /** Turn indices currently being archived (show spinner overlay) */
+  archivingTurnIndices?: Set<number>;
 }
 
 // Threshold in pixels to consider "at bottom"
 const AT_BOTTOM_THRESHOLD = 150;
 
-export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrollStateChange, onStreamingProgressChange }: StreamingTurnsViewProps) {
+export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrollStateChange, onStreamingProgressChange, archivingTurnIndices }: StreamingTurnsViewProps) {
   const { turns, isLoading, isStreaming, streamError, error, streamingProgress } = useSessionData(client, sessionId);
 
   // Ref for the scrollable container
@@ -156,13 +168,13 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
               type: 'parallel',
               turns: currentGroup,
               parallelGroupId: currentGroupId,
-              key: `parallel-${currentGroupId}`,
+              key: `parallel-${currentGroupId}-${result.length}`,
             });
           } else {
             result.push({
               type: 'single',
               turns: currentGroup,
-              key: currentGroup[0]?.turnId || `single-${result.length}`,
+              key: `${currentGroup[0]?.turnId || 'single'}-${result.length}`,
             });
           }
         }
@@ -175,7 +187,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
           result.push({
             type: 'single',
             turns: [turn],
-            key: turn.turnId,
+            key: `${turn.turnId}-${result.length}`,
           });
           currentGroup = [];
           currentGroupId = undefined;
@@ -196,13 +208,65 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         result.push({
           type: 'single',
           turns: currentGroup,
-          key: currentGroup[0]?.turnId || `single-${result.length}`,
+          key: `${currentGroup[0]?.turnId || 'single'}-flush-${result.length}`,
         });
       }
     }
 
     return result;
   }, [filteredTurns]);
+
+  // Group turnsOrGroups by exchangeId for visual grouping
+  const exchangeGroups = useMemo((): ExchangeGroup[] => {
+    const groups: ExchangeGroup[] = [];
+    let currentExchangeId: string | undefined;
+    let currentGroup: TurnOrGroup[] = [];
+    let colorIndex = 0;
+    const exchangeColorMap = new Map<string, number>();
+
+    for (const item of turnsOrGroups) {
+      // Get exchangeId from first turn in the item
+      const exchangeId = item.turns[0]?.exchangeId;
+
+      if (exchangeId && exchangeId === currentExchangeId) {
+        // Continue current exchange group
+        currentGroup.push(item);
+      } else {
+        // Flush previous group
+        if (currentGroup.length > 0 && currentExchangeId) {
+          groups.push({
+            exchangeId: currentExchangeId,
+            items: currentGroup,
+            colorIndex: exchangeColorMap.get(currentExchangeId) ?? 0,
+          });
+        }
+        // Start new group
+        currentGroup = [item];
+        currentExchangeId = exchangeId;
+        if (exchangeId && !exchangeColorMap.has(exchangeId)) {
+          exchangeColorMap.set(exchangeId, colorIndex++ % 6);
+        }
+      }
+    }
+
+    // Flush remaining
+    if (currentGroup.length > 0 && currentExchangeId) {
+      groups.push({
+        exchangeId: currentExchangeId,
+        items: currentGroup,
+        colorIndex: exchangeColorMap.get(currentExchangeId) ?? 0,
+      });
+    } else if (currentGroup.length > 0) {
+      // Turns without exchangeId - create group with empty exchangeId
+      groups.push({
+        exchangeId: '',
+        items: currentGroup,
+        colorIndex: 0,
+      });
+    }
+
+    return groups;
+  }, [turnsOrGroups]);
 
   // Report scroll state changes to parent (for status bar indicator)
   useEffect(() => {
@@ -394,44 +458,89 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         ref={scrollContainerRef}
       >
         <div className="streaming-turns-view">
-          {/* Direct rendering of all turns (no virtualization) */}
+          {/* Direct rendering of all turns grouped by exchange */}
           <div className="streaming-turns-list">
-            {turnsOrGroups.map((item, index) => (
-              <div key={item.key} data-index={index}>
-                {item.type === 'single' ? (
-                  <div data-turn-order={item.turns[0]?.order}>
-                    <TurnCard
-                      turn={item.turns[0]!}
-                      toolResultMap={toolResultMap}
-                      sessionId={sessionId || undefined}
-                    />
-                  </div>
-                ) : (
-                  <div className="parallel-group">
-                    <div className="parallel-group-header">
-                      <span className="turn-order">
-                        {item.turns.length > 1
-                          ? `${item.turns[0]?.order}-${item.turns[item.turns.length - 1]?.order}`
-                          : item.turns[0]?.order}
-                      </span>
-                      <span className="parallel-icon">⚡</span>
-                      <span className="parallel-label">{item.turns.length} parallel tool calls</span>
+            {exchangeGroups.map((exchangeGroup, groupIndex) => {
+              // Compute exchange stats for header/footer
+              const allTurnsInExchange = exchangeGroup.items.flatMap(item => item.turns);
+              const firstTurn = allTurnsInExchange[0];
+              const lastTurn = allTurnsInExchange[allTurnsInExchange.length - 1];
+              const turnCount = allTurnsInExchange.length;
+              const totalTokens = allTurnsInExchange.reduce((sum, t) => sum + (t.tokens || 0), 0);
+              const firstOrder = firstTurn?.order ?? 0;
+              const lastOrder = lastTurn?.order ?? firstOrder;
+              const turnRange = firstOrder === lastOrder ? `#${firstOrder}` : `#${firstOrder}-${lastOrder}`;
+              const timestamp = firstTurn?.timestamp ? new Date(firstTurn.timestamp).toLocaleTimeString() : '';
+
+              // Check if any turns in this exchange are being archived
+              const isArchivingExchange = archivingTurnIndices && allTurnsInExchange.some(
+                t => archivingTurnIndices.has(t.order ?? -1)
+              );
+
+              return (
+                <div
+                  key={`${exchangeGroup.exchangeId || 'no-exchange'}-${groupIndex}`}
+                  className={`exchange-group exchange-group--color-${exchangeGroup.colorIndex} ${isArchivingExchange ? 'exchange-group--archiving' : ''}`}
+                  data-exchange-id={exchangeGroup.exchangeId || undefined}
+                >
+                  {/* Archiving overlay */}
+                  {isArchivingExchange && (
+                    <div className="exchange-group__archiving-overlay">
+                      <span className="exchange-group__archiving-icon">📦</span>
+                      <span className="exchange-group__archiving-text">Archiving...</span>
                     </div>
-                    <div className="parallel-group-content">
-                      {item.turns.map((turn) => (
-                        <div key={turn.turnId} data-turn-order={turn.order}>
-                          <TurnCard
-                            turn={turn}
-                            toolResultMap={toolResultMap}
-                            sessionId={sessionId || undefined}
-                          />
+                  )}
+                  {/* Exchange header */}
+                  <div className="exchange-group__header">
+                    <span className="exchange-group__turn-range">{turnRange}</span>
+                    {timestamp && <span className="exchange-group__timestamp">{timestamp}</span>}
+                  </div>
+
+                  {exchangeGroup.items.map((item, index) => (
+                  <div key={item.key} data-index={index}>
+                    {item.type === 'single' ? (
+                      <div data-turn-order={item.turns[0]?.order}>
+                        <TurnCard
+                          turn={item.turns[0]!}
+                          toolResultMap={toolResultMap}
+                          sessionId={sessionId || undefined}
+                        />
+                      </div>
+                    ) : (
+                      <div className="parallel-group">
+                        <div className="parallel-group-header">
+                          <span className="turn-order">
+                            {item.turns.length > 1
+                              ? `${item.turns[0]?.order}-${item.turns[item.turns.length - 1]?.order}`
+                              : item.turns[0]?.order}
+                          </span>
+                          <span className="parallel-icon">⚡</span>
+                          <span className="parallel-label">{item.turns.length} parallel tool calls</span>
                         </div>
-                      ))}
-                    </div>
+                        <div className="parallel-group-content">
+                          {item.turns.map((turn) => (
+                            <div key={turn.turnId} data-turn-order={turn.order}>
+                              <TurnCard
+                                turn={turn}
+                                toolResultMap={toolResultMap}
+                                sessionId={sessionId || undefined}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            ))}
+                ))}
+
+                  {/* Exchange footer */}
+                  <div className="exchange-group__footer">
+                    <span className="exchange-group__turn-count">{turnCount} {turnCount === 1 ? 'turn' : 'turns'}</span>
+                    {totalTokens > 0 && <span className="exchange-group__tokens">{totalTokens.toLocaleString()} tokens</span>}
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
           {/* Loading state when session is being loaded */}

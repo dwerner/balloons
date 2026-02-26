@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-25T16:51:11.059916
+// Generated: 2026-02-26T13:07:40.105609
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -3683,6 +3683,177 @@ export class FileStateServiceClient implements FileStateService {
 
   onDirectoryChanged(callback: (data: Types.DirectoryListing) => void): Unsubscribe {
     return this.subscribe('directoryChanged', callback);
+  }
+
+}
+
+/**
+ * WebSocket-exposed service for supervisor state management.
+ * 
+ * Provides:
+ * - Host configuration and status queries
+ * - Process listing and management
+ * - Real-time status updates via events
+ */
+export interface SupervisorStateService {
+  /**
+   * Check connectivity status of a host.
+   * 
+   * For SSH hosts, performs a quick connection test.
+   * For local, always returns ready.
+   * 
+   * Args:
+   * host_name: Name of the host to check
+   * 
+   * Returns:
+   * Status result with connectivity info
+   */
+  checkHostStatus(hostName: string): Promise<Types.HostStatusResult>;
+
+  /**
+   * Get the complete supervisor state.
+   * 
+   * Returns all hosts, processes, and backend mappings.
+   */
+  getState(): Promise<Types.SupervisorState>;
+
+  /**
+   * Query hosts by tags and/or type.
+   * 
+   * Args:
+   * tags: Filter to hosts with ALL specified tags
+   * host_type: Filter to hosts of this type ("local" or "ssh")
+   * 
+   * Returns:
+   * List of matching hosts
+   */
+  listHosts(tags?: string[] | null, hostType?: string | null): Promise<Types.HostQueryResult>;
+
+  /**
+   * List supervised processes.
+   * 
+   * Args:
+   * session_id: Filter to processes for this session
+   * host: Filter to processes on this host
+   * 
+   * Returns:
+   * List of processes with summary
+   */
+  listProcesses(sessionId?: string | null, host?: string | null): Promise<Types.ProcessListResult>;
+
+  /**
+   * Reload supervisor configuration from disk.
+   * 
+   * Returns:
+   * True if reload succeeded
+   */
+  reloadConfig(): Promise<boolean>;
+
+}
+
+export interface SupervisorStateEvents {
+  /**
+   * Fired when a host's status changes.
+   */
+  hostStatusChanged(callback: (data: Types.HostInfo) => void): Unsubscribe;
+
+  /**
+   * Fired when a new process starts.
+   */
+  processStarted(callback: (data: Types.ProcessInfo) => void): Unsubscribe;
+
+  /**
+   * Fired when a process stops.
+   */
+  processStopped(callback: (data: Types.ProcessInfo) => void): Unsubscribe;
+
+  /**
+   * Fired when supervisor state changes (processes started/stopped, etc).
+   */
+  supervisorStateUpdated(callback: (data: Types.SupervisorState) => void): Unsubscribe;
+
+}
+
+export class SupervisorStateServiceClient implements SupervisorStateService {
+  private ws: WebSocket;
+  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
+  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
+
+  constructor(ws: WebSocket) {
+    this.ws = ws;
+    this.ws.addEventListener('message', this.handleMessage.bind(this));
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    const msg = JSON.parse(event.data);
+    if (msg.id && this.pending.has(msg.id)) {
+      const { resolve, reject } = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      if (msg.error) {
+        reject(new Error(msg.error.message));
+      } else {
+        resolve(msg.result);
+      }
+    } else if (msg.event) {
+      const handlers = this.eventHandlers.get(msg.event);
+      if (handlers) {
+        handlers.forEach(h => h(msg.data));
+      }
+    }
+  }
+
+  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const id = generateRequestId();
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, new Set());
+    }
+    this.eventHandlers.get(event)!.add(callback);
+    return () => {
+      this.eventHandlers.get(event)?.delete(callback);
+    };
+  }
+
+  async checkHostStatus(hostName: string): Promise<Types.HostStatusResult> {
+    return this.call('checkHostStatus', { hostName: hostName });
+  }
+
+  async getState(): Promise<Types.SupervisorState> {
+    return this.call('getState', {  });
+  }
+
+  async listHosts(tags?: string[] | null, hostType?: string | null): Promise<Types.HostQueryResult> {
+    return this.call('listHosts', { tags: tags, hostType: hostType });
+  }
+
+  async listProcesses(sessionId?: string | null, host?: string | null): Promise<Types.ProcessListResult> {
+    return this.call('listProcesses', { sessionId: sessionId, host: host });
+  }
+
+  async reloadConfig(): Promise<boolean> {
+    return this.call('reloadConfig', {  });
+  }
+
+  hostStatusChanged(callback: (data: Types.HostInfo) => void): Unsubscribe {
+    return this.subscribe('hostStatusChanged', callback);
+  }
+
+  processStarted(callback: (data: Types.ProcessInfo) => void): Unsubscribe {
+    return this.subscribe('processStarted', callback);
+  }
+
+  processStopped(callback: (data: Types.ProcessInfo) => void): Unsubscribe {
+    return this.subscribe('processStopped', callback);
+  }
+
+  supervisorStateUpdated(callback: (data: Types.SupervisorState) => void): Unsubscribe {
+    return this.subscribe('supervisorStateUpdated', callback);
   }
 
 }

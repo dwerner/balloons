@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-25T16:51:11.056286
+// Generated: 2026-02-26T13:07:40.100884
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -357,6 +357,7 @@ export interface CompleteArchiveResult {
   archiveId?: string;
   turnIndex?: number;
   turnsArchived?: number;
+  helperId?: string;
   error?: string;
 }
 
@@ -975,5 +976,58 @@ export interface GitDiffResult {
   files: DiffFile[];
   hasUnstaged: boolean;
   hasStaged: boolean;
+}
+
+export interface HostInfo {
+  name: string;
+  type: string;
+  host?: string | null;
+  user?: string | null;
+  port?: number;
+  tags?: string[];
+  description?: string | null;
+  status?: string;
+  latencyMs?: number | null;
+  error?: string | null;
+}
+
+export interface ProcessInfo {
+  processId: string;
+  command: string;
+  name: string | null;
+  host: string;
+  sessionId: string;
+  status: string;
+  exitCode?: number | null;
+  startedAt?: string | null;
+  runtimeSeconds?: number | null;
+}
+
+export interface BackendHostMapping {
+  backendName: string;
+  hostName: string;
+}
+
+export interface SupervisorState {
+  hosts: HostInfo[];
+  processes: ProcessInfo[];
+  backendHosts: BackendHostMapping[];
+}
+
+export interface HostQueryResult {
+  hosts: HostInfo[];
+}
+
+export interface HostStatusResult {
+  host: string;
+  type: string;
+  status: string;
+  latencyMs?: number | null;
+  error?: string | null;
+}
+
+export interface ProcessListResult {
+  summary: string;
+  processes: ProcessInfo[];
 }
 

@@ -328,6 +328,7 @@ class CompleteArchiveResult:
     archive_id: str = ""  # ID of the archive block created
     turn_index: int = 0  # Index of the archive turn
     turns_archived: int = 0  # Number of turns that were archived
+    helper_id: str = ""  # Helper ID for correlating with startArchive
     error: str = ""
 
 
@@ -3642,13 +3643,28 @@ class SessionManagerService:
         # Emit session updated event
         self._emit_event(SessionManagerEvent.SESSION_UPDATED, session_id)
 
-        return CompleteArchiveResult(
+        # Build the result
+        archive_result = CompleteArchiveResult(
             success=True,
             session_id=session_id,
             archive_id=result.archive_block.archive_id if result.archive_block else "",
             turn_index=turn_start,
             turns_archived=result.archived_count,
+            helper_id=helper_id,
         )
+
+        # Emit archive completed event so UI can reload turns
+        archive_event_data = {
+            "session_id": session_id,
+            "archive_id": archive_result.archive_id,
+            "turn_index": archive_result.turn_index,
+            "turns_archived": archive_result.turns_archived,
+            "helper_id": helper_id,
+        }
+        for handler in self._event_handlers:
+            handler("onArchiveCompleted", archive_event_data)
+
+        return archive_result
 
     @ws_expose
     async def find_switch_target(
