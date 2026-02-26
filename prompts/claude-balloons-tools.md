@@ -431,6 +431,7 @@ You have access to tools for managing long-running background processes. Use the
 - Start a dev server, watcher, or long build that should run while you work on other tasks
 - Check on the status or output of running processes
 - Stop processes when done
+- Run commands on remote hosts via SSH
 
 ### Why Use the Supervisor?
 
@@ -438,6 +439,7 @@ The regular `Bash` tool waits for commands to complete, which blocks your workfl
 - **Start processes in background**: Run `npm run dev` or `cargo watch` without blocking
 - **Check output later**: Query process output at any time
 - **Session-scoped**: Processes are tied to the session and cleaned up appropriately
+- **Remote execution**: Run commands on SSH-accessible hosts defined in supervisor.yaml
 
 ### Available Tools
 
@@ -447,6 +449,7 @@ The regular `Bash` tool waits for commands to complete, which blocks your workfl
   "name": "supervisor_start",
   "args": {
     "command": "npm run dev",           // Required: shell command to run
+    "host": "local",                    // Optional: host from supervisor.yaml (default: local)
     "name": "dev-server",               // Optional: friendly name for reference
     "working_dir": "/path/to/project",  // Optional: defaults to session working dir
     "env": {"NODE_ENV": "development"}  // Optional: additional environment variables
@@ -459,7 +462,8 @@ The regular `Bash` tool waits for commands to complete, which blocks your workfl
 {
   "name": "supervisor_list",
   "args": {
-    "all_sessions": false  // Optional: true to see all sessions, false (default) for current only
+    "all_sessions": false,  // Optional: true to see all sessions, false (default) for current only
+    "host": "gpu-box"       // Optional: filter to specific host
   }
 }
 ```
@@ -481,6 +485,27 @@ The regular `Bash` tool waits for commands to complete, which blocks your workfl
   "name": "supervisor_stop",
   "args": {
     "process_id": "uuid-from-start-or-list"  // Required
+  }
+}
+```
+
+**supervisor_query** - Query available hosts
+```json
+{
+  "name": "supervisor_query",
+  "args": {
+    "tags": ["docker", "ml"],  // Optional: filter by tags (must have ALL)
+    "type": "ssh"              // Optional: filter by type (local or ssh)
+  }
+}
+```
+
+**supervisor_host_status** - Check host connectivity
+```json
+{
+  "name": "supervisor_host_status",
+  "args": {
+    "host": "gpu-box"  // Required: host name from supervisor.yaml
   }
 }
 ```
@@ -510,12 +535,33 @@ The regular `Bash` tool waits for commands to complete, which blocks your workfl
    supervisor_stop with process_id="..."
    ```
 
+### Remote Host Workflow
+
+1. **Query available hosts**:
+   ```
+   supervisor_query with tags=["docker"]
+   ```
+   Returns hosts with docker capability.
+
+2. **Check host is reachable**:
+   ```
+   supervisor_host_status with host="gpu-box"
+   ```
+   Returns connectivity status and latency.
+
+3. **Run command on remote host**:
+   ```
+   supervisor_start with command="nvidia-smi", host="gpu-box", name="gpu-check"
+   ```
+   Executes via SSH, streams output back.
+
 ### Good Use Cases
 
 - **Dev servers**: `npm run dev`, `python manage.py runserver`, `cargo run`
 - **File watchers**: `cargo watch -x test`, `nodemon`, `inotifywait` loops
 - **Long builds**: `make all`, `cargo build --release`, `docker build`
 - **Database/services**: `docker-compose up`, `redis-server`
+- **Remote commands**: GPU monitoring, remote builds, deployment tasks
 
 ### Process Status
 
@@ -530,6 +576,7 @@ Processes report one of three states:
 - Up to 10,000 log entries are kept per process (circular buffer)
 - Log entries include timestamp, source (stdout/stderr/system), and content
 - When a session closes, its processes can be stopped automatically
+- Remote host SSH keys should be configured in ~/.ssh/config or ssh-agent
 
 
 ## Goal Management Tools

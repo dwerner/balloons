@@ -6,9 +6,15 @@ crate via PyO3 bindings.
 
 Tool definitions are in tools.py (SUPERVISOR_TOOLS). This module contains
 the execution logic.
+
+Extended to support remote hosts via SSH. Host configuration is loaded from
+~/.balloons/supervisor.yaml.
 """
 
+import asyncio
 import json
+import shlex
+import subprocess
 from typing import Any, TYPE_CHECKING
 
 from .debug_log import debug_log
@@ -22,6 +28,8 @@ SUPERVISOR_TOOL_NAMES = {
     "supervisor_list",
     "supervisor_output",
     "supervisor_stop",
+    "supervisor_query",
+    "supervisor_host_status",
 }
 
 # Global supervisor instance - set by app on startup
@@ -67,12 +75,18 @@ async def execute_supervisor_tool(
     Returns:
         Tuple of (result_string, is_error)
     """
+    # These tools don't need the supervisor instance
+    if name == "supervisor_query":
+        return await _execute_query(args)
+    elif name == "supervisor_host_status":
+        return await _execute_host_status(args)
+
     if _supervisor is None:
         return "Error: Process supervisor not initialized", True
 
     try:
         if name == "supervisor_start":
-            return _execute_start(args, session, working_dir)
+            return await _execute_start(args, session, working_dir)
         elif name == "supervisor_list":
             return _execute_list(args, session)
         elif name == "supervisor_output":
@@ -86,7 +100,7 @@ async def execute_supervisor_tool(
         return f"Error: {str(e)}", True
 
 
-def _execute_start(
+async def _execute_start(
     args: dict[str, Any],
     session: "Session",
     working_dir: str,
@@ -94,29 +108,64 @@ def _execute_start(
     """Start a new supervised process.
 
     Args:
-        args: Tool arguments (command, name, env)
+        args: Tool arguments (command, host, name, env)
         session: Current session for scoping
         working_dir: Default working directory
 
     Returns:
         Tuple of (result_string, is_error)
     """
+    from supervisor_config import get_supervisor_config
+
     command = args.get("command")
     if not command:
         return "Error: command is required", True
 
+    host_name = args.get("host", "local")
     name = args.get("name")
-    cwd = args.get("working_dir", working_dir)
+    cwd = args.get("working_dir")
     env = args.get("env")
+
+    # Get host configuration
+    try:
+        config = get_supervisor_config()
+        host = config.get_host(host_name)
+    except KeyError as e:
+        return f"Error: {e}", True
+
+    # Build the actual command based on host type
+    if host.type == "ssh":
+        # For SSH hosts, wrap command in ssh
+        # Use -tt to force PTY allocation for proper output streaming
+        ssh_args = ["ssh", "-tt", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+        if host.port != 22:
+            ssh_args.extend(["-p", str(host.port)])
+        ssh_args.append(host.ssh_target())
+
+        # If working directory specified, cd to it first
+        if cwd:
+            actual_command = f"cd {shlex.quote(cwd)} && {command}"
+        else:
+            actual_command = command
+
+        ssh_args.append(actual_command)
+        final_command = " ".join(shlex.quote(arg) for arg in ssh_args)
+
+        # For SSH, working_dir is handled in the remote command
+        effective_cwd = working_dir  # Local cwd doesn't matter for SSH
+    else:
+        # Local execution
+        final_command = command
+        effective_cwd = cwd or working_dir
 
     # Convert env dict to JSON string if provided
     env_json = json.dumps(env) if env else None
 
     try:
         process_id = _supervisor.start(
-            command=command,
+            command=final_command,
             session_id=session.id,
-            working_dir=cwd,
+            working_dir=effective_cwd,
             name=name,
             env_json=env_json,
         )
@@ -124,15 +173,21 @@ def _execute_start(
         debug_log.info(
             f"Started process: {process_id[:8]}",
             category="supervisor",
-            details={"command": command, "name": name, "session": session.id[:8]},
+            details={
+                "command": command,
+                "host": host_name,
+                "name": name,
+                "session": session.id[:8],
+            },
         )
 
         result = {
             "process_id": process_id,
             "status": "started",
             "command": command,
+            "host": host_name,
             "name": name,
-            "working_dir": cwd,
+            "working_dir": cwd or effective_cwd,
         }
         return json.dumps(result, indent=2), False
 
@@ -306,3 +361,142 @@ def shutdown_supervisor() -> None:
         debug_log.error(f"Error during supervisor shutdown: {e}", category="supervisor")
     finally:
         _supervisor = None
+
+
+# =============================================================================
+# Host query and status tools
+# =============================================================================
+
+async def _execute_query(args: dict[str, Any]) -> tuple[str, bool]:
+    """Query available hosts by tags and type.
+
+    Args:
+        args: Tool arguments (tags, type)
+
+    Returns:
+        Tuple of (result_string, is_error)
+    """
+    from supervisor_config import get_supervisor_config
+
+    tags = args.get("tags")
+    host_type = args.get("type")
+
+    try:
+        config = get_supervisor_config()
+        hosts = config.query_hosts(tags=tags, host_type=host_type)
+
+        result = []
+        for host in hosts:
+            host_info = {
+                "name": host.name,
+                "type": host.type,
+                "tags": host.tags,
+            }
+            if host.type == "ssh":
+                host_info["host"] = host.host
+                host_info["user"] = host.user
+                if host.port != 22:
+                    host_info["port"] = host.port
+            if host.description:
+                host_info["description"] = host.description
+
+            result.append(host_info)
+
+        if not result:
+            filters = []
+            if tags:
+                filters.append(f"tags={tags}")
+            if host_type:
+                filters.append(f"type={host_type}")
+            filter_str = ", ".join(filters) if filters else "none"
+            return f"No hosts found matching filters: {filter_str}", False
+
+        return json.dumps({"hosts": result}, indent=2), False
+
+    except Exception as e:
+        return f"Error querying hosts: {e}", True
+
+
+async def _execute_host_status(args: dict[str, Any]) -> tuple[str, bool]:
+    """Check connectivity status of a host.
+
+    Args:
+        args: Tool arguments (host)
+
+    Returns:
+        Tuple of (result_string, is_error)
+    """
+    from supervisor_config import get_supervisor_config
+
+    host_name = args.get("host")
+    if not host_name:
+        return "Error: host is required", True
+
+    try:
+        config = get_supervisor_config()
+        host = config.get_host(host_name)
+    except KeyError as e:
+        return f"Error: {e}", True
+
+    if host.type == "local":
+        return json.dumps({
+            "host": host_name,
+            "type": "local",
+            "status": "ready",
+        }, indent=2), False
+
+    # For SSH hosts, do a quick connectivity test
+    try:
+        ssh_args = [
+            "ssh",
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=5",
+            "-o", "StrictHostKeyChecking=accept-new",
+        ]
+        if host.port != 22:
+            ssh_args.extend(["-p", str(host.port)])
+        ssh_args.append(host.ssh_target())
+        ssh_args.append("true")  # Just run 'true' to test connectivity
+
+        start_time = asyncio.get_event_loop().time()
+
+        proc = await asyncio.create_subprocess_exec(
+            *ssh_args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+
+        end_time = asyncio.get_event_loop().time()
+        latency_ms = int((end_time - start_time) * 1000)
+
+        if proc.returncode == 0:
+            return json.dumps({
+                "host": host_name,
+                "type": "ssh",
+                "status": "reachable",
+                "latency_ms": latency_ms,
+            }, indent=2), False
+        else:
+            error_msg = stderr.decode().strip() if stderr else "Connection failed"
+            return json.dumps({
+                "host": host_name,
+                "type": "ssh",
+                "status": "unreachable",
+                "error": error_msg,
+            }, indent=2), False
+
+    except asyncio.TimeoutError:
+        return json.dumps({
+            "host": host_name,
+            "type": "ssh",
+            "status": "unreachable",
+            "error": "Connection timeout",
+        }, indent=2), False
+    except Exception as e:
+        return json.dumps({
+            "host": host_name,
+            "type": "ssh",
+            "status": "error",
+            "error": str(e),
+        }, indent=2), False

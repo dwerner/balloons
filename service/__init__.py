@@ -76,6 +76,19 @@ from service.debug_log_service import DebugLogService
 from service.file_state_service import FileStateService
 from service.ws_server import WsServer, create_server
 from service.jwt_auth import JWTAuth, JWTConfig, TokenClaims
+from service.user_auth import (
+    UserAuthService,
+    User,
+    PasswordHasher,
+    UserAuthError,
+    UserNotFoundError,
+    InvalidCredentialsError,
+    UserDisabledError,
+    UsernameExistsError,
+)
+from service.user_storage import JsonFileUserStorage, get_user_storage
+from service.auth_routes import AuthRoutes
+from service.http_server import HttpAuthServer, ServerConfig, create_http_auth_server
 
 __all__ = [
     "QueueStateService",
@@ -92,4 +105,20 @@ __all__ = [
     "JWTAuth",
     "JWTConfig",
     "TokenClaims",
+    # User authentication
+    "UserAuthService",
+    "User",
+    "PasswordHasher",
+    "UserAuthError",
+    "UserNotFoundError",
+    "InvalidCredentialsError",
+    "UserDisabledError",
+    "UsernameExistsError",
+    "JsonFileUserStorage",
+    "get_user_storage",
+    # HTTP/Auth
+    "AuthRoutes",
+    "HttpAuthServer",
+    "ServerConfig",
+    "create_http_auth_server",
 ]

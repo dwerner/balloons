@@ -47,6 +47,10 @@ from service import (
     SoundService,
     DebugLogService,
     FileStateService,
+    # Auth
+    UserAuthService,
+    get_user_storage,
+    create_http_auth_server,
 )
 
 
@@ -215,7 +219,33 @@ async def run_server(
     # Force enabled for headless mode
     ws_config.enabled = True
 
-    # Create and configure server
+    # Set up HTTP auth server on port + 1 (e.g. 8701 for WS on 8700)
+    auth_port = ws_config.port + 1
+    user_storage = await get_user_storage()
+    user_service = UserAuthService(user_storage)
+
+    # Bootstrap admin user if configured and no users exist
+    if config.auth and config.auth.admin:
+        admin_created = await user_service.ensure_admin_exists(
+            admin_username=config.auth.admin.username,
+            admin_password=config.auth.admin.password,
+        )
+        if admin_created:
+            print(f"Created bootstrap admin user: {config.auth.admin.username}")
+
+    # Create HTTP auth server (handles /auth/login, /users, etc.)
+    # Create a modified ws_config with the auth port
+    from copy import deepcopy
+    auth_ws_config = deepcopy(ws_config)
+    auth_ws_config.port = auth_port
+    http_auth_server = await create_http_auth_server(auth_ws_config, user_service)
+
+    # Start HTTP auth server
+    await http_auth_server.start()
+    auth_scheme = "https" if ws_config.tls.enabled else "http"
+    print(f"Auth server listening on {auth_scheme}://{ws_config.host}:{auth_port}")
+
+    # Create WebSocket handler with services
     ws_server = WsServer(config=ws_config)
     ws_server.register_service(queue_service)
     ws_server.register_service(session_service)
@@ -227,9 +257,10 @@ async def run_server(
     ws_server.register_service(debug_log_service)
     ws_server.register_service(file_service)
 
-    # Start server
+    # Start WebSocket server directly
     await ws_server.start()
-    print(f"Balloons headless server listening on {ws_config.get_url()}")
+    scheme = "wss" if ws_config.tls.enabled else "ws"
+    print(f"Balloons headless server listening on {scheme}://{ws_config.host}:{ws_config.port}")
     debug_log.info(
         f"Headless server started on {ws_config.get_url()}",
         category="startup",
@@ -253,6 +284,7 @@ async def run_server(
     debug_log.info("Shutting down headless server", category="startup")
     session_service.stop_event_pump()
     await ws_server.stop()
+    await http_auth_server.stop()
     shutdown_supervisor()
 
     print("Server stopped.")

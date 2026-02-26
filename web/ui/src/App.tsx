@@ -16,6 +16,8 @@ import { StreamingTurnsView, type StreamingProgress } from './components/Streami
 import { DialogProvider, useDialog } from './components/Dialog';
 import { useWakeLock, useSoundNotifications } from './hooks';
 import { setDebugClient, createLogger, isDebugEnabled, setDebugEnabled } from './utils/debugLog';
+import { logout, isAuthenticated, getToken } from './utils/auth';
+import { Login } from './components/Login';
 
 // Module-level client reference for debug logging
 // Set when client connects, cleared on disconnect
@@ -820,31 +822,67 @@ function formatTokens(count: number): string {
   return String(count);
 }
 
-// Server slots - A is primary (8765), B is secondary (8766)
+// Server slots - A is primary (8700), B is secondary (8710)
 type ServerSlot = 'A' | 'B';
-const SLOT_PORTS: Record<ServerSlot, number> = { A: 8765, B: 8766 };
+const SLOT_PORTS: Record<ServerSlot, number> = { A: 8700, B: 8710 };
 
-// Get WebSocket URL for a given slot
+// Auth server ports - HTTP server for login/auth (WS port + 1)
+const AUTH_PORTS: Record<ServerSlot, number> = { A: 8701, B: 8711 };
+
+// Check if TLS should be used (infer from page protocol or explicit setting)
+function shouldUseTls(): boolean {
+  if (typeof window === 'undefined') return false;
+  // If served over HTTPS, use TLS
+  if (window.location.protocol === 'https:') return true;
+  // Check for explicit TLS override in localStorage
+  const tlsSetting = localStorage.getItem('balloons:use-tls');
+  if (tlsSetting === 'true') return true;
+  // Check for ?tls=1 query param
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('tls') === '1') return true;
+  return false;
+}
+
+// Get WebSocket URL for a given slot (with JWT token if available)
 function getWsUrlForSlot(slot: ServerSlot): string {
   // Check for explicit override
   if (typeof window !== 'undefined' && (window as any).BALLOONS_WS_URL) {
     return (window as any).BALLOONS_WS_URL;
   }
 
+  const useTls = shouldUseTls();
+  const wsProtocol = useTls ? 'wss' : 'ws';
+
   // Check URL query param: ?ws=host:port (overrides slot)
   if (typeof window !== 'undefined') {
     const params = new URLSearchParams(window.location.search);
     const wsParam = params.get('ws');
     if (wsParam) {
-      return `ws://${wsParam}`;
+      const token = getToken();
+      const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
+      return `${wsProtocol}://${wsParam}${tokenParam}`;
     }
 
-    // Use slot's port
+    // Use slot's port with JWT token
     const port = SLOT_PORTS[slot];
-    return `ws://${window.location.hostname}:${port}`;
+    const token = getToken();
+    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
+    return `${wsProtocol}://${window.location.hostname}:${port}${tokenParam}`;
   }
 
-  return `ws://localhost:${SLOT_PORTS[slot]}`;
+  return `${wsProtocol}://localhost:${SLOT_PORTS[slot]}`;
+}
+
+// Get auth server URL for a given slot
+function getAuthUrlForSlot(slot: ServerSlot): string {
+  const useTls = shouldUseTls();
+  const httpProtocol = useTls ? 'https' : 'http';
+  const port = AUTH_PORTS[slot];
+
+  if (typeof window !== 'undefined') {
+    return `${httpProtocol}://${window.location.hostname}:${port}`;
+  }
+  return `${httpProtocol}://localhost:${port}`;
 }
 
 // Get initial slot from localStorage, default to A
@@ -961,6 +999,21 @@ const MessageInput = memo(MessageInputInner, (prevProps, nextProps) => {
  * Main App component - wraps AppContent with DialogProvider
  */
 export function App() {
+  // Check if user is authenticated
+  const [authed, setAuthed] = useState(() => isAuthenticated());
+  const [serverSlot] = useState<ServerSlot>(() => getInitialSlot());
+  const authUrl = getAuthUrlForSlot(serverSlot);
+
+  // If not authenticated, show login screen
+  if (!authed) {
+    return (
+      <Login
+        authUrl={authUrl}
+        onLoginSuccess={() => setAuthed(true)}
+      />
+    );
+  }
+
   return (
     <DialogProvider>
       <AppContent />
@@ -2221,6 +2274,10 @@ function AppContent() {
           onSlotChange={setServerSlot}
           debugEnabled={debugEnabled}
           onToggleDebug={handleToggleDebug}
+          onLogout={() => {
+            logout();
+            window.location.reload();
+          }}
           onNewBareSession={async () => {
             const sessionsClient = clientRef.current?.sessions;
             if (!sessionsClient || connectionState !== 'connected') return;
@@ -2987,6 +3044,8 @@ interface SidebarContentProps {
   // Debug logging props
   debugEnabled?: boolean;
   onToggleDebug?: () => void;
+  // Auth
+  onLogout?: () => void;
 }
 
 function SidebarContent({
@@ -3015,6 +3074,7 @@ function SidebarContent({
   onSlotChange,
   debugEnabled = false,
   onToggleDebug,
+  onLogout,
 }: SidebarContentProps) {
   const { closeSidebar, layoutMode } = useLayout();
   const { resolvedTheme, toggleTheme } = useTheme();
@@ -3193,6 +3253,18 @@ function SidebarContent({
         >
           {debugEnabled ? 'ON' : 'OFF'}
         </button>
+        {onLogout && (
+          <>
+            <span className="slot-divider">|</span>
+            <button
+              className="slot-toggle slot-logout"
+              onClick={onLogout}
+              title="Sign out"
+            >
+              Sign out
+            </button>
+          </>
+        )}
       </div>
 
       {onNewBareSession && (

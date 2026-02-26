@@ -810,6 +810,7 @@ class WsServer:
         return jwt_auth.generate_token(subject)
 
 
+
 class MethodNotFoundError(Exception):
     """Raised when a requested method is not found."""
 

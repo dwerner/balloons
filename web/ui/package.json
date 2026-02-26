@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "dev": "bun --watch dev-server.ts",
+    "dev:tls": "bun --watch dev-server-tls.ts",
     "typecheck": "bun x tsc --noEmit",
     "build": "bun x tsc"
   },

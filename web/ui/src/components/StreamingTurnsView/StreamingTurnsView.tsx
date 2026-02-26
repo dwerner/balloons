@@ -94,9 +94,11 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
   }, [isFollowing]);
 
   // Memoize context value to prevent unnecessary re-renders
+  // Include scrollContainerRef for IntersectionObserver-based lazy loading
   const contextValue = useMemo(() => ({
     client,
     onSelectSession,
+    scrollContainerRef,
   }), [client, onSelectSession]);
 
   // Build a lookup map from tool_use ID to matching tool_result turn

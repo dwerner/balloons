@@ -695,6 +695,17 @@ body {
   color: var(--color-accent-blue);
 }
 
+.slot-toggle.slot-logout {
+  border-color: var(--color-text-dim);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+}
+
+.slot-toggle.slot-logout:hover {
+  border-color: var(--color-danger, #dc2626);
+  color: var(--color-danger, #dc2626);
+}
+
 .slot-divider {
   color: var(--color-text-dim);
   margin: 0 4px;

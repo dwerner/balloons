@@ -486,9 +486,10 @@ Examples of good use cases:
 - Running a file watcher: `cargo watch -x test`
 - Long builds: `make all`
 - Database processes: `docker-compose up`
+- Remote commands: `supervisor_start(command="nvidia-smi", host="gpu-box")`
 
 The process is scoped to the current session and will be tracked until stopped
-or the session is closed.""",
+or the session is closed. For remote hosts, commands are executed via SSH.""",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -496,13 +497,17 @@ or the session is closed.""",
                         "type": "string",
                         "description": "The shell command to execute"
                     },
+                    "host": {
+                        "type": "string",
+                        "description": "Host to run on (from supervisor.yaml). Default: 'local'. Use supervisor_query to find available hosts."
+                    },
                     "name": {
                         "type": "string",
                         "description": "Optional friendly name for the process (e.g., 'dev-server', 'test-watcher')"
                     },
                     "working_dir": {
                         "type": "string",
-                        "description": "Working directory for the process. Defaults to session working directory."
+                        "description": "Working directory for the process. Defaults to session working directory (local) or home directory (remote)."
                     },
                     "env": {
                         "type": "object",
@@ -521,7 +526,7 @@ or the session is closed.""",
             "description": """List all supervised processes.
 
 Shows all processes managed by the supervisor, including their status (running/exited),
-command, and basic info. By default only shows processes for the current session.
+command, host, and basic info. By default only shows processes for the current session.
 
 Use this to check what background processes are running before starting new ones,
 or to get process IDs for supervisor_output or supervisor_stop.""",
@@ -531,9 +536,61 @@ or to get process IDs for supervisor_output or supervisor_stop.""",
                     "all_sessions": {
                         "type": "boolean",
                         "description": "If true, list processes from all sessions. Default: only current session."
+                    },
+                    "host": {
+                        "type": "string",
+                        "description": "Filter to processes running on a specific host. Default: all hosts."
                     }
                 },
                 "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "supervisor_query",
+            "description": """Query available hosts by tags and type.
+
+Returns a list of hosts defined in supervisor.yaml that match the given criteria.
+Use this to discover where you can run commands before using supervisor_start.
+
+Example: supervisor_query(tags=["docker"]) returns all hosts with docker installed.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of tags to filter by. Host must have ALL specified tags."
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": ["local", "ssh"],
+                        "description": "Filter by host type. Default: all types."
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "supervisor_host_status",
+            "description": """Check connectivity status of a host.
+
+For SSH hosts, attempts a quick connection test. For local, always returns ready.
+Use this to verify a remote host is reachable before running commands on it.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "host": {
+                        "type": "string",
+                        "description": "Host name to check (from supervisor.yaml)"
+                    }
+                },
+                "required": ["host"]
             }
         }
     },

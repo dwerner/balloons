@@ -20,8 +20,8 @@ import sys
 from pathlib import Path
 
 # Default slots
-SLOT_A_PORT = 8765
-SLOT_B_PORT = 8766
+SLOT_A_PORT = 8700
+SLOT_B_PORT = 8710
 
 # PID file location
 PID_DIR = Path.home() / ".balloons" / "run"

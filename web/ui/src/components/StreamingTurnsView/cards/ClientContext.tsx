@@ -5,13 +5,15 @@
  * call API methods.
  */
 
-import { createContext, useContext } from 'react';
+import { createContext, useContext, type RefObject } from 'react';
 import type { BalloonsClient } from '../../../../../generated/balloons-client';
 
 // Combined context value
 interface ClientContextValue {
   client: BalloonsClient | null;
   onSelectSession?: (sessionId: string) => void;
+  /** Scroll container ref for IntersectionObserver root */
+  scrollContainerRef?: RefObject<HTMLElement | null>;
 }
 
 // Context with null default (must be provided by parent)
@@ -34,4 +36,9 @@ export function useRequiredClient(): BalloonsClient {
     throw new Error('useRequiredClient must be used within a ClientContext.Provider');
   }
   return client;
+}
+
+// Hook for accessing the scroll container ref (for IntersectionObserver)
+export function useScrollContainer(): RefObject<HTMLElement | null> | undefined {
+  return useContext(ClientContext).scrollContainerRef;
 }

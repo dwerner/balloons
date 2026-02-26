@@ -3645,9 +3645,9 @@ class SessionManagerService:
         return CompleteArchiveResult(
             success=True,
             session_id=session_id,
-            archive_id=result.archive_id or "",
+            archive_id=result.archive_block.archive_id if result.archive_block else "",
             turn_index=turn_start,
-            turns_archived=len(turn_indices),
+            turns_archived=result.archived_count,
         )
 
     @ws_expose

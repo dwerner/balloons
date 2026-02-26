@@ -1067,6 +1067,13 @@ class SessionDataService:
         elif block_type == "archive":
             return ArchiveBlock(
                 type="archive",
+                archive_id=data.get("archive_id", ""),
+                file_path=data.get("file_path", ""),
+                summary=data.get("summary", ""),
+                turn_start=data.get("turn_start", 0),
+                turn_end=data.get("turn_end", 0),
+                message_count=data.get("message_count", 0),
+                token_estimate=data.get("token_estimate", 0),
             )
         elif block_type == "slide":
             return SlideBlock(

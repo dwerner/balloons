@@ -83,6 +83,31 @@ class JWTConfig:
 
 
 @dataclass
+class AdminBootstrapConfig:
+    """Bootstrap admin user configuration.
+
+    If no users exist in the database on startup, an admin user will be
+    created with these credentials.
+
+    Attributes:
+        username: Admin username
+        password: Admin password (plain text in config, or argon2 hash)
+    """
+    username: str = "admin"
+    password: str = "changeme"
+
+
+@dataclass
+class AuthConfig:
+    """Authentication configuration.
+
+    Attributes:
+        admin: Bootstrap admin configuration
+    """
+    admin: AdminBootstrapConfig = field(default_factory=AdminBootstrapConfig)
+
+
+@dataclass
 class WebSocketConfig:
     """WebSocket server configuration.
 
@@ -95,7 +120,7 @@ class WebSocketConfig:
     """
     enabled: bool = False
     host: str = "localhost"
-    port: int = 8765
+    port: int = 8700
     tls: TLSConfig = field(default_factory=TLSConfig)
     jwt: JWTConfig = field(default_factory=JWTConfig)
 
@@ -270,6 +295,7 @@ class Config:
     sounds: SoundsConfig = field(default_factory=SoundsConfig)  # Sound notifications
     reports: ReportsConfig = field(default_factory=ReportsConfig)  # Reports configuration
     websocket: WebSocketConfig = field(default_factory=WebSocketConfig)  # WebSocket server config
+    auth: AuthConfig = field(default_factory=AuthConfig)  # Authentication configuration
     review_backend: Optional[str] = None  # Backend for session quality reviews (defaults to default_backend)
     _config_path: Optional[Path] = field(default=None, repr=False)  # Where config was loaded from
 
@@ -395,6 +421,15 @@ class Config:
             jwt=jwt_config,
         )
 
+        # Load auth config
+        auth_data = data.get("auth", {})
+        admin_data = auth_data.get("admin", {})
+        admin_config = AdminBootstrapConfig(
+            username=admin_data.get("username", "admin"),
+            password=admin_data.get("password", "changeme"),
+        )
+        auth_config = AuthConfig(admin=admin_config)
+
         return cls(
             default_backend=data.get("default_backend", "claude"),
             backends=backends,
@@ -407,6 +442,7 @@ class Config:
             sounds=sounds_config,
             reports=reports_config,
             websocket=websocket_config,
+            auth=auth_config,
             review_backend=data.get("review_backend"),
             _config_path=path,
         )

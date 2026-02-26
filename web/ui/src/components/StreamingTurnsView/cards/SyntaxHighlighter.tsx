@@ -11,6 +11,7 @@ import { Prism as PrismHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { useTheme } from '../../layout';
+import { useScrollContainer } from './ClientContext';
 
 // Polyfill for requestIdleCallback (Safari doesn't support it)
 // Use a wrapper that handles both browser and Node.js environments
@@ -457,6 +458,9 @@ export function LazyDiffHighlightedCode({
   const { resolvedTheme: currentTheme } = useTheme();
   const isLightTheme = currentTheme === 'light';
 
+  // Get scroll container for proper IntersectionObserver root
+  const scrollContainerRef = useScrollContainer();
+
   // Determine language from props or try to extract from diff header
   const lang = useMemo(() => {
     if (language) return language;
@@ -489,7 +493,7 @@ export function LazyDiffHighlightedCode({
     });
   }, [diffLines]);
 
-  // IntersectionObserver to detect when diff enters viewport
+  // IntersectionObserver to detect when diff enters visible scroll area
   useEffect(() => {
     if (eager || isVisible) return;
 
@@ -502,6 +506,9 @@ export function LazyDiffHighlightedCode({
       return;
     }
 
+    // Use scroll container as root for accurate visibility detection
+    const root = scrollContainerRef?.current ?? null;
+
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
@@ -512,13 +519,13 @@ export function LazyDiffHighlightedCode({
           }
         }
       },
-      { rootMargin, threshold: 0 }
+      { root, rootMargin, threshold: 0 }
     );
 
     observer.observe(element);
 
     return () => observer.disconnect();
-  }, [eager, isVisible, rootMargin]);
+  }, [eager, isVisible, rootMargin, scrollContainerRef]);
 
   // Once visible, use requestIdleCallback to defer the actual highlighting
   useEffect(() => {
@@ -683,6 +690,10 @@ export function LazySyntaxHighlightedCode({
   const { resolvedTheme: currentTheme } = useTheme();
   const isLightTheme = currentTheme === 'light';
 
+  // Get scroll container for proper IntersectionObserver root
+  // This ensures visibility detection works within scrollable containers
+  const scrollContainerRef = useScrollContainer();
+
   // Determine language from prop or file path
   const lang = useMemo(() => {
     if (language) return language;
@@ -690,7 +701,7 @@ export function LazySyntaxHighlightedCode({
     return 'text';
   }, [language, filePath]);
 
-  // IntersectionObserver to detect when code block enters viewport
+  // IntersectionObserver to detect when code block enters visible scroll area
   useEffect(() => {
     if (eager || isVisible) return;
 
@@ -705,6 +716,10 @@ export function LazySyntaxHighlightedCode({
       return;
     }
 
+    // Use scroll container as root for accurate visibility detection
+    // within scrollable areas. Falls back to viewport if not available.
+    const root = scrollContainerRef?.current ?? null;
+
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
@@ -716,6 +731,7 @@ export function LazySyntaxHighlightedCode({
         }
       },
       {
+        root, // Use scroll container for accurate in-view detection
         rootMargin, // Start loading slightly before visible
         threshold: 0,
       }
@@ -724,7 +740,7 @@ export function LazySyntaxHighlightedCode({
     observer.observe(element);
 
     return () => observer.disconnect();
-  }, [eager, isVisible, rootMargin]);
+  }, [eager, isVisible, rootMargin, scrollContainerRef]);
 
   // Once visible, use requestIdleCallback to defer the actual highlighting
   useEffect(() => {

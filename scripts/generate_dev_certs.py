@@ -17,6 +17,7 @@ Files created:
 
 import argparse
 import datetime
+import ipaddress
 import os
 import sys
 from pathlib import Path
@@ -164,5 +165,4 @@ websocket:
 
 
 if __name__ == "__main__":
-    import ipaddress  # Import here to fail fast at top if cryptography missing
     main()

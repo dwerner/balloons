@@ -18,7 +18,7 @@
 export { TurnCard, type TurnCardProps } from './TurnCard';
 
 // Client context for interactive cards
-export { ClientContext, useClient, useRequiredClient } from './ClientContext';
+export { ClientContext, useClient, useRequiredClient, useScrollContainer } from './ClientContext';
 
 // Base components
 export { TextCard } from './TextCard';

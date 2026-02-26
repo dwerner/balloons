@@ -267,6 +267,29 @@ class SessionBinding:
 
 
 # =============================================================================
+# User Authentication
+# =============================================================================
+
+
+@rust_schema
+@dataclass
+class UserData:
+    """A user account for authentication.
+
+    Users authenticate via username/password and receive a JWT token.
+    The admin role grants access to user management endpoints.
+    """
+    id: str  # UUID
+    username: str  # Unique, case-insensitive
+    password_hash: str  # argon2id hash
+    role: str  # "admin" | "user"
+    created_at: str  # ISO 8601
+    created_by: Optional[str] = None  # User ID who created this user
+    last_login: Optional[str] = None  # ISO 8601
+    disabled: bool = False
+
+
+# =============================================================================
 # User Preferences
 # =============================================================================
 
