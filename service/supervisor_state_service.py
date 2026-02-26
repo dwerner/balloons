@@ -10,6 +10,7 @@ It wraps the supervisor_config and supervisor_tools modules for web client acces
 
 import asyncio
 import json
+import socket
 import subprocess
 from dataclasses import dataclass, field
 from typing import Optional
@@ -100,6 +101,30 @@ class ProcessListResult:
     processes: list[ProcessInfo]
 
 
+@ws_type
+@dataclass
+class HostUpdateRequest:
+    """Request to add or update a host."""
+
+    name: str
+    type: str = "ssh"  # "local" or "ssh"
+    host: Optional[str] = None  # Required for SSH
+    user: Optional[str] = None  # Required for SSH
+    port: int = 22
+    tags: list[str] = field(default_factory=list)
+    description: Optional[str] = None
+    originalName: Optional[str] = None  # For renaming: the old name to replace
+
+
+@ws_type
+@dataclass
+class ConfigUpdateResult:
+    """Result of a config update operation."""
+
+    success: bool
+    error: Optional[str] = None
+
+
 @ws_service
 class SupervisorStateService:
     """WebSocket-exposed service for supervisor state management.
@@ -118,10 +143,18 @@ class SupervisorStateService:
 
     def _host_config_to_info(self, host: HostConfig, status: str = "unknown") -> HostInfo:
         """Convert HostConfig to HostInfo for web clients."""
+        # For local host, populate 'host' field with the actual hostname
+        host_value = host.host
+        if host.type == "local" and not host_value:
+            try:
+                host_value = socket.gethostname()
+            except Exception:
+                host_value = "localhost"
+
         return HostInfo(
             name=host.name,
             type=host.type,
-            host=host.host,
+            host=host_value,
             user=host.user,
             port=host.port,
             tags=host.tags,
@@ -393,6 +426,265 @@ class SupervisorStateService:
         except Exception as e:
             debug_log.error(f"Error reloading supervisor config: {e}", category="supervisor")
             return False
+
+    @ws_expose
+    def add_host(self, request: HostUpdateRequest | dict) -> ConfigUpdateResult:
+        """Add a new host to the configuration.
+
+        Args:
+            request: Host configuration
+
+        Returns:
+            Success/failure result
+        """
+        try:
+            # Convert dict to dataclass if needed (WS layer passes raw dicts)
+            if isinstance(request, dict):
+                request = HostUpdateRequest(
+                    name=request["name"],
+                    type=request.get("type", "ssh"),
+                    host=request.get("host"),
+                    user=request.get("user"),
+                    port=request.get("port", 22),
+                    tags=request.get("tags", []),
+                    description=request.get("description"),
+                )
+
+            config = get_supervisor_config()
+
+            # Validate name doesn't exist (unless updating)
+            if request.name in config.hosts:
+                return ConfigUpdateResult(
+                    success=False,
+                    error=f"Host '{request.name}' already exists. Use updateHost to modify.",
+                )
+
+            # Create and validate host config
+            host = HostConfig(
+                name=request.name,
+                type=request.type,
+                host=request.host,
+                user=request.user,
+                port=request.port,
+                tags=request.tags,
+                description=request.description,
+            )
+            host.validate()
+
+            # Add to config and save
+            config.hosts[request.name] = host
+            config.save()
+
+            # Clear cache
+            self._host_status_cache.clear()
+
+            debug_log.info(f"Added host: {request.name}", category="supervisor")
+            return ConfigUpdateResult(success=True)
+
+        except ValueError as e:
+            return ConfigUpdateResult(success=False, error=str(e))
+        except Exception as e:
+            debug_log.error(f"Error adding host: {e}", category="supervisor")
+            return ConfigUpdateResult(success=False, error=str(e))
+
+    @ws_expose
+    def update_host(self, request: HostUpdateRequest | dict) -> ConfigUpdateResult:
+        """Update an existing host in the configuration.
+
+        Args:
+            request: Host configuration (name must exist, or originalName for rename)
+
+        Returns:
+            Success/failure result
+        """
+        try:
+            # Convert dict to dataclass if needed (WS layer passes raw dicts)
+            if isinstance(request, dict):
+                request = HostUpdateRequest(
+                    name=request["name"],
+                    type=request.get("type", "ssh"),
+                    host=request.get("host"),
+                    user=request.get("user"),
+                    port=request.get("port", 22),
+                    tags=request.get("tags", []),
+                    description=request.get("description"),
+                    originalName=request.get("originalName"),
+                )
+
+            config = get_supervisor_config()
+
+            # Determine which host we're updating (support renaming via originalName)
+            lookup_name = request.originalName if request.originalName else request.name
+            is_rename = request.originalName and request.originalName != request.name
+
+            if lookup_name not in config.hosts:
+                return ConfigUpdateResult(
+                    success=False,
+                    error=f"Host '{lookup_name}' not found. Use addHost to create.",
+                )
+
+            # Don't allow renaming or changing type of local host
+            if lookup_name == "local":
+                if is_rename:
+                    return ConfigUpdateResult(
+                        success=False,
+                        error="Cannot rename local host",
+                    )
+                if request.type != "local":
+                    return ConfigUpdateResult(
+                        success=False,
+                        error="Cannot change local host type",
+                    )
+
+            # If renaming, check new name doesn't exist
+            if is_rename and request.name in config.hosts:
+                return ConfigUpdateResult(
+                    success=False,
+                    error=f"Host '{request.name}' already exists",
+                )
+
+            # Create and validate host config
+            host = HostConfig(
+                name=request.name,
+                type=request.type,
+                host=request.host,
+                user=request.user,
+                port=request.port,
+                tags=request.tags,
+                description=request.description,
+            )
+            host.validate()
+
+            # If renaming, delete old entry
+            if is_rename:
+                del config.hosts[lookup_name]
+                self._host_status_cache.pop(lookup_name, None)
+
+            # Update config and save
+            config.hosts[request.name] = host
+            config.save()
+
+            # Clear cache for this host
+            self._host_status_cache.pop(request.name, None)
+
+            if is_rename:
+                debug_log.info(f"Renamed host: {lookup_name} -> {request.name}", category="supervisor")
+            else:
+                debug_log.info(f"Updated host: {request.name}", category="supervisor")
+            return ConfigUpdateResult(success=True)
+
+        except ValueError as e:
+            return ConfigUpdateResult(success=False, error=str(e))
+        except Exception as e:
+            debug_log.error(f"Error updating host: {e}", category="supervisor")
+            return ConfigUpdateResult(success=False, error=str(e))
+
+    @ws_expose
+    def remove_host(self, host_name: str) -> ConfigUpdateResult:
+        """Remove a host from the configuration.
+
+        Args:
+            host_name: Name of the host to remove
+
+        Returns:
+            Success/failure result
+        """
+        try:
+            config = get_supervisor_config()
+
+            if host_name not in config.hosts:
+                return ConfigUpdateResult(
+                    success=False,
+                    error=f"Host '{host_name}' not found",
+                )
+
+            if host_name == "local":
+                return ConfigUpdateResult(
+                    success=False,
+                    error="Cannot remove local host",
+                )
+
+            # Remove host
+            del config.hosts[host_name]
+
+            # Remove any backend mappings that referenced this host
+            config.backend_hosts = {
+                backend: host
+                for backend, host in config.backend_hosts.items()
+                if host != host_name
+            }
+
+            config.save()
+
+            # Clear cache
+            self._host_status_cache.pop(host_name, None)
+
+            debug_log.info(f"Removed host: {host_name}", category="supervisor")
+            return ConfigUpdateResult(success=True)
+
+        except Exception as e:
+            debug_log.error(f"Error removing host: {e}", category="supervisor")
+            return ConfigUpdateResult(success=False, error=str(e))
+
+    @ws_expose
+    def set_backend_host(self, backend_name: str, host_name: str) -> ConfigUpdateResult:
+        """Map a backend to a host.
+
+        Args:
+            backend_name: Name of the LLM backend
+            host_name: Name of the host it runs on
+
+        Returns:
+            Success/failure result
+        """
+        try:
+            config = get_supervisor_config()
+
+            # Validate host exists
+            if host_name not in config.hosts:
+                return ConfigUpdateResult(
+                    success=False,
+                    error=f"Host '{host_name}' not found",
+                )
+
+            config.backend_hosts[backend_name] = host_name
+            config.save()
+
+            debug_log.info(f"Mapped backend '{backend_name}' to host '{host_name}'", category="supervisor")
+            return ConfigUpdateResult(success=True)
+
+        except Exception as e:
+            debug_log.error(f"Error setting backend host: {e}", category="supervisor")
+            return ConfigUpdateResult(success=False, error=str(e))
+
+    @ws_expose
+    def remove_backend_host(self, backend_name: str) -> ConfigUpdateResult:
+        """Remove a backend-to-host mapping.
+
+        Args:
+            backend_name: Name of the backend to unmap
+
+        Returns:
+            Success/failure result
+        """
+        try:
+            config = get_supervisor_config()
+
+            if backend_name not in config.backend_hosts:
+                return ConfigUpdateResult(
+                    success=False,
+                    error=f"Backend '{backend_name}' has no host mapping",
+                )
+
+            del config.backend_hosts[backend_name]
+            config.save()
+
+            debug_log.info(f"Removed backend mapping: {backend_name}", category="supervisor")
+            return ConfigUpdateResult(success=True)
+
+        except Exception as e:
+            debug_log.error(f"Error removing backend host: {e}", category="supervisor")
+            return ConfigUpdateResult(success=False, error=str(e))
 
     # Events for real-time updates
     # Note: The return type hint indicates the event payload type for codegen

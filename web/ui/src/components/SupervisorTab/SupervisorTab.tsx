@@ -19,9 +19,32 @@ import type {
   ProcessInfo,
   BackendHostMapping,
   SupervisorState,
+  HostUpdateRequest,
 } from '../../../../generated/balloons-client';
 import { SupervisorStateServiceClient } from '../../../../generated/client';
+import { useDialog } from '../Dialog';
 import './SupervisorTab.css';
+
+// Form state for host editing
+interface HostFormState {
+  name: string;
+  type: 'local' | 'ssh';
+  host: string;
+  user: string;
+  port: number;
+  tags: string;
+  description: string;
+}
+
+const emptyHostForm: HostFormState = {
+  name: '',
+  type: 'ssh',
+  host: '',
+  user: '',
+  port: 22,
+  tags: '',
+  description: '',
+};
 
 // Status indicator component
 function StatusIndicator({ status }: { status: string }) {
@@ -78,14 +101,19 @@ const HostCard = memo(function HostCard({
   host,
   processCount,
   onCheckStatus,
+  onEdit,
+  onDelete,
   isChecking,
 }: {
   host: HostInfo;
   processCount: number;
   onCheckStatus: (hostName: string) => void;
+  onEdit: (host: HostInfo) => void;
+  onDelete: (hostName: string) => void;
   isChecking: boolean;
 }) {
   const displayStatus = isChecking ? 'checking' : (host.status || 'unknown');
+  const isLocal = host.name === 'local';
 
   return (
     <div className="supervisor-host-card">
@@ -99,8 +127,21 @@ const HostCard = memo(function HostCard({
           </span>
         )}
         {host.type === 'local' && (
-          <span className="supervisor-host-card__address">this machine</span>
+          <span className="supervisor-host-card__address">{host.host || 'this machine'}</span>
         )}
+        <div className="supervisor-host-card__edit-actions">
+          <ActionButton
+            label="✎"
+            onClick={() => onEdit(host)}
+          />
+          {!isLocal && (
+            <ActionButton
+              label="×"
+              onClick={() => onDelete(host.name)}
+              variant="danger"
+            />
+          )}
+        </div>
       </div>
 
       {host.tags && host.tags.length > 0 && (
@@ -201,10 +242,12 @@ const BackendCard = memo(function BackendCard({
   backend,
   hostName,
   hostStatus,
+  onRemove,
 }: {
   backend: string;
   hostName: string | null;
   hostStatus: string;
+  onRemove?: (backendName: string) => void;
 }) {
   return (
     <div className="supervisor-backend-card">
@@ -217,9 +260,205 @@ const BackendCard = memo(function BackendCard({
       ) : (
         <span className="supervisor-backend-card__host">configured</span>
       )}
+      {onRemove && (
+        <ActionButton
+          label="×"
+          onClick={() => onRemove(backend)}
+          variant="danger"
+        />
+      )}
     </div>
   );
 });
+
+// Host edit modal
+function HostEditModal({
+  isOpen,
+  onClose,
+  onSave,
+  initialData,
+  isNew,
+  isSaving,
+  error,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  onSave: (data: HostFormState) => void;
+  initialData: HostFormState;
+  isNew: boolean;
+  isSaving: boolean;
+  error: string | null;
+}) {
+  const [form, setForm] = useState<HostFormState>(initialData);
+
+  useEffect(() => {
+    setForm(initialData);
+  }, [initialData]);
+
+  if (!isOpen) return null;
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSave(form);
+  };
+
+  const updateField = <K extends keyof HostFormState>(
+    field: K,
+    value: HostFormState[K]
+  ) => {
+    setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  return (
+    <div className="supervisor-modal-overlay" onClick={onClose}>
+      <div className="supervisor-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="supervisor-modal__header">
+          <h3>{isNew ? 'Add Host' : `Edit Host: ${initialData.name}`}</h3>
+          <button className="supervisor-modal__close" onClick={onClose}>
+            ×
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="supervisor-modal__form">
+          <div className="supervisor-form-field">
+            <label htmlFor="host-name">Name</label>
+            <input
+              id="host-name"
+              type="text"
+              value={form.name}
+              onChange={(e) => updateField('name', e.target.value)}
+              placeholder="my-server"
+              required
+              disabled={isSaving || form.name === 'local'}
+            />
+            {!isNew && form.name === 'local' && (
+              <span className="supervisor-form-field__hint">Cannot rename local host</span>
+            )}
+          </div>
+
+          <div className="supervisor-form-field">
+            <label htmlFor="host-type">Type</label>
+            <select
+              id="host-type"
+              value={form.type}
+              onChange={(e) => updateField('type', e.target.value as 'local' | 'ssh')}
+              disabled={isSaving || form.name === 'local'}
+            >
+              <option value="ssh">SSH</option>
+              <option value="local">Local</option>
+            </select>
+          </div>
+
+          {form.type === 'ssh' && (
+            <>
+              <div className="supervisor-form-field">
+                <label htmlFor="host-host">Host / IP</label>
+                <input
+                  id="host-host"
+                  type="text"
+                  value={form.host}
+                  onChange={(e) => updateField('host', e.target.value)}
+                  placeholder="192.168.1.100"
+                  required={form.type === 'ssh'}
+                  disabled={isSaving}
+                />
+              </div>
+
+              <div className="supervisor-form-field">
+                <label htmlFor="host-user">User</label>
+                <input
+                  id="host-user"
+                  type="text"
+                  value={form.user}
+                  onChange={(e) => updateField('user', e.target.value)}
+                  placeholder="deploy"
+                  required={form.type === 'ssh'}
+                  disabled={isSaving}
+                />
+              </div>
+
+              <div className="supervisor-form-field">
+                <label htmlFor="host-port">Port</label>
+                <input
+                  id="host-port"
+                  type="number"
+                  value={form.port}
+                  onChange={(e) => updateField('port', parseInt(e.target.value) || 22)}
+                  min={1}
+                  max={65535}
+                  disabled={isSaving}
+                />
+              </div>
+
+              <div className="supervisor-form-field__tip">
+                <p>To copy your SSH key for passwordless login:</p>
+                <div className="supervisor-form-field__tip-command">
+                  <code>ssh-copy-id {form.user || 'user'}@{form.host || 'host'}{form.port && form.port !== 22 ? ` -p ${form.port}` : ''}</code>
+                  <button
+                    type="button"
+                    className="supervisor-form-field__tip-copy"
+                    onClick={() => {
+                      const cmd = `ssh-copy-id ${form.user || 'user'}@${form.host || 'host'}${form.port && form.port !== 22 ? ` -p ${form.port}` : ''}`;
+                      navigator.clipboard.writeText(cmd);
+                    }}
+                    title="Copy to clipboard"
+                  >
+                    📋
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+
+          <div className="supervisor-form-field">
+            <label htmlFor="host-tags">Tags (comma-separated)</label>
+            <input
+              id="host-tags"
+              type="text"
+              value={form.tags}
+              onChange={(e) => updateField('tags', e.target.value)}
+              placeholder="docker, ml, web"
+              disabled={isSaving}
+            />
+          </div>
+
+          <div className="supervisor-form-field">
+            <label htmlFor="host-description">Description</label>
+            <input
+              id="host-description"
+              type="text"
+              value={form.description}
+              onChange={(e) => updateField('description', e.target.value)}
+              placeholder="Production web server"
+              disabled={isSaving}
+            />
+          </div>
+
+          {error && (
+            <div className="supervisor-form-error">
+              <pre>{error}</pre>
+            </div>
+          )}
+
+          <div className="supervisor-modal__actions">
+            <ActionButton
+              label="Cancel"
+              onClick={onClose}
+              disabled={isSaving}
+            />
+            <button
+              type="submit"
+              className="supervisor-action supervisor-action--primary"
+              disabled={isSaving}
+            >
+              {isSaving ? 'Saving...' : isNew ? 'Add Host' : 'Save Changes'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
 
 // Section header component
 function SectionHeader({
@@ -263,10 +502,19 @@ export function SupervisorTab({
   onViewLogs,
   onStopProcess,
 }: SupervisorTabProps) {
+  const { confirm, alert } = useDialog();
   const [state, setState] = useState<SupervisorState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [checkingHosts, setCheckingHosts] = useState<Set<string>>(new Set());
   const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // Host edit modal state
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editingHost, setEditingHost] = useState<HostFormState>(emptyHostForm);
+  const [isNewHost, setIsNewHost] = useState(true);
+  const [originalHostName, setOriginalHostName] = useState<string | null>(null); // Track original name for renames
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Load initial state
   const loadState = useCallback(async () => {
@@ -415,6 +663,143 @@ export function SupervisorTab({
     [onStopProcess]
   );
 
+  // Open add host modal
+  const handleAddHost = useCallback(() => {
+    setEditingHost(emptyHostForm);
+    setIsNewHost(true);
+    setOriginalHostName(null);
+    setSaveError(null);
+    setEditModalOpen(true);
+  }, []);
+
+  // Open edit host modal
+  const handleEditHost = useCallback((host: HostInfo) => {
+    setEditingHost({
+      name: host.name,
+      type: host.type as 'local' | 'ssh',
+      host: host.host || '',
+      user: host.user || '',
+      port: host.port ?? 22,
+      tags: (host.tags || []).join(', '),
+      description: host.description || '',
+    });
+    setIsNewHost(false);
+    setOriginalHostName(host.name); // Track original name for potential rename
+    setSaveError(null);
+    setEditModalOpen(true);
+  }, []);
+
+  // Save host
+  const handleSaveHost = useCallback(
+    async (form: HostFormState) => {
+      if (!supervisorClient) return;
+
+      setIsSaving(true);
+      setSaveError(null);
+
+      try {
+        const request: HostUpdateRequest = {
+          name: form.name,
+          type: form.type,
+          host: form.type === 'ssh' ? form.host : undefined,
+          user: form.type === 'ssh' ? form.user : undefined,
+          port: form.port,
+          tags: form.tags
+            .split(',')
+            .map((t) => t.trim())
+            .filter((t) => t.length > 0),
+          description: form.description || undefined,
+          // Pass originalName for rename support (only when editing and name changed)
+          originalName: !isNewHost && originalHostName && originalHostName !== form.name
+            ? originalHostName
+            : undefined,
+        };
+
+        const result = isNewHost
+          ? await supervisorClient.addHost(request)
+          : await supervisorClient.updateHost(request);
+
+        if (!result.success) {
+          setSaveError(result.error || 'Unknown error');
+          return;
+        }
+
+        // Success - close modal and reload
+        setEditModalOpen(false);
+        loadState();
+      } catch (e) {
+        setSaveError(e instanceof Error ? e.message : 'Failed to save host');
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [supervisorClient, isNewHost, originalHostName, loadState]
+  );
+
+  // Delete host
+  const handleDeleteHost = useCallback(
+    async (hostName: string) => {
+      if (!supervisorClient) return;
+      const confirmed = await confirm({
+        title: 'Delete Host',
+        message: `Delete host "${hostName}"?`,
+        confirmText: 'Delete',
+        variant: 'danger',
+      });
+      if (!confirmed) return;
+
+      try {
+        const result = await supervisorClient.removeHost(hostName);
+        if (!result.success) {
+          await alert({
+            title: 'Error',
+            message: result.error || 'Failed to delete host',
+          });
+          return;
+        }
+        loadState();
+      } catch (e) {
+        await alert({
+          title: 'Error',
+          message: e instanceof Error ? e.message : 'Failed to delete host',
+        });
+      }
+    },
+    [supervisorClient, loadState, confirm, alert]
+  );
+
+  // Remove backend mapping
+  const handleRemoveBackendHost = useCallback(
+    async (backendName: string) => {
+      if (!supervisorClient) return;
+      const confirmed = await confirm({
+        title: 'Remove Backend Mapping',
+        message: `Remove backend mapping for "${backendName}"?`,
+        confirmText: 'Remove',
+        variant: 'warning',
+      });
+      if (!confirmed) return;
+
+      try {
+        const result = await supervisorClient.removeBackendHost(backendName);
+        if (!result.success) {
+          await alert({
+            title: 'Error',
+            message: result.error || 'Failed to remove backend mapping',
+          });
+          return;
+        }
+        loadState();
+      } catch (e) {
+        await alert({
+          title: 'Error',
+          message: e instanceof Error ? e.message : 'Failed to remove backend mapping',
+        });
+      }
+    },
+    [supervisorClient, loadState, confirm, alert]
+  );
+
   // Group processes by host
   const processesByHost = React.useMemo(() => {
     if (!state?.processes) return new Map<string, ProcessInfo[]>();
@@ -472,12 +857,30 @@ export function SupervisorTab({
         />
       </div>
 
+      {/* Host Edit Modal */}
+      <HostEditModal
+        isOpen={editModalOpen}
+        onClose={() => setEditModalOpen(false)}
+        onSave={handleSaveHost}
+        initialData={editingHost}
+        isNew={isNewHost}
+        isSaving={isSaving}
+        error={saveError}
+      />
+
       {/* Hosts Section */}
       <section className="supervisor-section">
         <SectionHeader
           icon="🖥️"
           title="HOSTS"
           count={state?.hosts.length}
+          action={
+            <ActionButton
+              label="+ Add Host"
+              onClick={handleAddHost}
+              variant="primary"
+            />
+          }
         />
         <div className="supervisor-hosts-grid">
           {state?.hosts.map((host) => (
@@ -486,6 +889,8 @@ export function SupervisorTab({
               host={host}
               processCount={processesByHost.get(host.name)?.length || 0}
               onCheckStatus={handleCheckHostStatus}
+              onEdit={handleEditHost}
+              onDelete={handleDeleteHost}
               isChecking={checkingHosts.has(host.name)}
             />
           ))}
@@ -546,6 +951,7 @@ export function SupervisorTab({
                 backend={mapping.backendName}
                 hostName={mapping.hostName}
                 hostStatus={getHostStatusForBackend(mapping.hostName)}
+                onRemove={handleRemoveBackendHost}
               />
             ))}
           </div>

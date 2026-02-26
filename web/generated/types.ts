@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-26T13:07:40.100884
+// Generated: 2026-02-26T13:45:49.531529
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -1029,5 +1029,21 @@ export interface HostStatusResult {
 export interface ProcessListResult {
   summary: string;
   processes: ProcessInfo[];
+}
+
+export interface HostUpdateRequest {
+  name: string;
+  type?: string;
+  host?: string | null;
+  user?: string | null;
+  port?: number;
+  tags?: string[];
+  description?: string | null;
+  originalName?: string | null;
+}
+
+export interface ConfigUpdateResult {
+  success: boolean;
+  error?: string | null;
 }
 

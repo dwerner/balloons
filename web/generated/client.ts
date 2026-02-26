@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-26T13:07:40.105609
+// Generated: 2026-02-26T13:45:49.535470
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -3697,6 +3697,17 @@ export class FileStateServiceClient implements FileStateService {
  */
 export interface SupervisorStateService {
   /**
+   * Add a new host to the configuration.
+   * 
+   * Args:
+   * request: Host configuration
+   * 
+   * Returns:
+   * Success/failure result
+   */
+  addHost(request: Types.HostUpdateRequest | Record<string, unknown>): Promise<Types.ConfigUpdateResult>;
+
+  /**
    * Check connectivity status of a host.
    * 
    * For SSH hosts, performs a quick connection test.
@@ -3748,6 +3759,51 @@ export interface SupervisorStateService {
    * True if reload succeeded
    */
   reloadConfig(): Promise<boolean>;
+
+  /**
+   * Remove a backend-to-host mapping.
+   * 
+   * Args:
+   * backend_name: Name of the backend to unmap
+   * 
+   * Returns:
+   * Success/failure result
+   */
+  removeBackendHost(backendName: string): Promise<Types.ConfigUpdateResult>;
+
+  /**
+   * Remove a host from the configuration.
+   * 
+   * Args:
+   * host_name: Name of the host to remove
+   * 
+   * Returns:
+   * Success/failure result
+   */
+  removeHost(hostName: string): Promise<Types.ConfigUpdateResult>;
+
+  /**
+   * Map a backend to a host.
+   * 
+   * Args:
+   * backend_name: Name of the LLM backend
+   * host_name: Name of the host it runs on
+   * 
+   * Returns:
+   * Success/failure result
+   */
+  setBackendHost(backendName: string, hostName: string): Promise<Types.ConfigUpdateResult>;
+
+  /**
+   * Update an existing host in the configuration.
+   * 
+   * Args:
+   * request: Host configuration (name must exist, or originalName for rename)
+   * 
+   * Returns:
+   * Success/failure result
+   */
+  updateHost(request: Types.HostUpdateRequest | Record<string, unknown>): Promise<Types.ConfigUpdateResult>;
 
 }
 
@@ -3820,6 +3876,10 @@ export class SupervisorStateServiceClient implements SupervisorStateService {
     };
   }
 
+  async addHost(request: Types.HostUpdateRequest | Record<string, unknown>): Promise<Types.ConfigUpdateResult> {
+    return this.call('addHost', { request: request });
+  }
+
   async checkHostStatus(hostName: string): Promise<Types.HostStatusResult> {
     return this.call('checkHostStatus', { hostName: hostName });
   }
@@ -3838,6 +3898,22 @@ export class SupervisorStateServiceClient implements SupervisorStateService {
 
   async reloadConfig(): Promise<boolean> {
     return this.call('reloadConfig', {  });
+  }
+
+  async removeBackendHost(backendName: string): Promise<Types.ConfigUpdateResult> {
+    return this.call('removeBackendHost', { backendName: backendName });
+  }
+
+  async removeHost(hostName: string): Promise<Types.ConfigUpdateResult> {
+    return this.call('removeHost', { hostName: hostName });
+  }
+
+  async setBackendHost(backendName: string, hostName: string): Promise<Types.ConfigUpdateResult> {
+    return this.call('setBackendHost', { backendName: backendName, hostName: hostName });
+  }
+
+  async updateHost(request: Types.HostUpdateRequest | Record<string, unknown>): Promise<Types.ConfigUpdateResult> {
+    return this.call('updateHost', { request: request });
   }
 
   hostStatusChanged(callback: (data: Types.HostInfo) => void): Unsubscribe {
