@@ -6,7 +6,7 @@
  * Theme-aware: uses light theme when app is in light mode.
  */
 
-import React, { useMemo, useDeferredValue, useState, useEffect } from 'react';
+import React, { useMemo, useDeferredValue, useState, useEffect, useRef } from 'react';
 import { Prism as PrismHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -402,6 +402,171 @@ export function DiffHighlightedCode({ diffLines, language, filePath }: DiffHighl
   );
 }
 
+/**
+ * Plain diff line without syntax highlighting - used for deferred rendering
+ */
+function PlainDiffLine({
+  type,
+  prefix,
+  content,
+}: {
+  type: 'header' | 'add' | 'remove' | 'context';
+  prefix: string;
+  content: string;
+}) {
+  let className = 'diff-line diff-context';
+  if (type === 'header') className = 'diff-line diff-header';
+  else if (type === 'add') className = 'diff-line diff-add';
+  else if (type === 'remove') className = 'diff-line diff-remove';
+
+  if (type === 'header') {
+    return <div className={className}>{content}</div>;
+  }
+
+  return (
+    <div className={className}>
+      <span className="diff-prefix">{prefix}</span>
+      <span>{content || ' '}</span>
+    </div>
+  );
+}
+
+interface LazyDiffHighlightedCodeProps extends DiffHighlightedCodeProps {
+  /** Skip lazy loading and highlight immediately */
+  eager?: boolean;
+  /** Root margin for IntersectionObserver - load slightly before visible */
+  rootMargin?: string;
+}
+
+/**
+ * LazyDiffHighlightedCode - Viewport-aware diff highlighting for performance
+ *
+ * Only applies syntax highlighting to diff lines when they become visible.
+ * Falls back to plain diff view (still colored by line type) until visible.
+ */
+export function LazyDiffHighlightedCode({
+  diffLines,
+  language,
+  filePath,
+  eager = false,
+  rootMargin = '200px',
+}: LazyDiffHighlightedCodeProps) {
+  const [isVisible, setIsVisible] = useState(eager);
+  const [isHighlighted, setIsHighlighted] = useState(eager);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const { resolvedTheme: currentTheme } = useTheme();
+  const isLightTheme = currentTheme === 'light';
+
+  // Determine language from props or try to extract from diff header
+  const lang = useMemo(() => {
+    if (language) return language;
+    if (filePath) return getLanguageFromPath(filePath);
+    // Try to extract from diff header (--- a/file.tsx or +++ b/file.tsx)
+    for (const line of diffLines) {
+      if (line.startsWith('---') || line.startsWith('+++')) {
+        const match = line.match(/[ab]\/(.+)$/);
+        if (match && match[1]) {
+          return getLanguageFromPath(match[1]);
+        }
+      }
+    }
+    return 'text';
+  }, [language, filePath, diffLines]);
+
+  // Parse each line into type, prefix, and content (memoized)
+  const processedLines = useMemo(() => {
+    return diffLines.map(line => {
+      if (line.startsWith('+++') || line.startsWith('---')) {
+        return { type: 'header' as const, prefix: '', content: line };
+      } else if (line.startsWith('+')) {
+        return { type: 'add' as const, prefix: '+', content: line.slice(1) };
+      } else if (line.startsWith('-')) {
+        return { type: 'remove' as const, prefix: '-', content: line.slice(1) };
+      } else if (line.startsWith(' ')) {
+        return { type: 'context' as const, prefix: ' ', content: line.slice(1) };
+      }
+      return { type: 'context' as const, prefix: ' ', content: line };
+    });
+  }, [diffLines]);
+
+  // IntersectionObserver to detect when diff enters viewport
+  useEffect(() => {
+    if (eager || isVisible) return;
+
+    const element = containerRef.current;
+    if (!element) return;
+
+    if (typeof IntersectionObserver === 'undefined') {
+      setIsVisible(true);
+      setIsHighlighted(true);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            setIsVisible(true);
+            observer.disconnect();
+            break;
+          }
+        }
+      },
+      { rootMargin, threshold: 0 }
+    );
+
+    observer.observe(element);
+
+    return () => observer.disconnect();
+  }, [eager, isVisible, rootMargin]);
+
+  // Once visible, use requestIdleCallback to defer the actual highlighting
+  useEffect(() => {
+    if (!isVisible || isHighlighted) return;
+
+    const id = scheduleIdleCallback(() => {
+      setIsHighlighted(true);
+    }, 100);
+
+    return () => cancelScheduledCallback(id);
+  }, [isVisible, isHighlighted]);
+
+  // Early return after all hooks
+  if (diffLines.length === 0) return null;
+
+  // Show plain diff (still colored) while not visible or waiting for highlighting
+  if (!isHighlighted) {
+    return (
+      <div ref={containerRef} className="tool-diff-view">
+        {processedLines.map((line, idx) => (
+          <PlainDiffLine
+            key={idx}
+            type={line.type}
+            prefix={line.prefix}
+            content={line.content}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  // Full syntax highlighting (only when visible and idle callback fired)
+  return (
+    <div className="tool-diff-view">
+      {processedLines.map((line, idx) => (
+        <DiffLine
+          key={idx}
+          type={line.type}
+          prefix={line.prefix}
+          content={line.content}
+          language={lang}
+          isLightTheme={isLightTheme}
+        />
+      ))}
+    </div>
+  );
+}
+
 interface GrepHighlightedResultsProps {
   content: string;
   pattern?: string;
@@ -485,15 +650,22 @@ function escapeRegex(str: string): string {
 }
 
 /**
- * LazySyntaxHighlightedCode - Deferred syntax highlighting for performance
+ * LazySyntaxHighlightedCode - Viewport-aware syntax highlighting for performance
  *
- * Initially renders a plain <pre> element, then uses requestIdleCallback
- * to defer the expensive syntax highlighting until the browser is idle.
- * This prevents scroll jank when rendering many code blocks.
+ * Only highlights code when it becomes visible in the viewport.
+ * Uses IntersectionObserver to detect visibility, then optionally defers
+ * actual highlighting via requestIdleCallback for extra smoothness.
+ *
+ * Performance benefits:
+ * - Code blocks outside viewport remain plain <pre> elements (fast)
+ * - Highlighting only happens when user scrolls to the code
+ * - Reduces initial render time and memory usage for long conversations
  */
 interface LazySyntaxHighlightedCodeProps extends SyntaxHighlightedCodeProps {
   /** Skip lazy loading and highlight immediately (useful for small code blocks) */
   eager?: boolean;
+  /** Root margin for IntersectionObserver - load slightly before visible */
+  rootMargin?: string;
 }
 
 export function LazySyntaxHighlightedCode({
@@ -503,8 +675,11 @@ export function LazySyntaxHighlightedCode({
   showLineNumbers = false,
   wrapLongLines = false,
   eager = false,
+  rootMargin = '200px', // Start loading 200px before visible
 }: LazySyntaxHighlightedCodeProps) {
+  const [isVisible, setIsVisible] = useState(eager);
   const [isHighlighted, setIsHighlighted] = useState(eager);
+  const containerRef = useRef<HTMLPreElement>(null);
   const { resolvedTheme: currentTheme } = useTheme();
   const isLightTheme = currentTheme === 'light';
 
@@ -515,26 +690,64 @@ export function LazySyntaxHighlightedCode({
     return 'text';
   }, [language, filePath]);
 
+  // IntersectionObserver to detect when code block enters viewport
   useEffect(() => {
-    if (eager || isHighlighted) return;
+    if (eager || isVisible) return;
+
+    const element = containerRef.current;
+    if (!element) return;
+
+    // Check if IntersectionObserver is available
+    if (typeof IntersectionObserver === 'undefined') {
+      // Fallback: just highlight immediately
+      setIsVisible(true);
+      setIsHighlighted(true);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            setIsVisible(true);
+            observer.disconnect(); // Only need to trigger once
+            break;
+          }
+        }
+      },
+      {
+        rootMargin, // Start loading slightly before visible
+        threshold: 0,
+      }
+    );
+
+    observer.observe(element);
+
+    return () => observer.disconnect();
+  }, [eager, isVisible, rootMargin]);
+
+  // Once visible, use requestIdleCallback to defer the actual highlighting
+  useEffect(() => {
+    if (!isVisible || isHighlighted) return;
 
     // Use requestIdleCallback to defer highlighting until browser is idle
     const id = scheduleIdleCallback(() => {
       setIsHighlighted(true);
-    }, 500); // Max 500ms wait
+    }, 100); // Short timeout since we're already visible
 
     return () => cancelScheduledCallback(id);
-  }, [eager, isHighlighted]);
+  }, [isVisible, isHighlighted]);
 
   // Handle empty code
   if (!code || !code.trim()) {
     return <pre className="tool-file-content"><code>(empty)</code></pre>;
   }
 
-  // Show plain pre while waiting for idle callback
+  // Show plain pre while not visible or waiting for highlighting
   if (!isHighlighted) {
     return (
       <pre
+        ref={containerRef}
         className="tool-file-content lazy-highlight-placeholder"
         style={{
           background: isLightTheme ? 'var(--bg-code, #f8f8f8)' : 'var(--bg-code, #081210)',
@@ -553,7 +766,7 @@ export function LazySyntaxHighlightedCode({
     );
   }
 
-  // Full syntax highlighting
+  // Full syntax highlighting (only when visible and idle callback fired)
   return (
     <SyntaxHighlightedCode
       code={code}

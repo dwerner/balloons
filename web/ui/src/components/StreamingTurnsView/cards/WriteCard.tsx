@@ -11,7 +11,7 @@ import React from 'react';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
 import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
 import { BaseToolCard, calculateToolPhase, formatRelativePath } from './BaseToolCard';
-import { SyntaxHighlightedCode } from './SyntaxHighlighter';
+import { LazySyntaxHighlightedCode } from './SyntaxHighlighter';
 import './cards.css';
 
 interface WriteCardProps {
@@ -87,7 +87,7 @@ export const WriteCard = React.memo(function WriteCard({ turn, result }: WriteCa
     >
       {/* Show content preview with syntax highlighting */}
       {content && (
-        <SyntaxHighlightedCode
+        <LazySyntaxHighlightedCode
           code={previewContent}
           filePath={filePath}
           showLineNumbers={true}

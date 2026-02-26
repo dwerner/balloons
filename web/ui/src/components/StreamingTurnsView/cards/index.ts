@@ -46,6 +46,7 @@ export {
   SyntaxHighlightedCode,
   LazySyntaxHighlightedCode,
   DiffHighlightedCode,
+  LazyDiffHighlightedCode,
   GrepHighlightedResults,
   getLanguageFromPath,
 } from './SyntaxHighlighter';

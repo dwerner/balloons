@@ -1,12 +1,12 @@
 /**
- * StreamingTurnsView - Virtualized chat log view using SessionDataService
+ * StreamingTurnsView - Chat log view using SessionDataService
  *
  * This component displays turns using the new SessionDataService subscription
  * model (turn_id based) rather than TaskStateService (turn_index based).
  *
- * Uses @tanstack/react-virtual for virtualization - only renders turns that
- * are visible in the viewport plus a small overscan buffer. This enables
- * smooth scrolling through sessions with thousands of turns.
+ * NOTE: This version renders all turns directly (no virtualization).
+ * We're testing whether recent performance improvements make virtualization
+ * unnecessary. If performance is poor with many turns, we can revert.
  *
  * Uses specialized card components for different content block types:
  * - TextCard: User and assistant text messages
@@ -23,10 +23,9 @@
  */
 
 import React, { useMemo, useEffect, useRef, useCallback, useState } from 'react';
-import { useVirtualizer } from '@tanstack/react-virtual';
 import type { BalloonsClient } from '../../../../generated/balloons-client';
 import { useSessionData, type SessionDataTurn, type StreamingProgress } from '../../hooks';
-import type { ToolUseBlock, ToolResultBlock } from '../../../../generated/types';
+import type { ToolResultBlock } from '../../../../generated/types';
 import { TurnCard, ClientContext } from './cards';
 import { ScrollToBottom } from '../ScrollToBottom';
 import './StreamingTurnsView.css';
@@ -54,13 +53,6 @@ interface StreamingTurnsViewProps {
   /** Callback when streaming progress updates (for status bar token counts) */
   onStreamingProgressChange?: (progress: StreamingProgress | null) => void;
 }
-
-// Default estimated height for items before measurement
-const ESTIMATED_ITEM_HEIGHT = 100;
-
-// Overscan count - how many items to render outside the visible area
-// Higher values reduce blank areas when scrolling quickly, at cost of more DOM nodes
-const OVERSCAN_COUNT = 15;
 
 // Threshold in pixels to consider "at bottom"
 const AT_BOTTOM_THRESHOLD = 150;
@@ -210,16 +202,6 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     return result;
   }, [filteredTurns]);
 
-  // Set up the virtualizer
-  const virtualizer = useVirtualizer({
-    count: turnsOrGroups.length,
-    getScrollElement: () => scrollContainerRef.current,
-    estimateSize: () => ESTIMATED_ITEM_HEIGHT,
-    overscan: OVERSCAN_COUNT,
-    // Use item keys for stable identity across re-renders
-    getItemKey: (index) => turnsOrGroups[index]?.key || index,
-  });
-
   // Report scroll state changes to parent (for status bar indicator)
   useEffect(() => {
     if (onScrollStateChange) {
@@ -258,17 +240,14 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     isFollowingRef.current = true;
     setIsAtBottom(true);
 
-    // Use virtualizer's scrollToIndex for efficiency
-    virtualizer.scrollToIndex(turnsOrGroups.length - 1, {
-      align: 'end',
-      behavior: 'auto', // 'auto' gives instant scroll, 'smooth' animates
-    });
+    // Use native scroll to bottom
+    scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
 
     // Reset flag after scroll settles
     setTimeout(() => {
       programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
     }, 100);
-  }, [virtualizer, turnsOrGroups.length]);
+  }, []);
 
   // Mark user as actively scrolling - used by wheel and touch handlers
   const markUserScrolling = useCallback(() => {
@@ -369,30 +348,19 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     // Use requestAnimationFrame to ensure DOM has updated
     requestAnimationFrame(() => {
       // Double-check we're still following and user isn't scrolling
-      if (!isFollowingRef.current || userScrollingRef.current) {
+      if (!isFollowingRef.current || userScrollingRef.current || !scrollContainerRef.current) {
         programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
         return;
       }
 
-      virtualizer.scrollToIndex(currentLength - 1, {
-        align: 'end',
-        behavior: 'auto',
-      });
+      // Native scroll to bottom
+      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
 
       setTimeout(() => {
         programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
       }, 50);
     });
-  }, [turnsOrGroups.length, virtualizer]);
-
-  // Re-measure items when streaming (last item may grow)
-  useEffect(() => {
-    if (isStreaming && turnsOrGroups.length > 0) {
-      // Measure the last few items which might be changing
-      const lastIndex = turnsOrGroups.length - 1;
-      virtualizer.measureElement(null); // Force re-measurement
-    }
-  }, [isStreaming, turns, virtualizer, turnsOrGroups.length]);
+  }, [turnsOrGroups.length]);
 
   // Early returns AFTER all hooks have been called
   if (!sessionId) {
@@ -417,8 +385,6 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
   // Show scroll-to-bottom button when user has scrolled away
   const showScrollIndicator = !isFollowing;
 
-  const virtualItems = virtualizer.getVirtualItems();
-
   return (
     <ClientContext.Provider value={contextValue}>
       <div
@@ -426,67 +392,44 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         ref={scrollContainerRef}
       >
         <div className="streaming-turns-view">
-          {/* Virtualized list */}
-          <div
-            className="streaming-turns-list"
-            style={{
-              height: virtualizer.getTotalSize(),
-              width: '100%',
-              position: 'relative',
-            }}
-          >
-            {virtualItems.map((virtualItem) => {
-              const item = turnsOrGroups[virtualItem.index];
-              if (!item) return null;
-
-              return (
-                <div
-                  key={virtualItem.key}
-                  data-index={virtualItem.index}
-                  ref={virtualizer.measureElement}
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    width: '100%',
-                    transform: `translateY(${virtualItem.start}px)`,
-                  }}
-                >
-                  {item.type === 'single' ? (
-                    <div data-turn-order={item.turns[0]?.order}>
-                      <TurnCard
-                        turn={item.turns[0]!}
-                        toolResultMap={toolResultMap}
-                        sessionId={sessionId || undefined}
-                      />
+          {/* Direct rendering of all turns (no virtualization) */}
+          <div className="streaming-turns-list">
+            {turnsOrGroups.map((item, index) => (
+              <div key={item.key} data-index={index}>
+                {item.type === 'single' ? (
+                  <div data-turn-order={item.turns[0]?.order}>
+                    <TurnCard
+                      turn={item.turns[0]!}
+                      toolResultMap={toolResultMap}
+                      sessionId={sessionId || undefined}
+                    />
+                  </div>
+                ) : (
+                  <div className="parallel-group">
+                    <div className="parallel-group-header">
+                      <span className="turn-order">
+                        {item.turns.length > 1
+                          ? `${item.turns[0]?.order}-${item.turns[item.turns.length - 1]?.order}`
+                          : item.turns[0]?.order}
+                      </span>
+                      <span className="parallel-icon">⚡</span>
+                      <span className="parallel-label">{item.turns.length} parallel tool calls</span>
                     </div>
-                  ) : (
-                    <div className="parallel-group">
-                      <div className="parallel-group-header">
-                        <span className="turn-order">
-                          {item.turns.length > 1
-                            ? `${item.turns[0]?.order}-${item.turns[item.turns.length - 1]?.order}`
-                            : item.turns[0]?.order}
-                        </span>
-                        <span className="parallel-icon">⚡</span>
-                        <span className="parallel-label">{item.turns.length} parallel tool calls</span>
-                      </div>
-                      <div className="parallel-group-content">
-                        {item.turns.map((turn) => (
-                          <div key={turn.turnId} data-turn-order={turn.order}>
-                            <TurnCard
-                              turn={turn}
-                              toolResultMap={toolResultMap}
-                              sessionId={sessionId || undefined}
-                            />
-                          </div>
-                        ))}
-                      </div>
+                    <div className="parallel-group-content">
+                      {item.turns.map((turn) => (
+                        <div key={turn.turnId} data-turn-order={turn.order}>
+                          <TurnCard
+                            turn={turn}
+                            toolResultMap={toolResultMap}
+                            sessionId={sessionId || undefined}
+                          />
+                        </div>
+                      ))}
                     </div>
-                  )}
-                </div>
-              );
-            })}
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
 
           {/* Loading state when session is being loaded */}

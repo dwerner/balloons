@@ -12,7 +12,7 @@ import React, { useMemo } from 'react';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
 import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
 import { BaseToolCard, calculateToolPhase, formatRelativePath } from './BaseToolCard';
-import { DiffHighlightedCode, SyntaxHighlightedCode, getLanguageFromPath } from './SyntaxHighlighter';
+import { LazyDiffHighlightedCode, LazySyntaxHighlightedCode, getLanguageFromPath } from './SyntaxHighlighter';
 import './cards.css';
 
 interface EditCardProps {
@@ -161,14 +161,14 @@ export const EditCard = React.memo(function EditCard({ turn, result }: EditCardP
     >
       {/* Show diff when we have input */}
       {diffLines.length > 0 ? (
-        <DiffHighlightedCode diffLines={diffLines} filePath={filePath} />
+        <LazyDiffHighlightedCode diffLines={diffLines} filePath={filePath} />
       ) : (oldString || newString) && !inputIsStreaming ? (
         /* Show raw strings with syntax highlighting if we have them but diff is empty */
         <div className="tool-edit-raw">
           {oldString && (
             <div className="tool-edit-section">
               <div className="tool-edit-label">Old:</div>
-              <SyntaxHighlightedCode
+              <LazySyntaxHighlightedCode
                 code={oldString}
                 filePath={filePath}
               />
@@ -177,7 +177,7 @@ export const EditCard = React.memo(function EditCard({ turn, result }: EditCardP
           {newString && (
             <div className="tool-edit-section">
               <div className="tool-edit-label">New:</div>
-              <SyntaxHighlightedCode
+              <LazySyntaxHighlightedCode
                 code={newString}
                 filePath={filePath}
               />

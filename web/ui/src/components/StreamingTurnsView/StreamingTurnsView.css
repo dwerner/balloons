@@ -163,19 +163,18 @@
   }
 }
 
-/* Virtualized list container - uses absolute positioning for items */
+/* List container - direct rendering of all turns */
 .streaming-turns-list {
-  /* Position relative is set via inline style along with height */
-  /* Items use absolute positioning with transform for placement */
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-/* Add spacing between virtualized items via padding on the item wrapper.
- * Also use content-visibility:auto to let the browser skip rendering
+/* Use content-visibility:auto to let the browser skip rendering
  * of off-screen items entirely - significant performance boost when
  * scrolling through long sessions.
  */
 .streaming-turns-list > div {
-  padding-bottom: 6px;
   content-visibility: auto;
   contain-intrinsic-size: auto 100px;
 }
