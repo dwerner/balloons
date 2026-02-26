@@ -6,11 +6,29 @@
  * Theme-aware: uses light theme when app is in light mode.
  */
 
-import React, { useMemo, useDeferredValue } from 'react';
+import React, { useMemo, useDeferredValue, useState, useEffect } from 'react';
 import { Prism as PrismHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { useTheme } from '../../layout';
+
+// Polyfill for requestIdleCallback (Safari doesn't support it)
+// Use a wrapper that handles both browser and Node.js environments
+function scheduleIdleCallback(cb: () => void, timeout: number): number {
+  if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+    return window.requestIdleCallback(cb, { timeout });
+  }
+  // Fallback to setTimeout - cast to number for TypeScript
+  return setTimeout(cb, 1) as unknown as number;
+}
+
+function cancelScheduledCallback(id: number): void {
+  if (typeof window !== 'undefined' && typeof window.cancelIdleCallback === 'function') {
+    window.cancelIdleCallback(id);
+  } else {
+    clearTimeout(id);
+  }
+}
 
 // Map file extensions to Prism language identifiers
 const extensionToLanguage: Record<string, string> = {
@@ -464,6 +482,87 @@ export function GrepHighlightedResults({
 // Escape special regex characters
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * LazySyntaxHighlightedCode - Deferred syntax highlighting for performance
+ *
+ * Initially renders a plain <pre> element, then uses requestIdleCallback
+ * to defer the expensive syntax highlighting until the browser is idle.
+ * This prevents scroll jank when rendering many code blocks.
+ */
+interface LazySyntaxHighlightedCodeProps extends SyntaxHighlightedCodeProps {
+  /** Skip lazy loading and highlight immediately (useful for small code blocks) */
+  eager?: boolean;
+}
+
+export function LazySyntaxHighlightedCode({
+  code,
+  language,
+  filePath,
+  showLineNumbers = false,
+  wrapLongLines = false,
+  eager = false,
+}: LazySyntaxHighlightedCodeProps) {
+  const [isHighlighted, setIsHighlighted] = useState(eager);
+  const { resolvedTheme: currentTheme } = useTheme();
+  const isLightTheme = currentTheme === 'light';
+
+  // Determine language from prop or file path
+  const lang = useMemo(() => {
+    if (language) return language;
+    if (filePath) return getLanguageFromPath(filePath);
+    return 'text';
+  }, [language, filePath]);
+
+  useEffect(() => {
+    if (eager || isHighlighted) return;
+
+    // Use requestIdleCallback to defer highlighting until browser is idle
+    const id = scheduleIdleCallback(() => {
+      setIsHighlighted(true);
+    }, 500); // Max 500ms wait
+
+    return () => cancelScheduledCallback(id);
+  }, [eager, isHighlighted]);
+
+  // Handle empty code
+  if (!code || !code.trim()) {
+    return <pre className="tool-file-content"><code>(empty)</code></pre>;
+  }
+
+  // Show plain pre while waiting for idle callback
+  if (!isHighlighted) {
+    return (
+      <pre
+        className="tool-file-content lazy-highlight-placeholder"
+        style={{
+          background: isLightTheme ? 'var(--bg-code, #f8f8f8)' : 'var(--bg-code, #081210)',
+          margin: 0,
+          padding: '8px',
+          borderRadius: '4px',
+          fontSize: '11px',
+          lineHeight: '1.4',
+          whiteSpace: wrapLongLines ? 'pre-wrap' : 'pre',
+          wordBreak: wrapLongLines ? 'break-word' : 'normal',
+          overflowX: wrapLongLines ? 'visible' : 'auto',
+        }}
+      >
+        <code>{code}</code>
+      </pre>
+    );
+  }
+
+  // Full syntax highlighting
+  return (
+    <SyntaxHighlightedCode
+      code={code}
+      language={lang}
+      filePath={filePath}
+      showLineNumbers={showLineNumbers}
+      wrapLongLines={wrapLongLines}
+    />
+  );
 }
 
 export default SyntaxHighlightedCode;

@@ -117,7 +117,6 @@ export const TextCard = React.memo(function TextCard({ turn }: TextCardProps) {
       if (streaming) {
         return (
           <div className="thinking-indicator">
-            <span className="thinking-spinner" />
             <span className="thinking-text">Loading...</span>
           </div>
         );
@@ -132,7 +131,6 @@ export const TextCard = React.memo(function TextCard({ turn }: TextCardProps) {
       if (streaming) {
         return (
           <div className="thinking-indicator">
-            <span className="thinking-spinner" />
             <span className="thinking-text">Thinking...</span>
           </div>
         );

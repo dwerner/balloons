@@ -14,7 +14,7 @@ import React from 'react';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
 import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
 import { BaseToolCard, calculateToolPhase, formatRelativePath } from './BaseToolCard';
-import { SyntaxHighlightedCode } from './SyntaxHighlighter';
+import { LazySyntaxHighlightedCode } from './SyntaxHighlighter';
 import './cards.css';
 
 interface ReadCardProps {
@@ -128,7 +128,7 @@ export const ReadCard = React.memo(function ReadCard({ turn, result }: ReadCardP
       timestamp={turn.timestamp}
     >
       {hasResult && (
-        <SyntaxHighlightedCode
+        <LazySyntaxHighlightedCode
           code={displayContent}
           filePath={filePath}
           showLineNumbers={true}

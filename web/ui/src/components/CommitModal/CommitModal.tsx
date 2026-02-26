@@ -11,7 +11,10 @@
 import React, { useState, useCallback, useRef, useEffect, memo } from 'react';
 import { Modal, ModalFooter } from '../Modal/Modal';
 import type { FileStateServiceClient, DiffFile } from '../../../../generated/balloons-client';
+import { createLogger } from '../../utils/debugLog';
 import './CommitModal.css';
+
+const log = createLogger('CommitModal');
 
 export interface CommitModalProps {
   /** Whether the modal is open */
@@ -76,6 +79,11 @@ export const CommitModal = memo(function CommitModal({
   // Ref for message textarea
   const messageRef = useRef<HTMLTextAreaElement>(null);
 
+  // Track the last selection we generated for (to avoid re-generating)
+  const lastGeneratedSelectionRef = useRef<string>('');
+  // Track if generation is in progress (to avoid duplicate requests)
+  const generationInProgressRef = useRef<boolean>(false);
+
   // Reset state when modal opens
   useEffect(() => {
     if (isOpen) {
@@ -85,16 +93,44 @@ export const CommitModal = memo(function CommitModal({
       setError(null);
       setIsGenerating(false);
       setIsCommitting(false);
+      // Reset generation tracking
+      lastGeneratedSelectionRef.current = '';
+      generationInProgressRef.current = false;
     }
   }, [isOpen, changedFiles]);
 
   // Generate commit message when selection changes (if auto-generate is on)
+  // Convert selectedFiles to a stable string key for comparison
+  const selectedFilesKey = Array.from(selectedFiles).sort().join('\n');
+
   useEffect(() => {
     if (!isOpen || !autoGenerate || selectedFiles.size === 0) return;
 
+    // Skip if we already generated for this exact selection
+    if (lastGeneratedSelectionRef.current === selectedFilesKey) {
+      log('Skipping generation - already generated for this selection');
+      return;
+    }
+
+    // Skip if a generation is already in progress
+    if (generationInProgressRef.current) {
+      log('Skipping generation - already in progress');
+      return;
+    }
+
     const generateMessage = async () => {
+      // Double-check we're not already generating
+      if (generationInProgressRef.current) return;
+      generationInProgressRef.current = true;
+
       setIsGenerating(true);
       setError(null);
+
+      log('generateMessage starting', {
+        hasOnRequestAIMessage: !!onRequestAIMessage,
+        selectedFilesCount: selectedFiles.size,
+        gitRoot,
+      });
 
       try {
         // Try AI message first if available
@@ -102,10 +138,14 @@ export const CommitModal = memo(function CommitModal({
           // Get the staged diff for the selected files
           // First, stage the selected files
           const selectedPaths = Array.from(selectedFiles);
+          log('Calling client.stageFiles', { gitRoot, pathCount: selectedPaths.length });
           await client.stageFiles(gitRoot, selectedPaths);
 
           // Get the staged diff
           const stagedDiffResult = await client.getStagedDiff(gitRoot);
+          log('Got staged diff result', {
+            fileCount: stagedDiffResult.files.length,
+          });
 
           // Build a simple diff string from the staged files
           let diffText = '';
@@ -120,31 +160,42 @@ export const CommitModal = memo(function CommitModal({
             }
           }
 
+          log('Built diff text', { diffTextLength: diffText.length });
+
           if (diffText) {
+            log('Calling onRequestAIMessage');
             const aiMessage = await onRequestAIMessage(gitRoot, diffText);
+            log('Got AI message', { aiMessageLength: aiMessage?.length });
             if (aiMessage) {
               setMessage(aiMessage);
+              lastGeneratedSelectionRef.current = selectedFilesKey;
               setIsGenerating(false);
+              generationInProgressRef.current = false;
               return;
             }
           }
         }
 
         // Fall back to simple auto-generated message
-        const simpleMessage = await client.generateCommitMessage(gitRoot);
+        log('Falling back to simple message generation', { gitRoot });
+        const simpleMessage = await client.generateSimpleCommitMessage(gitRoot);
+        log('Got simple message', { length: simpleMessage?.length });
         setMessage(simpleMessage || '');
+        lastGeneratedSelectionRef.current = selectedFilesKey;
       } catch (e) {
+        log('Failed to generate commit message', { error: String(e) });
         console.error('Failed to generate commit message:', e);
         // Don't show error for message generation - just leave empty
       } finally {
         setIsGenerating(false);
+        generationInProgressRef.current = false;
       }
     };
 
     // Debounce the generation
     const timer = setTimeout(generateMessage, 300);
     return () => clearTimeout(timer);
-  }, [isOpen, autoGenerate, selectedFiles, gitRoot, client, onRequestAIMessage]);
+  }, [isOpen, autoGenerate, selectedFilesKey, gitRoot, client, onRequestAIMessage]);
 
   // Toggle file selection
   const toggleFile = useCallback((path: string) => {

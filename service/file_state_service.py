@@ -831,12 +831,11 @@ class FileStateService:
         return await self.get_git_diff(git_root, staged=True)
 
     @ws_expose
-    async def generate_commit_message(self, git_root: str) -> str:
+    async def generate_simple_commit_message(self, git_root: str) -> str:
         """Generate a simple commit message based on staged changes.
 
-        This creates a basic summary of the staged changes.
-        For AI-powered commit messages, the frontend should call
-        the session's agent with the diff.
+        This creates a basic summary of the staged changes (just lists filenames).
+        For AI-powered commit messages, use SessionManagerService.generateCommitMessage.
 
         Args:
             git_root: The git repository root directory

@@ -1,4 +1,4 @@
-import React, { useMemo, useCallback } from 'react';
+import React, { useMemo, useDeferredValue } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -129,6 +129,10 @@ export const MarkdownContent = React.memo(function MarkdownContent({ content }: 
   const { resolvedTheme } = useTheme();
   const isLightTheme = resolvedTheme === 'light';
 
+  // Use deferred value for content - allows React to interrupt rendering during scroll
+  // This makes the UI more responsive when rapidly scrolling through many messages
+  const deferredContent = useDeferredValue(content);
+
   // Memoize components to prevent recreation on every render (only change when theme changes)
   const markdownComponents = useMemo(
     () => createMarkdownComponents(isLightTheme),
@@ -136,12 +140,12 @@ export const MarkdownContent = React.memo(function MarkdownContent({ content }: 
   );
 
   // Handle empty/null content - show a non-breaking space to maintain block height
-  if (!content || !content.trim()) {
+  if (!deferredContent || !deferredContent.trim()) {
     return <span className="empty-content">{'\u00A0'}</span>;
   }
 
   // Strip internal protocol markup before rendering
-  const cleanedContent = stripInternalMarkup(content);
+  const cleanedContent = stripInternalMarkup(deferredContent);
 
   // If stripping leaves empty content, show non-breaking space
   if (!cleanedContent) {

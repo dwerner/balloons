@@ -44,6 +44,7 @@ export { MidiPlayerCard } from './MidiPlayerCard';
 // Syntax highlighting utilities
 export {
   SyntaxHighlightedCode,
+  LazySyntaxHighlightedCode,
   DiffHighlightedCode,
   GrepHighlightedResults,
   getLanguageFromPath,

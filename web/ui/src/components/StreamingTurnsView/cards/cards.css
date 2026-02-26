@@ -1422,6 +1422,57 @@
   color: var(--accent-tool, #ffd43b);
 }
 
+/* ============================================================================
+ * Output Expand/Collapse Button (for large outputs)
+ * ============================================================================ */
+
+.output-expand-btn {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px 12px;
+  background: var(--bg-tertiary, #252525);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 4px;
+  color: var(--text-secondary, #888);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: center;
+}
+
+.output-expand-btn:hover {
+  background: var(--bg-hover, #333);
+  color: var(--text-primary, #e0e0e0);
+  border-color: var(--accent-tool, #ffd43b);
+}
+
+.output-expand-btn:focus {
+  outline: 2px solid var(--accent-focus, #60a5fa);
+  outline-offset: 2px;
+}
+
+:root[data-theme="light"] .output-expand-btn,
+[data-theme="light"] .output-expand-btn {
+  background: var(--bg-tertiary, #eee);
+  border-color: var(--border-color, #ddd);
+  color: var(--text-secondary, #666);
+}
+
+:root[data-theme="light"] .output-expand-btn:hover,
+[data-theme="light"] .output-expand-btn:hover {
+  background: var(--bg-hover, #ddd);
+  color: var(--text-primary, #333);
+  border-color: var(--accent-tool, #ca8a04);
+}
+
+/* Dark flat mode */
+:root[data-theme="dark-flat"] .output-expand-btn,
+[data-theme="dark-flat"] .output-expand-btn {
+  background: var(--bg-tertiary, #141414);
+  border-color: var(--border-muted, #1a1a1a);
+}
+
 /* Tool result section (for ToolUseCard v2) */
 .tool-result-section {
   margin-top: 8px;

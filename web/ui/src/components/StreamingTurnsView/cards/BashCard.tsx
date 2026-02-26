@@ -12,7 +12,7 @@ import React from 'react';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
 import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
 import { BaseToolCard, calculateToolPhase } from './BaseToolCard';
-import { SyntaxHighlightedCode } from './SyntaxHighlighter';
+import { LazySyntaxHighlightedCode } from './SyntaxHighlighter';
 import './cards.css';
 
 interface BashCardProps {
@@ -119,7 +119,7 @@ export const BashCard = React.memo(function BashCard({ turn, result }: BashCardP
             <code>{displayOutput || '(no output)'}</code>
           </pre>
         ) : (
-          <SyntaxHighlightedCode
+          <LazySyntaxHighlightedCode
             code={displayOutput || '(no output)'}
             language="bash"
           />

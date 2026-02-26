@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-25T14:24:44.175930
+// Generated: 2026-02-25T16:51:11.059916
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -3323,9 +3323,8 @@ export interface FileStateService {
   /**
    * Generate a simple commit message based on staged changes.
    * 
-   * This creates a basic summary of the staged changes.
-   * For AI-powered commit messages, the frontend should call
-   * the session's agent with the diff.
+   * This creates a basic summary of the staged changes (just lists filenames).
+   * For AI-powered commit messages, use SessionManagerService.generateCommitMessage.
    * 
    * Args:
    * git_root: The git repository root directory
@@ -3333,7 +3332,7 @@ export interface FileStateService {
    * Returns:
    * A suggested commit message
    */
-  generateCommitMessage(gitRoot: string): Promise<string>;
+  generateSimpleCommitMessage(gitRoot: string): Promise<string>;
 
   /**
    * Get all session CWDs.
@@ -3606,8 +3605,8 @@ export class FileStateServiceClient implements FileStateService {
     return this.call('clearSessionCwd', { sessionId: sessionId });
   }
 
-  async generateCommitMessage(gitRoot: string): Promise<string> {
-    return this.call('generateCommitMessage', { gitRoot: gitRoot });
+  async generateSimpleCommitMessage(gitRoot: string): Promise<string> {
+    return this.call('generateSimpleCommitMessage', { gitRoot: gitRoot });
   }
 
   async getAllCwds(): Promise<Types.SessionCwd[]> {

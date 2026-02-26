@@ -79,9 +79,17 @@ const OpenFileListItem = memo(function OpenFileListItem({
   const icon = getFileIcon(file.path);
 
   return (
-    <button
+    <div
       className={`code-file-list__item ${isSelected ? 'code-file-list__item--selected' : ''}`}
       onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick();
+        }
+      }}
+      role="button"
+      tabIndex={0}
       title={file.path}
     >
       <span className="code-file-list__icon">{icon}</span>
@@ -95,7 +103,7 @@ const OpenFileListItem = memo(function OpenFileListItem({
       >
         ×
       </button>
-    </button>
+    </div>
   );
 });
 

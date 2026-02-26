@@ -851,18 +851,48 @@ class SessionManagerService:
         start_time = time.time()
         poll_interval = 0.1  # 100ms
 
+        poll_count = 0
         while time.time() - start_time < timeout_seconds:
+            poll_count += 1
             # Check if helper exists
             ctx = self._helper_contexts.get(helper_id)
             if not ctx:
                 # Helper not found or already cleaned up
+                debug_log.info(
+                    f"await_helper_result: ctx not found",
+                    category="git",
+                    details={"helper_id": helper_id, "poll_count": poll_count},
+                )
                 return ""
 
             # Check if helper runner is done
             runner = self._helper_runners.get(helper_id)
-            if runner and runner.is_done:
+            if not runner:
+                debug_log.info(
+                    f"await_helper_result: runner not found but ctx exists",
+                    category="git",
+                    details={
+                        "helper_id": helper_id,
+                        "poll_count": poll_count,
+                        "ctx_content_len": len(ctx.content),
+                    },
+                )
+                # Runner was cleaned up but ctx still has content
+                result = ctx.content.strip()
+                self._helper_contexts.pop(helper_id, None)
+                return result
+            if runner.is_done:
                 # Done - return accumulated content
                 result = ctx.content.strip()
+                debug_log.info(
+                    f"await_helper_result: returning result",
+                    category="git",
+                    details={
+                        "helper_id": helper_id,
+                        "result_len": len(result),
+                        "result_preview": result[:200] if result else "(empty)",
+                    },
+                )
                 # Clean up
                 self._helper_contexts.pop(helper_id, None)
                 self._helper_runners.pop(helper_id, None)
@@ -4968,23 +4998,29 @@ class SessionManagerService:
                 error="No staged changes to generate commit message for"
             )
 
-        # Build the commit message prompt
-        prompt = f"""Generate a concise git commit message for the following staged changes.
+        # Build the commit message prompt - be very explicit to avoid context confusion
+        prompt = f"""You are a commit message generator. Your ONLY task is to generate a git commit message for the code changes shown below.
 
-Follow these conventions:
+DO NOT:
+- Discuss session management, goals, or todos
+- Ask questions or seek clarification
+- Provide explanations beyond the commit message
+- Use any tools or propose any actions
+
+JUST output a commit message following these conventions:
 - Start with a brief summary line (50 chars or less)
 - Use imperative mood ("Add feature" not "Added feature")
 - Focus on what changed and why, not how
 - If there are multiple changes, list the most important ones
 
-Staged diff:
-```
+Here are the staged changes to commit:
+
+```diff
 {staged_diff[:8000]}
 ```
-
 {"(diff truncated due to size)" if len(staged_diff) > 8000 else ""}
 
-Commit message:"""
+Output ONLY the commit message, nothing else:"""
 
         # Generate helper ID
         helper_id = f"commit-msg-{uuid.uuid4().hex[:8]}"
@@ -4992,6 +5028,10 @@ Commit message:"""
         debug_log.info(
             f"Starting commit message generation: helper_id={helper_id}",
             category="git",
+            details={
+                "diff_length": len(staged_diff),
+                "diff_preview": staged_diff[:500] if staged_diff else "(empty)",
+            },
         )
 
         # Start helper task (no session_id since this isn't tied to a session)
