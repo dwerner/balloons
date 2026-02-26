@@ -228,13 +228,23 @@
   color: var(--color-success, #4caf50);
 }
 
-.supervisor-host-card__error {
+.supervisor-host-card__error-block {
+  margin-top: 0.25rem;
+  padding: 0.5rem;
+  border-radius: 4px;
+  background: rgba(255, 107, 107, 0.1);
+  border: 1px solid rgba(255, 107, 107, 0.3);
+  max-height: 100px;
+  overflow: auto;
+}
+
+.supervisor-host-card__error-block pre {
+  margin: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.75rem;
   color: var(--color-error, #ff6b6b);
-  font-size: 0.7rem;
-  max-width: 150px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* Processes */

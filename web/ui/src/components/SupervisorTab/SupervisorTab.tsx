@@ -122,12 +122,6 @@ const HostCard = memo(function HostCard({
         {host.latencyMs !== undefined && host.latencyMs !== null && (
           <span className="supervisor-host-card__latency">{host.latencyMs}ms</span>
         )}
-        {host.error && (
-          <span className="supervisor-host-card__error" title={host.error}>
-            {host.error.slice(0, 30)}
-            {host.error.length > 30 ? '...' : ''}
-          </span>
-        )}
         {host.type === 'ssh' && (
           <ActionButton
             label={isChecking ? '...' : 'Check'}
@@ -136,6 +130,12 @@ const HostCard = memo(function HostCard({
           />
         )}
       </div>
+
+      {host.error && (
+        <div className="supervisor-host-card__error-block">
+          <pre>{host.error}</pre>
+        </div>
+      )}
     </div>
   );
 });

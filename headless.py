@@ -258,21 +258,9 @@ async def run_server(
     ws_server.register_service(file_service)
 
     # Supervisor service for process/host management
-    print("DEBUG: About to import SupervisorStateService", flush=True)
-    try:
-        from service import SupervisorStateService
-        print("DEBUG: Import succeeded", flush=True)
-        supervisor_service = SupervisorStateService()
-        print(f"DEBUG: SupervisorStateService has _ws_service_spec: {hasattr(type(supervisor_service), '_ws_service_spec')}", flush=True)
-        if hasattr(type(supervisor_service), '_ws_service_spec'):
-            spec = type(supervisor_service)._ws_service_spec
-            print(f"DEBUG: Spec name={spec.name}, methods={[m.wire_name for m in spec.methods]}", flush=True)
-        ws_server.register_service(supervisor_service)
-        print("DEBUG: Supervisor service registered", flush=True)
-    except Exception as e:
-        print(f"DEBUG: Failed to load SupervisorStateService: {e}", flush=True)
-        import traceback
-        traceback.print_exc()
+    from service import SupervisorStateService
+    supervisor_service = SupervisorStateService()
+    ws_server.register_service(supervisor_service)
 
     # Start WebSocket server directly
     await ws_server.start()
