@@ -2292,8 +2292,8 @@ function AppContent() {
                     next.set(result.helperId, new Set(turnIndices));
                     return next;
                   });
-                  // The archive will auto-complete after LLM generates summary
                   // archivingByHelper cleared on completion via onArchiveCompleted event
+                  // (backend emits event on both success AND failure)
                 } else {
                   console.warn('Archive request failed:', result.error);
                 }

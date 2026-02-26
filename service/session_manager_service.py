@@ -1258,6 +1258,16 @@ class SessionManagerService:
                     )
                     import traceback
                     traceback.print_exc()
+                    # Emit failure event so UI can clear archiving state
+                    archive_error_data = {
+                        "session_id": ctx.session_id,
+                        "helper_id": helper_id,
+                        "success": False,
+                        "error": str(e),
+                        "turns_archived": 0,
+                    }
+                    for handler in self._event_handlers:
+                        handler("onArchiveCompleted", archive_error_data)
 
             # Auto-complete session review if flagged to do so
             if (
