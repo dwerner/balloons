@@ -388,7 +388,7 @@ export const ForkProposalCard = React.memo(function ForkProposalCard({
         }
 
         .fork-proposal-card .fork-proposal-description {
-          color: #1f2937;
+          color: var(--color-text-primary, #e5e7eb);
           font-size: 14px;
           line-height: 1.5;
         }
