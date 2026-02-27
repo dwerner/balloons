@@ -7,7 +7,7 @@ use async_channel::{Receiver, Sender};
 use async_lock::RwLock;
 use chrono::{DateTime, Utc};
 use futures_lite::{future, StreamExt};
-use procstream::{ProcessEvent, ProcessEventType};
+use procstream::{ProcessEvent, ProcessEventType, ProcessHandle};
 use tracing::{debug, info};
 
 use crate::error::{Error, Result};
@@ -177,6 +177,17 @@ impl SupervisedProcess {
         self.add_log(LogEntry::system(exit_msg)).await;
     }
 
+    /// Mark the process as killed (for use from Arc<Self>).
+    pub async fn mark_killed(&self) {
+        let mut status = self.status.write().await;
+        *status = ProcessStatus::Exited {
+            code: None,
+            signal: Some(9), // SIGKILL
+        };
+        self.add_log(LogEntry::system("Process killed by supervisor".to_string()))
+            .await;
+    }
+
     /// Mark the process as failed.
     #[allow(dead_code)]
     pub async fn set_failed(&mut self, error: String) {
@@ -210,11 +221,18 @@ enum EventLoopAction {
     Event(Option<ProcessEvent>),
 }
 
+use crate::supervisor::OutputCallback;
+
 /// Handle procstream events and update the supervised process.
-pub async fn handle_process_events(
+///
+/// If an output_callback is provided, it will be called for each stdout/stderr line
+/// with (process_id, source, content).
+pub async fn handle_process_events<H: ProcessHandle>(
     process: Arc<SupervisedProcess>,
     mut events: impl StreamExt<Item = ProcessEvent> + Unpin,
     stop_rx: Receiver<()>,
+    output_callback: Option<OutputCallback>,
+    mut handle: H,
 ) {
     debug!(process_id = %process.id, "Starting event handler");
 
@@ -231,23 +249,28 @@ pub async fn handle_process_events(
 
         match action {
             EventLoopAction::Stop => {
-                info!(process_id = %process.id, "Received stop signal");
-                // TODO: Actually kill the process via procstream
+                info!(process_id = %process.id, "Received stop signal, killing process");
+                // Kill the process
+                if let Err(e) = handle.kill().await {
+                    info!(process_id = %process.id, error = %e, "Failed to kill process (may have already exited)");
+                }
+                // Update status to reflect the kill
+                process.mark_killed().await;
                 break;
             }
             EventLoopAction::Event(Some(event)) => {
-                let entry = match &event.event_type {
+                let (entry, source) = match &event.event_type {
                     ProcessEventType::Started { pid } => {
                         debug!(process_id = %process.id, pid = pid, "Process started");
-                        LogEntry::system(format!("Process started (PID {})", pid))
+                        (LogEntry::system(format!("Process started (PID {})", pid)), "system")
                     }
                     ProcessEventType::Stdout => {
                         let content = event.data.clone().unwrap_or_default();
-                        LogEntry::stdout(content)
+                        (LogEntry::stdout(content), "stdout")
                     }
                     ProcessEventType::Stderr => {
                         let content = event.data.clone().unwrap_or_default();
-                        LogEntry::stderr(content)
+                        (LogEntry::stderr(content), "stderr")
                     }
                     ProcessEventType::Exited { code, signal } => {
                         info!(
@@ -261,9 +284,14 @@ pub async fn handle_process_events(
                             (_, Some(s)) => format!("Process killed by signal {}", s),
                             (None, None) => "Process exited".to_string(),
                         };
-                        LogEntry::system(msg)
+                        (LogEntry::system(msg), "system")
                     }
                 };
+
+                // Call the output callback if registered
+                if let Some(ref callback) = output_callback {
+                    callback(&process.id, source, &entry.content);
+                }
 
                 process.add_log(entry).await;
 

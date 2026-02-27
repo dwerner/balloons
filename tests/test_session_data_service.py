@@ -778,7 +778,7 @@ class TestTurnSnapshotFields:
         assert hasattr(turn, 'exchange_id')
 
         # Verify correct values
-        assert turn.turn_id == "turn-id-abc"
+        assert turn.id == "turn-id-abc"
         assert turn.role == "user"
         assert turn.content_block.type == "text"
         assert turn.content_block.text == "test"

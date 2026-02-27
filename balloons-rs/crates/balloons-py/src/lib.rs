@@ -1212,6 +1212,56 @@ impl Supervisor {
             Ok(())
         })
     }
+
+    /// Set a callback to receive all process output events.
+    ///
+    /// The callback is called with (process_id, source, content) for each line
+    /// of output from any supervised process. This enables real-time streaming
+    /// of process output to Python.
+    ///
+    /// Args:
+    ///     callback: A Python callable that takes (process_id: str, source: str, content: str)
+    ///               where source is "stdout", "stderr", or "system".
+    ///               Pass None to clear the callback.
+    ///
+    /// Example:
+    ///     def on_output(process_id: str, source: str, content: str):
+    ///         print(f"[{process_id}] {source}: {content}")
+    ///
+    ///     supervisor.set_output_callback(on_output)
+    #[pyo3(signature = (callback=None))]
+    fn set_output_callback(&self, py: Python<'_>, callback: Option<Py<PyAny>>) -> PyResult<()> {
+        let supervisor = Arc::clone(&self.inner);
+
+        // If callback is provided, wrap it in an Arc for thread-safe sharing
+        let rust_callback: Option<balloons_supervisor::OutputCallback> = callback.map(|cb| {
+            // Create a Rust closure that acquires the GIL and calls the Python callback
+            let callback_fn: balloons_supervisor::OutputCallback = Arc::new(
+                move |process_id: &str, source: &str, content: &str| {
+                    // Acquire GIL to call Python
+                    // Note: try_attach returns None if we can't get the GIL (e.g., during shutdown)
+                    if let Some(()) = Python::try_attach(|py| {
+                        // Call the Python callback, ignoring errors
+                        // (we're in a background thread and can't propagate errors)
+                        let _ = cb.call1(py, (process_id, source, content));
+                    }) {
+                        // Successfully called
+                    }
+                },
+            );
+            callback_fn
+        });
+
+        // Set the callback on the supervisor
+        py.detach(|| {
+            let mut executor = get_supervisor_executor().lock().unwrap();
+            let task = executor.spawn_on_any(async move {
+                supervisor.set_output_callback(rust_callback).await;
+            });
+            let _ = future::block_on(task);
+            Ok(())
+        })
+    }
 }
 
 // =============================================================================

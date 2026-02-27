@@ -12,8 +12,10 @@ import asyncio
 import json
 import socket
 import subprocess
+import time
+from collections import deque
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 from codegen import ws_service, ws_expose, ws_event, ws_type
 from core.debug_log import debug_log
@@ -51,6 +53,17 @@ class ProcessInfo:
     exit_code: Optional[int] = None
     started_at: Optional[str] = None
     runtime_seconds: Optional[float] = None
+
+
+@ws_type
+@dataclass
+class ProcessOutput:
+    """A line of process output for real-time streaming."""
+
+    process_id: str
+    source: str  # "stdout", "stderr", or "system"
+    content: str
+    ts: float  # Unix timestamp
 
 
 @ws_type
@@ -125,6 +138,205 @@ class ConfigUpdateResult:
     error: Optional[str] = None
 
 
+@ws_type
+@dataclass
+class SupervisorEvent:
+    """A supervisor event for the event log.
+
+    Event types:
+    - "process_started": Process launched (data has ProcessInfo fields)
+    - "process_output": stdout/stderr line (data has process_id, source, content)
+    - "process_stopped": Process exited (data has ProcessInfo fields + exit_code)
+    - "host_status": Host status changed (data has HostInfo fields)
+    """
+    ts: float  # Unix timestamp
+    type: str  # Event type
+    data: dict  # Event-specific data
+
+
+@ws_type
+@dataclass
+class EventHistoryResult:
+    """Result of get_event_history."""
+    events: list[SupervisorEvent]
+    total_buffered: int
+
+
+class EventBuffer:
+    """In-memory circular buffer for supervisor events.
+
+    Holds recent events for UI replay and pushes new events to subscribers.
+    Events are post-filtered - only meaningful events go in.
+    """
+
+    def __init__(self, max_size: int = 1000):
+        self._events: deque[SupervisorEvent] = deque(maxlen=max_size)
+        self._subscribers: set[Callable[[SupervisorEvent], None]] = set()
+        self._lock = asyncio.Lock()
+
+    async def append(self, event: SupervisorEvent) -> None:
+        """Add event to buffer and notify subscribers."""
+        async with self._lock:
+            self._events.append(event)
+
+        # Notify subscribers (outside lock)
+        for sub in list(self._subscribers):
+            try:
+                sub(event)
+            except Exception as e:
+                debug_log.error(f"Event subscriber error: {e}", category="supervisor")
+
+    def append_sync(self, event: SupervisorEvent) -> None:
+        """Synchronous append for use from non-async contexts."""
+        self._events.append(event)
+        for sub in list(self._subscribers):
+            try:
+                sub(event)
+            except Exception as e:
+                debug_log.error(f"Event subscriber error: {e}", category="supervisor")
+
+    def get_history(
+        self,
+        limit: int = 100,
+        since_ts: float = 0,
+        event_types: Optional[list[str]] = None,
+        process_id: Optional[str] = None,
+    ) -> list[SupervisorEvent]:
+        """Get recent events, optionally filtered.
+
+        Args:
+            limit: Maximum events to return
+            since_ts: Only events after this timestamp
+            event_types: Filter to these event types
+            process_id: Filter to this process
+
+        Returns:
+            List of events, most recent last
+        """
+        result = []
+        for event in self._events:
+            if event.ts <= since_ts:
+                continue
+            if event_types and event.type not in event_types:
+                continue
+            if process_id and event.data.get("process_id") != process_id:
+                continue
+            result.append(event)
+
+        return result[-limit:]
+
+    def subscribe(self, callback: Callable[[SupervisorEvent], None]) -> Callable[[], None]:
+        """Subscribe to new events.
+
+        Args:
+            callback: Function called with each new event
+
+        Returns:
+            Unsubscribe function
+        """
+        self._subscribers.add(callback)
+        return lambda: self._subscribers.discard(callback)
+
+    def __len__(self) -> int:
+        return len(self._events)
+
+
+# Global event buffer instance
+_event_buffer: Optional[EventBuffer] = None
+
+
+def get_event_buffer() -> EventBuffer:
+    """Get the global event buffer, creating if needed."""
+    global _event_buffer
+    if _event_buffer is None:
+        _event_buffer = EventBuffer()
+    return _event_buffer
+
+
+def emit_supervisor_event(event_type: str, data: dict) -> SupervisorEvent:
+    """Create and emit a supervisor event.
+
+    Args:
+        event_type: Event type (process_started, process_output, etc.)
+        data: Event data
+
+    Returns:
+        The created event
+    """
+    event = SupervisorEvent(
+        ts=time.time(),
+        type=event_type,
+        data=data,
+    )
+    get_event_buffer().append_sync(event)
+    debug_log.debug(
+        f"Supervisor event: {event_type}",
+        category="supervisor",
+        details=data,
+    )
+    return event
+
+
+# Global reference to the service instance for callback access
+_service_instance: Optional["SupervisorStateService"] = None
+
+
+def _output_callback(process_id: str, source: str, content: str) -> None:
+    """Callback invoked by Rust supervisor for each process output line.
+
+    This is called from a background thread, so we need to be careful about
+    thread safety. We emit a WebSocket event to stream the output to clients.
+
+    Args:
+        process_id: UUID of the process
+        source: "stdout", "stderr", or "system"
+        content: The output line
+    """
+    # DEBUG: Log that callback was invoked
+    print(f"[OUTPUT_CALLBACK] {process_id[:8]} {source}: {content[:50]}")
+
+    # Create the output event
+    output = ProcessOutput(
+        process_id=process_id,
+        source=source,
+        content=content,
+        ts=time.time(),
+    )
+
+    # Emit the WebSocket event if service is initialized
+    if _service_instance is not None:
+        try:
+            print(f"[OUTPUT_CALLBACK] Emitting to WebSocket")
+            _service_instance._emit_process_output(output)
+        except Exception as e:
+            debug_log.error(f"Error emitting process output: {e}", category="supervisor")
+            print(f"[OUTPUT_CALLBACK] ERROR: {e}")
+    else:
+        print(f"[OUTPUT_CALLBACK] WARNING: _service_instance is None")
+
+
+def register_output_callback() -> None:
+    """Register the output callback with the Rust supervisor.
+
+    Call this after both the supervisor and WebSocket service are initialized.
+    """
+    from core.supervisor_tools import get_supervisor
+
+    supervisor = get_supervisor()
+    if supervisor is None:
+        debug_log.warning(
+            "Cannot register output callback: supervisor not initialized",
+            category="supervisor",
+        )
+        return
+
+    try:
+        supervisor.set_output_callback(_output_callback)
+        debug_log.info("Registered supervisor output callback", category="supervisor")
+    except Exception as e:
+        debug_log.error(f"Failed to register output callback: {e}", category="supervisor")
+
+
 @ws_service
 class SupervisorStateService:
     """WebSocket-exposed service for supervisor state management.
@@ -140,6 +352,40 @@ class SupervisorStateService:
         # Cache for host status (to avoid spamming SSH checks)
         self._host_status_cache: dict[str, HostInfo] = {}
         self._status_check_lock = asyncio.Lock()
+
+        # Event handlers for WebSocket broadcasting
+        self._event_handlers: list[Callable[[str, dict], None]] = []
+
+        # Register this instance globally for callback access
+        global _service_instance
+        _service_instance = self
+
+    def add_event_handler(self, handler: Callable[[str, dict], None]) -> None:
+        """Register an event handler for WebSocket broadcasting."""
+        self._event_handlers.append(handler)
+
+    def remove_event_handler(self, handler: Callable[[str, dict], None]) -> None:
+        """Unregister an event handler."""
+        if handler in self._event_handlers:
+            self._event_handlers.remove(handler)
+
+    def _emit_event(self, event_name: str, data: dict) -> None:
+        """Emit an event to all registered handlers."""
+        for handler in self._event_handlers:
+            handler(event_name, data)
+
+    def _emit_process_output(self, output: ProcessOutput) -> None:
+        """Emit a process_output event to WebSocket clients.
+
+        Called from the output callback when process output arrives.
+        This method is thread-safe as it queues the event for async dispatch.
+        """
+        self._emit_event("processOutput", {
+            "processId": output.process_id,
+            "source": output.source,
+            "content": output.content,
+            "ts": output.ts,
+        })
 
     def _host_config_to_info(self, host: HostConfig, status: str = "unknown") -> HostInfo:
         """Convert HostConfig to HostInfo for web clients."""
@@ -706,4 +952,9 @@ class SupervisorStateService:
     @ws_event
     def process_stopped(self, process: ProcessInfo) -> ProcessInfo:
         """Fired when a process stops."""
+        pass
+
+    @ws_event
+    def process_output(self, output: ProcessOutput) -> ProcessOutput:
+        """Fired when a process emits output (stdout/stderr)."""
         pass

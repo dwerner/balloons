@@ -395,6 +395,12 @@
   overflow-y: auto;
 }
 
+.supervisor-modal--logs {
+  max-width: 800px;
+  height: 70vh;
+  overflow: hidden;
+}
+
 .supervisor-modal__header {
   display: flex;
   align-items: center;
@@ -547,6 +553,179 @@
   padding-top: 0.5rem;
   border-top: 1px solid var(--border-color, #333);
   margin-top: 0.5rem;
+}
+
+/* Process Log Viewer */
+.process-log-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 600px;
+  background: var(--bg-secondary, #16213e);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.process-log-viewer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  background: var(--bg-tertiary, #0f172a);
+  border-bottom: 1px solid var(--border-color, #333);
+}
+
+.process-log-viewer__title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.process-log-viewer__process-name {
+  font-weight: 600;
+  color: var(--text-primary, #e0e0e0);
+}
+
+.process-log-viewer__process-status {
+  font-size: 0.875rem;
+  color: var(--text-secondary, #888);
+}
+
+.process-log-viewer__actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.process-log-viewer__action-btn {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.75rem;
+  border-radius: 4px;
+  border: 1px solid var(--border-color, #333);
+  background: var(--bg-secondary, #16213e);
+  color: var(--text-secondary, #888);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.process-log-viewer__action-btn:hover {
+  background: var(--bg-tertiary, #0f172a);
+  color: var(--text-primary, #e0e0e0);
+}
+
+.process-log-viewer__action-btn--close {
+  border-color: var(--danger, #dc2626);
+  color: var(--danger, #dc2626);
+}
+
+.process-log-viewer__action-btn--close:hover {
+  background: var(--danger, #dc2626);
+  color: white;
+}
+
+.process-log-viewer__command {
+  padding: 0.5rem 1rem;
+  background: var(--bg-tertiary, #0f172a);
+  font-size: 0.75rem;
+}
+
+.process-log-viewer__command code {
+  color: var(--text-secondary, #888);
+  font-family: 'JetBrains Mono', monospace;
+  word-break: break-all;
+}
+
+.process-log-viewer__logs {
+  flex: 1;
+  overflow-y: auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  padding: 0.5rem;
+}
+
+.process-log-viewer__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-secondary, #888);
+  font-style: italic;
+}
+
+.process-log-viewer__entry {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 2px;
+}
+
+.process-log-viewer__entry:hover {
+  background: var(--bg-tertiary, #0f172a);
+}
+
+.process-log-viewer__timestamp {
+  color: var(--text-muted, #666);
+  flex-shrink: 0;
+  min-width: 70px;
+}
+
+.process-log-viewer__source {
+  flex-shrink: 0;
+  min-width: 50px;
+  font-weight: 600;
+}
+
+.process-log-viewer__entry--stdout .process-log-viewer__source {
+  color: var(--success, #22c55e);
+}
+
+.process-log-viewer__entry--stderr .process-log-viewer__source {
+  color: var(--danger, #dc2626);
+}
+
+.process-log-viewer__entry--system .process-log-viewer__source {
+  color: var(--info, #3b82f6);
+}
+
+.process-log-viewer__content {
+  flex: 1;
+  color: var(--text-primary, #e0e0e0);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.process-log-viewer__entry--stderr .process-log-viewer__content {
+  color: var(--danger-light, #fca5a5);
+}
+
+.process-log-viewer__entry--system .process-log-viewer__content {
+  color: var(--info-light, #93c5fd);
+}
+
+.process-log-viewer__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 1rem;
+  background: var(--bg-tertiary, #0f172a);
+  border-top: 1px solid var(--border-color, #333);
+  font-size: 0.75rem;
+}
+
+.process-log-viewer__autoscroll {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-secondary, #888);
+  cursor: pointer;
+}
+
+.process-log-viewer__autoscroll input {
+  cursor: pointer;
+}
+
+.process-log-viewer__count {
+  color: var(--text-muted, #666);
 }
 
 /* Responsive adjustments */

@@ -13,6 +13,14 @@ use crate::error::{Error, Result};
 use crate::process::{handle_process_events, SupervisedProcess};
 use crate::types::{LogEntry, OutputQuery, ProcessId, ProcessInfo, StartRequest};
 
+/// Callback type for streaming output events.
+///
+/// Called with (process_id, source, content) where:
+/// - process_id: The UUID of the process
+/// - source: "stdout", "stderr", or "system"
+/// - content: The output line
+pub type OutputCallback = Arc<dyn Fn(&str, &str, &str) + Send + Sync>;
+
 /// The main process supervisor.
 ///
 /// Manages multiple long-running processes with streaming output capture.
@@ -20,6 +28,8 @@ use crate::types::{LogEntry, OutputQuery, ProcessId, ProcessInfo, StartRequest};
 pub struct ProcessSupervisor {
     /// All managed processes, keyed by ID.
     processes: RwLock<HashMap<ProcessId, Arc<SupervisedProcess>>>,
+    /// Optional callback for streaming output to external handlers.
+    output_callback: RwLock<Option<OutputCallback>>,
 }
 
 impl Default for ProcessSupervisor {
@@ -33,7 +43,21 @@ impl ProcessSupervisor {
     pub fn new() -> Self {
         Self {
             processes: RwLock::new(HashMap::new()),
+            output_callback: RwLock::new(None),
         }
+    }
+
+    /// Set an output callback that receives all stdout/stderr events.
+    ///
+    /// The callback is called with (process_id, source, content) for each line.
+    pub async fn set_output_callback(&self, callback: Option<OutputCallback>) {
+        let mut cb = self.output_callback.write().await;
+        *cb = callback;
+    }
+
+    /// Get a clone of the current output callback (if any).
+    pub async fn get_output_callback(&self) -> Option<OutputCallback> {
+        self.output_callback.read().await.clone()
     }
 
     /// Start a new supervised process.
@@ -115,6 +139,9 @@ impl ProcessSupervisor {
             processes.insert(process_id.clone(), Arc::clone(&supervised));
         }
 
+        // Get the output callback (if any) to pass to the event handler
+        let output_callback = self.get_output_callback().await;
+
         // Spawn task to handle events using smol (fire-and-forget).
         // We use smol because procstream uses smol internally for its async streams,
         // so the event handler needs to run on smol's executor to poll correctly.
@@ -123,9 +150,7 @@ impl ProcessSupervisor {
         // is dropped, procstream kills the process via its Drop impl.
         let process_clone = Arc::clone(&supervised);
         smol::spawn(async move {
-            // Keep handle alive for the duration of the event handler
-            let _handle = handle;
-            handle_process_events(process_clone, events, stop_rx).await;
+            handle_process_events(process_clone, events, stop_rx, output_callback, handle).await;
         })
         .detach();
 

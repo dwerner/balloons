@@ -23,6 +23,7 @@ import type {
 } from '../../../../generated/balloons-client';
 import { SupervisorStateServiceClient } from '../../../../generated/client';
 import { useDialog } from '../Dialog';
+import { ProcessLogViewer } from './ProcessLogViewer';
 import './SupervisorTab.css';
 
 // Form state for host editing
@@ -508,6 +509,9 @@ export function SupervisorTab({
   const [checkingHosts, setCheckingHosts] = useState<Set<string>>(new Set());
   const [isRefreshing, setIsRefreshing] = useState(false);
 
+  // Process log viewer state
+  const [viewingProcess, setViewingProcess] = useState<ProcessInfo | null>(null);
+
   // Host edit modal state
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingHost, setEditingHost] = useState<HostFormState>(emptyHostForm);
@@ -642,14 +646,23 @@ export function SupervisorTab({
   // View process logs
   const handleViewLogs = useCallback(
     (processId: string) => {
+      // Find the process in state
+      const process = state?.processes.find((p) => p.processId === processId);
+      if (process) {
+        setViewingProcess(process);
+      }
+      // Also call external handler if provided
       if (onViewLogs) {
         onViewLogs(processId);
-      } else {
-        console.log('View logs for process:', processId);
       }
     },
-    [onViewLogs]
+    [onViewLogs, state?.processes]
   );
+
+  // Close log viewer
+  const handleCloseLogViewer = useCallback(() => {
+    setViewingProcess(null);
+  }, []);
 
   // Stop process
   const handleStopProcess = useCallback(
@@ -956,6 +969,19 @@ export function SupervisorTab({
             ))}
           </div>
         </section>
+      )}
+
+      {/* Process Log Viewer */}
+      {viewingProcess && supervisorClient && (
+        <div className="supervisor-modal-overlay" onClick={handleCloseLogViewer}>
+          <div className="supervisor-modal supervisor-modal--logs" onClick={(e) => e.stopPropagation()}>
+            <ProcessLogViewer
+              process={viewingProcess}
+              client={supervisorClient}
+              onClose={handleCloseLogViewer}
+            />
+          </div>
+        </div>
       )}
     </div>
   );

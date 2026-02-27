@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-26T13:45:49.531529
+// Generated: 2026-02-26T19:04:28.141830
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -1003,6 +1003,13 @@ export interface ProcessInfo {
   runtimeSeconds?: number | null;
 }
 
+export interface ProcessOutput {
+  processId: string;
+  source: string;
+  content: string;
+  ts: number;
+}
+
 export interface BackendHostMapping {
   backendName: string;
   hostName: string;
@@ -1045,5 +1052,16 @@ export interface HostUpdateRequest {
 export interface ConfigUpdateResult {
   success: boolean;
   error?: string | null;
+}
+
+export interface SupervisorEvent {
+  ts: number;
+  type: string;
+  data: Record<string, unknown>;
+}
+
+export interface EventHistoryResult {
+  events: SupervisorEvent[];
+  totalBuffered: number;
 }
 

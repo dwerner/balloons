@@ -253,12 +253,42 @@ class AsyncStorage:
             saved_turns = True
 
         # 4. Reorder turns if order changed
-        # Use snapshot order to only include turns that were saved above
-        snapshot_order = [t.id for t in turns_snapshot]
-        if snapshot_order != saved_turn_order:
-            order_json = json.dumps(snapshot_order)
-            await self._run_sync(self._storage.reorder_turns, session.id, order_json)
-            saved_turns = True
+        # Build the new turn order based on what we know exists in the DB:
+        # - Turns from saved_turn_order (what was in DB when we loaded)
+        # - Plus turns we just saved (dirty_turns)
+        # - In the order they appear in our snapshot
+        #
+        # We cannot include turns that:
+        # - Were added by another server instance (not in our saved_turn_order or dirty_turns)
+        # - Were deleted (in deleted_ids)
+        #
+        # This prevents "Turn not found" errors when another server instance
+        # modified the same session concurrently.
+        dirty_turn_ids = {t.id for t in dirty_turns}
+        known_turn_ids = set(saved_turn_order) | dirty_turn_ids
+
+        # Filter snapshot_order to only include turns we know exist in the DB
+        safe_snapshot_order = [
+            t.id for t in turns_snapshot
+            if t.id in known_turn_ids and t.id not in deleted_ids
+        ]
+
+        if safe_snapshot_order != saved_turn_order:
+            order_json = json.dumps(safe_snapshot_order)
+            try:
+                await self._run_sync(self._storage.reorder_turns, session.id, order_json)
+                saved_turns = True
+            except Exception as e:
+                if "Turn not found" in str(e):
+                    # Race condition: another server modified the turn order.
+                    # Log and continue - the other server's order will persist.
+                    debug_log.warning(
+                        f"reorder_turns failed due to concurrent modification, skipping: {e}",
+                        category="storage",
+                        session_id=session.id,
+                    )
+                else:
+                    raise
 
         if saved_metadata and saved_turns:
             save_type = "both"

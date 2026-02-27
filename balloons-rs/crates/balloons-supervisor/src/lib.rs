@@ -44,5 +44,5 @@ mod types;
 
 pub use error::{Error, Result};
 pub use process::SupervisedProcess;
-pub use supervisor::ProcessSupervisor;
+pub use supervisor::{OutputCallback, ProcessSupervisor};
 pub use types::{LogEntry, LogSource, ProcessId, ProcessInfo, ProcessStatus, StartRequest};

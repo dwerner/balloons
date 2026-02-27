@@ -2068,7 +2068,7 @@ class SessionManagerService:
                     "on_turn_created",
                     TurnCreatedEvent(
                         session_id=session_id,
-                        turn_id=turn.turn_id,
+                        turn_id=turn.id,
                         turn_index=turn_idx,
                         role="assistant",
                         exchange_id=ctx.exchange_id,
@@ -2079,7 +2079,7 @@ class SessionManagerService:
                     "on_turn_finished",
                     TurnFinishedEvent(
                         session_id=session_id,
-                        turn_id=turn.turn_id,
+                        turn_id=turn.id,
                         turn_index=turn_idx,
                         role="assistant",
                         content="",

@@ -259,8 +259,12 @@ async def run_server(
 
     # Supervisor service for process/host management
     from service import SupervisorStateService
+    from service.supervisor_state_service import register_output_callback
     supervisor_service = SupervisorStateService()
     ws_server.register_service(supervisor_service)
+
+    # Register output callback for real-time process output streaming
+    register_output_callback()
 
     # Start WebSocket server directly
     await ws_server.start()

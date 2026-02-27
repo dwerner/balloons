@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-26T13:45:49.535470
+// Generated: 2026-02-26T19:04:28.145512
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -3814,6 +3814,11 @@ export interface SupervisorStateEvents {
   hostStatusChanged(callback: (data: Types.HostInfo) => void): Unsubscribe;
 
   /**
+   * Fired when a process emits output (stdout/stderr).
+   */
+  processOutput(callback: (data: Types.ProcessOutput) => void): Unsubscribe;
+
+  /**
    * Fired when a new process starts.
    */
   processStarted(callback: (data: Types.ProcessInfo) => void): Unsubscribe;
@@ -3918,6 +3923,10 @@ export class SupervisorStateServiceClient implements SupervisorStateService {
 
   hostStatusChanged(callback: (data: Types.HostInfo) => void): Unsubscribe {
     return this.subscribe('hostStatusChanged', callback);
+  }
+
+  processOutput(callback: (data: Types.ProcessOutput) => void): Unsubscribe {
+    return this.subscribe('processOutput', callback);
   }
 
   processStarted(callback: (data: Types.ProcessInfo) => void): Unsubscribe {
