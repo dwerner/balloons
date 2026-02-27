@@ -852,18 +852,11 @@ const SLOT_PORTS: Record<ServerSlot, number> = { A: 8700, B: 8710 };
 // Auth server ports - HTTP server for login/auth (WS port + 1)
 const AUTH_PORTS: Record<ServerSlot, number> = { A: 8701, B: 8711 };
 
-// Check if TLS should be used (infer from page protocol or explicit setting)
+// Check if TLS should be used (infer from page protocol only)
 function shouldUseTls(): boolean {
   if (typeof window === 'undefined') return false;
-  // If served over HTTPS, use TLS
-  if (window.location.protocol === 'https:') return true;
-  // Check for explicit TLS override in localStorage
-  const tlsSetting = localStorage.getItem('balloons:use-tls');
-  if (tlsSetting === 'true') return true;
-  // Check for ?tls=1 query param
-  const params = new URLSearchParams(window.location.search);
-  if (params.get('tls') === '1') return true;
-  return false;
+  // Only use TLS if served over HTTPS - no other magic
+  return window.location.protocol === 'https:';
 }
 
 // Get WebSocket URL for a given slot (with JWT token if available)
