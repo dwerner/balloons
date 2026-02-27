@@ -6,6 +6,7 @@ use core_executor::ThreadPoolExecutor;
 use futures_lite::future;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use pyo3::types::PyAny;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use balloons_core::{
@@ -56,7 +57,7 @@ impl Storage {
         let id = id.to_string();
 
         // Release GIL and execute on core-executor
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move { client.save_session(&id, &data).await });
             future::block_on(task)
@@ -70,7 +71,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let id = id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move { client.load_session(&id).await });
             let result = future::block_on(task)
@@ -92,7 +93,7 @@ impl Storage {
     fn list_sessions(&self, py: Python<'_>) -> PyResult<String> {
         let client = Arc::clone(&self.client);
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move { client.list_sessions().await });
             let sessions = future::block_on(task)
@@ -108,7 +109,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let id = id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move { client.delete_session(&id).await });
             future::block_on(task)
@@ -125,7 +126,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let session_id = session_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task =
                 executor.spawn_on_any(async move { client.save_turn(&session_id, &turn).await });
@@ -140,7 +141,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let session_id = session_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move { client.load_turns(&session_id).await });
             let turns = future::block_on(task)
@@ -156,7 +157,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let session_id = session_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task =
                 executor.spawn_on_any(async move { client.get_turn_count(&session_id).await });
@@ -184,7 +185,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let session_id = session_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor
                 .spawn_on_any(async move { client.load_turns_range(&session_id, offset, limit).await });
@@ -202,7 +203,7 @@ impl Storage {
         let session_id = session_id.to_string();
         let turn_id = turn_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor
                 .spawn_on_any(async move { client.delete_turn(&session_id, &turn_id).await });
@@ -220,7 +221,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let session_id = session_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor
                 .spawn_on_any(async move { client.reorder_turns(&session_id, &turn_ids).await });
@@ -253,7 +254,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let id = id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move {
                 client.save_session_with_turns(&id, &session, &turns).await
@@ -284,7 +285,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let session_id = session_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move {
                 client.replace_session_turns(&session_id, &turns).await
@@ -302,7 +303,7 @@ impl Storage {
     fn load_session_history(&self, py: Python<'_>) -> PyResult<String> {
         let client = Arc::clone(&self.client);
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move { client.load_session_history().await });
             let history = future::block_on(task)
@@ -323,7 +324,7 @@ impl Storage {
 
         let client = Arc::clone(&self.client);
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move {
                 client.save_session_history(&session_ids).await
@@ -348,7 +349,7 @@ impl Storage {
 
         let client = Arc::clone(&self.client);
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move { client.save_goal(&goal).await });
             future::block_on(task)
@@ -368,7 +369,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let goal_id = goal_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move { client.load_goal(&goal_id).await });
             let result = future::block_on(task)
@@ -394,7 +395,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let goal_id = goal_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move { client.delete_goal(&goal_id).await });
             future::block_on(task)
@@ -410,7 +411,7 @@ impl Storage {
     fn list_goals(&self, py: Python<'_>) -> PyResult<String> {
         let client = Arc::clone(&self.client);
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move { client.list_goals().await });
             let goals = future::block_on(task)
@@ -435,7 +436,7 @@ impl Storage {
 
         let client = Arc::clone(&self.client);
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move { client.save_plan(&plan).await });
             future::block_on(task)
@@ -455,7 +456,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let plan_id = plan_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move { client.load_plan(&plan_id).await });
             let result = future::block_on(task)
@@ -481,7 +482,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let plan_id = plan_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move { client.delete_plan(&plan_id).await });
             future::block_on(task)
@@ -502,7 +503,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let goal_id = goal_id.map(|s| s.to_string());
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor
                 .spawn_on_any(async move { client.list_plans(goal_id.as_deref()).await });
@@ -528,7 +529,7 @@ impl Storage {
 
         let client = Arc::clone(&self.client);
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move { client.save_todo(&todo).await });
             future::block_on(task)
@@ -548,7 +549,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let todo_id = todo_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move { client.load_todo(&todo_id).await });
             let result = future::block_on(task)
@@ -574,7 +575,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let todo_id = todo_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move { client.delete_todo(&todo_id).await });
             future::block_on(task)
@@ -595,7 +596,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let plan_id = plan_id.map(|s| s.to_string());
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor
                 .spawn_on_any(async move { client.list_todos(plan_id.as_deref()).await });
@@ -621,7 +622,7 @@ impl Storage {
 
         let client = Arc::clone(&self.client);
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move { client.save_todo_plan_link(&link).await });
             future::block_on(task)
@@ -640,7 +641,7 @@ impl Storage {
         let todo_id = todo_id.to_string();
         let plan_id = plan_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor
                 .spawn_on_any(async move { client.delete_todo_plan_link(&todo_id, &plan_id).await });
@@ -661,7 +662,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let todo_id = todo_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task =
                 executor.spawn_on_any(async move { client.get_plans_for_todo(&todo_id).await });
@@ -684,7 +685,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let plan_id = plan_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task =
                 executor.spawn_on_any(async move { client.get_todos_for_plan(&plan_id).await });
@@ -710,7 +711,7 @@ impl Storage {
 
         let client = Arc::clone(&self.client);
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move { client.save_todo_dependency(&dep).await });
             future::block_on(task)
@@ -734,7 +735,7 @@ impl Storage {
         let todo_id = todo_id.to_string();
         let depends_on_id = depends_on_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move {
                 client.delete_todo_dependency(&todo_id, &depends_on_id).await
@@ -756,7 +757,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let todo_id = todo_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task =
                 executor.spawn_on_any(async move { client.get_dependencies(&todo_id).await });
@@ -779,7 +780,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let todo_id = todo_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move { client.get_dependents(&todo_id).await });
             let deps = future::block_on(task)
@@ -804,7 +805,7 @@ impl Storage {
 
         let client = Arc::clone(&self.client);
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task =
                 executor.spawn_on_any(async move { client.save_session_binding(&binding).await });
@@ -825,7 +826,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let binding_id = binding_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor
                 .spawn_on_any(async move { client.load_session_binding(&binding_id).await });
@@ -852,7 +853,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let binding_id = binding_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor
                 .spawn_on_any(async move { client.delete_session_binding(&binding_id).await });
@@ -873,7 +874,7 @@ impl Storage {
         let client = Arc::clone(&self.client);
         let session_id = session_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor
                 .spawn_on_any(async move { client.get_bindings_for_session(&session_id).await });
@@ -903,7 +904,7 @@ impl Storage {
         let entity_type = entity_type.to_string();
         let entity_id = entity_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move {
                 client
@@ -925,7 +926,7 @@ impl Storage {
     fn list_bindings(&self, py: Python<'_>) -> PyResult<String> {
         let client = Arc::clone(&self.client);
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move { client.list_bindings().await });
             let bindings = future::block_on(task)
@@ -949,7 +950,7 @@ impl Storage {
     fn load_user_prefs(&self, py: Python<'_>) -> PyResult<String> {
         let client = Arc::clone(&self.client);
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move { client.load_user_prefs().await });
             let prefs = future::block_on(task)
@@ -970,7 +971,7 @@ impl Storage {
 
         let client = Arc::clone(&self.client);
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = self.executor.lock().unwrap();
             let task = executor.spawn_on_any(async move { client.save_user_prefs(&prefs).await });
             future::block_on(task)
@@ -1042,7 +1043,7 @@ impl Supervisor {
 
         let supervisor = Arc::clone(&self.inner);
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = get_supervisor_executor().lock().unwrap();
             let task = executor.spawn_on_any(async move { supervisor.start(request).await });
             future::block_on(task)
@@ -1057,17 +1058,19 @@ impl Supervisor {
     ///     process_id: The process ID
     ///
     /// Returns:
-    ///     JSON string with process info
-    fn get_process(&self, py: Python<'_>, process_id: &str) -> PyResult<String> {
+    ///     Awaitable that resolves to JSON string with process info
+    fn get_process<'py>(
+        &self,
+        py: Python<'py>,
+        process_id: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let supervisor = Arc::clone(&self.inner);
         let process_id = process_id.to_string();
 
-        py.allow_threads(|| {
-            let mut executor = get_supervisor_executor().lock().unwrap();
-            let task =
-                executor.spawn_on_any(async move { supervisor.get_process(&process_id).await });
-            let info = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let info = supervisor
+                .get_process(&process_id)
+                .await
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
             serde_json::to_string(&info).map_err(|e| PyRuntimeError::new_err(e.to_string()))
@@ -1080,20 +1083,18 @@ impl Supervisor {
     ///     session_id: Optional session ID to filter by
     ///
     /// Returns:
-    ///     JSON array of process info objects
+    ///     Awaitable that resolves to JSON array of process info objects
     #[pyo3(signature = (session_id=None))]
-    fn list_processes(&self, py: Python<'_>, session_id: Option<&str>) -> PyResult<String> {
+    fn list_processes<'py>(
+        &self,
+        py: Python<'py>,
+        session_id: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let supervisor = Arc::clone(&self.inner);
         let session_id = session_id.map(|s| s.to_string());
 
-        py.allow_threads(|| {
-            let mut executor = get_supervisor_executor().lock().unwrap();
-            let task = executor.spawn_on_any(async move {
-                supervisor.list_processes(session_id.as_deref()).await
-            });
-            let infos = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?;
-
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let infos = supervisor.list_processes(session_id.as_deref()).await;
             serde_json::to_string(&infos).map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })
     }
@@ -1105,18 +1106,21 @@ impl Supervisor {
     ///     limit: Maximum number of log entries to return (default 50)
     ///
     /// Returns:
-    ///     JSON array of log entries
+    ///     Awaitable that resolves to JSON array of log entries
     #[pyo3(signature = (process_id, limit=50))]
-    fn get_output(&self, py: Python<'_>, process_id: &str, limit: usize) -> PyResult<String> {
+    fn get_output<'py>(
+        &self,
+        py: Python<'py>,
+        process_id: &str,
+        limit: usize,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let supervisor = Arc::clone(&self.inner);
         let process_id = process_id.to_string();
 
-        py.allow_threads(|| {
-            let mut executor = get_supervisor_executor().lock().unwrap();
-            let task = executor
-                .spawn_on_any(async move { supervisor.get_output(&process_id, limit).await });
-            let logs = future::block_on(task)
-                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let logs = supervisor
+                .get_output(&process_id, limit)
+                .await
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
             serde_json::to_string(&logs).map_err(|e| PyRuntimeError::new_err(e.to_string()))
@@ -1131,7 +1135,7 @@ impl Supervisor {
         let supervisor = Arc::clone(&self.inner);
         let process_id = process_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = get_supervisor_executor().lock().unwrap();
             let task =
                 executor.spawn_on_any(async move { supervisor.stop_process(&process_id).await });
@@ -1152,7 +1156,7 @@ impl Supervisor {
         let supervisor = Arc::clone(&self.inner);
         let session_id = session_id.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = get_supervisor_executor().lock().unwrap();
             let task = executor
                 .spawn_on_any(async move { supervisor.stop_session_processes(&session_id).await });
@@ -1166,7 +1170,7 @@ impl Supervisor {
     fn running_count(&self, py: Python<'_>) -> PyResult<usize> {
         let supervisor = Arc::clone(&self.inner);
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = get_supervisor_executor().lock().unwrap();
             let task = executor.spawn_on_any(async move { supervisor.running_count().await });
             future::block_on(task)
@@ -1178,7 +1182,7 @@ impl Supervisor {
     fn total_count(&self, py: Python<'_>) -> PyResult<usize> {
         let supervisor = Arc::clone(&self.inner);
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = get_supervisor_executor().lock().unwrap();
             let task = executor.spawn_on_any(async move { supervisor.total_count().await });
             future::block_on(task)
@@ -1192,7 +1196,7 @@ impl Supervisor {
     fn shutdown(&self, py: Python<'_>) -> PyResult<()> {
         let supervisor = Arc::clone(&self.inner);
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = get_supervisor_executor().lock().unwrap();
             let task = executor.spawn_on_any(async move {
                 // Get all running processes and stop them
@@ -1228,17 +1232,17 @@ impl Supervisor {
 ///     plans_recovered, todos_recovered, links_recovered, dependencies_recovered,
 ///     bindings_recovered
 #[pyfunction]
-fn recover_database(py: Python<'_>, source_path: &str, target_path: &str) -> PyResult<PyObject> {
+fn recover_database(py: Python<'_>, source_path: &str, target_path: &str) -> PyResult<Py<PyAny>> {
     let source = source_path.to_string();
     let target = target_path.to_string();
 
-    py.allow_threads(|| {
+    py.detach(|| {
         let result = future::block_on(async {
             balloons_core::recover_database(&source, &target, None::<fn(&str)>).await
         })
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let dict = pyo3::types::PyDict::new(py);
             dict.set_item("recovered", result.recovered)?;
             dict.set_item("skipped", result.skipped)?;
@@ -1277,15 +1281,15 @@ fn create_backup(
     py: Python<'_>,
     source_path: &str,
     backup_dir: Option<&str>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let source = source_path.to_string();
     let backup = backup_dir.map(|s| std::path::PathBuf::from(s));
 
-    py.allow_threads(|| {
+    py.detach(|| {
         let result = balloons_core::create_backup(&source, backup.as_deref())
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let dict = pyo3::types::PyDict::new(py);
             dict.set_item("backup_path", result.backup_path.to_string_lossy().to_string())?;
             dict.set_item("timestamp", result.timestamp)?;
@@ -1309,17 +1313,17 @@ fn create_backup(
 /// Returns:
 ///     Dict with keys: export_path, timestamp, sessions_exported, turns_exported, size_bytes
 #[pyfunction]
-fn export_to_json(py: Python<'_>, source_path: &str, export_path: &str) -> PyResult<PyObject> {
+fn export_to_json(py: Python<'_>, source_path: &str, export_path: &str) -> PyResult<Py<PyAny>> {
     let source = source_path.to_string();
     let export = export_path.to_string();
 
-    py.allow_threads(|| {
+    py.detach(|| {
         let result = future::block_on(async {
             balloons_core::export_to_json(&source, &export, None::<fn(&str)>).await
         })
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let dict = pyo3::types::PyDict::new(py);
             dict.set_item("export_path", result.export_path.to_string_lossy().to_string())?;
             dict.set_item("timestamp", result.timestamp)?;
@@ -1342,17 +1346,17 @@ fn export_to_json(py: Python<'_>, source_path: &str, export_path: &str) -> PyRes
 /// Returns:
 ///     Dict with keys: target_path, sessions_imported, sessions_skipped, turns_imported
 #[pyfunction]
-fn import_from_json(py: Python<'_>, export_path: &str, target_path: &str) -> PyResult<PyObject> {
+fn import_from_json(py: Python<'_>, export_path: &str, target_path: &str) -> PyResult<Py<PyAny>> {
     let export = export_path.to_string();
     let target = target_path.to_string();
 
-    py.allow_threads(|| {
+    py.detach(|| {
         let result = future::block_on(async {
             balloons_core::import_from_json(&export, &target, None::<fn(&str)>).await
         })
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let dict = pyo3::types::PyDict::new(py);
             dict.set_item("target_path", result.target_path.to_string_lossy().to_string())?;
             dict.set_item("sessions_imported", result.sessions_imported)?;
@@ -1376,14 +1380,14 @@ fn import_from_json(py: Python<'_>, export_path: &str, target_path: &str) -> PyR
 /// Returns:
 ///     Dict with health report (can_open, is_healthy, session_count, turn_count, etc.)
 #[pyfunction]
-fn health_check(py: Python<'_>, path: &str) -> PyResult<PyObject> {
+fn health_check(py: Python<'_>, path: &str) -> PyResult<Py<PyAny>> {
     let path = path.to_string();
 
-    py.allow_threads(|| {
+    py.detach(|| {
         let result = future::block_on(async { balloons_core::health_check(&path).await })
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let dict = pyo3::types::PyDict::new(py);
             dict.set_item("path", result.path.to_string_lossy().to_string())?;
             dict.set_item("can_open", result.can_open)?;
@@ -1409,14 +1413,14 @@ fn health_check(py: Python<'_>, path: &str) -> PyResult<PyObject> {
 /// Returns:
 ///     List of dicts with backup info (backup_path, timestamp, size_bytes, files_copied)
 #[pyfunction]
-fn list_backups(py: Python<'_>, source_path: &str) -> PyResult<PyObject> {
+fn list_backups(py: Python<'_>, source_path: &str) -> PyResult<Py<PyAny>> {
     let source = source_path.to_string();
 
-    py.allow_threads(|| {
+    py.detach(|| {
         let backups = balloons_core::list_backups(&source)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let list = pyo3::types::PyList::empty(py);
             for backup in backups {
                 let dict = pyo3::types::PyDict::new(py);
@@ -1446,15 +1450,15 @@ fn restore_from_backup(
     py: Python<'_>,
     backup_path: &str,
     target_path: &str,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let backup = backup_path.to_string();
     let target = target_path.to_string();
 
-    py.allow_threads(|| {
+    py.detach(|| {
         let result = balloons_core::restore_from_backup(&backup, &target)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let dict = pyo3::types::PyDict::new(py);
             dict.set_item("backup_path", result.backup_path.to_string_lossy().to_string())?;
             dict.set_item("timestamp", result.timestamp)?;
@@ -1507,7 +1511,7 @@ impl Tokenizer {
     fn count_tokens(&self, py: Python<'_>, text: &str) -> PyResult<usize> {
         let text = text.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = get_tokenizer_executor().lock().unwrap();
             let task = executor.spawn_on_any(async move {
                 // Use tiktoken's singleton for efficiency
@@ -1531,7 +1535,7 @@ impl Tokenizer {
     /// Returns:
     ///     List of token counts (same order as input)
     fn count_tokens_batch(&self, py: Python<'_>, texts: Vec<String>) -> PyResult<Vec<usize>> {
-        py.allow_threads(|| {
+        py.detach(|| {
             let mut executor = get_tokenizer_executor().lock().unwrap();
 
             // Spawn all tasks
@@ -1564,7 +1568,7 @@ impl Tokenizer {
 use balloons_browser::{Browser as RustBrowser, BrowserConfig as RustBrowserConfig};
 
 /// Python-facing browser configuration.
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 #[derive(Clone)]
 struct BrowserConfig {
     inner: RustBrowserConfig,
@@ -1679,7 +1683,7 @@ impl Browser {
             .as_mut()
             .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
 
-        py.allow_threads(|| {
+        py.detach(|| {
             smol::block_on(async { browser.connect().await })
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
@@ -1692,7 +1696,7 @@ impl Browser {
             .as_mut()
             .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
 
-        py.allow_threads(|| {
+        py.detach(|| {
             smol::block_on(async { browser.disconnect().await })
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
@@ -1706,7 +1710,7 @@ impl Browser {
             .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
         let url = url.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             smol::block_on(async { browser.goto(&url).await })
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
@@ -1719,7 +1723,7 @@ impl Browser {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
 
-        py.allow_threads(|| {
+        py.detach(|| {
             smol::block_on(async { browser.back().await })
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
@@ -1732,7 +1736,7 @@ impl Browser {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
 
-        py.allow_threads(|| {
+        py.detach(|| {
             smol::block_on(async { browser.forward().await })
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
@@ -1745,7 +1749,7 @@ impl Browser {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
 
-        py.allow_threads(|| {
+        py.detach(|| {
             smol::block_on(async { browser.refresh().await })
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
@@ -1758,7 +1762,7 @@ impl Browser {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
 
-        py.allow_threads(|| {
+        py.detach(|| {
             smol::block_on(async { browser.url().await })
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
@@ -1771,7 +1775,7 @@ impl Browser {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
 
-        py.allow_threads(|| {
+        py.detach(|| {
             smol::block_on(async { browser.title().await })
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
@@ -1784,7 +1788,7 @@ impl Browser {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
 
-        py.allow_threads(|| {
+        py.detach(|| {
             smol::block_on(async { browser.html().await })
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
@@ -1797,7 +1801,7 @@ impl Browser {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
 
-        py.allow_threads(|| {
+        py.detach(|| {
             smol::block_on(async { browser.screenshot().await })
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
@@ -1811,7 +1815,7 @@ impl Browser {
             .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
         let selector = selector.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             smol::block_on(async { browser.click(&selector).await })
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
@@ -1826,7 +1830,7 @@ impl Browser {
         let selector = selector.to_string();
         let text = text.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             smol::block_on(async { browser.fill(&selector, &text).await })
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
@@ -1841,7 +1845,7 @@ impl Browser {
         let selector = selector.to_string();
         let text = text.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             smol::block_on(async { browser.type_text(&selector, &text).await })
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
@@ -1854,7 +1858,7 @@ impl Browser {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
 
-        py.allow_threads(|| {
+        py.detach(|| {
             smol::block_on(async { browser.submit().await })
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
@@ -1869,7 +1873,7 @@ impl Browser {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let inputs = smol::block_on(async { browser.inputs().await })
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))?;
             serde_json::to_string(&inputs)
@@ -1886,7 +1890,7 @@ impl Browser {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let buttons = smol::block_on(async { browser.buttons().await })
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))?;
             serde_json::to_string(&buttons)
@@ -1907,7 +1911,7 @@ impl Browser {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let links = smol::block_on(async { browser.links(limit).await })
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))?;
             serde_json::to_string(&links)
@@ -1922,7 +1926,7 @@ impl Browser {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
 
-        py.allow_threads(|| {
+        py.detach(|| {
             smol::block_on(async { browser.click_button(index).await })
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
@@ -1936,7 +1940,7 @@ impl Browser {
             .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
         let value = value.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             smol::block_on(async { browser.set_input(index, &value).await })
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
@@ -1950,7 +1954,7 @@ impl Browser {
             .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
         let script = script.to_string();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             let result = smol::block_on(async { browser.execute_js(&script).await })
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))?;
             serde_json::to_string(&result)
@@ -1977,7 +1981,7 @@ impl Browser {
 fn list_directory(py: Python<'_>, path: &str) -> PyResult<String> {
     let path = path.to_string();
 
-    py.allow_threads(|| {
+    py.detach(|| {
         let listing = balloons_git::list_directory(&path)
             .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))?;
 
@@ -1999,7 +2003,7 @@ fn git_stage_files(py: Python<'_>, repo_path: &str, paths_json: &str) -> PyResul
     let paths: Vec<String> = serde_json::from_str(paths_json)
         .map_err(|e| PyRuntimeError::new_err(format!("JSON error: {}", e)))?;
 
-    py.allow_threads(|| {
+    py.detach(|| {
         let repo = balloons_git::GitRepo::open(repo_path)
             .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))?;
 
@@ -2018,7 +2022,7 @@ fn git_stage_files(py: Python<'_>, repo_path: &str, paths_json: &str) -> PyResul
 ///     Number of index entries after staging
 #[pyfunction]
 fn git_stage_all(py: Python<'_>, repo_path: &str) -> PyResult<usize> {
-    py.allow_threads(|| {
+    py.detach(|| {
         let repo = balloons_git::GitRepo::open(repo_path)
             .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))?;
 
@@ -2040,7 +2044,7 @@ fn git_unstage_files(py: Python<'_>, repo_path: &str, paths_json: &str) -> PyRes
     let paths: Vec<String> = serde_json::from_str(paths_json)
         .map_err(|e| PyRuntimeError::new_err(format!("JSON error: {}", e)))?;
 
-    py.allow_threads(|| {
+    py.detach(|| {
         let repo = balloons_git::GitRepo::open(repo_path)
             .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))?;
 
@@ -2062,7 +2066,7 @@ fn git_unstage_files(py: Python<'_>, repo_path: &str, paths_json: &str) -> PyRes
 fn git_commit(py: Python<'_>, repo_path: &str, message: &str) -> PyResult<String> {
     let message = message.to_string();
 
-    py.allow_threads(|| {
+    py.detach(|| {
         let repo = balloons_git::GitRepo::open(repo_path)
             .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))?;
 
@@ -2087,7 +2091,7 @@ fn git_commit(py: Python<'_>, repo_path: &str, message: &str) -> PyResult<String
 ///     True if there are staged changes ready to commit
 #[pyfunction]
 fn git_has_staged_changes(py: Python<'_>, repo_path: &str) -> PyResult<bool> {
-    py.allow_threads(|| {
+    py.detach(|| {
         let repo = balloons_git::GitRepo::open(repo_path)
             .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))?;
 
@@ -2105,7 +2109,7 @@ fn git_has_staged_changes(py: Python<'_>, repo_path: &str) -> PyResult<bool> {
 ///     JSON array of staged file paths
 #[pyfunction]
 fn git_staged_files(py: Python<'_>, repo_path: &str) -> PyResult<String> {
-    py.allow_threads(|| {
+    py.detach(|| {
         let repo = balloons_git::GitRepo::open(repo_path)
             .map_err(|e| PyRuntimeError::new_err(format!("Git error: {}", e)))?;
 

@@ -88,9 +88,9 @@ async def execute_supervisor_tool(
         if name == "supervisor_start":
             return await _execute_start(args, session, working_dir)
         elif name == "supervisor_list":
-            return _execute_list(args, session)
+            return await _execute_list(args, session)
         elif name == "supervisor_output":
-            return _execute_output(args)
+            return await _execute_output(args)
         elif name == "supervisor_stop":
             return _execute_stop(args)
         else:
@@ -195,7 +195,7 @@ async def _execute_start(
         return f"Error starting process: {e}", True
 
 
-def _execute_list(
+async def _execute_list(
     args: dict[str, Any],
     session: "Session",
 ) -> tuple[str, bool]:
@@ -214,7 +214,7 @@ def _execute_list(
     session_id = None if all_sessions else session.id
 
     try:
-        processes_json = _supervisor.list_processes(session_id)
+        processes_json = await _supervisor.list_processes(session_id)
         processes = json.loads(processes_json)
 
         if not processes:
@@ -235,8 +235,11 @@ def _execute_list(
         return f"Error listing processes: {e}", True
 
 
-def _execute_output(args: dict[str, Any]) -> tuple[str, bool]:
+async def _execute_output(args: dict[str, Any]) -> tuple[str, bool]:
     """Get output from a supervised process.
+
+    Uses the async get_output_async() method from the Rust supervisor,
+    which allows other Python async tasks to run while waiting for output.
 
     Args:
         args: Tool arguments (process_id, limit)
@@ -251,12 +254,12 @@ def _execute_output(args: dict[str, Any]) -> tuple[str, bool]:
     limit = args.get("limit", 50)
 
     try:
-        # Get process info first
-        process_json = _supervisor.get_process(process_id)
+        # Get process info (now async)
+        process_json = await _supervisor.get_process(process_id)
         process = json.loads(process_json)
 
-        # Get output
-        output_json = _supervisor.get_output(process_id, limit)
+        # Get output (now async)
+        output_json = await _supervisor.get_output(process_id, limit)
         logs = json.loads(output_json)
 
         # Format output nicely

@@ -76,6 +76,10 @@
   transition: background-color 0.2s ease;
 }
 
+.exchange-group:last-child {
+  margin-bottom: 0;
+}
+
 /* Exchange header */
 .exchange-group__header {
   display: flex;

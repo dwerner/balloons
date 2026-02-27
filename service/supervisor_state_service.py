@@ -163,7 +163,7 @@ class SupervisorStateService:
         )
 
     @ws_expose
-    def get_state(self) -> SupervisorState:
+    async def get_state(self) -> SupervisorState:
         """Get the complete supervisor state.
 
         Returns all hosts, processes, and backend mappings.
@@ -187,7 +187,7 @@ class SupervisorStateService:
         supervisor = get_supervisor()
         if supervisor:
             try:
-                processes_json = supervisor.list_processes(None)  # All processes
+                processes_json = await supervisor.list_processes(None)  # All processes
                 process_list = json.loads(processes_json)
                 for p in process_list:
                     status_info = p.get("status", {})
@@ -352,7 +352,7 @@ class SupervisorStateService:
                 )
 
     @ws_expose
-    def list_processes(
+    async def list_processes(
         self,
         session_id: Optional[str] = None,
         host: Optional[str] = None,
@@ -376,7 +376,7 @@ class SupervisorStateService:
             )
 
         try:
-            processes_json = supervisor.list_processes(session_id)
+            processes_json = await supervisor.list_processes(session_id)
             process_list = json.loads(processes_json)
 
             processes = []
