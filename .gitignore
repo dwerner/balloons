@@ -102,3 +102,4 @@ cython_debug/
 .venv-*
 test/data.mdb
 test/lock.mdb
+**/nohup.out
