@@ -94,10 +94,23 @@ async def execute_tool(
             return await execute_link_tool(name, args, session)
 
         # Process supervisor tools
+        debug_log.info(
+            f"[CHECK] name={name!r}, SUP_TOOL_NAMES={SUP_TOOL_NAMES}, name in SUP_TOOL_NAMES={name in SUP_TOOL_NAMES}",
+            category="supervisor",
+        )
         if name in SUP_TOOL_NAMES:
+            debug_log.info(
+                f"[TOOL_EXEC] About to call execute_supervisor_tool for {name}",
+                category="supervisor",
+            )
             if session is None:
                 return "Error: Supervisor tools require a session context", True
-            return await execute_supervisor_tool(name, args, session, working_dir)
+            result = await execute_supervisor_tool(name, args, session, working_dir)
+            debug_log.info(
+                f"[TOOL_EXEC] execute_supervisor_tool returned",
+                category="supervisor",
+            )
+            return result
 
         # Review tools
         if name in REVIEW_TOOL_NAMES:

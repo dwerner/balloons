@@ -75,6 +75,8 @@ async def execute_supervisor_tool(
     Returns:
         Tuple of (result_string, is_error)
     """
+    debug_log.error(f"[ENTRY] execute_supervisor_tool called: name={name}, args={args}", category="supervisor")
+
     # These tools don't need the supervisor instance
     if name == "supervisor_query":
         return await _execute_query(args)
@@ -136,8 +138,9 @@ async def _execute_start(
     # Build the actual command based on host type
     if host.type == "ssh":
         # For SSH hosts, wrap command in ssh
-        # Use -tt to force PTY allocation for proper output streaming
-        ssh_args = ["ssh", "-tt", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+        # Note: We don't use -tt (PTY allocation) because procstream uses line-based
+        # reading which doesn't work well with PTY control characters
+        ssh_args = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
         if host.port != 22:
             ssh_args.extend(["-p", str(host.port)])
         ssh_args.append(host.ssh_target())
@@ -151,6 +154,12 @@ async def _execute_start(
         ssh_args.append(actual_command)
         final_command = " ".join(shlex.quote(arg) for arg in ssh_args)
 
+        # DEBUG: Log what we're actually building
+        debug_log.error(
+            f"Building SSH command - ssh_args: {ssh_args}, final: {final_command}",
+            category="supervisor",
+        )
+
         # For SSH, working_dir is handled in the remote command
         effective_cwd = working_dir  # Local cwd doesn't matter for SSH
     else:
@@ -162,6 +171,17 @@ async def _execute_start(
     env_json = json.dumps(env) if env else None
 
     try:
+        # Dump stack to understand call path
+        import traceback
+        debug_log.info(
+            f"CALL STACK for supervisor_start:\n{''.join(traceback.format_stack())}",
+            category="supervisor",
+        )
+        # Log the exact command being sent to supervisor
+        debug_log.info(
+            f"SUPERVISOR_START: final_command={final_command!r}",
+            category="supervisor",
+        )
         process_id = _supervisor.start(
             command=final_command,
             session_id=session.id,

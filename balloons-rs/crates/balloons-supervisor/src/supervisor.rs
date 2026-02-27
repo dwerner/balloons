@@ -1,11 +1,10 @@
 //! Process Supervisor - manages multiple supervised processes.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 use async_channel;
 use async_lock::RwLock;
-use core_executor::ThreadPoolExecutor;
 use procstream::{Command, Executor, ManagedProcess, ProcessHandle, Target};
 use tracing::info;
 use uuid::Uuid;
@@ -13,15 +12,6 @@ use uuid::Uuid;
 use crate::error::{Error, Result};
 use crate::process::{handle_process_events, SupervisedProcess};
 use crate::types::{LogEntry, OutputQuery, ProcessId, ProcessInfo, StartRequest};
-
-/// Global executor for spawning background event handler tasks.
-/// Uses multiple threads since each supervised process gets its own long-running
-/// event handler that needs to run concurrently.
-static EXECUTOR: OnceLock<Mutex<ThreadPoolExecutor>> = OnceLock::new();
-
-fn get_executor() -> &'static Mutex<ThreadPoolExecutor> {
-    EXECUTOR.get_or_init(|| Mutex::new(ThreadPoolExecutor::new(8)))
-}
 
 /// The main process supervisor.
 ///
@@ -125,14 +115,19 @@ impl ProcessSupervisor {
             processes.insert(process_id.clone(), Arc::clone(&supervised));
         }
 
-        // Spawn task to handle events (fire-and-forget)
+        // Spawn task to handle events using smol (fire-and-forget).
+        // We use smol because procstream uses smol internally for its async streams,
+        // so the event handler needs to run on smol's executor to poll correctly.
+        //
+        // IMPORTANT: We move `handle` into this task to keep it alive. If the handle
+        // is dropped, procstream kills the process via its Drop impl.
         let process_clone = Arc::clone(&supervised);
-        {
-            let mut executor = get_executor().lock().unwrap();
-            executor.spawn_on_any(async move {
-                handle_process_events(process_clone, events, stop_rx).await;
-            });
-        }
+        smol::spawn(async move {
+            // Keep handle alive for the duration of the event handler
+            let _handle = handle;
+            handle_process_events(process_clone, events, stop_rx).await;
+        })
+        .detach();
 
         Ok(process_id)
     }

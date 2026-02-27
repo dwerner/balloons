@@ -10,7 +10,7 @@ description = "Process supervisor for long-running commands with streaming outpu
 procstream.workspace = true
 
 # Async runtime
-core-executor.workspace = true
+smol.workspace = true
 async-trait.workspace = true
 futures-lite.workspace = true
 async-lock.workspace = true

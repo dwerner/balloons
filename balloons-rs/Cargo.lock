@@ -306,7 +306,6 @@ dependencies = [
  "async-lock 3.4.2",
  "async-trait",
  "chrono",
- "core-executor",
  "futures-lite 2.6.1",
  "procstream",
  "serde",
