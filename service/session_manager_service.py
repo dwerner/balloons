@@ -882,6 +882,13 @@ class SessionManagerService:
                 result = ctx.content.strip()
                 self._helper_contexts.pop(helper_id, None)
                 return result
+
+            # Drain events from runner to populate ctx.content
+            # This is needed because the main event pump may not run between our polls
+            events = runner.drain_events()
+            for event in events:
+                await self._dispatch_helper_event(helper_id, event, ctx)
+
             if runner.is_done:
                 # Done - return accumulated content
                 result = ctx.content.strip()

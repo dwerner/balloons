@@ -176,11 +176,7 @@ export const CommitModal = memo(function CommitModal({
           }
         }
 
-        // Fall back to simple auto-generated message
-        log('Falling back to simple message generation', { gitRoot });
-        const simpleMessage = await client.generateSimpleCommitMessage(gitRoot);
-        log('Got simple message', { length: simpleMessage?.length });
-        setMessage(simpleMessage || '');
+        // No fallback - if AI generation fails or is unavailable, leave message empty
         lastGeneratedSelectionRef.current = selectedFilesKey;
       } catch (e) {
         log('Failed to generate commit message', { error: String(e) });
