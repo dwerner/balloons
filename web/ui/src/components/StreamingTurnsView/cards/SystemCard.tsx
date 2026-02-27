@@ -8,7 +8,7 @@
  * - Raw JSON view toggle for debugging turn data
  */
 
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { MarkdownContent } from '../../../MarkdownContent';
 import { SyntaxHighlightedCode } from './SyntaxHighlighter';
 import { formatTimestamp } from '../../../utils';
@@ -29,6 +29,7 @@ import type {
   ImageBlock,
   SessionSummaryBlock,
 } from '../../../../../generated/types';
+import { useSelectSession } from './ClientContext';
 import './cards.css';
 
 type DisplayMode = 'formatted' | 'raw';
@@ -109,6 +110,56 @@ function RawDataDisplay({ data }: { data: unknown }) {
       <SyntaxHighlightedCode code={formatted} language="json" wrapLongLines />
     </div>
   );
+}
+
+// Extract the linked session ID for navigation (if applicable)
+function getLinkedSessionId(block: SessionDataTurn['contentBlock']): string | null {
+  if (!block) return null;
+
+  switch (block.type) {
+    case 'fork': {
+      const b = block as ForkBlock;
+      return b.childSessionId || null;
+    }
+    case 'forked_from': {
+      const b = block as ForkedFromBlock;
+      return b.parentSessionId || null;
+    }
+    case 'merge': {
+      const b = block as MergeBlock;
+      return b.childSessionId || null;
+    }
+    case 'merged_to': {
+      const b = block as MergedToBlock;
+      return b.parentSessionId || null;
+    }
+    case 'link': {
+      const b = block as LinkBlock;
+      return b.linkedSessionId || null;
+    }
+    default:
+      return null;
+  }
+}
+
+// Get the navigation button label for a block type
+function getNavigationLabel(block: SessionDataTurn['contentBlock']): string | null {
+  if (!block) return null;
+
+  switch (block.type) {
+    case 'fork':
+      return 'Go to fork';
+    case 'forked_from':
+      return 'Go to parent';
+    case 'merge':
+      return 'Go to fork';
+    case 'merged_to':
+      return 'Go to parent';
+    case 'link':
+      return 'Go to linked session';
+    default:
+      return null;
+  }
 }
 
 // Extract display content from different block types
@@ -207,6 +258,7 @@ function getDisplayContent(block: SessionDataTurn['contentBlock']): string {
 export const SystemCard = React.memo(function SystemCard({ turn }: SystemCardProps) {
   const { contentBlock, streaming, order, timestamp } = turn;
   const blockType = contentBlock?.type || 'unknown';
+  const selectSession = useSelectSession();
 
   // Display mode state - formatted (default) or raw JSON
   const [displayMode, setDisplayMode] = useState<DisplayMode>('formatted');
@@ -218,6 +270,15 @@ export const SystemCard = React.memo(function SystemCard({ turn }: SystemCardPro
   };
 
   const displayContent = getDisplayContent(contentBlock);
+  const linkedSessionId = getLinkedSessionId(contentBlock);
+  const navigationLabel = getNavigationLabel(contentBlock);
+
+  // Handler for navigating to linked session
+  const handleNavigate = useCallback(() => {
+    if (linkedSessionId && selectSession) {
+      selectSession(linkedSessionId);
+    }
+  }, [linkedSessionId, selectSession]);
 
   // Render body content based on display mode
   const renderBody = () => {
@@ -233,6 +294,7 @@ export const SystemCard = React.memo(function SystemCard({ turn }: SystemCardPro
   };
 
   const body = renderBody();
+  const showNavigationButton = linkedSessionId && selectSession && navigationLabel;
 
   return (
     <div className={`turn-card system-card ${config.className} ${streaming ? 'streaming' : ''} ${displayMode === 'raw' ? 'raw-mode' : ''}`}>
@@ -246,6 +308,17 @@ export const SystemCard = React.memo(function SystemCard({ turn }: SystemCardPro
       {body && (
         <div className="turn-card-body">
           {body}
+        </div>
+      )}
+      {showNavigationButton && (
+        <div className="turn-card-actions">
+          <button
+            className="btn btn-primary btn-small session-link-btn"
+            onClick={handleNavigate}
+            type="button"
+          >
+            {navigationLabel} →
+          </button>
         </div>
       )}
     </div>

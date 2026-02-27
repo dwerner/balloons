@@ -44,7 +44,7 @@ from typing import Callable, Any, TYPE_CHECKING
 from codegen import ws_service, ws_expose, ws_event, ws_type
 from core.debug_log import debug_log
 from core.context import ContextBuilder
-from core.fork import ForkManager, ForkResult, MergeResult, ForkData, DeriveResult, DeriveData, SwitchResult, ForkProposal, ForkBindingSpec, MergeProposal
+from core.fork import ForkManager, ForkResult, MergeResult, ForkData, DeriveResult, DeriveData, SwitchResult, ForkProposal, MergeProposal
 from core.tool_executor import parse_fork_proposal, parse_merge_proposal
 from core.manager import SessionManager
 from core.stream_state import (
@@ -56,7 +56,7 @@ from core.stream_state import (
 )
 # TreeState removed in Phase 8 - events go directly to SessionDataService
 from core.queue_state import QueueState
-from models import TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, Turn, ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData, ExchangeInfo, SessionSummaryBlock
+from models import TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, Turn, SessionSummaryBlock
 from service.session_events import (
     SessionEventObserver,
     TurnCreatedEvent,
@@ -205,6 +205,22 @@ class DeriveSessionResult:
     exchange_id: str = ""  # Exchange ID for tracking the session's stream
     needs_compression: bool = False
     helper_id: str = ""  # ID of compression helper if compression needed
+    error: str = ""
+
+
+@ws_type
+@dataclass
+class LinkSessionsResult:
+    """Result of a link_sessions operation.
+
+    Links create bidirectional references between sessions, allowing
+    navigation and context sharing without a parent/child relationship.
+    """
+
+    success: bool
+    link_id: str = ""  # Shared link ID in both sessions
+    source_session_id: str = ""
+    target_session_id: str = ""
     error: str = ""
 
 
@@ -1246,7 +1262,7 @@ class SessionManagerService:
                 and ctx.metadata.get("auto_complete", False)
             ):
                 debug_log.info(
-                    f"Auto-completing archive for helper {helper_id}",
+                    f"Auto-completing archive for helper {helper_id}, content_len={len(ctx.content)}",
                     category="archive",
                 )
                 try:
@@ -1258,9 +1274,24 @@ class SessionManagerService:
                         f"Archive auto-complete result: success={result.success}, error={result.error}",
                         category="archive",
                     )
+                    # If complete_archive returned a failure (not exception), emit failure event
+                    if not result.success:
+                        debug_log.warning(
+                            f"Archive auto-complete returned failure: {result.error}",
+                            category="archive",
+                        )
+                        archive_error_data = {
+                            "session_id": ctx.session_id,
+                            "helper_id": helper_id,
+                            "success": False,
+                            "error": result.error or "Unknown error",
+                            "turns_archived": 0,
+                        }
+                        for handler in self._event_handlers:
+                            handler("onArchiveCompleted", archive_error_data)
                 except Exception as e:
                     debug_log.warning(
-                        f"Auto-complete archive failed: {e}",
+                        f"Auto-complete archive failed with exception: {e}",
                         category="archive"
                     )
                     import traceback
@@ -2687,14 +2718,17 @@ class SessionManagerService:
         tool_input: dict,
         exchange_id: str,
     ) -> None:
-        """Handle a propose_fork tool call by creating an inline proposal turn.
+        """Handle a propose_fork tool call.
 
-        When the LLM calls propose_fork, we create a proposal turn in the
-        conversation that the user can accept or reject inline via buttons.
-        This method is called during event dispatch and works for both TUI
-        and headless modes.
+        The proposal UI is rendered directly from the tool_use turn by
+        ForkProposalCard in the frontend. This method just logs the proposal
+        for debugging - the tool_use turn is already created and emitted
+        by the regular event flow.
+
+        Previously this created a separate fork_proposal turn, but that was
+        redundant since ForkProposalCard renders from the tool_use block.
         """
-        # Parse the tool input into a ForkProposal
+        # Parse the tool input for logging
         proposal = parse_fork_proposal(tool_input)
         if not proposal:
             debug_log.error(
@@ -2704,167 +2738,15 @@ class SessionManagerService:
             )
             return
 
-        # Get the session
-        session = self._manager.get_session(session_id)
-        if not session:
-            session = await self._manager.load_session(session_id)
-            if not session:
-                debug_log.error(
-                    f"Session not found for fork proposal",
-                    category="fork",
-                    details={"session_id": session_id},
-                )
-                return
-
-        # Convert ForkProposal to persistable format
-        context_plan_data = [
-            ContextAssignmentData(
-                exchange_range=a.exchange_range,
-                mode=a.mode,
-                reason=a.reason,
-            )
-            for a in (proposal.context_plan or [])
-        ]
-
-        bind_to_data = None
-        bind_to_inherit = False
-        if proposal.bind_to == "inherit":
-            bind_to_inherit = True
-        elif isinstance(proposal.bind_to, ForkBindingSpec):
-            bind_to_data = ForkBindingData(
-                entity_type=proposal.bind_to.entity_type,
-                entity_id=proposal.bind_to.entity_id,
-                role=proposal.bind_to.role,
-            )
-
-        # Use the tool_use_id as the proposal ID so frontend can reference it
-        # The tool_use_id is already unique (e.g., "balloons-4997c0708ce3")
-        proposal_id = tool_use_id
-
-        # Get all exchanges for the interactive tree BEFORE adding the proposal turn
-        # (excludes the current exchange which contains the proposal)
-        all_exchanges = await self._get_all_exchange_info(session_id, exclude_current=True)
         debug_log.info(
-            f"_handle_fork_proposal: got all_exchanges",
+            f"Fork proposal received: {proposal.name}",
             category="fork",
             details={
-                "session_id": session_id,
-                "all_exchanges_count": len(all_exchanges),
+                "tool_use_id": tool_use_id,
+                "description": proposal.description[:100] if proposal.description else "",
+                "context_plan_count": len(proposal.context_plan) if proposal.context_plan else 0,
             },
         )
-
-        # Add the proposal as a turn in the session
-        turn = session.add_fork_proposal_turn(
-            proposal_id=proposal_id,
-            name=proposal.name,
-            description=proposal.description,
-            context_plan=context_plan_data,
-            initial_prompt=proposal.initial_prompt or "",
-            bind_to=bind_to_data,
-            bind_to_inherit=bind_to_inherit,
-            status="pending",
-            exchange_id=exchange_id,
-            all_exchanges=all_exchanges,
-        )
-
-        # Get the turn index for later reference
-        turn_idx = len(session.turns) - 1
-
-        # Emit turn events for WebSocket clients (web UI) and TUI
-        await self._notify_observers(
-            "on_turn_created",
-            TurnCreatedEvent(
-                session_id=session_id,
-                turn_id=turn.id,
-                turn_index=turn_idx,
-                role="system",
-                exchange_id=exchange_id,
-                content_block_type="fork_proposal",
-            ),
-        )
-        await self._notify_observers(
-            "on_turn_finished",
-            TurnFinishedEvent(
-                session_id=session_id,
-                turn_id=turn.id,
-                turn_index=turn_idx,
-                role="system",
-                content="[Fork proposal]",
-                tokens=0,
-                content_block=turn.content_block,
-            ),
-        )
-
-        # Save the session so the proposal persists
-        await session.save()
-
-        debug_log.info(
-            f"Fork proposal turn created",
-            category="fork",
-            details={"proposal_id": proposal_id, "name": proposal.name},
-        )
-
-    async def _get_all_exchange_info(self, session_id: str, exclude_current: bool = True) -> list[ExchangeInfo]:
-        """Get ExchangeInfo for each exchange for display in fork proposal tree.
-
-        Args:
-            session_id: The session to get exchange info for
-            exclude_current: If True, exclude the last exchange (the one containing
-                           the fork proposal). This aligns with how Claude thinks
-                           about exchanges when proposing a fork - "last" means
-                           the last exchange before its current response.
-        """
-        exchanges = []
-
-        session = self._manager.get_session(session_id)
-        if not session:
-            session = await self._manager.load_session(session_id)
-            if not session:
-                return []
-
-        groups = self._get_turns_grouped_by_exchange(session)
-
-        debug_log.info(
-            f"_get_all_exchange_info: got groups",
-            category="fork",
-            details={
-                "session_id": session_id,
-                "groups_count": len(groups),
-            },
-        )
-
-        # Exclude the current (proposal) exchange if requested
-        if exclude_current and groups:
-            groups = groups[:-1]
-
-        for exchange_idx, group in enumerate(groups):
-            if not group:
-                continue
-
-            # Get first meaningful content from the group (group is list of (idx, turn) tuples)
-            _, first_turn = group[0]
-            content = getattr(first_turn, 'content', '') or ""
-            if not content:
-                content_block = getattr(first_turn, 'content_block', None)
-                if content_block and hasattr(content_block, 'text'):
-                    content = str(content_block.text or "")
-
-            # Truncate for display
-            if len(content) > 60:
-                content = content[:57] + "..."
-            # Remove newlines for single-line display
-            content = content.replace("\n", " ").strip()
-
-            role = getattr(first_turn, 'role', 'user')
-            summary = f"[{role}] {content}"
-
-            exchanges.append(ExchangeInfo(
-                index=exchange_idx,
-                summary=summary,
-                mode="compress",  # Default mode
-            ))
-
-        return exchanges
 
     async def _handle_merge_proposal(
         self,
@@ -2873,14 +2755,17 @@ class SessionManagerService:
         tool_input: dict,
         exchange_id: str,
     ) -> None:
-        """Handle a propose_merge tool call by creating an inline proposal turn.
+        """Handle a propose_merge tool call.
 
-        When the LLM calls propose_merge, we create a proposal turn in the
-        conversation that the user can accept or reject inline via buttons.
-        This method is called during event dispatch and works for both TUI
-        and headless modes.
+        The proposal UI is rendered directly from the tool_use turn by
+        MergeProposalCard in the frontend. This method just logs the proposal
+        for debugging - the tool_use turn is already created and emitted
+        by the regular event flow.
+
+        Previously this created a separate merge_proposal turn, but that was
+        redundant since MergeProposalCard renders from the tool_use block.
         """
-        # Parse the tool input into a MergeProposal
+        # Parse the tool input for logging
         proposal = parse_merge_proposal(tool_input)
         if not proposal:
             debug_log.error(
@@ -2890,76 +2775,13 @@ class SessionManagerService:
             )
             return
 
-        # Get the session
-        session = self._manager.get_session(session_id)
-        if not session:
-            session = await self._manager.load_session(session_id)
-            if not session:
-                debug_log.error(
-                    f"Session not found for merge proposal",
-                    category="merge",
-                    details={"session_id": session_id},
-                )
-                return
-
-        # Validate that we're in a fork
-        if not session.is_fork():
-            debug_log.error(
-                "Cannot propose merge: not in a fork",
-                category="merge",
-                details={"session_id": session_id},
-            )
-            return
-
-        # Use the tool_use_id as the proposal ID so frontend can reference it
-        proposal_id = tool_use_id
-
-        # Add the proposal as a turn in the session
-        turn = session.add_merge_proposal_turn(
-            proposal_id=proposal_id,
-            summary=proposal.summary,
-            reason=proposal.reason,
-            files_changed=proposal.files_changed,
-            key_accomplishments=proposal.key_accomplishments,
-            status="pending",
-            exchange_id=exchange_id,
-        )
-
-        # Get turn index
-        turn_idx = len(session.turns) - 1
-
-        # Emit turn events for WebSocket clients (web UI) and TUI
-        await self._notify_observers(
-            "on_turn_created",
-            TurnCreatedEvent(
-                session_id=session_id,
-                turn_id=turn.id,
-                turn_index=turn_idx,
-                role="system",
-                exchange_id=exchange_id,
-                content_block_type="merge_proposal",
-            ),
-        )
-        await self._notify_observers(
-            "on_turn_finished",
-            TurnFinishedEvent(
-                session_id=session_id,
-                turn_id=turn.id,
-                turn_index=turn_idx,
-                role="system",
-                content="[Merge proposal]",
-                tokens=0,
-                content_block=turn.content_block,
-            ),
-        )
-
-        # Save the session so the proposal persists
-        await session.save()
-
         debug_log.info(
-            f"Merge proposal turn created",
+            f"Merge proposal received",
             category="merge",
-            details={"proposal_id": proposal_id, "summary": proposal.summary[:50] if proposal.summary else ""},
+            details={
+                "tool_use_id": tool_use_id,
+                "summary": proposal.summary[:100] if proposal.summary else "",
+            },
         )
 
     @ws_expose
@@ -3004,69 +2826,39 @@ class SessionManagerService:
                     error=f"Session {session_id} not found",
                 )
 
-        # Find the proposal in the session (may not exist if created from tool_use)
-        proposal_block = None
-        for turn in session.turns:
-            from models import ForkProposalBlock
-            if isinstance(turn.content_block, ForkProposalBlock):
-                if turn.content_block.proposal_id == proposal_id:
-                    proposal_block = turn.content_block
-                    break
-
-        # If proposal block exists, check its status
-        if proposal_block:
-            if proposal_block.status != "pending":
-                return RespondToForkProposalResult(
-                    success=False,
-                    error=f"Proposal already {proposal_block.status}",
-                )
-        else:
-            # No proposal block found - this is OK if we have all required data
-            # This happens when the frontend renders propose_fork tool calls directly
-            if not name or not context_plan:
-                return RespondToForkProposalResult(
-                    success=False,
-                    error=f"Proposal {proposal_id} not found and insufficient data to create fork",
-                )
+        # Validate required data - the frontend (ForkProposalCard) always provides these
+        # from the tool_use turn's input
+        if not name or not context_plan:
+            return RespondToForkProposalResult(
+                success=False,
+                error="Missing required fork parameters (name and context_plan)",
+            )
 
         if not accepted:
-            # Just update the status to rejected (if proposal block exists)
-            if proposal_block:
-                session.update_fork_proposal_status(proposal_id, "rejected")
-                await session.save()
+            # Nothing to update - rejection is just a no-op
+            # The tool_use turn remains in the session as-is
             return RespondToForkProposalResult(
                 success=True,
                 accepted=False,
             )
 
         # Accept the proposal - execute the fork
-        # Get the context plan (use provided or original from proposal_block)
         from core.fork import ForkProposal, ContextAssignment
         from models import ContextMode
 
-        if context_plan:
-            raw_context_plan = context_plan
-        elif proposal_block:
-            raw_context_plan = [
-                {"exchange_range": cp.exchange_range, "mode": cp.mode, "reason": cp.reason}
-                for cp in proposal_block.context_plan
-            ]
-        else:
-            raw_context_plan = []
-
         # Build a ForkProposal to resolve exchange ranges
         fork_proposal = ForkProposal(
-            name=name or (proposal_block.name if proposal_block else "fork"),
-            description=description or (proposal_block.description if proposal_block else ""),
+            name=name,
+            description=description or "",
             context_plan=[
                 ContextAssignment(
                     exchange_range=cp.get("exchange_range", ""),
                     mode=cp.get("mode", "compress"),
                     reason=cp.get("reason", ""),
                 )
-                for cp in raw_context_plan
+                for cp in context_plan
             ],
-            initial_prompt=initial_prompt if initial_prompt is not None else (proposal_block.initial_prompt if proposal_block else ""),
+            initial_prompt=initial_prompt or "",
         )
 
         # Get exchange groups to resolve ranges (list of (idx, turn) tuples per group)
@@ -3145,13 +2937,7 @@ class SessionManagerService:
                 error=fork_result.error or "Fork failed",
             )
 
-        # Update proposal status with child_session_id now that fork succeeded (if proposal block exists)
-        if proposal_block:
-            session.update_fork_proposal_status(
-                proposal_id, "accepted", child_session_id=fork_result.child_session_id
-            )
-
-        # Also update the tool_use turn (if it exists) with the child_session_id
+        # Update the tool_use turn with the child_session_id
         # so the ForkProposalCard can show the link after page reload
         tool_use_turn = None
         tool_use_turn_idx = None
@@ -3232,60 +3018,30 @@ class SessionManagerService:
                     error=f"Session {session_id} not found",
                 )
 
-        # Find the proposal in the session
-        proposal_block = None
-        for turn in session.turns:
-            from models import MergeProposalBlock
-            if isinstance(turn.content_block, MergeProposalBlock):
-                if turn.content_block.proposal_id == proposal_id:
-                    proposal_block = turn.content_block
-                    break
-
-        if not proposal_block:
+        # Validate we have a summary (required for merge)
+        if not summary:
             return RespondToMergeProposalResult(
                 success=False,
-                error=f"Proposal {proposal_id} not found in session",
-            )
-
-        if proposal_block.status != "pending":
-            return RespondToMergeProposalResult(
-                success=False,
-                error=f"Proposal already {proposal_block.status}",
+                error="Missing required merge summary",
             )
 
         if not accepted:
-            # Just update the status to rejected
-            session.update_merge_proposal_status(proposal_id, "rejected")
-            await session.save()
+            # Nothing to update - rejection is just a no-op
             return RespondToMergeProposalResult(
                 success=True,
                 accepted=False,
             )
 
         # Accept the proposal - execute the merge
-        # Use provided values or fall back to original
-        merge_summary = summary if summary is not None else proposal_block.summary
-        merge_files = files_changed if files_changed is not None else proposal_block.files_changed
-        merge_accomplishments = key_accomplishments if key_accomplishments is not None else proposal_block.key_accomplishments
-        merge_reason = reason if reason is not None else proposal_block.reason
-
-        # Update proposal status before merging
-        session.update_merge_proposal_status(proposal_id, "accepted")
-        await session.save()
-
-        # Execute the merge
         merge_result = await self.merge_session(
             fork_session_id=session_id,
-            merge_summary=merge_summary,
-            files_changed=merge_files,
-            key_accomplishments=merge_accomplishments,
-            reason=merge_reason,
+            merge_summary=summary,
+            files_changed=files_changed or [],
+            key_accomplishments=key_accomplishments or [],
+            reason=reason or "",
         )
 
         if not merge_result.success:
-            # Revert status on failure
-            session.update_merge_proposal_status(proposal_id, "pending")
-            await session.save()
             return RespondToMergeProposalResult(
                 success=False,
                 error=merge_result.error or "Merge failed",
@@ -3495,6 +3251,157 @@ class SessionManagerService:
             needs_compression=False,
         )
 
+    # --- Link Operations ---
+
+    @ws_expose
+    async def link_sessions(
+        self,
+        source_session_id: str,
+        target_session_id: str,
+        summary: str = "",
+    ) -> LinkSessionsResult:
+        """Create a bidirectional link between two sessions.
+
+        Links allow navigation between sessions without a parent/child relationship.
+        Both sessions get a LinkBlock turn pointing to the other.
+
+        Args:
+            source_session_id: The current session (where user initiated the link)
+            target_session_id: The session to link to
+            summary: Optional description of why these sessions are linked
+
+        Returns:
+            LinkSessionsResult with the shared link_id
+        """
+        import uuid
+
+        # Validate source session
+        source_session = self._manager.get_session(source_session_id)
+        if not source_session:
+            source_session = await self._manager.load_session(source_session_id)
+            if not source_session:
+                return LinkSessionsResult(
+                    success=False,
+                    error=f"Source session {source_session_id} not found",
+                )
+
+        # Validate target session
+        target_session = self._manager.get_session(target_session_id)
+        if not target_session:
+            target_session = await self._manager.load_session(target_session_id)
+            if not target_session:
+                return LinkSessionsResult(
+                    success=False,
+                    error=f"Target session {target_session_id} not found",
+                )
+
+        # Can't link a session to itself
+        if source_session_id == target_session_id:
+            return LinkSessionsResult(
+                success=False,
+                error="Cannot link a session to itself",
+            )
+
+        # Check if link already exists
+        for turn in source_session.turns:
+            from models import LinkBlock
+            if isinstance(turn.content_block, LinkBlock):
+                if turn.content_block.linked_session_id == target_session_id:
+                    return LinkSessionsResult(
+                        success=False,
+                        error="Sessions are already linked",
+                    )
+
+        # Generate a shared link ID
+        link_id = str(uuid.uuid4())
+
+        # Get display names for the summary
+        source_name = source_session.title or source_session.fork_name or source_session.id[:8]
+        target_name = target_session.title or target_session.fork_name or target_session.id[:8]
+
+        # Default summary if not provided
+        if not summary:
+            summary = f"Linked to {target_name}"
+
+        # Add link to source session (pointing to target)
+        source_turn = source_session.add_link_turn(
+            link_id=link_id,
+            linked_session_id=target_session_id,
+            summary=summary,
+        )
+        await source_session.save()
+
+        # Add link to target session (pointing back to source)
+        target_turn = target_session.add_link_turn(
+            link_id=link_id,
+            linked_session_id=source_session_id,
+            summary=f"Linked from {source_name}",
+        )
+        await target_session.save()
+
+        # Emit turn events for the source session
+        source_turn_idx = len(source_session.turns) - 1
+        await self._notify_observers(
+            "on_turn_created",
+            TurnCreatedEvent(
+                session_id=source_session_id,
+                turn_id=source_turn.id,
+                turn_index=source_turn_idx,
+                role="system",
+                content_block_type="link",
+            ),
+        )
+        await self._notify_observers(
+            "on_turn_finished",
+            TurnFinishedEvent(
+                session_id=source_session_id,
+                turn_id=source_turn.id,
+                turn_index=source_turn_idx,
+                role="system",
+                content="[Link created]",
+                tokens=0,
+                content_block=source_turn.content_block,
+            ),
+        )
+
+        # Emit turn events for the target session
+        target_turn_idx = len(target_session.turns) - 1
+        await self._notify_observers(
+            "on_turn_created",
+            TurnCreatedEvent(
+                session_id=target_session_id,
+                turn_id=target_turn.id,
+                turn_index=target_turn_idx,
+                role="system",
+                content_block_type="link",
+            ),
+        )
+        await self._notify_observers(
+            "on_turn_finished",
+            TurnFinishedEvent(
+                session_id=target_session_id,
+                turn_id=target_turn.id,
+                turn_index=target_turn_idx,
+                role="system",
+                content="[Link created]",
+                tokens=0,
+                content_block=target_turn.content_block,
+            ),
+        )
+
+        debug_log.info(
+            f"Linked sessions: {source_session_id[:8]} <-> {target_session_id[:8]}",
+            category="link",
+            details={"link_id": link_id, "summary": summary},
+        )
+
+        return LinkSessionsResult(
+            success=True,
+            link_id=link_id,
+            source_session_id=source_session_id,
+            target_session_id=target_session_id,
+        )
+
     # --- Archive Operations ---
 
     @ws_expose
@@ -3678,6 +3585,11 @@ class SessionManagerService:
             "turns_archived": archive_result.turns_archived,
             "helper_id": helper_id,
         }
+        debug_log.info(
+            f"Emitting onArchiveCompleted event to {len(self._event_handlers)} handlers",
+            category="archive",
+            details=archive_event_data,
+        )
         for handler in self._event_handlers:
             handler("onArchiveCompleted", archive_event_data)
 

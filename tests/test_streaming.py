@@ -421,7 +421,6 @@ class TestStreamingCoordinator:
             "role": "tool",
             "turn_type": "tool_result",
             "tool_use_id": "tool-123",
-            "result_preview": "File contents...",
         })
         action = coordinator.dispatch_event(event, ctx)
 
@@ -430,7 +429,6 @@ class TestStreamingCoordinator:
         assert action.role == "tool"
         assert action.turn_type == "tool_result"
         assert action.tool_use_id == "tool-123"
-        assert action.result_preview == "File contents..."
 
     def test_unknown_event(self):
         coordinator = StreamingCoordinator()

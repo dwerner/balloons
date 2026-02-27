@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-26T19:04:28.141830
+// Generated: 2026-02-27T07:42:12.741312
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -291,6 +291,14 @@ export interface DeriveSessionResult {
   exchangeId?: string;
   needsCompression?: boolean;
   helperId?: string;
+  error?: string;
+}
+
+export interface LinkSessionsResult {
+  success: boolean;
+  linkId?: string;
+  sourceSessionId?: string;
+  targetSessionId?: string;
   error?: string;
 }
 

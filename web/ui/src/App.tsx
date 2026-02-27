@@ -2295,6 +2295,25 @@ function AppContent() {
               console.error(`Failed to ${action} turns:`, err);
             }
           }}
+          onLinkSession={async (targetSessionId) => {
+            const client = clientRef.current;
+            if (!client || connectionState !== 'connected') return;
+            if (!selectedSessionId) return;
+
+            try {
+              const result = await client.sessions.linkSessions(
+                selectedSessionId,
+                targetSessionId,
+              );
+              if (result.success) {
+                debugLog('Sessions linked', { linkId: result.linkId, source: selectedSessionId, target: targetSessionId });
+              } else {
+                console.error('Failed to link sessions:', result.error);
+              }
+            } catch (err) {
+              console.error('Failed to link sessions:', err);
+            }
+          }}
           onReviewSession={async (sessionId) => {
             const client = clientRef.current;
             if (!client || connectionState !== 'connected') return;
@@ -3139,6 +3158,8 @@ interface SidebarContentProps {
   onExchangeAction?: (sessionId: string, turnIndices: number[], action: ExchangeAction) => void;
   // Session review callback
   onReviewSession?: (sessionId: string) => void;
+  // Link session callback
+  onLinkSession?: (sessionId: string) => void;
   // Sound notification props
   soundEnabled?: boolean;
   onToggleSound?: () => void;
@@ -3174,6 +3195,7 @@ function SidebarContent({
   onExchangeContextModeChange,
   onExchangeAction,
   onReviewSession,
+  onLinkSession,
   soundEnabled = true,
   onToggleSound,
   serverSlot,
@@ -3467,6 +3489,7 @@ function SidebarContent({
           onExchangeContextModeChange={onExchangeContextModeChange}
           onExchangeAction={onExchangeAction}
           onReviewSession={onReviewSession}
+          onLinkSession={onLinkSession}
           archivingTurnIndices={archivingTurnIndices}
         />
       ) : (

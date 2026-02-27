@@ -521,6 +521,63 @@
   color: var(--accent-summary, #ffd43b);
 }
 
+/* System card actions (navigation buttons) */
+.system-card .turn-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-muted, #333);
+  background: var(--bg-tertiary, #1a1a1a);
+  border-radius: 0 0 6px 6px;
+}
+
+.system-card .session-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+/* Fork-related navigation buttons */
+.system-card.system-fork .session-link-btn,
+.system-card.system-forked-from .session-link-btn {
+  background: var(--accent-fork, #be4bdb);
+  color: #fff;
+}
+
+.system-card.system-fork .session-link-btn:hover,
+.system-card.system-forked-from .session-link-btn:hover {
+  background: color-mix(in srgb, var(--accent-fork, #be4bdb) 80%, #fff);
+}
+
+/* Merge-related navigation buttons */
+.system-card.system-merge .session-link-btn,
+.system-card.system-merged-to .session-link-btn {
+  background: var(--accent-merge, #15aabf);
+  color: #fff;
+}
+
+.system-card.system-merge .session-link-btn:hover,
+.system-card.system-merged-to .session-link-btn:hover {
+  background: color-mix(in srgb, var(--accent-merge, #15aabf) 80%, #fff);
+}
+
+/* Link navigation buttons */
+.system-card.system-link .session-link-btn {
+  background: var(--accent-link, #20c997);
+  color: #fff;
+}
+
+.system-card.system-link .session-link-btn:hover {
+  background: color-mix(in srgb, var(--accent-link, #20c997) 80%, #fff);
+}
+
 /* ============================================================================
  * Collapsible Component
  * ============================================================================ */
@@ -2704,6 +2761,13 @@
 :root[data-theme="dark-flat"] .system-card.system-link .turn-card-header,
 [data-theme="dark-flat"] .system-card.system-link .turn-card-header {
   background: transparent;
+}
+
+/* System card actions - flat */
+:root[data-theme="dark-flat"] .system-card .turn-card-actions,
+[data-theme="dark-flat"] .system-card .turn-card-actions {
+  background: transparent;
+  border-top: 1px solid var(--border-muted, #1a1a1a);
 }
 
 /* Collapsibles - flat */

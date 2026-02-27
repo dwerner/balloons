@@ -279,8 +279,6 @@ class TurnStartedAction(StreamingAction):
     # For tool_use turns
     tool_use_id: str = ""
     tool_name: str = ""
-    # For tool_result turns
-    result_preview: str = ""
 
 
 # =============================================================================
@@ -365,7 +363,6 @@ class StreamingCoordinator:
                 exchange_id=data.get("exchange_id", ""),
                 turn_type="tool_result",
                 tool_use_id=data.get("tool_use_id", ""),
-                result_preview=data.get("result_preview", ""),
             )
 
         elif event.event_type == "text":

@@ -5,6 +5,7 @@ Each SessionRunner wraps a BaseRunner and maintains an event queue.
 """
 
 import asyncio
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -22,6 +23,79 @@ from session import Session, Turn
 from .debug_log import debug_log, perf_marker
 from .base_runner import BaseRunner
 
+
+# =============================================================================
+# Utility Functions
+# =============================================================================
+
+# Pattern to match <system-reminder>...</system-reminder> blocks
+# Captures surrounding whitespace to clean up the result
+_SYSTEM_REMINDER_PATTERN = re.compile(
+    r'\s*<system-reminder>[\s\S]*?</system-reminder>\s*',
+    re.MULTILINE
+)
+
+# Pattern to extract just the reminder content (for logging)
+_SYSTEM_REMINDER_CONTENT_PATTERN = re.compile(
+    r'<system-reminder>([\s\S]*?)</system-reminder>',
+    re.MULTILINE
+)
+
+# Track already-logged reminders to avoid duplicates within a running instance
+_logged_reminders: set[str] = set()
+
+
+def _log_system_reminder(reminder_content: str, session_id: str = "") -> None:
+    """Log a stripped system reminder to a separate JSONL file.
+
+    Deduplicates within a running instance - each unique reminder is logged once.
+    """
+    import json
+    from pathlib import Path
+
+    reminder_stripped = reminder_content.strip()
+
+    # Skip if we've already logged this exact reminder
+    if reminder_stripped in _logged_reminders:
+        return
+    _logged_reminders.add(reminder_stripped)
+
+    log_dir = Path.home() / ".balloons" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "system_reminders.jsonl"
+
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "session_id": session_id,
+        "reminder": reminder_stripped,
+    }
+
+    try:
+        with open(log_file, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass  # Don't let logging failures break tool results
+
+
+def strip_system_reminders(text: str, session_id: str = "") -> str:
+    """Strip <system-reminder> tags from tool result content.
+
+    Claude's API injects these reminders into tool results, but they're noise
+    for display and waste tokens when re-sent in context.
+
+    Stripped reminders are logged to ~/.balloons/logs/system_reminders.jsonl
+    """
+    # Find and log any reminders before stripping
+    for match in _SYSTEM_REMINDER_CONTENT_PATTERN.finditer(text):
+        _log_system_reminder(match.group(1), session_id)
+
+    result = _SYSTEM_REMINDER_PATTERN.sub('', text)
+    return result.rstrip()  # Clean trailing whitespace
+
+
+# =============================================================================
+# Runner State Types
+# =============================================================================
 
 class RunnerStatus(Enum):
     """Status of a session runner."""
@@ -883,9 +957,12 @@ class SessionRunner:
                 return events
 
             elif isinstance(event, ToolResultEvent):
+                # Strip system reminders from tool results before storing
+                clean_result = strip_system_reminders(event.result, self.session.id)
+
                 result_block = ToolResultBlock(
                     tool_use_id=event.tool_use_id,
-                    content=event.result,
+                    content=clean_result,
                     is_error=False,
                 )
                 self._content_blocks.append(result_block)  # Legacy
@@ -904,7 +981,7 @@ class SessionRunner:
                 # Note: For tool results, started_at approximates when tool execution began
                 turn = self._create_turn(
                     "tool",
-                    f"[Result: {len(event.result)} chars]",
+                    f"[Result: {len(clean_result)} chars]",
                     [result_block],
                     started_at=tool_result_ended_at,  # Tool execution is nearly instant
                     ended_at=tool_result_ended_at,
@@ -923,11 +1000,6 @@ class SessionRunner:
                         )
                         break
 
-                # Create result preview for display
-                result_preview = event.result[:50] if event.result else ""
-                if len(event.result) > 50:
-                    result_preview += "..."
-
                 events = []
                 # Emit turn_started for this tool_result turn so UI creates a new node
                 events.append(self._make_event("tool_result_turn_started", {
@@ -937,11 +1009,10 @@ class SessionRunner:
                     "role": "tool",
                     "turn_type": "tool_result",
                     "tool_use_id": event.tool_use_id,
-                    "result_preview": result_preview,
                 }))
                 events.append(self._make_event("tool_result", {
                     "tool_use_id": event.tool_use_id,
-                    "result": event.result,
+                    "result": clean_result,
                     "tool_index": tool_idx,
                     "result_block": result_block,
                     "turn_index": tool_result_turn_idx,

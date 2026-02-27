@@ -483,8 +483,10 @@ interface SessionMenuProps {
   position: { x: number; y: number };
   sessionId: string;
   sessionTitle: string;
+  currentSessionId: string | null;  // The currently selected session (for linking)
   onReview: () => void;
   onRename?: () => void;
+  onLinkToCurrentSession?: () => void;  // Link this session to the current session
   onClose: () => void;
 }
 
@@ -492,10 +494,14 @@ function SessionContextMenu({
   position,
   sessionId,
   sessionTitle,
+  currentSessionId,
   onReview,
   onRename,
+  onLinkToCurrentSession,
   onClose,
 }: SessionMenuProps) {
+  // Can link if there's a current session and it's different from the one being right-clicked
+  const canLink = currentSessionId && currentSessionId !== sessionId;
   const menuRef = React.useRef<HTMLDivElement>(null);
 
   // Debug log when menu mounts
@@ -562,6 +568,16 @@ function SessionContextMenu({
           >
             <span className="exchange-context-menu__icon">✏️</span>
             Rename
+          </button>
+        )}
+        {canLink && onLinkToCurrentSession && (
+          <button
+            className="exchange-context-menu__item"
+            onClick={() => { onLinkToCurrentSession(); onClose(); }}
+          >
+            <span className="exchange-context-menu__icon">🔗</span>
+            Link to Current Session
+            <span className="exchange-context-menu__hint">Create bidirectional link</span>
           </button>
         )}
       </div>
@@ -819,6 +835,8 @@ function SessionNode({
   onTurnClick,
   onReview,
   onRename,
+  onLinkSession,
+  selectedSessionId,
   archivingTurnIndices,
 }: {
   session: SessionInfo;
@@ -838,6 +856,8 @@ function SessionNode({
   onTurnClick?: (turnIdx: number) => void;
   onReview?: () => void;
   onRename?: () => void;
+  onLinkSession?: () => void;
+  selectedSessionId: string | null;
   archivingTurnIndices?: Set<number>;
 }) {
   const sessionColor = SESSION_COLORS[index % SESSION_COLORS.length] || '#60a5fa';
@@ -990,8 +1010,10 @@ function SessionNode({
           position={sessionMenuPosition}
           sessionId={session.id}
           sessionTitle={sessionName}
+          currentSessionId={selectedSessionId}
           onReview={() => onReview?.()}
           onRename={onRename}
+          onLinkToCurrentSession={onLinkSession}
           onClose={() => setSessionMenuPosition(null)}
         />
       )}
@@ -1051,6 +1073,7 @@ export const SessionTreeView = memo(forwardRef<SessionTreeViewHandle, SessionTre
   onExchangeAction,
   onReviewSession,
   onRenameSession,
+  onLinkSession,
   isLoading = false,
   archivingTurnIndices,
 }, ref) {
@@ -1371,6 +1394,8 @@ export const SessionTreeView = memo(forwardRef<SessionTreeViewHandle, SessionTre
         onTurnClick={handleTurnClick}
         onReview={onReviewSession ? () => onReviewSession(session.id) : undefined}
         onRename={onRenameSession ? () => onRenameSession(session.id) : undefined}
+        onLinkSession={onLinkSession ? () => onLinkSession(session.id) : undefined}
+        selectedSessionId={selectedSessionId}
         archivingTurnIndices={isSelected ? archivingTurnIndices : undefined}
       />
     );

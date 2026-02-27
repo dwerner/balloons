@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-26T19:04:28.145512
+// Generated: 2026-02-27T07:42:12.745156
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -659,6 +659,22 @@ export interface SessionManagerService {
   getStreamingSessions(): Promise<string[]>;
 
   /**
+   * Create a bidirectional link between two sessions.
+   * 
+   * Links allow navigation between sessions without a parent/child relationship.
+   * Both sessions get a LinkBlock turn pointing to the other.
+   * 
+   * Args:
+   * source_session_id: The current session (where user initiated the link)
+   * target_session_id: The session to link to
+   * summary: Optional description of why these sessions are linked
+   * 
+   * Returns:
+   * LinkSessionsResult with the shared link_id
+   */
+  linkSessions(sourceSessionId: string, targetSessionId: string, summary?: string): Promise<Types.LinkSessionsResult>;
+
+  /**
    * List all available backend names.
    * 
    * Returns:
@@ -1087,6 +1103,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   async getStreamingSessions(): Promise<string[]> {
     return this.call('getStreamingSessions', {  });
+  }
+
+  async linkSessions(sourceSessionId: string, targetSessionId: string, summary?: string): Promise<Types.LinkSessionsResult> {
+    return this.call('linkSessions', { sourceSessionId: sourceSessionId, targetSessionId: targetSessionId, summary: summary });
   }
 
   async listBackends(): Promise<string[]> {
