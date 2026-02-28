@@ -8,24 +8,23 @@ Balloons has a shared debug logging system that spans both client and server:
 - `web/ui/src/utils/debugLog.ts` - Client-side logger that sends to server
 
 **Log files:**
-- `~/.balloons/debug.log` - Main catch-all log (configure via `debug_log_file` in config.yaml)
 - `~/.balloons/logs/{category}.log` - Category-specific logs (only when categories enabled)
 - `~/.balloons/debug/interactions/` - Full interaction dumps on API errors
 
-**Categories:** api, tool, json, process, stream, perf
+**Categories:** api, tool, json, process, stream, perf, client
 
 **How it works:**
-- All log entries go to the main `debug.log` (if configured)
-- When you enable specific categories, those entries ALSO write to `~/.balloons/logs/{category}.log`
+- All log entries go to the in-memory log (for UI debug pane)
+- When you enable specific categories, those entries write to `~/.balloons/logs/{category}.log`
 - Category filtering affects both in-memory log and category files
 - Use categories for targeted debugging without sifting through everything
 
 **Tailing logs:**
 ```bash
-tail -f ~/.balloons/debug.log         # Everything
 tail -f ~/.balloons/logs/api.log      # API requests/responses/chunks (when enabled)
 tail -f ~/.balloons/logs/tool.log     # Tool execution (when enabled)
 tail -f ~/.balloons/logs/json.log     # JSON parsing errors (when enabled)
+tail -f ~/.balloons/logs/client.log   # Web UI client logs (when enabled)
 ```
 
 **From code:**

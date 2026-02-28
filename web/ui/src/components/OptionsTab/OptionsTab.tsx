@@ -17,6 +17,7 @@ const LOG_CATEGORIES = [
   { id: 'process', label: 'Process', description: 'Process lifecycle events' },
   { id: 'stream', label: 'Stream', description: 'Streaming events and timeouts' },
   { id: 'perf', label: 'Perf', description: 'Performance markers and timing' },
+  { id: 'client', label: 'Client', description: 'Web UI client-side logs' },
 ] as const;
 
 interface OptionsTabProps {

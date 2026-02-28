@@ -72,7 +72,6 @@ class DebugLog:
             cls._instance = super().__new__(cls)
             cls._instance._entries = []
             cls._instance._listeners = []
-            cls._instance._log_file: Path | None = None
             cls._instance._log_dir: Path | None = None  # Category-based log directory
             cls._instance._enabled = True
             cls._instance._seq_counter = 0  # Monotonic sequence counter
@@ -170,18 +169,6 @@ class DebugLog:
         """Clear category filter to log all categories."""
         self._enabled_categories.clear()
 
-    def set_log_file(self, path: str | Path | None) -> None:
-        """Enable file persistence for debug logs.
-
-        Args:
-            path: File path to write logs to, or None to disable.
-        """
-        if path is None:
-            self._log_file = None
-        else:
-            self._log_file = Path(path).expanduser()
-            self._log_file.parent.mkdir(parents=True, exist_ok=True)
-
     def set_log_dir(self, path: str | Path | None) -> None:
         """Enable category-based file logging.
 
@@ -198,39 +185,15 @@ class DebugLog:
             self._log_dir.mkdir(parents=True, exist_ok=True)
 
     def _write_to_file(self, entry: LogEntry) -> None:
-        """Write entry to log file if configured (fire-and-forget async)."""
+        """Write entry to category-specific log file (fire-and-forget async)."""
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return  # No running event loop
 
-        # Write to single log file if configured
-        if self._log_file is not None:
-            loop.create_task(self._write_to_file_async(entry))
-
-        # Write to category-specific file if log_dir is set
+        # Write to category-specific file if log_dir is set and entry has a category
         if hasattr(self, '_log_dir') and self._log_dir is not None and entry.category:
             loop.create_task(self._write_to_category_file_async(entry))
-
-    async def _write_to_file_async(self, entry: LogEntry) -> None:
-        """Async file write for log entry."""
-        if self._log_file is None:
-            return
-        try:
-            log_line = json.dumps({
-                "seq": entry.seq,
-                "timestamp": entry.timestamp,
-                "level": entry.level.value,
-                "message": entry.message,
-                "category": entry.category,
-                "session_id": entry.session_id,
-                "run_id": entry.run_id,
-                "details": entry.details,
-            })
-            async with aiofiles.open(self._log_file, "a") as f:
-                await f.write(log_line + "\n")
-        except Exception:
-            pass  # Don't let file errors crash logging
 
     async def _write_to_category_file_async(self, entry: LogEntry) -> None:
         """Async file write for category-specific log."""

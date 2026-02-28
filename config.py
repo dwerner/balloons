@@ -286,7 +286,6 @@ class Config:
     """Balloons configuration."""
     default_backend: str = "claude"
     backends: dict[str, BackendConfig] = field(default_factory=dict)
-    debug_log_file: Optional[str] = None  # Path to persist debug logs
     debug_perf_mode: bool = False  # If true, only log PERF level and above (timing/markers)
     editor: Optional[str] = None  # Editor command (falls back to $VISUAL, $EDITOR, vi)
     last_view_session_id: Optional[str] = None  # Last viewed session ID
@@ -433,7 +432,6 @@ class Config:
         return cls(
             default_backend=data.get("default_backend", "claude"),
             backends=backends,
-            debug_log_file=data.get("debug_log_file"),
             debug_perf_mode=data.get("debug_perf_mode", False),
             editor=data.get("editor"),
             last_view_session_id=last_view.get("session_id") if last_view else None,
