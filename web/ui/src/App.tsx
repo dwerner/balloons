@@ -770,11 +770,86 @@ function turnSnapshotToInfo(snapshot: TurnSnapshot, idx: number): TurnInfo {
   };
 }
 
-// Load turns via subscription API - subscribes, collects history chunks, returns when complete
-async function loadTurnsViaSubscription(
+// Helper to convert SessionDataTurn to TurnInfo
+// Used to bridge between useSessionData hook and components that use TurnInfo
+import type { SessionDataTurn, ContentBlock as SessionDataContentBlock } from './hooks/useSessionData';
+
+function sessionDataTurnToInfo(turn: SessionDataTurn): TurnInfo {
+  const block = turn.contentBlock;
+  const blockType = block?.type || 'text';
+
+  let content = '';
+  let toolUse: TurnInfo['toolUse'] = undefined;
+  let toolResult: TurnInfo['toolResult'] = undefined;
+
+  if (blockType === 'text' && block && 'text' in block) {
+    content = (block as { text?: string }).text || '';
+  } else if (blockType === 'tool_use' && block) {
+    const tb = block as { id?: string; name?: string; input?: unknown };
+    content = JSON.stringify(tb.input || {});
+    toolUse = {
+      toolUseId: tb.id || '',
+      name: tb.name || '',
+      inputJson: content,
+    };
+  } else if (blockType === 'tool_result' && block) {
+    const tr = block as { toolUseId?: string; content?: unknown; isError?: boolean };
+    content = String(tr.content || '');
+    toolResult = {
+      toolUseId: tr.toolUseId || '',
+      content,
+      isError: tr.isError || false,
+    };
+  } else if (blockType === 'archive' && block) {
+    const ab = block as { summary?: string; messageCount?: number };
+    content = ab.summary || `Archived ${ab.messageCount || 0} messages`;
+  } else if (blockType === 'fork' && block) {
+    const fb = block as { forkName?: string; prompt?: string };
+    content = fb.forkName ? `**${fb.forkName}**\n\n${fb.prompt || ''}` : fb.prompt || 'Forked session';
+  } else if (blockType === 'merge' && block) {
+    const mb = block as { forkName?: string; message?: string };
+    content = mb.message || `Merged from ${mb.forkName || 'fork'}`;
+  } else if (blockType === 'merged_to' && block) {
+    const mtb = block as { parentName?: string; message?: string };
+    content = mtb.message || `Merged to ${mtb.parentName || 'parent'}`;
+  } else if (blockType === 'link' && block) {
+    const lb = block as { summary?: string };
+    content = lb.summary || 'Linked session';
+  } else if (blockType === 'interruption' && block) {
+    const ib = block as { reason?: string };
+    content = ib.reason || 'User cancelled';
+  } else if (blockType === 'error' && block) {
+    const eb = block as { reason?: string; details?: string };
+    content = `**${eb.reason || 'Error'}**\n\n${eb.details || ''}`;
+  }
+
+  return {
+    idx: turn.order,
+    role: turn.role,
+    content,
+    streaming: turn.streaming,
+    viewed: turn.viewed,
+    tokens: turn.tokens,
+    contextMode: turn.contextMode,
+    contentBlockType: blockType,
+    exchangeId: turn.exchangeId,
+    toolUse,
+    toolResult,
+  };
+}
+
+/**
+ * Load session turns using layer-based subscriptions.
+ *
+ * Subscribes with specific layers (header, body, delta, history),
+ * collects history via historyChunk events, and keeps the subscription
+ * active for real-time updates.
+ */
+async function loadSessionWithLayers(
   client: BalloonsClient,
   sessionId: string,
-  clientId: string
+  clientId: string,
+  layers: string[] = ['header', 'body', 'delta', 'history']
 ): Promise<TurnInfo[]> {
   return new Promise((resolve, reject) => {
     const collectedTurns: Map<string, TurnSnapshot> = new Map();
@@ -818,8 +893,19 @@ async function loadTurnsViaSubscription(
       reject(new Error('Timeout waiting for history'));
     }, 30000);
 
-    // Subscribe to the session
-    client.sessionData.subscribeSession(sessionId, clientId)
+    // Subscribe using layer-based API
+    client.sessionData.subscribeAdd(sessionId, clientId, layers)
+      .then(result => {
+        if (!result.subscribed) {
+          cleanup();
+          reject(new Error(result.error || 'Subscription failed'));
+        }
+        // If no history layer, resolve immediately with empty
+        if (!layers.includes('history')) {
+          cleanup();
+          resolve([]);
+        }
+      })
       .catch(err => {
         cleanup();
         reject(err);
@@ -1205,18 +1291,16 @@ function AppContent() {
             setSelectedSessionId(sessionIdToLoad);
             setIsLoadingTurns(true);
 
-            // Load turns via subscription, other data in parallel
-            const clientId = `web-${Date.now()}`;
-            const [sessionTurns, queueInfo, task] = await Promise.all([
-              loadTurnsViaSubscription(client, sessionIdToLoad, clientId),
+            // Note: Turns will be loaded by StreamingTurnsView via useSessionData hook
+            // and reported via onTurnsChange callback. This prevents duplicate subscriptions.
+            const [queueInfo, task] = await Promise.all([
               client.queue.getQueue(sessionIdToLoad),
               client.tasks.getSessionTask(sessionIdToLoad),
             ]);
 
-            setTurns(sessionTurns);
             setQueuedMessageCount(queueInfo.messageCount);
             setStreamingTask(task);
-            setIsLoadingTurns(false);
+            // Note: setIsLoadingTurns(false) is handled by handleTurnsChange
           }
         } catch (err) {
           console.error('Failed to load sessions:', err);
@@ -1642,36 +1726,33 @@ function AppContent() {
         })
       );
 
-      // Helper to reload turns after task ends (completion, cancel, error)
-      // This ensures web UI matches TUI by discarding incremental streaming state
-      const reloadTurnsAfterTaskEnd = async (sessionId: string) => {
+      // Helper to clean up state after task ends (completion, cancel, error)
+      // Note: Turn updates are handled by useSessionData via events
+      const cleanupAfterTaskEnd = (_sessionId: string) => {
         setStreamingTask(null);
-        const clientId = `web-reload-${Date.now()}`;
-        const sessionTurns = await loadTurnsViaSubscription(client, sessionId, clientId);
-        setTurns(sessionTurns);
         setToolUses([]);
       };
 
       unsubscribers.push(
-        client.tasks.onTaskCompleted(async (data) => {
+        client.tasks.onTaskCompleted((data) => {
           if (data.sessionId && data.sessionId === selectedSessionId) {
-            await reloadTurnsAfterTaskEnd(data.sessionId);
+            cleanupAfterTaskEnd(data.sessionId);
           }
         })
       );
 
       unsubscribers.push(
-        client.tasks.onTaskCancelled(async (data) => {
+        client.tasks.onTaskCancelled((data) => {
           if (data.sessionId && data.sessionId === selectedSessionId) {
-            await reloadTurnsAfterTaskEnd(data.sessionId);
+            cleanupAfterTaskEnd(data.sessionId);
           }
         })
       );
 
       unsubscribers.push(
-        client.tasks.onTaskError(async (data) => {
+        client.tasks.onTaskError((data) => {
           if (data.sessionId && data.sessionId === selectedSessionId) {
-            await reloadTurnsAfterTaskEnd(data.sessionId);
+            cleanupAfterTaskEnd(data.sessionId);
           }
         })
       );
@@ -1691,11 +1772,8 @@ function AppContent() {
             // Fallback: clear all if no helperId (backwards compatibility)
             setArchivingByHelper(new Map());
           }
-          if (data.sessionId && data.sessionId === selectedSessionId) {
-            const clientId = `web-archive-${Date.now()}`;
-            const sessionTurns = await loadTurnsViaSubscription(client, data.sessionId, clientId);
-            setTurns(sessionTurns);
-          }
+          // Note: Turn updates after archive are handled by useSessionData via events
+          // The archive creates/updates turns which flow through the subscription
         })
       );
 
@@ -1865,13 +1943,16 @@ function AppContent() {
   }, [connectionState, selectedSessionId]);
 
   // Load turns for a session (used by SessionTreeView for lazy loading)
+  // Uses header-only subscription to avoid expensive delta streaming for tree view
   const handleLoadTurns = useCallback(async (sessionId: string): Promise<TurnInfo[]> => {
     const client = clientRef.current;
     if (!client || connectionState !== 'connected') return [];
 
     try {
-      const clientId = `web-lazy-${Date.now()}`;
-      const sessionTurns = await loadTurnsViaSubscription(client, sessionId, clientId);
+      // For tree view lazy loading, only request history (not delta streaming)
+      const sessionTurns = await loadSessionWithLayers(
+        client, sessionId, client.clientId, ['header', 'body', 'history']
+      );
       return sessionTurns;
     } catch (err) {
       console.error('Failed to load turns for session:', sessionId, err);
@@ -1883,6 +1964,11 @@ function AppContent() {
   // Note: We clear state BEFORE setting the new session ID to prevent race conditions
   // where streaming events for the old session could pollute the new session's state.
   // The loading state prevents rendering partial/stale data during the transition.
+  //
+  // IMPORTANT: We no longer load turns here - StreamingTurnsView's useSessionData hook
+  // is the sole owner of session subscription. It reports turns via onTurnsChange callback.
+  // This prevents duplicate subscription conflicts where both this function and useSessionData
+  // would try to subscribe to HISTORY layer.
   const handleSelectSession = useCallback(async (sessionId: string) => {
     debugLog('handleSelectSession called', { sessionId, connectionState, currentSelectedSessionId: selectedSessionId });
 
@@ -1902,6 +1988,7 @@ function AppContent() {
     loadingSessionRef.current = sessionId;
 
     // Clear state immediately to prevent stale data display
+    // Note: turns will be populated via onTurnsChange from StreamingTurnsView
     setIsLoadingTurns(true);
     setTurns([]);
     setToolUses([]);
@@ -1911,16 +1998,14 @@ function AppContent() {
     // Clear archiving state - it's session-specific and shouldn't persist across session switches
     setArchivingByHelper(new Map());
 
-    // Now set the new session ID - this triggers the event subscription useEffect
-    // to re-subscribe with the new session ID
+    // Now set the new session ID - this triggers StreamingTurnsView to subscribe
+    // and report turns via onTurnsChange callback
     debugLog('handleSelectSession: setting selectedSessionId', { sessionId });
     setSelectedSessionId(sessionId);
 
     try {
-      // Fetch all session data in parallel for faster loading
-      const clientId = `web-select-${Date.now()}`;
-      const [sessionTurns, queueInfo, task] = await Promise.all([
-        loadTurnsViaSubscription(client, sessionId, clientId),
+      // Fetch queue and task info (but NOT turns - those come from StreamingTurnsView)
+      const [queueInfo, task] = await Promise.all([
         client.queue.getQueue(sessionId),
         client.tasks.getSessionTask(sessionId),
       ]);
@@ -1931,18 +2016,31 @@ function AppContent() {
         return;
       }
 
-      // Apply the loaded data
-      debugLog('handleSelectSession: data loaded successfully', { turnCount: sessionTurns.length, queueCount: queueInfo.messageCount, hasTask: !!task });
-      setTurns(sessionTurns);
+      // Apply the loaded data (turns are set via onTurnsChange callback)
+      debugLog('handleSelectSession: data loaded successfully', { queueCount: queueInfo.messageCount, hasTask: !!task });
       setQueuedMessageCount(queueInfo.messageCount);
       setStreamingTask(task);
-      setIsLoadingTurns(false);
+      // Note: setIsLoadingTurns(false) is now done in handleTurnsChange when turns arrive
     } catch (err) {
-      console.error('Failed to load turns:', err);
-      setError(`Failed to load turns: ${err}`);
+      console.error('Failed to load session info:', err);
+      setError(`Failed to load session info: ${err}`);
       setIsLoadingTurns(false);
     }
   }, [connectionState, selectedSessionId]);
+
+  // Handle turns change from StreamingTurnsView
+  // This callback is called whenever useSessionData's turns change
+  const handleTurnsChange = useCallback((sessionDataTurns: SessionDataTurn[]) => {
+    // Convert SessionDataTurn[] to TurnInfo[]
+    const turnInfos = sessionDataTurns.map(sessionDataTurnToInfo);
+    debugLog('handleTurnsChange', { turnCount: turnInfos.length });
+    setTurns(turnInfos);
+
+    // Clear loading state when we have turns (or confirmed empty session)
+    if (isLoadingTurns && (turnInfos.length > 0 || loadingSessionRef.current !== null)) {
+      setIsLoadingTurns(false);
+    }
+  }, [isLoadingTurns]);
 
   // Scroll to a specific turn in the chat log
   // Uses data-turn-order attribute on turn wrappers in StreamingTurnsView
@@ -2267,13 +2365,7 @@ function AppContent() {
 
                 const deletedCount = await client.sessionData.deleteTurns(sessionId, turnIndices);
                 debugLog('Deleted turns', { sessionId, turnIndices, deletedCount });
-
-                // Refresh turns for this session
-                if (selectedSessionId === sessionId) {
-                  const clientId = `web-delete-${Date.now()}`;
-                  const newTurns = await loadTurnsViaSubscription(client, sessionId, clientId);
-                  setTurns(newTurns);
-                }
+                // Note: Turn deletion events are handled by useSessionData via subscription
               } else if (action === 'archive') {
                 // Start archive (with auto-completion after LLM generates summary)
                 const result = await client.sessions.startArchive(sessionId, turnIndices, true);
@@ -2297,9 +2389,20 @@ function AppContent() {
           }}
           onLinkSession={async (targetSessionId) => {
             const client = clientRef.current;
-            if (!client || connectionState !== 'connected') return;
-            if (!selectedSessionId) return;
+            if (!client || connectionState !== 'connected') {
+              console.error('Cannot link sessions: client not connected');
+              return;
+            }
+            if (!selectedSessionId) {
+              console.error('Cannot link sessions: no session selected');
+              return;
+            }
+            if (selectedSessionId === targetSessionId) {
+              console.error('Cannot link session to itself');
+              return;
+            }
 
+            debugLog('Linking sessions', { source: selectedSessionId, target: targetSessionId });
             try {
               const result = await client.sessions.linkSessions(
                 selectedSessionId,
@@ -2307,6 +2410,7 @@ function AppContent() {
               );
               if (result.success) {
                 debugLog('Sessions linked', { linkId: result.linkId, source: selectedSessionId, target: targetSessionId });
+                // Note: Link turn arrives via useSessionData subscription events
               } else {
                 console.error('Failed to link sessions:', result.error);
               }
@@ -2588,6 +2692,7 @@ function AppContent() {
                     onSelectSession={setSelectedSessionId}
                     onScrollStateChange={setScrollState}
                     onStreamingProgressChange={handleStreamingProgressChange}
+                    onTurnsChange={handleTurnsChange}
                     archivingTurnIndices={archivingTurnIndices}
                   />
                 ) : (

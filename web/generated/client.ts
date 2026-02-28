@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-27T07:42:12.745156
+// Generated: 2026-02-27T16:29:52.017557
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -2517,29 +2517,42 @@ export interface SessionDataService {
   setContextMode(sessionId: string, turnIdx: number, mode: string): Promise<null>;
 
   /**
-   * Subscribe to receive updates for a session.
+   * Add subscription layers for a session.
    * 
-   * Returns session metadata immediately, then streams historical turns
-   * via sessionDataHistoryChunk events. This ensures:
-   * 1. Subscription is registered FIRST (capturing concurrent streaming events)
-   * 2. Client gets metadata without waiting for full history load
-   * 3. History arrives progressively, enabling incremental rendering
+   * Layer-based subscriptions allow fine-grained control over which events
+   * a client receives. Layers are additive - call multiple times to add more.
    * 
-   * When subscribed, the client will receive:
-   * - historyChunk: Batches of historical turns during initial load
-   * - historyComplete: Signals all history has been sent
-   * - turnCreated: When a new turn starts (may interleave with history)
-   * - turnDelta: As content streams in
-   * - turnFinished: When a turn completes
+   * Layers:
+   * - "header": Turn lifecycle events (created, completed, deleted) + stream status
+   * - "body": Full turn content blocks on completion
+   * - "delta": Live streaming events (text deltas, tool input deltas)
+   * - "history": One-time historical turn loading (triggers historyChunk events)
    * 
    * Args:
    * session_id: The session to subscribe to
-   * client_id: Unique identifier for the subscribing client
+   * client_id: Unique identifier for the client
+   * layers: List of layer names to add (e.g., ["header", "body"])
    * 
    * Returns:
-   * SubscribeSessionResult with metadata-only snapshot (no turns)
+   * SubscriptionResult with success/failure info
    */
-  subscribeSession(sessionId: string, clientId?: string): Promise<Types.SubscribeSessionResult>;
+  subscribeAdd(sessionId: string, clientId: string, layers: string[]): Promise<Types.SubscriptionResult>;
+
+  /**
+   * Remove subscription layers for a session.
+   * 
+   * Removes specific layers from a subscription. If all layers are removed,
+   * the subscription is deleted entirely.
+   * 
+   * Args:
+   * session_id: The session to modify
+   * client_id: The client's identifier
+   * layers: List of layer names to remove
+   * 
+   * Returns:
+   * SubscriptionResult with success/failure info
+   */
+  subscribeRemove(sessionId: string, clientId: string, layers: string[]): Promise<Types.SubscriptionResult>;
 
   /**
    * Toggle pin state for a session.
@@ -2562,18 +2575,6 @@ export interface SessionDataService {
    * True if unpinned, False if wasn't pinned
    */
   unpinSession(sessionId: string): Promise<boolean>;
-
-  /**
-   * Unsubscribe from session updates.
-   * 
-   * Args:
-   * session_id: The session to unsubscribe from
-   * client_id: The client's unique identifier
-   * 
-   * Returns:
-   * SubscriptionResult indicating the unsubscription
-   */
-  unsubscribeSession(sessionId: string, clientId?: string): Promise<Types.SubscriptionResult>;
 
 }
 
@@ -2778,8 +2779,12 @@ export class SessionDataServiceClient implements SessionDataService {
     return this.call('setContextMode', { sessionId: sessionId, turnIdx: turnIdx, mode: mode });
   }
 
-  async subscribeSession(sessionId: string, clientId?: string): Promise<Types.SubscribeSessionResult> {
-    return this.call('subscribeSession', { sessionId: sessionId, clientId: clientId });
+  async subscribeAdd(sessionId: string, clientId: string, layers: string[]): Promise<Types.SubscriptionResult> {
+    return this.call('subscribeAdd', { sessionId: sessionId, clientId: clientId, layers: layers });
+  }
+
+  async subscribeRemove(sessionId: string, clientId: string, layers: string[]): Promise<Types.SubscriptionResult> {
+    return this.call('subscribeRemove', { sessionId: sessionId, clientId: clientId, layers: layers });
   }
 
   async togglePin(sessionId: string): Promise<boolean> {
@@ -2788,10 +2793,6 @@ export class SessionDataServiceClient implements SessionDataService {
 
   async unpinSession(sessionId: string): Promise<boolean> {
     return this.call('unpinSession', { sessionId: sessionId });
-  }
-
-  async unsubscribeSession(sessionId: string, clientId?: string): Promise<Types.SubscriptionResult> {
-    return this.call('unsubscribeSession', { sessionId: sessionId, clientId: clientId });
   }
 
   sessionDataHistoryChunk(callback: (data: Types.SessionHistoryChunkEvent) => void): Unsubscribe {

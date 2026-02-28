@@ -60,6 +60,9 @@ export class BalloonsClient {
   private _state: ConnectionState = 'disconnected';
   private stateListeners: Set<(state: ConnectionState) => void> = new Set();
 
+  // Server-assigned client ID (received on connection)
+  private _clientId: string | null = null;
+
   // Service clients (lazily initialized)
   private _queue: QueueStateServiceClient | null = null;
   private _sessions: SessionManagerServiceClient | null = null;
@@ -90,6 +93,23 @@ export class BalloonsClient {
   /** Check if connected */
   get isConnected(): boolean {
     return this._state === 'connected';
+  }
+
+  /**
+   * Get the server-assigned client ID.
+   * This ID should be used for all subscription-related calls.
+   * Only available after successful connection.
+   */
+  get clientId(): string {
+    if (!this._clientId) {
+      throw new Error('Not connected or clientId not yet received');
+    }
+    return this._clientId;
+  }
+
+  /** Check if clientId is available */
+  get hasClientId(): boolean {
+    return this._clientId !== null;
   }
 
   // --- Service Accessors ---
@@ -199,11 +219,38 @@ export class BalloonsClient {
 
       this.ws = new WebSocket(connectUrl);
 
+      // Track whether we've received the clientId (needed to resolve connection)
+      let clientIdReceived = false;
+      let wsOpened = false;
+
+      const maybeResolve = () => {
+        if (clientIdReceived && wsOpened) {
+          this.setState('connected');
+          resolve();
+        }
+      };
+
+      // Handle 'connected' event to receive server-assigned clientId
+      // Using addEventListener so it doesn't interfere with service clients
+      this.ws.addEventListener('message', (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.event === 'connected' && msg.data?.clientId) {
+            this._clientId = msg.data.clientId;
+            console.log('Server assigned clientId:', this._clientId);
+            clientIdReceived = true;
+            maybeResolve();
+          }
+        } catch {
+          // Ignore parse errors - let service clients handle their events
+        }
+      });
+
       this.ws.onopen = () => {
         this.reconnectAttempts = 0;
         this.initializeClients();
-        this.setState('connected');
-        resolve();
+        wsOpened = true;
+        maybeResolve();
       };
 
       this.ws.onerror = (event) => {
@@ -296,6 +343,7 @@ export class BalloonsClient {
     this._debugLog = null;
     this._files = null;
     this._supervisor = null;
+    this._clientId = null;
   }
 
   private scheduleReconnect(): void {

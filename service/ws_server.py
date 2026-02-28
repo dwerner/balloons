@@ -257,11 +257,19 @@ class WsServer:
             target_clients: Optional set of client_ids to send to. If None,
                 broadcasts to all clients.
         """
-        logger.debug(
-            f"Service event: {event_name}, "
-            f"targets: {len(target_clients) if target_clients else 'all'}, "
-            f"clients: {len(self._clients)}"
-        )
+        # Log history events at INFO level for debugging
+        if "History" in event_name:
+            logger.info(
+                f"Service event: {event_name}, "
+                f"targets: {target_clients if target_clients else 'all'}, "
+                f"clients: {len(self._clients)}"
+            )
+        else:
+            logger.debug(
+                f"Service event: {event_name}, "
+                f"targets: {len(target_clients) if target_clients else 'all'}, "
+                f"clients: {len(self._clients)}"
+            )
         # Convert data keys to camelCase for consistency with RPC responses
         camel_data = self._convert_keys_to_camel(data)
         message = {"event": event_name, "data": camel_data}
@@ -306,6 +314,7 @@ class WsServer:
 
         # Send to target clients (or all if no target specified)
         tasks = []
+        matched_clients = []
         for websocket in list(self._clients):
             client_info = self._client_info.get(websocket)
             if client_info is None:
@@ -313,9 +322,16 @@ class WsServer:
 
             # If target_clients is specified, only send to those clients
             if target_clients is not None and client_info.client_id not in target_clients:
+                logger.debug(f"_broadcast: skipping client {client_info.client_id}, not in targets {target_clients}")
                 continue
 
+            matched_clients.append(client_info.client_id)
             tasks.append(self._send_to_client(websocket, message_str))
+
+        if target_clients and not tasks:
+            logger.warning(f"_broadcast: NO clients matched for targets={target_clients}, connected clients: {[self._client_info[ws].client_id for ws in self._clients if ws in self._client_info]}")
+        elif target_clients:
+            logger.debug(f"_broadcast: matched {len(tasks)} clients: {matched_clients}")
 
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -546,6 +562,17 @@ class WsServer:
             )
         else:
             logger.info(f"Client connected: {client.client_id} from {client_addr}")
+
+        # Send connected event with assigned clientId
+        # This allows the client to use this ID for targeted subscriptions
+        connected_event = {
+            "event": "connected",
+            "data": {
+                "clientId": client.client_id,
+                "subject": subject,  # session ID from JWT, if any
+            }
+        }
+        await websocket.send(json.dumps(connected_event))
 
         try:
             async for message in websocket:

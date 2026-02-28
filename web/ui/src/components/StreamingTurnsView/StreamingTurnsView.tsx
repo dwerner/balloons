@@ -62,6 +62,8 @@ interface StreamingTurnsViewProps {
   onScrollStateChange?: (state: { isFollowing: boolean; isAtBottom: boolean }) => void;
   /** Callback when streaming progress updates (for status bar token counts) */
   onStreamingProgressChange?: (progress: StreamingProgress | null) => void;
+  /** Callback when turns change (for sharing with sidebar/tree view) */
+  onTurnsChange?: (turns: SessionDataTurn[]) => void;
   /** Turn indices currently being archived (show spinner overlay) */
   archivingTurnIndices?: Set<number>;
 }
@@ -69,8 +71,16 @@ interface StreamingTurnsViewProps {
 // Threshold in pixels to consider "at bottom"
 const AT_BOTTOM_THRESHOLD = 150;
 
-export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrollStateChange, onStreamingProgressChange, archivingTurnIndices }: StreamingTurnsViewProps) {
+export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrollStateChange, onStreamingProgressChange, onTurnsChange, archivingTurnIndices }: StreamingTurnsViewProps) {
+  // useSessionData now gets the clientId directly from client.clientId when connected
   const { turns, isLoading, isStreaming, streamError, error, streamingProgress } = useSessionData(client, sessionId);
+
+  // Report turns changes to parent
+  useEffect(() => {
+    if (onTurnsChange) {
+      onTurnsChange(turns);
+    }
+  }, [turns, onTurnsChange]);
 
   // Ref for the scrollable container
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -130,7 +140,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
 
   // Filter out tool_result turns - they're rendered inline with their matching tool_use
   const filteredTurns = useMemo(() => {
-    return turns.filter((turn) => {
+    const filtered = turns.filter((turn) => {
       const blockType = turn.contentBlock?.type || 'text';
       if (blockType !== 'tool_result' && turn.role !== 'tool') {
         return true;
@@ -146,6 +156,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         return tBlockType === 'tool_use' && tToolUseBlock?.id === toolUseId;
       });
     });
+    return filtered;
   }, [turns]);
 
   // Group consecutive turns with the same parallelGroupId

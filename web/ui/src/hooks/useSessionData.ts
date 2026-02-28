@@ -239,11 +239,19 @@ function appendTextDelta(block: ContentBlock, delta: string): ContentBlock {
  *
  * @param client - BalloonsClient instance
  * @param autoSubscribe - Session ID to automatically subscribe to (optional)
+ * @param clientId - Stable client identifier for subscriptions (optional, generates one if not provided)
  */
 export function useSessionData(
   client: BalloonsClient | null,
   autoSubscribe?: string | null
 ): UseSessionDataReturn {
+  // Get the server-assigned clientId directly from the client when needed
+  // This is set when the websocket connects and receives the 'connected' event
+  const getClientId = (): string | null => {
+    if (!client) return null;
+    return client.hasClientId ? client.clientId : null;
+  };
+
   // State
   const [turnsById, setTurnsById] = useState<Map<string, SessionDataTurn>>(new Map());
   const [isLoading, setIsLoading] = useState(false);
@@ -353,11 +361,15 @@ export function useSessionData(
     unsubscribersRef.current.forEach((unsub) => unsub());
     unsubscribersRef.current = [];
 
-    // Unsubscribe from session on server (only if client is still connected)
-    if (client && client.isConnected && currentSessionRef.current) {
+    // Unsubscribe from session on server using layer-based API
+    const clientId = getClientId();
+    if (client && client.isConnected && currentSessionRef.current && clientId) {
       try {
-        await client.sessionData.unsubscribeSession(
-          currentSessionRef.current
+        // Remove all layers to fully unsubscribe
+        await client.sessionData.subscribeRemove(
+          currentSessionRef.current,
+          clientId,
+          ['header', 'body', 'delta', 'history']
         );
       } catch (err) {
         // Ignore unsubscribe errors during disconnect
@@ -372,16 +384,24 @@ export function useSessionData(
   // Subscribe to a session
   const subscribe = useCallback(
     async (newSessionId: string) => {
+      const clientId = getClientId();
       debugLog('[useSessionData] subscribe called', {
         newSessionId,
         hasClient: !!client,
         currentSession: currentSessionRef.current,
         isSubscribed,
+        clientId,
       });
 
       if (!client) {
         debugLog('[useSessionData] subscribe: no client');
         setError('Client not connected');
+        return;
+      }
+
+      if (!clientId) {
+        debugLog('[useSessionData] subscribe: no clientId (not connected yet)');
+        setError('Client not ready - no clientId');
         return;
       }
 
@@ -827,8 +847,13 @@ export function useSessionData(
         // Save handlers immediately so events can be processed
         unsubscribersRef.current = handlers;
 
-        // NOW subscribe - handlers are ready to receive events
-        const result = await client.sessionData.subscribeSession(newSessionId);
+        // NOW subscribe using layer-based API - full subscription for active viewing
+        // clientId is already validated at the start of subscribe()
+        const result = await client.sessionData.subscribeAdd(
+          newSessionId,
+          clientId!,
+          ['header', 'body', 'delta', 'history']
+        );
 
         if (!result.subscribed) {
           // Cleanup handlers on failure
@@ -837,50 +862,21 @@ export function useSessionData(
           throw new Error(result.error || 'Subscription failed');
         }
 
-        // Process snapshot (metadata only - history arrives via chunks)
+        // Layer-based subscription doesn't return a snapshot - history arrives via events
         debugLog('[useSessionData] subscription result', {
-          hasSnapshot: !!result.snapshot,
-          turnCount: result.snapshot?.turns?.length ?? 0,
-          isStreaming: result.snapshot?.isStreaming,
+          subscribed: result.subscribed,
+          sessionId: result.sessionId,
         });
 
-        const initialTurns = new Map<string, SessionDataTurn>();
-        if (result.snapshot?.turns) {
-          result.snapshot.turns.forEach((turn: TurnSnapshot, arrayIndex: number) => {
-            const turnId = turn.turnId || `snapshot-${newSessionId}-${arrayIndex}`;
-            initialTurns.set(turnId, {
-              turnId,
-              order: arrayIndex,
-              role: turn.role,
-              contentBlock: turn.contentBlock,
-              streaming: turn.streaming || false,
-              viewed: turn.viewed || false,
-              tokens: turn.tokens || 0,
-              contextMode: turn.contextMode || 'copy',
-              exchangeId: turn.exchangeId ?? undefined,
-              timestamp: (turn as unknown as { timestamp?: string }).timestamp ?? undefined,
-            });
-          });
-        }
-
-        debugLog('[useSessionData] setting state: isSubscribed=true, isLoading=false', {
-          initialTurnsCount: initialTurns.size,
-        });
-        setTurnsById(initialTurns);
+        // NOTE: Don't clear turns here! History chunks arrive DURING the await subscribeAdd()
+        // call and are already processed by the handlers we set up above.
+        // Clearing turns here would erase all the history we just received.
         setIsSubscribed(true);
         setIsLoading(false);
 
-        // History loading state: if snapshot has no turns, history will arrive via chunks
-        const hasTurnsInSnapshot = (result.snapshot?.turns?.length ?? 0) > 0;
-        setIsLoadingHistory(!hasTurnsInSnapshot);
-        setHistoryWatermark(-1);
-
-        // Initialize streaming state from snapshot
-        if (result.snapshot?.isStreaming !== undefined) {
-          setIsStreaming(result.snapshot.isStreaming);
-        } else {
-          setIsStreaming(false);
-        }
+        // History loading state is set by historyChunk handler, completed by historyComplete
+        // Streaming state will be set when streamStarted/streamDone events arrive
+        setIsStreaming(false);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         setError(`Subscription failed: ${message}`);
@@ -892,13 +888,16 @@ export function useSessionData(
     [client, isSubscribed, unsubscribe]
   );
 
-  // Auto-subscribe when autoSubscribe changes
+  // Auto-subscribe when autoSubscribe changes and client is ready
+  // We get the clientId directly from the client when connected
   useEffect(() => {
+    const clientId = getClientId();
     debugLog('[useSessionData] useEffect triggered', {
       hasClient: !!client,
       autoSubscribe,
       isSubscribed,
       currentSession: currentSessionRef.current,
+      clientId,
     });
 
     if (!client || !autoSubscribe) {
@@ -909,14 +908,21 @@ export function useSessionData(
       return;
     }
 
-    debugLog('[useSessionData] calling subscribe', { autoSubscribe });
+    // Wait for client to have a clientId (connection established)
+    if (!clientId) {
+      debugLog('[useSessionData] waiting for clientId (client not fully connected)');
+      return;
+    }
+
+    debugLog('[useSessionData] calling subscribe', { autoSubscribe, clientId });
     subscribe(autoSubscribe);
 
     return () => {
       unsubscribe();
     };
+    // We depend on client.isConnected changing when the client connects
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, autoSubscribe]);
+  }, [client, autoSubscribe, client?.isConnected]);
 
   // Re-subscribe when client reconnects
   // This handles the case where the WebSocket disconnects (e.g., phone sleeps)
@@ -929,9 +935,10 @@ export function useSessionData(
 
     const unsubStateChange = client.onStateChange((state) => {
       const isNowConnected = state === 'connected';
+      const clientId = getClientId();
 
       // Detect reconnection: was disconnected, now connected
-      if (!wasConnected && isNowConnected) {
+      if (!wasConnected && isNowConnected && clientId) {
         debugLog('[useSessionData] Client reconnected, re-subscribing to session:', autoSubscribe);
 
         // Clear stale subscription state since handlers are likely invalid

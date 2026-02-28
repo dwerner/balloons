@@ -28,6 +28,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Callable, TYPE_CHECKING, Any, Awaitable, Union
 
 from codegen import ws_service, ws_expose, ws_event, ws_type
+from service.subscription_manager import SubscriptionManager, Layer
 from service.session_events import (
     SessionEventObserver,
     TurnCreatedEvent,
@@ -502,10 +503,8 @@ class SessionDataService:
         # Event handlers receive: (event_name, data, target_clients)
         # target_clients is a set of client_ids that should receive the event
         self._event_handlers: list[Callable[[str, dict, set[str] | None], None]] = []
-        # Track subscriptions: client_id -> set of session_ids
-        self._subscriptions: dict[str, set[str]] = {}
-        # Track reverse mapping: session_id -> set of client_ids
-        self._session_subscribers: dict[str, set[str]] = {}
+        # Layer-based subscription manager
+        self._subscription_manager = SubscriptionManager()
         # Session loader callback for loading sessions from storage
         self._session_loader: SessionLoaderCallback | None = session_loader
         # AsyncStorage for direct LMDB access (chunked history loading)
@@ -579,117 +578,36 @@ class SessionDataService:
         for handler in self._event_handlers:
             handler(event_name, data, target_clients)
 
-    # --- Subscription Management ---
+    # --- Subscription Management (Layer-Based) ---
 
     @ws_expose
-    async def subscribe_session(
-        self, session_id: str, client_id: str = ""
-    ) -> SubscribeSessionResult:
-        """Subscribe to receive updates for a session.
+    async def subscribe_add(
+        self,
+        session_id: str,
+        client_id: str,
+        layers: list[str],
+    ) -> SubscriptionResult:
+        """Add subscription layers for a session.
 
-        Returns session metadata immediately, then streams historical turns
-        via sessionDataHistoryChunk events. This ensures:
-        1. Subscription is registered FIRST (capturing concurrent streaming events)
-        2. Client gets metadata without waiting for full history load
-        3. History arrives progressively, enabling incremental rendering
+        Layer-based subscriptions allow fine-grained control over which events
+        a client receives. Layers are additive - call multiple times to add more.
 
-        When subscribed, the client will receive:
-        - historyChunk: Batches of historical turns during initial load
-        - historyComplete: Signals all history has been sent
-        - turnCreated: When a new turn starts (may interleave with history)
-        - turnDelta: As content streams in
-        - turnFinished: When a turn completes
+        Layers:
+        - "header": Turn lifecycle events (created, completed, deleted) + stream status
+        - "body": Full turn content blocks on completion
+        - "delta": Live streaming events (text deltas, tool input deltas)
+        - "history": One-time historical turn loading (triggers historyChunk events)
 
         Args:
             session_id: The session to subscribe to
-            client_id: Unique identifier for the subscribing client
+            client_id: Unique identifier for the client
+            layers: List of layer names to add (e.g., ["header", "body"])
 
         Returns:
-            SubscribeSessionResult with metadata-only snapshot (no turns)
+            SubscriptionResult with success/failure info
         """
         from core.debug_log import debug_log
 
-        if not client_id:
-            return SubscribeSessionResult(
-                session_id=session_id,
-                subscribed=False,
-                error="client_id is required",
-            )
-
-        # PHASE 3 CHANGE: Register subscription FIRST to capture concurrent events
-        # Add to client's subscriptions
-        if client_id not in self._subscriptions:
-            self._subscriptions[client_id] = set()
-        self._subscriptions[client_id].add(session_id)
-
-        # Add to session's subscribers
-        if session_id not in self._session_subscribers:
-            self._session_subscribers[session_id] = set()
-        self._session_subscribers[session_id].add(client_id)
-
-        debug_log.info(
-            f"subscribe_session: session={session_id[:8]}, client={client_id}, "
-            f"total_subscribers={len(self._session_subscribers.get(session_id, set()))}",
-            category="websocket",
-        )
-
-        # Get metadata-only snapshot (no turns) - fast operation
-        snapshot = await self._get_session_metadata_snapshot(session_id)
-
-        debug_log.info(
-            f"subscribe_session: snapshot_exists={snapshot is not None}, storage_exists={self._storage is not None}",
-            category="fork",
-            details={"session_id": session_id[:8]},
-        )
-
-        # PHASE 3 CHANGE: Spawn background task to stream history from LMDB
-        # Only if session exists and we have storage configured
-        if snapshot is not None and self._storage is not None:
-            # Cancel any existing history task for this session (e.g., from reconnect)
-            if session_id in self._history_tasks:
-                self._history_tasks[session_id].cancel()
-
-            # Start streaming history in background with a small delay
-            # This ensures the client has time to set up event handlers before
-            # history chunks arrive. Without this delay, events can be lost if
-            # they're emitted before the client's handlers are registered.
-            async def delayed_stream_history():
-                await asyncio.sleep(0.05)  # 50ms delay for handler setup
-                await self._stream_history_from_storage(session_id)
-
-            task = asyncio.create_task(
-                delayed_stream_history(),
-                name=f"history-{session_id[:8]}",
-            )
-            self._history_tasks[session_id] = task
-
-            # Clean up task reference when done
-            def cleanup_task(t: asyncio.Task) -> None:
-                if session_id in self._history_tasks and self._history_tasks[session_id] is t:
-                    del self._history_tasks[session_id]
-            task.add_done_callback(cleanup_task)
-
-        # Subscription succeeds even if session not found (client may be waiting for it)
-        # snapshot will be None in that case
-        return SubscribeSessionResult(
-            session_id=session_id,
-            subscribed=True,
-            snapshot=snapshot,  # Metadata only (no turns), or None if session not found
-        )
-
-    @ws_expose
-    async def unsubscribe_session(
-        self, session_id: str, client_id: str = ""
-    ) -> SubscriptionResult:
-        """Unsubscribe from session updates.
-
-        Args:
-            session_id: The session to unsubscribe from
-            client_id: The client's unique identifier
-
-        Returns:
-            SubscriptionResult indicating the unsubscription
-        """
         if not client_id:
             return SubscriptionResult(
                 session_id=session_id,
@@ -697,22 +615,226 @@ class SessionDataService:
                 error="client_id is required",
             )
 
-        # Remove from client's subscriptions
-        if client_id in self._subscriptions:
-            self._subscriptions[client_id].discard(session_id)
-            if not self._subscriptions[client_id]:
-                del self._subscriptions[client_id]
+        if not layers:
+            return SubscriptionResult(
+                session_id=session_id,
+                subscribed=False,
+                error="at least one layer is required",
+            )
 
-        # Remove from session's subscribers
-        if session_id in self._session_subscribers:
-            self._session_subscribers[session_id].discard(client_id)
-            if not self._session_subscribers[session_id]:
-                del self._session_subscribers[session_id]
+        # Convert string layer names to Layer enum
+        try:
+            layer_set = {Layer(layer_name) for layer_name in layers}
+        except ValueError as e:
+            return SubscriptionResult(
+                session_id=session_id,
+                subscribed=False,
+                error=f"invalid layer: {e}",
+            )
+
+        # Add layers to subscription
+        added = self._subscription_manager.add_layers(session_id, client_id, layer_set)
+
+        debug_log.info(
+            f"subscribe_add: session={session_id[:8]}, client={client_id}, "
+            f"layers={[l.value for l in layer_set]}, added={added}",
+            category="websocket",
+        )
+
+        # If HISTORY layer was added, trigger history loading
+        if Layer.HISTORY in layer_set and added:
+            debug_log.info(
+                f"subscribe_add: triggering history load for session={session_id[:8]}, client={client_id}",
+                category="websocket",
+            )
+            # Load session and emit history chunks
+            await self._load_and_emit_history(session_id, client_id)
+        elif Layer.HISTORY in layer_set and not added:
+            debug_log.info(
+                f"subscribe_add: HISTORY layer already existed, skipping history load for session={session_id[:8]}",
+                category="websocket",
+            )
 
         return SubscriptionResult(
             session_id=session_id,
-            subscribed=False,
+            subscribed=True,
         )
+
+    @ws_expose
+    async def subscribe_remove(
+        self,
+        session_id: str,
+        client_id: str,
+        layers: list[str],
+    ) -> SubscriptionResult:
+        """Remove subscription layers for a session.
+
+        Removes specific layers from a subscription. If all layers are removed,
+        the subscription is deleted entirely.
+
+        Args:
+            session_id: The session to modify
+            client_id: The client's identifier
+            layers: List of layer names to remove
+
+        Returns:
+            SubscriptionResult with success/failure info
+        """
+        from core.debug_log import debug_log
+
+        if not client_id:
+            return SubscriptionResult(
+                session_id=session_id,
+                subscribed=False,
+                error="client_id is required",
+            )
+
+        # Convert string layer names to Layer enum
+        try:
+            layer_set = {Layer(layer_name) for layer_name in layers}
+        except ValueError as e:
+            return SubscriptionResult(
+                session_id=session_id,
+                subscribed=False,
+                error=f"invalid layer: {e}",
+            )
+
+        # Remove layers
+        removed = self._subscription_manager.remove_layers(session_id, client_id, layer_set)
+
+        # Check if any layers remain
+        remaining = self._subscription_manager.get_client_layers(session_id, client_id)
+
+        debug_log.info(
+            f"subscribe_remove: session={session_id[:8]}, client={client_id}, "
+            f"layers={[l.value for l in layer_set]}, removed={removed}, "
+            f"remaining={[l.value for l in remaining]}",
+            category="websocket",
+        )
+
+        return SubscriptionResult(
+            session_id=session_id,
+            subscribed=bool(remaining),
+        )
+
+    async def _load_and_emit_history(self, session_id: str, client_id: str) -> None:
+        """Load session history and emit chunks to a specific client.
+
+        Called when HISTORY layer is added to a subscription.
+        Emits historyChunk events followed by historyComplete.
+
+        Args:
+            session_id: The session to load history for
+            client_id: The client to send history to
+        """
+        from core.debug_log import debug_log
+
+        debug_log.info(
+            f"_load_and_emit_history: STARTING for session={session_id[:8]}, client={client_id}",
+            category="websocket",
+        )
+
+        if not self._session_loader:
+            debug_log.warning(
+                f"_load_and_emit_history: no session_loader configured",
+                category="websocket",
+            )
+            return
+
+        # Load session
+        session = await self._session_loader(session_id)
+        if not session:
+            debug_log.warning(
+                f"_load_and_emit_history: session {session_id[:8]} not found",
+                category="websocket",
+            )
+            return
+
+        # Convert turns to snapshots and chunk them
+        turns = session.turns
+        total_turns = len(turns)
+        chunk_size = self.HISTORY_CHUNK_SIZE
+        total_chunks = (total_turns + chunk_size - 1) // chunk_size if total_turns > 0 else 1
+
+        for chunk_idx in range(total_chunks):
+            start = chunk_idx * chunk_size
+            end = min(start + chunk_size, total_turns)
+            chunk_turns = turns[start:end]
+
+            # Convert to TurnSnapshot format
+            turn_snapshots = []
+            for idx, turn in enumerate(chunk_turns, start=start):
+                # Get context_mode as string (handle both enum and string values)
+                raw_mode = getattr(turn, 'context_mode', 'copy')
+                if hasattr(raw_mode, 'value'):
+                    # It's an enum - get string value
+                    context_mode_str = raw_mode.value
+                else:
+                    # It's already a string
+                    context_mode_str = str(raw_mode).lower()
+
+                snapshot = TurnSnapshot(
+                    turn_id=turn.id,
+                    order=idx,
+                    role=turn.role,
+                    streaming=False,
+                    viewed=getattr(turn, 'viewed', False),
+                    tokens=getattr(turn, 'tokens', 0),
+                    context_mode=context_mode_str,
+                    content_block=turn.content_block if hasattr(turn, 'content_block') else None,
+                    exchange_id=getattr(turn, 'exchange_id', None),
+                    timestamp=getattr(turn, 'timestamp', None),
+                )
+                turn_snapshots.append(snapshot)
+
+            # Emit chunk event to this specific client
+            import uuid
+            chunk_id = str(uuid.uuid4())
+            debug_log.info(
+                f"_load_and_emit_history: emitting chunk {chunk_idx}/{total_chunks} with {len(turn_snapshots)} turns to client={client_id}",
+                category="websocket",
+            )
+            event_data = SessionHistoryChunkEvent(
+                session_id=session_id,
+                chunk_id=chunk_id,
+                turns=turn_snapshots,
+                chunk_index=chunk_idx,
+                total_chunks=total_chunks,
+                watermark=end - 1 if chunk_turns else 0,
+            )
+            self._emit_event(
+                "sessionDataHistoryChunk",
+                asdict(event_data),
+                target_clients={client_id},
+            )
+
+        # Emit history complete
+        complete_event = SessionHistoryCompleteEvent(
+            session_id=session_id,
+            total_turns=total_turns,
+            final_watermark=total_turns - 1 if total_turns > 0 else 0,
+        )
+        self._emit_event(
+            "sessionDataHistoryComplete",
+            asdict(complete_event),
+            target_clients={client_id},
+        )
+
+        debug_log.info(
+            f"_load_and_emit_history: session={session_id[:8]}, client={client_id}, "
+            f"turns={total_turns}, chunks={total_chunks}",
+            category="websocket",
+        )
+
+    def _get_turn_content_text(self, turn) -> str:
+        """Extract text content from a turn for history loading."""
+        if hasattr(turn, 'content_block') and turn.content_block:
+            block = turn.content_block
+            if hasattr(block, 'text'):
+                return block.text
+            elif hasattr(block, 'content'):
+                return str(block.content)
+        return ""
 
     @ws_expose
     async def get_session_snapshot(self, session_id: str) -> SessionSnapshot | None:
@@ -1125,7 +1247,7 @@ class SessionDataService:
         Returns:
             List of session IDs the client is subscribed to
         """
-        return list(self._subscriptions.get(client_id, set()))
+        return list(self._subscription_manager.get_client_sessions(client_id).keys())
 
     @ws_expose
     async def get_session_subscriber_count(self, session_id: str) -> int:
@@ -1137,10 +1259,10 @@ class SessionDataService:
         Returns:
             Number of subscribed clients
         """
-        return len(self._session_subscribers.get(session_id, set()))
+        return self._subscription_manager.get_subscriber_count(session_id)
 
     def get_session_subscribers(self, session_id: str) -> set[str]:
-        """Get the set of client_ids subscribed to a session.
+        """Get the set of client_ids subscribed to a session (any layer).
 
         This is an internal method for testing and debugging.
 
@@ -1150,7 +1272,11 @@ class SessionDataService:
         Returns:
             Set of client_ids subscribed to the session
         """
-        return self._session_subscribers.get(session_id, set()).copy()
+        # Return all clients subscribed to any layer of this session
+        result: set[str] = set()
+        for layer in Layer:
+            result |= self._subscription_manager.get_clients_for_layer(session_id, layer)
+        return result
 
     # --- Session Listing (Phase 8: replaces TreeStateService) ---
 
@@ -1595,22 +1721,21 @@ class SessionDataService:
         """Handle client disconnection by cleaning up subscriptions.
 
         Called by the WebSocket server when a client disconnects.
+        Cleans up both legacy and layer-based subscriptions.
 
         Args:
             client_id: The disconnected client's identifier
         """
-        if client_id not in self._subscriptions:
-            return
+        from core.debug_log import debug_log
 
-        # Remove client from all session subscriber lists
-        for session_id in self._subscriptions[client_id]:
-            if session_id in self._session_subscribers:
-                self._session_subscribers[session_id].discard(client_id)
-                if not self._session_subscribers[session_id]:
-                    del self._session_subscribers[session_id]
+        # Clean up all subscriptions for this client
+        session_count = self._subscription_manager.unsubscribe_client(client_id)
 
-        # Remove client's subscription record
-        del self._subscriptions[client_id]
+        if session_count > 0:
+            debug_log.info(
+                f"client_disconnected: client={client_id}, sessions={session_count}",
+                category="websocket",
+            )
 
     # --- Event Emission (called by session infrastructure) ---
 
@@ -1627,6 +1752,7 @@ class SessionDataService:
         """Emit a turn created event to subscribed clients.
 
         Called when a new turn begins in a session.
+        Routes to clients with HEADER layer subscription.
 
         Args:
             session_id: The session where the turn was created
@@ -1638,11 +1764,13 @@ class SessionDataService:
             parallel_group_id: Group ID for parallel tool calls
         """
         from core.debug_log import debug_log
-        subscribers = self._session_subscribers.get(session_id)
+
+        subscribers = self._subscription_manager.get_clients_for_layer(session_id, Layer.HEADER)
+
         debug_log.debug(
             f"emit_turn_created: session={session_id[:8]}, turn={turn_id[:8] if turn_id else 'none'}, "
             f"role={role}, order={order}, parallel_group={parallel_group_id[:8] if parallel_group_id else 'none'}, "
-            f"subscribers={len(subscribers) if subscribers else 0}",
+            f"subscribers={len(subscribers)}",
             category="websocket",
         )
         if not subscribers:
@@ -1669,6 +1797,7 @@ class SessionDataService:
         """Emit a turn delta event to subscribed clients.
 
         Called when new content is streamed to a turn.
+        Routes to clients with DELTA layer subscription.
 
         Args:
             session_id: The session containing the turn
@@ -1677,10 +1806,12 @@ class SessionDataService:
             accumulated_length: Total content length so far
         """
         from core.debug_log import debug_log
-        subscribers = self._session_subscribers.get(session_id)
+
+        subscribers = self._subscription_manager.get_clients_for_layer(session_id, Layer.DELTA)
+
         debug_log.debug(
             f"emit_turn_delta: session={session_id[:8]}, turn={turn_id[:8] if turn_id else 'none'}, "
-            f"delta_len={len(delta)}, subscribers={len(subscribers) if subscribers else 0}",
+            f"delta_len={len(delta)}, subscribers={len(subscribers)}",
             category="websocket",
         )
         if not subscribers:
@@ -1709,6 +1840,11 @@ class SessionDataService:
         """Emit a turn finished event to subscribed clients.
 
         Called when a turn completes streaming.
+        Routes to clients with HEADER layer (metadata) and BODY layer (full content).
+
+        For backward compatibility, emits the full event to all subscribers.
+        In the future, we may split into separate turnCompleted (HEADER) and
+        turnBody (BODY) events.
 
         Args:
             session_id: The session containing the turn
@@ -1721,7 +1857,13 @@ class SessionDataService:
             context_tokens: Cumulative context/input tokens sent to LLM
             output_tokens_total: Cumulative output tokens generated so far in this exchange
         """
-        subscribers = self._session_subscribers.get(session_id)
+        from core.debug_log import debug_log
+
+        # turnFinished goes to both HEADER (for completion notification) and BODY (for content)
+        header_subscribers = self._subscription_manager.get_clients_for_layer(session_id, Layer.HEADER)
+        body_subscribers = self._subscription_manager.get_clients_for_layer(session_id, Layer.BODY)
+        subscribers = header_subscribers | body_subscribers
+
         if not subscribers:
             return
 
@@ -1741,11 +1883,11 @@ class SessionDataService:
         if content_block is not None and hasattr(content_block, '__dict__'):
             event_dict['content_block'] = asdict(content_block)
 
-        from core.debug_log import debug_log
         block_info = f"block_type={content_block.type}" if content_block else f"final_content_len={len(final_content)}"
         debug_log.debug(
             f"emit_turn_finished: turn_id={turn_id}, {block_info}, "
-            f"tokens={tokens}, subscribers={len(subscribers)}",
+            f"tokens={tokens}, subscribers={len(subscribers)} "
+            f"(header={len(header_subscribers)}, body={len(body_subscribers)})",
             category="websocket",
         )
         self._emit_event("sessionDataTurnFinished", event_dict, subscribers)
@@ -1771,11 +1913,12 @@ class SessionDataService:
             total_chunks: Total number of chunks expected
             watermark: Highest turn order in this chunk
         """
-        subscribers = self._session_subscribers.get(session_id)
+        from core.debug_log import debug_log
+
+        subscribers = self._subscription_manager.get_clients_for_layer(session_id, Layer.HISTORY)
         if not subscribers:
             return
 
-        from core.debug_log import debug_log
         debug_log.debug(
             f"emit_history_chunk: session={session_id[:8]}, chunk={chunk_index}/{total_chunks}, "
             f"turns={len(turns)}, watermark={watermark}, subscribers={len(subscribers)}",
@@ -1815,11 +1958,12 @@ class SessionDataService:
             total_turns: Total number of historical turns sent
             final_watermark: Highest turn order across all chunks
         """
-        subscribers = self._session_subscribers.get(session_id)
+        from core.debug_log import debug_log
+
+        subscribers = self._subscription_manager.get_clients_for_layer(session_id, Layer.HISTORY)
         if not subscribers:
             return
 
-        from core.debug_log import debug_log
         debug_log.info(
             f"emit_history_complete: session={session_id[:8]}, total_turns={total_turns}, "
             f"watermark={final_watermark}, subscribers={len(subscribers)}",
@@ -2063,10 +2207,10 @@ class SessionDataService:
     async def on_stream_started(self, event: StreamStartedEvent) -> None:
         """Handle stream started event from SessionManagerService.
 
-        Emits streamStarted WebSocket event to subscribed clients.
+        Emits streamStarted WebSocket event to HEADER layer subscribers.
         """
         session_id = event.session_id
-        subscribers = self._session_subscribers.get(session_id, set())
+        subscribers = self._subscription_manager.get_clients_for_layer(session_id, Layer.HEADER)
         if not subscribers:
             return
 
@@ -2079,10 +2223,10 @@ class SessionDataService:
     async def on_stream_done(self, event: StreamDoneEvent) -> None:
         """Handle stream done event from SessionManagerService.
 
-        Emits streamDone WebSocket event to subscribed clients.
+        Emits streamDone WebSocket event to HEADER layer subscribers.
         """
         session_id = event.session_id
-        subscribers = self._session_subscribers.get(session_id, set())
+        subscribers = self._subscription_manager.get_clients_for_layer(session_id, Layer.HEADER)
         if not subscribers:
             return
 
@@ -2097,11 +2241,11 @@ class SessionDataService:
     async def on_stream_progress(self, event: StreamProgressEvent) -> None:
         """Handle stream progress event from SessionManagerService.
 
-        Emits streamProgress WebSocket event to subscribed clients.
+        Emits streamProgress WebSocket event to DELTA layer subscribers.
         This event is throttled (not sent on every delta).
         """
         session_id = event.session_id
-        subscribers = self._session_subscribers.get(session_id, set())
+        subscribers = self._subscription_manager.get_clients_for_layer(session_id, Layer.DELTA)
         if not subscribers:
             return
 
@@ -2121,10 +2265,10 @@ class SessionDataService:
     async def on_stream_error(self, event: StreamErrorEvent) -> None:
         """Handle stream error event from SessionManagerService.
 
-        Emits streamError WebSocket event to subscribed clients.
+        Emits streamError WebSocket event to HEADER layer subscribers.
         """
         session_id = event.session_id
-        subscribers = self._session_subscribers.get(session_id, set())
+        subscribers = self._subscription_manager.get_clients_for_layer(session_id, Layer.HEADER)
         if not subscribers:
             return
 
@@ -2139,10 +2283,10 @@ class SessionDataService:
     async def on_tool_use_started(self, event: ToolUseStartedEvent) -> None:
         """Handle tool use started event from SessionManagerService.
 
-        Emits toolUseStarted WebSocket event to subscribed clients.
+        Emits toolUseStarted WebSocket event to DELTA layer subscribers.
         """
         session_id = event.session_id
-        subscribers = self._session_subscribers.get(session_id, set())
+        subscribers = self._subscription_manager.get_clients_for_layer(session_id, Layer.DELTA)
         if not subscribers:
             return
 
@@ -2159,10 +2303,10 @@ class SessionDataService:
     async def on_tool_input_delta(self, event: ToolInputDeltaEvent) -> None:
         """Handle tool input delta event from SessionManagerService.
 
-        Emits toolInputDelta WebSocket event to subscribed clients.
+        Emits toolInputDelta WebSocket event to DELTA layer subscribers.
         """
         session_id = event.session_id
-        subscribers = self._session_subscribers.get(session_id, set())
+        subscribers = self._subscription_manager.get_clients_for_layer(session_id, Layer.DELTA)
         if not subscribers:
             return
 
@@ -2177,10 +2321,10 @@ class SessionDataService:
     async def on_tool_use(self, event: ToolUseEvent) -> None:
         """Handle tool use event from SessionManagerService.
 
-        Emits toolUse WebSocket event (tool input complete) to subscribed clients.
+        Emits toolUse WebSocket event (tool input complete) to DELTA layer subscribers.
         """
         session_id = event.session_id
-        subscribers = self._session_subscribers.get(session_id, set())
+        subscribers = self._subscription_manager.get_clients_for_layer(session_id, Layer.DELTA)
         if not subscribers:
             return
 
@@ -2211,10 +2355,10 @@ class SessionDataService:
     async def on_tool_result(self, event: ToolResultEvent) -> None:
         """Handle tool result event from SessionManagerService.
 
-        Emits toolResult WebSocket event to subscribed clients.
+        Emits toolResult WebSocket event to DELTA layer subscribers.
         """
         session_id = event.session_id
-        subscribers = self._session_subscribers.get(session_id, set())
+        subscribers = self._subscription_manager.get_clients_for_layer(session_id, Layer.DELTA)
         if not subscribers:
             return
 

@@ -54,40 +54,30 @@ client.subscribeRemove(oldSessionId, clientId, ["delta"]);
 
 ## Implementation Steps
 
-### Phase 1: SubscriptionManager Class
+### Phase 1: SubscriptionManager Class ✅ COMPLETE
 
-Create `service/subscription_manager.py`:
+Created `service/subscription_manager.py` with:
+- `Layer` enum: HEADER, BODY, DELTA, HISTORY
+- `SubscriptionManager` class with full test coverage (28 tests)
+- Methods: `add_layers`, `remove_layers`, `unsubscribe`, `unsubscribe_client`, `get_clients_for_layer`
 
-```python
-class Layer(Enum):
-    HEADER = "header"
-    BODY = "body"
-    DELTA = "delta"
-    HISTORY = "history"
+### Phase 2: Refactor SessionDataService ✅ COMPLETE
 
-@dataclass
-class SubscriptionManager:
-    """Manages client subscriptions to session event layers."""
+1. ✅ Added `SubscriptionManager` instance alongside legacy `_session_subscribers`
+2. ✅ Added `subscribe_add` / `subscribe_remove` WebSocket-exposed methods
+3. ✅ Updated all event emission to check layer subscriptions:
+   - `emit_turn_created` → HEADER layer
+   - `emit_turn_delta` → DELTA layer
+   - `emit_turn_finished` → HEADER + BODY layers
+   - `on_stream_started/done/error` → HEADER layer
+   - `on_stream_progress` → DELTA layer
+   - `on_tool_*` events → DELTA layer
+4. ✅ Updated `client_disconnected` to clean up both legacy and layer subscriptions
+5. ✅ Added 12 new integration tests for layer-based subscriptions
 
-    _subscriptions: dict[str, dict[str, set[Layer]]]  # client -> session -> layers
+**Backward compatibility**: Both legacy `_session_subscribers` and layer-based subscriptions work together. Events are sent to the union of both subscriber sets.
 
-    async def add_layers(session_id, client_id, layers) -> bool
-    def remove_layers(session_id, client_id, layers) -> bool
-    def unsubscribe(session_id, client_id) -> bool
-    def unsubscribe_client(client_id) -> None  # On disconnect
-    def get_clients_for_layer(session_id, layer) -> set[str]  # For event routing
-```
-
-### Phase 2: Refactor SessionDataService
-
-1. Replace `_session_subscribers` dict with `SubscriptionManager` instance
-2. Add `subscribe_add` / `subscribe_remove` WebSocket-exposed methods
-3. Update event emission to check layer subscriptions:
-   - `emit_turn_created` → check HEADER layer
-   - `emit_turn_body` → check BODY layer
-   - `emit_turn_delta` → check DELTA layer
-
-### Phase 3: New Event Types
+### Phase 3: New Event Types (DEFERRED)
 
 Split current `turnFinished` into:
 - `turnCompleted` (HEADER) - metadata only: turnId, tokenCount, timestamp
@@ -95,20 +85,36 @@ Split current `turnFinished` into:
 
 Keep backward compat by emitting both during transition.
 
-### Phase 4: Frontend Changes
+**Note**: This is optional optimization. Current implementation sends full turnFinished to both HEADER and BODY subscribers.
 
-1. Generate stable `clientId` on WebSocket connect (e.g., `web-client-${uuid}`)
-2. Create subscription management hook or integrate into existing state
-3. On session list load: `subscribeAdd` all sessions with `["header"]`
-4. On session select: `subscribeAdd` with `["body", "delta", "history"]`
-5. On session deselect: `subscribeRemove` with `["delta"]`
-6. Remove `loadTurnsViaSubscription` hack
+### Phase 4: Frontend Changes ✅ COMPLETE
 
-### Phase 5: Cleanup
+1. ✅ Generate stable `clientId` on WebSocket connect
+   - Added `clientIdRef` with format `web-client-${Date.now()}-${random}`
+2. ✅ Created `loadSessionWithLayers()` function
+   - Uses new `subscribeAdd` API with configurable layers
+   - Keeps subscription active (unlike old `loadTurnsViaSubscription`)
+3. ✅ Updated all call sites to use new API:
+   - Initial session load: full layers (header, body, delta, history)
+   - Session selection: full layers
+   - Tree view lazy load: header, body, history (no delta - efficient)
+   - Reload after task/archive/delete/link: history only (already subscribed)
 
-1. Remove old `subscribeSession` / `unsubscribeSession` methods (or deprecate)
-2. Remove `loadTurnsViaSubscription` function from App.tsx
-3. Update `useSessionData` hook to use new layer-based subscriptions
+**Key insight**: Different scenarios need different layer combinations:
+- Active session viewing: all layers (header, body, delta, history)
+- Tree view preview: header + body + history (no expensive delta streaming)
+- Refresh existing session: history only (already have other subscriptions)
+
+### Phase 5: Cleanup ✅ COMPLETE
+
+1. ✅ Deprecate old `subscribeSession` / `unsubscribeSession` methods (kept for backward compat)
+2. ✅ Remove `loadTurnsViaSubscription` function from App.tsx
+3. ✅ Update `useSessionData` hook to use new layer-based subscriptions
+   - Added optional `clientId` parameter with auto-generation
+   - Updated `subscribe()` to use `subscribeAdd` with full layers
+   - Updated `unsubscribe()` to use `subscribeRemove`
+   - Removed snapshot handling (history now arrives via events)
+4. Subscription downgrade when switching sessions (FUTURE - optimization)
 
 ## Expected Benefits
 

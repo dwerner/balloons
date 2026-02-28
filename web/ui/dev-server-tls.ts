@@ -1,8 +1,25 @@
 // Simple dev server for Bun with bundling - TLS version
 // Uses the same certs as the balloons backend from ~/.balloons/certs/
+//
+// Usage: bun run dev-server-tls.ts [--port <port>] [--no-watch]
+//
 import chokidar from "chokidar";
 import { join, dirname } from "path";
 import { homedir } from "os";
+import { parseArgs } from "util";
+
+// Parse command line arguments
+const { values: args } = parseArgs({
+  args: Bun.argv.slice(2),
+  options: {
+    port: { type: "string", short: "p", default: "3030" },
+    "no-watch": { type: "boolean", default: false },
+  },
+  strict: false,
+});
+
+const port = parseInt(args.port || "3030", 10);
+const noWatch = args["no-watch"] || false;
 
 const projectDir = import.meta.dir;
 const webDir = dirname(projectDir); // web/
@@ -90,30 +107,37 @@ const watcher = chokidar.watch(dirsToWatch, {
   ignored: /(^|[\/\\])\../, // ignore dotfiles
 });
 
-watcher.on("all", async (event, filePath) => {
-  if (filePath.endsWith(".ts") || filePath.endsWith(".tsx") || filePath.endsWith(".css")) {
-    // Debounce: wait 50ms for more changes before rebuilding
-    if (rebuildTimeout) clearTimeout(rebuildTimeout);
-    rebuildTimeout = setTimeout(async () => {
-      console.log(`${event}: ${filePath}, rebuilding...`);
-      const newBuild = await buildApp();
-      if (newBuild) {
-        buildOutput = newBuild;
-        console.log("Rebuild complete");
-      }
-    }, 50);
-  }
-});
+// Only watch if not disabled
+if (!noWatch) {
+  watcher.on("all", async (event, filePath) => {
+    if (filePath.endsWith(".ts") || filePath.endsWith(".tsx") || filePath.endsWith(".css")) {
+      // Debounce: wait 50ms for more changes before rebuilding
+      if (rebuildTimeout) clearTimeout(rebuildTimeout);
+      rebuildTimeout = setTimeout(async () => {
+        console.log(`${event}: ${filePath}, rebuilding...`);
+        const newBuild = await buildApp();
+        if (newBuild) {
+          buildOutput = newBuild;
+          console.log("Rebuild complete");
+        }
+      }, 50);
+    }
+  });
 
-watcher.on("ready", () => {
-  console.log(`Watching ${dirsToWatch.join(", ")}`);
-});
+  watcher.on("ready", () => {
+    console.log(`Watching ${dirsToWatch.join(", ")}`);
+  });
+} else {
+  // Close watcher if not needed
+  watcher.close();
+  console.log("File watching disabled (--no-watch)");
+}
 
 // Debug log file for browser logs
 const debugLogPath = join(projectDir, "browser-debug.log");
 
 const server = Bun.serve({
-  port: 3030,
+  port: port,
   hostname: "0.0.0.0", // Bind to all interfaces for LAN access
   tls: {
     cert: certFile,
@@ -210,13 +234,15 @@ function getLocalIP(): string {
 
 const localIP = getLocalIP();
 
+const watchStatus = noWatch ? "disabled" : "enabled";
 console.log(`
 ╔══════════════════════════════════════════════════════════════╗
 ║  Balloons Web UI Dev Server (TLS)                           ║
 ╠══════════════════════════════════════════════════════════════╣
-║  Local:   https://localhost:${server.port}                           ║
-║  LAN:     https://${localIP}:${server.port}                       ║
+║  Local:   https://localhost:${server.port.toString().padEnd(5)}                        ║
+║  LAN:     https://${localIP}:${server.port.toString().padEnd(5)}                   ║
 ║                                                              ║
 ║  Using self-signed cert from ~/.balloons/certs/              ║
+║  File watching: ${watchStatus.padEnd(43)}║
 ╚══════════════════════════════════════════════════════════════╝
 `);
