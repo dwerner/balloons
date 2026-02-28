@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from codegen import ws_service, ws_expose, ws_event, ws_type
-from core.debug_log import debug_log
+from core.debug_log import debug_log, Category
 from core.stream_state import (
     StreamState as TaskState,
     Stream as Task,
@@ -787,7 +787,7 @@ class TaskStateService:
             if content_len <= prev_len:
                 debug_log.debug(
                     f"emit_turn_finished: SKIP duplicate idx={turn_index}, prev_len={prev_len}, new_len={content_len}",
-                    category="websocket",
+                    category=Category.API,
                     session_id=session_id,
                 )
                 return

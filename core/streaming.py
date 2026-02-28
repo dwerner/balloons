@@ -17,7 +17,7 @@ from models import (
     TextBlock, ToolUseBlock, InterruptionBlock, ErrorBlock, Message,
     ToolUseEvent, ToolResultEvent,
 )
-from .debug_log import debug_log
+from .debug_log import debug_log, Category
 from .fork import ForkData, DeriveData
 
 
@@ -499,7 +499,7 @@ class StreamingCoordinator:
             # Note: "raw" events are common and benign - use debug level to reduce noise
             debug_log.debug(
                 f"Unknown event type: {event.event_type}",
-                category="stream",
+                category=Category.RUNNER,
                 session_id=session_id,
             )
             return NoAction(session_id=session_id)

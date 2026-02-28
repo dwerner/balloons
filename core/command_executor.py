@@ -21,7 +21,7 @@ import uuid
 
 from models import ArchiveBlock, LinkBlock
 from session import Session, Turn
-from .debug_log import debug_log
+from .debug_log import debug_log, Category
 
 
 # =============================================================================
@@ -297,15 +297,15 @@ class CommandExecutor:
         resolved: list[LinkTarget] = []
         needs_summary: list[Session] = []
 
-        debug_log.debug(f"LINK DEBUG: resolve_link_targets called with prefixes={target_prefixes}", category="link")
-        debug_log.debug(f"LINK DEBUG: all_sessions has {len(all_sessions)} sessions", category="link")
+        debug_log.debug(f"LINK DEBUG: resolve_link_targets called with prefixes={target_prefixes}", category=Category.SESSION)
+        debug_log.debug(f"LINK DEBUG: all_sessions has {len(all_sessions)} sessions", category=Category.SESSION)
         for s in all_sessions[:10]:  # Log first 10 session IDs
-            debug_log.debug(f"LINK DEBUG:   session id='{s['id']}' (len={len(s['id'])})", category="link")
+            debug_log.debug(f"LINK DEBUG:   session id='{s['id']}' (len={len(s['id'])})", category=Category.SESSION)
 
         for prefix in target_prefixes:
-            debug_log.debug(f"LINK DEBUG: looking for prefix='{prefix}' (len={len(prefix)})", category="link")
+            debug_log.debug(f"LINK DEBUG: looking for prefix='{prefix}' (len={len(prefix)})", category=Category.SESSION)
             matches = [s for s in all_sessions if s["id"].startswith(prefix)]
-            debug_log.debug(f"LINK DEBUG: found {len(matches)} matches", category="link")
+            debug_log.debug(f"LINK DEBUG: found {len(matches)} matches", category=Category.SESSION)
 
             if not matches:
                 return LinkResult(success=False, error=f"No session found matching '{prefix}'")
@@ -470,7 +470,7 @@ class CommandExecutor:
         if validation_error:
             debug_log.error(
                 f"Backend config validation failed: {validation_error}",
-                category="backend",
+                category=Category.RUNNER,
             )
             return BackendResult(
                 success=False,

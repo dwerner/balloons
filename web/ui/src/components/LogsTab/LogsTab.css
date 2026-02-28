@@ -1,0 +1,228 @@
+/* LogsTab styles */
+
+.logs-tab {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--color-bg-primary);
+}
+
+.logs-tab--disconnected {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-secondary);
+}
+
+/* Header */
+.logs-tab__header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+  flex-shrink: 0;
+}
+
+/* Category tabs */
+.logs-tab__categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.logs-tab__category-btn {
+  padding: 4px 8px;
+  font-size: 11px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+}
+
+.logs-tab__category-btn:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.logs-tab__category-btn--active {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: white;
+}
+
+.logs-tab__category-count {
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.logs-tab__category-btn--active .logs-tab__category-count {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Controls row */
+.logs-tab__controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.logs-tab__select {
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+}
+
+.logs-tab__auto-refresh {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.logs-tab__auto-refresh input {
+  cursor: pointer;
+}
+
+.logs-tab__refresh-btn {
+  padding: 4px 8px;
+  font-size: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.logs-tab__refresh-btn:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+
+.logs-tab__refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Entries list */
+.logs-tab__entries {
+  flex: 1;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.logs-tab__empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+
+/* Entry row */
+.logs-tab__entry {
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--color-border);
+  cursor: default;
+}
+
+.logs-tab__entry:hover {
+  background: var(--color-bg-secondary);
+}
+
+.logs-tab__entry--expanded {
+  background: var(--color-bg-secondary);
+}
+
+.logs-tab__entry-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.logs-tab__seq {
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  min-width: 40px;
+}
+
+.logs-tab__timestamp {
+  color: var(--color-text-secondary);
+  min-width: 80px;
+}
+
+.logs-tab__level {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 2px;
+  text-transform: uppercase;
+}
+
+.logs-tab__level--error {
+  background: var(--color-error);
+  color: white;
+}
+
+.logs-tab__level--warning {
+  background: var(--color-warning);
+  color: #000;
+}
+
+.logs-tab__level--info {
+  background: var(--color-accent);
+  color: white;
+}
+
+.logs-tab__level--perf {
+  background: #9b59b6;
+  color: white;
+}
+
+.logs-tab__level--debug {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+}
+
+.logs-tab__level--trace {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-muted);
+}
+
+.logs-tab__message {
+  flex: 1;
+  color: var(--color-text-primary);
+  word-break: break-word;
+}
+
+.logs-tab__expand-hint {
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+/* Details JSON */
+.logs-tab__details {
+  margin: 8px 0 4px 48px;
+  padding: 8px;
+  background: var(--color-bg-tertiary);
+  border-radius: 4px;
+  font-size: 10px;
+  color: var(--color-text-secondary);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

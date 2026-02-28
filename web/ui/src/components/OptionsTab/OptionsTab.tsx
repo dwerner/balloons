@@ -3,54 +3,82 @@
  *
  * Contains cards for:
  * - Logging: Toggle which log categories are written to server-side files
+ * - Buffer Stats: Per-category buffer size controls
+ * - Server Identity: Git state and server metadata
  */
 
 import React, { useState, useCallback, useEffect, memo } from 'react';
 import type { DebugLogServiceClient } from '../../../../generated/client';
+import type { BufferStats, ServerIdentityInfo } from '../../../../generated/types';
 import './OptionsTab.css';
 
-// Known log categories with descriptions
+// 8 core log categories (matches Category class in Python)
 const LOG_CATEGORIES = [
-  { id: 'api', label: 'API', description: 'API requests, responses, and raw chunks' },
-  { id: 'tool', label: 'Tool', description: 'Tool execution and results' },
-  { id: 'json', label: 'JSON', description: 'JSON parsing errors and dumps' },
-  { id: 'process', label: 'Process', description: 'Process lifecycle events' },
-  { id: 'stream', label: 'Stream', description: 'Streaming events and timeouts' },
-  { id: 'perf', label: 'Perf', description: 'Performance markers and timing' },
-  { id: 'client', label: 'Client', description: 'Web UI client-side logs' },
+  { id: 'client', label: 'Client', description: 'Web UI events' },
+  { id: 'api', label: 'API', description: 'WebSocket, HTTP auth' },
+  { id: 'runner', label: 'Runner', description: 'LLM calls, tool execution' },
+  { id: 'session', label: 'Session', description: 'Session lifecycle, fork/merge' },
+  { id: 'storage', label: 'Storage', description: 'DB reads/writes' },
+  { id: 'supervisor', label: 'Supervisor', description: 'Background processes' },
+  { id: 'lifecycle', label: 'Lifecycle', description: 'Server start/stop, config' },
+  { id: 'perf', label: 'Perf', description: 'Timing markers' },
 ] as const;
 
 interface OptionsTabProps {
   debugLogClient?: DebugLogServiceClient;
   isConnected: boolean;
-  debugEnabled?: boolean;
-  onToggleDebug?: () => void;
 }
 
 export const OptionsTab = memo(function OptionsTab({
   debugLogClient,
   isConnected,
-  debugEnabled = false,
-  onToggleDebug,
 }: OptionsTabProps) {
+  const [loggingEnabled, setLoggingEnabled] = useState(false);
   const [enabledCategories, setEnabledCategories] = useState<string[]>([]);
+  const [bufferStats, setBufferStats] = useState<BufferStats[]>([]);
+  const [serverIdentity, setServerIdentity] = useState<ServerIdentityInfo | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [showBufferStats, setShowBufferStats] = useState(false);
 
-  // Load current categories on mount
+  // Load current state on mount
   useEffect(() => {
     if (!debugLogClient || !isConnected) return;
 
-    const loadCategories = async () => {
+    const loadState = async () => {
       try {
-        const categories = await debugLogClient.getCategories();
+        const [enabled, categories, stats, identity] = await Promise.all([
+          debugLogClient.isEnabled(),
+          debugLogClient.getCategories(),
+          debugLogClient.getBufferStats(),
+          debugLogClient.getServerIdentity(),
+        ]);
+        setLoggingEnabled(enabled);
         setEnabledCategories(categories);
+        setBufferStats(stats);
+        setServerIdentity(identity);
       } catch (err) {
-        console.error('Failed to load log categories:', err);
+        console.error('Failed to load debug log state:', err);
       }
     };
 
-    loadCategories();
+    loadState();
   }, [debugLogClient, isConnected]);
+
+  // Refresh buffer stats periodically when panel is showing them
+  useEffect(() => {
+    if (!debugLogClient || !isConnected || !showBufferStats) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const stats = await debugLogClient.getBufferStats();
+        setBufferStats(stats);
+      } catch (err) {
+        console.error('Failed to refresh buffer stats:', err);
+      }
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [debugLogClient, isConnected, showBufferStats]);
 
   const handleToggleCategory = useCallback(async (categoryId: string) => {
     if (!debugLogClient) return;
@@ -101,6 +129,19 @@ export const OptionsTab = memo(function OptionsTab({
     }
   }, [debugLogClient]);
 
+  const handleClearBuffer = useCallback(async (category: string | null) => {
+    if (!debugLogClient) return;
+
+    try {
+      await debugLogClient.clearBuffer(category);
+      // Refresh stats
+      const stats = await debugLogClient.getBufferStats();
+      setBufferStats(stats);
+    } catch (err) {
+      console.error('Failed to clear buffer:', err);
+    }
+  }, [debugLogClient]);
+
   if (!isConnected) {
     return (
       <div className="options-tab">
@@ -113,8 +154,111 @@ export const OptionsTab = memo(function OptionsTab({
 
   const hasAnyEnabled = enabledCategories.length > 0;
 
+  const handleToggleLogging = useCallback(async () => {
+    if (!debugLogClient) return;
+
+    setIsLoading(true);
+    try {
+      const newValue = !loggingEnabled;
+      await debugLogClient.setEnabled(newValue);
+      setLoggingEnabled(newValue);
+    } catch (err) {
+      console.error('Failed to toggle logging:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [debugLogClient, loggingEnabled]);
+
+  // Calculate uptime if we have server identity
+  const getUptime = () => {
+    if (!serverIdentity?.startTime) return null;
+    const start = new Date(serverIdentity.startTime);
+    const now = new Date();
+    const seconds = Math.floor((now.getTime() - start.getTime()) / 1000);
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+    return `${Math.floor(seconds / 86400)}d ${Math.floor((seconds % 86400) / 3600)}h`;
+  };
+
+  // Generate a color from a hex hash (commit or diff hash)
+  const hashToColor = (hash: string): string => {
+    if (!hash || hash.length < 6) return '#888888';
+    // Use first 6 chars as RGB
+    const r = parseInt(hash.slice(0, 2), 16);
+    const g = parseInt(hash.slice(2, 4), 16);
+    const b = parseInt(hash.slice(4, 6), 16);
+    // Boost saturation by pushing values away from middle gray
+    const boost = (v: number) => {
+      const mid = 128;
+      const diff = v - mid;
+      return Math.max(0, Math.min(255, mid + diff * 1.5));
+    };
+    return `rgb(${boost(r)}, ${boost(g)}, ${boost(b)})`;
+  };
+
+  // Get identity color - use diff hash if dirty, otherwise commit
+  const getIdentityColor = () => {
+    if (!serverIdentity) return undefined;
+    if (serverIdentity.gitDirty && serverIdentity.gitDiffHash) {
+      return hashToColor(serverIdentity.gitDiffHash);
+    }
+    return hashToColor(serverIdentity.gitCommitShort);
+  };
+
   return (
     <div className="options-tab">
+      {/* Server Identity Card */}
+      {serverIdentity && (
+        <div className="options-card options-card--compact">
+          <div className="options-card__header">
+            <span
+              className="server-identity__color"
+              style={{ backgroundColor: getIdentityColor() }}
+              title={serverIdentity.gitDirty ? `Dirty: ${serverIdentity.gitDiffHash}` : serverIdentity.gitCommitShort}
+            />
+            <h3 className="options-card__title">Server Identity</h3>
+          </div>
+          <div className="options-card__content">
+            <div className="server-identity">
+              <div className="server-identity__row">
+                <span className="server-identity__label">Commit</span>
+                <span className="server-identity__value">
+                  <span
+                    className="server-identity__hash-color"
+                    style={{ backgroundColor: hashToColor(serverIdentity.gitCommitShort) }}
+                  />
+                  <code>{serverIdentity.gitCommitShort}</code>
+                  {serverIdentity.gitDirty && (
+                    <span className="server-identity__dirty">
+                      <span
+                        className="server-identity__hash-color"
+                        style={{ backgroundColor: hashToColor(serverIdentity.gitDiffHash) }}
+                      />
+                      +{serverIdentity.gitDiffHash}
+                    </span>
+                  )}
+                </span>
+              </div>
+              <div className="server-identity__row">
+                <span className="server-identity__label">Branch</span>
+                <span className="server-identity__value">{serverIdentity.gitBranch}</span>
+              </div>
+              <div className="server-identity__row">
+                <span className="server-identity__label">Slot</span>
+                <span className="server-identity__value">
+                  {serverIdentity.slot} (:{serverIdentity.port})
+                </span>
+              </div>
+              <div className="server-identity__row">
+                <span className="server-identity__label">Uptime</span>
+                <span className="server-identity__value">{getUptime()}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Debug Logging Card */}
       <div className="options-card">
         <div className="options-card__header">
@@ -126,39 +270,46 @@ export const OptionsTab = memo(function OptionsTab({
           <label className="debug-toggle">
             <input
               type="checkbox"
-              checked={debugEnabled}
-              onChange={onToggleDebug}
+              checked={loggingEnabled}
+              onChange={handleToggleLogging}
+              disabled={isLoading}
             />
-            <span className="debug-toggle__label">Enable debug logging</span>
+            <span className="debug-toggle__label">Enable Debug Logging</span>
             <span className="debug-toggle__description">
-              Log to browser console and ~/.balloons/debug.log
+              {loggingEnabled ? 'Entries are being collected in buffers' : 'Buffers are frozen (no new entries)'}
             </span>
           </label>
 
           {/* Category filtering section */}
-          <div className={`log-categories-section ${!debugEnabled ? 'log-categories-section--disabled' : ''}`}>
+          <div className={`log-categories-section ${!loggingEnabled ? 'log-categories-section--disabled' : ''}`}>
             <div className="options-card__section-header">
-              <span className="options-card__section-title">Category Filtering</span>
+              <span className="options-card__section-title">File Logging Categories</span>
               <span className="options-card__hint">
                 {hasAnyEnabled
-                  ? `${enabledCategories.length} categor${enabledCategories.length === 1 ? 'y' : 'ies'} enabled`
-                  : 'Logging all categories'}
+                  ? `${enabledCategories.length} categor${enabledCategories.length === 1 ? 'y' : 'ies'} → ~/.balloons/logs/`
+                  : 'No file logging (memory only)'}
               </span>
             </div>
 
             <div className="log-categories">
               {LOG_CATEGORIES.map(({ id, label, description }) => {
                 const isEnabled = enabledCategories.includes(id);
+                const stats = bufferStats.find(s => s.category === id);
                 return (
                   <label key={id} className="log-category">
                     <input
                       type="checkbox"
                       checked={isEnabled}
                       onChange={() => handleToggleCategory(id)}
-                      disabled={isLoading || !debugEnabled}
+                      disabled={isLoading || !loggingEnabled}
                     />
                     <span className="log-category__label">{label}</span>
                     <span className="log-category__description">{description}</span>
+                    {stats && stats.count > 0 && (
+                      <span className="log-category__count" title={`${stats.count}/${stats.maxsize} entries`}>
+                        {stats.count}
+                      </span>
+                    )}
                   </label>
                 );
               })}
@@ -168,22 +319,77 @@ export const OptionsTab = memo(function OptionsTab({
               <button
                 className="options-btn options-btn--secondary"
                 onClick={handleClearAll}
-                disabled={isLoading || !hasAnyEnabled || !debugEnabled}
-                title="Log all categories (no filtering)"
+                disabled={isLoading || !hasAnyEnabled || !loggingEnabled}
+                title="Stop writing to any log files"
               >
                 Clear Filter
               </button>
               <button
                 className="options-btn options-btn--secondary"
                 onClick={handleEnableAll}
-                disabled={isLoading || !debugEnabled}
-                title="Enable all categories"
+                disabled={isLoading || !loggingEnabled}
+                title="Write all categories to log files"
               >
                 Enable All
               </button>
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Buffer Stats Card */}
+      <div className="options-card">
+        <div className="options-card__header">
+          <h3 className="options-card__title">Memory Buffers</h3>
+          <span className="options-card__subtitle">{loggingEnabled ? 'collecting' : 'frozen'}</span>
+          <button
+            className="options-btn options-btn--small"
+            onClick={() => setShowBufferStats(!showBufferStats)}
+          >
+            {showBufferStats ? 'Hide' : 'Show'}
+          </button>
+        </div>
+
+        {showBufferStats && (
+          <div className="options-card__content">
+            <div className="buffer-stats">
+              {bufferStats
+                .filter(s => s.count > 0)
+                .sort((a, b) => b.count - a.count)
+                .map(({ category, count, maxsize }) => (
+                  <div key={category} className="buffer-stats__row">
+                    <span className="buffer-stats__category">{category}</span>
+                    <div className="buffer-stats__bar-container">
+                      <div
+                        className="buffer-stats__bar"
+                        style={{ width: `${(count / maxsize) * 100}%` }}
+                      />
+                    </div>
+                    <span className="buffer-stats__count">{count}/{maxsize}</span>
+                    <button
+                      className="options-btn options-btn--tiny"
+                      onClick={() => handleClearBuffer(category)}
+                      title="Clear this buffer"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              {bufferStats.filter(s => s.count > 0).length === 0 && (
+                <div className="buffer-stats__empty">All buffers empty</div>
+              )}
+            </div>
+            <div className="options-card__actions">
+              <button
+                className="options-btn options-btn--secondary"
+                onClick={() => handleClearBuffer(null)}
+                title="Clear all buffers"
+              >
+                Clear All Buffers
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

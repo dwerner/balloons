@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from codegen import ws_service, ws_expose, ws_event, ws_type
-from core.debug_log import debug_log
+from core.debug_log import debug_log, Category
 from supervisor_config import get_supervisor_config, reload_supervisor_config, HostConfig
 
 
@@ -184,7 +184,7 @@ class EventBuffer:
             try:
                 sub(event)
             except Exception as e:
-                debug_log.error(f"Event subscriber error: {e}", category="supervisor")
+                debug_log.error(f"Event subscriber error: {e}", category=Category.SUPERVISOR)
 
     def append_sync(self, event: SupervisorEvent) -> None:
         """Synchronous append for use from non-async contexts."""
@@ -193,7 +193,7 @@ class EventBuffer:
             try:
                 sub(event)
             except Exception as e:
-                debug_log.error(f"Event subscriber error: {e}", category="supervisor")
+                debug_log.error(f"Event subscriber error: {e}", category=Category.SUPERVISOR)
 
     def get_history(
         self,
@@ -271,7 +271,7 @@ def emit_supervisor_event(event_type: str, data: dict) -> SupervisorEvent:
     get_event_buffer().append_sync(event)
     debug_log.debug(
         f"Supervisor event: {event_type}",
-        category="supervisor",
+        category=Category.SUPERVISOR,
         details=data,
     )
     return event
@@ -309,7 +309,7 @@ def _output_callback(process_id: str, source: str, content: str) -> None:
             print(f"[OUTPUT_CALLBACK] Emitting to WebSocket")
             _service_instance._emit_process_output(output)
         except Exception as e:
-            debug_log.error(f"Error emitting process output: {e}", category="supervisor")
+            debug_log.error(f"Error emitting process output: {e}", category=Category.SUPERVISOR)
             print(f"[OUTPUT_CALLBACK] ERROR: {e}")
     else:
         print(f"[OUTPUT_CALLBACK] WARNING: _service_instance is None")
@@ -326,15 +326,15 @@ def register_output_callback() -> None:
     if supervisor is None:
         debug_log.warning(
             "Cannot register output callback: supervisor not initialized",
-            category="supervisor",
+            category=Category.SUPERVISOR,
         )
         return
 
     try:
         supervisor.set_output_callback(_output_callback)
-        debug_log.info("Registered supervisor output callback", category="supervisor")
+        debug_log.info("Registered supervisor output callback", category=Category.SUPERVISOR)
     except Exception as e:
-        debug_log.error(f"Failed to register output callback: {e}", category="supervisor")
+        debug_log.error(f"Failed to register output callback: {e}", category=Category.SUPERVISOR)
 
 
 @ws_service
@@ -449,7 +449,7 @@ class SupervisorStateService:
                         started_at=p.get("started_at"),
                     ))
             except Exception as e:
-                debug_log.error(f"Error listing processes: {e}", category="supervisor")
+                debug_log.error(f"Error listing processes: {e}", category=Category.SUPERVISOR)
 
         # Build backend-host mappings
         backend_hosts = [
@@ -651,7 +651,7 @@ class SupervisorStateService:
             return ProcessListResult(summary=summary, processes=processes)
 
         except Exception as e:
-            debug_log.error(f"Error listing processes: {e}", category="supervisor")
+            debug_log.error(f"Error listing processes: {e}", category=Category.SUPERVISOR)
             return ProcessListResult(
                 summary=f"Error: {e}",
                 processes=[],
@@ -670,7 +670,7 @@ class SupervisorStateService:
             self._host_status_cache.clear()
             return True
         except Exception as e:
-            debug_log.error(f"Error reloading supervisor config: {e}", category="supervisor")
+            debug_log.error(f"Error reloading supervisor config: {e}", category=Category.SUPERVISOR)
             return False
 
     @ws_expose
@@ -724,13 +724,13 @@ class SupervisorStateService:
             # Clear cache
             self._host_status_cache.clear()
 
-            debug_log.info(f"Added host: {request.name}", category="supervisor")
+            debug_log.info(f"Added host: {request.name}", category=Category.SUPERVISOR)
             return ConfigUpdateResult(success=True)
 
         except ValueError as e:
             return ConfigUpdateResult(success=False, error=str(e))
         except Exception as e:
-            debug_log.error(f"Error adding host: {e}", category="supervisor")
+            debug_log.error(f"Error adding host: {e}", category=Category.SUPERVISOR)
             return ConfigUpdateResult(success=False, error=str(e))
 
     @ws_expose
@@ -814,15 +814,15 @@ class SupervisorStateService:
             self._host_status_cache.pop(request.name, None)
 
             if is_rename:
-                debug_log.info(f"Renamed host: {lookup_name} -> {request.name}", category="supervisor")
+                debug_log.info(f"Renamed host: {lookup_name} -> {request.name}", category=Category.SUPERVISOR)
             else:
-                debug_log.info(f"Updated host: {request.name}", category="supervisor")
+                debug_log.info(f"Updated host: {request.name}", category=Category.SUPERVISOR)
             return ConfigUpdateResult(success=True)
 
         except ValueError as e:
             return ConfigUpdateResult(success=False, error=str(e))
         except Exception as e:
-            debug_log.error(f"Error updating host: {e}", category="supervisor")
+            debug_log.error(f"Error updating host: {e}", category=Category.SUPERVISOR)
             return ConfigUpdateResult(success=False, error=str(e))
 
     @ws_expose
@@ -865,11 +865,11 @@ class SupervisorStateService:
             # Clear cache
             self._host_status_cache.pop(host_name, None)
 
-            debug_log.info(f"Removed host: {host_name}", category="supervisor")
+            debug_log.info(f"Removed host: {host_name}", category=Category.SUPERVISOR)
             return ConfigUpdateResult(success=True)
 
         except Exception as e:
-            debug_log.error(f"Error removing host: {e}", category="supervisor")
+            debug_log.error(f"Error removing host: {e}", category=Category.SUPERVISOR)
             return ConfigUpdateResult(success=False, error=str(e))
 
     @ws_expose
@@ -896,11 +896,11 @@ class SupervisorStateService:
             config.backend_hosts[backend_name] = host_name
             config.save()
 
-            debug_log.info(f"Mapped backend '{backend_name}' to host '{host_name}'", category="supervisor")
+            debug_log.info(f"Mapped backend '{backend_name}' to host '{host_name}'", category=Category.SUPERVISOR)
             return ConfigUpdateResult(success=True)
 
         except Exception as e:
-            debug_log.error(f"Error setting backend host: {e}", category="supervisor")
+            debug_log.error(f"Error setting backend host: {e}", category=Category.SUPERVISOR)
             return ConfigUpdateResult(success=False, error=str(e))
 
     @ws_expose
@@ -925,11 +925,11 @@ class SupervisorStateService:
             del config.backend_hosts[backend_name]
             config.save()
 
-            debug_log.info(f"Removed backend mapping: {backend_name}", category="supervisor")
+            debug_log.info(f"Removed backend mapping: {backend_name}", category=Category.SUPERVISOR)
             return ConfigUpdateResult(success=True)
 
         except Exception as e:
-            debug_log.error(f"Error removing backend host: {e}", category="supervisor")
+            debug_log.error(f"Error removing backend host: {e}", category=Category.SUPERVISOR)
             return ConfigUpdateResult(success=False, error=str(e))
 
     # Events for real-time updates

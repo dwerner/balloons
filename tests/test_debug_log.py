@@ -28,7 +28,7 @@ class TestLogEntry:
             message="Error occurred",
             timestamp="12:00:00.000",
             session_id="abc123",
-            category="process",
+            category="runner",
             details={"key": "value"},
         )
         assert entry.level == LogLevel.ERROR
@@ -59,7 +59,7 @@ class TestDebugLog:
         assert entries[0].message == "Test info"
 
     def test_error_creates_entry(self):
-        debug_log.error("Test error", category="test")
+        debug_log.error("Test error", category="runner")
         entries = debug_log.get_entries()
         assert len(entries) == 1
         assert entries[0].level == LogLevel.ERROR
@@ -84,7 +84,7 @@ class TestDebugLog:
         original_level = debug_log.min_level
         try:
             debug_log.min_level = LogLevel.TRACE
-            debug_log.trace("Test trace", category="scroll")
+            debug_log.trace("Test trace", category="client")
             entries = debug_log.get_entries()
             assert len(entries) == 1
             assert entries[0].level == LogLevel.TRACE
@@ -195,11 +195,11 @@ class TestDebugLog:
         assert errors[0].message == "Error message"
 
     def test_get_entries_filter_by_category(self):
-        debug_log.info("Process started", category="process")
-        debug_log.info("JSON parsed", category="json")
-        debug_log.info("Stream started", category="stream")
+        debug_log.info("Process started", category="runner")
+        debug_log.info("JSON parsed", category="runner")
+        debug_log.info("Stream started", category="runner")
 
-        process_entries = debug_log.get_entries(category="process")
+        process_entries = debug_log.get_entries(category="runner")
         assert len(process_entries) == 1
         assert process_entries[0].message == "Process started"
 
@@ -292,7 +292,7 @@ class TestAsyncFileLogging:
         log_file = tmp_path / "test.log"
         debug_log.set_log_file(log_file)
 
-        debug_log.info("Test async write", category="test")
+        debug_log.info("Test async write", category="runner")
 
         # Allow the fire-and-forget task to complete
         await asyncio.sleep(0.1)

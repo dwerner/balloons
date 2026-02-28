@@ -33,8 +33,19 @@ from core import (
     get_stream_state,
     ensure_prompts_installed,
 )
-from core.debug_log import debug_log
+from core.debug_log import debug_log, Category
+from core.server_identity import capture_identity, get_identity, identity_to_dict
 from core.goal_tree_state import GoalTreeState
+import time
+
+_server_start_time: float = 0.0
+
+
+def _compute_uptime() -> float:
+    """Compute server uptime in seconds."""
+    if _server_start_time == 0.0:
+        return 0.0
+    return time.time() - _server_start_time
 from core.queue_state import get_queue_state
 from core.supervisor_tools import set_supervisor, shutdown_supervisor
 from service import (
@@ -65,14 +76,14 @@ def _initialize_supervisor() -> None:
         import balloons_storage
         supervisor = balloons_storage.Supervisor()
         set_supervisor(supervisor)
-        debug_log.info("Process supervisor initialized", category="startup")
+        debug_log.info("Process supervisor initialized", category=Category.LIFECYCLE)
     except ImportError:
         debug_log.warning(
             "balloons_storage not available, supervisor disabled",
-            category="startup",
+            category=Category.LIFECYCLE,
         )
     except Exception as e:
-        debug_log.error(f"Failed to initialize supervisor: {e}", category="startup")
+        debug_log.error(f"Failed to initialize supervisor: {e}", category=Category.LIFECYCLE)
 
 
 async def _load_goal_tree_data(goal_tree_state: GoalTreeState) -> None:
@@ -94,19 +105,19 @@ async def _load_goal_tree_data(goal_tree_state: GoalTreeState) -> None:
     try:
         # Load goals
         goals = await storage.list_goals()
-        debug_log.info(f"Loaded {len(goals)} goals from storage", category="startup")
+        debug_log.info(f"Loaded {len(goals)} goals from storage", category=Category.LIFECYCLE)
         for goal in goals:
             goal_tree_state.add_goal(goal)
 
         # Load plans
         plans = await storage.list_plans()
-        debug_log.info(f"Loaded {len(plans)} plans from storage", category="startup")
+        debug_log.info(f"Loaded {len(plans)} plans from storage", category=Category.LIFECYCLE)
         for plan in plans:
             goal_tree_state.add_plan(plan)
 
         # Load todos with their plan links
         todos = await storage.list_todos(include_spikes=True)
-        debug_log.info(f"Loaded {len(todos)} todos from storage", category="startup")
+        debug_log.info(f"Loaded {len(todos)} todos from storage", category=Category.LIFECYCLE)
         for todo in todos:
             plan_ids = await storage.get_plans_for_todo(todo.id)
             goal_tree_state.add_todo(todo, plan_ids)
@@ -115,7 +126,7 @@ async def _load_goal_tree_data(goal_tree_state: GoalTreeState) -> None:
 
     debug_log.info(
         f"Goal tree loaded: {len(goal_tree_state._goals)} goals",
-        category="startup",
+        category=Category.LIFECYCLE,
     )
 
 
@@ -157,6 +168,33 @@ async def run_server(
     # Enable category-based logging to ~/.balloons/logs/
     # Categories are written when enabled via set_categories() or enable_category()
     debug_log.set_log_dir(Path.home() / ".balloons" / "logs")
+
+    # Configure WebSocket server early to capture port for identity
+    ws_config = config.websocket
+    if host is not None:
+        ws_config.host = host
+    if port is not None:
+        ws_config.port = port
+    ws_config.enabled = True
+
+    # Determine slot from port (A=8700, B=8710, etc.)
+    slot = "A" if ws_config.port % 100 == 0 else "B"
+
+    # Track server start time for uptime calculation
+    global _server_start_time
+    _server_start_time = time.time()
+
+    # Capture server identity (git state, metadata)
+    identity = capture_identity(port=ws_config.port, slot=slot)
+
+    # Log server startup with identity
+    debug_log.info(
+        f"Server starting: {identity.git_commit_short} "
+        f"({'dirty' if identity.git_dirty else 'clean'}) "
+        f"on {identity.git_branch}",
+        category=Category.LIFECYCLE,
+        details=identity_to_dict(),
+    )
 
     # Initialize process supervisor
     _initialize_supervisor()
@@ -209,16 +247,6 @@ async def run_server(
 
     # Load goal tree data (goals, plans, todos)
     await _load_goal_tree_data(goal_tree_state)
-
-    # Configure WebSocket server
-    ws_config = config.websocket
-    # Override with CLI args if provided
-    if host is not None:
-        ws_config.host = host
-    if port is not None:
-        ws_config.port = port
-    # Force enabled for headless mode
-    ws_config.enabled = True
 
     # Set up HTTP auth server on port + 1 (e.g. 8701 for WS on 8700)
     auth_port = ws_config.port + 1
@@ -273,7 +301,7 @@ async def run_server(
     print(f"Balloons headless server listening on {scheme}://{ws_config.host}:{ws_config.port}")
     debug_log.info(
         f"Headless server started on {ws_config.get_url()}",
-        category="startup",
+        category=Category.LIFECYCLE,
     )
 
     # Set up signal handlers for graceful shutdown
@@ -291,12 +319,17 @@ async def run_server(
     await stop_event.wait()
 
     # Graceful shutdown
-    debug_log.info("Shutting down headless server", category="startup")
+    debug_log.info(
+        "Server stopping (graceful shutdown)",
+        category=Category.LIFECYCLE,
+        details={"reason": "signal", "uptime_seconds": _compute_uptime()},
+    )
     session_service.stop_event_pump()
     await ws_server.stop()
     await http_auth_server.stop()
     shutdown_supervisor()
 
+    debug_log.info("Server stopped", category=Category.LIFECYCLE)
     print("Server stopped.")
 
 

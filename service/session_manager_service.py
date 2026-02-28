@@ -42,7 +42,7 @@ from enum import Enum
 from typing import Callable, Any, TYPE_CHECKING
 
 from codegen import ws_service, ws_expose, ws_event, ws_type
-from core.debug_log import debug_log
+from core.debug_log import debug_log, Category
 from core.context import ContextBuilder
 from core.fork import ForkManager, ForkResult, MergeResult, ForkData, DeriveResult, DeriveData, SwitchResult, ForkProposal, MergeProposal
 from core.tool_executor import parse_fork_proposal, parse_merge_proposal
@@ -571,7 +571,7 @@ class SessionManagerService:
                 except Exception as e:
                     debug_log.error(
                         f"Observer {type(observer).__name__}.{method_name} failed: {e}",
-                        category="websocket",
+                        category=Category.API,
                     )
 
     # --- Session Lifecycle Events (Phase 8) ---
@@ -775,7 +775,7 @@ class SessionManagerService:
             if not backend:
                 debug_log.warning(
                     f"Requested backend '{backend_name}' not found, falling back",
-                    category="helper",
+                    category=Category.RUNNER,
                 )
 
         if not backend:
@@ -877,7 +877,7 @@ class SessionManagerService:
                 # Helper not found or already cleaned up
                 debug_log.info(
                     f"await_helper_result: ctx not found",
-                    category="git",
+                    category=Category.RUNNER,
                     details={"helper_id": helper_id, "poll_count": poll_count},
                 )
                 return ""
@@ -887,7 +887,7 @@ class SessionManagerService:
             if not runner:
                 debug_log.info(
                     f"await_helper_result: runner not found but ctx exists",
-                    category="git",
+                    category=Category.RUNNER,
                     details={
                         "helper_id": helper_id,
                         "poll_count": poll_count,
@@ -910,7 +910,7 @@ class SessionManagerService:
                 result = ctx.content.strip()
                 debug_log.info(
                     f"await_helper_result: returning result",
-                    category="git",
+                    category=Category.RUNNER,
                     details={
                         "helper_id": helper_id,
                         "result_len": len(result),
@@ -943,10 +943,10 @@ class SessionManagerService:
         The pump is idempotent - calling multiple times is safe.
         """
         if self._pump_running:
-            debug_log.info("start_event_pump: already running", category="stream")
+            debug_log.info("start_event_pump: already running", category=Category.RUNNER)
             return
 
-        debug_log.info("start_event_pump: starting pump task", category="stream")
+        debug_log.info("start_event_pump: starting pump task", category=Category.RUNNER)
         self._pump_running = True
         self._pump_task = asyncio.create_task(self._event_pump_loop())
 
@@ -982,7 +982,7 @@ class SessionManagerService:
         if self._queue_state.is_blocked(session_id):
             debug_log.info(
                 "Queue is blocked - first message is paused",
-                category="queue",
+                category=Category.RUNNER,
                 session_id=session_id,
             )
             return
@@ -997,7 +997,7 @@ class SessionManagerService:
 
         debug_log.info(
             f"Processing {len(messages)} queued messages as single prompt ({len(combined_prompt)} chars)",
-            category="queue",
+            category=Category.RUNNER,
             session_id=session_id,
         )
 
@@ -1035,7 +1035,7 @@ class SessionManagerService:
         if session_id in self._streaming_contexts:
             debug_log.debug(
                 f"register_streaming_context: session already registered",
-                category="websocket",
+                category=Category.API,
                 session_id=session_id,
             )
             return
@@ -1051,7 +1051,7 @@ class SessionManagerService:
         self._streaming_contexts[session_id] = ctx
         debug_log.debug(
             f"register_streaming_context: registered for event pumping",
-            category="websocket",
+            category=Category.API,
             session_id=session_id,
         )
 
@@ -1083,7 +1083,7 @@ class SessionManagerService:
             }
             debug_log.debug(
                 f"release_streaming_context: turn_idx={ctx.assistant_turn_idx}, content_len={len(ctx.content)}",
-                category="websocket",
+                category=Category.API,
                 session_id=session_id,
             )
             del self._streaming_contexts[session_id]
@@ -1092,7 +1092,7 @@ class SessionManagerService:
 
     async def _event_pump_loop(self) -> None:
         """Main event pump loop - polls sessions and relays events."""
-        debug_log.info("Event pump loop started", category="stream")
+        debug_log.info("Event pump loop started", category=Category.RUNNER)
         while self._pump_running:
             try:
                 await self._pump_events()
@@ -1101,7 +1101,7 @@ class SessionManagerService:
                 break
             except Exception as e:
                 # Log but don't crash the pump
-                debug_log.error(f"Pump error: {e}", category="stream")
+                debug_log.error(f"Pump error: {e}", category=Category.RUNNER)
                 import traceback
                 traceback.print_exc()
                 await asyncio.sleep(self._pump_interval)
@@ -1126,7 +1126,7 @@ class SessionManagerService:
             # Log that we have events to process
             debug_log.debug(
                 f"_pump_events: got {len(events)} events for session",
-                category="stream",
+                category=Category.RUNNER,
                 details={
                     "session_id": session_id[:8],
                     "event_types": [e.event_type for e in events[:5]],
@@ -1207,7 +1207,7 @@ class SessionManagerService:
             # Helper complete
             debug_log.info(
                 f"Helper done: {helper_id}, type={ctx.helper_type}",
-                category="fork",
+                category=Category.SESSION,
                 details={
                     "content_len": len(ctx.content),
                     "has_fork_data": bool(ctx.metadata.get("fork_data")),
@@ -1235,7 +1235,7 @@ class SessionManagerService:
             ):
                 debug_log.info(
                     f"Auto-completing fork compression for helper {helper_id}",
-                    category="fork",
+                    category=Category.SESSION,
                 )
                 try:
                     result = await self.complete_fork_after_compression(
@@ -1245,13 +1245,13 @@ class SessionManagerService:
                     )
                     debug_log.info(
                         f"Auto-complete result: success={result.success}, error={result.error}",
-                        category="fork",
+                        category=Category.SESSION,
                     )
                 except Exception as e:
                     # Log but don't fail - the manual path is still available
                     debug_log.warning(
                         f"Auto-complete fork compression failed: {e}",
-                        category="fork"
+                        category=Category.SESSION
                     )
                     import traceback
                     traceback.print_exc()
@@ -1263,7 +1263,7 @@ class SessionManagerService:
             ):
                 debug_log.info(
                     f"Auto-completing archive for helper {helper_id}, content_len={len(ctx.content)}",
-                    category="archive",
+                    category=Category.SESSION,
                 )
                 try:
                     result = await self.complete_archive(
@@ -1272,13 +1272,13 @@ class SessionManagerService:
                     )
                     debug_log.info(
                         f"Archive auto-complete result: success={result.success}, error={result.error}",
-                        category="archive",
+                        category=Category.SESSION,
                     )
                     # If complete_archive returned a failure (not exception), emit failure event
                     if not result.success:
                         debug_log.warning(
                             f"Archive auto-complete returned failure: {result.error}",
-                            category="archive",
+                            category=Category.SESSION,
                         )
                         archive_error_data = {
                             "session_id": ctx.session_id,
@@ -1292,7 +1292,7 @@ class SessionManagerService:
                 except Exception as e:
                     debug_log.warning(
                         f"Auto-complete archive failed with exception: {e}",
-                        category="archive"
+                        category=Category.SESSION
                     )
                     import traceback
                     traceback.print_exc()
@@ -1314,7 +1314,7 @@ class SessionManagerService:
             ):
                 debug_log.info(
                     f"Auto-completing session review for helper {helper_id}",
-                    category="review",
+                    category=Category.SESSION,
                 )
                 try:
                     result = await self.complete_session_review(
@@ -1323,12 +1323,12 @@ class SessionManagerService:
                     )
                     debug_log.info(
                         f"Session review auto-complete result: success={result.success}, error={result.error}",
-                        category="review",
+                        category=Category.SESSION,
                     )
                 except Exception as e:
                     debug_log.warning(
                         f"Auto-complete session review failed: {e}",
-                        category="review"
+                        category=Category.SESSION
                     )
                     import traceback
                     traceback.print_exc()
@@ -1401,7 +1401,7 @@ class SessionManagerService:
                 ctx.assistant_turn_id = str(uuid.uuid4())
                 debug_log.warning(
                     f"turn_started event missing turn_id, generated: {ctx.assistant_turn_id[:8]}",
-                    category="stream",
+                    category=Category.RUNNER,
                     details={"session_id": session_id, "data": data},
                 )
 
@@ -1576,7 +1576,7 @@ class SessionManagerService:
 
             debug_log.info(
                 f"_dispatch_event: tool_use_start",
-                category="stream",
+                category=Category.RUNNER,
                 details={
                     "session_id": session_id[:8],
                     "tool_name": tool_name,
@@ -1692,7 +1692,7 @@ class SessionManagerService:
             tool_name = data.get("tool_name", "")
             debug_log.info(
                 f"_dispatch_event: tool_use",
-                category="stream",
+                category=Category.RUNNER,
                 details={
                     "session_id": session_id[:8],
                     "tool_use_id": tool_use_id[:20] if tool_use_id else "",
@@ -2358,7 +2358,7 @@ class SessionManagerService:
 
         debug_log.info(
             f"fork_session: built indexed messages",
-            category="fork",
+            category=Category.SESSION,
             details={
                 "parent_turn_count": len(parent_session.turns),
                 "indexed_message_count": len(indexed_messages),
@@ -2389,7 +2389,7 @@ class SessionManagerService:
 
         debug_log.info(
             f"fork_session: child session created",
-            category="fork",
+            category=Category.SESSION,
             details={
                 "child_session_id": child_session.id[:8],
                 "child_turn_count": len(child_session.turns),
@@ -2489,7 +2489,7 @@ class SessionManagerService:
 
         debug_log.info(
             f"complete_fork_after_compression: session populated with {len(child_session.turns)} turns",
-            category="fork",
+            category=Category.SESSION,
             details={
                 "child_session_id": child_session.id[:8],
                 "child_turn_count": len(child_session.turns),
@@ -2519,7 +2519,7 @@ class SessionManagerService:
                 )
             debug_log.info(
                 f"complete_fork_after_compression: emitted {len(child_session.turns)} turn events",
-                category="fork",
+                category=Category.SESSION,
             )
 
         # Clean up helper
@@ -2733,14 +2733,14 @@ class SessionManagerService:
         if not proposal:
             debug_log.error(
                 "Failed to parse fork proposal",
-                category="fork",
+                category=Category.SESSION,
                 details={"tool_input_keys": list(tool_input.keys())},
             )
             return
 
         debug_log.info(
             f"Fork proposal received: {proposal.name}",
-            category="fork",
+            category=Category.SESSION,
             details={
                 "tool_use_id": tool_use_id,
                 "description": proposal.description[:100] if proposal.description else "",
@@ -2770,14 +2770,14 @@ class SessionManagerService:
         if not proposal:
             debug_log.error(
                 "Failed to parse merge proposal",
-                category="merge",
+                category=Category.SESSION,
                 details={"tool_input_keys": list(tool_input.keys())},
             )
             return
 
         debug_log.info(
             f"Merge proposal received",
-            category="merge",
+            category=Category.SESSION,
             details={
                 "tool_use_id": tool_use_id,
                 "summary": proposal.summary[:100] if proposal.summary else "",
@@ -2903,7 +2903,7 @@ class SessionManagerService:
         # Set auto_complete_compression=True so React UI works without helper event handling
         debug_log.info(
             f"Creating fork from proposal: name={fork_proposal.name}",
-            category="fork",
+            category=Category.SESSION,
             details={
                 "prompt": prompt[:100] + "..." if len(prompt) > 100 else prompt,
                 "num_context_modes": len(turn_context_modes),
@@ -2923,7 +2923,7 @@ class SessionManagerService:
 
         debug_log.info(
             f"Fork result: success={fork_result.success}, needs_compression={fork_result.needs_compression}",
-            category="fork",
+            category=Category.SESSION,
             details={
                 "child_session_id": fork_result.child_session_id,
                 "helper_id": fork_result.helper_id,
@@ -3391,7 +3391,7 @@ class SessionManagerService:
 
         debug_log.info(
             f"Linked sessions: {source_session_id[:8]} <-> {target_session_id[:8]}",
-            category="link",
+            category=Category.SESSION,
             details={"link_id": link_id, "summary": summary},
         )
 
@@ -3454,7 +3454,7 @@ class SessionManagerService:
 
         debug_log.info(
             f"Starting archive: session={session_id[:8]}, turns={turn_start}-{turn_end-1}",
-            category="archive",
+            category=Category.SESSION,
         )
 
         # Build summary prompt
@@ -3532,7 +3532,7 @@ class SessionManagerService:
 
         debug_log.info(
             f"Completing archive: session={session_id[:8]}, summary={archive_summary[:50]}...",
-            category="archive",
+            category=Category.SESSION,
         )
 
         # Load session
@@ -3587,7 +3587,7 @@ class SessionManagerService:
         }
         debug_log.info(
             f"Emitting onArchiveCompleted event to {len(self._event_handlers)} handlers",
-            category="archive",
+            category=Category.SESSION,
             details=archive_event_data,
         )
         for handler in self._event_handlers:
@@ -4469,7 +4469,7 @@ class SessionManagerService:
         if runner and runner.is_streaming:
             debug_log.warn(
                 "Cannot change backend while streaming",
-                category="backend",
+                category=Category.LIFECYCLE,
                 details={"session_id": session_id},
             )
             return False
@@ -4497,14 +4497,14 @@ class SessionManagerService:
 
             debug_log.info(
                 f"Backend changed to {backend_name}",
-                category="backend",
+                category=Category.LIFECYCLE,
                 details={"session_id": session_id, "backend": backend_name},
             )
             return True
         else:
             debug_log.warn(
                 f"Failed to set backend: {result.error}",
-                category="backend",
+                category=Category.LIFECYCLE,
                 details={"session_id": session_id, "error": result.error},
             )
             return False
@@ -4537,7 +4537,7 @@ class SessionManagerService:
 
         debug_log.info(
             f"Session title changed to: {title}",
-            category="session",
+            category=Category.SESSION,
             details={"session_id": session_id, "title": title},
         )
         return True
@@ -4561,7 +4561,7 @@ class SessionManagerService:
         if not os.path.isdir(working_directory):
             debug_log.warn(
                 f"Invalid working directory: {working_directory}",
-                category="session",
+                category=Category.SESSION,
                 details={"session_id": session_id, "path": working_directory},
             )
             return False
@@ -4581,7 +4581,7 @@ class SessionManagerService:
 
         debug_log.info(
             f"Session working directory changed to: {working_directory}",
-            category="session",
+            category=Category.SESSION,
             details={"session_id": session_id, "working_directory": working_directory},
         )
         return True
@@ -4629,7 +4629,7 @@ class SessionManagerService:
 
         debug_log.info(
             f"Starting session review: session={session_id[:8]}, backend={backend_name}",
-            category="review",
+            category=Category.SESSION,
         )
 
         # Build review prompt
@@ -4736,7 +4736,7 @@ class SessionManagerService:
         debug_log.info(
             f"Session review completed: session={session_id[:8]}, "
             f"summary_id={review.summary_id[:8]}, title='{review.proposed_title}'",
-            category="review",
+            category=Category.SESSION,
         )
 
         # Clean up helper context
@@ -4811,7 +4811,7 @@ class SessionManagerService:
         debug_log.info(
             f"Session review approved: session={session_id[:8]}, "
             f"summary_id={summary_id[:8]}, title='{approved_title}'",
-            category="review",
+            category=Category.SESSION,
         )
 
         # Emit session updated event
@@ -4972,7 +4972,7 @@ Output ONLY the commit message, nothing else:"""
 
         debug_log.info(
             f"Starting commit message generation: helper_id={helper_id}",
-            category="git",
+            category=Category.RUNNER,
             details={
                 "diff_length": len(staged_diff),
                 "diff_preview": staged_diff[:500] if staged_diff else "(empty)",

@@ -2,10 +2,16 @@
 
 Provides a singleton debug log that collects entries from across the app.
 Listeners can subscribe for real-time updates (used by DebugPane).
+
+v2 Architecture:
+- Per-category ring buffers (no filtering on write)
+- Component-based categories mapping to system topology
+- Dual storage: in-memory buffers + disk files
 """
 
 import asyncio
 import json
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -13,6 +19,36 @@ from pathlib import Path
 from typing import Callable
 
 import aiofiles
+
+
+# =============================================================================
+# Component-based Categories
+# =============================================================================
+# These map to system topology, not ad-hoc concerns.
+# Each category gets its own ring buffer.
+
+class Category(str, Enum):
+    """Log categories mapping to system components.
+
+    8 core categories, each with its own ring buffer.
+    Unknown categories go to a default buffer for backward compatibility.
+
+    Inherits from str so Category.RUNNER == "runner" for backward compatibility
+    with string-based lookups in _buffers dict.
+    """
+    CLIENT = "client"        # Web UI (web/ui/)
+    API = "api"              # Internal APIs (WebSocket, HTTP auth)
+    RUNNER = "runner"        # LLM calls, tool execution, context building
+    SESSION = "session"      # Session lifecycle, fork/merge, context modes
+    STORAGE = "storage"      # DB reads/writes
+    SUPERVISOR = "supervisor"  # Background process lifecycle
+    LIFECYCLE = "lifecycle"  # Server start/stop, config changes, git identity
+    PERF = "perf"            # Timing markers, latency measurements
+
+    @classmethod
+    def all(cls) -> list[str]:
+        """Return all valid category names."""
+        return [cat.value for cat in cls]
 
 
 class LogLevel(Enum):
@@ -45,39 +81,116 @@ class LogEntry:
     timestamp: str
     seq: int = 0  # Monotonic sequence number for strict ordering
     session_id: str = ""
-    category: str = ""  # "process", "stderr", "json", "event", "stream"
+    category: str = ""  # One of Category.* values
     details: dict = field(default_factory=dict)
-    run_id: str = ""  # Groups entries by Claude process run (PID)
+    run_id: str = ""  # Groups entries by LLM call
+
+
+class RingBuffer:
+    """Fixed-size ring buffer for log entries."""
+
+    def __init__(self, maxsize: int = 500):
+        self._buffer: deque[LogEntry] = deque(maxlen=maxsize)
+        self._maxsize = maxsize
+
+    @property
+    def maxsize(self) -> int:
+        return self._maxsize
+
+    @maxsize.setter
+    def maxsize(self, value: int) -> None:
+        """Resize the buffer, preserving recent entries."""
+        old_entries = list(self._buffer)
+        self._maxsize = value
+        self._buffer = deque(old_entries[-value:] if value < len(old_entries) else old_entries, maxlen=value)
+
+    def append(self, entry: LogEntry) -> None:
+        self._buffer.append(entry)
+
+    def __len__(self) -> int:
+        return len(self._buffer)
+
+    def __iter__(self):
+        return iter(self._buffer)
+
+    def get_entries(
+        self,
+        limit: int | None = None,
+        level: LogLevel | None = None,
+        session_id: str | None = None,
+        run_id: str | None = None,
+    ) -> list[LogEntry]:
+        """Get entries from this buffer, optionally filtered.
+
+        Args:
+            limit: Max entries to return (newest first)
+            level: Filter by log level
+            session_id: Filter by session
+            run_id: Filter by run
+
+        Returns:
+            List of matching entries (newest first)
+        """
+        entries = list(self._buffer)
+
+        if level is not None:
+            entries = [e for e in entries if e.level == level]
+        if session_id is not None:
+            entries = [e for e in entries if e.session_id == session_id]
+        if run_id is not None:
+            entries = [e for e in entries if e.run_id == run_id]
+
+        # Newest first
+        entries = list(reversed(entries))
+
+        if limit is not None:
+            entries = entries[:limit]
+
+        return entries
+
+    def clear(self) -> None:
+        self._buffer.clear()
 
 
 class DebugLog:
-    """Singleton debug log with listener pattern.
+    """Singleton debug log with per-category ring buffers.
 
-    Collects log entries from across the application.
-    Listeners are notified on each new entry for real-time UI updates.
+    v2 Architecture:
+    - Each category has its own ring buffer
+    - No filtering on write - all entries go to their category buffer
+    - Filtering happens on read via query methods
+    - Listeners notified for real-time UI updates
 
     Usage:
-        debug_log.info("Process started", category="process")
-        debug_log.error("JSON decode failed", category="json", details={"line": "..."})
+        debug_log.info("API request", category=Category.API)
+        debug_log.error("Parse failed", category=Category.RUNNER, details={"line": "..."})
+
+        # Query by category
+        entries = debug_log.query(Category.API, limit=50)
 
         # Subscribe to updates
         debug_log.add_listener(my_callback)
     """
 
     _instance: "DebugLog | None" = None
-    MAX_ENTRIES = 500
+    DEFAULT_BUFFER_SIZE = 500
 
     def __new__(cls) -> "DebugLog":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            cls._instance._entries = []
-            cls._instance._listeners = []
+            # Per-category ring buffers
+            cls._instance._buffers: dict[str, RingBuffer] = {
+                cat: RingBuffer(cls.DEFAULT_BUFFER_SIZE) for cat in Category.all()
+            }
+            # Fallback buffer for uncategorized or unknown categories
+            cls._instance._default_buffer = RingBuffer(cls.DEFAULT_BUFFER_SIZE)
+            cls._instance._listeners: list[Callable[[LogEntry], None]] = []
             cls._instance._log_dir: Path | None = None  # Category-based log directory
             cls._instance._enabled = True
             cls._instance._seq_counter = 0  # Monotonic sequence counter
             cls._instance._min_level = LogLevel.DEBUG  # Filter out TRACE by default
             cls._instance._perf_mode = False  # Perf mode shows only PERF+ (timing/markers)
-            cls._instance._enabled_categories: set[str] = set()  # Empty = log all categories
+            cls._instance._enabled_categories: set[str] = set()  # Empty = log all categories (for file output)
         return cls._instance
 
     @property
@@ -221,26 +334,34 @@ class DebugLog:
             pass  # Don't let file errors crash logging
 
     def _add_entry(self, entry: LogEntry) -> None:
-        """Add entry and notify listeners."""
+        """Add entry to category buffer and notify listeners.
+
+        v2: No filtering on write. Entries always go to their category buffer.
+        Filtering (level, perf_mode) only affects listeners and file output.
+        """
         if not self._enabled:
             return
-        # In perf mode, only show PERF, WARNING, and ERROR
-        # This filters out all the chatty INFO/DEBUG/TRACE logs
+
+        # Always add to the appropriate category buffer (no filtering)
+        buffer = self._buffers.get(entry.category, self._default_buffer)
+        buffer.append(entry)
+
+        # Write to file if configured and category is enabled
+        if self._enabled_categories and entry.category in self._enabled_categories:
+            self._write_to_file(entry)
+        elif not self._enabled_categories:
+            # If no categories enabled, write all (legacy behavior)
+            self._write_to_file(entry)
+
+        # Apply filters for listener notification
+        # In perf mode, only notify for PERF, WARNING, and ERROR
         if self._perf_mode:
             if entry.level not in (LogLevel.PERF, LogLevel.WARNING, LogLevel.ERROR):
                 return
         # Filter by minimum level
         if LogLevel.severity(entry.level) < LogLevel.severity(self._min_level):
             return
-        # Filter by enabled categories (if any are set)
-        if self._enabled_categories and entry.category not in self._enabled_categories:
-            return
-        self._entries.append(entry)
-        # Write to file if configured
-        self._write_to_file(entry)
-        # Prune oldest if over limit
-        if len(self._entries) > self.MAX_ENTRIES:
-            self._entries = self._entries[-self.MAX_ENTRIES:]
+
         # Notify listeners
         for listener in self._listeners:
             try:
@@ -359,6 +480,32 @@ class DebugLog:
         if callback in self._listeners:
             self._listeners.remove(callback)
 
+    def query(
+        self,
+        category: str,
+        limit: int = 50,
+        level: LogLevel | None = None,
+        session_id: str | None = None,
+        run_id: str | None = None,
+    ) -> list[LogEntry]:
+        """Query log entries from a specific category's buffer.
+
+        This is the primary query method for v2. Use this to query
+        entries from a single category's ring buffer.
+
+        Args:
+            category: Category to query (e.g., Category.API)
+            limit: Max entries to return (newest first)
+            level: Filter by log level
+            session_id: Filter by session
+            run_id: Filter by run
+
+        Returns:
+            List of matching entries (newest first)
+        """
+        buffer = self._buffers.get(category, self._default_buffer)
+        return buffer.get_entries(limit=limit, level=level, session_id=session_id, run_id=run_id)
+
     def get_entries(
         self,
         limit: int | None = None,
@@ -366,37 +513,90 @@ class DebugLog:
         category: str | None = None,
         session_id: str | None = None,
     ) -> list[LogEntry]:
-        """Get log entries, optionally filtered.
+        """Get log entries across all categories, optionally filtered.
+
+        Legacy compatibility method. For better performance, use query()
+        with a specific category.
 
         Args:
             limit: Max entries to return (newest first)
             level: Filter by log level
-            category: Filter by category
+            category: Filter by category (if None, searches all)
             session_id: Filter by session
 
         Returns:
-            List of matching entries (newest first)
+            List of matching entries (newest first, sorted by seq)
         """
-        entries = self._entries
+        if category is not None:
+            # Delegate to query for single category
+            return self.query(category, limit=limit or 100, level=level, session_id=session_id)
+
+        # Merge entries from all buffers
+        all_entries: list[LogEntry] = []
+        for buffer in self._buffers.values():
+            all_entries.extend(buffer)
+        all_entries.extend(self._default_buffer)
 
         if level is not None:
-            entries = [e for e in entries if e.level == level]
-        if category is not None:
-            entries = [e for e in entries if e.category == category]
+            all_entries = [e for e in all_entries if e.level == level]
         if session_id is not None:
-            entries = [e for e in entries if e.session_id == session_id]
+            all_entries = [e for e in all_entries if e.session_id == session_id]
 
-        # Newest first
-        entries = list(reversed(entries))
+        # Sort by seq (newest first)
+        all_entries.sort(key=lambda e: e.seq, reverse=True)
 
         if limit is not None:
-            entries = entries[:limit]
+            all_entries = all_entries[:limit]
 
-        return entries
+        return all_entries
 
-    def clear(self) -> None:
-        """Clear all log entries."""
-        self._entries = []
+    def get_buffer_stats(self) -> dict[str, dict[str, int]]:
+        """Get statistics for all category buffers.
+
+        Returns:
+            Dict mapping category -> {count, maxsize}
+        """
+        stats = {}
+        for cat, buffer in self._buffers.items():
+            stats[cat] = {"count": len(buffer), "maxsize": buffer.maxsize}
+        stats["_default"] = {"count": len(self._default_buffer), "maxsize": self._default_buffer.maxsize}
+        return stats
+
+    def set_buffer_size(self, category: str, size: int) -> bool:
+        """Set the buffer size for a category.
+
+        Args:
+            category: Category name
+            size: New max size (must be > 0)
+
+        Returns:
+            True if successful, False if category not found
+        """
+        if size <= 0:
+            return False
+        if category == "_default":
+            self._default_buffer.maxsize = size
+            return True
+        if category in self._buffers:
+            self._buffers[category].maxsize = size
+            return True
+        return False
+
+    def clear(self, category: str | None = None) -> None:
+        """Clear log entries.
+
+        Args:
+            category: If specified, clear only that category. Otherwise clear all.
+        """
+        if category is not None:
+            if category in self._buffers:
+                self._buffers[category].clear()
+            elif category == "_default":
+                self._default_buffer.clear()
+        else:
+            for buffer in self._buffers.values():
+                buffer.clear()
+            self._default_buffer.clear()
 
 
 # Module-level singleton instance
@@ -463,7 +663,7 @@ def timed(name: str, threshold_ms: float = 50.0):
         if elapsed_ms > threshold_ms:
             debug_log.warning(
                 f"SLOW: {name} took {elapsed_ms:.1f}ms (threshold: {threshold_ms}ms)",
-                category="perf",
+                category=Category.PERF,
                 details={"elapsed_ms": elapsed_ms, "threshold_ms": threshold_ms},
             )
 
@@ -490,13 +690,13 @@ def perf_timed(name: str, threshold_ms: float = 0.0):
         elapsed_ms = (time.perf_counter() - start) * 1000
         debug_log.perf(
             f"{name}: {elapsed_ms:.1f}ms",
-            category="perf",
+            category=Category.PERF,
             details={"elapsed_ms": elapsed_ms, "operation": name},
         )
         if threshold_ms > 0 and elapsed_ms > threshold_ms:
             debug_log.warning(
                 f"SLOW: {name} took {elapsed_ms:.1f}ms (threshold: {threshold_ms}ms)",
-                category="perf",
+                category=Category.PERF,
                 details={"elapsed_ms": elapsed_ms, "threshold_ms": threshold_ms},
             )
 
@@ -515,6 +715,6 @@ def perf_marker(name: str, **details) -> None:
     """
     debug_log.perf(
         f"[{name}]",
-        category="perf",
+        category=Category.PERF,
         details={"marker": name, **details},
     )

@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Optional, Protocol
 import aiofiles
 
 from core.async_storage import GoalStorage, get_goal_storage
-from core.debug_log import debug_log
+from core.debug_log import debug_log, Category
 from core.stream_state import get_stream_state, StreamType
 from storage_schema import GoalData, PlanData, TodoData
 
@@ -685,7 +685,7 @@ class StatusReportGenerator:
             get_stream_state().fail_stream(stream_id, str(e))
             debug_log.error(
                 f"Executive summary generation failed: {e}",
-                category="report",
+                category=Category.RUNNER,
             )
             # Return data without summary on error
             return data

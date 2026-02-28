@@ -8,6 +8,7 @@ import { GoalTreeView } from './components/GoalTreeView';
 import { FileBrowserView, type FileBrowserViewRef } from './components/FileBrowserView';
 import { SupervisorTab } from './components/SupervisorTab';
 import { OptionsTab } from './components/OptionsTab';
+import { LogsTab } from './components/LogsTab';
 import { CodeTab, type CodeReview, type CodeTabHandle, type GitStatusInfo } from './components/CodeTab';
 import { SessionStatusBar } from './components/SessionStatusBar';
 import { StreamingStatusBar } from './components/StreamingStatusBar';
@@ -2707,6 +2708,12 @@ function AppContent() {
                   <p>Context view coming soon.</p>
                 </div>
               )}
+              {mainContentTab === 'logs' && (
+                <LogsTab
+                  debugLogClient={clientRef.current?.debugLog}
+                  isConnected={connectionState === 'connected'}
+                />
+              )}
               {/* CodeTab is always mounted (hidden when not active) so it can report git status */}
               <div style={{ display: mainContentTab === 'code' ? 'contents' : 'none' }}>
                 {connectionState === 'connected' && clientRef.current ? (
@@ -2953,10 +2960,9 @@ function AppContent() {
 
           {detailTab === 'options' && (
             <OptionsTab
+              key={serverSlot}  // Remount when server slot changes
               debugLogClient={connectionState === 'connected' ? clientRef.current?.debugLog : undefined}
               isConnected={connectionState === 'connected'}
-              debugEnabled={debugEnabled}
-              onToggleDebug={handleToggleDebug}
             />
           )}
         </div>
@@ -3185,7 +3191,7 @@ function MobileHeader({ connectionState, selectedSession }: MobileHeaderProps) {
 }
 
 // Main content tab type
-type MainContentTab = 'streaming' | 'context' | 'code';
+type MainContentTab = 'streaming' | 'context' | 'code' | 'logs';
 
 /**
  * Header bar for the main content area with tabs and detail panel toggle
@@ -3228,6 +3234,12 @@ function MainContentHeader({
         {hasGitChanges && (
           <span className="code-tab-changes-indicator" />
         )}
+      </button>
+      <button
+        className={`view-toggle-btn ${activeTab === 'logs' ? 'active' : ''}`}
+        onClick={() => onTabChange('logs')}
+      >
+        Logs
       </button>
 
       {/* Spacer */}

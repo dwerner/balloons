@@ -49,6 +49,7 @@ from models import (
     MergeBlock, MergedToBlock, ArchiveBlock, SlideBlock, ReviewBlock,
     ForkProposalBlock, MergeProposalBlock
 )
+from core.debug_log import debug_log, Category
 
 if TYPE_CHECKING:
     from core.async_storage import AsyncStorage
@@ -638,21 +639,21 @@ class SessionDataService:
         debug_log.info(
             f"subscribe_add: session={session_id[:8]}, client={client_id}, "
             f"layers={[l.value for l in layer_set]}, added={added}",
-            category="websocket",
+            category=Category.API,
         )
 
         # If HISTORY layer was added, trigger history loading
         if Layer.HISTORY in layer_set and added:
             debug_log.info(
                 f"subscribe_add: triggering history load for session={session_id[:8]}, client={client_id}",
-                category="websocket",
+                category=Category.API,
             )
             # Load session and emit history chunks
             await self._load_and_emit_history(session_id, client_id)
         elif Layer.HISTORY in layer_set and not added:
             debug_log.info(
                 f"subscribe_add: HISTORY layer already existed, skipping history load for session={session_id[:8]}",
-                category="websocket",
+                category=Category.API,
             )
 
         return SubscriptionResult(
@@ -709,7 +710,7 @@ class SessionDataService:
             f"subscribe_remove: session={session_id[:8]}, client={client_id}, "
             f"layers={[l.value for l in layer_set]}, removed={removed}, "
             f"remaining={[l.value for l in remaining]}",
-            category="websocket",
+            category=Category.API,
         )
 
         return SubscriptionResult(
@@ -731,13 +732,13 @@ class SessionDataService:
 
         debug_log.info(
             f"_load_and_emit_history: STARTING for session={session_id[:8]}, client={client_id}",
-            category="websocket",
+            category=Category.API,
         )
 
         if not self._session_loader:
             debug_log.warning(
                 f"_load_and_emit_history: no session_loader configured",
-                category="websocket",
+                category=Category.API,
             )
             return
 
@@ -746,7 +747,7 @@ class SessionDataService:
         if not session:
             debug_log.warning(
                 f"_load_and_emit_history: session {session_id[:8]} not found",
-                category="websocket",
+                category=Category.API,
             )
             return
 
@@ -792,7 +793,7 @@ class SessionDataService:
             chunk_id = str(uuid.uuid4())
             debug_log.info(
                 f"_load_and_emit_history: emitting chunk {chunk_idx}/{total_chunks} with {len(turn_snapshots)} turns to client={client_id}",
-                category="websocket",
+                category=Category.API,
             )
             event_data = SessionHistoryChunkEvent(
                 session_id=session_id,
@@ -823,7 +824,7 @@ class SessionDataService:
         debug_log.info(
             f"_load_and_emit_history: session={session_id[:8]}, client={client_id}, "
             f"turns={total_turns}, chunks={total_chunks}",
-            category="websocket",
+            category=Category.API,
         )
 
     def _get_turn_content_text(self, turn) -> str:
@@ -852,7 +853,7 @@ class SessionDataService:
         from core.debug_log import debug_log
 
         if not self._session_loader:
-            debug_log.info("get_session_snapshot: no session_loader", category="fork")
+            debug_log.info("get_session_snapshot: no session_loader", category=Category.SESSION)
             return None
 
         # Load session from storage
@@ -860,13 +861,13 @@ class SessionDataService:
         if not session:
             debug_log.info(
                 f"get_session_snapshot: session {session_id[:8]} not found",
-                category="fork",
+                category=Category.SESSION,
             )
             return None
 
         debug_log.info(
             f"get_session_snapshot: session_id={session_id[:8]}, turns={len(session.turns)}",
-            category="fork",
+            category=Category.SESSION,
         )
 
         # Convert Session turns to TurnSnapshot format
@@ -918,7 +919,7 @@ class SessionDataService:
         from core.debug_log import debug_log
 
         if not self._session_loader:
-            debug_log.info("_get_session_metadata_snapshot: no session_loader", category="fork")
+            debug_log.info("_get_session_metadata_snapshot: no session_loader", category=Category.SESSION)
             return None
 
         # Load session from storage
@@ -926,7 +927,7 @@ class SessionDataService:
         if not session:
             debug_log.info(
                 f"_get_session_metadata_snapshot: session {session_id[:8]} not found",
-                category="fork",
+                category=Category.SESSION,
             )
             return None
 
@@ -959,7 +960,7 @@ class SessionDataService:
         if not self._storage:
             debug_log.warning(
                 f"_stream_history_from_storage: no storage configured for session {session_id[:8]}",
-                category="fork",
+                category=Category.SESSION,
             )
             # Emit empty completion to signal no history available
             self.emit_history_complete(session_id, total_turns=0, final_watermark=-1)
@@ -971,7 +972,7 @@ class SessionDataService:
 
             debug_log.info(
                 f"_stream_history_from_storage: session={session_id[:8]}, total_turns={total_turns}",
-                category="fork",
+                category=Category.SESSION,
             )
 
             if total_turns == 0:
@@ -1032,19 +1033,19 @@ class SessionDataService:
             debug_log.info(
                 f"_stream_history_from_storage: completed session={session_id[:8]}, "
                 f"turns_sent={turns_sent}, chunks={total_chunks}",
-                category="websocket",
+                category=Category.API,
             )
 
         except asyncio.CancelledError:
             debug_log.info(
                 f"_stream_history_from_storage: cancelled for session {session_id[:8]}",
-                category="websocket",
+                category=Category.API,
             )
             raise
         except Exception as e:
             debug_log.error(
                 f"_stream_history_from_storage: error for session {session_id[:8]}: {e}",
-                category="websocket",
+                category=Category.API,
             )
             # Emit completion with error state (0 turns signals incomplete load)
             self.emit_history_complete(session_id, total_turns=0, final_watermark=-1)
@@ -1396,7 +1397,7 @@ class SessionDataService:
         if not self._storage:
             debug_log.warning(
                 "get_all_sessions called without storage configured",
-                category="websocket",
+                category=Category.API,
             )
             return []
 
@@ -1433,7 +1434,7 @@ class SessionDataService:
         if not self._storage:
             debug_log.warning(
                 "get_session called without storage configured",
-                category="websocket",
+                category=Category.API,
             )
             return None
 
@@ -1493,7 +1494,7 @@ class SessionDataService:
         if not self._session_loader:
             debug_log.warning(
                 "set_context_mode called without session_loader configured",
-                category="websocket",
+                category=Category.API,
             )
             return
 
@@ -1501,14 +1502,14 @@ class SessionDataService:
         if not session:
             debug_log.warning(
                 f"set_context_mode: session {session_id[:8]} not found",
-                category="websocket",
+                category=Category.API,
             )
             return
 
         if turn_idx < 0 or turn_idx >= len(session.turns):
             debug_log.warning(
                 f"set_context_mode: turn index {turn_idx} out of range",
-                category="websocket",
+                category=Category.API,
             )
             return
 
@@ -1518,7 +1519,7 @@ class SessionDataService:
         except ValueError:
             debug_log.warning(
                 f"set_context_mode: invalid mode '{mode}'",
-                category="websocket",
+                category=Category.API,
             )
             return
 
@@ -1528,7 +1529,7 @@ class SessionDataService:
 
         debug_log.info(
             f"set_context_mode: session {session_id[:8]} turn {turn_idx} -> {mode}",
-            category="websocket",
+            category=Category.API,
         )
 
         # Emit session updated event
@@ -1551,7 +1552,7 @@ class SessionDataService:
         if not self._session_loader:
             debug_log.warning(
                 "delete_turns called without session_loader configured",
-                category="websocket",
+                category=Category.API,
             )
             return 0
 
@@ -1559,7 +1560,7 @@ class SessionDataService:
         if not session:
             debug_log.warning(
                 f"delete_turns: session {session_id[:8]} not found",
-                category="websocket",
+                category=Category.API,
             )
             return 0
 
@@ -1577,7 +1578,7 @@ class SessionDataService:
             await session.save()
             debug_log.info(
                 f"delete_turns: session {session_id[:8]} deleted {deleted_count} turns",
-                category="websocket",
+                category=Category.API,
             )
 
             # Emit session updated event
@@ -1613,7 +1614,7 @@ class SessionDataService:
 
             debug_log.info(
                 f"Session pinned: {session_id[:8]}",
-                category="websocket",
+                category=Category.API,
             )
 
             # Emit events to all clients
@@ -1628,7 +1629,7 @@ class SessionDataService:
 
             return True
         except Exception as e:
-            debug_log.error(f"Failed to pin session: {e}", category="websocket")
+            debug_log.error(f"Failed to pin session: {e}", category=Category.API)
             return False
 
     @ws_expose
@@ -1656,7 +1657,7 @@ class SessionDataService:
 
             debug_log.info(
                 f"Session unpinned: {session_id[:8]}",
-                category="websocket",
+                category=Category.API,
             )
 
             # Emit events to all clients
@@ -1671,7 +1672,7 @@ class SessionDataService:
 
             return True
         except Exception as e:
-            debug_log.error(f"Failed to unpin session: {e}", category="websocket")
+            debug_log.error(f"Failed to unpin session: {e}", category=Category.API)
             return False
 
     @ws_expose
@@ -1734,7 +1735,7 @@ class SessionDataService:
         if session_count > 0:
             debug_log.info(
                 f"client_disconnected: client={client_id}, sessions={session_count}",
-                category="websocket",
+                category=Category.API,
             )
 
     # --- Event Emission (called by session infrastructure) ---
@@ -1771,7 +1772,7 @@ class SessionDataService:
             f"emit_turn_created: session={session_id[:8]}, turn={turn_id[:8] if turn_id else 'none'}, "
             f"role={role}, order={order}, parallel_group={parallel_group_id[:8] if parallel_group_id else 'none'}, "
             f"subscribers={len(subscribers)}",
-            category="websocket",
+            category=Category.API,
         )
         if not subscribers:
             return
@@ -1812,7 +1813,7 @@ class SessionDataService:
         debug_log.debug(
             f"emit_turn_delta: session={session_id[:8]}, turn={turn_id[:8] if turn_id else 'none'}, "
             f"delta_len={len(delta)}, subscribers={len(subscribers)}",
-            category="websocket",
+            category=Category.API,
         )
         if not subscribers:
             return
@@ -1888,7 +1889,7 @@ class SessionDataService:
             f"emit_turn_finished: turn_id={turn_id}, {block_info}, "
             f"tokens={tokens}, subscribers={len(subscribers)} "
             f"(header={len(header_subscribers)}, body={len(body_subscribers)})",
-            category="websocket",
+            category=Category.API,
         )
         self._emit_event("sessionDataTurnFinished", event_dict, subscribers)
 
@@ -1922,7 +1923,7 @@ class SessionDataService:
         debug_log.debug(
             f"emit_history_chunk: session={session_id[:8]}, chunk={chunk_index}/{total_chunks}, "
             f"turns={len(turns)}, watermark={watermark}, subscribers={len(subscribers)}",
-            category="websocket",
+            category=Category.API,
         )
 
         # Convert TurnSnapshot list to dicts for serialization
@@ -1967,7 +1968,7 @@ class SessionDataService:
         debug_log.info(
             f"emit_history_complete: session={session_id[:8]}, total_turns={total_turns}, "
             f"watermark={final_watermark}, subscribers={len(subscribers)}",
-            category="websocket",
+            category=Category.API,
         )
 
         event_data = SessionHistoryCompleteEvent(
@@ -1990,7 +1991,7 @@ class SessionDataService:
         from core.debug_log import debug_log
         debug_log.info(
             f"emit_session_added: session={session.id[:8]}, title={session.title[:20]}",
-            category="websocket",
+            category=Category.API,
         )
         event_data = SessionAddedEvent(
             session_id=session.id,
@@ -2024,7 +2025,7 @@ class SessionDataService:
         from core.debug_log import debug_log
         debug_log.info(
             f"emit_session_removed: session={session_id[:8]}",
-            category="websocket",
+            category=Category.API,
         )
         event_data = SessionRemovedEvent(session_id=session_id)
         self._emit_event("sessionDataSessionRemoved", event_data.__dict__)
@@ -2347,7 +2348,7 @@ class SessionDataService:
                 f"old_string_len={len(tool_input.get('old_string', ''))}, "
                 f"new_string_len={len(tool_input.get('new_string', ''))}, "
                 f"keys={list(tool_input.keys())}",
-                category="websocket",
+                category=Category.API,
             )
 
         self._emit_event("sessionDataToolUse", event_data, subscribers)

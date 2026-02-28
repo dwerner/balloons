@@ -17,7 +17,7 @@ import shlex
 import subprocess
 from typing import Any, TYPE_CHECKING
 
-from .debug_log import debug_log
+from .debug_log import debug_log, Category
 
 if TYPE_CHECKING:
     from session import Session
@@ -46,7 +46,7 @@ def set_supervisor(supervisor) -> None:
     """
     global _supervisor
     _supervisor = supervisor
-    debug_log.info("Supervisor tools: supervisor instance set", category="supervisor")
+    debug_log.info("Supervisor tools: supervisor instance set", category=Category.SUPERVISOR)
 
 
 def get_supervisor():
@@ -75,7 +75,7 @@ async def execute_supervisor_tool(
     Returns:
         Tuple of (result_string, is_error)
     """
-    debug_log.error(f"[ENTRY] execute_supervisor_tool called: name={name}, args={args}", category="supervisor")
+    debug_log.error(f"[ENTRY] execute_supervisor_tool called: name={name}, args={args}", category=Category.SUPERVISOR)
 
     # These tools don't need the supervisor instance
     if name == "supervisor_query":
@@ -98,7 +98,7 @@ async def execute_supervisor_tool(
         else:
             return f"Unknown supervisor tool: {name}", True
     except Exception as e:
-        debug_log.error(f"Supervisor tool error: {e}", category="supervisor")
+        debug_log.error(f"Supervisor tool error: {e}", category=Category.SUPERVISOR)
         return f"Error: {str(e)}", True
 
 
@@ -157,7 +157,7 @@ async def _execute_start(
         # DEBUG: Log what we're actually building
         debug_log.error(
             f"Building SSH command - ssh_args: {ssh_args}, final: {final_command}",
-            category="supervisor",
+            category=Category.SUPERVISOR,
         )
 
         # For SSH, working_dir is handled in the remote command
@@ -175,12 +175,12 @@ async def _execute_start(
         import traceback
         debug_log.info(
             f"CALL STACK for supervisor_start:\n{''.join(traceback.format_stack())}",
-            category="supervisor",
+            category=Category.SUPERVISOR,
         )
         # Log the exact command being sent to supervisor
         debug_log.info(
             f"SUPERVISOR_START: final_command={final_command!r}",
-            category="supervisor",
+            category=Category.SUPERVISOR,
         )
         process_id = _supervisor.start(
             command=final_command,
@@ -192,7 +192,7 @@ async def _execute_start(
 
         debug_log.info(
             f"Started process: {process_id[:8]}",
-            category="supervisor",
+            category=Category.SUPERVISOR,
             details={
                 "command": command,
                 "host": host_name,
@@ -313,7 +313,7 @@ def _execute_stop(args: dict[str, Any]) -> tuple[str, bool]:
     try:
         _supervisor.stop_process(process_id)
 
-        debug_log.info(f"Stopped process: {process_id[:8]}", category="supervisor")
+        debug_log.info(f"Stopped process: {process_id[:8]}", category=Category.SUPERVISOR)
 
         return json.dumps({
             "process_id": process_id,
@@ -360,11 +360,11 @@ def stop_session_processes(session_id: str) -> int:
         if count > 0:
             debug_log.info(
                 f"Stopped {count} processes for session {session_id[:8]}",
-                category="supervisor",
+                category=Category.SUPERVISOR,
             )
         return count
     except Exception as e:
-        debug_log.error(f"Error stopping session processes: {e}", category="supervisor")
+        debug_log.error(f"Error stopping session processes: {e}", category=Category.SUPERVISOR)
         return 0
 
 
@@ -379,9 +379,9 @@ def shutdown_supervisor() -> None:
         return
     try:
         _supervisor.shutdown()
-        debug_log.info("Supervisor shutdown complete", category="supervisor")
+        debug_log.info("Supervisor shutdown complete", category=Category.SUPERVISOR)
     except Exception as e:
-        debug_log.error(f"Error during supervisor shutdown: {e}", category="supervisor")
+        debug_log.error(f"Error during supervisor shutdown: {e}", category=Category.SUPERVISOR)
     finally:
         _supervisor = None
 

@@ -9,7 +9,7 @@ Extracted from app.py to enable unit testing without the UI.
 from dataclasses import dataclass
 
 from models import Message, ContextMode
-from core.debug_log import debug_log
+from core.debug_log import debug_log, Category
 
 
 @dataclass
@@ -61,7 +61,7 @@ def group_messages_by_context_mode(
         incoming_modes[mode_name] = incoming_modes.get(mode_name, 0) + 1
     debug_log.info(
         f"group_messages_by_context_mode: incoming message modes",
-        category="fork",
+        category=Category.SESSION,
         details={"message_count": len(indexed_messages), "mode_distribution": incoming_modes},
     )
 
@@ -100,7 +100,7 @@ def group_messages_by_context_mode(
     # Log the result
     debug_log.info(
         f"group_messages_by_context_mode: result",
-        category="fork",
+        category=Category.SESSION,
         details={
             "copy_count": len(copy_items),
             "compress_group_count": len(compress_groups),

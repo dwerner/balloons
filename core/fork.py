@@ -19,7 +19,7 @@ from models import Message, TextBlock, ContextMode
 from session import Session
 from storage_schema import SessionBinding
 from .context_grouper import group_messages_by_context_mode, ContextGroups
-from .debug_log import debug_log
+from .debug_log import debug_log, Category
 
 
 # =============================================================================
@@ -422,13 +422,13 @@ class ForkManager:
 
             debug_log.info(
                 f"prepare_fork: populated child session with {len(child_session.turns)} turns, saving",
-                category="fork",
+                category=Category.SESSION,
                 details={"child_id": child_session.id[:8]},
             )
             await child_session.save()
             debug_log.info(
                 f"prepare_fork: child session saved",
-                category="fork",
+                category=Category.SESSION,
                 details={"child_id": child_session.id[:8]},
             )
 

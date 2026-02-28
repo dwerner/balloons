@@ -20,7 +20,7 @@ from models import (
 from .exceptions import RateLimitError, InputRequiredError, StreamTimeoutError
 from .binding_context import build_binding_context_for_session
 from session import Session, Turn
-from .debug_log import debug_log, perf_marker
+from .debug_log import debug_log, perf_marker, Category
 from .base_runner import BaseRunner
 
 
@@ -254,7 +254,7 @@ class SessionRunner:
                 debug_log.info(
                     f"Prepending binding context ({len(binding_context)} chars, is_fork={is_fork})",
                     session_id=self.session.id,
-                    category="binding",
+                    category=Category.RUNNER,
                 )
                 return f"{binding_context}\n\n---\n\n{prompt}"
             return prompt
@@ -262,7 +262,7 @@ class SessionRunner:
             debug_log.warning(
                 f"Failed to load binding context: {e}",
                 session_id=self.session.id,
-                category="binding",
+                category=Category.RUNNER,
             )
             return prompt
 
@@ -348,7 +348,7 @@ class SessionRunner:
             raise
         except RateLimitError as e:
             self._status = RunnerStatus.ERROR
-            debug_log.warning(f"Rate limit: {e}", session_id=self.session.id, category="stream")
+            debug_log.warning(f"Rate limit: {e}", session_id=self.session.id, category=Category.RUNNER)
             self._result = StreamResult(
                 content=self._text_buffer,
                 content_blocks=self._content_blocks,
@@ -358,13 +358,13 @@ class SessionRunner:
             yield self._make_event("rate_limit", str(e))
         except InputRequiredError as e:
             self._status = RunnerStatus.IDLE  # Not an error - just needs input
-            debug_log.info(f"Input required: {e}", session_id=self.session.id, category="stream")
+            debug_log.info(f"Input required: {e}", session_id=self.session.id, category=Category.RUNNER)
             await self._finalize_stream()
             self._result.error = "Claude is asking a question"
             yield self._make_event("input_required", str(e))
         except StreamTimeoutError as e:
             self._status = RunnerStatus.ERROR
-            debug_log.error(f"Stream timeout: {e}", session_id=self.session.id, category="stream")
+            debug_log.error(f"Stream timeout: {e}", session_id=self.session.id, category=Category.RUNNER)
             # Create an error turn with the timeout info
             error_block = ErrorBlock(
                 reason="timeout",
@@ -386,7 +386,7 @@ class SessionRunner:
             yield self._make_event("error", str(e))
         except Exception as e:
             self._status = RunnerStatus.ERROR
-            debug_log.error(f"Stream error: {e}", session_id=self.session.id, category="stream")
+            debug_log.error(f"Stream error: {e}", session_id=self.session.id, category=Category.RUNNER)
             self._result = StreamResult(
                 content=self._text_buffer,
                 content_blocks=self._content_blocks,
@@ -425,7 +425,7 @@ class SessionRunner:
         from core.debug_log import debug_log
         debug_log.info(
             f"SessionRunner.start_background: _initial_turn_id={self._initial_turn_id}, session={self.session.id[:8]}",
-            category="stream",
+            category=Category.RUNNER,
         )
 
         self._background_task = asyncio.create_task(
@@ -489,7 +489,7 @@ class SessionRunner:
             final_events = await self._finalize_stream()
             for event in final_events:
                 await self._event_queue.put(event)
-            debug_log.info("Emitting done event", category="stream", session_id=self.session.id)
+            debug_log.info("Emitting done event", category=Category.RUNNER, session_id=self.session.id)
             await self._event_queue.put(self._make_event("done", self._result))
             self._status = RunnerStatus.IDLE
 
@@ -498,7 +498,7 @@ class SessionRunner:
             await self._event_queue.put(self._make_event("cancelled", None))
         except RateLimitError as e:
             self._status = RunnerStatus.ERROR
-            debug_log.warning(f"Rate limit: {e}", session_id=self.session.id, category="stream")
+            debug_log.warning(f"Rate limit: {e}", session_id=self.session.id, category=Category.RUNNER)
             self._result = StreamResult(
                 content=self._text_buffer,
                 content_blocks=self._content_blocks,
@@ -508,13 +508,13 @@ class SessionRunner:
             await self._event_queue.put(self._make_event("rate_limit", str(e)))
         except InputRequiredError as e:
             self._status = RunnerStatus.IDLE  # Not an error - just needs input
-            debug_log.info(f"Input required: {e}", session_id=self.session.id, category="stream")
+            debug_log.info(f"Input required: {e}", session_id=self.session.id, category=Category.RUNNER)
             await self._finalize_stream()
             self._result.error = "Claude is asking a question"
             await self._event_queue.put(self._make_event("input_required", str(e)))
         except StreamTimeoutError as e:
             self._status = RunnerStatus.ERROR
-            debug_log.error(f"Stream timeout: {e}", session_id=self.session.id, category="stream")
+            debug_log.error(f"Stream timeout: {e}", session_id=self.session.id, category=Category.RUNNER)
             # Create an error turn with the timeout info
             error_block = ErrorBlock(
                 reason="timeout",
@@ -536,7 +536,7 @@ class SessionRunner:
             await self._event_queue.put(self._make_event("error", str(e)))
         except Exception as e:
             self._status = RunnerStatus.ERROR
-            debug_log.error(f"Stream error: {e}", session_id=self.session.id, category="stream")
+            debug_log.error(f"Stream error: {e}", session_id=self.session.id, category=Category.RUNNER)
             self._result = StreamResult(
                 content=self._text_buffer,
                 content_blocks=self._content_blocks,
@@ -702,13 +702,13 @@ class SessionRunner:
             debug_log.debug(
                 f"Session saved incrementally ({len(self.session.turns)} turns)",
                 session_id=self.session.id,
-                category="stream",
+                category=Category.RUNNER,
             )
         except Exception as e:
             debug_log.error(
                 f"Async session save failed: {e}",
                 session_id=self.session.id,
-                category="stream",
+                category=Category.RUNNER,
             )
 
     async def _flush_pending_save(self) -> None:
@@ -833,7 +833,7 @@ class SessionRunner:
 
                     debug_log.info(
                         f"Post-tool text starting - new turn {new_turn_id[:8]}",
-                        category="stream",
+                        category=Category.RUNNER,
                         session_id=self.session.id,
                         details={
                             "tool_index": self._tool_index,
@@ -899,7 +899,7 @@ class SessionRunner:
                 # Tool input complete - create the block and turn
                 debug_log.info(
                     f"_process_event: ToolUseEvent received",
-                    category="stream",
+                    category=Category.RUNNER,
                     details={
                         "tool_use_id": event.tool_use_id[:20] if event.tool_use_id else "",
                         "tool_name": event.tool_name,
@@ -1047,7 +1047,7 @@ class SessionRunner:
             debug_log.warning(
                 f"Failed to process event: {e}",
                 session_id=self.session.id,
-                category="llm",
+                category=Category.RUNNER,
             )
             return []  # Skip bad event
 
@@ -1125,7 +1125,7 @@ class SessionRunner:
         debug_log.warning(
             f"Stream ended with errors: {reason}",
             session_id=self.session.id,
-            category="stream",
+            category=Category.RUNNER,
             details={
                 "json_errors": len(json_errors),
                 "partial_tool": partial_tool_name or None,
@@ -1219,7 +1219,7 @@ class HelperRunner:
             await self._event_queue.put(self._make_event("cancelled", None))
         except Exception as e:
             self._status = RunnerStatus.ERROR
-            debug_log.error(f"Helper stream error: {e}", category="stream")
+            debug_log.error(f"Helper stream error: {e}", category=Category.RUNNER)
             await self._event_queue.put(self._make_event("error", str(e)))
 
     def drain_events(self) -> list[StreamEvent]:

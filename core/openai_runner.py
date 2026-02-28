@@ -16,7 +16,7 @@ from models import (
     ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultEvent,
 )
 from .base_runner import BaseRunner, RunnerEvent
-from .debug_log import debug_log, dump_failed_json, perf_marker
+from .debug_log import debug_log, dump_failed_json, perf_marker, Category
 from .tools import get_tools_for_request
 from .tool_executor import execute_tool
 
@@ -70,14 +70,14 @@ def _dump_interaction(
 
         debug_log.info(
             f"Dumped interaction to {filepath}",
-            category="api",
+            category=Category.RUNNER,
             details={"file": str(filepath), "context": context},
         )
         return filepath
     except Exception as e:
         debug_log.warning(
             f"Failed to dump interaction: {e}",
-            category="api",
+            category=Category.RUNNER,
         )
         return None
 
@@ -277,7 +277,7 @@ class OpenAICompatibleRunner(BaseRunner):
 
         debug_log.info(
             f"OpenAI request to {self.model}",
-            category="process",
+            category=Category.RUNNER,
             details={
                 "message_count": len(openai_messages),
                 "prompt_len": len(prompt),
@@ -356,7 +356,7 @@ class OpenAICompatibleRunner(BaseRunner):
                     if tool_name in CLIENT_ONLY_TOOLS:
                         debug_log.info(
                             f"Skipping client-only tool: {tool_name}",
-                            category="tool",
+                            category=Category.RUNNER,
                             run_id=self._run_id,
                         )
                         # Don't add to openai_messages - no result for LLM
@@ -385,7 +385,7 @@ class OpenAICompatibleRunner(BaseRunner):
 
             debug_log.info(
                 f"OpenAI stream complete",
-                category="process",
+                category=Category.RUNNER,
                 details={
                     "input_tokens": total_input_tokens,
                     "output_tokens": total_output_tokens,
@@ -404,7 +404,7 @@ class OpenAICompatibleRunner(BaseRunner):
         except Exception as e:
             debug_log.error(
                 f"OpenAI stream error: {e}",
-                category="process",
+                category=Category.RUNNER,
                 details={
                     "error_type": type(e).__name__,
                     "error_str": str(e),
@@ -461,7 +461,7 @@ class OpenAICompatibleRunner(BaseRunner):
         # Log request payload for debugging
         debug_log.debug(
             f"OpenAI request payload",
-            category="api",
+            category=Category.RUNNER,
             details={
                 "model": self.model,
                 "message_count": len(openai_messages),
@@ -483,7 +483,7 @@ class OpenAICompatibleRunner(BaseRunner):
         if tools:
             debug_log.trace(
                 "Full tool definitions",
-                category="api",
+                category=Category.RUNNER,
                 details={"tools": tools},
                 run_id=self._run_id,
             )
@@ -504,14 +504,14 @@ class OpenAICompatibleRunner(BaseRunner):
                 self._collected_chunks.append(chunk_dict)
                 debug_log.trace(
                     "Raw OpenAI chunk",
-                    category="api",
+                    category=Category.RUNNER,
                     details={"chunk": chunk_dict},
                     run_id=self._run_id,
                 )
             except Exception as e:
                 debug_log.trace(
                     f"Failed to serialize chunk: {e}",
-                    category="api",
+                    category=Category.RUNNER,
                     run_id=self._run_id,
                 )
 
@@ -535,7 +535,7 @@ class OpenAICompatibleRunner(BaseRunner):
                 # Log chunks without choices (might indicate issues)
                 debug_log.trace(
                     "Chunk without choices",
-                    category="api",
+                    category=Category.RUNNER,
                     details={"has_usage": chunk.usage is not None},
                     run_id=self._run_id,
                 )
@@ -558,7 +558,7 @@ class OpenAICompatibleRunner(BaseRunner):
                 # Log raw tool_calls delta for debugging
                 debug_log.debug(
                     "Raw tool_calls delta",
-                    category="api",
+                    category=Category.RUNNER,
                     details={
                         "tool_calls": [
                             {
@@ -618,7 +618,7 @@ class OpenAICompatibleRunner(BaseRunner):
             # Log the raw arguments before parsing (useful for debugging weird encodings)
             debug_log.debug(
                 f"Finalizing tool call: {tc['name']}",
-                category="api",
+                category=Category.RUNNER,
                 details={
                     "tool_id": tc["id"],
                     "tool_name": tc["name"],
@@ -635,7 +635,7 @@ class OpenAICompatibleRunner(BaseRunner):
                 dump_path = dump_failed_json(raw_args, "tool_input")
                 debug_log.warning(
                     f"Tool input JSON decode error: {e}" + (f" (dumped to {dump_path})" if dump_path else ""),
-                    category="json",
+                    category=Category.RUNNER,
                     details={
                         "tool_name": tc["name"],
                         "dump_file": str(dump_path) if dump_path else None,
@@ -666,7 +666,7 @@ class OpenAICompatibleRunner(BaseRunner):
             # Log successful parse
             debug_log.debug(
                 f"Tool call parsed: {tc['name']}",
-                category="api",
+                category=Category.RUNNER,
                 details={
                     "tool_id": tc["id"],
                     "tool_name": tc["name"],
@@ -709,7 +709,7 @@ class OpenAICompatibleRunner(BaseRunner):
             if re.search(pattern, content_buffer):
                 debug_log.warning(
                     f"Possible embedded tool call detected: {description}",
-                    category="api",
+                    category=Category.RUNNER,
                     details={
                         "pattern": pattern,
                         "description": description,

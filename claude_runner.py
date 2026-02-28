@@ -13,7 +13,7 @@ from models import (
     ToolUseStartEvent, ToolUseEvent, ToolResultEvent,
     TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock, ContextMode,
 )
-from core.debug_log import debug_log, dump_failed_json
+from core.debug_log import debug_log, dump_failed_json, Category
 from core.base_runner import BaseRunner, RunnerEvent
 from core.exceptions import RateLimitError, StreamTimeoutError
 
@@ -81,7 +81,7 @@ async def readline_unlimited(
                 session_info = f" [{session_name}]" if session_name else ""
                 debug_log.warning(
                     f"Tool execution taking {total_wait:.0f}s{session_info}",
-                    category="stream",
+                    category=Category.RUNNER,
                     run_id=run_id,
                 )
                 # TODO: Could emit a notification event here for UI
@@ -142,7 +142,7 @@ class ClaudeRunner(BaseRunner):
         if not all_matches:
             debug_log.debug(
                 "No balloons-tool blocks found in text",
-                category="tool",
+                category=Category.RUNNER,
                 details={"text_len": len(text), "text_preview": text[-500:] if len(text) > 500 else text},
                 run_id=self._run_id,
             )
@@ -150,7 +150,7 @@ class ClaudeRunner(BaseRunner):
 
         debug_log.info(
             f"Found {len(all_matches)} potential balloons-tool block(s)",
-            category="tool",
+            category=Category.RUNNER,
             details={
                 "text_len": len(text),
                 "match_positions": [(m.start(), m.end()) for m in all_matches],
@@ -175,7 +175,7 @@ class ClaudeRunner(BaseRunner):
             if is_inside_code_fence(match.start()):
                 debug_log.debug(
                     f"Skipping balloons-tool block inside code fence",
-                    category="tool",
+                    category=Category.RUNNER,
                     details={"position": match.start(), "content_preview": match.group(1)[:100]},
                     run_id=self._run_id,
                 )
@@ -185,14 +185,14 @@ class ClaudeRunner(BaseRunner):
         if not valid_matches:
             debug_log.info(
                 f"All {len(all_matches)} balloons-tool blocks were inside code fences (examples)",
-                category="tool",
+                category=Category.RUNNER,
                 run_id=self._run_id,
             )
             return []
 
         debug_log.info(
             f"Processing {len(valid_matches)} valid balloons-tool block(s) (filtered {len(all_matches) - len(valid_matches)} in code fences)",
-            category="tool",
+            category=Category.RUNNER,
             run_id=self._run_id,
         )
 
@@ -202,7 +202,7 @@ class ClaudeRunner(BaseRunner):
             try:
                 debug_log.info(
                     f"Parsing balloons-tool JSON",
-                    category="tool",
+                    category=Category.RUNNER,
                     details={"captured_len": len(captured), "captured_preview": captured[:200]},
                     run_id=self._run_id,
                 )
@@ -212,7 +212,7 @@ class ClaudeRunner(BaseRunner):
                 if tool_name == "propose_fork":
                     debug_log.info(
                         f"propose_fork parsed",
-                        category="tool",
+                        category=Category.RUNNER,
                         details={"context_plan_len": len(tool_args.get("context_plan", []))},
                         run_id=self._run_id,
                     )
@@ -220,14 +220,14 @@ class ClaudeRunner(BaseRunner):
                 results.append((tool_name, tool_id, tool_args))
                 debug_log.info(
                     f"Successfully parsed balloons-tool: {tool_name}",
-                    category="tool",
+                    category=Category.RUNNER,
                     details={"tool_id": tool_id, "args_keys": list(tool_args.keys())},
                     run_id=self._run_id,
                 )
             except json.JSONDecodeError as e:
                 debug_log.warning(
                     f"Failed to parse balloons-tool JSON: {e}",
-                    category="tool",
+                    category=Category.RUNNER,
                     details={"captured": captured[:500], "error_pos": e.pos if hasattr(e, 'pos') else None},
                     run_id=self._run_id,
                 )
@@ -256,7 +256,7 @@ class ClaudeRunner(BaseRunner):
 
         debug_log.info(
             f"Detected {len(tool_calls)} balloons-tool(s)",
-            category="tool",
+            category=Category.RUNNER,
             details={"tools": [tc[0] for tc in tool_calls]},
             run_id=self._run_id,
         )
@@ -336,7 +336,7 @@ class ClaudeRunner(BaseRunner):
         if not path.exists():
             debug_log.warning(
                 f"Image file not found: {file_path}",
-                category="image",
+                category=Category.RUNNER,
                 run_id=self._run_id,
             )
             return None
@@ -354,7 +354,7 @@ class ClaudeRunner(BaseRunner):
         if not media_type:
             debug_log.warning(
                 f"Unsupported image format: {ext}",
-                category="image",
+                category=Category.RUNNER,
                 run_id=self._run_id,
             )
             return None
@@ -366,7 +366,7 @@ class ClaudeRunner(BaseRunner):
         except Exception as e:
             debug_log.error(
                 f"Failed to read image: {e}",
-                category="image",
+                category=Category.RUNNER,
                 run_id=self._run_id,
             )
             return None
@@ -404,7 +404,7 @@ class ClaudeRunner(BaseRunner):
         for img_block in result.history_images:
             debug_log.info(
                 f"Added image: {img_block.file_path}",
-                category="image",
+                category=Category.RUNNER,
                 run_id=self._run_id,
             )
 
@@ -466,7 +466,7 @@ class ClaudeRunner(BaseRunner):
         if working_dir and not os.path.isdir(working_dir):
             debug_log.warning(
                 f"Working directory does not exist: {working_dir}, falling back to cwd",
-                category="process",
+                category=Category.RUNNER,
             )
             effective_cwd = None
 
@@ -483,7 +483,7 @@ class ClaudeRunner(BaseRunner):
 
         debug_log.info(
             f"Claude started (pid {self.process.pid})",
-            category="process",
+            category=Category.RUNNER,
             details={"cwd": working_dir or "default", "mode": "stream-json"},
             run_id=self._run_id,
         )
@@ -503,7 +503,7 @@ class ClaudeRunner(BaseRunner):
                 self._current_session.cached_context_tokens = context_tokens
                 debug_log.info(
                     f"Context tokens: {context_tokens} (tiktoken)",
-                    category="context",
+                    category=Category.RUNNER,
                     session_id=self._current_session.id[:8] if self._current_session else "",
                 )
 
@@ -559,7 +559,7 @@ class ClaudeRunner(BaseRunner):
 
         debug_log.debug(
             f"Sent {msg.get('type')} message",
-            category="claude",
+            category=Category.RUNNER,
             run_id=self._run_id,
         )
 
@@ -618,7 +618,7 @@ class ClaudeRunner(BaseRunner):
                 self._json_errors.append((str(e), str(dump_path) if dump_path else None))
                 debug_log.warning(
                     f"JSON decode error: {e}",
-                    category="json",
+                    category=Category.RUNNER,
                     run_id=self._run_id,
                 )
                 continue
@@ -657,7 +657,7 @@ class ClaudeRunner(BaseRunner):
 
                                 debug_log.debug(
                                     f"Detected balloons-tool tags: {opening_count} open, {closing_count} close",
-                                    category="tool",
+                                    category=Category.RUNNER,
                                     details={"buffer_len": len(self._text_buffer)},
                                     run_id=self._run_id,
                                 )
@@ -665,7 +665,7 @@ class ClaudeRunner(BaseRunner):
                                 if opening_count == closing_count:
                                     debug_log.info(
                                         f"Found {opening_count} complete balloons-tool block(s) - checking for real tool calls",
-                                        category="tool",
+                                        category=Category.RUNNER,
                                         details={"buffer_len": len(self._text_buffer), "buffer_preview": self._text_buffer[:500]},
                                         run_id=self._run_id,
                                     )
@@ -674,7 +674,7 @@ class ClaudeRunner(BaseRunner):
                                     if tool_calls:
                                         debug_log.info(
                                             f"Executing {len(tool_calls)} real balloons-tool call(s)",
-                                            category="tool",
+                                            category=Category.RUNNER,
                                             details={"tools": [tc[0] for tc in tool_calls]},
                                             run_id=self._run_id,
                                         )
@@ -687,7 +687,7 @@ class ClaudeRunner(BaseRunner):
                                     else:
                                         debug_log.info(
                                             f"All {opening_count} balloons-tool blocks were examples (in code fences), not executing",
-                                            category="tool",
+                                            category=Category.RUNNER,
                                             run_id=self._run_id,
                                         )
                                     self._text_buffer = ""
@@ -742,7 +742,7 @@ class ClaudeRunner(BaseRunner):
 
                         debug_log.debug(
                             f"CLI tool result received: {tool_use_id[:8]}...",
-                            category="claude",
+                            category=Category.RUNNER,
                             run_id=self._run_id,
                         )
 
@@ -789,7 +789,7 @@ class ClaudeRunner(BaseRunner):
                 if awaiting_balloons_tool_response:
                     debug_log.debug(
                         "Awaiting balloons-tool response, continuing stream",
-                        category="tool",
+                        category=Category.RUNNER,
                         run_id=self._run_id,
                     )
                     awaiting_balloons_tool_response = False
@@ -841,14 +841,14 @@ class ClaudeRunner(BaseRunner):
         if exit_code != 0:
             debug_log.error(
                 f"Claude exited (code {exit_code})",
-                category="process",
+                category=Category.RUNNER,
                 details={"stderr": stderr_text[:500]},
                 run_id=self._run_id,
             )
             if "hit your limit" in stderr_text.lower():
                 raise RateLimitError(stderr_text.strip())
         else:
-            debug_log.info(f"Claude exited (code 0)", category="process", run_id=self._run_id)
+            debug_log.info(f"Claude exited (code 0)", category=Category.RUNNER, run_id=self._run_id)
 
         self._run_id = ""
         self.process = None
@@ -894,7 +894,7 @@ class ClaudeRunner(BaseRunner):
         if images:
             debug_log.info(
                 f"Set {len(images)} pending images for next message",
-                category="image",
+                category=Category.RUNNER,
                 run_id=self._run_id,
             )
 

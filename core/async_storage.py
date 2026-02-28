@@ -34,7 +34,7 @@ try:
 except ImportError:
     RUST_STORAGE_AVAILABLE = False
 
-from .debug_log import perf_timed, perf_marker, debug_log
+from .debug_log import perf_timed, perf_marker, debug_log, Category
 
 if TYPE_CHECKING:
     from session import Session
@@ -180,7 +180,7 @@ class AsyncStorage:
             from core.debug_log import debug_log
             debug_log.info(
                 f"Saving session {session.id[:8]} with {len(turns_with_sentiment)} turns having sentiment: {turns_with_sentiment[:5]}",
-                category="storage"
+                category=Category.STORAGE
             )
 
         # Save session metadata first (required for replace_session_turns)
@@ -239,7 +239,7 @@ class AsyncStorage:
                     # Turn already deleted or never saved - this is fine
                     debug_log.debug(
                         f"Turn {turn_id[:8]} already deleted or never saved, skipping",
-                        category="storage",
+                        category=Category.STORAGE,
                         session_id=session.id,
                     )
                 else:
@@ -284,7 +284,7 @@ class AsyncStorage:
                     # Log and continue - the other server's order will persist.
                     debug_log.warning(
                         f"reorder_turns failed due to concurrent modification, skipping: {e}",
-                        category="storage",
+                        category=Category.STORAGE,
                         session_id=session.id,
                     )
                 else:

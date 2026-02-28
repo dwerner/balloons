@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-28T09:17:49.173492
+// Generated: 2026-02-28T12:27:00.617027
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -3206,6 +3206,17 @@ export class SoundServiceClient implements SoundService {
  */
 export interface DebugLogService {
   /**
+   * Clear log entries from a buffer.
+   * 
+   * Args:
+   * category: Category to clear, or None to clear all
+   * 
+   * Returns:
+   * LogResult with success status
+   */
+  clearBuffer(category?: string | null): Promise<Types.LogResult>;
+
+  /**
    * Clear category filter to log all categories.
    * 
    * Returns:
@@ -3255,6 +3266,22 @@ export interface DebugLogService {
   error(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult>;
 
   /**
+   * Get all valid category names.
+   * 
+   * Returns:
+   * List of all category names that have dedicated buffers
+   */
+  getAllCategories(): Promise<string[]>;
+
+  /**
+   * Get statistics for all category buffers.
+   * 
+   * Returns:
+   * List of BufferStats for each category
+   */
+  getBufferStats(): Promise<Types.BufferStats[]>;
+
+  /**
    * Get the list of currently enabled categories.
    * 
    * Returns:
@@ -3271,9 +3298,29 @@ export interface DebugLogService {
   getLevel(): Promise<string>;
 
   /**
+   * Get server identity (git state, metadata).
+   * 
+   * Returns the server's git commit, branch, dirty status, and
+   * diff hash (fingerprint of local changes). Useful for debugging
+   * to confirm what code version is running.
+   * 
+   * Returns:
+   * ServerIdentityInfo or None if not captured
+   */
+  getServerIdentity(): Promise<Types.ServerIdentityInfo | null>;
+
+  /**
    * Convenience method to log an info message.
    */
   info(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult>;
+
+  /**
+   * Check if debug logging is enabled.
+   * 
+   * Returns:
+   * True if debug logging is enabled
+   */
+  isEnabled(): Promise<boolean>;
 
   /**
    * Log a message from a web client.
@@ -3304,6 +3351,36 @@ export interface DebugLogService {
   logBatch(entries: Types.LogEntryInput[]): Promise<Types.LogResult>;
 
   /**
+   * Query log entries from a specific category's buffer.
+   * 
+   * This is the primary query method for v2. Use this to efficiently
+   * query entries from a single category's ring buffer.
+   * 
+   * Args:
+   * category: Category to query (e.g., 'api', 'runner')
+   * limit: Max entries to return (newest first)
+   * level: Filter by log level (optional)
+   * session_id: Filter by session (optional)
+   * run_id: Filter by run (optional)
+   * 
+   * Returns:
+   * QueryResult with matching entries and total buffer count
+   */
+  query(category: string, limit?: number, level?: string | null, sessionId?: string | null, runId?: string | null): Promise<Types.QueryResult>;
+
+  /**
+   * Set the buffer size for a category.
+   * 
+   * Args:
+   * category: Category name
+   * size: New max size (must be > 0)
+   * 
+   * Returns:
+   * LogResult with success status
+   */
+  setBufferSize(category: string, size: number): Promise<Types.LogResult>;
+
+  /**
    * Set the list of enabled categories.
    * 
    * Pass an empty list to log all categories (default behavior).
@@ -3315,6 +3392,20 @@ export interface DebugLogService {
    * LogResult with success status
    */
   setCategories(categories: string[]): Promise<Types.LogResult>;
+
+  /**
+   * Enable or disable debug logging globally.
+   * 
+   * When disabled, no entries are added to buffers or files.
+   * This is the main on/off switch for all debug logging.
+   * 
+   * Args:
+   * enabled: True to enable, False to disable
+   * 
+   * Returns:
+   * LogResult with success status
+   */
+  setEnabled(enabled: boolean): Promise<Types.LogResult>;
 
   /**
    * Set the minimum log level for the debug log.
@@ -3383,6 +3474,10 @@ export class DebugLogServiceClient implements DebugLogService {
     };
   }
 
+  async clearBuffer(category?: string | null): Promise<Types.LogResult> {
+    return this.call('clearBuffer', { category: category });
+  }
+
   async clearCategories(): Promise<Types.LogResult> {
     return this.call('clearCategories', {  });
   }
@@ -3403,6 +3498,14 @@ export class DebugLogServiceClient implements DebugLogService {
     return this.call('error', { message: message, category: category, sessionId: sessionId, details: details });
   }
 
+  async getAllCategories(): Promise<string[]> {
+    return this.call('getAllCategories', {  });
+  }
+
+  async getBufferStats(): Promise<Types.BufferStats[]> {
+    return this.call('getBufferStats', {  });
+  }
+
   async getCategories(): Promise<string[]> {
     return this.call('getCategories', {  });
   }
@@ -3411,8 +3514,16 @@ export class DebugLogServiceClient implements DebugLogService {
     return this.call('getLevel', {  });
   }
 
+  async getServerIdentity(): Promise<Types.ServerIdentityInfo | null> {
+    return this.call('getServerIdentity', {  });
+  }
+
   async info(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
     return this.call('info', { message: message, category: category, sessionId: sessionId, details: details });
+  }
+
+  async isEnabled(): Promise<boolean> {
+    return this.call('isEnabled', {  });
   }
 
   async log(entry: Types.LogEntryInput): Promise<Types.LogResult> {
@@ -3423,8 +3534,20 @@ export class DebugLogServiceClient implements DebugLogService {
     return this.call('logBatch', { entries: entries });
   }
 
+  async query(category: string, limit?: number, level?: string | null, sessionId?: string | null, runId?: string | null): Promise<Types.QueryResult> {
+    return this.call('query', { category: category, limit: limit, level: level, sessionId: sessionId, runId: runId });
+  }
+
+  async setBufferSize(category: string, size: number): Promise<Types.LogResult> {
+    return this.call('setBufferSize', { category: category, size: size });
+  }
+
   async setCategories(categories: string[]): Promise<Types.LogResult> {
     return this.call('setCategories', { categories: categories });
+  }
+
+  async setEnabled(enabled: boolean): Promise<Types.LogResult> {
+    return this.call('setEnabled', { enabled: enabled });
   }
 
   async setLevel(level: string): Promise<Types.LogResult> {

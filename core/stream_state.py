@@ -291,10 +291,10 @@ class StreamState:
             await callback(event, stream)
         except Exception as e:
             # Log but don't let observer errors break stream tracking
-            from core.debug_log import debug_log
+            from core.debug_log import debug_log, Category
             debug_log.error(
                 f"Stream observer error: {e} for event {event.value}",
-                category="streaming",
+                category=Category.RUNNER,
             )
 
     # =========================================================================

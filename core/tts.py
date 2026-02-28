@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Callable
 
-from .debug_log import debug_log
+from .debug_log import debug_log, Category
 
 
 @dataclass
@@ -62,7 +62,7 @@ class TTSRunner:
         self._running = True
         self._stop_requested = False
         self._task = asyncio.create_task(self._process_loop())
-        debug_log.info("TTS runner started", category="tts")
+        debug_log.info("TTS runner started", category=Category.RUNNER)
 
     async def stop(self) -> None:
         """Stop the TTS runner and cancel any pending speech."""
@@ -88,7 +88,7 @@ class TTSRunner:
                 pass
             self._task = None
 
-        debug_log.info("TTS runner stopped", category="tts")
+        debug_log.info("TTS runner stopped", category=Category.RUNNER)
 
     async def speak(
         self,
@@ -102,7 +102,7 @@ class TTSRunner:
             on_complete: Callback when speech finishes
         """
         if not self.config.enabled:
-            debug_log.info("TTS disabled, skipping", category="tts")
+            debug_log.info("TTS disabled, skipping", category=Category.RUNNER)
             if on_complete:
                 on_complete()
             return
@@ -112,7 +112,7 @@ class TTSRunner:
             await self.start()
 
         await self._queue.put((text, on_complete))
-        debug_log.info(f"Queued TTS: {text[:50]}...", category="tts")
+        debug_log.info(f"Queued TTS: {text[:50]}...", category=Category.RUNNER)
 
     async def speak_now(self, text: str) -> None:
         """Speak text immediately, canceling any current speech.
@@ -182,7 +182,7 @@ class TTSRunner:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                debug_log.error(f"TTS error: {e}", category="tts")
+                debug_log.error(f"TTS error: {e}", category=Category.RUNNER)
 
     async def _speak_tortoise(self, text: str) -> None:
         """Speak using Tortoise-TTS.
@@ -205,7 +205,7 @@ class TTSRunner:
 
         debug_log.info(
             f"Generating TTS with Tortoise (preset={self.config.tortoise_quality}, voice={self.config.voice or 'random'})",
-            category="tts"
+            category=Category.RUNNER
         )
 
         # Generate audio
@@ -221,16 +221,16 @@ class TTSRunner:
         if return_code != 0:
             debug_log.error(
                 f"Tortoise-TTS failed (exit {return_code}): {stderr.decode()[:500]}",
-                category="tts"
+                category=Category.RUNNER
             )
             Path(temp_path).unlink(missing_ok=True)
             return
 
         if not Path(temp_path).exists():
-            debug_log.error("Tortoise failed to generate audio file", category="tts")
+            debug_log.error("Tortoise failed to generate audio file", category=Category.RUNNER)
             return
 
-        debug_log.info(f"Generated audio, playing: {temp_path}", category="tts")
+        debug_log.info(f"Generated audio, playing: {temp_path}", category=Category.RUNNER)
 
         # Play the file
         if shutil.which("aplay"):
@@ -240,7 +240,7 @@ class TTSRunner:
         elif shutil.which("paplay"):
             play_cmd = ["paplay", temp_path]
         else:
-            debug_log.error("No audio player found (tried aplay, afplay, paplay)", category="tts")
+            debug_log.error("No audio player found (tried aplay, afplay, paplay)", category=Category.RUNNER)
             Path(temp_path).unlink(missing_ok=True)
             return
 

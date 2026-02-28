@@ -327,11 +327,19 @@ python balloons-server.py start -b    # Start Slot B
 python balloons-server.py restart -b  # Restart Slot B with new code
 ```
 
+**IMPORTANT: Before restarting a server, ALWAYS check the current server identity first:**
+```json
+{"name": "debug_log_config", "args": {"action": "identity"}}
+```
+This confirms which slot you're connected to, its git commit/diff hash, and uptime.
+If you're connected to the slot you're about to restart, you'll lose your connection!
+
 **Self-modification workflow:**
-1. Code changes to source files don't affect running servers
-2. Start/restart Slot B to test changes
-3. If changes work, restart Slot A to promote
-4. If changes break, Slot A still runs stable code
+1. Check server identity to confirm which slot you're on
+2. Code changes to source files don't affect running servers
+3. Start/restart Slot B to test changes (safe if you're on Slot A)
+4. If changes work, restart Slot A to promote
+5. If changes break, Slot A still runs stable code
 
 The React UI can toggle between slots via the "Server: A/B" control in the sidebar.
 

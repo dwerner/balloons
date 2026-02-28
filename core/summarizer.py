@@ -14,7 +14,7 @@ import aiofiles
 from models import Message, TextDelta, ArchiveSummary, SessionSummaryBlock
 from session import Session
 from core.context import ContextBuilder
-from core.debug_log import debug_log
+from core.debug_log import debug_log, Category
 from core.stream_state import get_stream_state, StreamType, StreamStatus
 
 # Load prompts from files
@@ -240,7 +240,7 @@ class Summarizer:
             self._complete_stream(stream_id)
         except Exception as e:
             self._fail_stream(stream_id, str(e))
-            debug_log.error(f"Session summary generation failed: {e}", category="link")
+            debug_log.error(f"Session summary generation failed: {e}", category=Category.SESSION)
             return session.title or "Session"
 
         result = "".join(summary_parts).strip()
@@ -455,7 +455,7 @@ Structured summary:"""
             self._complete_stream(stream_id)
         except Exception as e:
             self._fail_stream(stream_id, str(e))
-            debug_log.error(f"Archive summary generation failed: {e}", category="archive")
+            debug_log.error(f"Archive summary generation failed: {e}", category=Category.RUNNER)
             # Return a basic summary on error
             return ArchiveSummary(
                 work_done=f"Archived {len(messages)} turns" + (f" ({user_hint})" if user_hint else "")
@@ -578,7 +578,7 @@ Structured summary:"""
             self._complete_stream(stream_id)
         except Exception as e:
             self._fail_stream(stream_id, str(e))
-            debug_log.error(f"Session review generation failed: {e}", category="review")
+            debug_log.error(f"Session review generation failed: {e}", category=Category.RUNNER)
             # Return a basic review on error
             return SessionSummaryBlock(
                 summary_id=str(uuid.uuid4()),

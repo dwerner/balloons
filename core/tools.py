@@ -774,6 +774,131 @@ Example: "C4 D4 E4:h F4 G4:w [C4,E4,G4]:h" plays C-D-E(half)-F-G(whole)-Cmaj(hal
 # Names of MIDI tools
 MIDI_TOOL_NAMES = {"play_midi"}
 
+# Debug logging tools for LLM self-debugging
+DEBUG_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "debug_log_query",
+            "description": """Query log entries from the server's in-memory buffer.
+
+Use this tool to debug issues by viewing recent log entries. Each category has its own
+ring buffer (500 entries by default). Entries are returned newest-first.
+
+Categories (8 core):
+- client: Web UI events
+- api: Internal APIs (WebSocket, HTTP auth)
+- runner: LLM calls, tool execution
+- session: Session lifecycle, fork/merge
+- storage: DB reads/writes
+- supervisor: Background processes
+- lifecycle: Server start/stop, config
+- perf: Timing markers
+
+Example: Query recent API errors
+  debug_log_query(category="api", limit=20, level="error")""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": "Category to query (e.g., 'api', 'runner', 'session')"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max entries to return (default 50)"
+                    },
+                    "level": {
+                        "type": "string",
+                        "enum": ["error", "warning", "info", "perf", "debug", "trace"],
+                        "description": "Filter by log level (optional)"
+                    },
+                    "run_id": {
+                        "type": "string",
+                        "description": "Filter by run ID (optional)"
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Filter by session ID (optional)"
+                    }
+                },
+                "required": ["category"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "debug_log_config",
+            "description": """Query or modify debug log configuration.
+
+Actions:
+- list: Show which categories are enabled for file logging
+- enable: Enable a category for file logging
+- disable: Disable a category for file logging
+- identity: Get server identity (git commit, branch, dirty status)
+- categories: List all valid category names
+- stats: Show buffer statistics (entries per category)
+
+Example: Check what code version the server is running
+  debug_log_config(action="identity")""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "enable", "disable", "identity", "categories", "stats"],
+                        "description": "What action to perform"
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Category name (required for enable/disable)"
+                    }
+                },
+                "required": ["action"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "debug_log_tail",
+            "description": """Tail a log file for historical debugging.
+
+Use this for debugging issues that happened in the past (before current in-memory
+buffer window). Log files are written to ~/.balloons/logs/{category}.log when
+categories are enabled.
+
+Note: This only works if the category was enabled for file logging when the
+events occurred.
+
+Example: Search API logs for errors
+  debug_log_tail(category="api", lines=500, grep="error")""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": "Category to tail (e.g., 'api', 'runner')"
+                    },
+                    "lines": {
+                        "type": "integer",
+                        "description": "Number of lines to return (default 100)"
+                    },
+                    "grep": {
+                        "type": "string",
+                        "description": "Optional filter pattern (case-insensitive)"
+                    }
+                },
+                "required": ["category"]
+            }
+        }
+    },
+]
+
+# Names of debug tools
+DEBUG_TOOL_NAMES = {"debug_log_query", "debug_log_config", "debug_log_tail"}
+
 # Import goal tools
 from .goal_tools import GOAL_TOOLS, GOAL_TOOL_NAMES
 
@@ -786,12 +911,13 @@ def get_tools_for_request(
     include_review_tools: bool = False,
     include_goal_tools: bool = True,
     include_midi_tools: bool = True,
+    include_debug_tools: bool = True,
 ) -> list[dict] | None:
     """Get the list of tools to include in an API request.
 
     Includes standard file/shell tools and optionally Balloons-specific tools
     (workflow, UI, session/link navigation), supervisor tools, review tools,
-    goal management tools, and MIDI tools.
+    goal management tools, MIDI tools, and debug tools.
 
     Args:
         allowed_tools: List of tool names to allow, or None for all
@@ -801,6 +927,7 @@ def get_tools_for_request(
         include_review_tools: If True, include session review tools (save_review)
         include_goal_tools: If True, include goal management tools (create_goal, etc.)
         include_midi_tools: If True, include MIDI player tools (play_midi)
+        include_debug_tools: If True, include debug logging tools (debug_log_query, etc.)
 
     Returns:
         List of tool definitions, or None if tools disabled
@@ -820,6 +947,8 @@ def get_tools_for_request(
         all_tools = all_tools + GOAL_TOOLS
     if include_midi_tools:
         all_tools = all_tools + MIDI_TOOLS
+    if include_debug_tools:
+        all_tools = all_tools + DEBUG_TOOLS
 
     if allowed_tools is None:
         return all_tools

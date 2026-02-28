@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-28T09:17:49.169565
+// Generated: 2026-02-28T12:27:00.613105
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -913,6 +913,40 @@ export interface LogEntryInput {
 export interface LogResult {
   success: boolean;
   seq?: number;
+}
+
+export interface LogEntryOutput {
+  seq: number;
+  timestamp: string;
+  level: string;
+  message: string;
+  category: string;
+  sessionId: string;
+  runId: string;
+  details: Record<string, unknown>;
+}
+
+export interface QueryResult {
+  entries: LogEntryOutput[];
+  total: number;
+}
+
+export interface BufferStats {
+  category: string;
+  count: number;
+  maxsize: number;
+}
+
+export interface ServerIdentityInfo {
+  gitCommit: string;
+  gitCommitShort: string;
+  gitBranch: string;
+  gitDirty: boolean;
+  gitDiffHash: string;
+  slot: string;
+  port: number;
+  pid: number;
+  startTime: string;
 }
 
 export interface FileEntry {
