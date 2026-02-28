@@ -25,6 +25,7 @@ The server exposes the same WebSocket API as the TUI mode, including:
 import argparse
 import asyncio
 import signal
+from pathlib import Path
 
 from config import get_config
 from core import (
@@ -156,6 +157,10 @@ async def run_server(
     # Configure debug log if enabled
     if config.debug_log_file:
         debug_log.set_log_file(config.debug_log_file)
+
+    # Enable category-based logging to ~/.balloons/logs/
+    # Categories are written when enabled via set_categories() or enable_category()
+    debug_log.set_log_dir(Path.home() / ".balloons" / "logs")
 
     # Initialize process supervisor
     _initialize_supervisor()

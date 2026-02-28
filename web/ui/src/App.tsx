@@ -7,6 +7,7 @@ import { SessionTreeView } from './components/SessionTreeView';
 import { GoalTreeView } from './components/GoalTreeView';
 import { FileBrowserView, type FileBrowserViewRef } from './components/FileBrowserView';
 import { SupervisorTab } from './components/SupervisorTab';
+import { OptionsTab } from './components/OptionsTab';
 import { CodeTab, type CodeReview, type CodeTabHandle, type GitStatusInfo } from './components/CodeTab';
 import { SessionStatusBar } from './components/SessionStatusBar';
 import { StreamingStatusBar } from './components/StreamingStatusBar';
@@ -1202,8 +1203,8 @@ function AppContent() {
   const fileBrowserRef = useRef<FileBrowserViewRef>(null);
   const codeTabRef = useRef<CodeTabHandle>(null);
 
-  // Detail panel tab state ('files' or 'supervisor')
-  type DetailTab = 'files' | 'supervisor';
+  // Detail panel tab state ('files', 'supervisor', or 'options')
+  type DetailTab = 'files' | 'supervisor' | 'options';
   const [detailTab, setDetailTab] = useState<DetailTab>('files');
 
   // Track the session we're currently loading to handle race conditions
@@ -2461,8 +2462,6 @@ function AppContent() {
           onToggleSound={() => soundNotifications.setSoundEnabled(!soundNotifications.soundEnabled)}
           serverSlot={serverSlot}
           onSlotChange={setServerSlot}
-          debugEnabled={debugEnabled}
-          onToggleDebug={handleToggleDebug}
           onLogout={() => {
             logout();
             window.location.reload();
@@ -2899,6 +2898,12 @@ function AppContent() {
           >
             Supervisor
           </button>
+          <button
+            className={`detail-panel-tab ${detailTab === 'options' ? 'active' : ''}`}
+            onClick={() => setDetailTab('options')}
+          >
+            Options
+          </button>
         </div>
 
         {/* Tab content */}
@@ -2943,6 +2948,15 @@ function AppContent() {
                 debugLog('Stop process', { processId });
                 // TODO: Call supervisor to stop process
               }}
+            />
+          )}
+
+          {detailTab === 'options' && (
+            <OptionsTab
+              debugLogClient={connectionState === 'connected' ? clientRef.current?.debugLog : undefined}
+              isConnected={connectionState === 'connected'}
+              debugEnabled={debugEnabled}
+              onToggleDebug={handleToggleDebug}
             />
           )}
         </div>
@@ -3271,9 +3285,6 @@ interface SidebarContentProps {
   // Server slot props
   serverSlot: ServerSlot;
   onSlotChange: (slot: ServerSlot) => void;
-  // Debug logging props
-  debugEnabled?: boolean;
-  onToggleDebug?: () => void;
   // Auth
   onLogout?: () => void;
   // Archiving state
@@ -3305,8 +3316,6 @@ function SidebarContent({
   onToggleSound,
   serverSlot,
   onSlotChange,
-  debugEnabled = false,
-  onToggleDebug,
   onLogout,
   archivingTurnIndices,
 }: SidebarContentProps) {
@@ -3478,15 +3487,6 @@ function SidebarContent({
           {serverSlot}
         </button>
         <span className="slot-port">:{SLOT_PORTS[serverSlot]}</span>
-        <span className="slot-divider">|</span>
-        <span className="slot-label">Debug:</span>
-        <button
-          className={`slot-toggle ${debugEnabled ? 'slot-a' : 'slot-b'}`}
-          onClick={onToggleDebug}
-          title={debugEnabled ? 'Debug logging enabled. Click to disable.' : 'Debug logging disabled. Click to enable.'}
-        >
-          {debugEnabled ? 'ON' : 'OFF'}
-        </button>
         {onLogout && (
           <>
             <span className="slot-divider">|</span>

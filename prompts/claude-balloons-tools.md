@@ -1034,3 +1034,6 @@ python balloons-server.py restart -b  # Restart Slot B with new code
 4. If changes break, Slot A still runs stable code
 
 The React UI can toggle between slots via the "Server: A/B" control in the sidebar.
+
+
+<!-- #include shared/debug-logging.md -->

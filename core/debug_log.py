@@ -73,10 +73,12 @@ class DebugLog:
             cls._instance._entries = []
             cls._instance._listeners = []
             cls._instance._log_file: Path | None = None
+            cls._instance._log_dir: Path | None = None  # Category-based log directory
             cls._instance._enabled = True
             cls._instance._seq_counter = 0  # Monotonic sequence counter
             cls._instance._min_level = LogLevel.DEBUG  # Filter out TRACE by default
             cls._instance._perf_mode = False  # Perf mode shows only PERF+ (timing/markers)
+            cls._instance._enabled_categories: set[str] = set()  # Empty = log all categories
         return cls._instance
 
     @property
@@ -127,6 +129,47 @@ class DebugLog:
             except Exception:
                 pass
 
+    def enable_category(self, category: str) -> None:
+        """Enable logging for a specific category.
+
+        When any categories are enabled, only those categories will be logged.
+        Use this for targeted debugging (e.g., 'api' for API issues).
+
+        Args:
+            category: Category to enable (e.g., 'api', 'tool', 'process')
+        """
+        self._enabled_categories.add(category)
+
+    def disable_category(self, category: str) -> None:
+        """Disable logging for a specific category.
+
+        Args:
+            category: Category to disable
+        """
+        self._enabled_categories.discard(category)
+
+    def set_categories(self, categories: list[str]) -> None:
+        """Set the list of enabled categories.
+
+        Pass an empty list to log all categories (default behavior).
+
+        Args:
+            categories: List of category names to enable
+        """
+        self._enabled_categories = set(categories)
+
+    def get_categories(self) -> list[str]:
+        """Get the list of currently enabled categories.
+
+        Returns:
+            List of enabled category names, or empty list if all are enabled
+        """
+        return sorted(self._enabled_categories)
+
+    def clear_categories(self) -> None:
+        """Clear category filter to log all categories."""
+        self._enabled_categories.clear()
+
     def set_log_file(self, path: str | Path | None) -> None:
         """Enable file persistence for debug logs.
 
@@ -139,12 +182,35 @@ class DebugLog:
             self._log_file = Path(path).expanduser()
             self._log_file.parent.mkdir(parents=True, exist_ok=True)
 
+    def set_log_dir(self, path: str | Path | None) -> None:
+        """Enable category-based file logging.
+
+        When set, logs are written to {path}/{category}.log files.
+        Only logs for enabled categories are written.
+
+        Args:
+            path: Directory path for log files, or None to disable.
+        """
+        if path is None:
+            self._log_dir: Path | None = None
+        else:
+            self._log_dir = Path(path).expanduser()
+            self._log_dir.mkdir(parents=True, exist_ok=True)
+
     def _write_to_file(self, entry: LogEntry) -> None:
         """Write entry to log file if configured (fire-and-forget async)."""
-        if self._log_file is None:
-            return
-        loop = asyncio.get_running_loop()
-        loop.create_task(self._write_to_file_async(entry))
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # No running event loop
+
+        # Write to single log file if configured
+        if self._log_file is not None:
+            loop.create_task(self._write_to_file_async(entry))
+
+        # Write to category-specific file if log_dir is set
+        if hasattr(self, '_log_dir') and self._log_dir is not None and entry.category:
+            loop.create_task(self._write_to_category_file_async(entry))
 
     async def _write_to_file_async(self, entry: LogEntry) -> None:
         """Async file write for log entry."""
@@ -166,6 +232,31 @@ class DebugLog:
         except Exception:
             pass  # Don't let file errors crash logging
 
+    async def _write_to_category_file_async(self, entry: LogEntry) -> None:
+        """Async file write for category-specific log."""
+        if not hasattr(self, '_log_dir') or self._log_dir is None:
+            return
+        if not entry.category:
+            return
+        try:
+            # Sanitize category name for filename
+            safe_category = entry.category.replace("/", "_").replace("\\", "_").replace("..", "_")
+            log_path = self._log_dir / f"{safe_category}.log"
+
+            log_line = json.dumps({
+                "seq": entry.seq,
+                "timestamp": entry.timestamp,
+                "level": entry.level.value,
+                "message": entry.message,
+                "session_id": entry.session_id,
+                "run_id": entry.run_id,
+                "details": entry.details,
+            })
+            async with aiofiles.open(log_path, "a") as f:
+                await f.write(log_line + "\n")
+        except Exception:
+            pass  # Don't let file errors crash logging
+
     def _add_entry(self, entry: LogEntry) -> None:
         """Add entry and notify listeners."""
         if not self._enabled:
@@ -177,6 +268,9 @@ class DebugLog:
                 return
         # Filter by minimum level
         if LogLevel.severity(entry.level) < LogLevel.severity(self._min_level):
+            return
+        # Filter by enabled categories (if any are set)
+        if self._enabled_categories and entry.category not in self._enabled_categories:
             return
         self._entries.append(entry)
         # Write to file if configured

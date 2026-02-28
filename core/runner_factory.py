@@ -65,21 +65,67 @@ def ensure_prompts_installed() -> None:
             user_path.write_text(source_path.read_text())
 
 
+# Regex for include directives: <!-- #include path/to/file.md -->
+_INCLUDE_PATTERN = re.compile(r'<!--\s*#include\s+(\S+)\s*-->')
+
+
+def _process_includes(content: str, base_dir: Path, seen: set[Path] | None = None) -> str:
+    """Process #include directives in prompt content.
+
+    Replaces <!-- #include path/to/file.md --> with the file contents.
+    Paths are relative to prompts/ directory. Handles circular includes.
+
+    Args:
+        content: Prompt content with potential includes
+        base_dir: Base directory for resolving relative paths
+        seen: Set of already-included paths (for cycle detection)
+
+    Returns:
+        Content with includes expanded
+    """
+    if seen is None:
+        seen = set()
+
+    def replace_include(match: re.Match) -> str:
+        include_path = match.group(1)
+        # Resolve relative to prompts directory
+        full_path = (base_dir / include_path).resolve()
+
+        # Cycle detection
+        if full_path in seen:
+            return f"<!-- ERROR: circular include {include_path} -->"
+        if not full_path.exists():
+            return f"<!-- ERROR: include not found {include_path} -->"
+
+        seen.add(full_path)
+        try:
+            included_content = full_path.read_text()
+            # Recursively process includes in the included file
+            return _process_includes(included_content, full_path.parent, seen)
+        except Exception as e:
+            return f"<!-- ERROR: failed to include {include_path}: {e} -->"
+
+    return _INCLUDE_PATTERN.sub(replace_include, content)
+
+
 def _load_prompt_file(filename: str) -> str:
     """Load a prompt file from user or source directory.
 
     Looks in ~/.balloons/prompts/ first, then falls back to source directory.
+    Processes <!-- #include path/to/file.md --> directives.
 
     Args:
         filename: Name of the prompt file to load
 
     Returns:
-        File contents, or empty string if not found
+        File contents with includes expanded, or empty string if not found
     """
     path = _get_prompt_path(filename)
     if path:
         try:
-            return path.read_text()
+            content = path.read_text()
+            # Process includes relative to the prompts directory
+            return _process_includes(content, _SOURCE_PROMPTS_DIR)
         except Exception:
             pass
     return ""

@@ -2,7 +2,10 @@
 
 import asyncio
 import json
+import re
 import uuid
+from datetime import datetime
+from pathlib import Path
 from typing import AsyncIterator, TYPE_CHECKING
 
 from openai import AsyncOpenAI
@@ -19,6 +22,64 @@ from .tool_executor import execute_tool
 
 if TYPE_CHECKING:
     from session import Session
+
+
+
+
+def _dump_interaction(
+    context: str,
+    model: str,
+    messages: list[dict],
+    tools: list[dict] | None,
+    chunks: list[dict],
+    error: str | None = None,
+) -> Path | None:
+    """Dump a full interaction to a debug file for analysis.
+
+    Args:
+        context: Short identifier (e.g., "tool_call_fail", "stream_error")
+        model: Model name
+        messages: Messages sent to the API
+        tools: Tool definitions sent
+        chunks: Raw chunks received
+        error: Optional error message
+
+    Returns:
+        Path to the created file, or None on failure
+    """
+    try:
+        debug_dir = Path.home() / ".balloons" / "debug" / "interactions"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        filename = f"{context}_{timestamp}.json"
+        filepath = debug_dir / filename
+
+        interaction = {
+            "timestamp": datetime.now().isoformat(),
+            "context": context,
+            "model": model,
+            "error": error,
+            "messages": messages,
+            "tools": tools,
+            "chunks": chunks,
+            "chunk_count": len(chunks),
+        }
+
+        with open(filepath, "w") as f:
+            json.dump(interaction, f, indent=2, default=str)
+
+        debug_log.info(
+            f"Dumped interaction to {filepath}",
+            category="api",
+            details={"file": str(filepath), "context": context},
+        )
+        return filepath
+    except Exception as e:
+        debug_log.warning(
+            f"Failed to dump interaction: {e}",
+            category="api",
+        )
+        return None
 
 
 class OpenAICompatibleRunner(BaseRunner):
@@ -46,6 +107,7 @@ class OpenAICompatibleRunner(BaseRunner):
         self._cancelled = False
         self._run_id = ""
         self._session: "Session | None" = None
+        self._collected_chunks: list[dict] = []  # Raw chunks for dump on error
 
     def set_session(self, session: "Session") -> None:
         """Set the session for link tool execution.
@@ -343,7 +405,20 @@ class OpenAICompatibleRunner(BaseRunner):
             debug_log.error(
                 f"OpenAI stream error: {e}",
                 category="process",
+                details={
+                    "error_type": type(e).__name__,
+                    "error_str": str(e),
+                },
                 run_id=self._run_id,
+            )
+            # Dump full interaction for debugging
+            _dump_interaction(
+                context="stream_error",
+                model=self.model,
+                messages=openai_messages,
+                tools=tools,
+                chunks=self._collected_chunks,
+                error=f"{type(e).__name__}: {e}",
             )
             raise
 
@@ -383,14 +458,62 @@ class OpenAICompatibleRunner(BaseRunner):
         if tools:
             kwargs["tools"] = tools
 
+        # Log request payload for debugging
+        debug_log.debug(
+            f"OpenAI request payload",
+            category="api",
+            details={
+                "model": self.model,
+                "message_count": len(openai_messages),
+                "last_messages": [
+                    {
+                        "role": m.get("role"),
+                        "content_preview": str(m.get("content", ""))[:200] if m.get("content") else None,
+                        "has_tool_calls": "tool_calls" in m,
+                    }
+                    for m in openai_messages[-3:]
+                ],
+                "tools_count": len(tools) if tools else 0,
+                "tool_names": [t["function"]["name"] for t in tools] if tools else [],
+            },
+            run_id=self._run_id,
+        )
+
+        # Log full tool definitions at TRACE level (filtered by debug_log.min_level)
+        if tools:
+            debug_log.trace(
+                "Full tool definitions",
+                category="api",
+                details={"tools": tools},
+                run_id=self._run_id,
+            )
+
         api_start = time.perf_counter()
         first_chunk_time = None
+        self._collected_chunks = []  # Reset chunk collection
 
         stream = await self.client.chat.completions.create(**kwargs)
 
         async for chunk in stream:
             if self._cancelled:
                 break
+
+            # Collect chunks for potential error dumps, and log at TRACE level
+            try:
+                chunk_dict = chunk.model_dump()
+                self._collected_chunks.append(chunk_dict)
+                debug_log.trace(
+                    "Raw OpenAI chunk",
+                    category="api",
+                    details={"chunk": chunk_dict},
+                    run_id=self._run_id,
+                )
+            except Exception as e:
+                debug_log.trace(
+                    f"Failed to serialize chunk: {e}",
+                    category="api",
+                    run_id=self._run_id,
+                )
 
             # Track first chunk timing
             if first_chunk_time is None:
@@ -409,6 +532,13 @@ class OpenAICompatibleRunner(BaseRunner):
                 output_tokens = chunk.usage.completion_tokens
 
             if not chunk.choices:
+                # Log chunks without choices (might indicate issues)
+                debug_log.trace(
+                    "Chunk without choices",
+                    category="api",
+                    details={"has_usage": chunk.usage is not None},
+                    run_id=self._run_id,
+                )
                 continue
 
             choice = chunk.choices[0]
@@ -425,6 +555,25 @@ class OpenAICompatibleRunner(BaseRunner):
 
             # Handle tool calls
             if delta.tool_calls:
+                # Log raw tool_calls delta for debugging
+                debug_log.debug(
+                    "Raw tool_calls delta",
+                    category="api",
+                    details={
+                        "tool_calls": [
+                            {
+                                "index": tc.index,
+                                "id": tc.id,
+                                "type": tc.type,
+                                "function_name": tc.function.name if tc.function else None,
+                                "arguments_chunk": tc.function.arguments if tc.function else None,
+                                "arguments_len": len(tc.function.arguments) if tc.function and tc.function.arguments else 0,
+                            }
+                            for tc in delta.tool_calls
+                        ],
+                    },
+                    run_id=self._run_id,
+                )
                 for tc_delta in delta.tool_calls:
                     tc_id = tc_delta.id
                     tc_index = tc_delta.index
@@ -466,6 +615,19 @@ class OpenAICompatibleRunner(BaseRunner):
         # Finalize tool calls - parse arguments JSON
         finalized_tool_calls = []
         for tc in tool_calls.values():
+            # Log the raw arguments before parsing (useful for debugging weird encodings)
+            debug_log.debug(
+                f"Finalizing tool call: {tc['name']}",
+                category="api",
+                details={
+                    "tool_id": tc["id"],
+                    "tool_name": tc["name"],
+                    "arguments_json_len": len(tc["arguments_json"]),
+                    "arguments_json_preview": tc["arguments_json"][:500] if tc["arguments_json"] else "",
+                },
+                run_id=self._run_id,
+            )
+
             try:
                 arguments = json.loads(tc["arguments_json"]) if tc["arguments_json"] else {}
             except json.JSONDecodeError as e:
@@ -474,8 +636,25 @@ class OpenAICompatibleRunner(BaseRunner):
                 debug_log.warning(
                     f"Tool input JSON decode error: {e}" + (f" (dumped to {dump_path})" if dump_path else ""),
                     category="json",
-                    details={"tool_name": tc["name"], "dump_file": str(dump_path) if dump_path else None},
+                    details={
+                        "tool_name": tc["name"],
+                        "dump_file": str(dump_path) if dump_path else None,
+                        "raw_preview": raw_args[:200] if raw_args else "",
+                        "raw_len": len(raw_args) if raw_args else 0,
+                    },
+                    run_id=self._run_id,
                 )
+
+                # Dump full interaction for debugging
+                _dump_interaction(
+                    context="tool_json_parse_fail",
+                    model=self.model,
+                    messages=openai_messages,
+                    tools=tools,
+                    chunks=self._collected_chunks,
+                    error=f"JSON decode error for tool {tc['name']}: {e}",
+                )
+
                 arguments = {"raw": raw_args, "_dump_file": str(dump_path) if dump_path else None}
 
             finalized_tool_calls.append({
@@ -483,6 +662,18 @@ class OpenAICompatibleRunner(BaseRunner):
                 "name": tc["name"],
                 "arguments": arguments,
             })
+
+            # Log successful parse
+            debug_log.debug(
+                f"Tool call parsed: {tc['name']}",
+                category="api",
+                details={
+                    "tool_id": tc["id"],
+                    "tool_name": tc["name"],
+                    "argument_keys": list(arguments.keys()) if isinstance(arguments, dict) else "not_dict",
+                },
+                run_id=self._run_id,
+            )
 
             # Emit tool use complete event
             events.append(ToolUseEvent(
@@ -502,6 +693,44 @@ class OpenAICompatibleRunner(BaseRunner):
             tool_calls=len(finalized_tool_calls),
             run_id=self._run_id,
         )
+
+        # Detect embedded tool calls in content (common with some models)
+        # These patterns indicate the model is trying to call tools but not using the API
+        embedded_patterns = [
+            (r'<function_call>', "XML function_call tag"),
+            (r'<tool_call>', "XML tool_call tag"),
+            (r'```json\s*\{\s*"name"\s*:', "JSON tool block in code fence"),
+            (r'\{\s*"function"\s*:\s*\{', "function object in content"),
+            (r'\{\s*"tool"\s*:\s*"', "tool field in content"),
+            (r'Action:\s*\w+\[', "Action pattern (e.g., Action: Search[query])"),
+        ]
+
+        for pattern, description in embedded_patterns:
+            if re.search(pattern, content_buffer):
+                debug_log.warning(
+                    f"Possible embedded tool call detected: {description}",
+                    category="api",
+                    details={
+                        "pattern": pattern,
+                        "description": description,
+                        "content_preview": content_buffer[:500],
+                        "content_len": len(content_buffer),
+                        "model": self.model,
+                        "had_tool_calls": len(finalized_tool_calls) > 0,
+                    },
+                    run_id=self._run_id,
+                )
+                # Dump interaction for analysis if no proper tool calls were made
+                if len(finalized_tool_calls) == 0:
+                    _dump_interaction(
+                        context="embedded_tool_call",
+                        model=self.model,
+                        messages=openai_messages,
+                        tools=tools,
+                        chunks=self._collected_chunks,
+                        error=f"Detected {description} in content",
+                    )
+                break  # Only warn once per response
 
         return {
             "events": events,

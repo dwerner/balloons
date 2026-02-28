@@ -21,3 +21,6 @@ export * from './SessionReviewModal';
 
 // Dialog components (confirm/alert)
 export * from './Dialog';
+
+// Options/Settings components
+export * from './OptionsTab';

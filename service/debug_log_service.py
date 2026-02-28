@@ -192,3 +192,135 @@ class DebugLogService:
                 details=details,
             )
         )
+
+    @ws_expose
+    def set_level(self, level: str) -> LogResult:
+        """Set the minimum log level for the debug log.
+
+        This controls what gets logged on the server side. Use 'trace' for
+        maximum verbosity when debugging API issues.
+
+        Args:
+            level: One of 'error', 'warning', 'info', 'perf', 'debug', 'trace'
+
+        Returns:
+            LogResult with success status
+        """
+        level_map = {
+            "error": LogLevel.ERROR,
+            "warning": LogLevel.WARNING,
+            "info": LogLevel.INFO,
+            "perf": LogLevel.PERF,
+            "debug": LogLevel.DEBUG,
+            "trace": LogLevel.TRACE,
+        }
+        log_level = level_map.get(level.lower())
+        if log_level is None:
+            return LogResult(success=False, seq=0)
+
+        debug_log.min_level = log_level
+        debug_log.info(
+            f"Log level set to {level.upper()}",
+            category="debug",
+        )
+        return LogResult(success=True, seq=0)
+
+    @ws_expose
+    def get_level(self) -> str:
+        """Get the current minimum log level.
+
+        Returns:
+            Current log level as string (e.g., 'debug', 'trace')
+        """
+        return debug_log.min_level.value
+
+    @ws_expose
+    def enable_category(self, category: str) -> LogResult:
+        """Enable logging for a specific category.
+
+        When any categories are enabled, only those categories will be logged.
+        Useful for targeted debugging.
+
+        Categories for API debugging:
+        - 'api': API requests, responses, chunks
+        - 'tool': Tool execution
+        - 'json': JSON parsing errors
+        - 'process': Process lifecycle
+
+        Args:
+            category: Category to enable
+
+        Returns:
+            LogResult with success status
+        """
+        debug_log.enable_category(category)
+        debug_log.info(
+            f"Enabled category: {category}",
+            category="debug",
+        )
+        return LogResult(success=True, seq=0)
+
+    @ws_expose
+    def disable_category(self, category: str) -> LogResult:
+        """Disable logging for a specific category.
+
+        Args:
+            category: Category to disable
+
+        Returns:
+            LogResult with success status
+        """
+        debug_log.disable_category(category)
+        debug_log.info(
+            f"Disabled category: {category}",
+            category="debug",
+        )
+        return LogResult(success=True, seq=0)
+
+    @ws_expose
+    def set_categories(self, categories: list[str]) -> LogResult:
+        """Set the list of enabled categories.
+
+        Pass an empty list to log all categories (default behavior).
+
+        Args:
+            categories: List of category names to enable
+
+        Returns:
+            LogResult with success status
+        """
+        debug_log.set_categories(categories)
+        if categories:
+            debug_log.info(
+                f"Set categories: {', '.join(categories)}",
+                category="debug",
+            )
+        else:
+            debug_log.info(
+                "Cleared category filter (logging all)",
+                category="debug",
+            )
+        return LogResult(success=True, seq=0)
+
+    @ws_expose
+    def get_categories(self) -> list[str]:
+        """Get the list of currently enabled categories.
+
+        Returns:
+            List of enabled category names, or empty list if all are enabled
+        """
+        return debug_log.get_categories()
+
+    @ws_expose
+    def clear_categories(self) -> LogResult:
+        """Clear category filter to log all categories.
+
+        Returns:
+            LogResult with success status
+        """
+        debug_log.clear_categories()
+        debug_log.info(
+            "Cleared category filter (logging all)",
+            category="debug",
+        )
+        return LogResult(success=True, seq=0)

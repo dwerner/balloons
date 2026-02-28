@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-27T16:29:52.017557
+// Generated: 2026-02-28T09:17:49.173492
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -3206,14 +3206,69 @@ export class SoundServiceClient implements SoundService {
  */
 export interface DebugLogService {
   /**
+   * Clear category filter to log all categories.
+   * 
+   * Returns:
+   * LogResult with success status
+   */
+  clearCategories(): Promise<Types.LogResult>;
+
+  /**
    * Convenience method to log a debug message.
    */
   debug(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult>;
 
   /**
+   * Disable logging for a specific category.
+   * 
+   * Args:
+   * category: Category to disable
+   * 
+   * Returns:
+   * LogResult with success status
+   */
+  disableCategory(category: string): Promise<Types.LogResult>;
+
+  /**
+   * Enable logging for a specific category.
+   * 
+   * When any categories are enabled, only those categories will be logged.
+   * Useful for targeted debugging.
+   * 
+   * Categories for API debugging:
+   * - 'api': API requests, responses, chunks
+   * - 'tool': Tool execution
+   * - 'json': JSON parsing errors
+   * - 'process': Process lifecycle
+   * 
+   * Args:
+   * category: Category to enable
+   * 
+   * Returns:
+   * LogResult with success status
+   */
+  enableCategory(category: string): Promise<Types.LogResult>;
+
+  /**
    * Convenience method to log an error.
    */
   error(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult>;
+
+  /**
+   * Get the list of currently enabled categories.
+   * 
+   * Returns:
+   * List of enabled category names, or empty list if all are enabled
+   */
+  getCategories(): Promise<string[]>;
+
+  /**
+   * Get the current minimum log level.
+   * 
+   * Returns:
+   * Current log level as string (e.g., 'debug', 'trace')
+   */
+  getLevel(): Promise<string>;
 
   /**
    * Convenience method to log an info message.
@@ -3247,6 +3302,33 @@ export interface DebugLogService {
    * LogResult with success status and last sequence number
    */
   logBatch(entries: Types.LogEntryInput[]): Promise<Types.LogResult>;
+
+  /**
+   * Set the list of enabled categories.
+   * 
+   * Pass an empty list to log all categories (default behavior).
+   * 
+   * Args:
+   * categories: List of category names to enable
+   * 
+   * Returns:
+   * LogResult with success status
+   */
+  setCategories(categories: string[]): Promise<Types.LogResult>;
+
+  /**
+   * Set the minimum log level for the debug log.
+   * 
+   * This controls what gets logged on the server side. Use 'trace' for
+   * maximum verbosity when debugging API issues.
+   * 
+   * Args:
+   * level: One of 'error', 'warning', 'info', 'perf', 'debug', 'trace'
+   * 
+   * Returns:
+   * LogResult with success status
+   */
+  setLevel(level: string): Promise<Types.LogResult>;
 
   /**
    * Convenience method to log a warning.
@@ -3301,12 +3383,32 @@ export class DebugLogServiceClient implements DebugLogService {
     };
   }
 
+  async clearCategories(): Promise<Types.LogResult> {
+    return this.call('clearCategories', {  });
+  }
+
   async debug(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
     return this.call('debug', { message: message, category: category, sessionId: sessionId, details: details });
   }
 
+  async disableCategory(category: string): Promise<Types.LogResult> {
+    return this.call('disableCategory', { category: category });
+  }
+
+  async enableCategory(category: string): Promise<Types.LogResult> {
+    return this.call('enableCategory', { category: category });
+  }
+
   async error(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
     return this.call('error', { message: message, category: category, sessionId: sessionId, details: details });
+  }
+
+  async getCategories(): Promise<string[]> {
+    return this.call('getCategories', {  });
+  }
+
+  async getLevel(): Promise<string> {
+    return this.call('getLevel', {  });
   }
 
   async info(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
@@ -3319,6 +3421,14 @@ export class DebugLogServiceClient implements DebugLogService {
 
   async logBatch(entries: Types.LogEntryInput[]): Promise<Types.LogResult> {
     return this.call('logBatch', { entries: entries });
+  }
+
+  async setCategories(categories: string[]): Promise<Types.LogResult> {
+    return this.call('setCategories', { categories: categories });
+  }
+
+  async setLevel(level: string): Promise<Types.LogResult> {
+    return this.call('setLevel', { level: level });
   }
 
   async warning(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
