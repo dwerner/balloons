@@ -64,12 +64,18 @@ const customDarkTheme = {
     padding: 0,
     fontSize: '12px',
     lineHeight: '1.5',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    overflowWrap: 'break-word',
   },
   'code[class*="language-"]': {
     ...oneDark['code[class*="language-"]'],
     background: 'transparent',
     fontSize: '12px',
     lineHeight: '1.5',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    overflowWrap: 'break-word',
   },
 };
 
@@ -83,12 +89,18 @@ const customLightTheme = {
     padding: 0,
     fontSize: '12px',
     lineHeight: '1.5',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    overflowWrap: 'break-word',
   },
   'code[class*="language-"]': {
     ...oneLight['code[class*="language-"]'],
     background: 'transparent',
     fontSize: '12px',
     lineHeight: '1.5',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    overflowWrap: 'break-word',
   },
 };
 
@@ -113,14 +125,22 @@ const SyntaxHighlightedLine = memo(function SyntaxHighlightedLine({
     <PrismHighlighter
       style={theme}
       language={language}
-      PreTag="span"
+      PreTag="div"
       customStyle={{
-        display: 'inline',
+        display: 'block',
         margin: 0,
         padding: 0,
         background: 'transparent',
         whiteSpace: 'pre-wrap',
-        wordBreak: 'break-all',
+        wordBreak: 'break-word',
+        overflowWrap: 'break-word',
+      }}
+      codeTagProps={{
+        style: {
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+          overflowWrap: 'break-word',
+        }
       }}
     >
       {code}
@@ -528,6 +548,10 @@ export const FileContentView = memo(function FileContentView({
         onTouchMove={handleTouchMove}
       >
         <table className="file-content-view__table">
+          <colgroup>
+            <col className="file-content-view__gutter-col" />
+            <col className="file-content-view__code-col" />
+          </colgroup>
           <tbody>
             {lines.map((line, index) => {
               const lineNumber = index + 1;

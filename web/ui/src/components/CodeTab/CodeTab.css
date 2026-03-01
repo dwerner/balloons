@@ -780,6 +780,9 @@
 
 .file-content-view {
   min-height: 100%;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .file-content-view__header {
@@ -820,7 +823,17 @@
 }
 
 .file-content-view__content {
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  width: 100%;
+}
+
+.file-content-view__gutter-col {
+  width: 60px;
+}
+
+.file-content-view__code-col {
+  width: auto;
 }
 
 .file-content-view__table {
@@ -829,6 +842,7 @@
   font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
   font-size: 12px;
   line-height: 1.5;
+  table-layout: fixed;
 }
 
 .file-line {
@@ -853,24 +867,39 @@
 .file-line__code {
   padding: 0 12px;
   background: var(--color-bg);
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 .file-line__code pre {
   margin: 0;
-  white-space: pre-wrap;
-  word-break: break-all;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  overflow-wrap: break-word !important;
 }
 
-/* Syntax highlighted code - Prism uses span with code children */
-.file-line__code > span {
+/* Syntax highlighted code - Prism wraps in div > code */
+.file-line__code > div {
   font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
-  white-space: pre-wrap;
-  word-break: break-all;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  overflow-wrap: break-word !important;
+  display: block !important;
 }
 
 .file-line__code code {
   font-family: inherit;
   background: transparent;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  overflow-wrap: break-word !important;
+}
+
+/* Force all descendants to wrap */
+.file-line__code * {
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  overflow-wrap: break-word !important;
 }
 
 .file-line__widget-row td {

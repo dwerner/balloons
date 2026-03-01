@@ -618,10 +618,23 @@ export const DiffView = memo(function DiffView({
                 codeFoldContentColor: 'var(--color-text-secondary)',
               },
             },
+            diffContainer: {
+              width: '100%',
+              tableLayout: 'fixed' as const,
+            },
             line: {
               fontSize: '12px',
               lineHeight: '1.5',
               fontFamily: "'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace",
+            },
+            content: {
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
+              width: '100%',
+            },
+            contentText: {
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
             },
             gutter: {
               minWidth: '40px',
