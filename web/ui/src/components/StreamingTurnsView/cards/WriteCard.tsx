@@ -12,6 +12,7 @@ import type { SessionDataTurn } from '../../../hooks/useSessionData';
 import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
 import { BaseToolCard, calculateToolPhase, formatRelativePath } from './BaseToolCard';
 import { LazySyntaxHighlightedCode } from './SyntaxHighlighter';
+import { getStringInput } from './toolInputUtils';
 import './cards.css';
 
 interface WriteCardProps {
@@ -35,9 +36,9 @@ export const WriteCard = React.memo(function WriteCard({ turn, result }: WriteCa
   const toolInput = toolUseBlock?.input || {};
   const inputIsStreaming = isStreamingInput(toolInput);
 
-  // Extract Write-specific inputs
-  const filePath = (toolInput.file_path || '') as string;
-  const content = (toolInput.content || '') as string;
+  // Extract Write-specific inputs (with defensive string conversion for malformed data)
+  const filePath = getStringInput(toolInput, 'file_path');
+  const content = getStringInput(toolInput, 'content');
 
   // Get result info
   const resultBlock = result?.contentBlock?.type === 'tool_result'

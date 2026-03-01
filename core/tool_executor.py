@@ -21,6 +21,7 @@ from .link_tools import LINK_TOOL_NAMES, execute_link_tool
 from .supervisor_tools import SUPERVISOR_TOOL_NAMES as SUP_TOOL_NAMES, execute_supervisor_tool
 from .goal_tools import GOAL_TOOL_NAMES, execute_goal_tool
 from .debug_tools import DEBUG_TOOL_NAMES, execute_debug_tool
+from .watcher_tools import WATCHER_TOOL_NAMES, execute_watcher_tool
 from .fork import ForkProposal, ContextAssignment, MergeProposal
 from .tts import get_tts_runner, TTSConfig
 
@@ -128,6 +129,12 @@ async def execute_tool(
         # Debug logging tools (LLM self-debugging)
         if name in DEBUG_TOOL_NAMES:
             return await execute_debug_tool(name, args, session)
+
+        # Watcher mode tools (cross-session communication)
+        if name in WATCHER_TOOL_NAMES:
+            if session is None:
+                return "Error: Watcher tools require a session context", True
+            return await execute_watcher_tool(name, args, session)
 
         # Standard file/shell tools
         if name == "Read":

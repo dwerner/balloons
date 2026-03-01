@@ -3,7 +3,7 @@ use thiserror::Error;
 
 use crate::generated::{
     GoalData, PlanData, SessionBinding, SessionData, SessionMetadata, TodoData, TodoDependency,
-    TodoPlanLink, TurnData, UserPrefs,
+    TodoPlanLink, TurnData, UserPrefs, WatcherRelation,
 };
 
 #[derive(Debug, Error)]
@@ -289,4 +289,29 @@ pub trait StorageEngine: Send + Sync {
     ///
     /// Replaces all existing preferences with the provided data.
     async fn save_user_prefs(&self, prefs: &UserPrefs) -> Result<()>;
+
+    // =========================================================================
+    // Watcher Relationships
+    // =========================================================================
+
+    /// Save a watcher relationship (upsert).
+    ///
+    /// Automatically maintains indexes for lookup by watcher and target.
+    async fn save_watcher(&self, watcher: &WatcherRelation) -> Result<()>;
+
+    /// Delete a watcher relationship by ID.
+    async fn delete_watcher(&self, id: &str) -> Result<()>;
+
+    /// Get all watchers for a target session.
+    ///
+    /// Returns all sessions watching the given target.
+    async fn get_watchers_for_target(&self, target_session_id: &str) -> Result<Vec<WatcherRelation>>;
+
+    /// Get all targets a watcher session is watching.
+    ///
+    /// Returns all sessions being watched by the given watcher.
+    async fn get_targets_for_watcher(&self, watcher_session_id: &str) -> Result<Vec<WatcherRelation>>;
+
+    /// List all watcher relationships.
+    async fn list_watchers(&self) -> Result<Vec<WatcherRelation>>;
 }

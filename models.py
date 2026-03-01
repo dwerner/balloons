@@ -395,8 +395,57 @@ class SessionSummaryBlock:
     approved_title: str = ""  # Final title (may differ from proposed)
 
 
+# =============================================================================
+# Watcher Mode Content Blocks
+# =============================================================================
+
+
+@ws_type
+@dataclass
+class WatchStartBlock:
+    """Turn marking the start of watching a target session.
+
+    Created when a watcher session begins observing a target session.
+    This establishes the watching relationship and is visible in the
+    watcher's conversation history.
+    """
+    type: str = "watch_start"
+    target_session_id: str = ""  # The session being watched
+    target_session_name: str = ""  # Display name of the target session
+
+
+@ws_type
+@dataclass
+class WatchStopBlock:
+    """Turn marking the end of watching a target session.
+
+    Created when watching is stopped, either by user action or because
+    the target session was closed/archived.
+    """
+    type: str = "watch_stop"
+    target_session_id: str = ""  # The session that was being watched
+    reason: str = ""  # "user", "session_closed", "session_archived"
+
+
+@ws_type
+@dataclass
+class WatchSummaryBlock:
+    """Turn containing a summary of a target session exchange.
+
+    Generated when the target session completes an exchange. The summary
+    is contextualized by the watcher's full context (previous summaries,
+    user instructions, etc.). Injected into the watcher session as an
+    external input, which the watcher LLM then responds to.
+    """
+    type: str = "watch_summary"
+    target_session_id: str = ""  # The session being watched
+    target_session_name: str = ""  # Display name of the target session
+    exchange_index: int = 0  # Which exchange this summarizes (0-indexed)
+    summary: str = ""  # The LLM-generated summary content
+
+
 # Union type for all content block types
-ContentBlock = Union[TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ForkedFromBlock, ArchiveBlock, SessionSummaryBlock, SlideBlock, ReviewBlock, ForkProposalBlock, MergeProposalBlock]
+ContentBlock = Union[TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ForkedFromBlock, ArchiveBlock, SessionSummaryBlock, SlideBlock, ReviewBlock, ForkProposalBlock, MergeProposalBlock, WatchStartBlock, WatchStopBlock, WatchSummaryBlock]
 
 
 @dataclass
@@ -491,6 +540,8 @@ class QueuedMessage:
     content: str
     created: datetime
     paused: bool = False  # When True, this message and all after it are blocked
+    source: str = "user"  # "user" or "watcher:{session_id}" for attribution
+    source_name: str = ""  # Display name of source (e.g., "watching-auth-bug")
 
     def to_dict(self) -> dict:
         return {
@@ -498,6 +549,8 @@ class QueuedMessage:
             "content": self.content,
             "created": self.created.isoformat(),
             "paused": self.paused,
+            "source": self.source,
+            "source_name": self.source_name,
         }
 
     @classmethod
@@ -507,6 +560,8 @@ class QueuedMessage:
             content=data["content"],
             created=datetime.fromisoformat(data["created"]),
             paused=data.get("paused", False),
+            source=data.get("source", "user"),
+            source_name=data.get("source_name", ""),
         )
 
 
@@ -520,12 +575,28 @@ class MessageQueue:
     """
     messages: list[QueuedMessage] = field(default_factory=list)
 
-    def add(self, content: str) -> QueuedMessage:
-        """Add a message to the queue."""
+    def add(
+        self,
+        content: str,
+        source: str = "user",
+        source_name: str = "",
+    ) -> QueuedMessage:
+        """Add a message to the queue.
+
+        Args:
+            content: The message content
+            source: Attribution for the message ("user" or "watcher:{session_id}")
+            source_name: Display name of the source (e.g., "watching-auth-bug")
+
+        Returns:
+            The created QueuedMessage
+        """
         msg = QueuedMessage(
             id=str(uuid.uuid4()),
             content=content,
             created=datetime.now(),
+            source=source,
+            source_name=source_name,
         )
         self.messages.append(msg)
         return msg

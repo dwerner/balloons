@@ -2459,6 +2459,33 @@ function AppContent() {
               sessionTitle,
             });
           }}
+          onWatchSession={async (targetSessionId) => {
+            const client = clientRef.current;
+            if (!client || connectionState !== 'connected') {
+              console.error('Cannot create watcher: client not connected');
+              return;
+            }
+
+            debugLog('Creating watcher session', { target: targetSessionId });
+            try {
+              const result = await client.sessions.createWatcherSession(targetSessionId);
+              if (result.success) {
+                debugLog('Watcher session created', {
+                  watcherId: result.watcherSessionId,
+                  target: result.targetSessionId,
+                  name: result.watcherName,
+                });
+                // Switch to the watcher session
+                if (result.watcherSessionId) {
+                  handleSelectSession(result.watcherSessionId);
+                }
+              } else {
+                console.error('Failed to create watcher session:', result.error);
+              }
+            } catch (err) {
+              console.error('Failed to create watcher session:', err);
+            }
+          }}
           soundEnabled={soundNotifications.soundEnabled}
           onToggleSound={() => soundNotifications.setSoundEnabled(!soundNotifications.soundEnabled)}
           serverSlot={serverSlot}
@@ -3291,6 +3318,8 @@ interface SidebarContentProps {
   onReviewSession?: (sessionId: string) => void;
   // Link session callback
   onLinkSession?: (sessionId: string) => void;
+  // Watch session callback (create watcher session)
+  onWatchSession?: (sessionId: string) => void;
   // Sound notification props
   soundEnabled?: boolean;
   onToggleSound?: () => void;
@@ -3324,6 +3353,7 @@ function SidebarContent({
   onExchangeAction,
   onReviewSession,
   onLinkSession,
+  onWatchSession,
   soundEnabled = true,
   onToggleSound,
   serverSlot,
@@ -3607,6 +3637,7 @@ function SidebarContent({
           onExchangeAction={onExchangeAction}
           onReviewSession={onReviewSession}
           onLinkSession={onLinkSession}
+          onWatchSession={onWatchSession}
           archivingTurnIndices={archivingTurnIndices}
         />
       ) : (

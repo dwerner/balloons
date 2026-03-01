@@ -10,7 +10,7 @@ from typing import Optional, AsyncIterator
 
 import aiofiles
 
-from models import Message, TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, ArchiveSummary, SlideBlock, ReviewBlock, ContentBlock, ContextMode, QueuedMessage, MessageQueue, Turn, ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData, ExchangeInfo
+from models import Message, TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ArchiveBlock, ArchiveSummary, SlideBlock, ReviewBlock, ContentBlock, ContextMode, QueuedMessage, MessageQueue, Turn, ForkProposalBlock, MergeProposalBlock, ContextAssignmentData, ForkBindingData, ExchangeInfo, WatchStartBlock, WatchStopBlock, WatchSummaryBlock
 
 # Rust storage availability (checked lazily to avoid circular imports)
 _rust_storage_checked = False
@@ -789,6 +789,153 @@ class Session:
         return len(self.get_all_active_links()) > 0
 
     # =========================================================================
+    # Watcher Methods
+    # =========================================================================
+
+    def get_watch_target_id(self) -> Optional[str]:
+        """Get the target session ID if this session is watching another session.
+
+        Searches for the most recent WatchStartBlock that hasn't been stopped.
+
+        Returns:
+            Target session ID if watching, None otherwise
+        """
+        # Track which targets have been stopped
+        stopped_targets = set()
+
+        # Scan backwards to find most recent state for each target
+        for turn in reversed(self.turns):
+            if isinstance(turn.content_block, WatchStopBlock):
+                stopped_targets.add(turn.content_block.target_session_id)
+            elif isinstance(turn.content_block, WatchStartBlock):
+                target_id = turn.content_block.target_session_id
+                if target_id not in stopped_targets:
+                    return target_id
+
+        return None
+
+    @property
+    def is_watcher(self) -> bool:
+        """Check if this session is a watcher (watching another session).
+
+        Returns:
+            True if this session is watching at least one target
+        """
+        return self.get_watch_target_id() is not None
+
+    def get_all_watch_targets(self) -> list[str]:
+        """Get all currently watched target session IDs.
+
+        Returns:
+            List of target session IDs being watched (empty if none)
+        """
+        # Track which targets have been stopped
+        stopped_targets = set()
+        active_targets = []
+
+        # Scan backwards to find active watches
+        for turn in reversed(self.turns):
+            if isinstance(turn.content_block, WatchStopBlock):
+                stopped_targets.add(turn.content_block.target_session_id)
+            elif isinstance(turn.content_block, WatchStartBlock):
+                target_id = turn.content_block.target_session_id
+                if target_id not in stopped_targets and target_id not in active_targets:
+                    active_targets.append(target_id)
+
+        return active_targets
+
+    def is_watching(self, target_session_id: str) -> bool:
+        """Check if this session is watching a specific target session.
+
+        Args:
+            target_session_id: The session ID to check
+
+        Returns:
+            True if watching the target, False otherwise
+        """
+        return target_session_id in self.get_all_watch_targets()
+
+    def add_watch_start_turn(self, target_session_id: str, target_session_name: str) -> Turn:
+        """Add a WatchStartBlock turn to begin watching a target session.
+
+        Args:
+            target_session_id: ID of the session to watch
+            target_session_name: Display name of the target session
+
+        Returns:
+            The created turn
+        """
+        block = WatchStartBlock(
+            target_session_id=target_session_id,
+            target_session_name=target_session_name,
+        )
+        turn = Turn(role="system", content_block=block)
+        self.turns.append(turn)
+        return turn
+
+    def add_watch_stop_turn(self, target_session_id: str, reason: str = "user") -> Turn:
+        """Add a WatchStopBlock turn to stop watching a target session.
+
+        Args:
+            target_session_id: ID of the session to stop watching
+            reason: Why watching stopped ("user", "session_closed", "session_archived")
+
+        Returns:
+            The created turn
+        """
+        block = WatchStopBlock(
+            target_session_id=target_session_id,
+            reason=reason,
+        )
+        turn = Turn(role="system", content_block=block)
+        self.turns.append(turn)
+        return turn
+
+    def add_watch_summary_turn(
+        self,
+        target_session_id: str,
+        target_session_name: str,
+        exchange_index: int,
+        summary: str,
+    ) -> Turn:
+        """Add a WatchSummaryBlock turn with a summary of a target exchange.
+
+        Args:
+            target_session_id: ID of the target session
+            target_session_name: Display name of the target session
+            exchange_index: Which exchange this summarizes (0-indexed)
+            summary: The LLM-generated summary content
+
+        Returns:
+            The created turn
+        """
+        block = WatchSummaryBlock(
+            target_session_id=target_session_id,
+            target_session_name=target_session_name,
+            exchange_index=exchange_index,
+            summary=summary,
+        )
+        turn = Turn(role="system", content_block=block)
+        self.turns.append(turn)
+        return turn
+
+    def get_all_watch_summaries(self, target_session_id: Optional[str] = None) -> list[tuple[int, WatchSummaryBlock]]:
+        """Get all watch summary blocks with their turn indices.
+
+        Args:
+            target_session_id: Optional filter for specific target
+
+        Returns:
+            List of (turn_index, WatchSummaryBlock) tuples
+        """
+        summaries = []
+        for i, turn in enumerate(self.turns):
+            if isinstance(turn.content_block, WatchSummaryBlock):
+                if target_session_id is None or turn.content_block.target_session_id == target_session_id:
+                    summaries.append((i, turn.content_block))
+        return summaries
+
+    # =========================================================================
     # Archive Methods
     # =========================================================================
 
@@ -1094,6 +1241,26 @@ class Session:
                 "key_accomplishments": block.key_accomplishments,
                 "status": block.status,
             }
+        elif isinstance(block, WatchStartBlock):
+            return {
+                "type": "watch_start",
+                "target_session_id": block.target_session_id,
+                "target_session_name": block.target_session_name,
+            }
+        elif isinstance(block, WatchStopBlock):
+            return {
+                "type": "watch_stop",
+                "target_session_id": block.target_session_id,
+                "target_session_name": block.target_session_name,
+            }
+        elif isinstance(block, WatchSummaryBlock):
+            return {
+                "type": "watch_summary",
+                "target_session_id": block.target_session_id,
+                "target_session_name": block.target_session_name,
+                "exchange_index": block.exchange_index,
+                "summary": block.summary,
+            }
         return {"type": "unknown"}
 
     def _serialize_turn(self, turn: Turn) -> dict:
@@ -1330,6 +1497,23 @@ class Session:
                 files_changed=data.get("files_changed", []),
                 key_accomplishments=data.get("key_accomplishments", []),
                 status=data.get("status", "pending"),
+            )
+        elif block_type == "watch_start":
+            return WatchStartBlock(
+                target_session_id=data.get("target_session_id", ""),
+                target_session_name=data.get("target_session_name", ""),
+            )
+        elif block_type == "watch_stop":
+            return WatchStopBlock(
+                target_session_id=data.get("target_session_id", ""),
+                target_session_name=data.get("target_session_name", ""),
+            )
+        elif block_type == "watch_summary":
+            return WatchSummaryBlock(
+                target_session_id=data.get("target_session_id", ""),
+                target_session_name=data.get("target_session_name", ""),
+                exchange_index=data.get("exchange_index", 0),
+                summary=data.get("summary", ""),
             )
         # Fallback to text
         return TextBlock(text=str(data))

@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-28T12:27:00.617027
+// Generated: 2026-02-28T16:05:09.790880
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -479,6 +479,21 @@ export interface SessionManagerService {
   createSession(workingDirectory?: string | null): Promise<Types.ManagedSessionInfo>;
 
   /**
+   * Create a watcher session to observe another session.
+   * 
+   * The watcher session will receive summaries of exchanges from the target
+   * session. The user can provide instructions to the watcher to guide how
+   * summaries are generated and how the watcher should respond.
+   * 
+   * Args:
+   * target_session_id: ID of the session to watch
+   * 
+   * Returns:
+   * CreateWatcherSessionResult with the new watcher session info
+   */
+  createWatcherSession(targetSessionId: string): Promise<Types.CreateWatcherSessionResult>;
+
+  /**
    * Delete a session.
    * 
    * Note: This removes the session from memory and storage.
@@ -824,6 +839,19 @@ export interface SessionManagerService {
   startSessionReview(sessionId: string, backendName: string): Promise<Types.StartSessionReviewResult>;
 
   /**
+   * Stop a watcher session from watching a target.
+   * 
+   * Args:
+   * watcher_session_id: ID of the watcher session
+   * target_session_id: ID of the target to stop watching (if None, stops all)
+   * reason: Why watching stopped ("user", "session_closed", "session_archived")
+   * 
+   * Returns:
+   * True if successfully stopped, False otherwise
+   */
+  stopWatching(watcherSessionId: string, targetSessionId?: string | null, reason?: string): Promise<boolean>;
+
+  /**
    * Submit a markdown message to a session and start streaming the response.
    * 
    * Similar to submit_message but the user turn is stored and displayed as
@@ -1053,6 +1081,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.call('createSession', { workingDirectory: workingDirectory });
   }
 
+  async createWatcherSession(targetSessionId: string): Promise<Types.CreateWatcherSessionResult> {
+    return this.call('createWatcherSession', { targetSessionId: targetSessionId });
+  }
+
   async deleteSession(sessionId: string): Promise<boolean> {
     return this.call('deleteSession', { sessionId: sessionId });
   }
@@ -1147,6 +1179,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   async startSessionReview(sessionId: string, backendName: string): Promise<Types.StartSessionReviewResult> {
     return this.call('startSessionReview', { sessionId: sessionId, backendName: backendName });
+  }
+
+  async stopWatching(watcherSessionId: string, targetSessionId?: string | null, reason?: string): Promise<boolean> {
+    return this.call('stopWatching', { watcherSessionId: watcherSessionId, targetSessionId: targetSessionId, reason: reason });
   }
 
   async submitMarkdownMessage(sessionId: string, content: string, queue?: boolean, allowedTools?: string[] | null): Promise<Types.SubmitMessageResult> {

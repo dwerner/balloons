@@ -13,6 +13,7 @@ import type { SessionDataTurn } from '../../../hooks/useSessionData';
 import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
 import { BaseToolCard, calculateToolPhase } from './BaseToolCard';
 import { LazySyntaxHighlightedCode } from './SyntaxHighlighter';
+import { getStringInput } from './toolInputUtils';
 import './cards.css';
 
 interface BashCardProps {
@@ -36,9 +37,9 @@ export const BashCard = React.memo(function BashCard({ turn, result }: BashCardP
   const toolInput = toolUseBlock?.input || {};
   const inputIsStreaming = isStreamingInput(toolInput);
 
-  // Extract Bash-specific inputs
-  const command = (toolInput.command || '') as string;
-  const description = (toolInput.description || '') as string;
+  // Extract Bash-specific inputs (with safe string conversion)
+  const command = getStringInput(toolInput, 'command');
+  const description = getStringInput(toolInput, 'description');
   const timeout = toolInput.timeout as number | undefined;
   const runInBackground = toolInput.run_in_background as boolean | undefined;
 

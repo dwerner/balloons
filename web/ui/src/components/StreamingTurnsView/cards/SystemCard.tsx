@@ -28,6 +28,9 @@ import type {
   MergeProposalBlock,
   ImageBlock,
   SessionSummaryBlock,
+  WatchStartBlock,
+  WatchStopBlock,
+  WatchSummaryBlock,
 } from '../../../../../generated/types';
 import { useSelectSession } from './ClientContext';
 import './cards.css';
@@ -54,6 +57,10 @@ const SYSTEM_CONFIG: Record<string, { icon: string; label: string; className: st
   merge_proposal: { icon: '⤴', label: 'Merge Proposal', className: 'system-merge-proposal' },
   archive: { icon: '📦', label: 'Archive', className: 'system-archive' },
   session_summary: { icon: '📝', label: 'Session Summary', className: 'system-session-summary' },
+  // Watcher mode blocks
+  watch_start: { icon: '👁', label: 'Watching', className: 'system-watch-start' },
+  watch_stop: { icon: '👁', label: 'Stopped Watching', className: 'system-watch-stop' },
+  watch_summary: { icon: '📋', label: 'Summary', className: 'system-watch-summary' },
 };
 
 /**
@@ -137,6 +144,18 @@ function getLinkedSessionId(block: SessionDataTurn['contentBlock']): string | nu
       const b = block as LinkBlock;
       return b.linkedSessionId || null;
     }
+    case 'watch_start': {
+      const b = block as WatchStartBlock;
+      return b.targetSessionId || null;
+    }
+    case 'watch_stop': {
+      const b = block as WatchStopBlock;
+      return b.targetSessionId || null;
+    }
+    case 'watch_summary': {
+      const b = block as WatchSummaryBlock;
+      return b.targetSessionId || null;
+    }
     default:
       return null;
   }
@@ -157,6 +176,10 @@ function getNavigationLabel(block: SessionDataTurn['contentBlock']): string | nu
       return 'Go to parent';
     case 'link':
       return 'Go to linked session';
+    case 'watch_start':
+    case 'watch_stop':
+    case 'watch_summary':
+      return 'Go to target';
     default:
       return null;
   }
@@ -249,6 +272,25 @@ function getDisplayContent(block: SessionDataTurn['contentBlock']): string {
         }
       }
       return content;
+    }
+    // Watcher mode blocks
+    case 'watch_start': {
+      const b = block as WatchStartBlock;
+      return `Watching **${b.targetSessionName || 'session'}**`;
+    }
+    case 'watch_stop': {
+      const b = block as WatchStopBlock;
+      const reasonText = b.reason === 'user' ? 'stopped by user' :
+                         b.reason === 'session_closed' ? 'session closed' :
+                         b.reason === 'session_archived' ? 'session archived' :
+                         b.reason || 'unknown';
+      return `Stopped watching (${reasonText})`;
+    }
+    case 'watch_summary': {
+      const b = block as WatchSummaryBlock;
+      const exchangeNum = (b.exchangeIndex ?? 0) + 1;
+      const header = `**Exchange ${exchangeNum}** from *${b.targetSessionName || 'target'}*`;
+      return `${header}\n\n${b.summary || ''}`;
     }
     default:
       return '';

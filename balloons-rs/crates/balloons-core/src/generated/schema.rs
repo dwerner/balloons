@@ -2,7 +2,7 @@
 //!
 //! Generated from Python domain entities marked with @rust_schema.
 //! Source: models.py and other domain modules
-//! Generated: 2026-02-25T13:44:47.579711
+//! Generated: 2026-02-28T18:47:30.148326
 //!
 //! To regenerate:
 //!     python -m codegen.generate_rust
@@ -185,6 +185,29 @@ pub struct SessionBinding {
     pub created_at: String,
     #[serde(default)]
     pub released_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatcherRelation {
+    pub id: String,
+    pub watcher_session_id: String,
+    pub target_session_id: String,
+    pub target_session_name: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserData {
+    pub id: String,
+    pub username: String,
+    pub password_hash: String,
+    pub role: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub created_by: Option<String>,
+    #[serde(default)]
+    pub last_login: Option<String>,
+    pub disabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

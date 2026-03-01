@@ -521,6 +521,41 @@
   color: var(--accent-summary, #ffd43b);
 }
 
+/* Watcher mode blocks */
+.system-card.system-watch-start,
+.system-card.system-watch-stop {
+  border-color: var(--accent-watch, #74c0fc);
+}
+
+.system-card.system-watch-start .turn-card-header,
+.system-card.system-watch-stop .turn-card-header {
+  background: rgba(116, 192, 252, 0.1);
+  color: var(--accent-watch, #74c0fc);
+}
+
+.system-card.system-watch-summary {
+  border-color: var(--accent-watch-summary, #a9e34b);
+}
+
+.system-card.system-watch-summary .turn-card-header {
+  background: rgba(169, 227, 75, 0.1);
+  color: var(--accent-watch-summary, #a9e34b);
+}
+
+/* Watcher navigation buttons */
+.system-card.system-watch-start .session-link-btn,
+.system-card.system-watch-stop .session-link-btn,
+.system-card.system-watch-summary .session-link-btn {
+  background: var(--accent-watch, #74c0fc);
+  color: #000;
+}
+
+.system-card.system-watch-start .session-link-btn:hover,
+.system-card.system-watch-stop .session-link-btn:hover,
+.system-card.system-watch-summary .session-link-btn:hover {
+  background: color-mix(in srgb, var(--accent-watch, #74c0fc) 80%, #fff);
+}
+
 /* System card actions (navigation buttons) */
 .system-card .turn-card-actions {
   display: flex;
@@ -2760,6 +2795,31 @@
 
 :root[data-theme="dark-flat"] .system-card.system-link .turn-card-header,
 [data-theme="dark-flat"] .system-card.system-link .turn-card-header {
+  background: transparent;
+}
+
+/* Watcher mode blocks - flat */
+:root[data-theme="dark-flat"] .system-card.system-watch-start,
+[data-theme="dark-flat"] .system-card.system-watch-start,
+:root[data-theme="dark-flat"] .system-card.system-watch-stop,
+[data-theme="dark-flat"] .system-card.system-watch-stop {
+  border-left-color: var(--accent-watch, #5090b0);
+}
+
+:root[data-theme="dark-flat"] .system-card.system-watch-start .turn-card-header,
+[data-theme="dark-flat"] .system-card.system-watch-start .turn-card-header,
+:root[data-theme="dark-flat"] .system-card.system-watch-stop .turn-card-header,
+[data-theme="dark-flat"] .system-card.system-watch-stop .turn-card-header {
+  background: transparent;
+}
+
+:root[data-theme="dark-flat"] .system-card.system-watch-summary,
+[data-theme="dark-flat"] .system-card.system-watch-summary {
+  border-left-color: var(--accent-watch-summary, #709050);
+}
+
+:root[data-theme="dark-flat"] .system-card.system-watch-summary .turn-card-header,
+[data-theme="dark-flat"] .system-card.system-watch-summary .turn-card-header {
   background: transparent;
 }
 

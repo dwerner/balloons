@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-02-28T12:27:00.613105
+// Generated: 2026-02-28T16:05:09.786947
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -224,6 +224,26 @@ export interface SessionSummaryBlock {
   approvedTitle?: string;
 }
 
+export interface WatchStartBlock {
+  type?: string;
+  targetSessionId?: string;
+  targetSessionName?: string;
+}
+
+export interface WatchStopBlock {
+  type?: string;
+  targetSessionId?: string;
+  reason?: string;
+}
+
+export interface WatchSummaryBlock {
+  type?: string;
+  targetSessionId?: string;
+  targetSessionName?: string;
+  exchangeIndex?: number;
+  summary?: string;
+}
+
 export interface ManagedSessionInfo {
   id: string;
   title: string;
@@ -398,6 +418,15 @@ export interface ApproveSessionReviewResult {
 export interface GenerateCommitMessageResult {
   success: boolean;
   helperId?: string;
+  error?: string;
+}
+
+export interface CreateWatcherSessionResult {
+  success: boolean;
+  watcherSessionId?: string;
+  targetSessionId?: string;
+  targetSessionName?: string;
+  watcherName?: string;
   error?: string;
 }
 
@@ -635,7 +664,7 @@ export interface TurnSnapshot {
   viewed: boolean;
   tokens: number;
   contextMode: string;
-  contentBlock: TextBlock | MarkdownBlock | ImageBlock | ToolUseBlock | ToolResultBlock | InterruptionBlock | ErrorBlock | LinkBlock | ForkBlock | ForkedFromBlock | MergeBlock | MergedToBlock | ArchiveBlock | SlideBlock | ReviewBlock | ForkProposalBlock | MergeProposalBlock;
+  contentBlock: TextBlock | MarkdownBlock | ImageBlock | ToolUseBlock | ToolResultBlock | InterruptionBlock | ErrorBlock | LinkBlock | ForkBlock | ForkedFromBlock | MergeBlock | MergedToBlock | ArchiveBlock | SlideBlock | ReviewBlock | ForkProposalBlock | MergeProposalBlock | WatchStartBlock | WatchStopBlock | WatchSummaryBlock;
   order?: number;
   exchangeId?: string | null;
   timestamp?: string | null;
@@ -686,7 +715,7 @@ export interface SessionTurnFinishedEvent {
   tokens: number;
   order?: number;
   role?: string;
-  contentBlock?: TextBlock | MarkdownBlock | ImageBlock | ToolUseBlock | ToolResultBlock | InterruptionBlock | ErrorBlock | LinkBlock | ForkBlock | ForkedFromBlock | MergeBlock | MergedToBlock | ArchiveBlock | SlideBlock | ReviewBlock | ForkProposalBlock | MergeProposalBlock | null;
+  contentBlock?: TextBlock | MarkdownBlock | ImageBlock | ToolUseBlock | ToolResultBlock | InterruptionBlock | ErrorBlock | LinkBlock | ForkBlock | ForkedFromBlock | MergeBlock | MergedToBlock | ArchiveBlock | SlideBlock | ReviewBlock | ForkProposalBlock | MergeProposalBlock | WatchStartBlock | WatchStopBlock | WatchSummaryBlock | null;
   finalContent?: string;
   contextTokens?: number;
   outputTokensTotal?: number;

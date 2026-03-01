@@ -24,6 +24,51 @@ if TYPE_CHECKING:
     from session import Session
 
 
+# Tool argument fields that MUST be strings (for UI rendering safety)
+_STRING_FIELDS_BY_TOOL = {
+    "Write": ["file_path", "content"],
+    "Edit": ["file_path", "old_string", "new_string"],
+    "Read": ["file_path"],
+    "Bash": ["command", "description"],
+    "Grep": ["pattern", "path", "glob", "type", "output_mode"],
+    "Glob": ["pattern", "path"],
+}
+
+
+def _normalize_tool_arguments(tool_name: str, arguments: dict) -> dict:
+    """Normalize tool arguments to ensure expected types.
+
+    Some models (e.g., Qwen) may send non-string values for fields that
+    should be strings. This converts them to prevent UI crashes.
+    """
+    if not isinstance(arguments, dict):
+        return arguments
+
+    string_fields = _STRING_FIELDS_BY_TOOL.get(tool_name, [])
+    if not string_fields:
+        return arguments
+
+    normalized = arguments.copy()
+    for field in string_fields:
+        if field in normalized:
+            value = normalized[field]
+            if not isinstance(value, str):
+                # Convert non-strings to JSON representation
+                if value is None:
+                    normalized[field] = ""
+                elif isinstance(value, (list, dict)):
+                    normalized[field] = json.dumps(value, indent=2)
+                else:
+                    normalized[field] = str(value)
+                debug_log.warning(
+                    f"Normalized non-string tool argument: {tool_name}.{field}",
+                    category=Category.RUNNER,
+                    details={
+                        "original_type": type(value).__name__,
+                        "original_preview": str(value)[:100] if value else None,
+                    },
+                )
+    return normalized
 
 
 def _dump_interaction(
@@ -656,6 +701,9 @@ class OpenAICompatibleRunner(BaseRunner):
                 )
 
                 arguments = {"raw": raw_args, "_dump_file": str(dump_path) if dump_path else None}
+
+            # Normalize arguments to ensure expected types (e.g., strings for Write.content)
+            arguments = _normalize_tool_arguments(tc["name"], arguments)
 
             finalized_tool_calls.append({
                 "id": tc["id"],

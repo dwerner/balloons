@@ -47,7 +47,8 @@ from models import (
     TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock,
     InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, ForkedFromBlock,
     MergeBlock, MergedToBlock, ArchiveBlock, SlideBlock, ReviewBlock,
-    ForkProposalBlock, MergeProposalBlock
+    ForkProposalBlock, MergeProposalBlock,
+    WatchStartBlock, WatchStopBlock, WatchSummaryBlock
 )
 from core.debug_log import debug_log, Category
 
@@ -60,7 +61,8 @@ ContentBlock = Union[
     TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock,
     InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, ForkedFromBlock,
     MergeBlock, MergedToBlock, ArchiveBlock, SlideBlock, ReviewBlock,
-    ForkProposalBlock, MergeProposalBlock
+    ForkProposalBlock, MergeProposalBlock,
+    WatchStartBlock, WatchStopBlock, WatchSummaryBlock
 ]
 
 # Type for session loader callback: async (session_id) -> Session | None
@@ -1232,6 +1234,27 @@ class SessionDataService:
                 files_changed=data.get("files_changed", []),
                 key_accomplishments=data.get("key_accomplishments", []),
                 status=data.get("status", "pending"),
+            )
+        # Watcher mode blocks
+        elif block_type == "watch_start":
+            return WatchStartBlock(
+                type="watch_start",
+                target_session_id=data.get("target_session_id", ""),
+                target_session_name=data.get("target_session_name", ""),
+            )
+        elif block_type == "watch_stop":
+            return WatchStopBlock(
+                type="watch_stop",
+                target_session_id=data.get("target_session_id", ""),
+                reason=data.get("reason", ""),
+            )
+        elif block_type == "watch_summary":
+            return WatchSummaryBlock(
+                type="watch_summary",
+                target_session_id=data.get("target_session_id", ""),
+                target_session_name=data.get("target_session_name", ""),
+                exchange_index=data.get("exchange_index", 0),
+                summary=data.get("summary", ""),
             )
         else:
             # Unknown type - return as text block with JSON dump

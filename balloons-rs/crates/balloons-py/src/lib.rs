@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use balloons_core::{
     GoalData, LmdbEngine, PlanData, SessionBinding, SessionData, StorageClient, TodoData,
-    TodoDependency, TodoPlanLink, UserPrefs,
+    TodoDependency, TodoPlanLink, UserPrefs, WatcherRelation,
 };
 use balloons_supervisor::{ProcessSupervisor, StartRequest};
 
@@ -977,6 +977,88 @@ impl Storage {
             future::block_on(task)
                 .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    // =========================================================================
+    // Watcher Relationships
+    // =========================================================================
+
+    /// Save a watcher relationship (upsert).
+    fn save_watcher(&self, py: Python<'_>, watcher_json: &str) -> PyResult<()> {
+        let watcher: WatcherRelation =
+            serde_json::from_str(watcher_json).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        let client = Arc::clone(&self.client);
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move { client.save_watcher(&watcher).await });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Delete a watcher relationship.
+    fn delete_watcher(&self, py: Python<'_>, id: &str) -> PyResult<()> {
+        let client = Arc::clone(&self.client);
+        let id = id.to_string();
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move { client.delete_watcher(&id).await });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Get all watchers for a target session. Returns JSON array.
+    fn get_watchers_for_target(&self, py: Python<'_>, target_session_id: &str) -> PyResult<String> {
+        let client = Arc::clone(&self.client);
+        let target_session_id = target_session_id.to_string();
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move {
+                client.get_watchers_for_target(&target_session_id).await
+            });
+            let watchers = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+            serde_json::to_string(&watchers).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Get all targets a watcher session is watching. Returns JSON array.
+    fn get_targets_for_watcher(&self, py: Python<'_>, watcher_session_id: &str) -> PyResult<String> {
+        let client = Arc::clone(&self.client);
+        let watcher_session_id = watcher_session_id.to_string();
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move {
+                client.get_targets_for_watcher(&watcher_session_id).await
+            });
+            let watchers = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+            serde_json::to_string(&watchers).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// List all watcher relationships. Returns JSON array.
+    fn list_watchers(&self, py: Python<'_>) -> PyResult<String> {
+        let client = Arc::clone(&self.client);
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move { client.list_watchers().await });
+            let watchers = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+            serde_json::to_string(&watchers).map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })
     }
 }

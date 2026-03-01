@@ -467,7 +467,41 @@ BALLOON_TOOL_NAMES = {
     "balloon", "propose_fork", "propose_merge", "create_slide",
     "list_links", "follow_link", "search_linked_session", "session_info",
     "speak", "play_midi",
+    # Watcher mode tools
+    "send_to_target",
 }
+
+# Watcher mode tools - for cross-session communication
+WATCHER_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "send_to_target",
+            "description": """Send a message to the target session being watched.
+
+Use this tool when you (as the watcher) need to communicate with the target session.
+The message is queued and sent after any current exchange in the target completes.
+
+Example use cases:
+- Suggesting an alternative approach when the target is stuck
+- Providing a reminder about user instructions
+- Sharing relevant context the target might have missed
+
+The message will appear as a user message in the target session, attributed
+as coming from the watcher session.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "The message to send to the target session"
+                    }
+                },
+                "required": ["message"]
+            }
+        }
+    },
+]
 
 # Process supervisor tools for managing long-running background processes
 SUPERVISOR_TOOLS = [
@@ -912,12 +946,13 @@ def get_tools_for_request(
     include_goal_tools: bool = True,
     include_midi_tools: bool = True,
     include_debug_tools: bool = True,
+    include_watcher_tools: bool = False,
 ) -> list[dict] | None:
     """Get the list of tools to include in an API request.
 
     Includes standard file/shell tools and optionally Balloons-specific tools
     (workflow, UI, session/link navigation), supervisor tools, review tools,
-    goal management tools, MIDI tools, and debug tools.
+    goal management tools, MIDI tools, debug tools, and watcher tools.
 
     Args:
         allowed_tools: List of tool names to allow, or None for all
@@ -928,6 +963,7 @@ def get_tools_for_request(
         include_goal_tools: If True, include goal management tools (create_goal, etc.)
         include_midi_tools: If True, include MIDI player tools (play_midi)
         include_debug_tools: If True, include debug logging tools (debug_log_query, etc.)
+        include_watcher_tools: If True, include watcher mode tools (send_to_target)
 
     Returns:
         List of tool definitions, or None if tools disabled
@@ -949,6 +985,8 @@ def get_tools_for_request(
         all_tools = all_tools + MIDI_TOOLS
     if include_debug_tools:
         all_tools = all_tools + DEBUG_TOOLS
+    if include_watcher_tools:
+        all_tools = all_tools + WATCHER_TOOLS
 
     if allowed_tools is None:
         return all_tools

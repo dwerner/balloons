@@ -24,6 +24,7 @@ STREAM_READLINE_TIMEOUT = 180.0
 from core.tool_executor import execute_tool
 from core.link_tools import LINK_TOOL_NAMES
 from core.tools import REVIEW_TOOL_NAMES
+from core.watcher_tools import WATCHER_TOOL_NAMES
 
 # Regex to match <balloons-tool>...</balloons-tool> blocks
 # Use non-greedy .*? to allow matching multiple blocks, but consume up to the matching closing tag
@@ -755,9 +756,9 @@ class ClaudeRunner(BaseRunner):
             if msg_type == "result":
                 usage = data.get("usage", {})
 
-                # Only execute custom tools (link/review tools) that CLI doesn't know about
+                # Only execute custom tools (link/review/watcher tools) that CLI doesn't know about
                 # Standard tools (Read, Bash, etc.) are handled by CLI
-                custom_tool_names = LINK_TOOL_NAMES | REVIEW_TOOL_NAMES
+                custom_tool_names = LINK_TOOL_NAMES | REVIEW_TOOL_NAMES | WATCHER_TOOL_NAMES
                 custom_tool_calls = [
                     tc for tc in pending_tool_calls
                     if tc["name"] in custom_tool_names

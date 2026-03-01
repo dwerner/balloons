@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::generated::{
     GoalData, PlanData, SessionBinding, SessionData, SessionMetadata, TodoData, TodoDependency,
-    TodoPlanLink, TurnData, TurnOrder, UserPrefs,
+    TodoPlanLink, TurnData, TurnOrder, UserPrefs, WatcherRelation,
 };
 use super::traits::{Error, Result, StorageEngine};
 
@@ -152,6 +152,11 @@ pub struct LmdbEngine {
     session_bindings: Database<Str, Bytes>,    // binding_id → SessionBinding
     bindings_by_session: Database<Str, Bytes>, // session_id → [binding_id]
     bindings_by_entity: Database<Str, Bytes>,  // "entity_type:entity_id" → [binding_id]
+
+    // Watcher relationships
+    watchers: Database<Str, Bytes>,             // watcher_id → WatcherRelation
+    watchers_by_target: Database<Str, Bytes>,   // target_session_id → [watcher_id]
+    watchers_by_watcher: Database<Str, Bytes>,  // watcher_session_id → [watcher_id]
 }
 
 /// Key used for session history in the metadata table
@@ -176,11 +181,11 @@ impl LmdbEngine {
         // Create directory if it doesn't exist
         std::fs::create_dir_all(path)?;
 
-        // Database count: 4 session + 3 goal entities + 5 goal indexes + 3 binding = 15
+        // Database count: 4 session + 3 goal entities + 5 goal indexes + 3 binding + 3 watcher = 18
         let env = unsafe {
             EnvOpenOptions::new()
                 .map_size(map_size)
-                .max_dbs(15)
+                .max_dbs(18)
                 .open(path)
                 .map_err(|e| Error::Database(e.to_string()))?
         };
@@ -243,6 +248,17 @@ impl LmdbEngine {
             .create_database(&mut wtxn, Some("bindings_by_entity"))
             .map_err(|e| Error::Database(e.to_string()))?;
 
+        // Watcher relationship tables
+        let watchers = env
+            .create_database(&mut wtxn, Some("watchers"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let watchers_by_target = env
+            .create_database(&mut wtxn, Some("watchers_by_target"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let watchers_by_watcher = env
+            .create_database(&mut wtxn, Some("watchers_by_watcher"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+
         wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
 
         let engine = Self {
@@ -270,6 +286,11 @@ impl LmdbEngine {
             session_bindings,
             bindings_by_session,
             bindings_by_entity,
+
+            // Watcher relationships
+            watchers,
+            watchers_by_target,
+            watchers_by_watcher,
         };
 
         // Ensure schema version is compatible and up-to-date
@@ -402,6 +423,55 @@ impl LmdbEngine {
                 Err(Error::SchemaTooNew { db_version, app_version })
             }
         }
+    }
+
+    /// Add an ID to a string list index.
+    fn add_to_index(
+        &self,
+        wtxn: &mut heed::RwTxn,
+        db: &Database<Str, Bytes>,
+        key: &str,
+        id: &str,
+    ) -> Result<()> {
+        let mut ids: Vec<String> = db
+            .get(wtxn, key)
+            .map_err(|e| Error::Database(e.to_string()))?
+            .and_then(|b| serde_json::from_slice(b).ok())
+            .unwrap_or_default();
+
+        if !ids.contains(&id.to_string()) {
+            ids.push(id.to_string());
+            let bytes = serde_json::to_vec(&ids)
+                .map_err(|e| Error::Serialization(e.to_string()))?;
+            db.put(wtxn, key, &bytes)
+                .map_err(|e| Error::Database(e.to_string()))?;
+        }
+
+        Ok(())
+    }
+
+    /// Remove an ID from a string list index.
+    fn remove_from_index(
+        &self,
+        wtxn: &mut heed::RwTxn,
+        db: &Database<Str, Bytes>,
+        key: &str,
+        id: &str,
+    ) -> Result<()> {
+        if let Some(bytes) = db.get(wtxn, key).map_err(|e| Error::Database(e.to_string()))? {
+            if let Ok(mut ids) = serde_json::from_slice::<Vec<String>>(bytes) {
+                ids.retain(|existing| existing != id);
+                if ids.is_empty() {
+                    db.delete(wtxn, key).map_err(|e| Error::Database(e.to_string()))?;
+                } else {
+                    let new_bytes = serde_json::to_vec(&ids)
+                        .map_err(|e| Error::Serialization(e.to_string()))?;
+                    db.put(wtxn, key, &new_bytes)
+                        .map_err(|e| Error::Database(e.to_string()))?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1760,6 +1830,132 @@ impl StorageEngine for LmdbEngine {
         wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
 
         Ok(())
+    }
+
+    // =========================================================================
+    // Watcher Relationships
+    // =========================================================================
+
+    async fn save_watcher(&self, watcher: &WatcherRelation) -> Result<()> {
+        let bytes = serde_json::to_vec(watcher)
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+
+        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        // Check if this watcher already exists to handle index updates
+        let existing = self.watchers
+            .get(&wtxn, &watcher.id)
+            .map_err(|e| Error::Database(e.to_string()))?
+            .and_then(|b| serde_json::from_slice::<WatcherRelation>(b).ok());
+
+        // Save the watcher
+        self.watchers
+            .put(&mut wtxn, &watcher.id, &bytes)
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        // Update indexes
+        // If there was an existing watcher with different target/watcher, clean up old indexes
+        if let Some(ref old) = existing {
+            if old.target_session_id != watcher.target_session_id {
+                // Remove from old target index
+                self.remove_from_index(&mut wtxn, &self.watchers_by_target, &old.target_session_id, &watcher.id)?;
+            }
+            if old.watcher_session_id != watcher.watcher_session_id {
+                // Remove from old watcher index
+                self.remove_from_index(&mut wtxn, &self.watchers_by_watcher, &old.watcher_session_id, &watcher.id)?;
+            }
+        }
+
+        // Add to target index
+        self.add_to_index(&mut wtxn, &self.watchers_by_target, &watcher.target_session_id, &watcher.id)?;
+
+        // Add to watcher index
+        self.add_to_index(&mut wtxn, &self.watchers_by_watcher, &watcher.watcher_session_id, &watcher.id)?;
+
+        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn delete_watcher(&self, id: &str) -> Result<()> {
+        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        // Load the watcher first to clean up indexes
+        if let Some(bytes) = self.watchers.get(&wtxn, id).map_err(|e| Error::Database(e.to_string()))? {
+            if let Ok(watcher) = serde_json::from_slice::<WatcherRelation>(bytes) {
+                // Remove from indexes
+                self.remove_from_index(&mut wtxn, &self.watchers_by_target, &watcher.target_session_id, id)?;
+                self.remove_from_index(&mut wtxn, &self.watchers_by_watcher, &watcher.watcher_session_id, id)?;
+            }
+        }
+
+        // Delete the watcher
+        self.watchers
+            .delete(&mut wtxn, id)
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn get_watchers_for_target(&self, target_session_id: &str) -> Result<Vec<WatcherRelation>> {
+        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        // Get watcher IDs from index
+        let ids: Vec<String> = self.watchers_by_target
+            .get(&rtxn, target_session_id)
+            .map_err(|e| Error::Database(e.to_string()))?
+            .and_then(|b| serde_json::from_slice(b).ok())
+            .unwrap_or_default();
+
+        // Load each watcher
+        let mut watchers = Vec::new();
+        for id in ids {
+            if let Some(bytes) = self.watchers.get(&rtxn, &id).map_err(|e| Error::Database(e.to_string()))? {
+                if let Ok(watcher) = serde_json::from_slice(bytes) {
+                    watchers.push(watcher);
+                }
+            }
+        }
+
+        Ok(watchers)
+    }
+
+    async fn get_targets_for_watcher(&self, watcher_session_id: &str) -> Result<Vec<WatcherRelation>> {
+        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        // Get watcher IDs from index
+        let ids: Vec<String> = self.watchers_by_watcher
+            .get(&rtxn, watcher_session_id)
+            .map_err(|e| Error::Database(e.to_string()))?
+            .and_then(|b| serde_json::from_slice(b).ok())
+            .unwrap_or_default();
+
+        // Load each watcher
+        let mut watchers = Vec::new();
+        for id in ids {
+            if let Some(bytes) = self.watchers.get(&rtxn, &id).map_err(|e| Error::Database(e.to_string()))? {
+                if let Ok(watcher) = serde_json::from_slice(bytes) {
+                    watchers.push(watcher);
+                }
+            }
+        }
+
+        Ok(watchers)
+    }
+
+    async fn list_watchers(&self) -> Result<Vec<WatcherRelation>> {
+        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let mut watchers = Vec::new();
+
+        let iter = self.watchers.iter(&rtxn).map_err(|e| Error::Database(e.to_string()))?;
+        for result in iter {
+            let (_, bytes) = result.map_err(|e| Error::Database(e.to_string()))?;
+            if let Ok(watcher) = serde_json::from_slice(bytes) {
+                watchers.push(watcher);
+            }
+        }
+
+        Ok(watchers)
     }
 }
 

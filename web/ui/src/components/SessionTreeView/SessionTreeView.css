@@ -140,6 +140,10 @@
   color: #facc15;
 }
 
+.tree-group--watching .tree-group__header {
+  color: #22d3ee; /* cyan */
+}
+
 .tree-group__sessions {
   list-style: none;
   margin: 0;

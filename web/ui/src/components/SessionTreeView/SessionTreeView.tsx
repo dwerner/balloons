@@ -60,7 +60,7 @@ function groupTurnsIntoExchanges(turns: TurnInfo[]): Exchange[] {
       currentExchangeId = exchangeId;
     } else if (turn.role === 'assistant') {
       // Assistant turns belong to current exchange or create new one
-      const exchangeId = turnExchangeId || currentExchangeId || `exchange-${exchangeIndex++}`;
+      const exchangeId: string = turnExchangeId || currentExchangeId || `exchange-${exchangeIndex++}`;
       let exchange = exchangeMap.get(exchangeId);
       if (!exchange) {
         exchange = {
@@ -487,6 +487,7 @@ interface SessionMenuProps {
   onReview: () => void;
   onRename?: () => void;
   onLinkToCurrentSession?: () => void;  // Link this session to the current session
+  onWatchSession?: () => void;  // Create a watcher session to observe this session
   onClose: () => void;
 }
 
@@ -498,6 +499,7 @@ function SessionContextMenu({
   onReview,
   onRename,
   onLinkToCurrentSession,
+  onWatchSession,
   onClose,
 }: SessionMenuProps) {
   // Can link if there's a current session and it's different from the one being right-clicked
@@ -578,6 +580,16 @@ function SessionContextMenu({
             <span className="exchange-context-menu__icon">🔗</span>
             Link to Current Session
             <span className="exchange-context-menu__hint">Create bidirectional link</span>
+          </button>
+        )}
+        {onWatchSession && (
+          <button
+            className="exchange-context-menu__item"
+            onClick={() => { onWatchSession(); onClose(); }}
+          >
+            <span className="exchange-context-menu__icon">👁</span>
+            Watch this Session
+            <span className="exchange-context-menu__hint">Create watcher session</span>
           </button>
         )}
       </div>
@@ -836,6 +848,7 @@ function SessionNode({
   onReview,
   onRename,
   onLinkSession,
+  onWatchSession,
   selectedSessionId,
   archivingTurnIndices,
 }: {
@@ -857,6 +870,7 @@ function SessionNode({
   onReview?: () => void;
   onRename?: () => void;
   onLinkSession?: () => void;
+  onWatchSession?: () => void;
   selectedSessionId: string | null;
   archivingTurnIndices?: Set<number>;
 }) {
@@ -1014,6 +1028,7 @@ function SessionNode({
           onReview={() => onReview?.()}
           onRename={onRename}
           onLinkToCurrentSession={onLinkSession}
+          onWatchSession={onWatchSession}
           onClose={() => setSessionMenuPosition(null)}
         />
       )}
@@ -1045,6 +1060,7 @@ interface SessionTreeViewProps {
   onExchangeContextModeChange?: (sessionId: string, turnIndices: number[], mode: ContextMode) => void;
   onExchangeAction?: (sessionId: string, turnIndices: number[], action: ExchangeAction) => void;
   onLinkSession?: (sessionId: string) => void;
+  onWatchSession?: (sessionId: string) => void;
   onTogglePin?: (sessionId: string) => void;
   onBulkAction?: (sessionIds: string[], action: BulkAction) => void;
   onLoadTurns?: (sessionId: string) => Promise<TurnInfo[]>;
@@ -1074,6 +1090,7 @@ export const SessionTreeView = memo(forwardRef<SessionTreeViewHandle, SessionTre
   onReviewSession,
   onRenameSession,
   onLinkSession,
+  onWatchSession,
   isLoading = false,
   archivingTurnIndices,
 }, ref) {
@@ -1268,7 +1285,7 @@ export const SessionTreeView = memo(forwardRef<SessionTreeViewHandle, SessionTre
     setCheckedSessions(new Set());
   }, []);
 
-  // Group sessions by day with pinned sessions first
+  // Group sessions by day with pinned sessions first, plus a "Watching" group
   const groupedSessions = useMemo(() => {
     // Separate pinned and unpinned sessions
     const pinned = sessions.filter(s => s.isPinned);
@@ -1279,11 +1296,61 @@ export const SessionTreeView = memo(forwardRef<SessionTreeViewHandle, SessionTre
       return new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime();
     });
 
-    // Group unpinned by day label first, THEN sort within groups
+    // Identify watcher sessions and their targets
+    // Watchers have titles like "watching:target-name"
+    const watcherSessions = new Set<string>();
+    const targetSessions = new Set<string>();
+    const watcherToTarget = new Map<string, string>(); // watcher title -> target title it's watching
+
+    for (const session of unpinned) {
+      const title = session.title || session.forkName || '';
+      if (title.startsWith('watching:')) {
+        watcherSessions.add(session.id);
+        const targetName = title.slice('watching:'.length);
+        watcherToTarget.set(session.id, targetName);
+      }
+    }
+
+    // Find target sessions by matching their title/forkName to what watchers are watching
+    for (const session of unpinned) {
+      const sessionName = session.title || session.forkName || '';
+      // Check if any watcher is watching this session
+      for (const [, targetName] of watcherToTarget) {
+        if (sessionName === targetName) {
+          targetSessions.add(session.id);
+          break;
+        }
+      }
+    }
+
+    // Separate watching-related sessions from regular sessions
+    const watchingSessions: SessionInfo[] = [];
+    const regularUnpinned: SessionInfo[] = [];
+
+    for (const session of unpinned) {
+      if (watcherSessions.has(session.id) || targetSessions.has(session.id)) {
+        watchingSessions.push(session);
+      } else {
+        regularUnpinned.push(session);
+      }
+    }
+
+    // Sort watching sessions: targets first, then their watchers, by last modified
+    watchingSessions.sort((a, b) => {
+      const aIsWatcher = watcherSessions.has(a.id);
+      const bIsWatcher = watcherSessions.has(b.id);
+      // Targets before watchers
+      if (!aIsWatcher && bIsWatcher) return -1;
+      if (aIsWatcher && !bIsWatcher) return 1;
+      // Within same type, sort by last modified
+      return new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime();
+    });
+
+    // Group regular unpinned by day label first, THEN sort within groups
     // This ensures all "Today" sessions are together even if isCurrent bumps one to the top
     const dayGroupMap = new Map<string, { key: string; label: string; sessions: SessionInfo[]; sortKey: number }>();
 
-    for (const session of unpinned) {
+    for (const session of regularUnpinned) {
       const dayKey = getDayKey(session.lastModified);
       const label = formatDayGroup(session.lastModified);
 
@@ -1326,7 +1393,7 @@ export const SessionTreeView = memo(forwardRef<SessionTreeViewHandle, SessionTre
       })
       .map(({ key, label, sessions }) => ({ key, label, sessions }));
 
-    return { pinned, dayGroups };
+    return { pinned, watching: watchingSessions, dayGroups };
   }, [sessions]);
 
   if (isLoading) {
@@ -1395,6 +1462,7 @@ export const SessionTreeView = memo(forwardRef<SessionTreeViewHandle, SessionTre
         onReview={onReviewSession ? () => onReviewSession(session.id) : undefined}
         onRename={onRenameSession ? () => onRenameSession(session.id) : undefined}
         onLinkSession={onLinkSession ? () => onLinkSession(session.id) : undefined}
+        onWatchSession={onWatchSession ? () => onWatchSession(session.id) : undefined}
         selectedSessionId={selectedSessionId}
         archivingTurnIndices={isSelected ? archivingTurnIndices : undefined}
       />
@@ -1445,6 +1513,16 @@ export const SessionTreeView = memo(forwardRef<SessionTreeViewHandle, SessionTre
             <div className="tree-group__header">Pinned</div>
             <ul className="tree-group__sessions">
               {groupedSessions.pinned.map(renderSessionNode)}
+            </ul>
+          </li>
+        )}
+
+        {/* Watching sessions (watchers and their targets) */}
+        {groupedSessions.watching.length > 0 && (
+          <li className="tree-group tree-group--watching">
+            <div className="tree-group__header">👁 Watching</div>
+            <ul className="tree-group__sessions">
+              {groupedSessions.watching.map(renderSessionNode)}
             </ul>
           </li>
         )}

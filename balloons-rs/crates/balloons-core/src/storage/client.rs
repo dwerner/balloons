@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::generated::{
     GoalData, PlanData, SessionBinding, SessionData, SessionMetadata, TodoData, TodoDependency,
-    TodoPlanLink, TurnData, UserPrefs,
+    TodoPlanLink, TurnData, UserPrefs, WatcherRelation,
 };
 use super::traits::{Result, StorageEngine};
 
@@ -275,5 +275,34 @@ impl StorageClient {
     /// Save user preferences.
     pub async fn save_user_prefs(&self, prefs: &UserPrefs) -> Result<()> {
         self.engine.save_user_prefs(prefs).await
+    }
+
+    // =========================================================================
+    // Watcher Relationships
+    // =========================================================================
+
+    /// Save a watcher relationship (upsert).
+    pub async fn save_watcher(&self, watcher: &WatcherRelation) -> Result<()> {
+        self.engine.save_watcher(watcher).await
+    }
+
+    /// Delete a watcher relationship.
+    pub async fn delete_watcher(&self, id: &str) -> Result<()> {
+        self.engine.delete_watcher(id).await
+    }
+
+    /// Get all watchers for a target session.
+    pub async fn get_watchers_for_target(&self, target_session_id: &str) -> Result<Vec<WatcherRelation>> {
+        self.engine.get_watchers_for_target(target_session_id).await
+    }
+
+    /// Get all targets a watcher session is watching.
+    pub async fn get_targets_for_watcher(&self, watcher_session_id: &str) -> Result<Vec<WatcherRelation>> {
+        self.engine.get_targets_for_watcher(watcher_session_id).await
+    }
+
+    /// List all watcher relationships.
+    pub async fn list_watchers(&self) -> Result<Vec<WatcherRelation>> {
+        self.engine.list_watchers().await
     }
 }

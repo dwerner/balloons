@@ -636,7 +636,8 @@ class AsyncStorage:
         from models import (
             TextBlock, MarkdownBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock,
             ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock,
-            ArchiveBlock, SlideBlock, ReviewBlock, ForkProposalBlock, MergeProposalBlock
+            ArchiveBlock, SlideBlock, ReviewBlock, ForkProposalBlock, MergeProposalBlock,
+            WatchStartBlock, WatchStopBlock, WatchSummaryBlock,
         )
 
         if isinstance(block, TextBlock):
@@ -774,6 +775,26 @@ class AsyncStorage:
                 "files_changed": block.files_changed,
                 "key_accomplishments": block.key_accomplishments,
                 "status": block.status,
+            }
+        elif isinstance(block, WatchStartBlock):
+            return {
+                "type": "watch_start",
+                "target_session_id": block.target_session_id,
+                "target_session_name": block.target_session_name,
+            }
+        elif isinstance(block, WatchStopBlock):
+            return {
+                "type": "watch_stop",
+                "target_session_id": block.target_session_id,
+                "target_session_name": block.target_session_name,
+            }
+        elif isinstance(block, WatchSummaryBlock):
+            return {
+                "type": "watch_summary",
+                "target_session_id": block.target_session_id,
+                "target_session_name": block.target_session_name,
+                "exchange_index": block.exchange_index,
+                "summary": block.summary,
             }
         return {"type": "unknown"}
 
@@ -1022,6 +1043,26 @@ class AsyncStorage:
                 files_changed=data.get("files_changed", []),
                 key_accomplishments=data.get("key_accomplishments", []),
                 status=data.get("status", "pending"),
+            )
+        elif block_type == "watch_start":
+            from models import WatchStartBlock
+            return WatchStartBlock(
+                target_session_id=data.get("target_session_id", ""),
+                target_session_name=data.get("target_session_name", ""),
+            )
+        elif block_type == "watch_stop":
+            from models import WatchStopBlock
+            return WatchStopBlock(
+                target_session_id=data.get("target_session_id", ""),
+                target_session_name=data.get("target_session_name", ""),
+            )
+        elif block_type == "watch_summary":
+            from models import WatchSummaryBlock
+            return WatchSummaryBlock(
+                target_session_id=data.get("target_session_id", ""),
+                target_session_name=data.get("target_session_name", ""),
+                exchange_index=data.get("exchange_index", 0),
+                summary=data.get("summary", ""),
             )
         # Fallback to text
         return TextBlock(text=str(data))
@@ -1818,3 +1859,128 @@ async def get_user_prefs_storage() -> UserPrefsStorage:
     if _user_prefs_instance is None:
         _user_prefs_instance = UserPrefsStorage(DEFAULT_DB_PATH)
     return _user_prefs_instance
+
+
+# =============================================================================
+# Watcher Storage
+# =============================================================================
+
+
+@dataclass
+class WatcherRelationData:
+    """Python representation of a watcher relationship."""
+    id: str
+    watcher_session_id: str
+    target_session_id: str
+    target_session_name: str
+    created_at: str
+
+
+class WatcherStorage:
+    """Async wrapper for watcher relationship storage using Rust backend.
+
+    Provides an async interface to the synchronous Rust storage backend,
+    using ThreadPoolExecutor to run blocking calls without blocking the event loop.
+
+    Stores watcher relationships for cross-session observation.
+    """
+
+    # Shared executor for all instances
+    _executor: ThreadPoolExecutor | None = None
+    _executor_lock: asyncio.Lock | None = None
+
+    def __init__(self, db_path: str | Path | None = None):
+        """Initialize watcher storage.
+
+        Args:
+            db_path: Path to the database file. Defaults to ~/.balloons/sessions.lmdb
+        """
+        self._db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
+        # Use shared storage handle to avoid LMDB "already open" errors
+        self._storage = _get_shared_storage(self._db_path)
+
+    @classmethod
+    async def _get_executor(cls) -> ThreadPoolExecutor:
+        """Get or create the shared thread pool executor."""
+        if cls._executor is None:
+            if cls._executor_lock is None:
+                cls._executor_lock = asyncio.Lock()
+            async with cls._executor_lock:
+                if cls._executor is None:
+                    cls._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="watcher_storage")
+        return cls._executor
+
+    async def _run_sync(self, func, *args):
+        """Run a synchronous function in the thread pool."""
+        executor = await self._get_executor()
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(executor, func, *args)
+
+    async def save_watcher(self, watcher: WatcherRelationData) -> None:
+        """Save a watcher relationship (upsert).
+
+        Args:
+            watcher: The watcher relationship to save
+        """
+        from dataclasses import asdict
+        watcher_json = json.dumps(asdict(watcher))
+        await self._run_sync(self._storage.save_watcher, watcher_json)
+
+    async def delete_watcher(self, watcher_id: str) -> None:
+        """Delete a watcher relationship.
+
+        Args:
+            watcher_id: The ID of the watcher relationship to delete
+        """
+        await self._run_sync(self._storage.delete_watcher, watcher_id)
+
+    async def get_watchers_for_target(self, target_session_id: str) -> list[WatcherRelationData]:
+        """Get all watcher relationships for a target session.
+
+        Args:
+            target_session_id: The ID of the target session
+
+        Returns:
+            List of watcher relationships
+        """
+        json_data = await self._run_sync(self._storage.get_watchers_for_target, target_session_id)
+        watchers = json.loads(json_data)
+        return [WatcherRelationData(**w) for w in watchers]
+
+    async def get_targets_for_watcher(self, watcher_session_id: str) -> list[WatcherRelationData]:
+        """Get all targets a watcher session is watching.
+
+        Args:
+            watcher_session_id: The ID of the watcher session
+
+        Returns:
+            List of watcher relationships
+        """
+        json_data = await self._run_sync(self._storage.get_targets_for_watcher, watcher_session_id)
+        watchers = json.loads(json_data)
+        return [WatcherRelationData(**w) for w in watchers]
+
+    async def list_watchers(self) -> list[WatcherRelationData]:
+        """List all watcher relationships.
+
+        Returns:
+            List of all watcher relationships
+        """
+        json_data = await self._run_sync(self._storage.list_watchers)
+        watchers = json.loads(json_data)
+        return [WatcherRelationData(**w) for w in watchers]
+
+
+# Singleton instance for WatcherStorage
+_watcher_storage_instance: WatcherStorage | None = None
+
+
+async def get_watcher_storage() -> WatcherStorage:
+    """Get the default WatcherStorage instance (singleton).
+
+    Uses the default database path (~/.balloons/sessions.lmdb).
+    """
+    global _watcher_storage_instance
+    if _watcher_storage_instance is None:
+        _watcher_storage_instance = WatcherStorage(DEFAULT_DB_PATH)
+    return _watcher_storage_instance

@@ -12,6 +12,7 @@ import React from 'react';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
 import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
 import { BaseToolCard, calculateToolPhase, formatRelativePath } from './BaseToolCard';
+import { getStringInput, ensureString } from './toolInputUtils';
 import './cards.css';
 
 interface GlobCardProps {
@@ -35,9 +36,9 @@ export const GlobCard = React.memo(function GlobCard({ turn, result }: GlobCardP
   const toolInput = toolUseBlock?.input || {};
   const inputIsStreaming = isStreamingInput(toolInput);
 
-  // Extract Glob-specific inputs
-  const pattern = (toolInput.pattern || '') as string;
-  const path = (toolInput.path || '.') as string;
+  // Extract Glob-specific inputs (with safe string conversion)
+  const pattern = getStringInput(toolInput, 'pattern');
+  const path = getStringInput(toolInput, 'path', '.');
 
   // Get result info
   const resultBlock = result?.contentBlock?.type === 'tool_result'
@@ -69,8 +70,9 @@ export const GlobCard = React.memo(function GlobCard({ turn, result }: GlobCardP
     <span className="tool-building">building...</span>
   ) : null;
 
-  // Parse results to get file list
-  const fileList = resultContent.split('\n').filter(line => line.trim());
+  // Parse results to get file list (safely handle non-string content)
+  const safeResultContent = ensureString(resultContent);
+  const fileList = safeResultContent.split('\n').filter(line => line.trim());
   const fileCount = fileList.length;
 
   // Raw data for debugging mode

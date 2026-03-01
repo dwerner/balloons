@@ -13,6 +13,7 @@ import type { SessionDataTurn } from '../../../hooks/useSessionData';
 import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
 import { BaseToolCard, calculateToolPhase, formatRelativePath } from './BaseToolCard';
 import { LazyDiffHighlightedCode, LazySyntaxHighlightedCode, getLanguageFromPath } from './SyntaxHighlighter';
+import { getStringInputWithFallback, ensureString } from './toolInputUtils';
 import './cards.css';
 
 interface EditCardProps {
@@ -34,9 +35,14 @@ function generateUnifiedDiff(oldStr: string, newStr: string, filePath: string): 
     return [];
   }
 
-  const oldLines = oldStr ? oldStr.split('\n') : [];
-  const newLines = newStr ? newStr.split('\n') : [];
-  const fileName = filePath.split('/').pop() || filePath;
+  // Ensure we have strings (defensive for malformed input)
+  const safeOldStr = ensureString(oldStr);
+  const safeNewStr = ensureString(newStr);
+  const safeFilePath = ensureString(filePath);
+
+  const oldLines = safeOldStr ? safeOldStr.split('\n') : [];
+  const newLines = safeNewStr ? safeNewStr.split('\n') : [];
+  const fileName = safeFilePath.split('/').pop() || safeFilePath;
 
   const result: string[] = [];
   result.push(`--- a/${fileName}`);
@@ -107,10 +113,10 @@ export const EditCard = React.memo(function EditCard({ turn, result }: EditCardP
   const toolInput = toolUseBlock?.input || {};
   const inputIsStreaming = isStreamingInput(toolInput);
 
-  // Extract Edit-specific inputs (support both snake_case and camelCase)
-  const filePath = (toolInput.file_path || toolInput.filePath || '') as string;
-  const oldString = (toolInput.old_string || toolInput.oldString || '') as string;
-  const newString = (toolInput.new_string || toolInput.newString || '') as string;
+  // Extract Edit-specific inputs (support both snake_case and camelCase, with safe string conversion)
+  const filePath = getStringInputWithFallback(toolInput, ['file_path', 'filePath']);
+  const oldString = getStringInputWithFallback(toolInput, ['old_string', 'oldString']);
+  const newString = getStringInputWithFallback(toolInput, ['new_string', 'newString']);
   const replaceAll = (toolInput.replace_all ?? toolInput.replaceAll) as boolean | undefined;
 
   // Get result info

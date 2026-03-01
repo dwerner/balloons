@@ -341,6 +341,11 @@ If you're connected to the slot you're about to restart, you'll lose your connec
 4. If changes work, restart Slot A to promote
 5. If changes break, Slot A still runs stable code
 
+**CRITICAL: Never import app modules in test commands!**
+Do NOT run `python -c "from core import ..."` or `from service import ...` to test imports.
+These imports can clobber/conflict with the running server's state and cause instability.
+To test if code works, restart the appropriate slot instead.
+
 The React UI can toggle between slots via the "Server: A/B" control in the sidebar.
 
 

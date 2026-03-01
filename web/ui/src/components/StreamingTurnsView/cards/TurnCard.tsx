@@ -56,6 +56,10 @@ const SYSTEM_TYPES = new Set([
   // Legacy proposal block types (deprecated - new proposals are tool_use blocks)
   'fork_proposal',
   'merge_proposal',
+  // Watcher mode blocks
+  'watch_start',
+  'watch_stop',
+  'watch_summary',
 ]);
 
 // Note: fork_proposal and merge_proposal block types are deprecated.

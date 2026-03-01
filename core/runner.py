@@ -293,6 +293,20 @@ class SessionRunner:
         self._status = RunnerStatus.STREAMING
         self._turn_index = len(self.session.turns)  # Next turn index
 
+        # If this is a watcher session, include watcher tools (send_to_target)
+        if self.session.is_watcher:
+            if allowed_tools is None:
+                # None means "all tools" - add watcher tools to that set
+                allowed_tools = None  # Keep as None, watcher tools will be included via system
+            else:
+                # Specific allowed tools - add send_to_target
+                allowed_tools = list(allowed_tools) + ["send_to_target"]
+            debug_log.debug(
+                "Watcher session - including send_to_target tool",
+                session_id=self.session.id,
+                category=Category.RUNNER,
+            )
+
         # Add binding context to prompt if session has active bindings
         effective_prompt = await self._build_prompt_with_bindings(prompt)
 
@@ -420,6 +434,12 @@ class SessionRunner:
         self._reset_state()
         self._status = RunnerStatus.STREAMING
         self._turn_index = len(self.session.turns)  # Next turn index
+
+        # If this is a watcher session, include watcher tools (send_to_target)
+        if self.session.is_watcher:
+            if allowed_tools is not None:
+                # Specific allowed tools - add send_to_target
+                allowed_tools = list(allowed_tools) + ["send_to_target"]
 
         # Debug log to trace turn_id
         from core.debug_log import debug_log

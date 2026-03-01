@@ -268,12 +268,14 @@ class QueueState:
             self._queues[session_id] = _MessageQueue(session_id=session_id)
         return self._queues[session_id]
 
-    def add_message(self, session_id: str, content: str) -> str:
+    def add_message(self, session_id: str, content: str, source: str | None = None) -> str:
         """Add a message to a session's queue.
 
         Args:
             session_id: The session to add to
             content: Message content
+            source: Optional source identifier (e.g., "watcher:session-id" for watcher messages,
+                   "user" for typed input). Used to determine processing behavior.
 
         Returns:
             The new message's ID
@@ -290,7 +292,7 @@ class QueueState:
         self._schedule_notification(
             QueueEvent.MESSAGE_ADDED,
             session_id,
-            {"message_id": msg.id},
+            {"message_id": msg.id, "source": source},
         )
 
         return msg.id

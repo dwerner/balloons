@@ -15,6 +15,7 @@ import type { SessionDataTurn } from '../../../hooks/useSessionData';
 import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
 import { BaseToolCard, calculateToolPhase, formatRelativePath } from './BaseToolCard';
 import { LazySyntaxHighlightedCode } from './SyntaxHighlighter';
+import { getStringInputWithFallback, ensureString } from './toolInputUtils';
 import './cards.css';
 
 interface ReadCardProps {
@@ -38,8 +39,8 @@ export const ReadCard = React.memo(function ReadCard({ turn, result }: ReadCardP
   const toolInput = toolUseBlock?.input || {};
   const inputIsStreaming = isStreamingInput(toolInput);
 
-  // Extract Read-specific inputs (support both snake_case and camelCase)
-  const filePath = (toolInput.file_path || toolInput.filePath || '') as string;
+  // Extract Read-specific inputs (support both snake_case and camelCase, with safe string conversion)
+  const filePath = getStringInputWithFallback(toolInput, ['file_path', 'filePath']);
   const offset = (toolInput.offset) as number | undefined;
   const limit = (toolInput.limit) as number | undefined;
 
@@ -97,8 +98,9 @@ export const ReadCard = React.memo(function ReadCard({ turn, result }: ReadCardP
   // Strip line number prefixes from Read output
   // Balloons Read tool adds prefixes like "     1→" (spaces + number + arrow)
   // We need to strip these for proper syntax highlighting
-  const stripLineNumberPrefixes = (content: string): string => {
-    return content
+  const stripLineNumberPrefixes = (content: unknown): string => {
+    const safeContent = ensureString(content);
+    return safeContent
       .split('\n')
       .map(line => {
         // Match pattern: optional spaces + digits + arrow (→) + content

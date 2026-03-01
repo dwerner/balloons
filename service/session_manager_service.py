@@ -55,7 +55,7 @@ from core.stream_state import (
     get_stream_state,
 )
 # TreeState removed in Phase 8 - events go directly to SessionDataService
-from core.queue_state import QueueState
+from core.queue_state import QueueState, QueueEvent, QueueSnapshot
 from models import TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, Turn, SessionSummaryBlock
 from service.session_events import (
     SessionEventObserver,
@@ -79,7 +79,6 @@ from service.session_events import (
 if TYPE_CHECKING:
     from service.task_state_service import TaskStateService
     from service.session_data_service import SessionDataService
-    from core.queue_state import QueueState
 
 
 class SessionManagerEvent(Enum):
@@ -404,6 +403,24 @@ class GenerateCommitMessageResult:
     error: str = ""
 
 
+@ws_type
+@dataclass
+class CreateWatcherSessionResult:
+    """Result of creating a watcher session to observe another session.
+
+    The watcher session will receive summaries of exchanges from the target
+    session. The user can provide instructions to the watcher to guide
+    summarization.
+    """
+
+    success: bool
+    watcher_session_id: str = ""  # The new watcher session ID
+    target_session_id: str = ""  # The session being watched
+    target_session_name: str = ""  # Display name of the target
+    watcher_name: str = ""  # Name of the watcher session (e.g., "watching:target-name")
+    error: str = ""
+
+
 @dataclass
 class _StreamingContext:
     """Internal context for tracking streaming state per session.
@@ -486,6 +503,10 @@ class SessionManagerService:
         self._queue_state = queue_state
         self._event_handlers: list[Callable[[str, dict], None]] = []
 
+        # Register as observer of QueueState to process messages for idle sessions
+        if queue_state:
+            queue_state.add_observer(self._on_queue_event)
+
         # Event pump state
         self._pump_task: asyncio.Task | None = None
         self._pump_running = False
@@ -508,12 +529,63 @@ class SessionManagerService:
         # Async observers for session events (SessionEventObserver protocol)
         self._observers: list[SessionEventObserver] = []
 
+        # Watcher mode tracking (MVP internal implementation)
+        # Map: target_session_id -> list of watcher_session_ids
+        self._watcher_targets: dict[str, list[str]] = {}
+        # Map: watcher_session_id -> list of (target_session_id, target_name)
+        self._watcher_watching: dict[str, list[tuple[str, str]]] = {}
+
         # Register SessionDataService as observer if provided
         if session_data_service is not None:
             self.add_observer(session_data_service)
 
         # Wire up StreamState observer to emit streaming events
         self._stream_state.add_observer(self._on_stream_event)
+
+    async def initialize(self) -> None:
+        """Initialize async components of the service.
+
+        Call this after creating the service to:
+        - Rebuild watcher relationships from persisted sessions
+
+        This must be called before using watcher-related features.
+        """
+        await self._rebuild_all_watcher_relationships()
+
+    async def _rebuild_all_watcher_relationships(self) -> None:
+        """Load watcher relationships from LMDB storage.
+
+        Called at startup to restore watcher relationships.
+        This is now fast because watchers are stored as a proper entity.
+        """
+        from core.async_storage import get_watcher_storage
+
+        debug_log.info(
+            "Loading watcher relationships from storage",
+            category=Category.SESSION,
+        )
+
+        try:
+            watcher_storage = await get_watcher_storage()
+            watchers = await watcher_storage.list_watchers()
+
+            for watcher in watchers:
+                await self._register_watcher_internal(
+                    watcher.watcher_session_id,
+                    watcher.target_session_id,
+                    watcher.target_session_name,
+                    source="startup",
+                )
+
+            debug_log.info(
+                f"Loaded {len(watchers)} watcher relationships from storage",
+                category=Category.SESSION,
+            )
+        except Exception as e:
+            debug_log.error(
+                f"Failed to load watcher relationships: {e}",
+                category=Category.SESSION,
+            )
 
     def add_event_handler(self, handler: Callable[[str, dict], None]) -> None:
         """Register a handler for WebSocket events.
@@ -703,6 +775,100 @@ class SessionManagerService:
             queue_state: The QueueState to use for queue draining
         """
         self._queue_state = queue_state
+
+    async def _load_session_with_watcher_rebuild(self, session_id: str):
+        """Load a session and rebuild watcher relationships if applicable.
+
+        Use this instead of self._manager.load_session() when loading sessions
+        that might be watchers.
+
+        Args:
+            session_id: Session ID to load
+
+        Returns:
+            The loaded session, or None if not found
+        """
+        session = await self._manager.load_session(session_id)
+        if session:
+            await self._rebuild_watcher_for_session(session)
+        return session
+
+    async def _on_queue_event(
+        self,
+        event: "QueueEvent",
+        snapshot: "QueueSnapshot",
+        data: dict,
+    ) -> None:
+        """Handle QueueState events.
+
+        When a message from a WATCHER is added to a session's queue and that session
+        is idle (not streaming), immediately process the queued message. This enables
+        watcher-to-target messaging where the watcher queues a message and the
+        target processes it right away if it's not busy.
+
+        Regular user input (typed while streaming) should NOT trigger immediate
+        processing - it stays in the queue until streaming ends.
+
+        Args:
+            event: The queue event type
+            snapshot: Current queue state snapshot
+            data: Additional event data (e.g., message_id, source)
+        """
+        if event != QueueEvent.MESSAGE_ADDED:
+            return
+
+        # Only process watcher messages immediately
+        # Regular user input should wait for streaming to end
+        source = data.get("source")
+        if not source or not source.startswith("watcher:"):
+            return
+
+        session_id = snapshot.session_id
+        if not session_id:
+            return
+
+        # Check if this session has a runner and if it's idle
+        runner = self._manager.get_runner(session_id)
+        if not runner:
+            # No runner - session not loaded yet
+            # Load it so we can process the watcher message
+            debug_log.info(
+                f"Watcher message for unloaded session {session_id[:8]} - loading session",
+                category=Category.SESSION,
+            )
+            try:
+                session = await self._manager.load_session(session_id)
+                if session:
+                    runner = self._manager.get_runner(session_id)
+            except Exception as e:
+                debug_log.error(
+                    f"Failed to load session for watcher message: {e}",
+                    category=Category.SESSION,
+                )
+                return
+
+            if not runner:
+                debug_log.error(
+                    f"Session loaded but no runner created for {session_id[:8]}",
+                    category=Category.SESSION,
+                )
+                return
+
+        if runner.is_streaming:
+            # Session is busy - message will be processed when streaming ends
+            debug_log.debug(
+                f"Watcher message for session {session_id[:8]} but streaming - will process on completion",
+                category=Category.SESSION,
+            )
+            return
+
+        # Session is idle - process queued messages immediately
+        debug_log.info(
+            f"Watcher message for idle session {session_id[:8]} - processing immediately",
+            category=Category.SESSION,
+            details={"message_id": data.get("message_id"), "source": source},
+        )
+        await self._process_queued_messages(session_id)
 
     # --- Helper Runner Management ---
 
@@ -1328,6 +1494,35 @@ class SessionManagerService:
                 except Exception as e:
                     debug_log.warning(
                         f"Auto-complete session review failed: {e}",
+                        category=Category.SESSION
+                    )
+                    import traceback
+                    traceback.print_exc()
+
+            # Auto-complete watcher summary injection
+            if (
+                ctx.helper_type == "watch_summary"
+                and ctx.metadata.get("auto_complete", False)
+            ):
+                debug_log.info(
+                    f"Auto-completing watcher summary for helper {helper_id}",
+                    category=Category.SESSION,
+                )
+                try:
+                    await self._inject_watch_summary(
+                        watcher_session_id=ctx.metadata["watcher_session_id"],
+                        target_session_id=ctx.metadata["target_session_id"],
+                        target_session_name=ctx.metadata["target_session_name"],
+                        exchange_index=ctx.metadata["exchange_index"],
+                        summary=ctx.content.strip(),
+                    )
+                    debug_log.info(
+                        f"Watcher summary injected successfully for helper {helper_id}",
+                        category=Category.SESSION,
+                    )
+                except Exception as e:
+                    debug_log.warning(
+                        f"Auto-complete watcher summary failed: {e}",
                         category=Category.SESSION
                     )
                     import traceback
@@ -2015,6 +2210,9 @@ class SessionManagerService:
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
 
+            # Notify watchers of completed exchange (watcher mode)
+            await self._notify_watchers_of_exchange(session_id, ctx.exchange_id)
+
             # Process any queued messages now that streaming is done
             await self._process_queued_messages(session_id)
 
@@ -2180,6 +2378,9 @@ class SessionManagerService:
                 self._emit_session_updated(session, is_streaming=False)
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
+
+            # Notify watchers of completed exchange (watcher mode)
+            await self._notify_watchers_of_exchange(session_id, ctx.exchange_id)
 
             # Process any queued messages now that streaming is done
             await self._process_queued_messages(session_id)
@@ -3341,6 +3542,7 @@ class SessionManagerService:
 
         # Emit turn events for the source session
         source_turn_idx = len(source_session.turns) - 1
+        source_exchange_id = str(uuid.uuid4())
         await self._notify_observers(
             "on_turn_created",
             TurnCreatedEvent(
@@ -3348,6 +3550,7 @@ class SessionManagerService:
                 turn_id=source_turn.id,
                 turn_index=source_turn_idx,
                 role="system",
+                exchange_id=source_exchange_id,
                 content_block_type="link",
             ),
         )
@@ -3366,6 +3569,7 @@ class SessionManagerService:
 
         # Emit turn events for the target session
         target_turn_idx = len(target_session.turns) - 1
+        target_exchange_id = str(uuid.uuid4())
         await self._notify_observers(
             "on_turn_created",
             TurnCreatedEvent(
@@ -3373,6 +3577,7 @@ class SessionManagerService:
                 turn_id=target_turn.id,
                 turn_index=target_turn_idx,
                 role="system",
+                exchange_id=target_exchange_id,
                 content_block_type="link",
             ),
         )
@@ -3401,6 +3606,869 @@ class SessionManagerService:
             source_session_id=source_session_id,
             target_session_id=target_session_id,
         )
+
+    # --- Watcher Operations ---
+
+    @ws_expose
+    async def create_watcher_session(
+        self,
+        target_session_id: str,
+    ) -> CreateWatcherSessionResult:
+        """Create a watcher session to observe another session.
+
+        The watcher session will receive summaries of exchanges from the target
+        session. The user can provide instructions to the watcher to guide how
+        summaries are generated and how the watcher should respond.
+
+        Args:
+            target_session_id: ID of the session to watch
+
+        Returns:
+            CreateWatcherSessionResult with the new watcher session info
+        """
+        from models import WatchStartBlock
+
+        debug_log.info(
+            f"create_watcher_session called for target {target_session_id[:8]}",
+            category=Category.SESSION,
+        )
+
+        # Validate target session exists
+        target_session = self._manager.get_session(target_session_id)
+        if not target_session:
+            target_session = await self._manager.load_session(target_session_id)
+            if not target_session:
+                return CreateWatcherSessionResult(
+                    success=False,
+                    error=f"Target session {target_session_id} not found",
+                )
+
+        # Get target session name for display
+        target_name = target_session.title or target_session.fork_name or target_session.id[:8]
+
+        # Create the watcher session
+        watcher_session = await self._manager.create_session(
+            working_directory=target_session.working_directory
+        )
+
+        # Name the watcher session
+        watcher_name = f"watching:{target_name}"
+        watcher_session.title = watcher_name
+
+        # Add WatchStartBlock to establish the watching relationship
+        watch_turn = watcher_session.add_watch_start_turn(
+            target_session_id=target_session_id,
+            target_session_name=target_name,
+        )
+
+        # Add watcher instructions as a system-like user turn
+        # This ensures the LLM knows it's a watcher session and how to behave
+        watcher_instructions = self._get_watcher_instructions(target_name)
+        instructions_turn = watcher_session.add_turn(
+            role="user",
+            content_block=TextBlock(text=watcher_instructions),
+        )
+
+        # Save the watcher session
+        await watcher_session.save()
+
+        # Emit session created event
+        self._emit_event(SessionManagerEvent.SESSION_CREATED, watcher_session.id)
+
+        # Emit session added event so React UI can display the new session
+        self._emit_session_added(watcher_session, is_streaming=False)
+
+        # Emit turn events for the watch start (turn 0)
+        watch_exchange_id = str(uuid.uuid4())
+        await self._notify_observers(
+            "on_turn_created",
+            TurnCreatedEvent(
+                session_id=watcher_session.id,
+                turn_id=watch_turn.id,
+                turn_index=0,
+                role="system",
+                exchange_id=watch_exchange_id,
+                content_block_type="watch_start",
+            ),
+        )
+        await self._notify_observers(
+            "on_turn_finished",
+            TurnFinishedEvent(
+                session_id=watcher_session.id,
+                turn_id=watch_turn.id,
+                turn_index=0,
+                role="system",
+                content=f"[Watching {target_name}]",
+                tokens=0,
+                content_block=watch_turn.content_block,
+            ),
+        )
+
+        # Emit turn events for the instructions turn (turn 1)
+        instructions_exchange_id = str(uuid.uuid4())
+        await self._notify_observers(
+            "on_turn_created",
+            TurnCreatedEvent(
+                session_id=watcher_session.id,
+                turn_id=instructions_turn.id,
+                turn_index=1,
+                role="user",
+                exchange_id=instructions_exchange_id,
+                content_block_type="text",
+            ),
+        )
+        await self._notify_observers(
+            "on_turn_finished",
+            TurnFinishedEvent(
+                session_id=watcher_session.id,
+                turn_id=instructions_turn.id,
+                turn_index=1,
+                role="user",
+                content=watcher_instructions[:100] + "...",
+                tokens=0,
+                content_block=instructions_turn.content_block,
+            ),
+        )
+
+        # Register watcher relationship for live summarization
+        # Uses internal tracking; persists to LMDB for fast startup
+        await self._register_watcher_internal(
+            watcher_session.id, target_session_id, target_name
+        )
+
+        debug_log.info(
+            f"Created watcher session: {watcher_session.id[:8]} watching {target_session_id[:8]}",
+            category=Category.SESSION,
+            details={"target_name": target_name, "watcher_name": watcher_name},
+        )
+
+        return CreateWatcherSessionResult(
+            success=True,
+            watcher_session_id=watcher_session.id,
+            target_session_id=target_session_id,
+            target_session_name=target_name,
+            watcher_name=watcher_name,
+        )
+
+    @ws_expose
+    async def stop_watching(
+        self,
+        watcher_session_id: str,
+        target_session_id: str | None = None,
+        reason: str = "user",
+    ) -> bool:
+        """Stop a watcher session from watching a target.
+
+        Args:
+            watcher_session_id: ID of the watcher session
+            target_session_id: ID of the target to stop watching (if None, stops all)
+            reason: Why watching stopped ("user", "session_closed", "session_archived")
+
+        Returns:
+            True if successfully stopped, False otherwise
+        """
+        # Load the watcher session
+        watcher_session = self._manager.get_session(watcher_session_id)
+        if not watcher_session:
+            watcher_session = await self._manager.load_session(watcher_session_id)
+            if not watcher_session:
+                return False
+
+        # Get the target(s) to stop watching
+        if target_session_id:
+            targets = [target_session_id] if watcher_session.is_watching(target_session_id) else []
+        else:
+            targets = watcher_session.get_all_watch_targets()
+
+        if not targets:
+            return False
+
+        # Add WatchStopBlock for each target
+        for target_id in targets:
+            stop_turn = watcher_session.add_watch_stop_turn(
+                target_session_id=target_id,
+                reason=reason,
+            )
+
+            # Emit turn events
+            stop_turn_idx = len(watcher_session.turns) - 1
+            stop_exchange_id = str(uuid.uuid4())
+            await self._notify_observers(
+                "on_turn_created",
+                TurnCreatedEvent(
+                    session_id=watcher_session_id,
+                    turn_id=stop_turn.id,
+                    turn_index=stop_turn_idx,
+                    role="system",
+                    exchange_id=stop_exchange_id,
+                    content_block_type="watch_stop",
+                ),
+            )
+            await self._notify_observers(
+                "on_turn_finished",
+                TurnFinishedEvent(
+                    session_id=watcher_session_id,
+                    turn_id=stop_turn.id,
+                    turn_index=stop_turn_idx,
+                    role="system",
+                    content=f"[Stopped watching]",
+                    tokens=0,
+                    content_block=stop_turn.content_block,
+                ),
+            )
+
+        await watcher_session.save()
+
+        # Unregister watcher relationships
+        for target_id in targets:
+            await self._unregister_watcher_internal(watcher_session_id, target_id)
+
+        debug_log.info(
+            f"Stopped watching: {watcher_session_id[:8]} no longer watching {targets}",
+            category=Category.SESSION,
+            details={"reason": reason},
+        )
+
+        return True
+
+    # --- Watcher Internal Methods ---
+
+    async def _register_watcher_internal(
+        self,
+        watcher_session_id: str,
+        target_session_id: str,
+        target_session_name: str,
+        source: str = "creation",
+    ) -> None:
+        """Register a watcher relationship internally.
+
+        Called when create_watcher_session creates the watching relationship,
+        or when loading from storage after server restart.
+
+        Args:
+            watcher_session_id: ID of the watcher session
+            target_session_id: ID of the target being watched
+            target_session_name: Display name of the target
+            source: Where this registration came from ("creation", "startup", "load", "rebuild")
+        """
+        # Add to target -> watchers map (in-memory cache)
+        is_new = False
+        if target_session_id not in self._watcher_targets:
+            self._watcher_targets[target_session_id] = []
+        if watcher_session_id not in self._watcher_targets[target_session_id]:
+            self._watcher_targets[target_session_id].append(watcher_session_id)
+            is_new = True
+
+        # Add to watcher -> targets map (in-memory cache)
+        if watcher_session_id not in self._watcher_watching:
+            self._watcher_watching[watcher_session_id] = []
+        entry = (target_session_id, target_session_name)
+        if entry not in self._watcher_watching[watcher_session_id]:
+            self._watcher_watching[watcher_session_id].append(entry)
+
+        # Persist to storage (for new relationships, not startup loads)
+        # - "creation": new watcher session created
+        # - "rebuild": session loaded that has watcher info, now migrating to LMDB
+        # - "load": session loaded/switched, may need migration to LMDB
+        # Skip "startup" since those are already loaded from LMDB
+        if is_new and source in ("creation", "rebuild", "load"):
+            from datetime import datetime
+            from core.async_storage import get_watcher_storage, WatcherRelationData
+
+            watcher_id = f"{watcher_session_id}:{target_session_id}"
+            watcher_data = WatcherRelationData(
+                id=watcher_id,
+                watcher_session_id=watcher_session_id,
+                target_session_id=target_session_id,
+                target_session_name=target_session_name,
+                created_at=datetime.utcnow().isoformat() + "Z",
+            )
+            try:
+                watcher_storage = await get_watcher_storage()
+                await watcher_storage.save_watcher(watcher_data)
+            except Exception as e:
+                debug_log.error(
+                    f"Failed to persist watcher relationship: {e}",
+                    category=Category.SESSION,
+                )
+
+        debug_log.info(
+            f"Registered watcher relationship ({source}): {watcher_session_id[:8]} -> {target_session_id[:8]}",
+            category=Category.SESSION,
+            details={
+                "watcher_id": watcher_session_id,
+                "target_id": target_session_id,
+                "target_name": target_session_name,
+                "source": source,
+                "is_new": is_new,
+            },
+        )
+
+    async def _unregister_watcher_internal(
+        self,
+        watcher_session_id: str,
+        target_session_id: str | None = None,
+    ) -> None:
+        """Unregister a watcher relationship internally.
+
+        Called when stop_watching is called. Removes from in-memory cache and LMDB.
+        """
+        from core.async_storage import get_watcher_storage
+
+        targets_to_delete: list[str] = []
+
+        if target_session_id:
+            # Remove specific target
+            if target_session_id in self._watcher_targets:
+                if watcher_session_id in self._watcher_targets[target_session_id]:
+                    self._watcher_targets[target_session_id].remove(watcher_session_id)
+            if watcher_session_id in self._watcher_watching:
+                self._watcher_watching[watcher_session_id] = [
+                    (tid, tn) for tid, tn in self._watcher_watching[watcher_session_id]
+                    if tid != target_session_id
+                ]
+            targets_to_delete.append(target_session_id)
+        else:
+            # Remove all targets for this watcher
+            for tid, _ in list(self._watcher_watching.get(watcher_session_id, [])):
+                if tid in self._watcher_targets:
+                    if watcher_session_id in self._watcher_targets[tid]:
+                        self._watcher_targets[tid].remove(watcher_session_id)
+                targets_to_delete.append(tid)
+            self._watcher_watching.pop(watcher_session_id, None)
+
+        # Delete from LMDB storage
+        try:
+            watcher_storage = await get_watcher_storage()
+            for tid in targets_to_delete:
+                watcher_id = f"{watcher_session_id}:{tid}"
+                await watcher_storage.delete_watcher(watcher_id)
+        except Exception as e:
+            debug_log.error(
+                f"Failed to delete watcher from storage: {e}",
+                category=Category.SESSION,
+            )
+
+    def _get_watchers_for_session(self, session_id: str) -> list[str]:
+        """Get list of watcher session IDs observing a session.
+
+        Returns cached watchers loaded from LMDB at startup.
+        If empty, watchers either don't exist or weren't loaded yet.
+        """
+        return self._watcher_targets.get(session_id, []).copy()
+
+    async def _rebuild_watcher_for_session(self, session) -> None:
+        """Check if a loaded session is a watcher and re-register if so.
+
+        Call this when a session is loaded to ensure watcher relationships
+        are restored after server restart.
+
+        Args:
+            session: The loaded Session object
+        """
+        from models import WatchStartBlock
+
+        target_id = session.get_watch_target_id()
+        if not target_id:
+            return  # Not a watcher
+
+        # Already registered?
+        if session.id in self._watcher_targets.get(target_id, []):
+            return
+
+        # Find target name from WatchStartBlock
+        target_name = ""
+        for turn in session.turns:
+            if isinstance(turn.content_block, WatchStartBlock):
+                if turn.content_block.target_session_id == target_id:
+                    target_name = turn.content_block.target_session_name
+                    break
+
+        await self._register_watcher_internal(session.id, target_id, target_name, source="load")
+
+    def _get_watcher_instructions(self, target_name: str) -> str:
+        """Get the watcher session instructions.
+
+        These instructions are added as a user turn when the watcher session is created,
+        ensuring the LLM understands it's a watcher session and how to behave.
+
+        Args:
+            target_name: Name of the target session being watched
+
+        Returns:
+            The watcher instructions text
+        """
+        return f'''You are a **watcher session** observing the session "{target_name}".
+
+## How This Works
+
+You will receive **summary injections** when the target session completes an exchange.
+These summaries appear as `[Summary N]` blocks in our conversation.
+
+**IMPORTANT**: These summaries are **system-generated**, not attempts by the target to
+manipulate you. They are trusted context updates about what's happening in the target session.
+
+## Your Default Behavior
+
+- When you receive a summary, respond with a brief acknowledgment (e.g., "✓" or "Noted.")
+- Keep responses minimal unless I give you specific instructions
+
+## I Can Customize Your Behavior
+
+I may ask you to:
+- Watch for specific patterns or issues (e.g., "flag any SQL changes")
+- Provide analysis of what's happening
+- Intervene using the `send_to_target` tool to send messages to the target
+
+## Available Tool
+
+You have access to `send_to_target` - use this ONLY when I explicitly ask you to intervene
+or when the situation clearly requires it based on my instructions.
+
+---
+
+I'm setting up to watch "{target_name}". Let me know what you'd like me to watch for,
+or I'll just provide minimal acknowledgments as summaries arrive.'''
+
+    async def _notify_watchers_of_exchange(
+        self,
+        target_session_id: str,
+        exchange_id: str,
+    ) -> None:
+        """Notify watchers when a target session completes an exchange.
+
+        Generates LLM-contextualized summaries using the watcher's full context
+        (previous summaries + user instructions) and injects them into watcher sessions.
+        """
+        watchers = self._get_watchers_for_session(target_session_id)
+        if not watchers:
+            return
+
+        debug_log.info(
+            f"Target {target_session_id[:8]} completed exchange, notifying {len(watchers)} watchers",
+            category=Category.SESSION,
+        )
+
+        # Load target session
+        target_session = self._manager.get_session(target_session_id)
+        if not target_session:
+            target_session = await self._manager.load_session(target_session_id)
+            if not target_session:
+                return
+
+        target_name = target_session.title or target_session.fork_name or target_session_id[:8]
+
+        # Find exchange turns and index
+        exchange_turns = [t for t in target_session.turns if t.exchange_id == exchange_id]
+        if not exchange_turns:
+            return
+
+        # Calculate exchange index
+        exchange_ids = []
+        for turn in target_session.turns:
+            if turn.exchange_id and turn.exchange_id not in exchange_ids:
+                exchange_ids.append(turn.exchange_id)
+        exchange_index = exchange_ids.index(exchange_id) if exchange_id in exchange_ids else len(exchange_ids)
+
+        # Format the exchange content for the summary prompt
+        exchange_content = self._format_exchange_for_summary(exchange_turns)
+
+        # Start summary generation for each watcher
+        for watcher_session_id in watchers:
+            try:
+                await self._start_watcher_summary_generation(
+                    watcher_session_id=watcher_session_id,
+                    target_session_id=target_session_id,
+                    target_session_name=target_name,
+                    exchange_index=exchange_index,
+                    exchange_content=exchange_content,
+                )
+            except Exception as e:
+                debug_log.error(
+                    f"Error starting summary generation for watcher {watcher_session_id[:8]}: {e}",
+                    category=Category.SESSION,
+                )
+
+    def _format_exchange_for_summary(self, exchange_turns: list) -> str:
+        """Format exchange turns into readable text for the summary prompt.
+
+        Args:
+            exchange_turns: List of Turn objects from the exchange
+
+        Returns:
+            Formatted text representation of the exchange
+        """
+        parts = []
+        for turn in exchange_turns:
+            role = turn.role.capitalize()
+            block = turn.content_block
+
+            if hasattr(block, 'text') and block.text:
+                # TextBlock - include full text (will be truncated in prompt if too long)
+                content = block.text
+                parts.append(f"**{role}**: {content}")
+            elif hasattr(block, 'name') and hasattr(block, 'input'):
+                # ToolUseBlock
+                import json
+                tool_input_str = json.dumps(block.input, indent=2)
+                # Truncate very long tool inputs
+                if len(tool_input_str) > 500:
+                    tool_input_str = tool_input_str[:500] + "..."
+                parts.append(f"**{role}**: [Tool: {block.name}]\n```json\n{tool_input_str}\n```")
+            elif hasattr(block, 'content') and hasattr(block, 'tool_use_id'):
+                # ToolResultBlock
+                content = block.content
+                if len(content) > 500:
+                    content = content[:500] + "..."
+                parts.append(f"**{role}**: [Tool Result]\n{content}")
+            else:
+                # Other block types
+                parts.append(f"**{role}**: [Content block: {type(block).__name__}]")
+
+        return "\n\n".join(parts) if parts else "Exchange completed."
+
+    def _build_watcher_context(self, watcher_session) -> str:
+        """Build context from watcher session's turns for the summary prompt.
+
+        Includes previous summaries, user instructions, and watcher responses
+        to give the LLM context for generating new summaries.
+
+        Args:
+            watcher_session: The watcher Session object
+
+        Returns:
+            Formatted text context from the watcher's conversation
+        """
+        from models import WatchStartBlock, WatchStopBlock, WatchSummaryBlock, TextBlock
+
+        context_parts = []
+
+        for turn in watcher_session.turns:
+            block = turn.content_block
+            role = turn.role
+
+            if isinstance(block, WatchStartBlock):
+                context_parts.append(f"[Started watching {block.target_session_name}]")
+            elif isinstance(block, WatchStopBlock):
+                context_parts.append(f"[Stopped watching: {block.reason}]")
+            elif isinstance(block, WatchSummaryBlock):
+                context_parts.append(f"[Summary {block.exchange_index + 1}]: {block.summary}")
+            elif role == "user" and hasattr(block, 'text'):
+                # User instructions to the watcher
+                context_parts.append(f"**User instruction**: {block.text}")
+            elif role == "assistant" and hasattr(block, 'text'):
+                # Watcher's previous responses
+                context_parts.append(f"**Watcher response**: {block.text}")
+
+        return "\n\n".join(context_parts) if context_parts else ""
+
+    def _build_watcher_summary_prompt(
+        self,
+        watcher_context: str,
+        target_session_name: str,
+        exchange_index: int,
+        exchange_content: str,
+    ) -> str:
+        """Build the prompt for generating a watcher summary.
+
+        The prompt includes the watcher's context (previous summaries, user instructions)
+        and the target exchange content, asking the LLM to generate a contextualized summary.
+
+        Args:
+            watcher_context: Context from the watcher session
+            target_session_name: Name of the target session
+            exchange_index: Index of the exchange being summarized
+            exchange_content: Formatted content of the target exchange
+
+        Returns:
+            The complete prompt for summary generation
+        """
+        prompt_parts = []
+
+        # Add watcher context if available
+        if watcher_context:
+            prompt_parts.append(f"""## Your Watching Context
+
+You are watching the session "{target_session_name}". Here is your context from previous summaries and user instructions:
+
+{watcher_context}
+
+---""")
+
+        # Add the exchange to summarize
+        prompt_parts.append(f"""## Exchange {exchange_index + 1} to Summarize
+
+The target session "{target_session_name}" just completed this exchange:
+
+{exchange_content}
+
+---
+
+## Instructions
+
+Provide a 2-4 sentence summary of this exchange. Focus on:
+- What was attempted or asked
+- Key outcomes or changes
+- Anything the user previously asked you to watch for (if applicable)
+
+Keep the summary concise but informative. If the user gave you specific instructions about what to watch for, prioritize highlighting those aspects.
+
+Summary:""")
+
+        return "\n\n".join(prompt_parts)
+
+    async def _start_watcher_summary_generation(
+        self,
+        watcher_session_id: str,
+        target_session_id: str,
+        target_session_name: str,
+        exchange_index: int,
+        exchange_content: str,
+    ) -> None:
+        """Start LLM-based summary generation for a watcher.
+
+        Uses a HelperRunner to asynchronously generate the summary using the
+        watcher's full context. The summary will be injected when generation completes.
+
+        Args:
+            watcher_session_id: ID of the watcher session
+            target_session_id: ID of the target session
+            target_session_name: Display name of the target session
+            exchange_index: Index of the exchange being summarized
+            exchange_content: Formatted content of the target exchange
+        """
+        import uuid
+
+        # Load watcher session
+        watcher_session = self._manager.get_session(watcher_session_id)
+        if not watcher_session:
+            watcher_session = await self._manager.load_session(watcher_session_id)
+            if not watcher_session:
+                debug_log.warning(
+                    f"Could not load watcher session {watcher_session_id[:8]}",
+                    category=Category.SESSION,
+                )
+                return
+
+        # Build context from watcher's previous turns
+        watcher_context = self._build_watcher_context(watcher_session)
+
+        # Build the summary prompt
+        prompt = self._build_watcher_summary_prompt(
+            watcher_context=watcher_context,
+            target_session_name=target_session_name,
+            exchange_index=exchange_index,
+            exchange_content=exchange_content,
+        )
+
+        # Start helper with metadata for auto-completion
+        helper_id = str(uuid.uuid4())
+        metadata = {
+            "watcher_session_id": watcher_session_id,
+            "target_session_id": target_session_id,
+            "target_session_name": target_session_name,
+            "exchange_index": exchange_index,
+            "auto_complete": True,  # Auto-inject when complete
+        }
+
+        debug_log.info(
+            f"Starting watcher summary generation: helper={helper_id[:8]}, watcher={watcher_session_id[:8]}",
+            category=Category.SESSION,
+            details={
+                "target_session_id": target_session_id[:8],
+                "exchange_index": exchange_index,
+                "context_len": len(watcher_context),
+            },
+        )
+
+        # Use the watcher's backend for summary generation
+        self.start_helper(
+            helper_id=helper_id,
+            helper_type="watch_summary",
+            prompt=prompt,
+            session_id=watcher_session_id,
+            metadata=metadata,
+            backend_name=watcher_session.backend_name or None,
+        )
+
+    async def _inject_watch_summary(
+        self,
+        watcher_session_id: str,
+        target_session_id: str,
+        target_session_name: str,
+        exchange_index: int,
+        summary: str,
+        trigger_response: bool = True,
+    ) -> None:
+        """Inject a WatchSummaryBlock into a watcher session and optionally trigger LLM response.
+
+        Args:
+            watcher_session_id: ID of the watcher session
+            target_session_id: ID of the target session
+            target_session_name: Display name of the target session
+            exchange_index: Index of the exchange being summarized
+            summary: The LLM-generated summary content
+            trigger_response: If True, trigger the watcher LLM to respond to the summary
+        """
+        from models import WatchSummaryBlock
+
+        watcher_session = self._manager.get_session(watcher_session_id)
+        if not watcher_session:
+            watcher_session = await self._manager.load_session(watcher_session_id)
+            if not watcher_session:
+                return
+
+        # Add the summary turn
+        summary_turn = watcher_session.add_watch_summary_turn(
+            target_session_id=target_session_id,
+            target_session_name=target_session_name,
+            exchange_index=exchange_index,
+            summary=summary,
+        )
+
+        await watcher_session.save()
+
+        # Emit turn events so UI updates
+        summary_turn_idx = len(watcher_session.turns) - 1
+        summary_exchange_id = str(uuid.uuid4())
+        await self._notify_observers(
+            "on_turn_created",
+            TurnCreatedEvent(
+                session_id=watcher_session_id,
+                turn_id=summary_turn.id,
+                turn_index=summary_turn_idx,
+                role="system",
+                exchange_id=summary_exchange_id,
+                content_block_type="watch_summary",
+            ),
+        )
+        await self._notify_observers(
+            "on_turn_finished",
+            TurnFinishedEvent(
+                session_id=watcher_session_id,
+                turn_id=summary_turn.id,
+                turn_index=summary_turn_idx,
+                role="system",
+                content=f"[Summary of exchange {exchange_index + 1}]",
+                tokens=0,
+                content_block=summary_turn.content_block,
+            ),
+        )
+
+        debug_log.info(
+            f"Injected summary for exchange {exchange_index} into watcher {watcher_session_id[:8]}",
+            category=Category.SESSION,
+        )
+
+        # Trigger watcher LLM response to the summary
+        if trigger_response:
+            await self._trigger_watcher_response(
+                watcher_session_id=watcher_session_id,
+                target_session_name=target_session_name,
+                exchange_index=exchange_index,
+                summary=summary,
+            )
+
+    async def _trigger_watcher_response(
+        self,
+        watcher_session_id: str,
+        target_session_name: str,
+        exchange_index: int,
+        summary: str,
+    ) -> None:
+        """Trigger the watcher LLM to respond to an injected summary.
+
+        The watcher's response is guided by any user instructions in its context.
+        Default behavior is minimal acknowledgment (e.g., "✓").
+
+        Args:
+            watcher_session_id: ID of the watcher session
+            target_session_name: Name of the target session
+            exchange_index: Index of the exchange that was summarized
+            summary: The summary content that was injected
+        """
+        # Get runner for the watcher session
+        runner = self._manager.get_runner(watcher_session_id)
+        if not runner:
+            debug_log.warning(
+                f"No runner for watcher session {watcher_session_id[:8]}, skipping response",
+                category=Category.SESSION,
+            )
+            return
+
+        watcher_session = self._manager.get_session(watcher_session_id)
+        if not watcher_session:
+            watcher_session = await self._manager.load_session(watcher_session_id)
+            if not watcher_session:
+                return
+
+        # Build the response prompt - this guides how the watcher responds to summaries
+        response_prompt = self._build_watcher_response_prompt(
+            target_session_name=target_session_name,
+            exchange_index=exchange_index,
+            summary=summary,
+        )
+
+        # Check if watcher is currently streaming
+        if runner.is_streaming:
+            # Queue the response for later
+            debug_log.info(
+                f"Watcher {watcher_session_id[:8]} is busy, queueing response",
+                category=Category.SESSION,
+            )
+            # Use the session's message queue
+            watcher_session.message_queue.add(response_prompt)
+            await watcher_session.save()
+            return
+
+        # Start streaming the watcher's response
+        try:
+            # Submit as a pseudo-user message (the summary acts as the input)
+            result = await self.submit_message(
+                session_id=watcher_session_id,
+                content=response_prompt,
+                queue=True,  # Queue if busy (shouldn't happen given check above)
+            )
+            debug_log.info(
+                f"Triggered watcher response: session={watcher_session_id[:8]}, exchange_id={result.exchange_id}",
+                category=Category.SESSION,
+            )
+        except Exception as e:
+            debug_log.error(
+                f"Failed to trigger watcher response: {e}",
+                category=Category.SESSION,
+            )
+
+    def _build_watcher_response_prompt(
+        self,
+        target_session_name: str,
+        exchange_index: int,
+        summary: str,
+    ) -> str:
+        """Build the prompt for the watcher's response to a summary.
+
+        The prompt guides the watcher to respond based on any user instructions.
+        Default behavior is minimal acknowledgment.
+
+        Args:
+            target_session_name: Name of the target session
+            exchange_index: Index of the exchange
+            summary: The summary content
+
+        Returns:
+            The prompt for the watcher's response
+        """
+        return f"""A new summary has been injected from the target session "{target_session_name}":
+
+**[Summary {exchange_index + 1}]**: {summary}
+
+Based on the user's instructions (if any), respond appropriately:
+- If no specific instructions: Give a brief acknowledgment (e.g., "✓" or "Noted.")
+- If user asked for analysis: Provide your analysis
+- If user asked to watch for something specific: Note if this relates to that
+- If user asked you to intervene: Use send_to_target() if appropriate
+
+Keep your response concise unless the user asked for detailed analysis."""
 
     # --- Archive Operations ---
 
@@ -3649,6 +4717,10 @@ class SessionManagerService:
         success = await self._manager.set_active(session_id)
 
         if success:
+            # Rebuild watcher relationships for the now-loaded session
+            session = self._manager.get_session(session_id)
+            if session:
+                await self._rebuild_watcher_for_session(session)
             self._emit_event(SessionManagerEvent.SESSION_SWITCHED, session_id)
 
         return success
@@ -3666,7 +4738,7 @@ class SessionManagerService:
         session = self._manager.get_session(session_id)
         if not session:
             # Try loading from storage
-            session = await self._manager.load_session(session_id)
+            session = await self._load_session_with_watcher_rebuild(session_id)
             if not session:
                 return None
 

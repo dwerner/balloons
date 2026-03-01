@@ -12,6 +12,7 @@ import React from 'react';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
 import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
 import { BaseToolCard, calculateToolPhase, type ToolCardDisplayMode } from './BaseToolCard';
+import { getStringInput, ensureString } from './toolInputUtils';
 import './cards.css';
 
 interface ToolUseCardProps {
@@ -73,11 +74,14 @@ function getStreamingJson(input: Record<string, unknown>): string {
   return (input._streaming as string) || '';
 }
 
-// Generate simple diff
-function generateDiff(oldStr: string, newStr: string, filePath: string): string[] {
-  const oldLines = oldStr.split('\n');
-  const newLines = newStr.split('\n');
-  const fileName = filePath.split('/').pop() || filePath;
+// Generate simple diff (with safe string handling)
+function generateDiff(oldStr: unknown, newStr: unknown, filePath: unknown): string[] {
+  const safeOld = ensureString(oldStr);
+  const safeNew = ensureString(newStr);
+  const safePath = ensureString(filePath);
+  const oldLines = safeOld.split('\n');
+  const newLines = safeNew.split('\n');
+  const fileName = safePath.split('/').pop() || safePath;
 
   const result: string[] = [];
   result.push(`--- a/${fileName}`);
@@ -159,9 +163,9 @@ function FormattedToolInput({
     return <StreamingInputIndicator partialJson={getStreamingJson(toolInput)} />;
   }
   if (toolName === 'Edit') {
-    const filePath = (toolInput.file_path || '') as string;
-    const oldString = (toolInput.old_string || '') as string;
-    const newString = (toolInput.new_string || '') as string;
+    const filePath = getStringInput(toolInput, 'file_path');
+    const oldString = getStringInput(toolInput, 'old_string');
+    const newString = getStringInput(toolInput, 'new_string');
     const diffLines = generateDiff(oldString, newString, filePath);
 
     return (
@@ -192,8 +196,8 @@ function FormattedToolInput({
   }
 
   if (toolName === 'Write') {
-    const filePath = (toolInput.file_path || '') as string;
-    const content = (toolInput.content || '') as string;
+    const filePath = getStringInput(toolInput, 'file_path');
+    const content = getStringInput(toolInput, 'content');
     const language = guessLanguage(filePath);
     // Show all content (no truncation)
     const displayContent = content;
@@ -212,7 +216,7 @@ function FormattedToolInput({
   }
 
   if (toolName === 'Read') {
-    const filePath = (toolInput.file_path || '') as string;
+    const filePath = getStringInput(toolInput, 'file_path');
     const offset = toolInput.offset as number | undefined;
     const limit = toolInput.limit as number | undefined;
     let rangeInfo = '';
@@ -238,8 +242,8 @@ function FormattedToolInput({
   }
 
   if (toolName === 'Bash') {
-    const command = (toolInput.command || '') as string;
-    const description = (toolInput.description || '') as string;
+    const command = getStringInput(toolInput, 'command');
+    const description = getStringInput(toolInput, 'description');
     return (
       <div className="tool-input-formatted">
         <div className="tool-input-header">
@@ -254,8 +258,8 @@ function FormattedToolInput({
   }
 
   if (toolName === 'Glob') {
-    const pattern = (toolInput.pattern || '') as string;
-    const path = (toolInput.path || '.') as string;
+    const pattern = getStringInput(toolInput, 'pattern');
+    const path = getStringInput(toolInput, 'path', '.');
     return (
       <div className="tool-input-formatted">
         <div className="tool-input-header">
@@ -269,8 +273,8 @@ function FormattedToolInput({
   }
 
   if (toolName === 'Grep') {
-    const pattern = (toolInput.pattern || '') as string;
-    const path = (toolInput.path || '.') as string;
+    const pattern = getStringInput(toolInput, 'pattern');
+    const path = getStringInput(toolInput, 'path', '.');
     return (
       <div className="tool-input-formatted">
         <div className="tool-input-header">
@@ -321,20 +325,20 @@ function buildHeaderContent(
 
   switch (toolName) {
     case 'Edit': {
-      const filePath = (toolInput.file_path || '') as string;
+      const filePath = getStringInput(toolInput, 'file_path');
       return filePath ? <code className="tool-file-path">{filePath}</code> : null;
     }
     case 'Write': {
-      const filePath = (toolInput.file_path || '') as string;
+      const filePath = getStringInput(toolInput, 'file_path');
       return filePath ? <code className="tool-file-path">{filePath}</code> : null;
     }
     case 'Read': {
-      const filePath = (toolInput.file_path || '') as string;
+      const filePath = getStringInput(toolInput, 'file_path');
       return filePath ? <code className="tool-file-path">{filePath}</code> : null;
     }
     case 'Bash': {
-      const description = (toolInput.description || '') as string;
-      const command = (toolInput.command || '') as string;
+      const description = getStringInput(toolInput, 'description');
+      const command = getStringInput(toolInput, 'command');
       if (description) {
         return <span className="tool-description">{description}</span>;
       }
@@ -345,11 +349,11 @@ function buildHeaderContent(
       return null;
     }
     case 'Glob': {
-      const pattern = (toolInput.pattern || '') as string;
+      const pattern = getStringInput(toolInput, 'pattern');
       return pattern ? <code className="tool-pattern">{pattern}</code> : null;
     }
     case 'Grep': {
-      const pattern = (toolInput.pattern || '') as string;
+      const pattern = getStringInput(toolInput, 'pattern');
       return pattern ? <code className="tool-pattern">{pattern}</code> : null;
     }
     default:

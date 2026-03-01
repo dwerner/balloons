@@ -267,6 +267,27 @@ class SessionBinding:
 
 
 # =============================================================================
+# Watcher Relationships
+# =============================================================================
+
+
+@rust_schema
+@dataclass
+class WatcherRelation:
+    """A watcher session observing a target session.
+
+    Tracks which sessions are watching which targets, enabling notification
+    when target sessions complete exchanges. Persisted to LMDB for fast
+    lookup at startup.
+    """
+    id: str  # UUID (watcher_id:target_id composite)
+    watcher_session_id: str  # The session doing the watching
+    target_session_id: str  # The session being watched
+    target_session_name: str  # Display name at time of creation
+    created_at: str  # ISO 8601
+
+
+# =============================================================================
 # User Authentication
 # =============================================================================
 

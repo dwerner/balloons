@@ -14,6 +14,7 @@ import type { SessionDataTurn } from '../../../hooks/useSessionData';
 import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
 import { BaseToolCard, calculateToolPhase, formatRelativePath } from './BaseToolCard';
 import { GrepHighlightedResults } from './SyntaxHighlighter';
+import { getStringInput, ensureString } from './toolInputUtils';
 import './cards.css';
 
 interface GrepCardProps {
@@ -37,10 +38,10 @@ export const GrepCard = React.memo(function GrepCard({ turn, result }: GrepCardP
   const toolInput = toolUseBlock?.input || {};
   const inputIsStreaming = isStreamingInput(toolInput);
 
-  // Extract Grep-specific inputs
-  const pattern = (toolInput.pattern || '') as string;
-  const path = (toolInput.path || '.') as string;
-  const glob = toolInput.glob as string | undefined;
+  // Extract Grep-specific inputs (with safe string conversion)
+  const pattern = getStringInput(toolInput, 'pattern');
+  const path = getStringInput(toolInput, 'path', '.');
+  const glob = toolInput.glob ? ensureString(toolInput.glob) : undefined;
   const caseInsensitive = toolInput['-i'] as boolean | undefined;
 
   // Get result info
@@ -58,8 +59,9 @@ export const GrepCard = React.memo(function GrepCard({ turn, result }: GrepCardP
   // Format display path
   const displayPath = formatRelativePath(path);
 
-  // Parse results to count matches
-  const resultLines = resultContent.split('\n').filter(line => line.trim());
+  // Parse results to count matches (safely handle non-string content)
+  const safeResultContent = ensureString(resultContent);
+  const resultLines = safeResultContent.split('\n').filter(line => line.trim());
   const matchCount = resultLines.length;
 
   // Header content: pattern, path, and match count
