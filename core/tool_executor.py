@@ -141,6 +141,8 @@ async def execute_tool(
             return await execute_read(args, working_dir)
         elif name == "Write":
             return await execute_write(args, working_dir)
+        elif name == "Edit":
+            return await execute_edit(args, working_dir)
         elif name == "Bash":
             return await execute_bash(args, working_dir)
         elif name == "Glob":
@@ -244,6 +246,69 @@ async def execute_write(args: dict, working_dir: str) -> tuple[str, bool]:
         async with aiofiles.open(path, "w", encoding="utf-8") as f:
             await f.write(content)
         return f"Successfully wrote {len(content)} bytes to {path}", False
+    except Exception as e:
+        return f"Error writing file: {e}", True
+
+
+async def execute_edit(args: dict, working_dir: str) -> tuple[str, bool]:
+    """Edit a file by replacing specific text.
+
+    More precise than Write - only changes the specified text while
+    preserving the rest of the file.
+    """
+    file_path = args.get("file_path")
+    old_string = args.get("old_string")
+    new_string = args.get("new_string")
+    replace_all = args.get("replace_all", False)
+
+    if not file_path:
+        return "Error: file_path is required", True
+    if old_string is None:
+        return "Error: old_string is required", True
+    if new_string is None:
+        return "Error: new_string is required", True
+
+    path = resolve_path(file_path, working_dir)
+
+    if not path.exists():
+        return f"Error: File not found: {path}", True
+
+    if path.is_dir():
+        return f"Error: {path} is a directory, not a file", True
+
+    try:
+        async with aiofiles.open(path, encoding="utf-8", errors="replace") as f:
+            content = await f.read()
+    except Exception as e:
+        return f"Error reading file: {e}", True
+
+    # Count occurrences
+    count = content.count(old_string)
+
+    if count == 0:
+        # Provide helpful debug info
+        preview = old_string[:100] + "..." if len(old_string) > 100 else old_string
+        return f"Error: old_string not found in file. Searched for: {preview!r}", True
+
+    if count > 1 and not replace_all:
+        return f"Error: old_string found {count} times in file. Use replace_all=true to replace all occurrences, or provide more context to make it unique.", True
+
+    # Perform replacement
+    if replace_all:
+        new_content = content.replace(old_string, new_string)
+        replaced_count = count
+    else:
+        new_content = content.replace(old_string, new_string, 1)
+        replaced_count = 1
+
+    try:
+        async with aiofiles.open(path, "w", encoding="utf-8") as f:
+            await f.write(new_content)
+
+        if replaced_count == 1:
+            return f"Successfully edited {path}", False
+        else:
+            return f"Successfully replaced {replaced_count} occurrences in {path}", False
     except Exception as e:
         return f"Error writing file: {e}", True
 

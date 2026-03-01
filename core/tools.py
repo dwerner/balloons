@@ -148,6 +148,35 @@ TOOLS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "Edit",
+            "description": "Edit a file by replacing specific text. More precise than Write - only changes the specified text while preserving the rest of the file. Use this for making targeted changes to existing files.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "The path to the file to edit"
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": "The exact text to find and replace. Must match exactly including whitespace and indentation."
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": "The text to replace old_string with"
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "If true, replace all occurrences. If false (default), replace only the first occurrence and fail if not unique."
+                    }
+                },
+                "required": ["file_path", "old_string", "new_string"]
+            }
+        }
+    },
 ]
 
 # Balloons-specific tools - UI interaction, workflow, and session/link navigation

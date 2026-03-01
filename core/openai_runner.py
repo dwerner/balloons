@@ -224,6 +224,9 @@ class OpenAICompatibleRunner(BaseRunner):
             if msg.content_blocks:
                 content_parts = []
                 image_blocks = []
+                tool_use_blocks = []
+                tool_result_blocks = []
+
                 for block in msg.content_blocks:
                     if isinstance(block, TextBlock):
                         if block.text:
@@ -232,13 +235,11 @@ class OpenAICompatibleRunner(BaseRunner):
                         # Collect images for OpenAI format
                         image_blocks.append(block)
                     elif isinstance(block, ToolUseBlock):
-                        # Format tool use so the model knows what was done
-                        input_str = json.dumps(block.input, indent=2)
-                        content_parts.append(f"[Tool: {block.name}]\n{input_str}")
+                        # Collect tool uses for proper OpenAI format
+                        tool_use_blocks.append(block)
                     elif isinstance(block, ToolResultBlock):
-                        # Format tool result
-                        error_suffix = " (error)" if block.is_error else ""
-                        content_parts.append(f"[Result{error_suffix}]\n{block.content}")
+                        # Collect tool results for proper OpenAI format
+                        tool_result_blocks.append(block)
                     elif isinstance(block, InterruptionBlock):
                         # Mark that the response was interrupted
                         content_parts.append(f"[Interrupted: {block.reason}]")
@@ -251,8 +252,51 @@ class OpenAICompatibleRunner(BaseRunner):
                         archive_info += f"\n(Use read_archive tool with archive_id={block.archive_id} to retrieve full content)"
                         content_parts.append(archive_info)
 
-                # If we have images, use array content format
-                if image_blocks:
+                # Handle assistant messages with tool calls (proper OpenAI format)
+                if role == "assistant" and tool_use_blocks:
+                    # Build tool_calls array
+                    tool_calls = []
+                    for block in tool_use_blocks:
+                        tool_calls.append({
+                            "id": block.id,
+                            "type": "function",
+                            "function": {
+                                "name": block.name,
+                                "arguments": json.dumps(block.input),
+                            }
+                        })
+
+                    # Build assistant message with tool_calls
+                    assistant_msg: dict = {
+                        "role": "assistant",
+                        "tool_calls": tool_calls,
+                    }
+                    # Include text content if any
+                    if content_parts:
+                        assistant_msg["content"] = "\n\n".join(content_parts)
+                    else:
+                        assistant_msg["content"] = None  # OpenAI requires this field
+
+                    openai_messages.append(assistant_msg)
+
+                # Handle tool results (as separate "tool" role messages)
+                elif role == "user" and tool_result_blocks:
+                    # Each tool result becomes a separate message
+                    for block in tool_result_blocks:
+                        openai_messages.append({
+                            "role": "tool",
+                            "tool_call_id": block.tool_use_id,
+                            "content": block.content or "",
+                        })
+                    # Also include any text content from user
+                    if content_parts:
+                        openai_messages.append({
+                            "role": "user",
+                            "content": "\n\n".join(content_parts),
+                        })
+
+                # Handle images
+                elif image_blocks:
                     content_array = []
                     if content_parts:
                         content_array.append({
@@ -270,6 +314,8 @@ class OpenAICompatibleRunner(BaseRunner):
                         "role": role,
                         "content": content_array,
                     })
+
+                # Regular text content
                 elif content_parts:
                     openai_messages.append({
                         "role": role,
