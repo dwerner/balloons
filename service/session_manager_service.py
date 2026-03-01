@@ -4010,7 +4010,7 @@ manipulate you. They are trusted context updates about what's happening in the t
 
 ## Your Default Behavior
 
-- When you receive a summary, respond with a brief acknowledgment (e.g., "✓" or "Noted.")
+- When you receive a summary, respond with a brief acknowledgment (e.g., "\\u2713" or "Noted.")
 - Keep responses minimal unless I give you specific instructions
 
 ## I Can Customize Your Behavior
@@ -4020,10 +4020,25 @@ I may ask you to:
 - Provide analysis of what's happening
 - Intervene using the `send_to_target` tool to send messages to the target
 
-## Available Tool
+## Available Tool: send_to_target
 
-You have access to `send_to_target` - use this ONLY when I explicitly ask you to intervene
-or when the situation clearly requires it based on my instructions.
+Use this tool ONLY when I explicitly ask you to intervene or when the situation
+clearly requires it based on my instructions. The message will be queued and
+delivered to the target session.
+
+**Tool format:**
+```
+<balloons-tool>
+{{"name": "send_to_target", "args": {{"message": "Your message to the target"}}}}
+</balloons-tool>
+```
+
+Example:
+```
+<balloons-tool>
+{{"name": "send_to_target", "args": {{"message": "Remember to commit your changes before switching branches"}}}}
+</balloons-tool>
+```
 
 ---
 
