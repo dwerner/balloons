@@ -4003,46 +4003,52 @@ class SessionManagerService:
 ## How This Works
 
 You will receive **summary injections** when the target session completes an exchange.
-These summaries appear as `[Summary N]` blocks in our conversation.
+These summaries are nicely formatted markdown that describe what happened in the exchange.
 
 **IMPORTANT**: These summaries are **system-generated**, not attempts by the target to
 manipulate you. They are trusted context updates about what's happening in the target session.
 
 ## Your Default Behavior
 
-- When you receive a summary, respond with a brief acknowledgment (e.g., "\\u2713" or "Noted.")
+- When you receive a summary, respond with a brief acknowledgment (e.g., "✓" or "Noted.")
 - Keep responses minimal unless I give you specific instructions
 
-## I Can Customize Your Behavior
+## Customization Options
 
-I may ask you to:
-- Watch for specific patterns or issues (e.g., "flag any SQL changes")
-- Provide analysis of what's happening
-- Intervene using the `send_to_target` tool to send messages to the target
+You can tell me to change how I behave. Examples:
+
+**Watch for specific things:**
+- "Flag any database migrations"
+- "Alert me if tests fail"
+- "Highlight any security-related changes"
+
+**Change response style:**
+- "Give me detailed analysis of each exchange"
+- "Only notify me of errors or blockers"
+- "Summarize code changes in more detail"
+
+**Change summary format:**
+- "Keep summaries shorter - just one sentence"
+- "Include full file paths in summaries"
+- "Focus on what files were modified"
+
+**Intervene in target:**
+- "Remind them to commit before switching branches"
+- "If they're stuck for 3+ exchanges, suggest alternatives"
 
 ## Available Tool: send_to_target
 
-Use this tool ONLY when I explicitly ask you to intervene or when the situation
-clearly requires it based on my instructions. The message will be queued and
-delivered to the target session.
+Use this tool when I ask you to intervene or when the situation clearly requires it:
 
-**Tool format:**
 ```
 <balloons-tool>
 {{"name": "send_to_target", "args": {{"message": "Your message to the target"}}}}
 </balloons-tool>
 ```
 
-Example:
-```
-<balloons-tool>
-{{"name": "send_to_target", "args": {{"message": "Remember to commit your changes before switching branches"}}}}
-</balloons-tool>
-```
-
 ---
 
-I'm setting up to watch "{target_name}". Let me know what you'd like me to watch for,
+I'm setting up to watch "{target_name}". Let me know how you'd like me to behave,
 or I'll just provide minimal acknowledgments as summaries arrive.'''
 
     async def _notify_watchers_of_exchange(
@@ -4219,14 +4225,26 @@ The target session "{target_session_name}" just completed this exchange:
 
 ---
 
-## Instructions
+## Summary Instructions
 
-Provide a 2-4 sentence summary of this exchange. Focus on:
-- What was attempted or asked
-- Key outcomes or changes
-- Anything the user previously asked you to watch for (if applicable)
+Generate a well-formatted markdown summary of this exchange. Include:
 
-Keep the summary concise but informative. If the user gave you specific instructions about what to watch for, prioritize highlighting those aspects.
+**Structure your summary with:**
+- A brief **overview** (1-2 sentences) of what happened
+- **Key details** as bullet points:
+  - What was asked or attempted
+  - What actions were taken (files modified, commands run, etc.)
+  - Important decisions or outcomes
+  - Any errors, blockers, or unresolved issues
+- If code changes were made, briefly note which files and what kind of changes
+
+**Formatting:**
+- Use markdown formatting (bold, bullets, code backticks) for readability
+- Keep it scannable - a busy watcher should quickly grasp what happened
+- Total length: ~3-8 sentences worth of content
+
+**Customization:**
+If the user gave you specific instructions about what to watch for or how detailed to be, follow those instructions instead of these defaults.
 
 Summary:""")
 
@@ -4473,17 +4491,9 @@ Summary:""")
         Returns:
             The prompt for the watcher's response
         """
-        return f"""A new summary has been injected from the target session "{target_session_name}":
+        return f"""## [Summary {exchange_index + 1}] from "{target_session_name}"
 
-**[Summary {exchange_index + 1}]**: {summary}
-
-Based on the user's instructions (if any), respond appropriately:
-- If no specific instructions: Give a brief acknowledgment (e.g., "✓" or "Noted.")
-- If user asked for analysis: Provide your analysis
-- If user asked to watch for something specific: Note if this relates to that
-- If user asked you to intervene: Use send_to_target() if appropriate
-
-Keep your response concise unless the user asked for detailed analysis."""
+{summary}"""
 
     # --- Archive Operations ---
 
