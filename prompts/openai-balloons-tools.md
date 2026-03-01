@@ -2,12 +2,41 @@
 
 This guide documents additional tools available in Balloons beyond the standard file and shell tools.
 
+## Watcher Tools
+
+If you are a **watcher session** observing another session, you have access to tools for
+cross-session communication.
+
+### send_to_target
+
+Send a message to the target session you're watching. The message is queued and delivered
+when the target completes its current exchange.
+
+**Parameters:**
+- `message` (required): The message to send to the target session
+
+**Example:**
+```
+send_to_target(message="Consider using a cache here to improve performance")
+```
+
+**Use cases:**
+- Suggesting an alternative approach when the target seems stuck
+- Providing a reminder about user instructions
+- Sharing relevant context the target might have missed
+- Asking the target for information (like session IDs, file paths, etc.)
+
+The message will appear as a user message in the target session, attributed as coming
+from your watcher session.
+
+
 ## Process Supervisor Tools
 
 You have access to tools for managing long-running background processes. Use these when you need to:
 - Start a dev server, watcher, or long build that should run while you work on other tasks
 - Check on the status or output of running processes
 - Stop processes when done
+- Run commands on remote hosts via SSH
 
 ### Why Use the Supervisor?
 
@@ -15,17 +44,20 @@ The regular `Bash` tool waits for commands to complete, which blocks your workfl
 - **Start processes in background**: Run `npm run dev` or `cargo watch` without blocking
 - **Check output later**: Query process output at any time
 - **Session-scoped**: Processes are tied to the session and cleaned up appropriately
+- **Remote execution**: Run commands on SSH-accessible hosts defined in supervisor.yaml
 
 ### Available Tools
 
 **supervisor_start** - Start a background process
 - `command` (required): Shell command to execute
+- `host` (optional): Host from supervisor.yaml (default: "local"). Use supervisor_query to find available hosts.
 - `name` (optional): Friendly name for the process (e.g., "dev-server", "test-watcher")
 - `working_dir` (optional): Working directory. Defaults to session working directory.
 - `env` (optional): Additional environment variables as key-value pairs
 
 **supervisor_list** - List processes
 - `all_sessions` (optional): If true, list processes from all sessions. Default: only current session.
+- `host` (optional): Filter to specific host.
 
 **supervisor_output** - Get process output
 - `process_id` (required): The process ID from supervisor_start or supervisor_list
@@ -33,6 +65,13 @@ The regular `Bash` tool waits for commands to complete, which blocks your workfl
 
 **supervisor_stop** - Stop a process
 - `process_id` (required): The process ID to stop
+
+**supervisor_query** - Query available hosts
+- `tags` (optional): Filter by tags (must have ALL specified tags)
+- `type` (optional): Filter by type ("local" or "ssh")
+
+**supervisor_host_status** - Check host connectivity
+- `host` (required): Host name from supervisor.yaml
 
 ### Typical Workflow
 
@@ -59,12 +98,33 @@ The regular `Bash` tool waits for commands to complete, which blocks your workfl
    supervisor_stop(process_id="...")
    ```
 
+### Remote Host Workflow
+
+1. **Query available hosts**:
+   ```
+   supervisor_query(tags=["docker"])
+   ```
+   Returns hosts with docker capability.
+
+2. **Check host is reachable**:
+   ```
+   supervisor_host_status(host="gpu-box")
+   ```
+   Returns connectivity status and latency.
+
+3. **Run command on remote host**:
+   ```
+   supervisor_start(command="nvidia-smi", host="gpu-box", name="gpu-check")
+   ```
+   Executes via SSH, streams output back.
+
 ### Good Use Cases
 
 - **Dev servers**: `npm run dev`, `python manage.py runserver`, `cargo run`
 - **File watchers**: `cargo watch -x test`, `nodemon`, `inotifywait` loops
 - **Long builds**: `make all`, `cargo build --release`, `docker build`
 - **Database/services**: `docker-compose up`, `redis-server`
+- **Remote commands**: GPU monitoring, remote builds, deployment tasks
 
 ### Process Status
 
@@ -84,8 +144,10 @@ Each log entry contains:
 
 - Processes are scoped to the current session
 - Up to 10,000 log entries are kept per process (circular buffer)
+- Log entries include timestamp, source (stdout/stderr/system), and content
 - When a session closes, its processes can be stopped automatically
 - The process and its logs are retained after stopping, so you can still query output
+- Remote host SSH keys should be configured in ~/.ssh/config or ssh-agent
 
 
 ## Workflow Tools
