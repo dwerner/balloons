@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::generated::{
     GoalData, PlanData, SessionBinding, SessionData, SessionMetadata, TodoData, TodoDependency,
-    TodoPlanLink, TurnData, TurnOrder, UserPrefs, WatcherRelation,
+    TodoPlanLink, TurnData, TurnOrder, UserData, UserPrefs, WatcherRelation,
 };
 use super::traits::{Error, Result, StorageEngine};
 
@@ -157,6 +157,10 @@ pub struct LmdbEngine {
     watchers: Database<Str, Bytes>,             // watcher_id → WatcherRelation
     watchers_by_target: Database<Str, Bytes>,   // target_session_id → [watcher_id]
     watchers_by_watcher: Database<Str, Bytes>,  // watcher_session_id → [watcher_id]
+
+    // User management
+    users: Database<Str, Bytes>,              // user_id → UserData
+    users_by_username: Database<Str, Bytes>,  // lowercase_username → user_id
 }
 
 /// Key used for session history in the metadata table
@@ -181,11 +185,11 @@ impl LmdbEngine {
         // Create directory if it doesn't exist
         std::fs::create_dir_all(path)?;
 
-        // Database count: 4 session + 3 goal entities + 5 goal indexes + 3 binding + 3 watcher = 18
+        // Database count: 4 session + 3 goal entities + 5 goal indexes + 3 binding + 3 watcher + 2 users = 20
         let env = unsafe {
             EnvOpenOptions::new()
                 .map_size(map_size)
-                .max_dbs(18)
+                .max_dbs(20)
                 .open(path)
                 .map_err(|e| Error::Database(e.to_string()))?
         };
@@ -259,6 +263,14 @@ impl LmdbEngine {
             .create_database(&mut wtxn, Some("watchers_by_watcher"))
             .map_err(|e| Error::Database(e.to_string()))?;
 
+        // User management tables
+        let users = env
+            .create_database(&mut wtxn, Some("users"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let users_by_username = env
+            .create_database(&mut wtxn, Some("users_by_username"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+
         wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
 
         let engine = Self {
@@ -291,6 +303,10 @@ impl LmdbEngine {
             watchers,
             watchers_by_target,
             watchers_by_watcher,
+
+            // User management
+            users,
+            users_by_username,
         };
 
         // Ensure schema version is compatible and up-to-date
@@ -1956,6 +1972,129 @@ impl StorageEngine for LmdbEngine {
         }
 
         Ok(watchers)
+    }
+
+    // =========================================================================
+    // User Management Implementation
+    // =========================================================================
+
+    async fn save_user(&self, user: &UserData) -> Result<()> {
+        let bytes = serde_json::to_vec(user).map_err(|e| Error::Serialization(e.to_string()))?;
+        let username_key = user.username.to_lowercase();
+
+        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        // Check if user already exists to handle username changes
+        let old_username: Option<String> = match self.users.get(&wtxn, &user.id).map_err(|e| Error::Database(e.to_string()))? {
+            Some(old_bytes) => {
+                let old_user: UserData = serde_json::from_slice(old_bytes)
+                    .map_err(|e| Error::Serialization(e.to_string()))?;
+                let old_key = old_user.username.to_lowercase();
+                if old_key != username_key {
+                    Some(old_key)
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
+
+        // Save the user
+        self.users
+            .put(&mut wtxn, &user.id, &bytes)
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        // Remove old username index if username changed
+        if let Some(old_key) = old_username {
+            self.users_by_username
+                .delete(&mut wtxn, &old_key)
+                .map_err(|e| Error::Database(e.to_string()))?;
+        }
+
+        // Update users_by_username index (store user_id, not full user)
+        let id_bytes = serde_json::to_vec(&user.id)
+            .map_err(|e| Error::Serialization(e.to_string()))?;
+        self.users_by_username
+            .put(&mut wtxn, &username_key, &id_bytes)
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn load_user(&self, id: &str) -> Result<Option<UserData>> {
+        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        match self.users.get(&rtxn, id).map_err(|e| Error::Database(e.to_string()))? {
+            Some(bytes) => {
+                let data: UserData = serde_json::from_slice(bytes)
+                    .map_err(|e| Error::Serialization(e.to_string()))?;
+                Ok(Some(data))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn load_user_by_username(&self, username: &str) -> Result<Option<UserData>> {
+        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+        let username_key = username.to_lowercase();
+
+        // Look up user_id from username index
+        let user_id: String = match self.users_by_username.get(&rtxn, &username_key).map_err(|e| Error::Database(e.to_string()))? {
+            Some(bytes) => serde_json::from_slice(bytes)
+                .map_err(|e| Error::Serialization(e.to_string()))?,
+            None => return Ok(None),
+        };
+
+        // Load the full user record
+        match self.users.get(&rtxn, &user_id).map_err(|e| Error::Database(e.to_string()))? {
+            Some(bytes) => {
+                let data: UserData = serde_json::from_slice(bytes)
+                    .map_err(|e| Error::Serialization(e.to_string()))?;
+                Ok(Some(data))
+            }
+            None => Ok(None), // Index orphan - shouldn't happen
+        }
+    }
+
+    async fn delete_user(&self, id: &str) -> Result<()> {
+        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        // Get the user to find their username for index cleanup
+        if let Some(bytes) = self.users.get(&wtxn, id).map_err(|e| Error::Database(e.to_string()))? {
+            let user: UserData = serde_json::from_slice(bytes)
+                .map_err(|e| Error::Serialization(e.to_string()))?;
+
+            // Remove from users_by_username index
+            let username_key = user.username.to_lowercase();
+            self.users_by_username
+                .delete(&mut wtxn, &username_key)
+                .map_err(|e| Error::Database(e.to_string()))?;
+        }
+
+        // Delete the user
+        self.users
+            .delete(&mut wtxn, id)
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn list_users(&self) -> Result<Vec<UserData>> {
+        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        let mut users = Vec::new();
+        for entry in self.users.iter(&rtxn).map_err(|e| Error::Database(e.to_string()))? {
+            let (_key, value) = entry.map_err(|e| Error::Database(e.to_string()))?;
+            let data: UserData = serde_json::from_slice(value)
+                .map_err(|e| Error::Serialization(e.to_string()))?;
+            users.push(data);
+        }
+
+        Ok(users)
     }
 }
 

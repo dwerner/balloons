@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::generated::{
     GoalData, PlanData, SessionBinding, SessionData, SessionMetadata, TodoData, TodoDependency,
-    TodoPlanLink, TurnData, UserPrefs, WatcherRelation,
+    TodoPlanLink, TurnData, UserData, UserPrefs, WatcherRelation,
 };
 use super::traits::{Result, StorageEngine};
 
@@ -304,5 +304,34 @@ impl StorageClient {
     /// List all watcher relationships.
     pub async fn list_watchers(&self) -> Result<Vec<WatcherRelation>> {
         self.engine.list_watchers().await
+    }
+
+    // =========================================================================
+    // User Management
+    // =========================================================================
+
+    /// Save a user (upsert).
+    pub async fn save_user(&self, user: &UserData) -> Result<()> {
+        self.engine.save_user(user).await
+    }
+
+    /// Load a user by ID.
+    pub async fn load_user(&self, id: &str) -> Result<Option<UserData>> {
+        self.engine.load_user(id).await
+    }
+
+    /// Load a user by username (case-insensitive).
+    pub async fn load_user_by_username(&self, username: &str) -> Result<Option<UserData>> {
+        self.engine.load_user_by_username(username).await
+    }
+
+    /// Delete a user by ID.
+    pub async fn delete_user(&self, id: &str) -> Result<()> {
+        self.engine.delete_user(id).await
+    }
+
+    /// List all users.
+    pub async fn list_users(&self) -> Result<Vec<UserData>> {
+        self.engine.list_users().await
     }
 }

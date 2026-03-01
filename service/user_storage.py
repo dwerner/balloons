@@ -1,13 +1,15 @@
-"""User storage implementation using a JSON file.
+"""User storage implementations.
 
-For now, users are stored in a simple JSON file since:
-1. User counts are small (typically 1-10)
-2. Avoids requiring Rust changes for initial implementation
-3. Easy to inspect and debug
+Supports two backends:
+1. JSON file (~/.balloons/users.json) - Original, simple implementation
+2. LMDB (~/.balloons/sessions.lmdb) - Unified storage with sessions
 
-The file is stored at ~/.balloons/users.json
+The factory function get_user_storage() automatically selects:
+- LMDB if the Rust storage module is available
+- JSON file as fallback
 
-Future: Can migrate to LMDB if needed for performance.
+Migration: Run `python scripts/migrate_users_to_lmdb.py` to move
+users from JSON to LMDB when upgrading.
 """
 
 import asyncio
@@ -15,11 +17,14 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import aiofiles
 
 from service.user_auth import User, UserStorage
+
+if TYPE_CHECKING:
+    from core.async_storage import LmdbUserStorage
 
 logger = logging.getLogger(__name__)
 
@@ -161,13 +166,64 @@ class JsonFileUserStorage(UserStorage):
                 await self._save()
 
 
-# Singleton instance
-_user_storage_instance: JsonFileUserStorage | None = None
+# Singleton instance (can be either JSON or LMDB backend)
+_user_storage_instance: UserStorage | None = None
 
 
-async def get_user_storage() -> JsonFileUserStorage:
-    """Get the default user storage instance (singleton)."""
+def _lmdb_available() -> bool:
+    """Check if LMDB storage is available."""
+    try:
+        import balloons_storage
+        # Check if the user methods exist
+        return hasattr(balloons_storage.Storage, 'save_user')
+    except ImportError:
+        return False
+
+
+async def get_user_storage() -> UserStorage:
+    """Get the default user storage instance (singleton).
+
+    Automatically selects the best available backend:
+    - LMDB if Rust storage module is available (preferred)
+    - JSON file as fallback
+
+    Returns:
+        UserStorage implementation (either LmdbUserStorage or JsonFileUserStorage)
+    """
     global _user_storage_instance
     if _user_storage_instance is None:
-        _user_storage_instance = JsonFileUserStorage()
+        if _lmdb_available():
+            from core.async_storage import LmdbUserStorage
+            _user_storage_instance = LmdbUserStorage()
+            logger.info("Using LMDB backend for user storage")
+        else:
+            _user_storage_instance = JsonFileUserStorage()
+            logger.info("Using JSON file backend for user storage (LMDB not available)")
     return _user_storage_instance
+
+
+async def get_json_user_storage() -> JsonFileUserStorage:
+    """Get JSON file user storage (for migration or explicit use).
+
+    Returns:
+        JsonFileUserStorage instance
+    """
+    return JsonFileUserStorage()
+
+
+async def get_lmdb_user_storage() -> "LmdbUserStorage":
+    """Get LMDB user storage (requires Rust module).
+
+    Raises:
+        RuntimeError: If LMDB storage is not available
+
+    Returns:
+        LmdbUserStorage instance
+    """
+    if not _lmdb_available():
+        raise RuntimeError(
+            "LMDB storage not available. "
+            "Run 'maturin develop' in balloons-rs/ to build it."
+        )
+    from core.async_storage import LmdbUserStorage
+    return LmdbUserStorage()

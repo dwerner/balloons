@@ -3,7 +3,7 @@ use thiserror::Error;
 
 use crate::generated::{
     GoalData, PlanData, SessionBinding, SessionData, SessionMetadata, TodoData, TodoDependency,
-    TodoPlanLink, TurnData, UserPrefs, WatcherRelation,
+    TodoPlanLink, TurnData, UserData, UserPrefs, WatcherRelation,
 };
 
 #[derive(Debug, Error)]
@@ -25,6 +25,9 @@ pub enum Error {
 
     #[error("Session binding not found: {0}")]
     BindingNotFound(String),
+
+    #[error("User not found: {0}")]
+    UserNotFound(String),
 
     #[error("Database error: {0}")]
     Database(String),
@@ -314,4 +317,30 @@ pub trait StorageEngine: Send + Sync {
 
     /// List all watcher relationships.
     async fn list_watchers(&self) -> Result<Vec<WatcherRelation>>;
+
+    // =========================================================================
+    // User Management
+    // =========================================================================
+
+    /// Save a user (upsert).
+    ///
+    /// Automatically maintains the users_by_username index for efficient
+    /// username lookups.
+    async fn save_user(&self, user: &UserData) -> Result<()>;
+
+    /// Load a user by ID.
+    async fn load_user(&self, id: &str) -> Result<Option<UserData>>;
+
+    /// Load a user by username (case-insensitive).
+    ///
+    /// Uses the users_by_username index for O(1) lookup.
+    async fn load_user_by_username(&self, username: &str) -> Result<Option<UserData>>;
+
+    /// Delete a user by ID.
+    ///
+    /// Automatically cleans up the users_by_username index.
+    async fn delete_user(&self, id: &str) -> Result<()>;
+
+    /// List all users.
+    async fn list_users(&self) -> Result<Vec<UserData>>;
 }

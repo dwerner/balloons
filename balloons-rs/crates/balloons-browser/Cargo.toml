@@ -6,8 +6,8 @@ license.workspace = true
 description = "Browser automation for Balloons using surfer-rs with smol runtime"
 
 [dependencies]
-# Browser automation - using smol-runtime for core-executor compatibility
-surfer-rs = { git = "https://github.com/dwerner/surfer-rs", features = ["smol-runtime"], default-features = false }
+# Browser automation - using local smol-based fantoccini fork
+surfer-rs = { path = "../../../../forks/surfer-rs", features = ["smol-runtime"], default-features = false }
 
 # Async runtime (smol for core-executor compatibility)
 smol = "2"

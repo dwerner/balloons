@@ -39,6 +39,7 @@ from .debug_log import perf_timed, perf_marker, debug_log, Category
 if TYPE_CHECKING:
     from session import Session
     from models import Turn, ContentBlock
+    from service.user_auth import User
 
 
 # Default database path
@@ -1984,3 +1985,145 @@ async def get_watcher_storage() -> WatcherStorage:
     if _watcher_storage_instance is None:
         _watcher_storage_instance = WatcherStorage(DEFAULT_DB_PATH)
     return _watcher_storage_instance
+
+
+# =============================================================================
+# User Management Storage (LMDB)
+# =============================================================================
+
+
+class LmdbUserStorage:
+    """User storage backed by LMDB via Rust.
+
+    Implements the UserStorage protocol from user_auth.py, using the
+    Rust balloons_storage module for persistence.
+
+    Thread-safe via the underlying Rust LMDB implementation.
+    """
+
+    # Shared executor
+    _executor: ThreadPoolExecutor | None = None
+    _executor_lock: asyncio.Lock | None = None
+
+    def __init__(self, db_path: str | Path | None = None):
+        """Initialize LMDB user storage.
+
+        Args:
+            db_path: Path to the database file. Defaults to ~/.balloons/sessions.lmdb
+        """
+        self._db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
+        self._storage = _get_shared_storage(self._db_path)
+
+    @classmethod
+    async def _get_executor(cls) -> ThreadPoolExecutor:
+        """Get or create the shared thread pool executor."""
+        if cls._executor is None:
+            if cls._executor_lock is None:
+                cls._executor_lock = asyncio.Lock()
+            async with cls._executor_lock:
+                if cls._executor is None:
+                    cls._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lmdb_user")
+        return cls._executor
+
+    async def _run_sync(self, func, *args):
+        """Run a synchronous function in the thread pool."""
+        executor = await self._get_executor()
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(executor, func, *args)
+
+    def _user_to_data(self, user: "User") -> dict:
+        """Convert User domain object to storage dict."""
+        return {
+            "id": user.id,
+            "username": user.username,
+            "password_hash": user.password_hash,
+            "role": user.role,
+            "created_at": user.created_at.isoformat(),
+            "created_by": user.created_by,
+            "last_login": user.last_login.isoformat() if user.last_login else None,
+            "disabled": user.disabled,
+        }
+
+    def _data_to_user(self, data: dict) -> "User":
+        """Convert storage dict to User domain object."""
+        from datetime import datetime
+        from service.user_auth import User
+
+        return User(
+            id=data["id"],
+            username=data["username"],
+            password_hash=data["password_hash"],
+            role=data["role"],
+            created_at=datetime.fromisoformat(data["created_at"]),
+            created_by=data.get("created_by"),
+            last_login=(
+                datetime.fromisoformat(data["last_login"])
+                if data.get("last_login")
+                else None
+            ),
+            disabled=data.get("disabled", False),
+        )
+
+    async def get_by_id(self, user_id: str) -> Optional["User"]:
+        """Get a user by ID."""
+        json_data = await self._run_sync(self._storage.load_user, user_id)
+        if json_data is None:
+            return None
+
+        try:
+            data = json.loads(json_data)
+            return self._data_to_user(data)
+        except Exception:
+            return None
+
+    async def get_by_username(self, username: str) -> Optional["User"]:
+        """Get a user by username (case-insensitive)."""
+        json_data = await self._run_sync(self._storage.load_user_by_username, username)
+        if json_data is None:
+            return None
+
+        try:
+            data = json.loads(json_data)
+            return self._data_to_user(data)
+        except Exception:
+            return None
+
+    async def list_all(self) -> list["User"]:
+        """List all users."""
+        json_data = await self._run_sync(self._storage.list_users)
+        all_users = json.loads(json_data)
+
+        users = []
+        for data in all_users:
+            try:
+                users.append(self._data_to_user(data))
+            except Exception:
+                continue
+
+        users.sort(key=lambda u: u.created_at)
+        return users
+
+    async def save(self, user: "User") -> None:
+        """Save a user (create or update)."""
+        data = self._user_to_data(user)
+        json_data = json.dumps(data)
+        await self._run_sync(self._storage.save_user, json_data)
+
+    async def delete(self, user_id: str) -> None:
+        """Delete a user by ID."""
+        await self._run_sync(self._storage.delete_user, user_id)
+
+
+# Singleton instance for LmdbUserStorage
+_lmdb_user_storage_instance: LmdbUserStorage | None = None
+
+
+async def get_lmdb_user_storage() -> LmdbUserStorage:
+    """Get the default LmdbUserStorage instance (singleton).
+
+    Uses the default database path (~/.balloons/sessions.lmdb).
+    """
+    global _lmdb_user_storage_instance
+    if _lmdb_user_storage_instance is None:
+        _lmdb_user_storage_instance = LmdbUserStorage(DEFAULT_DB_PATH)
+    return _lmdb_user_storage_instance

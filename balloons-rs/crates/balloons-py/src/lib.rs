@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use balloons_core::{
     GoalData, LmdbEngine, PlanData, SessionBinding, SessionData, StorageClient, TodoData,
-    TodoDependency, TodoPlanLink, UserPrefs, WatcherRelation,
+    TodoDependency, TodoPlanLink, UserData, UserPrefs, WatcherRelation,
 };
 use balloons_supervisor::{ProcessSupervisor, StartRequest};
 
@@ -1059,6 +1059,122 @@ impl Storage {
                 .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
             serde_json::to_string(&watchers).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    // =========================================================================
+    // User Management
+    // =========================================================================
+
+    /// Save a user from JSON string.
+    ///
+    /// Args:
+    ///     user_json: JSON-encoded UserData
+    fn save_user(&self, py: Python<'_>, user_json: &str) -> PyResult<()> {
+        let user: UserData =
+            serde_json::from_str(user_json).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        let client = Arc::clone(&self.client);
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move { client.save_user(&user).await });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Load a user by ID.
+    ///
+    /// Args:
+    ///     user_id: The user's ID
+    ///
+    /// Returns:
+    ///     JSON-encoded UserData, or None if not found
+    fn load_user(&self, py: Python<'_>, user_id: &str) -> PyResult<Option<String>> {
+        let client = Arc::clone(&self.client);
+        let user_id = user_id.to_string();
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move { client.load_user(&user_id).await });
+            let result = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+            match result {
+                Some(user) => {
+                    let json =
+                        serde_json::to_string(&user).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+                    Ok(Some(json))
+                }
+                None => Ok(None),
+            }
+        })
+    }
+
+    /// Load a user by username (case-insensitive).
+    ///
+    /// Args:
+    ///     username: The username to look up
+    ///
+    /// Returns:
+    ///     JSON-encoded UserData, or None if not found
+    fn load_user_by_username(&self, py: Python<'_>, username: &str) -> PyResult<Option<String>> {
+        let client = Arc::clone(&self.client);
+        let username = username.to_string();
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move { client.load_user_by_username(&username).await });
+            let result = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+            match result {
+                Some(user) => {
+                    let json =
+                        serde_json::to_string(&user).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+                    Ok(Some(json))
+                }
+                None => Ok(None),
+            }
+        })
+    }
+
+    /// Delete a user by ID.
+    ///
+    /// Args:
+    ///     user_id: The user's ID
+    fn delete_user(&self, py: Python<'_>, user_id: &str) -> PyResult<()> {
+        let client = Arc::clone(&self.client);
+        let user_id = user_id.to_string();
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move { client.delete_user(&user_id).await });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// List all users.
+    ///
+    /// Returns:
+    ///     JSON array of UserData objects
+    fn list_users(&self, py: Python<'_>) -> PyResult<String> {
+        let client = Arc::clone(&self.client);
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move { client.list_users().await });
+            let users = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+            serde_json::to_string(&users).map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })
     }
 }

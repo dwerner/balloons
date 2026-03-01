@@ -725,11 +725,16 @@ dependencies = [
 [[package]]
 name = "fantoccini"
 version = "0.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d0086bcd59795408c87a04f94b5a8bd62cba2856cfe656c7e6439061d95b760"
 dependencies = [
+ "async-channel 2.5.0",
+ "async-executor",
+ "async-io 2.6.0",
+ "async-lock 3.4.2",
+ "async-net",
  "base64 0.22.1",
  "cookie 0.18.1",
+ "futures-channel",
+ "futures-lite 2.6.1",
  "futures-util",
  "http 1.4.0",
  "http-body-util",
@@ -738,10 +743,14 @@ dependencies = [
  "hyper-util",
  "mime",
  "openssl",
+ "pin-project-lite",
  "serde",
  "serde_json",
+ "smol",
+ "smol-hyper",
+ "smol-timeout",
  "time",
- "tokio",
+ "tower-service",
  "url",
  "webdriver",
 ]
@@ -2417,7 +2426,6 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "surfer-rs"
 version = "0.1.0"
-source = "git+https://github.com/dwerner/surfer-rs#e1259bb9ace3778272369a34f9a87ceae74b1ac2"
 dependencies = [
  "async-process",
  "async-trait",

@@ -9,7 +9,7 @@ mod testutil;
 // Re-export schema types from generated module
 pub use generated::{
     GoalData, PlanData, SessionBinding, SessionData, SessionMetadata, TodoData, TodoDependency,
-    TodoPlanLink, TurnData, TurnOrder, UserPrefs, WatcherRelation,
+    TodoPlanLink, TurnData, TurnOrder, UserData, UserPrefs, WatcherRelation,
 };
 
 // Re-export storage types
