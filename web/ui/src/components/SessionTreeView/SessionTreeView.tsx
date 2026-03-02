@@ -1299,52 +1299,76 @@ export const SessionTreeView = memo(forwardRef<SessionTreeViewHandle, SessionTre
     // Identify watcher sessions and their targets
     // Watchers have titles like "watching:target-name"
     const watcherSessions = new Set<string>();
-    const targetSessions = new Set<string>();
-    const watcherToTarget = new Map<string, string>(); // watcher title -> target title it's watching
+    const watcherToTargetName = new Map<string, string>(); // watcher session id -> target name it's watching
+    const targetNameToSession = new Map<string, SessionInfo>(); // target name -> target session
 
+    // First pass: identify watchers and build target name index
     for (const session of unpinned) {
       const title = session.title || session.forkName || '';
       if (title.startsWith('watching:')) {
         watcherSessions.add(session.id);
         const targetName = title.slice('watching:'.length);
-        watcherToTarget.set(session.id, targetName);
+        watcherToTargetName.set(session.id, targetName);
       }
-    }
-
-    // Find target sessions by matching their title/forkName to what watchers are watching
-    for (const session of unpinned) {
+      // Index all sessions by their name for target matching
       const sessionName = session.title || session.forkName || '';
-      // Check if any watcher is watching this session
-      for (const [, targetName] of watcherToTarget) {
-        if (sessionName === targetName) {
-          targetSessions.add(session.id);
-          break;
-        }
+      if (sessionName && !sessionName.startsWith('watching:')) {
+        targetNameToSession.set(sessionName, session);
       }
     }
 
-    // Separate watching-related sessions from regular sessions
-    const watchingSessions: SessionInfo[] = [];
-    const regularUnpinned: SessionInfo[] = [];
+    // Build watcher groups: each target with its watchers
+    // Structure: { target: SessionInfo | null, watchers: SessionInfo[], groupTime: number }
+    type WatcherGroup = { target: SessionInfo | null; watchers: SessionInfo[]; groupTime: number; targetName: string };
+    const watcherGroups: WatcherGroup[] = [];
+    const usedSessionIds = new Set<string>();
 
+    // Group watchers by their target
+    const targetNameToWatchers = new Map<string, SessionInfo[]>();
     for (const session of unpinned) {
-      if (watcherSessions.has(session.id) || targetSessions.has(session.id)) {
-        watchingSessions.push(session);
-      } else {
+      if (watcherSessions.has(session.id)) {
+        const targetName = watcherToTargetName.get(session.id)!;
+        if (!targetNameToWatchers.has(targetName)) {
+          targetNameToWatchers.set(targetName, []);
+        }
+        targetNameToWatchers.get(targetName)!.push(session);
+      }
+    }
+
+    // Create groups for each unique target name
+    for (const [targetName, watchers] of targetNameToWatchers) {
+      const targetSession = targetNameToSession.get(targetName) || null;
+
+      // Calculate group time as most recent activity in the group
+      let groupTime = 0;
+      if (targetSession) {
+        groupTime = new Date(targetSession.lastModified).getTime();
+        usedSessionIds.add(targetSession.id);
+      }
+      for (const watcher of watchers) {
+        const watcherTime = new Date(watcher.lastModified).getTime();
+        if (watcherTime > groupTime) groupTime = watcherTime;
+        usedSessionIds.add(watcher.id);
+      }
+
+      // Sort watchers by last modified (most recent first)
+      watchers.sort((a, b) =>
+        new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime()
+      );
+
+      watcherGroups.push({ target: targetSession, watchers, groupTime, targetName });
+    }
+
+    // Sort groups by most recent activity
+    watcherGroups.sort((a, b) => b.groupTime - a.groupTime);
+
+    // Separate regular sessions (not in any watcher group)
+    const regularUnpinned: SessionInfo[] = [];
+    for (const session of unpinned) {
+      if (!usedSessionIds.has(session.id)) {
         regularUnpinned.push(session);
       }
     }
-
-    // Sort watching sessions: targets first, then their watchers, by last modified
-    watchingSessions.sort((a, b) => {
-      const aIsWatcher = watcherSessions.has(a.id);
-      const bIsWatcher = watcherSessions.has(b.id);
-      // Targets before watchers
-      if (!aIsWatcher && bIsWatcher) return -1;
-      if (aIsWatcher && !bIsWatcher) return 1;
-      // Within same type, sort by last modified
-      return new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime();
-    });
 
     // Group regular unpinned by day label first, THEN sort within groups
     // This ensures all "Today" sessions are together even if isCurrent bumps one to the top
@@ -1393,7 +1417,7 @@ export const SessionTreeView = memo(forwardRef<SessionTreeViewHandle, SessionTre
       })
       .map(({ key, label, sessions }) => ({ key, label, sessions }));
 
-    return { pinned, watching: watchingSessions, dayGroups };
+    return { pinned, watcherGroups, dayGroups };
   }, [sessions]);
 
   if (isLoading) {
@@ -1517,12 +1541,29 @@ export const SessionTreeView = memo(forwardRef<SessionTreeViewHandle, SessionTre
           </li>
         )}
 
-        {/* Watching sessions (watchers and their targets) */}
-        {groupedSessions.watching.length > 0 && (
+        {/* Watching sessions (watchers and their targets grouped together) */}
+        {groupedSessions.watcherGroups.length > 0 && (
           <li className="tree-group tree-group--watching">
             <div className="tree-group__header">👁 Watching</div>
             <ul className="tree-group__sessions">
-              {groupedSessions.watching.map(renderSessionNode)}
+              {groupedSessions.watcherGroups.map((group, groupIndex) => (
+                <li key={`watcher-group-${groupIndex}`} className="watcher-pair">
+                  {/* Watcher sessions first */}
+                  {group.watchers.map(renderSessionNode)}
+                  {/* Target session (the watched one) indented below */}
+                  <ul className="watcher-pair__watched">
+                    {group.target ? (
+                      <li>{renderSessionNode(group.target)}</li>
+                    ) : (
+                      <li className="watcher-pair__missing-target">
+                        <span className="watcher-pair__missing-icon">?</span>
+                        <span className="watcher-pair__missing-name">{group.targetName}</span>
+                        <span className="watcher-pair__missing-hint">(session not found)</span>
+                      </li>
+                    )}
+                  </ul>
+                </li>
+              ))}
             </ul>
           </li>
         )}

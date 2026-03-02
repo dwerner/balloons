@@ -150,6 +150,62 @@
   padding: 0;
 }
 
+/* ===== Watcher/Watched Pair Groups ===== */
+.watcher-pair {
+  list-style: none;
+  margin: 4px 0;
+  padding: 4px;
+  border-radius: 6px;
+  background: rgba(34, 211, 238, 0.04); /* subtle cyan tint */
+  border-left: 2px solid rgba(34, 211, 238, 0.3);
+}
+
+.watcher-pair:first-child {
+  margin-top: 0;
+}
+
+.watcher-pair__watched {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  padding-left: 12px; /* indent watched target under watcher */
+  border-left: 1px dashed rgba(34, 211, 238, 0.2);
+  margin-left: 8px;
+}
+
+.watcher-pair__missing-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  margin: 1px 0;
+  color: #888;
+  font-size: 13px;
+  font-style: italic;
+}
+
+.watcher-pair__missing-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  font-size: 10px;
+  font-weight: 600;
+  color: #666;
+}
+
+.watcher-pair__missing-name {
+  color: #aaa;
+}
+
+.watcher-pair__missing-hint {
+  font-size: 11px;
+  color: #666;
+}
+
 /* ===== Node (base) ===== */
 .tree-node {
   display: flex;
@@ -496,6 +552,32 @@
 
 [data-theme="light"] .tree-node--exchange > .tree-node__content:hover {
   background: rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="light"] .watcher-pair {
+  background: rgba(34, 211, 238, 0.06);
+  border-left-color: rgba(34, 211, 238, 0.4);
+}
+
+[data-theme="light"] .watcher-pair__watched {
+  border-left-color: rgba(34, 211, 238, 0.3);
+}
+
+[data-theme="light"] .watcher-pair__missing-target {
+  color: #666;
+}
+
+[data-theme="light"] .watcher-pair__missing-icon {
+  background: rgba(0, 0, 0, 0.08);
+  color: #888;
+}
+
+[data-theme="light"] .watcher-pair__missing-name {
+  color: #555;
+}
+
+[data-theme="light"] .watcher-pair__missing-hint {
+  color: #888;
 }
 
 /* ===== Context mode badge ===== */
