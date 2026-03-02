@@ -969,15 +969,20 @@ class SessionManagerService:
         self._helper_contexts[helper_id] = ctx
 
         # Notify observers that helper is starting
-        asyncio.create_task(self._notify_observers(
-            "on_helper_started",
-            HelperStartedEvent(
-                helper_id=helper_id,
-                helper_type=helper_type,
-                session_id=session_id,
-                metadata=metadata or {},
-            ),
-        ))
+        started_event = HelperStartedEvent(
+            helper_id=helper_id,
+            helper_type=helper_type,
+            session_id=session_id,
+            metadata=metadata or {},
+        )
+        asyncio.create_task(self._notify_observers("on_helper_started", started_event))
+        # Also emit to WebSocket clients
+        for handler in self._event_handlers:
+            handler("onHelperStarted", {
+                "helperId": helper_id,
+                "helperType": helper_type,
+                "sessionId": session_id,
+            })
 
         # Start background streaming
         helper_runner.start_background(prompt)
@@ -1359,15 +1364,23 @@ class SessionManagerService:
             text = data if isinstance(data, str) else str(data)
             ctx.content += text
 
-            await self._notify_observers(
-                "on_helper_delta",
-                HelperDeltaEvent(
-                    helper_id=helper_id,
-                    helper_type=ctx.helper_type,
-                    delta=text,
-                    accumulated_length=len(ctx.content),
-                ),
+            delta_event = HelperDeltaEvent(
+                helper_id=helper_id,
+                helper_type=ctx.helper_type,
+                delta=text,
+                accumulated_length=len(ctx.content),
+                session_id=ctx.session_id,
             )
+            await self._notify_observers("on_helper_delta", delta_event)
+            # Also emit to WebSocket clients
+            for handler in self._event_handlers:
+                handler("onHelperDelta", {
+                    "helperId": helper_id,
+                    "helperType": ctx.helper_type,
+                    "delta": text,
+                    "accumulatedLength": len(ctx.content),
+                    "sessionId": ctx.session_id,
+                })
 
         elif event_type == "done":
             # Helper complete
@@ -1381,15 +1394,22 @@ class SessionManagerService:
                 },
             )
 
-            await self._notify_observers(
-                "on_helper_done",
-                HelperDoneEvent(
-                    helper_id=helper_id,
-                    helper_type=ctx.helper_type,
-                    result=ctx.content,
-                    metadata=ctx.metadata,
-                ),
+            done_event = HelperDoneEvent(
+                helper_id=helper_id,
+                helper_type=ctx.helper_type,
+                result=ctx.content,
+                session_id=ctx.session_id,
+                metadata=ctx.metadata,
             )
+            await self._notify_observers("on_helper_done", done_event)
+            # Also emit to WebSocket clients
+            for handler in self._event_handlers:
+                handler("onHelperDone", {
+                    "helperId": helper_id,
+                    "helperType": ctx.helper_type,
+                    "result": ctx.content,
+                    "sessionId": ctx.session_id,
+                })
 
             # Auto-complete fork compression if flagged to do so
             # This allows React UI to work without needing to listen for helper events
@@ -1535,30 +1555,46 @@ class SessionManagerService:
         elif event_type == "error":
             # Helper failed
             error_msg = data if isinstance(data, str) else str(data)
-            await self._notify_observers(
-                "on_helper_error",
-                HelperErrorEvent(
-                    helper_id=helper_id,
-                    helper_type=ctx.helper_type,
-                    error=error_msg,
-                    cancelled=False,
-                ),
+            error_event = HelperErrorEvent(
+                helper_id=helper_id,
+                helper_type=ctx.helper_type,
+                session_id=ctx.session_id,
+                error=error_msg,
+                cancelled=False,
             )
+            await self._notify_observers("on_helper_error", error_event)
+            # Also emit to WebSocket clients
+            for handler in self._event_handlers:
+                handler("onHelperError", {
+                    "helperId": helper_id,
+                    "helperType": ctx.helper_type,
+                    "sessionId": ctx.session_id,
+                    "error": error_msg,
+                    "cancelled": False,
+                })
             # Clean up context
             if helper_id in self._helper_contexts:
                 del self._helper_contexts[helper_id]
 
         elif event_type == "cancelled":
             # Helper cancelled
-            await self._notify_observers(
-                "on_helper_error",
-                HelperErrorEvent(
-                    helper_id=helper_id,
-                    helper_type=ctx.helper_type,
-                    error=None,
-                    cancelled=True,
-                ),
+            error_event = HelperErrorEvent(
+                helper_id=helper_id,
+                helper_type=ctx.helper_type,
+                session_id=ctx.session_id,
+                error=None,
+                cancelled=True,
             )
+            await self._notify_observers("on_helper_error", error_event)
+            # Also emit to WebSocket clients
+            for handler in self._event_handlers:
+                handler("onHelperError", {
+                    "helperId": helper_id,
+                    "helperType": ctx.helper_type,
+                    "sessionId": ctx.session_id,
+                    "error": None,
+                    "cancelled": True,
+                })
             # Clean up context
             if helper_id in self._helper_contexts:
                 del self._helper_contexts[helper_id]
@@ -5509,8 +5545,11 @@ Summary:""")
         """
         from config import get_config
 
+        debug_log.info("list_backends called", category=Category.SESSION)
         config = get_config()
-        return list(config.backends.keys())
+        backends = list(config.backends.keys())
+        debug_log.info(f"list_backends returning {len(backends)} backends: {backends}", category=Category.SESSION)
+        return backends
 
     @ws_expose
     async def get_session_backend(self, session_id: str) -> str | None:
@@ -5716,9 +5755,11 @@ Summary:""")
                     error=f"Session {session_id} not found"
                 )
 
-        # Validate backend exists
-        if backend_name not in self._backend_config:
-            available = list(self._backend_config.keys())
+        # Validate backend exists using the config module
+        from config import get_config
+        config = get_config()
+        if backend_name not in config.backends:
+            available = list(config.backends.keys())
             return StartSessionReviewResult(
                 success=False,
                 error=f"Unknown backend: {backend_name}. Available: {available}"
@@ -5843,7 +5884,8 @@ Summary:""")
         # Emit session updated event
         self._emit_event(SessionManagerEvent.SESSION_UPDATED, session_id)
 
-        return CompleteSessionReviewResult(
+        # Build result first
+        result = CompleteSessionReviewResult(
             success=True,
             session_id=session_id,
             summary_id=review.summary_id,
@@ -5851,6 +5893,20 @@ Summary:""")
             proposed_title=review.proposed_title,
             markdown_content=review.markdown_content,
         )
+
+        # Emit session review completed event for WebSocket clients
+        review_completed_data = {
+            "session_id": session_id,
+            "summary_id": review.summary_id,
+            "helper_id": helper_id,
+            "proposed_title": review.proposed_title,
+            "turn_index": turn_index,
+            "success": True,
+        }
+        for handler in self._event_handlers:
+            handler("onSessionReviewCompleted", review_completed_data)
+
+        return result
 
     @ws_expose
     async def approve_session_review(
@@ -5980,6 +6036,7 @@ Summary:""")
         Returns:
             List of review dictionaries
         """
+        debug_log.info(f"get_session_reviews called for session {session_id[:8]}", category=Category.SESSION)
         # Load the session
         session = self._manager.get_session(session_id)
         if not session:
@@ -6135,4 +6192,29 @@ Output ONLY the commit message, nothing else:"""
     @ws_event
     async def on_archive_completed(self) -> CompleteArchiveResult:
         """Emitted when an archive operation completes successfully."""
+        ...
+
+    @ws_event
+    async def on_session_review_completed(self) -> CompleteSessionReviewResult:
+        """Emitted when a session review completes successfully."""
+        ...
+
+    @ws_event
+    async def on_helper_started(self) -> HelperStartedEvent:
+        """Emitted when a helper task begins streaming."""
+        ...
+
+    @ws_event
+    async def on_helper_delta(self) -> HelperDeltaEvent:
+        """Emitted when text content is streamed from a helper task."""
+        ...
+
+    @ws_event
+    async def on_helper_done(self) -> HelperDoneEvent:
+        """Emitted when a helper task completes successfully."""
+        ...
+
+    @ws_event
+    async def on_helper_error(self) -> HelperErrorEvent:
+        """Emitted when a helper task fails or is cancelled."""
         ...

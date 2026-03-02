@@ -60,13 +60,13 @@ export function debugLog(
   message: string,
   data?: Record<string, unknown>
 ): void {
-  if (!_debugEnabled) return;
+  // Console logging is gated by _debugEnabled
+  if (_debugEnabled) {
+    const timestamp = new Date().toISOString().split('T')[1]?.slice(0, 12) ?? '';
+    console.log(`[${timestamp}][${category}]`, message, data ?? '');
+  }
 
-  // Always log to console with timestamp
-  const timestamp = new Date().toISOString().split('T')[1]?.slice(0, 12) ?? '';
-  console.log(`[${timestamp}][${category}]`, message, data ?? '');
-
-  // Also send to TUI if connected
+  // Always send to server if connected (for server-side debugging)
   if (_client?.isConnected) {
     _client.debugLog.info(message, `web.${category}`, '', data ?? null).catch(() => {
       // Silently ignore WebSocket errors

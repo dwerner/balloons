@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-02-28T16:05:09.790880
+// Generated: 2026-03-01T16:34:30.431041
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -967,6 +967,26 @@ export interface SessionManagerEvents {
   onArchiveStarted(callback: (data: Types.StartArchiveResult) => void): Unsubscribe;
 
   /**
+   * Emitted when text content is streamed from a helper task.
+   */
+  onHelperDelta(callback: (data: Types.HelperDeltaEvent) => void): Unsubscribe;
+
+  /**
+   * Emitted when a helper task completes successfully.
+   */
+  onHelperDone(callback: (data: Types.HelperDoneEvent) => void): Unsubscribe;
+
+  /**
+   * Emitted when a helper task fails or is cancelled.
+   */
+  onHelperError(callback: (data: Types.HelperErrorEvent) => void): Unsubscribe;
+
+  /**
+   * Emitted when a helper task begins streaming.
+   */
+  onHelperStarted(callback: (data: Types.HelperStartedEvent) => void): Unsubscribe;
+
+  /**
    * Emitted when a message is submitted and streaming begins.
    */
   onMessageSubmitted(callback: (data: Types.SubmitMessageResult) => void): Unsubscribe;
@@ -980,6 +1000,11 @@ export interface SessionManagerEvents {
    * Emitted when a session is deleted.
    */
   onSessionDeleted(callback: (data: Types.SessionEventData) => void): Unsubscribe;
+
+  /**
+   * Emitted when a session review completes successfully.
+   */
+  onSessionReviewCompleted(callback: (data: Types.CompleteSessionReviewResult) => void): Unsubscribe;
 
   /**
    * Emitted when the active session changes.
@@ -1213,6 +1238,22 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.subscribe('archiveStarted', callback);
   }
 
+  onHelperDelta(callback: (data: Types.HelperDeltaEvent) => void): Unsubscribe {
+    return this.subscribe('helperDelta', callback);
+  }
+
+  onHelperDone(callback: (data: Types.HelperDoneEvent) => void): Unsubscribe {
+    return this.subscribe('helperDone', callback);
+  }
+
+  onHelperError(callback: (data: Types.HelperErrorEvent) => void): Unsubscribe {
+    return this.subscribe('helperError', callback);
+  }
+
+  onHelperStarted(callback: (data: Types.HelperStartedEvent) => void): Unsubscribe {
+    return this.subscribe('helperStarted', callback);
+  }
+
   onMessageSubmitted(callback: (data: Types.SubmitMessageResult) => void): Unsubscribe {
     return this.subscribe('messageSubmitted', callback);
   }
@@ -1223,6 +1264,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   onSessionDeleted(callback: (data: Types.SessionEventData) => void): Unsubscribe {
     return this.subscribe('sessionDeleted', callback);
+  }
+
+  onSessionReviewCompleted(callback: (data: Types.CompleteSessionReviewResult) => void): Unsubscribe {
+    return this.subscribe('sessionReviewCompleted', callback);
   }
 
   onSessionSwitched(callback: (data: Types.SessionEventData) => void): Unsubscribe {

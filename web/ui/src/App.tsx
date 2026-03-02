@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, memo, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { BalloonsClient } from '../../generated/balloons-client';
-import type { ConnectionState, SessionInfo, TurnInfo, TaskInfo, Unsubscribe, ToolUseStartedEvent, ToolInputDeltaEvent, ToolResultEvent, ContentDeltaEvent, TurnStartedEvent, TurnFinishedEvent, GoalTreeStateServiceClient, TurnSnapshot, SessionHistoryChunkEvent, SessionHistoryCompleteEvent } from '../../generated/balloons-client';
+import type { ConnectionState, SessionInfo, TurnInfo, TaskInfo, Unsubscribe, ToolUseStartedEvent, ToolInputDeltaEvent, ToolResultEvent, GoalTreeStateServiceClient, TurnSnapshot, SessionHistoryChunkEvent, SessionHistoryCompleteEvent } from '../../generated/balloons-client';
 import { MarkdownContent } from './MarkdownContent';
 import { AppLayout, useLayout, useTheme, usePreferences } from './components/layout';
 import { SessionTreeView } from './components/SessionTreeView';
@@ -15,6 +15,7 @@ import { StreamingStatusBar } from './components/StreamingStatusBar';
 import { ForkProposalTurn } from './components/ForkProposalTurn';
 import { CreateTodoModal, type CreateTodoResult } from './components/CreateTodoModal';
 import { SessionReviewModal, type SessionReview, type BackendInfo } from './components/SessionReviewModal';
+import { PropertiesTab } from './components/PropertiesTab';
 import { StreamingTurnsView, type StreamingProgress } from './components/StreamingTurnsView';
 import { DialogProvider, useDialog } from './components/Dialog';
 import { useWakeLock, useSoundNotifications } from './hooks';
@@ -1195,6 +1196,7 @@ function AppContent() {
   const [existingReviews, setExistingReviews] = useState<SessionReview[]>([]);
   const [currentReview, setCurrentReview] = useState<SessionReview | null>(null);
   const [isGeneratingReview, setIsGeneratingReview] = useState(false);
+  const [reviewStreamingText, setReviewStreamingText] = useState<string>('');
   const reviewHelperIdRef = useRef<string | null>(null);
   const reviewAccumulatedTextRef = useRef<string>('');
 
@@ -1398,173 +1400,32 @@ function AppContent() {
         })
       );
 
-      // Turn events for streaming - use TaskStateService events for efficient incremental updates
-      // onTurnStarted: Create a placeholder turn immediately when streaming begins
-      // Note: We only create visible turns for 'user' and primary 'assistant' turns.
-      // Tool-related turns (additional assistant turns for tool_use, and 'tool' role for results)
-      // are handled inline within the main assistant turn via tool use events.
+      // LEGACY TURN HANDLERS DISABLED
+      // These handlers (onTurnStarted, onContentDelta, onTurnFinished) were causing
+      // duplication bugs because they update `turns` state in parallel with
+      // handleTurnsChange (which receives data from StreamingTurnsView's useSessionData).
       //
-      // IMPORTANT: These handlers check data.sessionId === selectedSessionId to filter events.
-      // When switching sessions:
-      // 1. handleSelectSession clears turns[] and sets isLoadingTurns=true
-      // 2. The useEffect re-runs (due to selectedSessionId dependency), unsubscribing old handlers
-      // 3. New handlers are subscribed with the new selectedSessionId
-      // This ensures events for the wrong session are ignored during the transition.
-      unsubscribers.push(
-        client.tasks.onTurnStarted((data: TurnStartedEvent) => {
-          if (data.sessionId === selectedSessionId) {
-            // Skip events with undefined turnIndex (server bug)
-            if (data.turnIndex === undefined || data.turnIndex === null) {
-              return;
-            }
-
-            // Skip creating separate turns for tool-related events
-            // Tool uses are tracked separately and displayed inline in the assistant turn
-            // The 'tool' role turns are for tool results which we display as part of the tool use
-            if (data.role === 'tool') {
-              return;
-            }
-
-            setTurns(prev => {
-              // Check if turn already exists by its index
-              const existing = prev.find(t => t.idx === data.turnIndex);
-              if (existing) {
-                // Update existing turn to streaming state
-                return prev.map(t => t.idx === data.turnIndex ? {
-                  idx: existing.idx,
-                  role: existing.role,
-                  content: existing.content,
-                  streaming: true,
-                  viewed: existing.viewed,
-                  tokens: existing.tokens,
-                  contextMode: existing.contextMode,
-                  exchangeId: existing.exchangeId,
-                } : t);
-              }
-
-              // Create new turn for this index
-              // Note: We used to skip creating assistant turns if one already existed
-              // in the same exchange, but this was wrong - each turn has a unique index
-              // and should be tracked separately. Tool_use turns (which are also role=assistant)
-              // have different indices than text turns.
-              // Map turn_type to contentBlockType for proper rendering
-              const contentBlockType = data.turnType === 'tool_use' ? 'tool_use'
-                : data.turnType === 'tool_result' ? 'tool_result'
-                : data.turnType === 'text_turn' ? 'text'
-                : undefined;
-
-              const placeholderTurn: TurnInfo = {
-                idx: data.turnIndex,
-                role: data.role,
-                content: '',
-                streaming: true,
-                viewed: false,
-                tokens: 0,
-                contextMode: 'COPY',
-                exchangeId: data.exchangeId,
-                contentBlockType,
-              };
-              return sortTurnsByIdx([...prev, placeholderTurn]);
-            });
-          }
-        })
-      );
-
-      // onContentDelta: Incrementally update turn content without re-fetching
-      unsubscribers.push(
-        client.tasks.onContentDelta((data: ContentDeltaEvent) => {
-          if (data.sessionId === selectedSessionId) {
-            setTurns(prev => {
-              const turnIdx = data.turnIndex;
-              const existing = prev.find(t => t.idx === turnIdx);
-              if (existing) {
-                // Update existing turn with accumulated content
-                return prev.map(t => t.idx === turnIdx ? {
-                  idx: existing.idx,
-                  role: existing.role,
-                  content: data.accumulated,
-                  streaming: true,
-                  viewed: existing.viewed,
-                  tokens: existing.tokens,
-                  contextMode: existing.contextMode,
-                  exchangeId: existing.exchangeId,
-                } : t);
-              }
-
-              // Turn doesn't exist yet - create it
-              // This can happen if onContentDelta arrives before onTurnStarted
-              const newTurn: TurnInfo = {
-                idx: turnIdx,
-                role: 'assistant',
-                content: data.accumulated,
-                streaming: true,
-                viewed: false,
-                tokens: 0,
-                contextMode: 'COPY',
-                exchangeId: data.exchangeId,
-              };
-              return sortTurnsByIdx([...prev, newTurn]);
-            });
-          }
-        })
-      );
-
-      // onTurnFinished: Finalize turn state with complete content
-      unsubscribers.push(
-        client.tasks.onTurnFinished((data: TurnFinishedEvent) => {
-          if (data.sessionId === selectedSessionId) {
-            // Skip tool result turns - they're displayed inline via tool use events
-            if (data.role === 'tool') {
-              return;
-            }
-
-            setTurns(prev => {
-              const turnIdx = data.turnIndex;
-              const existing = prev.find(t => t.idx === turnIdx);
-              if (existing) {
-                // Finalize existing turn
-                return prev.map(t => t.idx === turnIdx ? {
-                  idx: existing.idx,
-                  role: data.role,
-                  content: data.content,
-                  streaming: false,
-                  viewed: existing.viewed,
-                  tokens: existing.tokens,
-                  contextMode: existing.contextMode,
-                  exchangeId: existing.exchangeId,
-                } : t);
-              }
-
-              // Turn doesn't exist - create it with final content
-              // This can happen if events arrive out of order
-              const newTurn: TurnInfo = {
-                idx: turnIdx,
-                role: data.role,
-                content: data.content,
-                streaming: false,
-                viewed: false,
-                tokens: 0,
-                contextMode: 'COPY',
-                exchangeId: data.exchangeId,
-              };
-              return sortTurnsByIdx([...prev, newTurn]);
-            });
-          }
-          // NOTE: Don't refetch sessions here - the sessionDataSessionUpdated event
-          // already provides incremental updates. Refetching would overwrite in-memory
-          // session state (like cachedContextTokens) with stale data from storage.
-        })
-      );
+      // Root cause: Both TaskStateService and SessionDataService emit events for the
+      // same streaming content. When both handlers are active, the same text gets
+      // applied twice to `turns` state, causing visual duplication.
+      //
+      // Fix: StreamingTurnsView + handleTurnsChange is now the sole owner of turn
+      // content. It subscribes to SessionDataService events, accumulates deltas,
+      // and reports final turn state via onTurnsChange callback.
+      //
+      // See: BUGS.md - Streaming duplication bug
 
       // Handle sessionDataTurnFinished for non-streaming updates (e.g., context mode changes)
       // Uses contentBlock from event directly instead of fetching via getTurn
+      // NOTE: This is kept because it handles updates AFTER streaming completes,
+      // which don't conflict with the streaming handlers in useSessionData.
       unsubscribers.push(
         client.sessionData.sessionDataTurnFinished(async (data) => {
           if (data.sessionId === selectedSessionId && data.order != null && data.contentBlock) {
             const turnIdx = data.order;
             setTurns(prev => {
               const existingTurn = prev.find(t => t.idx === turnIdx);
-              // If turn is currently streaming, skip - onContentDelta handles it
+              // If turn is currently streaming, skip - useSessionData handles it
               if (existingTurn?.streaming) {
                 return prev;
               }
@@ -1776,6 +1637,50 @@ function AppContent() {
           }
           // Note: Turn updates after archive are handled by useSessionData via events
           // The archive creates/updates turns which flow through the subscription
+        })
+      );
+
+      // Session review completion - update UI when review finishes
+      unsubscribers.push(
+        client.sessions.onSessionReviewCompleted(async (data) => {
+          debugLog('Session review completed', { sessionId: data.sessionId, summaryId: data.summaryId });
+          // Only update if this is for the currently selected session
+          if (data.sessionId === selectedSessionId) {
+            setIsGeneratingReview(false);
+            // Reload reviews to get the newly created one
+            try {
+              const reviews = await client.sessions.getSessionReviews(data.sessionId);
+              setExistingReviews(reviews as unknown as SessionReview[]);
+              if (reviews.length > 0) {
+                setCurrentReview(reviews[0] as unknown as SessionReview);
+              }
+            } catch (err) {
+              console.error('Failed to load reviews after completion:', err);
+            }
+          }
+        })
+      );
+
+      // Helper delta - stream review text as it generates
+      unsubscribers.push(
+        client.sessions.onHelperDelta((data) => {
+          // If this is a session_review helper for our session, update streaming text
+          if (data.helperType === 'session_review' && data.sessionId === selectedSessionId) {
+            reviewAccumulatedTextRef.current += data.delta;
+            setReviewStreamingText(reviewAccumulatedTextRef.current);
+          }
+        })
+      );
+
+      // Helper error handling - clear generating state if helper fails
+      unsubscribers.push(
+        client.sessions.onHelperError((data) => {
+          debugLog('Helper error', { helperId: data.helperId, helperType: data.helperType, error: data.error });
+          // If this is a session_review helper for our session, clear the generating state
+          if (data.helperType === 'session_review' && data.sessionId === selectedSessionId) {
+            setIsGeneratingReview(false);
+            setReviewStreamingText('');
+          }
         })
       );
 
@@ -2305,6 +2210,49 @@ function AppContent() {
     selectedSessionId
   );
 
+  // Load backends and reviews when Properties tab is active or session changes
+  useEffect(() => {
+    debugLog('Properties tab useEffect', { mainContentTab, selectedSessionId, connectionState });
+    if (mainContentTab !== 'properties' || !selectedSessionId || connectionState !== 'connected') {
+      debugLog('Properties tab useEffect: early return', { mainContentTab, selectedSessionId, connectionState });
+      return;
+    }
+
+    const client = clientRef.current;
+    if (!client) {
+      debugLog('Properties tab useEffect: no client');
+      return;
+    }
+
+    // Load available backends
+    (async () => {
+      debugLog('Properties tab: loading backends...');
+      try {
+        const backends = await client.sessions.listBackends();
+        debugLog('Properties tab: loaded backends', { count: backends.length, backends });
+        setAvailableBackends(backends.map(name => ({ name, displayName: name })));
+      } catch (err) {
+        debugLog('Properties tab: failed to load backends', { error: String(err) });
+        console.error('Failed to load backends:', err);
+        setAvailableBackends([{ name: 'claude', displayName: 'claude' }]);
+      }
+    })();
+
+    // Load existing reviews for this session
+    (async () => {
+      debugLog('Properties tab: loading reviews...');
+      try {
+        const reviews = await client.sessions.getSessionReviews(selectedSessionId);
+        debugLog('Properties tab: loaded reviews', { count: reviews.length });
+        setExistingReviews(reviews as unknown as SessionReview[]);
+      } catch (err) {
+        debugLog('Properties tab: failed to load reviews', { error: String(err) });
+        console.error('Failed to load existing reviews:', err);
+        setExistingReviews([]);
+      }
+    })();
+  }, [mainContentTab, selectedSessionId, connectionState]);
+
   return (
     <AppLayout>
       {/* Mobile header */}
@@ -2711,6 +2659,7 @@ function AppContent() {
             )}
 
             <div className="turns-container">
+              {/* Session-specific tabs */}
               {mainContentTab === 'streaming' && (
                 clientRef.current && connectionState === 'connected' ? (
                   <StreamingTurnsView
@@ -2735,6 +2684,121 @@ function AppContent() {
                   <p>Context view coming soon.</p>
                 </div>
               )}
+              {mainContentTab === 'properties' && (
+                <PropertiesTab
+                  session={selectedSession || null}
+                  isConnected={connectionState === 'connected'}
+                  availableBackends={availableBackends}
+                  onStartReview={async (backendName) => {
+                    debugLog('onStartReview callback called', { backendName, selectedSessionId });
+                    if (!selectedSessionId) {
+                      debugLog('onStartReview: no selectedSessionId');
+                      return;
+                    }
+                    const client = clientRef.current;
+                    if (!client) {
+                      debugLog('onStartReview: no client');
+                      return;
+                    }
+
+                    debugLog('onStartReview: starting review');
+                    setIsGeneratingReview(true);
+                    setCurrentReview(null);
+                    setReviewStreamingText('');
+                    reviewAccumulatedTextRef.current = '';
+
+                    try {
+                      debugLog('calling startSessionReview', { selectedSessionId, backendName });
+                      const result = await client.sessions.startSessionReview(selectedSessionId, backendName);
+                      debugLog('startSessionReview result', { result });
+                      if (result.success && result.helperId) {
+                        reviewHelperIdRef.current = result.helperId;
+                        debugLog('Review started successfully', {
+                          sessionId: selectedSessionId,
+                          backendName,
+                          helperId: result.helperId
+                        });
+                        // Completion is handled by onSessionReviewCompleted event subscription
+                      } else {
+                        debugLog('startSessionReview failed', { result });
+                        setIsGeneratingReview(false);
+                      }
+                    } catch (err) {
+                      debugLog('startSessionReview error', { error: String(err) });
+                      setIsGeneratingReview(false);
+                    }
+                  }}
+                  isGeneratingReview={isGeneratingReview}
+                  reviewStreamingText={reviewStreamingText}
+                  currentReview={currentReview}
+                  existingReviews={existingReviews}
+                  onApproveReview={async (summaryId, title, markdown) => {
+                    if (!selectedSessionId) return;
+                    const client = clientRef.current;
+                    if (!client) return;
+
+                    try {
+                      await client.sessions.approveSessionReview(
+                        selectedSessionId,
+                        summaryId,
+                        title,
+                        markdown
+                      );
+                      debugLog('Approved session review', { sessionId: selectedSessionId, summaryId });
+                      setCurrentReview(null);
+                    } catch (err) {
+                      console.error('Failed to approve review:', err);
+                    }
+                  }}
+                  onRename={async (newTitle) => {
+                    if (!selectedSessionId) return;
+                    const client = clientRef.current;
+                    if (!client) return;
+
+                    try {
+                      await client.sessions.setSessionTitle(selectedSessionId, newTitle);
+                      debugLog('Renamed session', { sessionId: selectedSessionId, newTitle });
+                    } catch (err) {
+                      console.error('Failed to rename session:', err);
+                    }
+                  }}
+                  onChangeBackend={async (backendName) => {
+                    if (!selectedSessionId) return;
+                    const client = clientRef.current;
+                    if (!client) return;
+
+                    try {
+                      await client.sessions.setSessionBackend(selectedSessionId, backendName);
+                      debugLog('Changed session backend', { sessionId: selectedSessionId, backendName });
+                    } catch (err) {
+                      console.error('Failed to change backend:', err);
+                    }
+                  }}
+                  onChangeWorkingDirectory={async (path) => {
+                    if (!selectedSessionId) return;
+                    const client = clientRef.current;
+                    if (!client) return;
+
+                    try {
+                      await client.sessions.setSessionWorkingDirectory(selectedSessionId, path);
+                      debugLog('Changed working directory', { sessionId: selectedSessionId, path });
+                    } catch (err) {
+                      console.error('Failed to change working directory:', err);
+                    }
+                  }}
+                />
+              )}
+              {mainContentTab === 'slides' && (
+                <div className="empty-state">
+                  <h2>Slides</h2>
+                  <p>Presentation slides created in this session.</p>
+                  <p style={{ color: 'var(--color-text-dim)', marginTop: '8px', fontSize: '0.9em' }}>
+                    Use the <code>create_slide</code> tool to add slides.
+                  </p>
+                </div>
+              )}
+
+              {/* Global tabs */}
               {mainContentTab === 'logs' && (
                 <LogsTab
                   debugLogClient={clientRef.current?.debugLog}
@@ -2839,9 +2903,18 @@ function AppContent() {
                   </div>
                 )}
               </div>
+              {mainContentTab === 'settings' && (
+                <div className="empty-state">
+                  <h2>Settings</h2>
+                  <p>Application settings and configuration.</p>
+                  <p style={{ color: 'var(--color-text-dim)', marginTop: '8px', fontSize: '0.9em' }}>
+                    Coming soon: backend configuration, appearance, keybindings, and more.
+                  </p>
+                </div>
+              )}
             </div>
 
-            {/* Input area - only show on streaming tab */}
+            {/* Input area - only show on chat tab */}
             {mainContentTab === 'streaming' && (
               <div className={`input-area ${selectedSession?.isStreaming ? 'queue-mode' : ''}`}>
                 {/* Image preview area */}
@@ -3218,7 +3291,9 @@ function MobileHeader({ connectionState, selectedSession }: MobileHeaderProps) {
 }
 
 // Main content tab type
-type MainContentTab = 'streaming' | 'context' | 'code' | 'logs';
+// Session tabs: streaming, context, properties, slides (depend on selected session)
+// Global tabs: code, logs, settings (app-wide)
+type MainContentTab = 'streaming' | 'context' | 'properties' | 'slides' | 'code' | 'logs' | 'settings';
 
 /**
  * Header bar for the main content area with tabs and detail panel toggle
@@ -3239,35 +3314,62 @@ function MainContentHeader({
 
   return (
     <div className="conversation-view-toggle">
-      {/* Tab buttons */}
-      <button
-        className={`view-toggle-btn ${activeTab === 'streaming' ? 'active' : ''}`}
-        onClick={() => onTabChange('streaming')}
-      >
-        Streaming
-      </button>
-      <button
-        className={`view-toggle-btn ${activeTab === 'context' ? 'active' : ''}`}
-        onClick={() => onTabChange('context')}
-      >
-        Context
-      </button>
-      <button
-        className={`view-toggle-btn ${activeTab === 'code' ? 'active' : ''}`}
-        onClick={() => onTabChange('code')}
-        title={hasGitChanges ? `${gitStatus.fileCount} uncommitted change${gitStatus.fileCount !== 1 ? 's' : ''}` : undefined}
-      >
-        Code
-        {hasGitChanges && (
-          <span className="code-tab-changes-indicator" />
-        )}
-      </button>
-      <button
-        className={`view-toggle-btn ${activeTab === 'logs' ? 'active' : ''}`}
-        onClick={() => onTabChange('logs')}
-      >
-        Logs
-      </button>
+      {/* Session-specific tabs */}
+      <div className="tab-group tab-group--session">
+        <button
+          className={`view-toggle-btn ${activeTab === 'streaming' ? 'active' : ''}`}
+          onClick={() => onTabChange('streaming')}
+        >
+          Streaming
+        </button>
+        <button
+          className={`view-toggle-btn ${activeTab === 'context' ? 'active' : ''}`}
+          onClick={() => onTabChange('context')}
+        >
+          Context
+        </button>
+        <button
+          className={`view-toggle-btn ${activeTab === 'properties' ? 'active' : ''}`}
+          onClick={() => onTabChange('properties')}
+        >
+          Properties
+        </button>
+        <button
+          className={`view-toggle-btn ${activeTab === 'slides' ? 'active' : ''}`}
+          onClick={() => onTabChange('slides')}
+        >
+          Slides
+        </button>
+      </div>
+
+      {/* Separator between session and global tabs */}
+      <div className="tab-group-separator" />
+
+      {/* Global tabs */}
+      <div className="tab-group tab-group--global">
+        <button
+          className={`view-toggle-btn ${activeTab === 'code' ? 'active' : ''}`}
+          onClick={() => onTabChange('code')}
+          title={hasGitChanges ? `${gitStatus.fileCount} uncommitted change${gitStatus.fileCount !== 1 ? 's' : ''}` : undefined}
+        >
+          Code
+          {hasGitChanges && (
+            <span className="code-tab-changes-indicator" />
+          )}
+        </button>
+        <button
+          className={`view-toggle-btn ${activeTab === 'logs' ? 'active' : ''}`}
+          onClick={() => onTabChange('logs')}
+        >
+          Logs
+        </button>
+        <button
+          className={`view-toggle-btn ${activeTab === 'settings' ? 'active' : ''}`}
+          onClick={() => onTabChange('settings')}
+        >
+          Settings
+        </button>
+      </div>
 
       {/* Spacer */}
       <div style={{ flex: 1 }} />

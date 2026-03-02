@@ -843,10 +843,26 @@ body {
 /* ----- Conversation View Toggle ----- */
 .conversation-view-toggle {
   display: flex;
+  align-items: center;
   gap: 4px;
   padding: 8px 12px;
   background: var(--color-bg-secondary);
   border-bottom: 1px solid var(--color-border);
+}
+
+/* Tab groups for session vs global tabs */
+.tab-group {
+  display: flex;
+  gap: 4px;
+}
+
+/* Visual separator between tab groups */
+.tab-group-separator {
+  width: 1px;
+  height: 20px;
+  background: var(--color-border);
+  margin: 0 8px;
+  opacity: 0.5;
 }
 
 .conversation-view-toggle .view-toggle-btn {
@@ -2061,6 +2077,10 @@ body {
 
 [data-theme="dark-flat"] .conversation-view-toggle {
   border-bottom: none;
+}
+
+[data-theme="dark-flat"] .tab-group-separator {
+  background: var(--color-border-secondary);
 }
 
 [data-theme="dark-flat"] .conversation-view-toggle .view-toggle-btn {

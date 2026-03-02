@@ -90,6 +90,10 @@ class ConnectedClient:
     subscriptions: set[str] = field(default_factory=set)  # Event patterns subscribed to
     authenticated: bool = False  # Whether client passed JWT auth
     token_subject: str | None = None  # Subject from JWT token (e.g., session ID)
+    # Event queue for ordered delivery
+    # Using asyncio.Queue ensures events are sent in FIFO order
+    event_queue: asyncio.Queue = field(default_factory=asyncio.Queue)
+    queue_processor_task: asyncio.Task | None = field(default=None)
 
 
 class WsServer:
@@ -296,10 +300,14 @@ class WsServer:
         else:
             return data
 
-    async def _broadcast(
+    def _enqueue_broadcast(
         self, message: dict, target_clients: set[str] | None = None
     ) -> None:
-        """Broadcast a message to connected clients.
+        """Enqueue a message for broadcast to connected clients.
+
+        This method is synchronous and adds messages to per-client queues.
+        The queue processor tasks send messages in FIFO order, ensuring
+        streaming deltas arrive in correct order (fixes duplication bug).
 
         Args:
             message: Message dict to JSON-encode and send
@@ -312,9 +320,7 @@ class WsServer:
 
         message_str = json.dumps(message)
 
-        # Send to target clients (or all if no target specified)
-        tasks = []
-        matched_clients = []
+        # Enqueue to each matching client's queue
         for websocket in list(self._clients):
             client_info = self._client_info.get(websocket)
             if client_info is None:
@@ -322,19 +328,51 @@ class WsServer:
 
             # If target_clients is specified, only send to those clients
             if target_clients is not None and client_info.client_id not in target_clients:
-                logger.debug(f"_broadcast: skipping client {client_info.client_id}, not in targets {target_clients}")
                 continue
 
-            matched_clients.append(client_info.client_id)
-            tasks.append(self._send_to_client(websocket, message_str))
+            # Non-blocking enqueue (queue is unbounded)
+            client_info.event_queue.put_nowait(message_str)
 
-        if target_clients and not tasks:
-            logger.warning(f"_broadcast: NO clients matched for targets={target_clients}, connected clients: {[self._client_info[ws].client_id for ws in self._clients if ws in self._client_info]}")
-        elif target_clients:
-            logger.debug(f"_broadcast: matched {len(tasks)} clients: {matched_clients}")
+    async def _process_client_event_queue(self, client: ConnectedClient) -> None:
+        """Process events from a client's queue and send them in order.
 
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        This ensures events are sent in FIFO order, which is critical for
+        streaming deltas to arrive in correct order.
+
+        Args:
+            client: The client whose queue to process
+        """
+        try:
+            while True:
+                # Wait for next message from queue
+                message_str = await client.event_queue.get()
+                try:
+                    await client.websocket.send(message_str)
+                except ConnectionClosed:
+                    # Client disconnected, stop processing
+                    break
+                except Exception as e:
+                    logger.warning(f"Error sending to client {client.client_id}: {e}")
+                finally:
+                    client.event_queue.task_done()
+        except asyncio.CancelledError:
+            # Normal shutdown
+            pass
+
+    async def _broadcast(
+        self, message: dict, target_clients: set[str] | None = None
+    ) -> None:
+        """Broadcast a message to connected clients (legacy, uses queue).
+
+        This method now delegates to _enqueue_broadcast for ordered delivery.
+
+        Args:
+            message: Message dict to JSON-encode and send
+            target_clients: Optional set of client_ids to send to. If None,
+                broadcasts to all clients. If provided, only sends to clients
+                whose client_id is in the set.
+        """
+        self._enqueue_broadcast(message, target_clients)
 
     async def _send_to_client(
         self, websocket: ServerConnection, message: str
@@ -555,6 +593,12 @@ class WsServer:
         self._clients.add(websocket)
         self._client_info[websocket] = client
 
+        # Start the event queue processor for this client
+        # This ensures events are sent in FIFO order (fixes streaming duplication bug)
+        client.queue_processor_task = asyncio.create_task(
+            self._process_client_event_queue(client)
+        )
+
         if subject:
             logger.info(
                 f"Client connected: {client.client_id} from {client_addr} "
@@ -587,6 +631,13 @@ class WsServer:
         except Exception as e:
             logger.error(f"Error handling client {client.client_id}: {e}")
         finally:
+            # Stop the event queue processor
+            if client.queue_processor_task and not client.queue_processor_task.done():
+                client.queue_processor_task.cancel()
+                try:
+                    await client.queue_processor_task
+                except asyncio.CancelledError:
+                    pass
             # Cleanup
             self._clients.discard(websocket)
             self._client_info.pop(websocket, None)

@@ -23,6 +23,8 @@ Usage:
 from dataclasses import dataclass, field
 from typing import Protocol, Any, Union
 
+from codegen import ws_type
+
 from models import (
     TextBlock,
     ToolUseBlock,
@@ -241,6 +243,7 @@ class ToolResultEvent:
 # merge summaries, archive summaries, link summaries, etc.
 
 
+@ws_type
 @dataclass
 class HelperStartedEvent:
     """Emitted when a helper task begins streaming.
@@ -258,6 +261,7 @@ class HelperStartedEvent:
     metadata: dict[str, Any] = field(default_factory=dict)  # Type-specific data
 
 
+@ws_type
 @dataclass
 class HelperDeltaEvent:
     """Emitted when text content is streamed from a helper task.
@@ -269,8 +273,10 @@ class HelperDeltaEvent:
     helper_type: str
     delta: str  # New text chunk
     accumulated_length: int  # Total content length so far
+    session_id: str | None = None  # Associated session if applicable
 
 
+@ws_type
 @dataclass
 class HelperDoneEvent:
     """Emitted when a helper task completes successfully.
@@ -281,9 +287,11 @@ class HelperDoneEvent:
     helper_id: str
     helper_type: str
     result: str  # Final accumulated text
+    session_id: str | None = None  # Associated session if applicable
     metadata: dict[str, Any] = field(default_factory=dict)  # Type-specific result data
 
 
+@ws_type
 @dataclass
 class HelperErrorEvent:
     """Emitted when a helper task fails or is cancelled.
@@ -293,6 +301,7 @@ class HelperErrorEvent:
 
     helper_id: str
     helper_type: str
+    session_id: str | None = None  # Associated session if applicable
     error: str | None = None  # Error message (None if cancelled)
     cancelled: bool = False  # True if cancelled rather than errored
 
