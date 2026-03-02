@@ -2,6 +2,7 @@ import React, { memo, useState, useEffect, useCallback } from 'react';
 import type { SessionInfo, BalloonsClient } from '../../../../generated/balloons-client';
 import { useLongPress } from '../../hooks';
 import { useLayout } from '../layout';
+import { usePreferences } from '../layout/PreferencesContext';
 import { RenameSessionModal } from '../RenameSessionModal';
 import './SessionStatusBar.css';
 
@@ -142,6 +143,7 @@ export const SessionStatusBar = memo(function SessionStatusBar({
   onSetCwd,
 }: SessionStatusBarProps) {
   const { expandDetail } = useLayout();
+  const { expandToolCards, togglePreference } = usePreferences();
   const contextTokens = session.cachedContextTokens ?? 0;
   const contextWindow = session.contextWindow ?? 150000;
 
@@ -364,6 +366,16 @@ export const SessionStatusBar = memo(function SessionStatusBar({
             )}
             {/* Spacer to push actions to the right */}
             <div className="session-status-bar__spacer" />
+            {/* Expand tool cards toggle */}
+            <button
+              type="button"
+              className={`session-status-bar__expand-toggle ${expandToolCards ? 'active' : ''}`}
+              onClick={() => togglePreference('expandToolCards')}
+              title={expandToolCards ? 'Tool cards: expanded (click to collapse)' : 'Tool cards: collapsed (click to expand)'}
+              aria-label={expandToolCards ? 'Collapse tool cards by default' : 'Expand tool cards by default'}
+            >
+              {expandToolCards ? '▼' : '▶'}
+            </button>
             {/* Scroll state indicator */}
             {scrollState && !scrollState.isFollowing && (
               <div

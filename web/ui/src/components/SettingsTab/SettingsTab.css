@@ -49,6 +49,114 @@
   padding: 16px;
 }
 
+.settings-card__header-actions {
+  margin-left: auto;
+}
+
+/* Appearance Settings */
+.appearance-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.appearance-settings__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 0;
+}
+
+.appearance-settings__label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.appearance-settings__label-text {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.appearance-settings__label-description {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.appearance-settings__control {
+  flex-shrink: 0;
+}
+
+.appearance-settings__select {
+  padding: 6px 10px;
+  font-size: 13px;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+
+.appearance-settings__select:hover {
+  border-color: var(--color-border-secondary);
+}
+
+.appearance-settings__select:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+/* Toggle switch */
+.appearance-settings__toggle {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+}
+
+.appearance-settings__toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.appearance-settings__toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: 20px;
+  transition: all 0.2s ease;
+}
+
+.appearance-settings__toggle-slider::before {
+  position: absolute;
+  content: "";
+  height: 14px;
+  width: 14px;
+  left: 2px;
+  bottom: 2px;
+  background-color: var(--color-text-muted);
+  border-radius: 50%;
+  transition: all 0.2s ease;
+}
+
+.appearance-settings__toggle input:checked + .appearance-settings__toggle-slider {
+  background-color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.appearance-settings__toggle input:checked + .appearance-settings__toggle-slider::before {
+  transform: translateX(16px);
+  background-color: white;
+}
+
 /* Sound Settings */
 .sound-settings {
   display: flex;

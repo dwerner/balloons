@@ -151,27 +151,8 @@
 }
 
 /* ===== Watcher/Watched Pair Groups ===== */
-.watcher-pair {
-  list-style: none;
-  margin: 4px 0;
-  padding: 4px;
-  border-radius: 6px;
-  background: rgba(34, 211, 238, 0.04); /* subtle cyan tint */
-  border-left: 2px solid rgba(34, 211, 238, 0.3);
-}
-
-.watcher-pair:first-child {
-  margin-top: 0;
-}
-
-.watcher-pair__watched {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  padding-left: 12px; /* indent watched target under watcher */
-  border-left: 1px dashed rgba(34, 211, 238, 0.2);
-  margin-left: 8px;
-}
+/* Watcher group styling - sessions are rendered flat in the list */
+/* Visual grouping is achieved through the "Watching" header */
 
 .watcher-pair__missing-target {
   display: flex;
@@ -554,14 +535,7 @@
   background: rgba(0, 0, 0, 0.03);
 }
 
-[data-theme="light"] .watcher-pair {
-  background: rgba(34, 211, 238, 0.06);
-  border-left-color: rgba(34, 211, 238, 0.4);
-}
-
-[data-theme="light"] .watcher-pair__watched {
-  border-left-color: rgba(34, 211, 238, 0.3);
-}
+/* Watcher group light theme - sessions rendered flat, grouped under "Watching" header */
 
 [data-theme="light"] .watcher-pair__missing-target {
   color: #666;

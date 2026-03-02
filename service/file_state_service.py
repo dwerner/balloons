@@ -144,6 +144,32 @@ class GitDiffResult:
     has_staged: bool
 
 
+@ws_type
+@dataclass
+class UntrackedFile:
+    """An untracked file in the working tree."""
+
+    path: str  # relative path from git root
+    absolute_path: str
+
+
+@ws_type
+@dataclass
+class WorkingTreeStatus:
+    """Full status of the working tree including staged, unstaged, and untracked.
+
+    This provides a complete view of the git working tree state, separating:
+    - staged_files: Changes in the index ready to commit
+    - unstaged_files: Modified tracked files not yet staged
+    - untracked_files: New files not tracked by git
+    """
+
+    git_root: str
+    staged_files: list[DiffFile]  # Files in the index (staged for commit)
+    unstaged_files: list[DiffFile]  # Modified tracked files not yet staged
+    untracked_files: list[UntrackedFile]  # New files not tracked by git
+
+
 # =============================================================================
 # Service Class
 # =============================================================================
@@ -829,6 +855,77 @@ class FileStateService:
             GitDiffResult with staged changes
         """
         return await self.get_git_diff(git_root, staged=True)
+
+    @ws_expose
+    async def get_working_tree_status(self, path: str) -> WorkingTreeStatus:
+        """Get the full working tree status including staged, unstaged, and untracked files.
+
+        This provides a complete view of the git state, suitable for displaying
+        a staging interface where users can stage/unstage individual files.
+
+        Args:
+            path: Path to a directory inside a git repository
+
+        Returns:
+            WorkingTreeStatus with staged, unstaged, and untracked files
+
+        Raises:
+            ValueError: If path is not in a git repository
+        """
+        import subprocess
+
+        # Find git root
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=path,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            git_root = result.stdout.strip()
+        except subprocess.CalledProcessError:
+            raise ValueError(f"Not a git repository: {path}")
+
+        # Get staged diff
+        staged_result = subprocess.run(
+            ["git", "diff", "--cached", "--no-color", "--unified=3"],
+            cwd=git_root,
+            capture_output=True,
+            text=True,
+        )
+        staged_files = self._parse_diff_output(staged_result.stdout, git_root)
+
+        # Get unstaged diff (tracked files only)
+        unstaged_result = subprocess.run(
+            ["git", "diff", "--no-color", "--unified=3"],
+            cwd=git_root,
+            capture_output=True,
+            text=True,
+        )
+        unstaged_files = self._parse_diff_output(unstaged_result.stdout, git_root)
+
+        # Get untracked files
+        untracked_result = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard"],
+            cwd=git_root,
+            capture_output=True,
+            text=True,
+        )
+        untracked_files = []
+        for line in untracked_result.stdout.splitlines():
+            if line.strip():
+                untracked_files.append(UntrackedFile(
+                    path=line.strip(),
+                    absolute_path=os.path.join(git_root, line.strip()),
+                ))
+
+        return WorkingTreeStatus(
+            git_root=git_root,
+            staged_files=staged_files,
+            unstaged_files=unstaged_files,
+            untracked_files=untracked_files,
+        )
 
     @ws_expose
     async def generate_simple_commit_message(self, git_root: str) -> str:

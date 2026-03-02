@@ -362,56 +362,118 @@ body {
   pointer-events: auto;
 }
 
-/* Sidebar header - uses flex-wrap for responsive layout */
+/* Sidebar header - compact single row */
 .sidebar-header {
-  padding: 12px 16px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--color-border-primary);
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  flex-shrink: 0; /* Don't shrink header in flex column */
+  flex-shrink: 0;
 }
 
 .sidebar-header h1 {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
   flex: 1;
-  min-width: 0; /* Allow shrinking */
+  min-width: 0;
 }
 
-/* Settings toggle group - groups the setting buttons together */
-.sidebar-settings-toggle {
+/* Connection status button with server slot indicator */
+.connection-status-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
 }
 
-/* Mobile: force two rows using flex-basis to trigger wrap */
-@media (max-width: 767px) {
-  .sidebar-header {
-    row-gap: 10px;
-  }
+.connection-status-btn:hover {
+  background: var(--color-bg-secondary);
+  border-color: var(--color-border-secondary);
+}
 
-  /* First row: dot + title grow to push close to end, then force wrap */
-  .sidebar-header h1 {
-    flex: 1 1 auto;
-  }
+.connection-status-btn .connection-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+}
 
-  /* After close button, force a line break using a pseudo-element trick */
-  .sidebar-header .close-button {
-    flex: 0 0 auto;
-  }
+.connection-status-btn.connected .connection-dot {
+  background: var(--color-accent-green);
+}
 
-  /* View toggle starts a new row - give it basis to ensure wrap happens */
-  .sidebar-header .view-toggle {
-    flex: 0 0 auto;
-  }
+.connection-status-btn.connecting .connection-dot {
+  background: var(--color-accent-yellow);
+  animation: pulse 1s infinite;
+}
 
-  .sidebar-header .sidebar-settings-toggle {
-    flex: 0 0 auto;
-    margin-left: auto; /* Push to right side */
-  }
+.connection-status-btn.disconnected .connection-dot {
+  background: var(--color-accent-red);
+}
+
+.connection-status-btn .server-slot {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+/* Sign out button in header */
+.signout-btn {
+  padding: 4px 8px;
+  font-size: 12px;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.signout-btn:hover {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  border-color: var(--color-border-secondary);
+}
+
+/* View mode tabs row */
+.sidebar-view-tabs {
+  display: flex;
+  padding: 0;
+  gap: 0;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-tertiary);
+}
+
+.sidebar-view-tab {
+  flex: 1;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: center;
+  margin-bottom: -1px; /* Overlap the container border */
+}
+
+.sidebar-view-tab:hover {
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--color-text-secondary);
+}
+
+.sidebar-view-tab.active {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  border-bottom-color: var(--color-accent);
 }
 
 /* ----- View Toggle ----- */
@@ -845,12 +907,103 @@ body {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 8px 12px;
+  padding: 6px 8px;
   background: var(--color-bg-secondary);
   border-bottom: 1px solid var(--color-border);
+  overflow: hidden; /* Prevent children from overflowing */
+  min-width: 0; /* Allow flex container to shrink */
 }
 
-/* Tab groups for session vs global tabs */
+/* Outer tabs: Session | Global - inline with subtabs */
+.outer-tabs {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0; /* Don't shrink outer tabs */
+}
+
+.outer-tab-btn {
+  padding: 3px 8px;
+  font-size: 0.8em;
+  font-weight: 500;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  position: relative;
+}
+
+.outer-tab-btn:hover {
+  color: var(--color-text-secondary);
+  background: var(--color-bg-primary);
+}
+
+.outer-tab-btn.active {
+  background: var(--color-accent);
+  color: white;
+  border-color: var(--color-accent);
+}
+
+/* Subtabs wrapper with scroll arrows */
+.subtabs-wrapper {
+  display: flex;
+  align-items: center;
+  min-width: 0; /* Allow shrinking */
+  flex: 1;
+  position: relative;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+  padding: 2px;
+}
+
+/* Subtabs container - pannable/scrollable */
+.subtabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge */
+  min-width: 0; /* Allow shrinking */
+  padding: 2px 4px;
+}
+
+.subtabs::-webkit-scrollbar {
+  display: none; /* Chrome/Safari */
+}
+
+/* Scroll arrow buttons */
+.subtabs-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  border-radius: 4px;
+  color: var(--color-text-secondary);
+  font-size: 16px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.subtabs-arrow:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: var(--color-text-primary);
+}
+
+.subtabs-arrow-left {
+  margin-right: 2px;
+}
+
+.subtabs-arrow-right {
+  margin-left: 2px;
+}
+
+/* Tab groups for session vs global tabs (legacy, keep for compatibility) */
 .tab-group {
   display: flex;
   gap: 4px;
@@ -859,31 +1012,35 @@ body {
 /* Visual separator between tab groups */
 .tab-group-separator {
   width: 1px;
-  height: 20px;
+  height: 18px;
   background: var(--color-border);
-  margin: 0 8px;
+  margin: 0 4px;
   opacity: 0.5;
+  flex-shrink: 0; /* Don't shrink separator */
 }
 
 .conversation-view-toggle .view-toggle-btn {
-  padding: 4px 12px;
-  font-size: 0.85em;
-  border: 1px solid var(--color-border);
+  padding: 3px 10px;
+  font-size: 0.8em;
+  border: 1px solid transparent;
   border-radius: 4px;
-  background: var(--color-bg-primary);
-  color: var(--color-text-secondary);
+  background: transparent;
+  color: var(--color-text-muted);
   cursor: pointer;
   transition: all 0.15s ease;
+  white-space: nowrap; /* Prevent wrapping for panning */
+  flex-shrink: 0; /* Don't shrink subtabs */
 }
 
 .conversation-view-toggle .view-toggle-btn:hover {
-  background: var(--color-bg-secondary);
+  background: rgba(255, 255, 255, 0.08);
   color: var(--color-text-primary);
 }
 
 .conversation-view-toggle .view-toggle-btn.active {
-  background: var(--color-accent);
-  color: white;
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--color-text-primary);
+  border-color: var(--color-border);
   border-color: var(--color-accent);
 }
 
@@ -920,6 +1077,11 @@ body {
 
 /* Hide the indicator when tab is active (user is already viewing it) */
 .conversation-view-toggle .view-toggle-btn.active .code-tab-changes-indicator {
+  display: none;
+}
+
+/* Also hide on outer tab when Global is active */
+.outer-tab-btn.active .code-tab-changes-indicator {
   display: none;
 }
 
@@ -1991,6 +2153,39 @@ body {
   border-bottom: none;
 }
 
+[data-theme="dark-flat"] .sidebar-view-tabs {
+  border-bottom: none;
+  background: transparent;
+}
+
+[data-theme="dark-flat"] .sidebar-view-tab {
+  background: transparent;
+  border-bottom-color: transparent;
+}
+
+[data-theme="dark-flat"] .sidebar-view-tab.active {
+  background: transparent;
+  border-bottom-color: var(--color-accent);
+}
+
+[data-theme="dark-flat"] .connection-status-btn {
+  background: transparent;
+  border-color: transparent;
+}
+
+[data-theme="dark-flat"] .connection-status-btn:hover {
+  background: var(--color-bg-tertiary);
+}
+
+[data-theme="dark-flat"] .signout-btn {
+  border-color: transparent;
+}
+
+[data-theme="dark-flat"] .signout-btn:hover {
+  background: var(--color-bg-tertiary);
+  border-color: transparent;
+}
+
 [data-theme="dark-flat"] .mobile-header {
   border-bottom: none;
 }
@@ -2083,13 +2278,40 @@ body {
   background: var(--color-border-secondary);
 }
 
+[data-theme="dark-flat"] .outer-tab-btn {
+  background: transparent;
+  border-color: transparent;
+}
+
+[data-theme="dark-flat"] .outer-tab-btn:hover {
+  background: var(--color-bg-tertiary);
+  border-color: var(--color-border-secondary);
+}
+
+[data-theme="dark-flat"] .outer-tab-btn.active {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+[data-theme="dark-flat"] .subtabs-wrapper {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+[data-theme="dark-flat"] .subtabs-arrow {
+  background: transparent;
+}
+
+[data-theme="dark-flat"] .subtabs-arrow:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
 [data-theme="dark-flat"] .conversation-view-toggle .view-toggle-btn {
   border-color: transparent;
 }
 
 [data-theme="dark-flat"] .conversation-view-toggle .view-toggle-btn.active {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--color-border-secondary);
 }
 
 /* Tool use visualization - flat */

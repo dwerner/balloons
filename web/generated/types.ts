@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-03-01T16:34:30.426915
+// Generated: 2026-03-01T20:08:44.746036
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -1078,6 +1078,18 @@ export interface GitDiffResult {
   files: DiffFile[];
   hasUnstaged: boolean;
   hasStaged: boolean;
+}
+
+export interface UntrackedFile {
+  path: string;
+  absolutePath: string;
+}
+
+export interface WorkingTreeStatus {
+  gitRoot: string;
+  stagedFiles: DiffFile[];
+  unstagedFiles: DiffFile[];
+  untrackedFiles: UntrackedFile[];
 }
 
 export interface HostInfo {

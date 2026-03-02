@@ -2,12 +2,15 @@
  * SettingsTab - Application settings panel
  *
  * Contains cards for:
+ * - Appearance Settings: Theme, wake lock
  * - Sound Settings: Enable/disable sounds, select sound files for events, volume control
  */
 
 import React, { memo, useCallback } from 'react';
 import type { SoundInfo } from '../../../../generated/types';
 import type { SoundConfig } from '../../hooks/useSoundNotifications';
+import { useTheme } from '../layout/ThemeContext';
+import { useWakeLock } from '../../hooks/useWakeLock';
 import './SettingsTab.css';
 
 interface SettingsTabProps {
@@ -48,6 +51,10 @@ export const SettingsTab = memo(function SettingsTab({
   isLoading,
   error,
 }: SettingsTabProps) {
+  // Theme and wake lock hooks
+  const { resolvedTheme, setTheme } = useTheme();
+  const { isActive: wakeLockActive, isSupported: wakeLockSupported, toggle: toggleWakeLock } = useWakeLock();
+
   // Handle volume change
   const handleVolumeChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     onSetVolume(parseFloat(e.target.value));
@@ -83,6 +90,60 @@ export const SettingsTab = memo(function SettingsTab({
 
   return (
     <div className="settings-tab">
+      {/* Appearance Settings Card */}
+      <div className="settings-card">
+        <div className="settings-card__header">
+          <h3 className="settings-card__title">Appearance</h3>
+        </div>
+
+        <div className="settings-card__content">
+          <div className="appearance-settings">
+            {/* Theme selector */}
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Theme</span>
+                <span className="appearance-settings__label-description">
+                  Choose your preferred color scheme
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <select
+                  className="appearance-settings__select"
+                  value={resolvedTheme}
+                  onChange={(e) => setTheme(e.target.value as 'dark' | 'dark-flat' | 'light')}
+                >
+                  <option value="dark">Dark</option>
+                  <option value="dark-flat">Dark Flat</option>
+                  <option value="light">Light</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Wake lock toggle */}
+            {wakeLockSupported && (
+              <div className="appearance-settings__row">
+                <div className="appearance-settings__label">
+                  <span className="appearance-settings__label-text">Keep Screen Awake</span>
+                  <span className="appearance-settings__label-description">
+                    Prevent screen from sleeping while app is open
+                  </span>
+                </div>
+                <div className="appearance-settings__control">
+                  <label className="appearance-settings__toggle">
+                    <input
+                      type="checkbox"
+                      checked={wakeLockActive}
+                      onChange={toggleWakeLock}
+                    />
+                    <span className="appearance-settings__toggle-slider" />
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* Sound Settings Card */}
       <div className="settings-card">
         <div className="settings-card__header">

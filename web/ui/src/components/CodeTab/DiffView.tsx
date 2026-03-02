@@ -256,10 +256,45 @@ export const DiffView = memo(function DiffView({
     const startLine = hasRange ? Math.min(start.lineNumber, end.lineNumber) : start.lineNumber;
     const endLine = hasRange ? Math.max(start.lineNumber, end.lineNumber) : undefined;
 
+    // Collect all line contents in the range by querying the DOM
+    const contentLines: string[] = [];
+    if (hasRange && diffContainerRef.current) {
+      const gutterCells = diffContainerRef.current.querySelectorAll('td[class*="gutter"]');
+      const lineContentMap = new Map<number, string>();
+
+      gutterCells.forEach(cell => {
+        const text = cell.textContent?.trim();
+        if (text && /^\d+$/.test(text)) {
+          const lineNum = parseInt(text, 10);
+          if (lineNum >= startLine && lineNum <= (endLine || startLine)) {
+            const row = cell.closest('tr');
+            const codeCell = row?.querySelector('td[class*="content"]');
+            if (codeCell) {
+              lineContentMap.set(lineNum, codeCell.textContent || '');
+            }
+          }
+        }
+      });
+
+      // Sort by line number and collect content
+      const sortedLines = Array.from(lineContentMap.entries()).sort((a, b) => a[0] - b[0]);
+      for (const [, content] of sortedLines) {
+        contentLines.push(content);
+      }
+    }
+
+    // Fall back to single line content if no range or DOM query failed
+    if (contentLines.length === 0) {
+      contentLines.push(start.content);
+      if (hasRange && end) {
+        contentLines.push(end.content);
+      }
+    }
+
     setCommentForm({
       lineStart: startLine,
       lineEnd: endLine,
-      content: hasRange ? [start.content, end.content] : [start.content],
+      content: contentLines,
     });
 
     // Clear selection state

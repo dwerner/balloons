@@ -978,7 +978,7 @@ class SessionManagerService:
         asyncio.create_task(self._notify_observers("on_helper_started", started_event))
         # Also emit to WebSocket clients
         for handler in self._event_handlers:
-            handler("onHelperStarted", {
+            handler("helperStarted", {
                 "helperId": helper_id,
                 "helperType": helper_type,
                 "sessionId": session_id,
@@ -1374,7 +1374,7 @@ class SessionManagerService:
             await self._notify_observers("on_helper_delta", delta_event)
             # Also emit to WebSocket clients
             for handler in self._event_handlers:
-                handler("onHelperDelta", {
+                handler("helperDelta", {
                     "helperId": helper_id,
                     "helperType": ctx.helper_type,
                     "delta": text,
@@ -1404,7 +1404,7 @@ class SessionManagerService:
             await self._notify_observers("on_helper_done", done_event)
             # Also emit to WebSocket clients
             for handler in self._event_handlers:
-                handler("onHelperDone", {
+                handler("helperDone", {
                     "helperId": helper_id,
                     "helperType": ctx.helper_type,
                     "result": ctx.content,
@@ -1565,7 +1565,7 @@ class SessionManagerService:
             await self._notify_observers("on_helper_error", error_event)
             # Also emit to WebSocket clients
             for handler in self._event_handlers:
-                handler("onHelperError", {
+                handler("helperError", {
                     "helperId": helper_id,
                     "helperType": ctx.helper_type,
                     "sessionId": ctx.session_id,
@@ -1588,7 +1588,7 @@ class SessionManagerService:
             await self._notify_observers("on_helper_error", error_event)
             # Also emit to WebSocket clients
             for handler in self._event_handlers:
-                handler("onHelperError", {
+                handler("helperError", {
                     "helperId": helper_id,
                     "helperType": ctx.helper_type,
                     "sessionId": ctx.session_id,

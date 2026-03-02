@@ -10,7 +10,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo, memo, useImperativeHandle, forwardRef } from 'react';
-import type { GitDiffResult, FileStateServiceClient } from '../../../../generated/balloons-client';
+import type { WorkingTreeStatus, DiffFile, UntrackedFile, FileStateServiceClient } from '../../../../generated/balloons-client';
 import type { CodeReview, CodeReviewComment } from './types';
 import { FileList } from './FileList';
 import { DiffView } from './DiffView';
@@ -45,8 +45,16 @@ export interface CodeTabProps {
   client?: FileStateServiceClient;
   /** Callback when a review is submitted */
   onSubmitReview?: (review: CodeReview) => void;
-  /** Callback to generate AI commit message - receives staged files and returns message */
-  onRequestAICommitMessage?: (gitRoot: string, stagedDiff: string) => Promise<string>;
+  /** Callback to start AI commit message generation with streaming */
+  onStartAICommitMessage?: (
+    gitRoot: string,
+    stagedDiff: string,
+    callbacks: {
+      onDelta: (delta: string) => void;
+      onDone: (result: string) => void;
+      onError: (error: string) => void;
+    }
+  ) => (() => void);
   /** Callback when git status changes (for showing badge on Code tab) */
   onGitStatusChange?: (status: GitStatusInfo | null) => void;
 }
@@ -155,7 +163,7 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
   cwd,
   client,
   onSubmitReview,
-  onRequestAICommitMessage,
+  onStartAICommitMessage,
   onGitStatusChange,
 }, ref) {
   // Dialog hook for confirm/alert dialogs
@@ -164,13 +172,14 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
   // Sub-tab state
   const [activeSubTab, setActiveSubTab] = useState<CodeSubTab>('changes');
 
-  // Diff state (for Changes tab)
-  const [diffResult, setDiffResult] = useState<GitDiffResult | null>(null);
+  // Working tree status (for Changes tab) - now includes staged, unstaged, and untracked
+  const [workingTreeStatus, setWorkingTreeStatus] = useState<WorkingTreeStatus | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Selected file in Changes tab
+  // Selected file in Changes tab - now tracks which section too
   const [selectedDiffPath, setSelectedDiffPath] = useState<string | null>(null);
+  const [selectedSection, setSelectedSection] = useState<'staged' | 'unstaged' | 'untracked'>('unstaged');
 
   // Open files state (for Files tab)
   const [openFiles, setOpenFiles] = useState<OpenFile[]>(loadOpenFiles);
@@ -195,10 +204,10 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
     saveOpenFiles(openFiles);
   }, [openFiles]);
 
-  // Load diff when cwd changes or refresh is triggered
-  const loadDiff = useCallback(async () => {
+  // Load working tree status when cwd changes or refresh is triggered
+  const loadWorkingTreeStatus = useCallback(async () => {
     if (!cwd || !client) {
-      setDiffResult(null);
+      setWorkingTreeStatus(null);
       return;
     }
 
@@ -206,42 +215,54 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
     setError(null);
 
     try {
-      // Always load unstaged changes
-      const result = await client.getGitDiff(cwd, false);
-      setDiffResult(result);
+      const result = await client.getWorkingTreeStatus(cwd);
+      setWorkingTreeStatus(result);
 
       // Auto-select first file if none selected
-      if (result.files.length > 0 && !selectedDiffPath && result.files[0]) {
-        setSelectedDiffPath(result.files[0].path);
+      // Prioritize: staged first, then unstaged, then untracked
+      if (!selectedDiffPath) {
+        if (result.stagedFiles.length > 0 && result.stagedFiles[0]) {
+          setSelectedDiffPath(result.stagedFiles[0].path);
+          setSelectedSection('staged');
+        } else if (result.unstagedFiles.length > 0 && result.unstagedFiles[0]) {
+          setSelectedDiffPath(result.unstagedFiles[0].path);
+          setSelectedSection('unstaged');
+        } else if (result.untrackedFiles.length > 0 && result.untrackedFiles[0]) {
+          setSelectedDiffPath(result.untrackedFiles[0].path);
+          setSelectedSection('untracked');
+        }
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setError(message);
-      setDiffResult(null);
+      setWorkingTreeStatus(null);
     } finally {
       setIsLoading(false);
     }
   }, [cwd, client, selectedDiffPath]);
 
-  // Load diff on mount and when dependencies change
+  // Load working tree status on mount and when dependencies change
   useEffect(() => {
-    loadDiff();
-  }, [loadDiff]);
+    loadWorkingTreeStatus();
+  }, [loadWorkingTreeStatus]);
 
   // Report git status changes to parent
   useEffect(() => {
     if (onGitStatusChange) {
-      if (diffResult) {
+      if (workingTreeStatus) {
+        const totalFiles = workingTreeStatus.stagedFiles.length +
+          workingTreeStatus.unstagedFiles.length +
+          workingTreeStatus.untrackedFiles.length;
         onGitStatusChange({
-          hasUnstaged: diffResult.hasUnstaged,
-          hasStaged: diffResult.hasStaged,
-          fileCount: diffResult.files.length,
+          hasUnstaged: workingTreeStatus.unstagedFiles.length > 0 || workingTreeStatus.untrackedFiles.length > 0,
+          hasStaged: workingTreeStatus.stagedFiles.length > 0,
+          fileCount: totalFiles,
         });
       } else {
         onGitStatusChange(null);
       }
     }
-  }, [diffResult, onGitStatusChange]);
+  }, [workingTreeStatus, onGitStatusChange]);
 
   // Open a file in the Files tab
   const openFile = useCallback(async (path: string) => {
@@ -361,14 +382,91 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
 
   // Get the selected diff file
   const selectedDiffFile = useMemo(() => {
-    if (!diffResult || !selectedDiffPath) return null;
-    return diffResult.files.find((f) => f.path === selectedDiffPath) || null;
-  }, [diffResult, selectedDiffPath]);
+    if (!workingTreeStatus || !selectedDiffPath) return null;
+
+    // Search in the appropriate section based on selectedSection
+    if (selectedSection === 'staged') {
+      return workingTreeStatus.stagedFiles.find((f) => f.path === selectedDiffPath) || null;
+    } else if (selectedSection === 'unstaged') {
+      return workingTreeStatus.unstagedFiles.find((f) => f.path === selectedDiffPath) || null;
+    }
+    // For untracked files, we don't have diff data
+    return null;
+  }, [workingTreeStatus, selectedDiffPath, selectedSection]);
+
+  // Get the selected untracked file (for displaying new file content)
+  const selectedUntrackedFile = useMemo(() => {
+    if (!workingTreeStatus || !selectedDiffPath || selectedSection !== 'untracked') return null;
+    return workingTreeStatus.untrackedFiles.find((f) => f.path === selectedDiffPath) || null;
+  }, [workingTreeStatus, selectedDiffPath, selectedSection]);
 
   // Handle diff file selection
-  const handleSelectDiffFile = useCallback((path: string) => {
+  const handleSelectDiffFile = useCallback((path: string, section: 'staged' | 'unstaged' | 'untracked') => {
     setSelectedDiffPath(path);
+    setSelectedSection(section);
   }, []);
+
+  // Handle staging a file
+  const handleStageFile = useCallback(async (path: string) => {
+    if (!workingTreeStatus || !client) return;
+
+    try {
+      const result = await client.stageFiles(workingTreeStatus.gitRoot, [path]);
+      if (result.success) {
+        // If this was the selected file, update section to 'staged' since it moved there
+        if (selectedDiffPath === path) {
+          setSelectedSection('staged');
+        }
+        // Refresh to show updated status
+        loadWorkingTreeStatus();
+      } else {
+        await alert({
+          title: 'Failed to Stage',
+          message: result.message,
+        });
+      }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      await alert({
+        title: 'Error',
+        message: `Failed to stage file: ${message}`,
+      });
+    }
+  }, [workingTreeStatus, client, loadWorkingTreeStatus, alert, selectedDiffPath]);
+
+  // Handle unstaging a file
+  const handleUnstageFile = useCallback(async (path: string) => {
+    if (!workingTreeStatus || !client) return;
+
+    // Check if this is a newly added file (status 'added') - it will become untracked
+    // versus a modified file which will become unstaged
+    const stagedFile = workingTreeStatus.stagedFiles.find(f => f.path === path);
+    const willBecomeUntracked = stagedFile?.status === 'added';
+
+    try {
+      const result = await client.unstageFiles(workingTreeStatus.gitRoot, [path]);
+      if (result.success) {
+        // If this was the selected file, update section based on where it goes
+        if (selectedDiffPath === path) {
+          // Newly added files go back to untracked, modified files go to unstaged
+          setSelectedSection(willBecomeUntracked ? 'untracked' : 'unstaged');
+        }
+        // Refresh to show updated status
+        loadWorkingTreeStatus();
+      } else {
+        await alert({
+          title: 'Failed to Unstage',
+          message: result.message,
+        });
+      }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      await alert({
+        title: 'Error',
+        message: `Failed to unstage file: ${message}`,
+      });
+    }
+  }, [workingTreeStatus, client, loadWorkingTreeStatus, alert, selectedDiffPath]);
 
   // Handle open file selection - loads content if not cached
   const handleSelectOpenFile = useCallback(async (path: string) => {
@@ -478,24 +576,28 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
     setComments([]);
   }, [comments, onSubmitReview, alert]);
 
-  // Refresh diff
+  // Refresh working tree status
   const handleRefresh = useCallback(() => {
     // Clear selection if file no longer exists
-    if (selectedDiffPath && diffResult) {
-      const stillExists = diffResult.files.some((f) => f.path === selectedDiffPath);
-      if (!stillExists) {
+    if (selectedDiffPath && workingTreeStatus) {
+      const allPaths = [
+        ...workingTreeStatus.stagedFiles.map(f => f.path),
+        ...workingTreeStatus.unstagedFiles.map(f => f.path),
+        ...workingTreeStatus.untrackedFiles.map(f => f.path),
+      ];
+      if (!allPaths.includes(selectedDiffPath)) {
         setSelectedDiffPath(null);
       }
     }
-    loadDiff();
-  }, [loadDiff, selectedDiffPath, diffResult]);
+    loadWorkingTreeStatus();
+  }, [loadWorkingTreeStatus, selectedDiffPath, workingTreeStatus]);
 
-  // Handle commit success - refresh the diff
+  // Handle commit success - refresh the working tree status
   const handleCommitSuccess = useCallback((commitHash: string) => {
     log('Commit successful', { commitHash });
-    // Refresh the diff to show updated state
-    loadDiff();
-  }, [loadDiff]);
+    // Refresh to show updated state
+    loadWorkingTreeStatus();
+  }, [loadWorkingTreeStatus]);
 
   // Build a ReviewState for views
   const reviewState = useMemo(() => ({
@@ -510,8 +612,8 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
   // Get the content for selected open file
   const selectedFileContent = selectedFilePath ? fileContents.get(selectedFilePath) : undefined;
 
-  // Render loading state (only for initial diff load)
-  if (isLoading && !diffResult && activeSubTab === 'changes') {
+  // Render loading state (only for initial load)
+  if (isLoading && !workingTreeStatus && activeSubTab === 'changes') {
     return (
       <div className="code-tab code-tab--loading">
         <div className="code-tab__spinner" />
@@ -565,9 +667,9 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
             onClick={() => setActiveSubTab('changes')}
           >
             Changes
-            {diffResult && diffResult.files.length > 0 && (
+            {workingTreeStatus && (workingTreeStatus.stagedFiles.length + workingTreeStatus.unstagedFiles.length + workingTreeStatus.untrackedFiles.length) > 0 && (
               <span className="code-tab__subtab-badge">
-                {diffResult.files.length}
+                {workingTreeStatus.stagedFiles.length + workingTreeStatus.unstagedFiles.length + workingTreeStatus.untrackedFiles.length}
               </span>
             )}
           </button>
@@ -598,14 +700,14 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
             </button>
           )}
 
-          {/* Commit button (only for changes tab with files) */}
-          {activeSubTab === 'changes' && diffResult && diffResult.files.length > 0 && (
+          {/* Commit button (only for changes tab when there are staged files) */}
+          {activeSubTab === 'changes' && workingTreeStatus && workingTreeStatus.stagedFiles.length > 0 && (
             <button
               className="code-tab__commit"
               onClick={() => setIsCommitModalOpen(true)}
-              title="Commit changes"
+              title="Commit staged changes"
             >
-              Commit
+              Commit ({workingTreeStatus.stagedFiles.length})
             </button>
           )}
 
@@ -639,9 +741,14 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
             {/* File list sidebar */}
             <div className="code-tab__sidebar">
               <FileList
-                files={diffResult?.files || []}
+                stagedFiles={workingTreeStatus?.stagedFiles || []}
+                unstagedFiles={workingTreeStatus?.unstagedFiles || []}
+                untrackedFiles={workingTreeStatus?.untrackedFiles || []}
                 selectedPath={selectedDiffPath}
+                selectedSection={selectedSection}
                 onSelectFile={handleSelectDiffFile}
+                onStageFile={handleStageFile}
+                onUnstageFile={handleUnstageFile}
               />
             </div>
 
@@ -655,12 +762,28 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
                   onEditComment={handleEditComment}
                   onDeleteComment={handleDeleteComment}
                 />
+              ) : selectedUntrackedFile ? (
+                <div className="code-tab__untracked-preview">
+                  <div className="code-tab__untracked-header">
+                    <span className="code-tab__untracked-path">{selectedUntrackedFile.path}</span>
+                    <span className="code-tab__untracked-badge">New File</span>
+                  </div>
+                  <p className="code-tab__untracked-hint">
+                    This is a new untracked file. Stage it to see its contents in the diff.
+                  </p>
+                  <button
+                    className="code-tab__stage-btn"
+                    onClick={() => handleStageFile(selectedUntrackedFile.path)}
+                  >
+                    Stage File
+                  </button>
+                </div>
               ) : (
                 <div className="code-tab__no-selection">
-                  {diffResult && diffResult.files.length > 0 ? (
+                  {workingTreeStatus && (workingTreeStatus.stagedFiles.length + workingTreeStatus.unstagedFiles.length + workingTreeStatus.untrackedFiles.length) > 0 ? (
                     <p>Select a file to view changes</p>
                   ) : (
-                    <p>No unstaged changes</p>
+                    <p>No changes detected</p>
                   )}
                 </div>
               )}
@@ -708,15 +831,15 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
       </div>
 
       {/* Commit Modal */}
-      {diffResult && (
+      {workingTreeStatus && (
         <CommitModal
           isOpen={isCommitModalOpen}
           onClose={() => setIsCommitModalOpen(false)}
-          gitRoot={diffResult.gitRoot}
-          changedFiles={diffResult.files}
+          gitRoot={workingTreeStatus.gitRoot}
+          stagedFiles={workingTreeStatus.stagedFiles}
           client={client}
           onCommitSuccess={handleCommitSuccess}
-          onRequestAIMessage={onRequestAICommitMessage}
+          onStartAIMessage={onStartAICommitMessage}
         />
       )}
     </div>

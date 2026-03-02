@@ -1,11 +1,15 @@
 /**
- * CommitModal - Modal for staging and committing git changes
+ * CommitModal - Modal for committing staged git changes
+ *
+ * This modal shows what's currently staged and allows creating a commit.
+ * Files should be staged BEFORE opening this modal using the stage/unstage
+ * controls in the FileList. This modal does NOT modify staging.
  *
  * Features:
- * - Shows list of changed files with checkboxes for staging
- * - Auto-generate commit message option (simple or AI-powered)
+ * - Shows list of staged files (read-only display)
+ * - Auto-generate commit message option (AI-powered)
  * - Editable commit message textarea
- * - Stage selected files and commit in one action
+ * - Commit the staged changes
  */
 
 import React, { useState, useCallback, useRef, useEffect, memo } from 'react';
@@ -15,6 +19,13 @@ import { createLogger } from '../../utils/debugLog';
 import './CommitModal.css';
 
 const log = createLogger('CommitModal');
+
+/** Callback for streaming AI commit message generation */
+export interface StreamingMessageCallbacks {
+  onDelta: (delta: string) => void;
+  onDone: (result: string) => void;
+  onError: (error: string) => void;
+}
 
 export interface CommitModalProps {
   /** Whether the modal is open */
@@ -26,8 +37,8 @@ export interface CommitModalProps {
   /** Git root directory */
   gitRoot: string;
 
-  /** List of changed files from the diff */
-  changedFiles: DiffFile[];
+  /** List of files that are already staged */
+  stagedFiles: DiffFile[];
 
   /** FileStateService client for git operations */
   client: FileStateServiceClient;
@@ -35,8 +46,12 @@ export interface CommitModalProps {
   /** Callback when commit is successful */
   onCommitSuccess?: (commitHash: string) => void;
 
-  /** Optional: callback to generate AI commit message using the staged diff */
-  onRequestAIMessage?: (gitRoot: string, stagedDiff: string) => Promise<string>;
+  /** Optional: callback to start AI commit message generation with streaming */
+  onStartAIMessage?: (
+    gitRoot: string,
+    stagedDiff: string,
+    callbacks: StreamingMessageCallbacks
+  ) => (() => void); // Returns cleanup function
 }
 
 // Status icons and colors
@@ -49,20 +64,17 @@ const STATUS_CONFIG: Record<string, { icon: string; color: string; label: string
 };
 
 /**
- * Modal for staging files and creating commits.
+ * Modal for committing staged changes.
  */
 export const CommitModal = memo(function CommitModal({
   isOpen,
   onClose,
   gitRoot,
-  changedFiles,
+  stagedFiles,
   client,
   onCommitSuccess,
-  onRequestAIMessage,
+  onStartAIMessage,
 }: CommitModalProps) {
-  // Selected files for staging (by path)
-  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
-
   // Commit message
   const [message, setMessage] = useState('');
 
@@ -73,42 +85,135 @@ export const CommitModal = memo(function CommitModal({
   const [isGenerating, setIsGenerating] = useState(false);
   const [isCommitting, setIsCommitting] = useState(false);
 
+  // Timer for generation duration
+  const [generationTime, setGenerationTime] = useState(0);
+
   // Error state
   const [error, setError] = useState<string | null>(null);
 
   // Ref for message textarea
   const messageRef = useRef<HTMLTextAreaElement>(null);
 
-  // Track the last selection we generated for (to avoid re-generating)
-  const lastGeneratedSelectionRef = useRef<string>('');
-  // Track if generation is in progress (to avoid duplicate requests)
+  // Track if we've generated a message for these staged files
+  const lastGeneratedForRef = useRef<string>('');
+  // Track if generation is in progress
   const generationInProgressRef = useRef<boolean>(false);
+  // Cleanup function for current generation
+  const cleanupRef = useRef<(() => void) | null>(null);
+  // Timer interval ref
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Create a stable key for the staged files
+  const stagedFilesKey = stagedFiles.map(f => f.path).sort().join('\n');
+
+  // Helper to stop timer
+  const stopTimer = useCallback(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  // Helper to start timer
+  const startTimer = useCallback(() => {
+    stopTimer();
+    setGenerationTime(0);
+    timerRef.current = setInterval(() => {
+      setGenerationTime(t => t + 0.1);
+    }, 100);
+  }, [stopTimer]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      stopTimer();
+      if (cleanupRef.current) {
+        cleanupRef.current();
+        cleanupRef.current = null;
+      }
+    };
+  }, [stopTimer]);
 
   // Reset state when modal opens
   useEffect(() => {
     if (isOpen) {
-      // Select all files by default
-      setSelectedFiles(new Set(changedFiles.map(f => f.path)));
       setMessage('');
       setError(null);
       setIsGenerating(false);
       setIsCommitting(false);
-      // Reset generation tracking
-      lastGeneratedSelectionRef.current = '';
+      setGenerationTime(0);
+      lastGeneratedForRef.current = '';
       generationInProgressRef.current = false;
+      stopTimer();
+      if (cleanupRef.current) {
+        cleanupRef.current();
+        cleanupRef.current = null;
+      }
     }
-  }, [isOpen, changedFiles]);
+  }, [isOpen, stopTimer]);
 
-  // Generate commit message when selection changes (if auto-generate is on)
-  // Convert selectedFiles to a stable string key for comparison
-  const selectedFilesKey = Array.from(selectedFiles).sort().join('\n');
+  // Start generation - used by effect and manual button
+  const startGeneration = useCallback(() => {
+    if (generationInProgressRef.current || !onStartAIMessage || stagedFiles.length === 0) return;
 
+    // Build a diff string from the staged files
+    let diffText = '';
+    for (const file of stagedFiles) {
+      diffText += `\n--- a/${file.path}\n+++ b/${file.path}\n`;
+      for (const hunk of file.hunks) {
+        diffText += hunk.header + '\n';
+        for (const change of hunk.changes) {
+          const prefix = change.type === 'insert' ? '+' : change.type === 'delete' ? '-' : ' ';
+          diffText += prefix + change.content + '\n';
+        }
+      }
+    }
+
+    if (!diffText) return;
+
+    generationInProgressRef.current = true;
+    setIsGenerating(true);
+    setError(null);
+    setMessage(''); // Clear to show streaming
+    startTimer();
+
+    log('startGeneration', { diffTextLength: diffText.length });
+
+    // Start streaming with callbacks
+    const cleanup = onStartAIMessage(gitRoot, diffText, {
+      onDelta: (delta) => {
+        setMessage(prev => prev + delta);
+      },
+      onDone: (result) => {
+        log('Generation done', { resultLength: result.length });
+        setMessage(result);
+        setIsGenerating(false);
+        generationInProgressRef.current = false;
+        lastGeneratedForRef.current = stagedFilesKey;
+        stopTimer();
+        cleanupRef.current = null;
+      },
+      onError: (error) => {
+        log('Generation error', { error });
+        console.error('Commit message generation error:', error);
+        setIsGenerating(false);
+        generationInProgressRef.current = false;
+        stopTimer();
+        cleanupRef.current = null;
+        // Don't show error - just leave message empty or with partial content
+      },
+    });
+
+    cleanupRef.current = cleanup;
+  }, [onStartAIMessage, stagedFiles, gitRoot, stagedFilesKey, startTimer, stopTimer]);
+
+  // Generate commit message when modal opens with staged files (if auto-generate is on)
   useEffect(() => {
-    if (!isOpen || !autoGenerate || selectedFiles.size === 0) return;
+    if (!isOpen || !autoGenerate || stagedFiles.length === 0) return;
 
-    // Skip if we already generated for this exact selection
-    if (lastGeneratedSelectionRef.current === selectedFilesKey) {
-      log('Skipping generation - already generated for this selection');
+    // Skip if we already generated for these staged files
+    if (lastGeneratedForRef.current === stagedFilesKey) {
+      log('Skipping generation - already generated for these files');
       return;
     }
 
@@ -118,108 +223,15 @@ export const CommitModal = memo(function CommitModal({
       return;
     }
 
-    const generateMessage = async () => {
-      // Double-check we're not already generating
-      if (generationInProgressRef.current) return;
-      generationInProgressRef.current = true;
-
-      setIsGenerating(true);
-      setError(null);
-
-      log('generateMessage starting', {
-        hasOnRequestAIMessage: !!onRequestAIMessage,
-        selectedFilesCount: selectedFiles.size,
-        gitRoot,
-      });
-
-      try {
-        // Try AI message first if available
-        if (onRequestAIMessage) {
-          // Get the staged diff for the selected files
-          // First, stage the selected files
-          const selectedPaths = Array.from(selectedFiles);
-          log('Calling client.stageFiles', { gitRoot, pathCount: selectedPaths.length });
-          await client.stageFiles(gitRoot, selectedPaths);
-
-          // Get the staged diff
-          const stagedDiffResult = await client.getStagedDiff(gitRoot);
-          log('Got staged diff result', {
-            fileCount: stagedDiffResult.files.length,
-          });
-
-          // Build a simple diff string from the staged files
-          let diffText = '';
-          for (const file of stagedDiffResult.files) {
-            diffText += `\n--- a/${file.path}\n+++ b/${file.path}\n`;
-            for (const hunk of file.hunks) {
-              diffText += hunk.header + '\n';
-              for (const change of hunk.changes) {
-                const prefix = change.type === 'insert' ? '+' : change.type === 'delete' ? '-' : ' ';
-                diffText += prefix + change.content + '\n';
-              }
-            }
-          }
-
-          log('Built diff text', { diffTextLength: diffText.length });
-
-          if (diffText) {
-            log('Calling onRequestAIMessage');
-            const aiMessage = await onRequestAIMessage(gitRoot, diffText);
-            log('Got AI message', { aiMessageLength: aiMessage?.length });
-            if (aiMessage) {
-              setMessage(aiMessage);
-              lastGeneratedSelectionRef.current = selectedFilesKey;
-              setIsGenerating(false);
-              generationInProgressRef.current = false;
-              return;
-            }
-          }
-        }
-
-        // No fallback - if AI generation fails or is unavailable, leave message empty
-        lastGeneratedSelectionRef.current = selectedFilesKey;
-      } catch (e) {
-        log('Failed to generate commit message', { error: String(e) });
-        console.error('Failed to generate commit message:', e);
-        // Don't show error for message generation - just leave empty
-      } finally {
-        setIsGenerating(false);
-        generationInProgressRef.current = false;
-      }
-    };
-
-    // Debounce the generation
-    const timer = setTimeout(generateMessage, 300);
+    // Small delay to avoid generating while modal is still animating
+    const timer = setTimeout(startGeneration, 200);
     return () => clearTimeout(timer);
-  }, [isOpen, autoGenerate, selectedFilesKey, gitRoot, client, onRequestAIMessage]);
-
-  // Toggle file selection
-  const toggleFile = useCallback((path: string) => {
-    setSelectedFiles(prev => {
-      const next = new Set(prev);
-      if (next.has(path)) {
-        next.delete(path);
-      } else {
-        next.add(path);
-      }
-      return next;
-    });
-  }, []);
-
-  // Select all files
-  const selectAll = useCallback(() => {
-    setSelectedFiles(new Set(changedFiles.map(f => f.path)));
-  }, [changedFiles]);
-
-  // Deselect all files
-  const deselectAll = useCallback(() => {
-    setSelectedFiles(new Set());
-  }, []);
+  }, [isOpen, autoGenerate, stagedFilesKey, stagedFiles, startGeneration]);
 
   // Handle commit
   const handleCommit = useCallback(async () => {
-    if (selectedFiles.size === 0) {
-      setError('No files selected to commit');
+    if (stagedFiles.length === 0) {
+      setError('No staged files to commit');
       return;
     }
 
@@ -233,17 +245,7 @@ export const CommitModal = memo(function CommitModal({
     setError(null);
 
     try {
-      // Stage selected files
-      const selectedPaths = Array.from(selectedFiles);
-      const stageResult = await client.stageFiles(gitRoot, selectedPaths);
-
-      if (!stageResult.success) {
-        setError(stageResult.message);
-        setIsCommitting(false);
-        return;
-      }
-
-      // Create commit
+      // Create commit (files are already staged)
       const commitResult = await client.gitCommit(gitRoot, message.trim());
 
       if (!commitResult.success) {
@@ -264,7 +266,7 @@ export const CommitModal = memo(function CommitModal({
     } finally {
       setIsCommitting(false);
     }
-  }, [selectedFiles, message, gitRoot, client, onCommitSuccess, onClose]);
+  }, [stagedFiles.length, message, gitRoot, client, onCommitSuccess, onClose]);
 
   // Handle Enter key in message (Cmd/Ctrl+Enter to commit)
   const handleKeyDown = useCallback(
@@ -277,14 +279,20 @@ export const CommitModal = memo(function CommitModal({
     [handleCommit]
   );
 
-  const allSelected = selectedFiles.size === changedFiles.length;
-  const noneSelected = selectedFiles.size === 0;
+  // Manually trigger AI generation - just calls startGeneration
+  const handleGenerateMessage = useCallback(() => {
+    // Clear last generated so we regenerate
+    lastGeneratedForRef.current = '';
+    startGeneration();
+  }, [startGeneration]);
+
+  const noStagedFiles = stagedFiles.length === 0;
 
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Commit Changes"
+      title="Commit Staged Changes"
       size="medium"
       className="commit-modal"
       ariaDescribedBy="commit-modal-description"
@@ -297,70 +305,54 @@ export const CommitModal = memo(function CommitModal({
           </div>
         )}
 
-        {/* File selection */}
+        {/* Staged files display (read-only) */}
         <div className="commit-modal__section">
           <div className="commit-modal__section-header">
             <span className="commit-modal__section-title">
-              Files to commit ({selectedFiles.size}/{changedFiles.length})
+              Staged files ({stagedFiles.length})
             </span>
-            <div className="commit-modal__select-actions">
-              <button
-                type="button"
-                className="commit-modal__select-btn"
-                onClick={selectAll}
-                disabled={allSelected}
-              >
-                All
-              </button>
-              <button
-                type="button"
-                className="commit-modal__select-btn"
-                onClick={deselectAll}
-                disabled={noneSelected}
-              >
-                None
-              </button>
+          </div>
+
+          {noStagedFiles ? (
+            <div className="commit-modal__empty">
+              <p>No files staged for commit.</p>
+              <p className="commit-modal__empty-hint">
+                Use the + button next to files in the Changes view to stage them.
+              </p>
             </div>
-          </div>
+          ) : (
+            <div className="commit-modal__file-list">
+              {stagedFiles.map((file) => {
+                const config = STATUS_CONFIG[file.status] || { icon: '?', color: '#888', label: file.status };
 
-          <div className="commit-modal__file-list">
-            {changedFiles.map((file) => {
-              const config = STATUS_CONFIG[file.status] || { icon: '?', color: '#888', label: file.status };
-              const isSelected = selectedFiles.has(file.path);
-
-              return (
-                <label
-                  key={file.path}
-                  className={`commit-modal__file ${isSelected ? 'commit-modal__file--selected' : ''}`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={isSelected}
-                    onChange={() => toggleFile(file.path)}
-                    className="commit-modal__checkbox"
-                  />
-                  <span
-                    className="commit-modal__file-status"
-                    style={{ color: config.color }}
-                    title={config.label}
+                return (
+                  <div
+                    key={file.path}
+                    className="commit-modal__file commit-modal__file--staged"
                   >
-                    {config.icon}
-                  </span>
-                  <span className="commit-modal__file-path" title={file.path}>
-                    {file.path}
-                  </span>
-                  <span className="commit-modal__file-stats">
-                    {file.additions > 0 && (
-                      <span className="commit-modal__additions">+{file.additions}</span>
-                    )}
-                    {file.deletions > 0 && (
-                      <span className="commit-modal__deletions">-{file.deletions}</span>
-                    )}
-                  </span>
-                </label>
-              );
-            })}
-          </div>
+                    <span
+                      className="commit-modal__file-status"
+                      style={{ color: config.color }}
+                      title={config.label}
+                    >
+                      {config.icon}
+                    </span>
+                    <span className="commit-modal__file-path" title={file.path}>
+                      {file.path}
+                    </span>
+                    <span className="commit-modal__file-stats">
+                      {file.additions > 0 && (
+                        <span className="commit-modal__additions">+{file.additions}</span>
+                      )}
+                      {file.deletions > 0 && (
+                        <span className="commit-modal__deletions">-{file.deletions}</span>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Commit message */}
@@ -370,32 +362,48 @@ export const CommitModal = memo(function CommitModal({
             {isGenerating ? (
               <div className="commit-modal__generating">
                 <div className="commit-modal__spinner" />
-                <span>Generating with AI...</span>
+                <span>Generating... {generationTime.toFixed(1)}s</span>
               </div>
             ) : (
-              <label className="commit-modal__auto-generate">
-                <input
-                  type="checkbox"
-                  checked={autoGenerate}
-                  onChange={(e) => setAutoGenerate(e.target.checked)}
-                />
-                <span>Auto-generate</span>
-              </label>
+              <div className="commit-modal__message-actions">
+                {onStartAIMessage && (
+                  <button
+                    type="button"
+                    className="commit-modal__generate-btn"
+                    onClick={handleGenerateMessage}
+                    disabled={noStagedFiles || isCommitting}
+                  >
+                    Generate
+                  </button>
+                )}
+                <label className="commit-modal__auto-generate">
+                  <input
+                    type="checkbox"
+                    checked={autoGenerate}
+                    onChange={(e) => setAutoGenerate(e.target.checked)}
+                  />
+                  <span>Auto</span>
+                </label>
+              </div>
             )}
           </div>
 
           <textarea
             ref={messageRef}
-            className="commit-modal__message"
-            placeholder={isGenerating ? 'Generating message...' : 'Enter commit message...'}
+            className={`commit-modal__message ${isGenerating ? 'commit-modal__message--streaming' : ''}`}
+            placeholder={isGenerating ? '' : 'Enter commit message...'}
             value={message}
             onChange={(e) => setMessage(e.target.value)}
             onKeyDown={handleKeyDown}
-            disabled={isCommitting || isGenerating}
+            disabled={isCommitting || noStagedFiles}
+            readOnly={isGenerating}
             rows={4}
           />
           <div className="commit-modal__hint">
-            Press {navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+Enter to commit
+            {isGenerating
+              ? 'Streaming commit message from AI...'
+              : `Press ${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+Enter to commit`
+            }
           </div>
         </div>
       </div>
@@ -413,9 +421,9 @@ export const CommitModal = memo(function CommitModal({
           type="button"
           className="btn btn-success"
           onClick={handleCommit}
-          disabled={isCommitting || noneSelected || !message.trim()}
+          disabled={isCommitting || noStagedFiles || !message.trim()}
         >
-          {isCommitting ? 'Committing...' : `Commit ${selectedFiles.size} file${selectedFiles.size !== 1 ? 's' : ''}`}
+          {isCommitting ? 'Committing...' : `Commit ${stagedFiles.length} file${stagedFiles.length !== 1 ? 's' : ''}`}
         </button>
       </ModalFooter>
     </Modal>

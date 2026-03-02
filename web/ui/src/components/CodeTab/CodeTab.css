@@ -428,6 +428,135 @@
   gap: 4px;
 }
 
+/* Section headers for staged/unstaged/untracked */
+.code-file-list__section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  font-size: 0.75em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: var(--color-bg-secondary);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.code-file-list__section-header--staged {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.1);
+}
+
+.code-file-list__section-header--unstaged {
+  color: #facc15;
+  background: rgba(250, 204, 21, 0.1);
+}
+
+.code-file-list__section-header--untracked {
+  color: #60a5fa;
+  background: rgba(96, 165, 250, 0.1);
+}
+
+.code-file-list__section-title {
+  flex: 1;
+}
+
+.code-file-list__section-count {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 0.9em;
+}
+
+/* Stage/unstage action buttons */
+.code-file-list__action {
+  padding: 2px 8px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 1em;
+  font-weight: bold;
+  line-height: 1;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+
+.code-file-list__item:hover .code-file-list__action {
+  opacity: 1;
+}
+
+.code-file-list__action--stage {
+  color: #4ade80;
+}
+
+.code-file-list__action--stage:hover {
+  background: rgba(74, 222, 128, 0.2);
+}
+
+.code-file-list__action--unstage {
+  color: #f87171;
+}
+
+.code-file-list__action--unstage:hover {
+  background: rgba(248, 113, 113, 0.2);
+}
+
+/* Untracked file preview */
+.code-tab__untracked-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 24px;
+  text-align: center;
+  gap: 16px;
+}
+
+.code-tab__untracked-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.code-tab__untracked-path {
+  font-family: monospace;
+  font-size: 0.9em;
+}
+
+.code-tab__untracked-badge {
+  background: rgba(96, 165, 250, 0.2);
+  color: #60a5fa;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75em;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.code-tab__untracked-hint {
+  color: var(--color-text-secondary);
+  font-size: 0.9em;
+  max-width: 300px;
+}
+
+.code-tab__stage-btn {
+  padding: 10px 20px;
+  background: #4ade80;
+  color: #000;
+  border: none;
+  border-radius: 6px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.code-tab__stage-btn:hover {
+  opacity: 0.9;
+}
+
 /* ============================================================================
  * DiffView styles
  * ============================================================================ */
@@ -635,6 +764,33 @@
 /* Make the diff viewer fill the container */
 .code-diff-view > div:nth-child(2) {
   overflow: auto;
+}
+
+/* Highlight styles for diff lines with comments */
+.diff-line--commented {
+  background: rgba(59, 130, 246, 0.12) !important;
+}
+
+.diff-line--commented td {
+  background: rgba(59, 130, 246, 0.12) !important;
+}
+
+/* Highlight styles for active selection in diff */
+.diff-line--in-range {
+  background: rgba(234, 179, 8, 0.15) !important;
+}
+
+.diff-line--in-range td {
+  background: rgba(234, 179, 8, 0.15) !important;
+}
+
+/* Range start line gets stronger highlight */
+.diff-line--range-start {
+  background: rgba(234, 179, 8, 0.35) !important;
+}
+
+.diff-line--range-start td {
+  background: rgba(234, 179, 8, 0.35) !important;
 }
 
 /* Comment form overlay for diff view */
@@ -1008,19 +1164,44 @@
  * ============================================================================ */
 
 @media (max-width: 768px) {
-  /* Minimal header bar - 28px total height */
+  /* Taller header bar on mobile - 44px for better touch targets */
   .code-tab__header {
-    padding: 2px 6px;
-    gap: 6px;
+    padding: 4px 8px;
+    gap: 8px;
     flex-wrap: nowrap;
+    min-height: 44px;
+    max-height: 44px;
+  }
+
+  /* Make sub-tabs scrollable horizontally */
+  .code-tab__subtabs {
+    flex: 1;
+    min-width: 0;
     overflow-x: auto;
-    min-height: 28px;
-    max-height: 28px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    gap: 4px;
+  }
+
+  .code-tab__subtabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .code-tab__subtab {
+    padding: 8px 14px;
+    font-size: 0.85em;
+    flex-shrink: 0;
+    min-height: 36px;
+  }
+
+  .code-tab__subtab-badge {
+    font-size: 0.7em;
+    padding: 2px 6px;
   }
 
   /* Abbreviated title */
   .code-tab__title {
-    font-size: 0.7em;
+    font-size: 0.8em;
     white-space: nowrap;
     flex-shrink: 1;
     min-width: 0;
@@ -1029,30 +1210,39 @@
   }
 
   .code-tab__stats {
-    font-size: 0.65em;
+    font-size: 0.7em;
   }
 
   .code-tab__actions {
-    gap: 3px;
+    gap: 6px;
     flex-shrink: 0;
+  }
+
+  /* Larger action buttons on mobile */
+  .code-tab__refresh,
+  .code-tab__commit,
+  .code-tab__clear,
+  .code-tab__submit {
+    padding: 8px 12px;
+    font-size: 0.8em;
+    min-height: 36px;
   }
 
   /* Micro buttons */
   .code-tab__toggle,
-  .code-tab__refresh,
   .code-tab__start-review,
   .code-tab__cancel-review,
   .code-tab__submit-review {
-    padding: 1px 5px;
-    font-size: 0.6em;
-    border-radius: 2px;
+    padding: 6px 10px;
+    font-size: 0.75em;
+    border-radius: 4px;
     line-height: 1.4;
   }
 
   /* Review banner - minimal */
   .code-tab__review-banner {
-    padding: 2px 6px;
-    font-size: 0.65em;
+    padding: 4px 8px;
+    font-size: 0.75em;
   }
 
   /* Stack sidebar above diff view on mobile */
@@ -1060,22 +1250,22 @@
     flex-direction: column;
   }
 
-  /* Thin horizontal file strip - 32px */
+  /* Taller horizontal file strip on mobile - 48px for easier touch targets */
   .code-tab__sidebar {
     width: 100%;
     min-width: unset;
     max-width: unset;
     border-right: none;
     border-bottom: 1px solid var(--color-border);
-    height: 32px;
-    max-height: 32px;
+    height: 48px;
+    max-height: 48px;
     overflow-y: hidden;
     flex-shrink: 0;
   }
 
   .code-file-list {
-    height: 32px;
-    max-height: 32px;
+    height: 48px;
+    max-height: 48px;
   }
 
   /* Hide the "Files" header on mobile */
@@ -1090,7 +1280,7 @@
     overflow-x: auto;
     overflow-y: hidden;
     gap: 0;
-    height: 32px;
+    height: 48px;
     align-items: stretch;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
@@ -1100,18 +1290,18 @@
     display: none;
   }
 
-  /* Compact file chips */
+  /* Taller file chips for better touch targets */
   .code-file-list__item {
     flex-direction: row;
     align-items: center;
     min-width: auto;
     max-width: none;
-    padding: 0 8px;
+    padding: 0 12px;
     border-bottom: none;
     border-right: 1px solid var(--color-border-subtle, rgba(255,255,255,0.08));
-    gap: 4px;
+    gap: 6px;
     white-space: nowrap;
-    height: 32px;
+    height: 48px;
   }
 
   .code-file-list__item--selected {
@@ -1119,19 +1309,32 @@
   }
 
   .code-file-list__status {
-    font-size: 0.65em;
-    width: 10px;
+    font-size: 0.8em;
+    width: 12px;
   }
 
   .code-file-list__name {
-    font-size: 0.65em;
-    max-width: 70px;
+    font-size: 0.8em;
+    max-width: 80px;
   }
 
-  /* Hide directory and stats on mobile */
+  /* Hide directory, stats, and section headers on mobile */
   .code-file-list__dir,
-  .code-file-list__stats {
+  .code-file-list__stats,
+  .code-file-list__section-header {
     display: none;
+  }
+
+  /* Larger stage/unstage action on mobile - always visible, easier to tap */
+  .code-file-list__action {
+    opacity: 1;
+    padding: 8px 12px;
+    font-size: 1.2em;
+    min-width: 36px;
+    min-height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   /* Main diff takes all remaining space */
@@ -1225,48 +1428,70 @@
   }
 }
 
-/* Extra small screens - squeeze more */
+/* Extra small screens - still keep touch-friendly sizes */
 @media (max-width: 480px) {
   .code-tab__header {
-    padding: 2px 4px;
-    gap: 4px;
-    min-height: 24px;
-    max-height: 24px;
+    padding: 4px 6px;
+    gap: 6px;
+    min-height: 40px;
+    max-height: 40px;
+  }
+
+  .code-tab__subtab {
+    padding: 6px 10px;
+    font-size: 0.8em;
+    min-height: 32px;
   }
 
   .code-tab__title {
-    font-size: 0.65em;
+    font-size: 0.75em;
+  }
+
+  .code-tab__refresh,
+  .code-tab__commit,
+  .code-tab__clear,
+  .code-tab__submit {
+    padding: 6px 10px;
+    font-size: 0.75em;
+    min-height: 32px;
   }
 
   .code-tab__toggle,
-  .code-tab__refresh,
   .code-tab__start-review,
   .code-tab__cancel-review,
   .code-tab__submit-review {
-    padding: 1px 4px;
-    font-size: 0.55em;
+    padding: 4px 8px;
+    font-size: 0.7em;
   }
 
-  /* Thinner file strip */
+  /* Still keep file strip tall enough for touch */
   .code-tab__sidebar {
-    height: 28px;
-    max-height: 28px;
+    height: 44px;
+    max-height: 44px;
   }
 
   .code-file-list {
-    height: 28px;
-    max-height: 28px;
+    height: 44px;
+    max-height: 44px;
   }
 
   .code-file-list__item {
-    padding: 0 6px;
-    height: 28px;
-    gap: 3px;
+    padding: 0 10px;
+    height: 44px;
+    gap: 4px;
   }
 
   .code-file-list__name {
-    font-size: 0.6em;
-    max-width: 55px;
+    font-size: 0.75em;
+    max-width: 65px;
+  }
+
+  /* Keep action buttons large enough to tap */
+  .code-file-list__action {
+    padding: 6px 10px;
+    font-size: 1.1em;
+    min-width: 32px;
+    min-height: 32px;
   }
 
   .code-diff-view .diff-gutter-col {

@@ -20,7 +20,8 @@ import { SessionReviewModal, type SessionReview, type BackendInfo } from './comp
 import { PropertiesTab } from './components/PropertiesTab';
 import { StreamingTurnsView, type StreamingProgress } from './components/StreamingTurnsView';
 import { DialogProvider, useDialog } from './components/Dialog';
-import { useWakeLock, useSoundNotifications } from './hooks';
+import { useWakeLock, useSoundNotifications, useLongPress } from './hooks';
+import { RenameSessionModal } from './components/RenameSessionModal';
 import { setDebugClient, createLogger, isDebugEnabled, setDebugEnabled } from './utils/debugLog';
 import { logout, isAuthenticated, getToken } from './utils/auth';
 import { Login } from './components/Login';
@@ -2270,6 +2271,7 @@ function AppContent() {
         <SidebarContent
           connectionState={connectionState}
           sessions={sessions}
+          client={clientRef.current}
           selectedSessionId={selectedSessionId}
           selectedSession={selectedSession}
           turns={turns}
@@ -2436,8 +2438,6 @@ function AppContent() {
               console.error('Failed to create watcher session:', err);
             }
           }}
-          soundEnabled={soundNotifications.soundEnabled}
-          onToggleSound={() => soundNotifications.setSoundEnabled(!soundNotifications.soundEnabled)}
           serverSlot={serverSlot}
           onSlotChange={setServerSlot}
           onLogout={() => {
@@ -2874,27 +2874,74 @@ function AppContent() {
                       }
                       setMainContentTab('streaming');
                     }}
-                    onRequestAICommitMessage={async (gitRoot, stagedDiff) => {
+                    onStartAICommitMessage={(gitRoot, stagedDiff, callbacks) => {
                       const client = clientRef.current;
                       if (!client || connectionState !== 'connected') {
-                        return '';
+                        callbacks.onError('Not connected');
+                        return () => {};
                       }
 
-                      try {
-                        // Start the commit message generation
-                        const result = await client.sessions.generateCommitMessage(gitRoot, stagedDiff);
-                        if (!result.success || !result.helperId) {
-                          console.error('Failed to start commit message generation:', result.error);
-                          return '';
+                      let helperId: string | null = null;
+                      let unsubDelta: (() => void) | null = null;
+                      let unsubDone: (() => void) | null = null;
+                      let unsubError: (() => void) | null = null;
+                      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+                      // Cleanup function
+                      const cleanup = () => {
+                        if (timeoutId) clearTimeout(timeoutId);
+                        if (unsubDelta) unsubDelta();
+                        if (unsubDone) unsubDone();
+                        if (unsubError) unsubError();
+                      };
+
+                      // Start the generation
+                      (async () => {
+                        try {
+                          const result = await client.sessions.generateCommitMessage(gitRoot, stagedDiff);
+                          if (!result.success || !result.helperId) {
+                            console.error('Failed to start commit message generation:', result.error);
+                            callbacks.onError(result.error || 'Failed to start generation');
+                            return;
+                          }
+
+                          helperId = result.helperId;
+
+                          // Subscribe to delta events
+                          unsubDelta = client.sessions.onHelperDelta((data) => {
+                            if (data.helperId === helperId) {
+                              callbacks.onDelta(data.delta);
+                            }
+                          });
+
+                          // Subscribe to done event
+                          unsubDone = client.sessions.onHelperDone((data) => {
+                            if (data.helperId === helperId) {
+                              cleanup();
+                              callbacks.onDone(data.result || '');
+                            }
+                          });
+
+                          // Subscribe to error event
+                          unsubError = client.sessions.onHelperError((data) => {
+                            if (data.helperId === helperId) {
+                              cleanup();
+                              callbacks.onError(data.error || 'Generation failed');
+                            }
+                          });
+
+                          // Timeout after 60 seconds
+                          timeoutId = setTimeout(() => {
+                            cleanup();
+                            callbacks.onError('Generation timed out');
+                          }, 60000);
+                        } catch (err) {
+                          console.error('Failed to generate AI commit message:', err);
+                          callbacks.onError(err instanceof Error ? err.message : String(err));
                         }
+                      })();
 
-                        // Wait for the helper to complete and get the result
-                        const message = await client.sessions.awaitHelperResult(result.helperId, 30);
-                        return message;
-                      } catch (err) {
-                        console.error('Failed to generate AI commit message:', err);
-                        return '';
-                      }
+                      return cleanup;
                     }}
                     onGitStatusChange={setGitStatus}
                   />
@@ -3311,9 +3358,88 @@ function MobileHeader({ connectionState, selectedSession }: MobileHeaderProps) {
 // Session tabs: streaming, context, properties, slides (depend on selected session)
 // Global tabs: code, logs, llm, settings (app-wide)
 type MainContentTab = 'streaming' | 'context' | 'properties' | 'slides' | 'code' | 'logs' | 'llm' | 'settings';
+type OuterTab = 'session' | 'global';
+
+// Helper to determine which outer tab a content tab belongs to
+const SESSION_TABS: MainContentTab[] = ['streaming', 'context', 'properties', 'slides'];
+const GLOBAL_TABS: MainContentTab[] = ['code', 'logs', 'llm', 'settings'];
+
+function getOuterTab(tab: MainContentTab): OuterTab {
+  return SESSION_TABS.includes(tab) ? 'session' : 'global';
+}
 
 /**
- * Header bar for the main content area with tabs and detail panel toggle
+ * Subtabs container with scroll indicators (arrows) when content overflows
+ */
+function SubtabsContainer({ children }: { children: React.ReactNode }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const updateScrollState = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+
+    const hasOverflow = el.scrollWidth > el.clientWidth;
+    setCanScrollLeft(hasOverflow && el.scrollLeft > 1);
+    setCanScrollRight(hasOverflow && el.scrollLeft < el.scrollWidth - el.clientWidth - 1);
+  }, []);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+
+    // Initial check after a small delay to let layout settle
+    const timeoutId = setTimeout(updateScrollState, 50);
+
+    el.addEventListener('scroll', updateScrollState);
+
+    // Also check on resize
+    const resizeObserver = new ResizeObserver(updateScrollState);
+    resizeObserver.observe(el);
+
+    return () => {
+      clearTimeout(timeoutId);
+      el.removeEventListener('scroll', updateScrollState);
+      resizeObserver.disconnect();
+    };
+  }, [updateScrollState, children]); // Re-run when children change
+
+  const scrollBy = (amount: number) => {
+    scrollRef.current?.scrollBy({ left: amount, behavior: 'smooth' });
+  };
+
+  return (
+    <div className="subtabs-wrapper">
+      {canScrollLeft && (
+        <button
+          className="subtabs-arrow subtabs-arrow-left"
+          onClick={() => scrollBy(-100)}
+          aria-label="Scroll left"
+        >
+          ‹
+        </button>
+      )}
+      <div className="subtabs" ref={scrollRef}>
+        {children}
+      </div>
+      {canScrollRight && (
+        <button
+          className="subtabs-arrow subtabs-arrow-right"
+          onClick={() => scrollBy(100)}
+          aria-label="Scroll right"
+        >
+          ›
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Header bar for the main content area with two-level tabs:
+ * - Outer tabs: Session | Global
+ * - Subtabs: depend on which outer tab is selected
  */
 function MainContentHeader({
   activeTab,
@@ -3329,80 +3455,109 @@ function MainContentHeader({
   // Show badge if there are git changes (unstaged or staged)
   const hasGitChanges = gitStatus && (gitStatus.hasUnstaged || gitStatus.hasStaged);
 
+  // Determine which outer tab is active based on current subtab
+  const activeOuterTab = getOuterTab(activeTab);
+
+  // When switching outer tabs, go to the first subtab of that group
+  const handleOuterTabChange = (outer: OuterTab) => {
+    if (outer === 'session' && activeOuterTab !== 'session') {
+      onTabChange('streaming');
+    } else if (outer === 'global' && activeOuterTab !== 'global') {
+      onTabChange('code');
+    }
+  };
+
   return (
     <div className="conversation-view-toggle">
-      {/* Session-specific tabs */}
-      <div className="tab-group tab-group--session">
+      {/* Outer tabs: Session | Global */}
+      <div className="outer-tabs">
         <button
-          className={`view-toggle-btn ${activeTab === 'streaming' ? 'active' : ''}`}
-          onClick={() => onTabChange('streaming')}
+          className={`outer-tab-btn ${activeOuterTab === 'session' ? 'active' : ''}`}
+          onClick={() => handleOuterTabChange('session')}
         >
-          Streaming
+          Session
         </button>
         <button
-          className={`view-toggle-btn ${activeTab === 'context' ? 'active' : ''}`}
-          onClick={() => onTabChange('context')}
+          className={`outer-tab-btn ${activeOuterTab === 'global' ? 'active' : ''}`}
+          onClick={() => handleOuterTabChange('global')}
         >
-          Context
-        </button>
-        <button
-          className={`view-toggle-btn ${activeTab === 'properties' ? 'active' : ''}`}
-          onClick={() => onTabChange('properties')}
-        >
-          Properties
-        </button>
-        <button
-          className={`view-toggle-btn ${activeTab === 'slides' ? 'active' : ''}`}
-          onClick={() => onTabChange('slides')}
-        >
-          Slides
+          Global
         </button>
       </div>
 
-      {/* Separator between session and global tabs */}
+      {/* Separator */}
       <div className="tab-group-separator" />
 
-      {/* Global tabs */}
-      <div className="tab-group tab-group--global">
-        <button
-          className={`view-toggle-btn ${activeTab === 'code' ? 'active' : ''}`}
-          onClick={() => onTabChange('code')}
-          title={hasGitChanges ? `${gitStatus.fileCount} uncommitted change${gitStatus.fileCount !== 1 ? 's' : ''}` : undefined}
-        >
-          Code
-          {hasGitChanges && (
-            <span className="code-tab-changes-indicator" />
-          )}
-        </button>
-        <button
-          className={`view-toggle-btn ${activeTab === 'logs' ? 'active' : ''}`}
-          onClick={() => onTabChange('logs')}
-        >
-          Logs
-        </button>
-        <button
-          className={`view-toggle-btn ${activeTab === 'llm' ? 'active' : ''}`}
-          onClick={() => onTabChange('llm')}
-        >
-          LLM
-        </button>
-        <button
-          className={`view-toggle-btn ${activeTab === 'settings' ? 'active' : ''}`}
-          onClick={() => onTabChange('settings')}
-        >
-          Settings
-        </button>
-      </div>
+      {/* Subtabs - show based on which outer tab is active */}
+      <SubtabsContainer>
+        {activeOuterTab === 'session' ? (
+          <>
+            <button
+              className={`view-toggle-btn ${activeTab === 'streaming' ? 'active' : ''}`}
+              onClick={() => onTabChange('streaming')}
+            >
+              Streaming
+            </button>
+            <button
+              className={`view-toggle-btn ${activeTab === 'context' ? 'active' : ''}`}
+              onClick={() => onTabChange('context')}
+            >
+              Context
+            </button>
+            <button
+              className={`view-toggle-btn ${activeTab === 'properties' ? 'active' : ''}`}
+              onClick={() => onTabChange('properties')}
+            >
+              Properties
+            </button>
+            <button
+              className={`view-toggle-btn ${activeTab === 'slides' ? 'active' : ''}`}
+              onClick={() => onTabChange('slides')}
+            >
+              Slides
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              className={`view-toggle-btn ${activeTab === 'code' ? 'active' : ''}`}
+              onClick={() => onTabChange('code')}
+              title={hasGitChanges ? `${gitStatus.fileCount} uncommitted change${gitStatus.fileCount !== 1 ? 's' : ''}` : undefined}
+            >
+              Code
+              {hasGitChanges && (
+                <span className="code-tab-changes-indicator" />
+              )}
+            </button>
+            <button
+              className={`view-toggle-btn ${activeTab === 'logs' ? 'active' : ''}`}
+              onClick={() => onTabChange('logs')}
+            >
+              Logs
+            </button>
+            <button
+              className={`view-toggle-btn ${activeTab === 'llm' ? 'active' : ''}`}
+              onClick={() => onTabChange('llm')}
+            >
+              LLM
+            </button>
+            <button
+              className={`view-toggle-btn ${activeTab === 'settings' ? 'active' : ''}`}
+              onClick={() => onTabChange('settings')}
+            >
+              Settings
+            </button>
+          </>
+        )}
+      </SubtabsContainer>
 
-      {/* Spacer */}
-      <div style={{ flex: 1 }} />
-
-      {/* Detail panel toggle - only show on desktop */}
+      {/* Detail panel toggle - only show on desktop, pushed to right */}
       {layoutMode === 'desktop' && (
         <button
           className={`view-toggle-btn detail-toggle-btn ${!isDetailCollapsed ? 'active' : ''}`}
           onClick={toggleDetailCollapse}
           title={isDetailCollapsed ? 'Show detail panel' : 'Hide detail panel'}
+          style={{ marginLeft: 'auto' }}
         >
           {isDetailCollapsed ? '◀ More Stuff' : 'Less Stuff ▶'}
         </button>
@@ -3419,9 +3574,116 @@ type ContextMode = 'COPY' | 'COMPRESS' | 'DROP';
 // Exchange action type from SessionTreeView
 type ExchangeAction = 'archive' | 'delete';
 
+/**
+ * Session list item with long-press to rename support
+ */
+interface SessionListItemProps {
+  session: SessionInfo;
+  isSelected: boolean;
+  isPinned: boolean;
+  showStreamingDetails: boolean;
+  streamingTask: TaskInfo | null;
+  client?: BalloonsClient | null;
+  onSelect: () => void;
+  onTogglePin?: () => void;
+  onRenamed?: (newTitle: string) => void;
+  itemRef?: (el: HTMLDivElement | null) => void;
+}
+
+function SessionListItem({
+  session,
+  isSelected,
+  isPinned,
+  showStreamingDetails,
+  streamingTask,
+  client,
+  onSelect,
+  onTogglePin,
+  onRenamed,
+  itemRef,
+}: SessionListItemProps) {
+  const [showRenameModal, setShowRenameModal] = useState(false);
+
+  const titleLongPress = useLongPress({
+    onLongPress: () => {
+      if (client?.isConnected) {
+        setShowRenameModal(true);
+      }
+    },
+    delay: 500,
+  });
+
+  const handleRenamed = useCallback((newTitle: string) => {
+    setShowRenameModal(false);
+    onRenamed?.(newTitle);
+  }, [onRenamed]);
+
+  return (
+    <>
+      <div
+        ref={itemRef}
+        className={`session-item ${isSelected ? 'selected' : ''} ${session.isStreaming ? 'streaming' : ''} ${isPinned ? 'pinned' : ''}`}
+        onClick={onSelect}
+      >
+        <div className="session-header">
+          {onTogglePin && (
+            <span
+              className={`session-pin ${isPinned ? 'session-pin--active' : ''}`}
+              onClick={(e) => { e.stopPropagation(); onTogglePin(); }}
+              title={isPinned ? 'Unpin session' : 'Pin session'}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill={isPinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 17v5" />
+                <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1z" />
+              </svg>
+            </span>
+          )}
+          <div
+            className="session-title"
+            title="Long press to rename"
+            {...titleLongPress}
+          >
+            {session.title || session.forkName || `Session ${session.id.slice(0, 8)}`}
+          </div>
+        </div>
+        <div className="session-meta">
+          {session.messageCount} messages
+          {session.isStreaming && !showStreamingDetails && ' • streaming'}
+        </div>
+        {showStreamingDetails && streamingTask && (
+          <div className="session-streaming-info">
+            <span className="streaming-badge">
+              <span className="streaming-dot" />
+              {streamingTask.toolName ? (
+                <span>{streamingTask.toolName}</span>
+              ) : (
+                <span>{formatTokens(streamingTask.tokensStreamed)} tokens</span>
+              )}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Rename modal */}
+      {client?.isConnected && (
+        <RenameSessionModal
+          isOpen={showRenameModal}
+          onClose={() => setShowRenameModal(false)}
+          sessionId={session.id}
+          currentTitle={session.title || session.forkName || ''}
+          client={client.sessions}
+          onRenamed={handleRenamed}
+        />
+      )}
+    </>
+  );
+}
+
 interface SidebarContentProps {
   connectionState: ConnectionState;
   sessions: SessionInfo[];
+  /** Balloons client for rename operations */
+  client?: BalloonsClient | null;
   selectedSessionId: string | null;
   selectedSession?: SessionInfo | null;
   turns: TurnInfo[];
@@ -3445,9 +3707,6 @@ interface SidebarContentProps {
   onLinkSession?: (sessionId: string) => void;
   // Watch session callback (create watcher session)
   onWatchSession?: (sessionId: string) => void;
-  // Sound notification props
-  soundEnabled?: boolean;
-  onToggleSound?: () => void;
   // Server slot props
   serverSlot: ServerSlot;
   onSlotChange: (slot: ServerSlot) => void;
@@ -3460,6 +3719,7 @@ interface SidebarContentProps {
 function SidebarContent({
   connectionState,
   sessions,
+  client,
   selectedSessionId,
   selectedSession,
   turns,
@@ -3479,17 +3739,12 @@ function SidebarContent({
   onReviewSession,
   onLinkSession,
   onWatchSession,
-  soundEnabled = true,
-  onToggleSound,
   serverSlot,
   onSlotChange,
   onLogout,
   archivingTurnIndices,
 }: SidebarContentProps) {
   const { closeSidebar, layoutMode } = useLayout();
-  const { resolvedTheme, toggleTheme } = useTheme();
-  const { expandToolCards, togglePreference } = usePreferences();
-  const { isActive: wakeLockActive, isSupported: wakeLockSupported, toggle: toggleWakeLock } = useWakeLock();
 
   // View mode state (persisted in localStorage)
   const [viewMode, setViewMode] = useState<SidebarView>(() => {
@@ -3562,79 +3817,26 @@ function SidebarContent({
   return (
     <>
       <header className="sidebar-header">
-        <div className={`connection-status ${connectionState}`} title={connectionState} />
+        {/* Connection status with server slot indicator */}
+        <button
+          className={`connection-status-btn ${connectionState}`}
+          onClick={toggleSlot}
+          title={`${connectionState} - Server ${serverSlot} (:${SLOT_PORTS[serverSlot]}). Click to switch.`}
+        >
+          <span className="connection-dot" />
+          <span className="server-slot">{serverSlot}</span>
+        </button>
         <h1>{headerTitle}</h1>
 
-        {/* View mode toggle */}
-        <div className="view-toggle">
+        {onLogout && (
           <button
-            className={`view-toggle-btn ${viewMode === 'list' ? 'active' : ''}`}
-            onClick={() => handleViewModeChange('list')}
-            title="List view"
-            aria-label="List view"
+            className="signout-btn"
+            onClick={onLogout}
+            title="Sign out"
           >
-            ☰
+            Sign out
           </button>
-          <button
-            className={`view-toggle-btn ${viewMode === 'tree' ? 'active' : ''}`}
-            onClick={() => handleViewModeChange('tree')}
-            title="Tree view"
-            aria-label="Tree view"
-          >
-            🌲
-          </button>
-          <button
-            className={`view-toggle-btn ${viewMode === 'goals' ? 'active' : ''}`}
-            onClick={() => handleViewModeChange('goals')}
-            title="Goals view"
-            aria-label="Goals view"
-          >
-            🎯
-          </button>
-        </div>
-
-        {/* Settings toggles */}
-        <div className="sidebar-settings-toggle">
-          {onToggleSound && (
-            <button
-              className={`sound-toggle ${soundEnabled ? 'active' : ''}`}
-              onClick={onToggleSound}
-              aria-label={soundEnabled ? 'Disable notification sounds' : 'Enable notification sounds'}
-              title={soundEnabled ? 'Sounds: enabled' : 'Sounds: disabled'}
-            >
-              {soundEnabled ? '🔔' : '🔕'}
-            </button>
-          )}
-
-          {wakeLockSupported && (
-            <button
-              className={`wake-lock-toggle ${wakeLockActive ? 'active' : ''}`}
-              onClick={toggleWakeLock}
-              aria-label={wakeLockActive ? 'Allow screen to sleep' : 'Keep screen awake'}
-              title={wakeLockActive ? 'Screen: staying awake' : 'Screen: can sleep'}
-            >
-              {wakeLockActive ? '☀️' : '💤'}
-            </button>
-          )}
-
-          <button
-            className={`expand-toggle ${expandToolCards ? 'active' : ''}`}
-            onClick={() => togglePreference('expandToolCards')}
-            aria-label={expandToolCards ? 'Collapse tool cards by default' : 'Expand tool cards by default'}
-            title={expandToolCards ? 'Tool cards: expanded' : 'Tool cards: collapsed'}
-          >
-            {expandToolCards ? '▼' : '▶'}
-          </button>
-
-          <button
-            className="theme-toggle"
-            onClick={toggleTheme}
-            aria-label={`Switch theme (current: ${resolvedTheme})`}
-            title={`Theme: ${resolvedTheme} (click to cycle)`}
-          >
-            {resolvedTheme === 'dark' ? '🌙' : resolvedTheme === 'dark-flat' ? '⬛' : '☀️'}
-          </button>
-        </div>
+        )}
 
         {layoutMode === 'mobile' && (
           <button className="close-button" onClick={closeSidebar} aria-label="Close menu">
@@ -3643,29 +3845,29 @@ function SidebarContent({
         )}
       </header>
 
-      {/* Server slot toggle row */}
-      <div className="slot-toggle-row">
-        <span className="slot-label">Server:</span>
+      {/* View mode tabs */}
+      <div className="sidebar-view-tabs">
         <button
-          className={`slot-toggle slot-${serverSlot.toLowerCase()}`}
-          onClick={toggleSlot}
-          title={`Server slot ${serverSlot} (port ${SLOT_PORTS[serverSlot]}). Click to switch.`}
+          className={`sidebar-view-tab ${viewMode === 'list' ? 'active' : ''}`}
+          onClick={() => handleViewModeChange('list')}
+          title="List view"
         >
-          {serverSlot}
+          List
         </button>
-        <span className="slot-port">:{SLOT_PORTS[serverSlot]}</span>
-        {onLogout && (
-          <>
-            <span className="slot-divider">|</span>
-            <button
-              className="slot-toggle slot-logout"
-              onClick={onLogout}
-              title="Sign out"
-            >
-              Sign out
-            </button>
-          </>
-        )}
+        <button
+          className={`sidebar-view-tab ${viewMode === 'tree' ? 'active' : ''}`}
+          onClick={() => handleViewModeChange('tree')}
+          title="Tree view"
+        >
+          Tree
+        </button>
+        <button
+          className={`sidebar-view-tab ${viewMode === 'goals' ? 'active' : ''}`}
+          onClick={() => handleViewModeChange('goals')}
+          title="Goals view"
+        >
+          Goals
+        </button>
       </div>
 
       {onNewBareSession && (
@@ -3778,49 +3980,21 @@ function SidebarContent({
             const showStreamingDetails = isSelected && session.isStreaming && streamingTask;
             const isPinned = session.isPinned ?? false;
             return (
-              <div
+              <SessionListItem
                 key={session.id}
-                ref={(el) => {
+                session={session}
+                isSelected={isSelected}
+                isPinned={isPinned}
+                showStreamingDetails={!!showStreamingDetails}
+                streamingTask={streamingTask}
+                client={client}
+                onSelect={() => handleSelectSession(session.id)}
+                onTogglePin={onTogglePin ? () => onTogglePin(session.id) : undefined}
+                itemRef={(el) => {
                   if (el) sessionItemRefs.current.set(session.id, el);
                   else sessionItemRefs.current.delete(session.id);
                 }}
-                className={`session-item ${isSelected ? 'selected' : ''} ${session.isStreaming ? 'streaming' : ''} ${isPinned ? 'pinned' : ''}`}
-                onClick={() => handleSelectSession(session.id)}
-              >
-                <div className="session-header">
-                  {onTogglePin && (
-                    <span
-                      className={`session-pin ${isPinned ? 'session-pin--active' : ''}`}
-                      onClick={(e) => { e.stopPropagation(); onTogglePin(session.id); }}
-                      title={isPinned ? 'Unpin session' : 'Pin session'}
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill={isPinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M12 17v5" />
-                        <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1z" />
-                      </svg>
-                    </span>
-                  )}
-                  <div className="session-title">
-                    {session.title || `Session ${session.id.slice(0, 8)}`}
-                  </div>
-                </div>
-                <div className="session-meta">
-                  {session.messageCount} messages
-                  {session.isStreaming && !showStreamingDetails && ' • streaming'}
-                </div>
-                {showStreamingDetails && (
-                  <div className="session-streaming-info">
-                    <span className="streaming-badge">
-                      <span className="streaming-dot" />
-                      {streamingTask.toolName ? (
-                        <span>{streamingTask.toolName}</span>
-                      ) : (
-                        <span>{formatTokens(streamingTask.tokensStreamed)} tokens</span>
-                      )}
-                    </span>
-                  </div>
-                )}
-              </div>
+              />
             );
           })}
         </div>

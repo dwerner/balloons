@@ -2,6 +2,7 @@ import React, { memo, useEffect, useState, useRef, useCallback } from 'react';
 import type { TaskInfo, SessionInfo, BalloonsClient } from '../../../../generated/balloons-client';
 import { useLongPress } from '../../hooks';
 import { useLayout } from '../layout';
+import { usePreferences } from '../layout/PreferencesContext';
 import { RenameSessionModal } from '../RenameSessionModal';
 import './StreamingStatusBar.css';
 
@@ -143,6 +144,7 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
   onSetCwd,
 }: StreamingStatusBarProps) {
   const { expandDetail } = useLayout();
+  const { expandToolCards, togglePreference } = usePreferences();
   // Collapsed state - persist in localStorage (shared with SessionStatusBar)
   const [isCollapsed, setIsCollapsed] = useState(() => {
     const stored = localStorage.getItem('sessionStatusBar.collapsed');
@@ -339,6 +341,16 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
             )}
             {/* Spacer to push actions to the right */}
             <div className="streaming-status-bar__spacer" />
+            {/* Expand tool cards toggle */}
+            <button
+              type="button"
+              className={`streaming-status-bar__expand-toggle ${expandToolCards ? 'active' : ''}`}
+              onClick={() => togglePreference('expandToolCards')}
+              title={expandToolCards ? 'Tool cards: expanded (click to collapse)' : 'Tool cards: collapsed (click to expand)'}
+              aria-label={expandToolCards ? 'Collapse tool cards by default' : 'Expand tool cards by default'}
+            >
+              {expandToolCards ? '▼' : '▶'}
+            </button>
             {/* Scroll state indicator (only when paused) */}
             {scrollState && !scrollState.isFollowing && (
               <div

@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-03-01T16:34:30.431041
+// Generated: 2026-03-01T20:08:44.749844
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -3737,6 +3737,23 @@ export interface FileStateService {
   getStagedDiff(gitRoot: string): Promise<Types.GitDiffResult>;
 
   /**
+   * Get the full working tree status including staged, unstaged, and untracked files.
+   * 
+   * This provides a complete view of the git state, suitable for displaying
+   * a staging interface where users can stage/unstage individual files.
+   * 
+   * Args:
+   * path: Path to a directory inside a git repository
+   * 
+   * Returns:
+   * WorkingTreeStatus with staged, unstaged, and untracked files
+   * 
+   * Raises:
+   * ValueError: If path is not in a git repository
+   */
+  getWorkingTreeStatus(path: string): Promise<Types.WorkingTreeStatus>;
+
+  /**
    * Create a git commit with the staged changes using git2.
    * 
    * Args:
@@ -3966,6 +3983,10 @@ export class FileStateServiceClient implements FileStateService {
 
   async getStagedDiff(gitRoot: string): Promise<Types.GitDiffResult> {
     return this.call('getStagedDiff', { gitRoot: gitRoot });
+  }
+
+  async getWorkingTreeStatus(path: string): Promise<Types.WorkingTreeStatus> {
+    return this.call('getWorkingTreeStatus', { path: path });
   }
 
   async gitCommit(gitRoot: string, message: string): Promise<Types.FileOperationResult> {

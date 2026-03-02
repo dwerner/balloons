@@ -1547,22 +1547,20 @@ export const SessionTreeView = memo(forwardRef<SessionTreeViewHandle, SessionTre
             <div className="tree-group__header">👁 Watching</div>
             <ul className="tree-group__sessions">
               {groupedSessions.watcherGroups.map((group, groupIndex) => (
-                <li key={`watcher-group-${groupIndex}`} className="watcher-pair">
+                <React.Fragment key={`watcher-group-${groupIndex}`}>
                   {/* Watcher sessions first */}
                   {group.watchers.map(renderSessionNode)}
-                  {/* Target session (the watched one) indented below */}
-                  <ul className="watcher-pair__watched">
-                    {group.target ? (
-                      <li>{renderSessionNode(group.target)}</li>
-                    ) : (
-                      <li className="watcher-pair__missing-target">
-                        <span className="watcher-pair__missing-icon">?</span>
-                        <span className="watcher-pair__missing-name">{group.targetName}</span>
-                        <span className="watcher-pair__missing-hint">(session not found)</span>
-                      </li>
-                    )}
-                  </ul>
-                </li>
+                  {/* Target session (the watched one) - SessionNode renders its own <li> */}
+                  {group.target ? (
+                    renderSessionNode(group.target)
+                  ) : (
+                    <li key={`missing-${group.targetName}`} className="watcher-pair__missing-target">
+                      <span className="watcher-pair__missing-icon">?</span>
+                      <span className="watcher-pair__missing-name">{group.targetName}</span>
+                      <span className="watcher-pair__missing-hint">(session not found)</span>
+                    </li>
+                  )}
+                </React.Fragment>
               ))}
             </ul>
           </li>

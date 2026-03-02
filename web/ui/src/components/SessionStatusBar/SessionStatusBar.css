@@ -278,6 +278,36 @@
   cursor: not-allowed;
 }
 
+/* ----- Expand Tool Cards Toggle ----- */
+.session-status-bar__expand-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.session-status-bar__expand-toggle:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--color-text-secondary);
+  border-color: var(--color-border-secondary);
+}
+
+.session-status-bar__expand-toggle.active {
+  background: rgba(74, 222, 128, 0.15);
+  border-color: var(--color-accent-green);
+  color: var(--color-accent-green);
+}
+
 /* ----- Scroll State Indicator (only shown when paused) ----- */
 .session-status-bar__scroll-state {
   display: flex;
