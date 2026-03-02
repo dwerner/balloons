@@ -278,6 +278,13 @@ class StreamState:
         This is called from sync methods and schedules the async callbacks
         to run on the event loop without blocking.
         """
+        from core.debug_log import debug_log, Category
+        debug_log.debug(
+            f"StreamState: scheduling {event.value} for stream {stream.stream_id[:8]} "
+            f"type={stream.stream_type.value} observers={len(self._observers)}",
+            category=Category.RUNNER,
+        )
+
         if not self._observers:
             return
 

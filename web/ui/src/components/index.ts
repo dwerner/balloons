@@ -24,3 +24,7 @@ export * from './Dialog';
 
 // Options/Settings components
 export * from './OptionsTab';
+export * from './SettingsTab';
+
+// LLM monitoring components
+export * from './LLMTab';

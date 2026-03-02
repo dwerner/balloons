@@ -8,7 +8,9 @@ import { GoalTreeView } from './components/GoalTreeView';
 import { FileBrowserView, type FileBrowserViewRef } from './components/FileBrowserView';
 import { SupervisorTab } from './components/SupervisorTab';
 import { OptionsTab } from './components/OptionsTab';
+import { SettingsTab } from './components/SettingsTab';
 import { LogsTab } from './components/LogsTab';
+import { LLMTab } from './components/LLMTab';
 import { CodeTab, type CodeReview, type CodeTabHandle, type GitStatusInfo } from './components/CodeTab';
 import { SessionStatusBar } from './components/SessionStatusBar';
 import { StreamingStatusBar } from './components/StreamingStatusBar';
@@ -2903,14 +2905,29 @@ function AppContent() {
                   </div>
                 )}
               </div>
+              {mainContentTab === 'llm' && (
+                <LLMTab
+                  tasksClient={connectionState === 'connected' ? clientRef.current?.tasks : undefined}
+                  onJumpToSession={(sessionId) => {
+                    setSelectedSessionId(sessionId);
+                    setMainContentTab('streaming');
+                  }}
+                />
+              )}
               {mainContentTab === 'settings' && (
-                <div className="empty-state">
-                  <h2>Settings</h2>
-                  <p>Application settings and configuration.</p>
-                  <p style={{ color: 'var(--color-text-dim)', marginTop: '8px', fontSize: '0.9em' }}>
-                    Coming soon: backend configuration, appearance, keybindings, and more.
-                  </p>
-                </div>
+                <SettingsTab
+                  isConnected={connectionState === 'connected'}
+                  soundEnabled={soundNotifications.soundEnabled}
+                  onToggleSound={() => soundNotifications.setSoundEnabled(!soundNotifications.soundEnabled)}
+                  soundConfig={soundNotifications.soundConfig}
+                  availableSounds={soundNotifications.availableSounds}
+                  onSetSoundForEvent={soundNotifications.setSoundForEvent}
+                  onSetVolume={soundNotifications.setVolume}
+                  onPlaySound={soundNotifications.playSound}
+                  onRefreshSounds={soundNotifications.refreshSounds}
+                  isLoading={soundNotifications.isLoading}
+                  error={soundNotifications.error}
+                />
               )}
             </div>
 
@@ -3292,8 +3309,8 @@ function MobileHeader({ connectionState, selectedSession }: MobileHeaderProps) {
 
 // Main content tab type
 // Session tabs: streaming, context, properties, slides (depend on selected session)
-// Global tabs: code, logs, settings (app-wide)
-type MainContentTab = 'streaming' | 'context' | 'properties' | 'slides' | 'code' | 'logs' | 'settings';
+// Global tabs: code, logs, llm, settings (app-wide)
+type MainContentTab = 'streaming' | 'context' | 'properties' | 'slides' | 'code' | 'logs' | 'llm' | 'settings';
 
 /**
  * Header bar for the main content area with tabs and detail panel toggle
@@ -3362,6 +3379,12 @@ function MainContentHeader({
           onClick={() => onTabChange('logs')}
         >
           Logs
+        </button>
+        <button
+          className={`view-toggle-btn ${activeTab === 'llm' ? 'active' : ''}`}
+          onClick={() => onTabChange('llm')}
+        >
+          LLM
         </button>
         <button
           className={`view-toggle-btn ${activeTab === 'settings' ? 'active' : ''}`}

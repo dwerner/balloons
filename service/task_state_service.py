@@ -306,6 +306,12 @@ class TaskStateService:
         # Map TaskEvent enum to camelCase wire name
         event_name = self._task_event_to_wire_name(event)
 
+        debug_log.debug(
+            f"TaskStateService: emitting {event_name} for task {task.task_id[:8]} "
+            f"type={task.task_type.value} handlers={len(self._event_handlers)}",
+            category=Category.API,
+        )
+
         # Create event data
         event_data = TaskEventData(
             event_type=event.value,
