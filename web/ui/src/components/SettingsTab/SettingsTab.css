@@ -1,0 +1,325 @@
+/* SettingsTab styles */
+
+.settings-tab {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.settings-tab__disconnected {
+  padding: 24px;
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+
+/* Settings Card (reuses options-card styling) */
+.settings-card {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.settings-card__header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.settings-card__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.settings-card__subtitle {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  font-style: italic;
+  opacity: 0.7;
+}
+
+.settings-card__content {
+  padding: 16px;
+}
+
+/* Sound Settings */
+.sound-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sound-settings__toggle {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  gap: 4px 12px;
+  padding: 12px;
+  background: var(--color-bg-tertiary);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.sound-settings__toggle input[type="checkbox"] {
+  grid-row: span 2;
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  align-self: center;
+}
+
+.sound-settings__toggle-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.sound-settings__toggle-description {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+/* Volume slider */
+.sound-settings__volume {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--color-bg-tertiary);
+  border-radius: 6px;
+}
+
+.sound-settings__volume-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.sound-settings__volume-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.sound-settings__volume-value {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+}
+
+.sound-settings__volume-slider {
+  width: 100%;
+  height: 6px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--color-bg-secondary);
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+}
+
+.sound-settings__volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background: var(--color-accent);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.sound-settings__volume-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+}
+
+.sound-settings__volume-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: var(--color-accent);
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+}
+
+/* Sound event configuration */
+.sound-events {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sound-events__section-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  margin-bottom: 4px;
+}
+
+.sound-event {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--color-bg-tertiary);
+  border-radius: 6px;
+}
+
+.sound-event__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.sound-event__label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.sound-event__description {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.sound-event__controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.sound-event__select {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 12px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  outline: none;
+}
+
+.sound-event__select:hover {
+  border-color: var(--color-border-hover);
+}
+
+.sound-event__select:focus {
+  border-color: var(--color-accent);
+}
+
+.sound-event__select option {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+}
+
+/* Play/preview button */
+.sound-event__play-btn {
+  padding: 6px 10px;
+  font-size: 12px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.sound-event__play-btn:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  border-color: var(--color-border-hover);
+}
+
+.sound-event__play-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Loading/error states */
+.sound-settings__loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.sound-settings__error {
+  padding: 12px;
+  background: var(--color-error-bg, rgba(255, 100, 100, 0.1));
+  border: 1px solid var(--color-error);
+  border-radius: 6px;
+  color: var(--color-error);
+  font-size: 12px;
+}
+
+/* Disabled state for sound events when sounds are off */
+.sound-events--disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Available sounds list (for debugging/reference) */
+.sound-settings__available {
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.sound-settings__available-title {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin-bottom: 8px;
+}
+
+.sound-settings__available-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sound-settings__available-item {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 2px 8px;
+  background: var(--color-bg-secondary);
+  border-radius: 3px;
+  color: var(--color-text-secondary);
+}
+
+/* Refresh button */
+.settings-card__header-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+.settings-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.settings-btn:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.settings-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
