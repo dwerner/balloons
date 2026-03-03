@@ -10,6 +10,11 @@
  * - Maintains stable array references using cached sorted turns
  * - Only triggers React re-renders when relevant data actually changes
  *
+ * URL ROUTING INTEGRATION:
+ * - setActiveSession() should be called by the router when session route changes
+ * - Router should update URL when setActiveSession() is called from UI actions
+ * - See docs/url-routing.md for the full routing design
+ *
  * Usage:
  *   <SessionDataProvider client={client}>
  *     <App />

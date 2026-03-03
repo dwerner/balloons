@@ -10,6 +10,11 @@
  * - Review & Summarize functionality
  *
  * Most fields are editable inline with save-on-change behavior.
+ *
+ * URL ROUTING: This is a session tab at #/sessions/:sessionId/properties
+ * - Parent/child session links should navigate to #/sessions/:sessionId
+ * - Binding links could navigate to #/goals/:goalId/plans/:planId/todos/:todoId
+ * - See docs/url-routing.md for the full routing design
  */
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';

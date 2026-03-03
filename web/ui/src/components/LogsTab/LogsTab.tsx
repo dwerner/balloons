@@ -6,6 +6,11 @@
  * - Level filter (error/warning/info/debug/trace/perf)
  * - Auto-refresh toggle
  * - Expandable entries with details JSON
+ *
+ * URL ROUTING INTEGRATION:
+ * - Category selection could update URL to #/logs/:category
+ * - Level filter could be a query param: #/logs/runner?level=error
+ * - See docs/url-routing.md for the full routing design
  */
 
 import React, { useState, useEffect, useCallback, useRef, memo } from 'react';

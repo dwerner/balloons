@@ -40,6 +40,9 @@ export interface UseLongPressReturn {
   /** Attach to onTouchEnd */
   onTouchEnd: (e: React.TouchEvent) => void;
 
+  /** Attach to onTouchMove (cancels long press if finger moves) */
+  onTouchMove: (e: React.TouchEvent) => void;
+
   /** Attach to onTouchCancel (optional but recommended) */
   onTouchCancel?: (e: React.TouchEvent) => void;
 
@@ -131,6 +134,27 @@ export function useLongPress({
     startPosRef.current = null;
   }, [clearTimer]);
 
+  // Touch move handler - cancel long press if finger moves too far (allows scrolling)
+  const onTouchMove = useCallback(
+    (e: React.TouchEvent) => {
+      if (!startPosRef.current) return;
+
+      const touch = e.touches[0];
+      if (!touch) return;
+
+      // Calculate distance moved
+      const dx = Math.abs(touch.clientX - startPosRef.current.x);
+      const dy = Math.abs(touch.clientY - startPosRef.current.y);
+
+      // If finger moved more than 10px, cancel the long press (user is scrolling)
+      if (dx > 10 || dy > 10) {
+        clearTimer();
+        startPosRef.current = null;
+      }
+    },
+    [clearTimer]
+  );
+
   // Click handler - prevent click if long press was detected
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
@@ -154,6 +178,7 @@ export function useLongPress({
     onMouseLeave,
     onTouchStart,
     onTouchEnd,
+    onTouchMove,
     onTouchCancel,
     onClick: handleClick,
   };

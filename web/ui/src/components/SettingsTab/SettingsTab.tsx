@@ -4,6 +4,10 @@
  * Contains cards for:
  * - Appearance Settings: Theme, wake lock
  * - Sound Settings: Enable/disable sounds, select sound files for events, volume control
+ *
+ * URL ROUTING: This is a global tab at #/settings
+ * - Sub-sections could use hash fragments: #/settings#sounds
+ * - See docs/url-routing.md for the full routing design
  */
 
 import React, { memo, useCallback } from 'react';

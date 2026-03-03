@@ -21,6 +21,8 @@ export interface StreamingStatusBarProps {
   isPinned?: boolean;
   /** Callback when pin state is toggled */
   onTogglePin?: () => void;
+  /** Callback when user wants to select/navigate to a different session */
+  onSelectSession?: (sessionId: string) => void;
   /** Scroll state from chat view */
   scrollState?: { isFollowing: boolean; isAtBottom: boolean };
   /** Session info for displaying/editing name */
@@ -135,6 +137,7 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
   sessionContextTokens,
   isPinned = false,
   onTogglePin,
+  onSelectSession,
   scrollState,
   session,
   client,
@@ -428,7 +431,9 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
         sessionId={session.id}
         currentTitle={session.title || session.forkName || ''}
         client={client.sessions}
+        sessionDataClient={client.sessionData}
         onRenamed={handleRenamed}
+        onNavigateToSession={onSelectSession}
       />
     )}
     </>

@@ -4,18 +4,25 @@
  * General subtab provides:
  * - Board list with create/delete
  * - Board view with columns and tasks
- * - Drag-and-drop task movement
+ * - Desktop: Horizontal columns with drag-and-drop
+ * - Mobile: Accordion layout with move-to-column modal
  * - Real-time updates via WebSocket subscriptions
+ *
+ * URL ROUTING INTEGRATION:
+ * - Board selection should update URL to #/kanban/:boardId
+ * - Task selection/focus could use #/kanban/:boardId/task/:taskId
+ * - See docs/url-routing.md for the full routing design
  */
 
 import React, { useState, useEffect, useCallback, memo } from 'react';
 import type {
   BoardInfo,
   BoardStateInfo,
-  TaskInfo,
+  KanbanTaskInfo,
   ColumnInfo,
   KanbanWebSocketServiceClient,
 } from '../../../../generated/balloons-client';
+import { useLayout } from '../layout';
 import './KanbanTab.css';
 
 // =============================================================================
@@ -34,8 +41,8 @@ function ConnectionStatus({ connected }: { connected: boolean }) {
   );
 }
 
-/** Task card displayed within a column */
-const TaskCard = memo(function TaskCard({
+/** Task card displayed within a column (desktop - draggable) */
+const TaskCardDesktop = memo(function TaskCardDesktop({
   task,
   onEdit,
   onDelete,
@@ -43,11 +50,11 @@ const TaskCard = memo(function TaskCard({
   onDragStart,
   onDragEnd,
 }: {
-  task: TaskInfo;
-  onEdit: (task: TaskInfo) => void;
+  task: KanbanTaskInfo;
+  onEdit: (task: KanbanTaskInfo) => void;
   onDelete: (taskId: string) => void;
   isDragging?: boolean;
-  onDragStart: (e: React.DragEvent, task: TaskInfo) => void;
+  onDragStart: (e: React.DragEvent, task: KanbanTaskInfo) => void;
   onDragEnd: (e: React.DragEvent) => void;
 }) {
   return (
@@ -62,6 +69,62 @@ const TaskCard = memo(function TaskCard({
         <div className="kanban-task-card__description">{task.description}</div>
       )}
       <div className="kanban-task-card__actions">
+        <button
+          className="kanban-task-card__action"
+          onClick={(e) => {
+            e.stopPropagation();
+            onEdit(task);
+          }}
+          title="Edit task"
+        >
+          ✎
+        </button>
+        <button
+          className="kanban-task-card__action kanban-task-card__action--danger"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(task.id);
+          }}
+          title="Delete task"
+        >
+          ×
+        </button>
+      </div>
+    </div>
+  );
+});
+
+/** Task card for mobile - with Move button */
+const TaskCardMobile = memo(function TaskCardMobile({
+  task,
+  onEdit,
+  onDelete,
+  onMove,
+}: {
+  task: KanbanTaskInfo;
+  onEdit: (task: KanbanTaskInfo) => void;
+  onDelete: (taskId: string) => void;
+  onMove: (task: KanbanTaskInfo) => void;
+}) {
+  return (
+    <div className="kanban-task-card kanban-task-card--mobile">
+      <div className="kanban-task-card__content">
+        <div className="kanban-task-card__title">{task.title}</div>
+        {task.description && (
+          <div className="kanban-task-card__description">{task.description}</div>
+        )}
+      </div>
+      <div className="kanban-task-card__actions kanban-task-card__actions--mobile">
+        <button
+          className="kanban-task-card__action"
+          onClick={(e) => {
+            e.stopPropagation();
+            onMove(task);
+          }}
+          title="Move task"
+        >
+          ↔
+        </button>
         <button
           className="kanban-task-card__action"
           onClick={(e) => {
@@ -112,8 +175,8 @@ const ColumnHeader = memo(function ColumnHeader({
   );
 });
 
-/** Kanban column containing tasks */
-const KanbanColumn = memo(function KanbanColumn({
+/** Kanban column for desktop - horizontal layout with drag-drop */
+const KanbanColumnDesktop = memo(function KanbanColumnDesktop({
   column,
   tasks,
   onAddTask,
@@ -126,11 +189,11 @@ const KanbanColumn = memo(function KanbanColumn({
   dragOverColumnId,
 }: {
   column: ColumnInfo;
-  tasks: TaskInfo[];
+  tasks: KanbanTaskInfo[];
   onAddTask: (columnId: string) => void;
-  onEditTask: (task: TaskInfo) => void;
+  onEditTask: (task: KanbanTaskInfo) => void;
   onDeleteTask: (taskId: string) => void;
-  onDragStart: (e: React.DragEvent, task: TaskInfo, columnId: string) => void;
+  onDragStart: (e: React.DragEvent, task: KanbanTaskInfo, columnId: string) => void;
   onDragEnd: (e: React.DragEvent) => void;
   onDragOver: (e: React.DragEvent, columnId: string) => void;
   onDrop: (e: React.DragEvent, columnId: string) => void;
@@ -138,7 +201,7 @@ const KanbanColumn = memo(function KanbanColumn({
 }) {
   const columnTasks = (column.taskIds || [])
     .map(id => tasks.find(t => t.id === id))
-    .filter((t): t is TaskInfo => t !== undefined);
+    .filter((t): t is KanbanTaskInfo => t !== undefined);
 
   const isDropTarget = dragOverColumnId === column.id;
 
@@ -155,7 +218,7 @@ const KanbanColumn = memo(function KanbanColumn({
       />
       <div className="kanban-column__tasks">
         {columnTasks.map((task) => (
-          <TaskCard
+          <TaskCardDesktop
             key={task.id}
             task={task}
             onEdit={onEditTask}
@@ -174,6 +237,121 @@ const KanbanColumn = memo(function KanbanColumn({
   );
 });
 
+/** Accordion column for mobile - collapsible with tap-to-expand */
+const AccordionColumn = memo(function AccordionColumn({
+  column,
+  tasks,
+  isExpanded,
+  onToggle,
+  onAddTask,
+  onEditTask,
+  onDeleteTask,
+  onMoveTask,
+}: {
+  column: ColumnInfo;
+  tasks: KanbanTaskInfo[];
+  isExpanded: boolean;
+  onToggle: () => void;
+  onAddTask: (columnId: string) => void;
+  onEditTask: (task: KanbanTaskInfo) => void;
+  onDeleteTask: (taskId: string) => void;
+  onMoveTask: (task: KanbanTaskInfo, fromColumnId: string) => void;
+}) {
+  const columnTasks = (column.taskIds || [])
+    .map(id => tasks.find(t => t.id === id))
+    .filter((t): t is KanbanTaskInfo => t !== undefined);
+
+  return (
+    <div className={`kanban-accordion ${isExpanded ? 'kanban-accordion--expanded' : ''}`}>
+      <button
+        className="kanban-accordion__header"
+        onClick={onToggle}
+        type="button"
+      >
+        <span className="kanban-accordion__icon">
+          {isExpanded ? '▼' : '▶'}
+        </span>
+        <span className="kanban-accordion__title">{column.name}</span>
+        <span className="kanban-accordion__count">{columnTasks.length}</span>
+        <button
+          className="kanban-accordion__add-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            onAddTask(column.id);
+          }}
+          title="Add task"
+        >
+          +
+        </button>
+      </button>
+      {isExpanded && (
+        <div className="kanban-accordion__content">
+          {columnTasks.length === 0 ? (
+            <div className="kanban-accordion__empty">No tasks in this column</div>
+          ) : (
+            columnTasks.map((task) => (
+              <TaskCardMobile
+                key={task.id}
+                task={task}
+                onEdit={onEditTask}
+                onDelete={onDeleteTask}
+                onMove={(t) => onMoveTask(t, column.id)}
+              />
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+});
+
+/** Move task modal for mobile */
+function MoveTaskModal({
+  task,
+  columns,
+  currentColumnId,
+  onMove,
+  onClose,
+}: {
+  task: KanbanTaskInfo;
+  columns: ColumnInfo[];
+  currentColumnId: string;
+  onMove: (toColumnId: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="kanban-modal-overlay" onClick={onClose}>
+      <div className="kanban-modal kanban-modal--bottom-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="kanban-modal__header">
+          <h3>Move "{task.title}"</h3>
+          <button className="kanban-modal__close" onClick={onClose}>
+            ×
+          </button>
+        </div>
+        <div className="kanban-modal__content">
+          <div className="kanban-move-options">
+            {columns
+              .sort((a, b) => a.position - b.position)
+              .map((col) => (
+                <button
+                  key={col.id}
+                  className={`kanban-move-option ${col.id === currentColumnId ? 'kanban-move-option--current' : ''}`}
+                  onClick={() => col.id !== currentColumnId && onMove(col.id)}
+                  disabled={col.id === currentColumnId}
+                >
+                  <span className="kanban-move-option__name">{col.name}</span>
+                  {col.id === currentColumnId && (
+                    <span className="kanban-move-option__current">current</span>
+                  )}
+                </button>
+              ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // =============================================================================
 // Board View
 // =============================================================================
@@ -186,9 +364,22 @@ interface BoardViewProps {
 }
 
 function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardViewProps) {
+  const { layoutMode } = useLayout();
+  const isMobile = layoutMode === 'mobile';
+
   const [localState, setLocalState] = useState<BoardStateInfo>(boardState);
-  const [draggingTask, setDraggingTask] = useState<{ task: TaskInfo; fromColumnId: string } | null>(null);
+  const [draggingTask, setDraggingTask] = useState<{ task: KanbanTaskInfo; fromColumnId: string } | null>(null);
   const [dragOverColumnId, setDragOverColumnId] = useState<string | null>(null);
+
+  // Accordion state for mobile (which columns are expanded)
+  const [expandedColumns, setExpandedColumns] = useState<Set<string>>(() => {
+    // Default: expand the first column with tasks, or first column
+    const firstWithTasks = boardState.columns.find(
+      col => (col.taskIds || []).length > 0
+    );
+    const initialId = firstWithTasks?.id || boardState.columns[0]?.id;
+    return new Set(initialId ? [initialId] : []);
+  });
 
   // Task creation modal state
   const [showAddTask, setShowAddTask] = useState(false);
@@ -197,14 +388,30 @@ function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardViewProp
   const [newTaskDescription, setNewTaskDescription] = useState('');
 
   // Task edit modal state
-  const [editingTask, setEditingTask] = useState<TaskInfo | null>(null);
+  const [editingTask, setEditingTask] = useState<KanbanTaskInfo | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editDescription, setEditDescription] = useState('');
+
+  // Task move modal state (mobile)
+  const [movingTask, setMovingTask] = useState<{ task: KanbanTaskInfo; fromColumnId: string } | null>(null);
 
   // Update local state when prop changes (e.g., from events)
   useEffect(() => {
     setLocalState(boardState);
   }, [boardState]);
+
+  // Toggle accordion column expansion
+  const toggleColumn = useCallback((columnId: string) => {
+    setExpandedColumns((prev) => {
+      const next = new Set(prev);
+      if (next.has(columnId)) {
+        next.delete(columnId);
+      } else {
+        next.add(columnId);
+      }
+      return next;
+    });
+  }, []);
 
   // Handle adding a task
   const handleAddTask = useCallback(async () => {
@@ -220,6 +427,8 @@ function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardViewProp
       setShowAddTask(false);
       setNewTaskTitle('');
       setNewTaskDescription('');
+      // Expand the column we just added to
+      setExpandedColumns((prev) => new Set(prev).add(addTaskColumnId));
       setAddTaskColumnId(null);
     } catch (e) {
       console.error('Failed to create task:', e);
@@ -254,8 +463,32 @@ function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardViewProp
     }
   }, [kanbanClient, localState.board.id]);
 
-  // Drag handlers
-  const handleDragStart = useCallback((e: React.DragEvent, task: TaskInfo, fromColumnId: string) => {
+  // Handle moving a task (from move modal)
+  const handleMoveTask = useCallback(async (toColumnId: string) => {
+    if (!movingTask) return;
+
+    const { task, fromColumnId } = movingTask;
+    setMovingTask(null);
+
+    if (fromColumnId === toColumnId) return;
+
+    try {
+      await kanbanClient.moveTask(
+        task.id,
+        localState.board.id,
+        toColumnId,
+        undefined,
+        fromColumnId
+      );
+      // Expand the target column
+      setExpandedColumns((prev) => new Set(prev).add(toColumnId));
+    } catch (e) {
+      console.error('Failed to move task:', e);
+    }
+  }, [kanbanClient, localState.board.id, movingTask]);
+
+  // Desktop drag handlers
+  const handleDragStart = useCallback((e: React.DragEvent, task: KanbanTaskInfo, fromColumnId: string) => {
     setDraggingTask({ task, fromColumnId });
     e.dataTransfer.effectAllowed = 'move';
   }, []);
@@ -280,7 +513,6 @@ function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardViewProp
     const { task, fromColumnId } = draggingTask;
     setDraggingTask(null);
 
-    // Only move if column changed
     if (fromColumnId === toColumnId) return;
 
     try {
@@ -288,7 +520,7 @@ function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardViewProp
         task.id,
         localState.board.id,
         toColumnId,
-        undefined, // position (end of column)
+        undefined,
         fromColumnId
       );
     } catch (e) {
@@ -305,14 +537,21 @@ function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardViewProp
   }, []);
 
   // Open edit task modal
-  const openEditTask = useCallback((task: TaskInfo) => {
+  const openEditTask = useCallback((task: KanbanTaskInfo) => {
     setEditingTask(task);
     setEditTitle(task.title);
     setEditDescription(task.description);
   }, []);
 
+  // Open move modal for mobile
+  const openMoveTask = useCallback((task: KanbanTaskInfo, fromColumnId: string) => {
+    setMovingTask({ task, fromColumnId });
+  }, []);
+
+  const sortedColumns = localState.columns.sort((a, b) => a.position - b.position);
+
   return (
-    <div className="kanban-board-view">
+    <div className={`kanban-board-view ${isMobile ? 'kanban-board-view--mobile' : ''}`}>
       {/* Board header */}
       <div className="kanban-board-view__header">
         <button className="kanban-back-btn" onClick={onBack}>
@@ -321,12 +560,29 @@ function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardViewProp
         <h3 className="kanban-board-view__title">{localState.board.name}</h3>
       </div>
 
-      {/* Columns container */}
-      <div className="kanban-columns-container">
-        {localState.columns
-          .sort((a, b) => a.position - b.position)
-          .map((column) => (
-            <KanbanColumn
+      {/* Columns - desktop or mobile layout */}
+      {isMobile ? (
+        // Mobile: Accordion layout - whole area scrolls together
+        <div className="kanban-accordion-container">
+          {sortedColumns.map((column) => (
+            <AccordionColumn
+              key={column.id}
+              column={column}
+              tasks={localState.tasks}
+              isExpanded={expandedColumns.has(column.id)}
+              onToggle={() => toggleColumn(column.id)}
+              onAddTask={openAddTask}
+              onEditTask={openEditTask}
+              onDeleteTask={handleDeleteTask}
+              onMoveTask={openMoveTask}
+            />
+          ))}
+        </div>
+      ) : (
+        // Desktop: Horizontal columns
+        <div className="kanban-columns-container">
+          {sortedColumns.map((column) => (
+            <KanbanColumnDesktop
               key={column.id}
               column={column}
               tasks={localState.tasks}
@@ -340,7 +596,8 @@ function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardViewProp
               dragOverColumnId={dragOverColumnId}
             />
           ))}
-      </div>
+        </div>
+      )}
 
       {/* Add Task Modal */}
       {showAddTask && (
@@ -436,6 +693,17 @@ function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardViewProp
             </div>
           </div>
         </div>
+      )}
+
+      {/* Move Task Modal (mobile) */}
+      {movingTask && (
+        <MoveTaskModal
+          task={movingTask.task}
+          columns={localState.columns}
+          currentColumnId={movingTask.fromColumnId}
+          onMove={handleMoveTask}
+          onClose={() => setMovingTask(null)}
+        />
       )}
     </div>
   );

@@ -19,6 +19,8 @@ export interface SessionStatusBarProps {
   onTogglePin?: () => void;
   /** Callback when session title is changed */
   onTitleChange?: (newTitle: string) => void;
+  /** Callback when user wants to select/navigate to a different session */
+  onSelectSession?: (sessionId: string) => void;
   /** Scroll state from chat view */
   scrollState?: { isFollowing: boolean; isAtBottom: boolean };
   /** Current working directory for the session */
@@ -137,6 +139,7 @@ export const SessionStatusBar = memo(function SessionStatusBar({
   onBackendChange,
   onTogglePin,
   onTitleChange,
+  onSelectSession,
   scrollState,
   cwd,
   onCwdClick,
@@ -480,7 +483,9 @@ export const SessionStatusBar = memo(function SessionStatusBar({
         sessionId={session.id}
         currentTitle={session.title || session.forkName || ''}
         client={client.sessions}
+        sessionDataClient={client.sessionData}
         onRenamed={handleRenamed}
+        onNavigateToSession={onSelectSession}
       />
     )}
     </>

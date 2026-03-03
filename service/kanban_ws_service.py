@@ -44,8 +44,8 @@ from core.kanban_service import (
 
 @ws_type
 @dataclass
-class TaskInfo:
-    """Task information for display."""
+class KanbanTaskInfo:
+    """Task information for kanban display."""
     id: str
     title: str
     description: str
@@ -79,7 +79,7 @@ class BoardStateInfo:
     """Full board state with columns and tasks."""
     board: BoardInfo
     columns: list[ColumnInfo]
-    tasks: list[TaskInfo]  # All tasks, referenced by task_ids in columns
+    tasks: list[KanbanTaskInfo]  # All tasks, referenced by task_ids in columns
 
 
 # =============================================================================
@@ -127,7 +127,7 @@ class TaskMovedEvent:
 class TaskCreatedEvent:
     """Event fired when a task is created."""
     board_id: str
-    task: TaskInfo
+    task: KanbanTaskInfo
     column_id: str
     position: int
 
@@ -137,7 +137,7 @@ class TaskCreatedEvent:
 class TaskUpdatedEvent:
     """Event fired when a task is updated."""
     board_id: str
-    task: TaskInfo
+    task: KanbanTaskInfo
 
 
 @ws_type
@@ -302,9 +302,9 @@ class KanbanWebSocketService:
 
     # --- Helper Methods ---
 
-    def _task_to_info(self, task: Task) -> TaskInfo:
+    def _task_to_info(self, task: Task) -> KanbanTaskInfo:
         """Convert Task to TaskInfo wire type."""
-        return TaskInfo(
+        return KanbanTaskInfo(
             id=task.id,
             title=task.title,
             description=task.description,
@@ -332,7 +332,7 @@ class KanbanWebSocketService:
 
     def _board_state_to_info(self, state: BoardState) -> BoardStateInfo:
         """Convert BoardState to BoardStateInfo wire type."""
-        all_tasks: list[TaskInfo] = []
+        all_tasks: list[KanbanTaskInfo] = []
         columns: list[ColumnInfo] = []
 
         for col in state.columns:
@@ -527,7 +527,7 @@ class KanbanWebSocketService:
         title: str,
         description: str = "",
         column_id: str | None = None,
-    ) -> TaskInfo | None:
+    ) -> KanbanTaskInfo | None:
         """Create a new task on a board.
 
         Emits taskCreated event to board subscribers.
@@ -573,7 +573,7 @@ class KanbanWebSocketService:
         board_id: str,
         title: str | None = None,
         description: str | None = None,
-    ) -> TaskInfo | None:
+    ) -> KanbanTaskInfo | None:
         """Update a task's title and/or description.
 
         Emits taskUpdated event to board subscribers.

@@ -182,6 +182,6 @@ for async integration.
 - **heed/LMDB**: Embedded key-value database (ACID, single-writer MVCC)
 - **procstream**: Process execution with streaming output
 - **core-executor**: CPU-affine async executor
-- **tokio**: Async runtime for supervisor operations
+- **smol**: Lightweight async runtime for supervisor operations
 - **serde_json**: JSON serialization
 - **PyO3**: Python bindings

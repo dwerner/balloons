@@ -11,6 +11,12 @@
  * - Session nodes bound to entities with role indicators
  * - Action buttons: [+plan], [+todo], [+session], [done], [move], [unbind], [+rollup]
  * - Unbound sessions section
+ *
+ * URL ROUTING INTEGRATION:
+ * - Goal/plan/todo selection should update URL to #/goals/:goalId/plans/:planId/todos/:todoId
+ * - Session clicks should navigate to #/sessions/:sessionId
+ * - Router should expand tree nodes based on URL params
+ * - See docs/url-routing.md for the full routing design
  */
 
 import React, { useState, useCallback, useMemo, memo, useEffect } from 'react';

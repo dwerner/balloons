@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-03-02T11:07:31.752035
+// Generated: 2026-03-03T09:17:58.108553
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -2530,6 +2530,21 @@ export interface SessionDataService {
   getSession(sessionId: string): Promise<Types.SessionInfo | null>;
 
   /**
+   * Get the parent chain for a session (ancestors from immediate parent to root).
+   * 
+   * This traverses the fork tree upward, returning all ancestor sessions
+   * in order from immediate parent to the root session.
+   * 
+   * Args:
+   * session_id: The session ID to get parents for
+   * 
+   * Returns:
+   * List of SessionInfo for each parent, ordered from immediate parent to root.
+   * Empty list if the session has no parent (is a root session).
+   */
+  getSessionParentChain(sessionId: string): Promise<Types.SessionInfo[]>;
+
+  /**
    * Get a complete snapshot of the session's current state.
    * 
    * Use this when subscribing to get the initial state before
@@ -2834,6 +2849,10 @@ export class SessionDataServiceClient implements SessionDataService {
 
   async getSession(sessionId: string): Promise<Types.SessionInfo | null> {
     return this.call('getSession', { sessionId: sessionId });
+  }
+
+  async getSessionParentChain(sessionId: string): Promise<Types.SessionInfo[]> {
+    return this.call('getSessionParentChain', { sessionId: sessionId });
   }
 
   async getSessionSnapshot(sessionId: string): Promise<Types.SessionSnapshot | null> {
@@ -4405,7 +4424,7 @@ export interface KanbanWebSocketService {
    * Returns:
    * Created task info, or None if board not found
    */
-  createTask(boardId: string, title: string, description?: string, columnId?: string | null): Promise<Types.TaskInfo | null>;
+  createTask(boardId: string, title: string, description?: string, columnId?: string | null): Promise<Types.KanbanTaskInfo | null>;
 
   /**
    * Delete a board.
@@ -4553,7 +4572,7 @@ export interface KanbanWebSocketService {
    * Returns:
    * Updated task info, or None if not found
    */
-  updateTask(taskId: string, boardId: string, title?: string | null, description?: string | null): Promise<Types.TaskInfo | null>;
+  updateTask(taskId: string, boardId: string, title?: string | null, description?: string | null): Promise<Types.KanbanTaskInfo | null>;
 
 }
 
@@ -4659,7 +4678,7 @@ export class KanbanWebSocketServiceClient implements KanbanWebSocketService {
     return this.call('createBoard', { name: name });
   }
 
-  async createTask(boardId: string, title: string, description?: string, columnId?: string | null): Promise<Types.TaskInfo | null> {
+  async createTask(boardId: string, title: string, description?: string, columnId?: string | null): Promise<Types.KanbanTaskInfo | null> {
     return this.call('createTask', { boardId: boardId, title: title, description: description, columnId: columnId });
   }
 
@@ -4703,7 +4722,7 @@ export class KanbanWebSocketServiceClient implements KanbanWebSocketService {
     return this.call('unsubscribeBoard', { boardId: boardId, clientId: clientId });
   }
 
-  async updateTask(taskId: string, boardId: string, title?: string | null, description?: string | null): Promise<Types.TaskInfo | null> {
+  async updateTask(taskId: string, boardId: string, title?: string | null, description?: string | null): Promise<Types.KanbanTaskInfo | null> {
     return this.call('updateTask', { taskId: taskId, boardId: boardId, title: title, description: description });
   }
 

@@ -768,6 +768,17 @@ class ClaudeRunner(BaseRunner):
                 # Tool results received - back to hard timeout for Claude's response
                 if not pending_tool_calls:
                     awaiting_tool_execution = False
+                    # Check for mid-stream injection after CLI tool execution
+                    if self._injection_callback:
+                        injection = await self._injection_callback()
+                        if injection:
+                            debug_log.info(
+                                f"Injecting user steering message after CLI tools",
+                                category=Category.RUNNER,
+                                details={"injection_len": len(injection)},
+                                run_id=self._run_id,
+                            )
+                            await self._send_user_injection(injection)
                 continue
 
             # Handle result event (turn complete)

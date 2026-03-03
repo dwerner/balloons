@@ -154,6 +154,10 @@
   overflow: hidden;
 }
 
+.kanban-board-view--mobile {
+  /* Mobile-specific adjustments */
+}
+
 .kanban-board-view__header {
   display: flex;
   align-items: center;
@@ -187,7 +191,7 @@
 }
 
 /* =============================================================================
-   Columns Container
+   Desktop: Columns Container (horizontal scroll)
    ============================================================================= */
 
 .kanban-columns-container {
@@ -200,7 +204,7 @@
 }
 
 /* =============================================================================
-   Column
+   Desktop: Column
    ============================================================================= */
 
 .kanban-column {
@@ -283,7 +287,109 @@
 }
 
 /* =============================================================================
-   Task Card
+   Mobile: Accordion Container
+   ============================================================================= */
+
+.kanban-accordion-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  gap: 4px;
+  overflow-y: auto;
+  /* The whole accordion area scrolls as one unit, like the chat log */
+}
+
+/* =============================================================================
+   Mobile: Accordion Column
+   ============================================================================= */
+
+.kanban-accordion {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.kanban-accordion--expanded {
+  /* Subtle highlight for expanded state */
+}
+
+.kanban-accordion__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--color-text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 0.15s ease;
+}
+
+.kanban-accordion__header:hover {
+  background: var(--color-bg-hover);
+}
+
+.kanban-accordion__icon {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  width: 12px;
+  flex-shrink: 0;
+}
+
+.kanban-accordion__title {
+  flex: 1;
+}
+
+.kanban-accordion__count {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.kanban-accordion__add-btn {
+  padding: 4px 10px;
+  font-size: 16px;
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.kanban-accordion__add-btn:hover {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+}
+
+.kanban-accordion__content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 8px 8px 8px;
+  border-top: 1px solid var(--color-border);
+  padding-top: 8px;
+  /* On mobile, expanded columns grow to show all content - the outer container scrolls */
+}
+
+.kanban-accordion__empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+/* =============================================================================
+   Task Card (shared)
    ============================================================================= */
 
 .kanban-task-card {
@@ -310,6 +416,19 @@
   cursor: grabbing;
 }
 
+/* Mobile task card - no drag cursor */
+.kanban-task-card--mobile {
+  cursor: default;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.kanban-task-card--mobile .kanban-task-card__content {
+  flex: 1;
+  min-width: 0; /* Allow text truncation */
+}
+
 .kanban-task-card__title {
   font-size: 13px;
   font-weight: 500;
@@ -328,6 +447,7 @@
   overflow: hidden;
 }
 
+/* Desktop: Actions appear on hover */
 .kanban-task-card__actions {
   position: absolute;
   top: 4px;
@@ -342,8 +462,17 @@
   opacity: 1;
 }
 
+/* Mobile: Actions always visible, in a row */
+.kanban-task-card__actions--mobile {
+  position: static;
+  opacity: 1;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
 .kanban-task-card__action {
-  padding: 2px 6px;
+  padding: 4px 8px;
   font-size: 12px;
   background: var(--color-bg-secondary);
   border: none;
@@ -421,12 +550,24 @@
   background: var(--color-bg-primary);
   border: 1px solid var(--color-border);
   border-radius: 12px;
-  min-width: 400px;
+  min-width: 320px;
   max-width: 90vw;
   max-height: 90vh;
   display: flex;
   flex-direction: column;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+/* Bottom sheet style for mobile move modal */
+.kanban-modal--bottom-sheet {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  max-width: 100%;
+  min-width: 100%;
+  border-radius: 16px 16px 0 0;
+  max-height: 60vh;
 }
 
 .kanban-modal__header {
@@ -471,6 +612,56 @@
   gap: 8px;
   padding: 16px 20px;
   border-top: 1px solid var(--color-border);
+}
+
+/* =============================================================================
+   Move Task Options (mobile)
+   ============================================================================= */
+
+.kanban-move-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.kanban-move-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: left;
+  color: var(--color-text-primary);
+  font-size: 14px;
+}
+
+.kanban-move-option:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  border-color: var(--color-border-hover);
+}
+
+.kanban-move-option:disabled {
+  cursor: default;
+}
+
+.kanban-move-option--current {
+  background: var(--color-accent-bg, rgba(var(--color-accent-rgb), 0.1));
+  border-color: var(--color-accent);
+}
+
+.kanban-move-option__name {
+  font-weight: 500;
+}
+
+.kanban-move-option__current {
+  font-size: 11px;
+  color: var(--color-accent);
+  font-weight: 500;
+  text-transform: uppercase;
 }
 
 /* =============================================================================

@@ -11,6 +11,11 @@
  * - Real-time event-driven updates (no polling)
  * - Cancel active streams
  * - Jump to session
+ *
+ * URL ROUTING: This is a global tab at #/llm
+ * - Task selection could use #/llm/:taskId
+ * - "Jump to session" should navigate to #/sessions/:sessionId
+ * - See docs/url-routing.md for the full routing design
  */
 
 import React, { useState, useCallback, useEffect, memo } from 'react';

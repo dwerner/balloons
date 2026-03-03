@@ -1495,6 +1495,93 @@ class SessionDataService:
 
         return await self._session_dict_to_info(data, pinned_ids, streaming_ids)
 
+    @ws_expose
+    async def get_session_parent_chain(self, session_id: str) -> list[SessionInfo]:
+        """Get the parent chain for a session (ancestors from immediate parent to root).
+
+        This traverses the fork tree upward, returning all ancestor sessions
+        in order from immediate parent to the root session.
+
+        Args:
+            session_id: The session ID to get parents for
+
+        Returns:
+            List of SessionInfo for each parent, ordered from immediate parent to root.
+            Empty list if the session has no parent (is a root session).
+        """
+        from core.debug_log import debug_log
+
+        if not self._storage:
+            debug_log.warning(
+                "get_session_parent_chain called without storage configured",
+                category=Category.API,
+            )
+            return []
+
+        parents: list[SessionInfo] = []
+        current_id = session_id
+        visited: set[str] = {session_id}  # Prevent infinite loops
+
+        # Load pinned and streaming state once
+        pinned_ids = await self._load_pinned_session_ids()
+        streaming_ids: set[str] = set()
+        if self._stream_state:
+            for stream in self._stream_state.get_active_streams():
+                streaming_ids.add(stream.session_id)
+
+        while True:
+            # Load the current session to get its parent_id
+            session = await self._storage.load_session(current_id)
+            if not session:
+                break
+
+            parent_id = session.parent_id
+            if not parent_id:
+                break  # Reached root
+
+            if parent_id in visited:
+                debug_log.warning(
+                    f"Cycle detected in parent chain at {parent_id}",
+                    category=Category.API,
+                )
+                break
+
+            visited.add(parent_id)
+
+            # Load the parent session
+            parent_session = await self._storage.load_session(parent_id)
+            if not parent_session:
+                debug_log.warning(
+                    f"Parent session {parent_id[:8]} not found",
+                    category=Category.API,
+                )
+                break
+
+            # Convert to SessionInfo
+            data = {
+                "id": parent_session.id,
+                "title": parent_session.title,
+                "created": parent_session.created,
+                "last_modified": parent_session.last_modified,
+                "model": parent_session.model,
+                "message_count": len(parent_session.turns),
+                "total_cost": parent_session.total_cost,
+                "fork_name": parent_session.fork_name,
+                "fork_status": parent_session.fork_status,
+                "parent_id": parent_session.parent_id,
+                "cached_context_tokens": getattr(parent_session, "cached_context_tokens", 0),
+                "context_window": getattr(parent_session, "context_window", 150000),
+                "binding_indicator": getattr(parent_session, "binding_indicator", ""),
+                "backend_name": getattr(parent_session, "backend_name", ""),
+            }
+
+            parent_info = await self._session_dict_to_info(data, pinned_ids, streaming_ids)
+            parents.append(parent_info)
+
+            current_id = parent_id
+
+        return parents
+
     # --- Turn Access ---
     # NOTE: get_turns() and get_turn() have been removed.
     # History is loaded via the subscription API (historyChunk events).

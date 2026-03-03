@@ -2637,6 +2637,7 @@ function AppContent() {
                 sessionContextTokens={selectedSession.cachedContextTokens}
                 isPinned={selectedSession.isPinned ?? false}
                 onTogglePin={() => handleTogglePin(selectedSession.id)}
+                onSelectSession={setSelectedSessionId}
                 scrollState={scrollState}
                 session={selectedSession}
                 client={clientRef.current}
@@ -2654,6 +2655,7 @@ function AppContent() {
                 isStreaming={selectedSession.isStreaming}
                 client={clientRef.current}
                 onTogglePin={() => handleTogglePin(selectedSession.id)}
+                onSelectSession={setSelectedSessionId}
                 cwd={selectedSession.workingDirectory}
                 scrollState={scrollState}
                 onCwdClick={handleCwdClick}
@@ -3370,10 +3372,16 @@ function MobileHeader({ connectionState, selectedSession }: MobileHeaderProps) {
 // Main content tab type
 // Session tabs: streaming, context, properties, slides (depend on selected session)
 // Global tabs: code, logs, llm, settings (app-wide)
+//
+// URL ROUTING: When adding new tabs, also update:
+// - docs/url-routing.md (add route to URL scheme)
+// - routes.ts (add route constant when created)
+// - useRouter hook (add route handler when created)
 type MainContentTab = 'streaming' | 'context' | 'properties' | 'slides' | 'code' | 'logs' | 'llm' | 'settings' | 'kanban';
 type OuterTab = 'session' | 'global';
 
 // Helper to determine which outer tab a content tab belongs to
+// URL ROUTING: Add new session tabs to SESSION_TABS, global tabs to GLOBAL_TABS
 const SESSION_TABS: MainContentTab[] = ['streaming', 'context', 'properties', 'slides'];
 const GLOBAL_TABS: MainContentTab[] = ['code', 'logs', 'llm', 'settings', 'kanban'];
 
@@ -3606,6 +3614,7 @@ interface SessionListItemProps {
   onSelect: () => void;
   onTogglePin?: () => void;
   onRenamed?: (newTitle: string) => void;
+  onSelectSession?: (sessionId: string) => void;
   itemRef?: (el: HTMLDivElement | null) => void;
 }
 
@@ -3619,6 +3628,7 @@ function SessionListItem({
   onSelect,
   onTogglePin,
   onRenamed,
+  onSelectSession,
   itemRef,
 }: SessionListItemProps) {
   const [showRenameModal, setShowRenameModal] = useState(false);
@@ -3691,7 +3701,9 @@ function SessionListItem({
           sessionId={session.id}
           currentTitle={session.title || session.forkName || ''}
           client={client.sessions}
+          sessionDataClient={client.sessionData}
           onRenamed={handleRenamed}
+          onNavigateToSession={onSelectSession}
         />
       )}
     </>
@@ -4009,6 +4021,7 @@ function SidebarContent({
                 client={client}
                 onSelect={() => handleSelectSession(session.id)}
                 onTogglePin={onTogglePin ? () => onTogglePin(session.id) : undefined}
+                onSelectSession={onSelectSession}
                 itemRef={(el) => {
                   if (el) sessionItemRefs.current.set(session.id, el);
                   else sessionItemRefs.current.delete(session.id);

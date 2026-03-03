@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-03-02T11:07:31.747592
+// Generated: 2026-03-03T09:17:58.104233
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -1192,7 +1192,7 @@ export interface EventHistoryResult {
   totalBuffered: number;
 }
 
-export interface TaskInfo {
+export interface KanbanTaskInfo {
   id: string;
   title: string;
   description: string;
@@ -1217,7 +1217,7 @@ export interface BoardInfo {
 export interface BoardStateInfo {
   board: BoardInfo;
   columns: ColumnInfo[];
-  tasks: TaskInfo[];
+  tasks: KanbanTaskInfo[];
 }
 
 export interface BoardSubscriptionResult {
@@ -1243,14 +1243,14 @@ export interface TaskMovedEvent {
 
 export interface TaskCreatedEvent {
   boardId: string;
-  task: TaskInfo;
+  task: KanbanTaskInfo;
   columnId: string;
   position: number;
 }
 
 export interface TaskUpdatedEvent {
   boardId: string;
-  task: TaskInfo;
+  task: KanbanTaskInfo;
 }
 
 export interface TaskDeletedEvent {

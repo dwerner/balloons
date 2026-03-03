@@ -1,9 +1,11 @@
 /**
- * RenameSessionModal - Modal for renaming a session
+ * RenameSessionModal - Modal for renaming a session and navigating to parents
  *
  * Features:
  * - Title input field with current session name pre-filled
  * - Save button to confirm rename
+ * - Parent session chain display (for forked sessions)
+ * - Click parent to navigate to that session
  * - Cancel button to dismiss without changes
  * - Dismiss on Escape or backdrop click
  * - Calls client.sessions.setSessionTitle() on submit
@@ -11,8 +13,12 @@
 
 import React, { useState, useCallback, useRef, useEffect, memo } from 'react';
 import { Modal, ModalFooter } from '../Modal/Modal';
-import type { SessionManagerServiceClient } from '../../../../generated/client';
+import type { SessionManagerServiceClient, SessionDataServiceClient } from '../../../../generated/client';
+import type { SessionInfo } from '../../../../generated/types';
+import { createLogger } from '../../utils/debugLog';
 import './RenameSessionModal.css';
+
+const debugLog = createLogger('RenameSessionModal');
 
 export interface RenameSessionModalProps {
   /** Whether the modal is open */
@@ -30,8 +36,21 @@ export interface RenameSessionModalProps {
   /** Session manager client for API calls */
   client: SessionManagerServiceClient;
 
+  /** Session data client for fetching parent chain */
+  sessionDataClient?: SessionDataServiceClient;
+
   /** Called when session is renamed successfully */
   onRenamed?: (newTitle: string) => void;
+
+  /** Called when user wants to navigate to a parent session */
+  onNavigateToSession?: (sessionId: string) => void;
+}
+
+/**
+ * Get display name for a session
+ */
+function getSessionDisplayName(session: SessionInfo): string {
+  return session.forkName || session.title || `Session ${session.id.slice(0, 8)}`;
 }
 
 /**
@@ -43,12 +62,18 @@ export const RenameSessionModal = memo(function RenameSessionModal({
   sessionId,
   currentTitle,
   client,
+  sessionDataClient,
   onRenamed,
+  onNavigateToSession,
 }: RenameSessionModalProps) {
   // Form state
   const [title, setTitle] = useState(currentTitle);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Parent chain state
+  const [parentChain, setParentChain] = useState<SessionInfo[]>([]);
+  const [isLoadingParents, setIsLoadingParents] = useState(false);
 
   // Ref for title input to focus on mount
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -66,6 +91,29 @@ export const RenameSessionModal = memo(function RenameSessionModal({
       }, 50);
     }
   }, [isOpen, currentTitle]);
+
+  // Load parent chain when modal opens
+  useEffect(() => {
+    debugLog('Parent chain effect triggered', { isOpen, sessionId, hasClient: !!sessionDataClient });
+    if (isOpen && sessionDataClient) {
+      setIsLoadingParents(true);
+      debugLog('Fetching parent chain', { sessionId });
+      sessionDataClient.getSessionParentChain(sessionId)
+        .then(parents => {
+          debugLog('Got parent chain', { count: parents.length, parents: parents.map(p => ({ id: p.id.slice(0, 8), name: p.forkName || p.title })) });
+          setParentChain(parents);
+        })
+        .catch(err => {
+          debugLog('Failed to load parent chain', { error: String(err) });
+          setParentChain([]);
+        })
+        .finally(() => {
+          setIsLoadingParents(false);
+        });
+    } else if (!isOpen) {
+      setParentChain([]);
+    }
+  }, [isOpen, sessionId, sessionDataClient]);
 
   // Submit handler
   const handleSubmit = useCallback(async () => {
@@ -113,11 +161,19 @@ export const RenameSessionModal = memo(function RenameSessionModal({
     [handleSubmit]
   );
 
+  // Handle parent session click
+  const handleParentClick = useCallback((parentId: string) => {
+    if (onNavigateToSession) {
+      onNavigateToSession(parentId);
+      onClose();
+    }
+  }, [onNavigateToSession, onClose]);
+
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Rename Session"
+      title="Session"
       size="small"
       className="rename-session-modal"
       ariaDescribedBy="rename-session-description"
@@ -148,6 +204,39 @@ export const RenameSessionModal = memo(function RenameSessionModal({
             />
           </label>
         </div>
+
+        {/* Parent chain section */}
+        {(parentChain.length > 0 || isLoadingParents) && (
+          <div className="rename-session-modal__parents">
+            <span className="rename-session-modal__label">Parent Sessions</span>
+            {isLoadingParents ? (
+              <div className="rename-session-modal__parents-loading">Loading...</div>
+            ) : (
+              <div className="rename-session-modal__parents-list">
+                {parentChain.map((parent, index) => (
+                  <button
+                    key={parent.id}
+                    type="button"
+                    className="rename-session-modal__parent-item"
+                    onClick={() => handleParentClick(parent.id)}
+                    disabled={!onNavigateToSession}
+                    title={`Navigate to ${getSessionDisplayName(parent)}`}
+                  >
+                    <span className="rename-session-modal__parent-depth">
+                      {'↑'.repeat(index + 1)}
+                    </span>
+                    <span className="rename-session-modal__parent-name">
+                      {getSessionDisplayName(parent)}
+                    </span>
+                    <span className="rename-session-modal__parent-id">
+                      {parent.id.slice(0, 8)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <ModalFooter>
