@@ -653,18 +653,8 @@ function useLongPress(
   };
 }
 
-// Exchange node component - groups user + assistant turns
-function ExchangeNode({
-  exchange,
-  isExpanded,
-  contextMode,
-  isArchiving,
-  onToggle,
-  onContextModeChange,
-  onArchive,
-  onDelete,
-  onTurnClick,
-}: {
+// Exchange node props for memoization
+interface ExchangeNodeProps {
   exchange: Exchange;
   isExpanded: boolean;
   contextMode?: ContextMode;
@@ -674,7 +664,21 @@ function ExchangeNode({
   onArchive?: () => void;
   onDelete?: () => void;
   onTurnClick?: (turnIdx: number) => void;
-}) {
+}
+
+// Exchange node component - groups user + assistant turns
+// Memoized to prevent re-renders when parent SessionNode re-renders
+const ExchangeNode = memo(function ExchangeNode({
+  exchange,
+  isExpanded,
+  contextMode,
+  isArchiving,
+  onToggle,
+  onContextModeChange,
+  onArchive,
+  onDelete,
+  onTurnClick,
+}: ExchangeNodeProps) {
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
 
   // Debug log when menuPosition changes
@@ -823,35 +827,13 @@ function ExchangeNode({
       )}
     </li>
   );
-}
+});
 
 // Exchange action type for callbacks
 export type ExchangeAction = 'archive' | 'delete';
 
-// Session node component
-function SessionNode({
-  session,
-  index,
-  isSelected,
-  isChecked,
-  isExpanded,
-  turns,
-  isLoadingTurns,
-  showCheckboxes,
-  onToggle,
-  onSelect,
-  onTogglePin,
-  onToggleCheck,
-  onExchangeContextModeChange,
-  onExchangeAction,
-  onTurnClick,
-  onReview,
-  onRename,
-  onLinkSession,
-  onWatchSession,
-  selectedSessionId,
-  archivingTurnIndices,
-}: {
+// Session node props for memoization
+interface SessionNodeProps {
   session: SessionInfo;
   index: number;
   isSelected: boolean;
@@ -873,7 +855,76 @@ function SessionNode({
   onWatchSession?: () => void;
   selectedSessionId: string | null;
   archivingTurnIndices?: Set<number>;
-}) {
+}
+
+/**
+ * Custom comparison for SessionNode memoization.
+ * Only re-render when meaningful props change.
+ */
+function sessionNodePropsAreEqual(prev: SessionNodeProps, next: SessionNodeProps): boolean {
+  // Always re-render if selection, expansion, or checkbox state changed
+  if (prev.isSelected !== next.isSelected) return false;
+  if (prev.isChecked !== next.isChecked) return false;
+  if (prev.isExpanded !== next.isExpanded) return false;
+  if (prev.isLoadingTurns !== next.isLoadingTurns) return false;
+  if (prev.showCheckboxes !== next.showCheckboxes) return false;
+
+  // Session identity and metadata
+  if (prev.session.id !== next.session.id) return false;
+  if (prev.session.messageCount !== next.session.messageCount) return false;
+  if (prev.session.isStreaming !== next.session.isStreaming) return false;
+  if (prev.session.isPinned !== next.session.isPinned) return false;
+  if (prev.session.title !== next.session.title) return false;
+  if (prev.session.forkName !== next.session.forkName) return false;
+  if (prev.session.forkStatus !== next.session.forkStatus) return false;
+
+  // If collapsed, don't care about turns content
+  if (!next.isExpanded) return true;
+
+  // For expanded nodes, check if turns array changed
+  // Compare by length first (fast check), then by turn IDs/content
+  if (prev.turns.length !== next.turns.length) return false;
+
+  // Check if archiving state changed for any turn
+  if (prev.archivingTurnIndices?.size !== next.archivingTurnIndices?.size) return false;
+
+  // Deep check turns only if same length - compare by idx and tokens (content proxy)
+  for (let i = 0; i < prev.turns.length; i++) {
+    const prevTurn = prev.turns[i];
+    const nextTurn = next.turns[i];
+    if (!prevTurn || !nextTurn) return false;
+    if (prevTurn.idx !== nextTurn.idx) return false;
+    if (prevTurn.tokens !== nextTurn.tokens) return false;
+    if (prevTurn.contextMode !== nextTurn.contextMode) return false;
+  }
+
+  return true;
+}
+
+// Session node component - memoized to prevent unnecessary re-renders
+const SessionNode = memo(function SessionNode({
+  session,
+  index,
+  isSelected,
+  isChecked,
+  isExpanded,
+  turns,
+  isLoadingTurns,
+  showCheckboxes,
+  onToggle,
+  onSelect,
+  onTogglePin,
+  onToggleCheck,
+  onExchangeContextModeChange,
+  onExchangeAction,
+  onTurnClick,
+  onReview,
+  onRename,
+  onLinkSession,
+  onWatchSession,
+  selectedSessionId,
+  archivingTurnIndices,
+}: SessionNodeProps) {
   const sessionColor = SESSION_COLORS[index % SESSION_COLORS.length] || '#60a5fa';
   const sessionName = session.forkName || session.title || `Session ${session.id.slice(0, 8)}`;
   const isPinned = session.isPinned ?? false;
@@ -1034,7 +1085,7 @@ function SessionNode({
       )}
     </li>
   );
-}
+}, sessionNodePropsAreEqual);
 
 // Bulk action type
 export type BulkAction = 'archive' | 'delete' | 'unarchive';

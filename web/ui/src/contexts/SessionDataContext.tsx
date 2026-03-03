@@ -4,6 +4,12 @@
  * Provides a single source of truth for session turns, streaming state, and
  * subscription management across the application.
  *
+ * PERFORMANCE OPTIMIZATIONS:
+ * - Uses versioned state tracking to avoid creating new objects on every update
+ * - Separates high-frequency updates (progress) from structural changes (turns)
+ * - Maintains stable array references using cached sorted turns
+ * - Only triggers React re-renders when relevant data actually changes
+ *
  * Usage:
  *   <SessionDataProvider client={client}>
  *     <App />
@@ -28,6 +34,7 @@ import {
   type ManagedTurn,
   type StreamingProgress,
   type SessionState,
+  type ChangeType,
 } from '../lib/SessionDataManager';
 import { createLogger } from '../utils/debugLog';
 
@@ -66,6 +73,12 @@ export interface SessionDataContextValue {
 
   /** Whether history is currently loading for active session */
   isLoadingHistory: boolean;
+
+  /** Version counter for turns (increments on structural changes) */
+  turnsVersion: number;
+
+  /** Version counter for streaming state */
+  streamingVersion: number;
 }
 
 const SessionDataContext = createContext<SessionDataContextValue | null>(null);
@@ -75,19 +88,67 @@ interface SessionDataProviderProps {
   children: React.ReactNode;
 }
 
+/**
+ * Cached sorted turns array to avoid recreating on every render.
+ * Only rebuilt when the turns Map actually changes.
+ */
+interface TurnsCache {
+  /** Version when this cache was built */
+  version: number;
+  /** The cached sorted array */
+  turns: ManagedTurn[];
+  /** Session ID this cache is for */
+  sessionId: string | null;
+}
+
 export function SessionDataProvider({ client, children }: SessionDataProviderProps): React.ReactElement {
   // Manager instance - created when client connects
   const managerRef = useRef<SessionDataManager | null>(null);
 
-  // Track state for active session
-  const [activeSessionId, setActiveSessionIdState] = useState<string | null>(null);
-  const [activeSessionState, setActiveSessionState] = useState<SessionState | null>(null);
+  // Version counters for different types of changes
+  // Incrementing these triggers selective re-renders
+  const [turnsVersion, setTurnsVersion] = useState(0);
+  const [streamingVersion, setStreamingVersion] = useState(0);
 
-  // Derived state for convenience
-  const activeSessionTurns = useMemo(() => {
-    if (!activeSessionState) return [];
-    return Array.from(activeSessionState.turns.values()).sort((a, b) => a.order - b.order);
-  }, [activeSessionState]);
+  // Active session tracking
+  const [activeSessionId, setActiveSessionIdState] = useState<string | null>(null);
+
+  // Cache for sorted turns array - avoids recreating array on every render
+  const turnsCacheRef = useRef<TurnsCache>({ version: -1, turns: [], sessionId: null });
+
+  // Direct state access refs (avoid triggering re-renders for high-frequency updates)
+  const streamingProgressRef = useRef<StreamingProgress | null>(null);
+  const isStreamingRef = useRef(false);
+  const streamErrorRef = useRef<string | null>(null);
+  const historyLoadedRef = useRef(false);
+
+  // Progress update batching - don't trigger re-renders for every progress tick
+  const lastProgressRenderRef = useRef(0);
+  const PROGRESS_RENDER_INTERVAL_MS = 200; // Only render progress updates every 200ms
+
+  // Get sorted turns array, using cache when possible
+  const getActiveSessionTurns = useCallback((): ManagedTurn[] => {
+    const manager = managerRef.current;
+    if (!manager || !activeSessionId) {
+      return [];
+    }
+
+    const cache = turnsCacheRef.current;
+    // Return cached array if version matches and same session
+    if (cache.version === turnsVersion && cache.sessionId === activeSessionId) {
+      return cache.turns;
+    }
+
+    // Rebuild cache
+    const turns = manager.getTurns(activeSessionId);
+    turnsCacheRef.current = {
+      version: turnsVersion,
+      turns,
+      sessionId: activeSessionId,
+    };
+
+    return turns;
+  }, [activeSessionId, turnsVersion]);
 
   // Initialize manager when client connects
   useEffect(() => {
@@ -98,7 +159,13 @@ export function SessionDataProvider({ client, children }: SessionDataProviderPro
         managerRef.current = null;
       }
       setActiveSessionIdState(null);
-      setActiveSessionState(null);
+      setTurnsVersion(0);
+      setStreamingVersion(0);
+      streamingProgressRef.current = null;
+      isStreamingRef.current = false;
+      streamErrorRef.current = null;
+      historyLoadedRef.current = false;
+      turnsCacheRef.current = { version: -1, turns: [], sessionId: null };
       return;
     }
 
@@ -112,10 +179,44 @@ export function SessionDataProvider({ client, children }: SessionDataProviderPro
     const manager = new SessionDataManager(client);
     managerRef.current = manager;
 
-    // Listen for state changes
-    const unsubscribe = manager.addListener((sessionId, state) => {
-      if (sessionId === manager.getActiveSessionId()) {
-        setActiveSessionState({ ...state, turns: new Map(state.turns) });
+    // Listen for state changes with change type awareness
+    const unsubscribe = manager.addListener((sessionId, state, changeType) => {
+      // Only process updates for the active session
+      if (sessionId !== manager.getActiveSessionId()) {
+        return;
+      }
+
+      switch (changeType) {
+        case 'turns':
+        case 'history':
+          // Structural changes - update refs and increment version
+          historyLoadedRef.current = state.historyLoaded;
+          setTurnsVersion(v => v + 1);
+          break;
+
+        case 'streaming':
+          // Streaming state changed - update refs and increment version
+          isStreamingRef.current = state.isStreaming;
+          streamingProgressRef.current = state.streamingProgress;
+          setStreamingVersion(v => v + 1);
+          break;
+
+        case 'progress':
+          // High-frequency progress updates - only trigger render periodically
+          streamingProgressRef.current = state.streamingProgress;
+          const now = Date.now();
+          if (now - lastProgressRenderRef.current >= PROGRESS_RENDER_INTERVAL_MS) {
+            lastProgressRenderRef.current = now;
+            setStreamingVersion(v => v + 1);
+          }
+          break;
+
+        case 'error':
+          // Error state - always render immediately
+          streamErrorRef.current = state.streamError;
+          isStreamingRef.current = state.isStreaming;
+          setStreamingVersion(v => v + 1);
+          break;
       }
     });
 
@@ -138,45 +239,70 @@ export function SessionDataProvider({ client, children }: SessionDataProviderPro
 
     debugLog('setActiveSession', { sessionId: sessionId?.slice(0, 8) });
 
-    await manager.setActiveSession(sessionId);
+    // Update local state immediately
     setActiveSessionIdState(sessionId);
 
-    // Get initial state
+    // Clear cache for new session
+    turnsCacheRef.current = { version: -1, turns: [], sessionId: null };
+
+    // Subscribe to new session
+    await manager.setActiveSession(sessionId);
+
+    // Initialize refs from session state
     if (sessionId) {
       const state = manager.getSession(sessionId);
       if (state) {
-        setActiveSessionState({ ...state, turns: new Map(state.turns) });
+        isStreamingRef.current = state.isStreaming;
+        streamingProgressRef.current = state.streamingProgress;
+        streamErrorRef.current = state.streamError;
+        historyLoadedRef.current = state.historyLoaded;
       }
     } else {
-      setActiveSessionState(null);
+      isStreamingRef.current = false;
+      streamingProgressRef.current = null;
+      streamErrorRef.current = null;
+      historyLoadedRef.current = false;
     }
+
+    // Trigger re-render with new session data
+    setTurnsVersion(v => v + 1);
+    setStreamingVersion(v => v + 1);
   }, []);
 
-  // Get turns for any session
+  // Get turns for any session (used by tree view for non-active sessions)
   const getTurns = useCallback((sessionId: string): ManagedTurn[] => {
     const manager = managerRef.current;
     if (!manager) return [];
     return manager.getTurns(sessionId);
   }, []);
 
-  // Context value
+  // Memoized turns array - only changes when turnsVersion or activeSessionId changes
+  const activeSessionTurns = useMemo(() => {
+    return getActiveSessionTurns();
+  }, [getActiveSessionTurns]);
+
+  // Context value - only recreated when versions or session change
   const value = useMemo<SessionDataContextValue>(() => ({
     manager: managerRef.current,
     activeSessionId,
     setActiveSession,
     getTurns,
     activeSessionTurns,
-    isStreaming: activeSessionState?.isStreaming ?? false,
-    streamingProgress: activeSessionState?.streamingProgress ?? null,
-    streamError: activeSessionState?.streamError ?? null,
-    historyLoaded: activeSessionState?.historyLoaded ?? false,
-    isLoadingHistory: !activeSessionState?.historyLoaded && activeSessionId !== null,
+    // Read from refs for latest values without triggering re-renders
+    isStreaming: isStreamingRef.current,
+    streamingProgress: streamingProgressRef.current,
+    streamError: streamErrorRef.current,
+    historyLoaded: historyLoadedRef.current,
+    isLoadingHistory: !historyLoadedRef.current && activeSessionId !== null,
+    turnsVersion,
+    streamingVersion,
   }), [
     activeSessionId,
     setActiveSession,
     getTurns,
     activeSessionTurns,
-    activeSessionState,
+    turnsVersion,
+    streamingVersion,
   ]);
 
   return (
@@ -200,34 +326,61 @@ export function useSessionDataContext(): SessionDataContextValue {
 /**
  * Hook to get turns for a specific session
  * Returns reactive updates when the session changes
+ *
+ * Optimized to avoid re-renders when the actual turn content hasn't changed.
  */
 export function useSessionTurns(sessionId: string | null): ManagedTurn[] {
-  const { manager, activeSessionId, activeSessionTurns, getTurns } = useSessionDataContext();
-  const [turns, setTurns] = useState<ManagedTurn[]>([]);
+  const { manager, activeSessionId, activeSessionTurns, getTurns, turnsVersion } = useSessionDataContext();
+  const [localTurns, setLocalTurns] = useState<ManagedTurn[]>([]);
+  const localVersionRef = useRef(-1);
 
   useEffect(() => {
     if (!sessionId || !manager) {
-      setTurns([]);
+      if (localTurns.length > 0) {
+        setLocalTurns([]);
+      }
       return;
     }
 
-    // If this is the active session, we already have reactive updates
+    // If this is the active session, we already have reactive updates via context
     if (sessionId === activeSessionId) {
-      setTurns(activeSessionTurns);
       return;
     }
 
-    // For non-active sessions, get cached turns and listen for changes
-    setTurns(getTurns(sessionId));
+    // For non-active sessions, get cached turns
+    setLocalTurns(getTurns(sessionId));
 
-    const unsubscribe = manager.addListener((changedSessionId, state) => {
-      if (changedSessionId === sessionId) {
-        setTurns(Array.from(state.turns.values()).sort((a, b) => a.order - b.order));
+    // Listen for changes to this specific session
+    const unsubscribe = manager.addListener((changedSessionId, state, changeType) => {
+      if (changedSessionId === sessionId && (changeType === 'turns' || changeType === 'history')) {
+        // Only update if turns actually changed (new turn added, content changed, etc.)
+        const newTurns = Array.from(state.turns.values()).sort((a, b) => a.order - b.order);
+        setLocalTurns(newTurns);
       }
     });
 
     return unsubscribe;
-  }, [sessionId, manager, activeSessionId, activeSessionTurns, getTurns]);
+  }, [sessionId, manager, activeSessionId, getTurns, localTurns.length]);
 
-  return sessionId === activeSessionId ? activeSessionTurns : turns;
+  // Return active session turns from context, or local turns for non-active sessions
+  return sessionId === activeSessionId ? activeSessionTurns : localTurns;
+}
+
+/**
+ * Hook for components that only care about streaming state
+ * Optimized to only re-render on streaming state changes, not turn changes
+ */
+export function useStreamingState(): {
+  isStreaming: boolean;
+  progress: StreamingProgress | null;
+  error: string | null;
+} {
+  const { isStreaming, streamingProgress, streamError, streamingVersion } = useSessionDataContext();
+
+  // Re-render when streamingVersion changes (isStreaming/progress/error changed)
+  return useMemo(() => ({
+    isStreaming,
+    progress: streamingProgress,
+    error: streamError,
+  }), [isStreaming, streamingProgress, streamError, streamingVersion]);
 }
