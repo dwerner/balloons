@@ -6,6 +6,19 @@ use serde::{Deserialize, Serialize};
 /// Unique identifier for a managed process.
 pub type ProcessId = String;
 
+/// Process I/O mode - how stdout/stderr is parsed.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessMode {
+    /// Line-based reading (default). Each newline-delimited line is an event.
+    #[default]
+    Lines,
+    /// LSP mode. Parses Content-Length headers and delivers complete JSON-RPC messages.
+    Lsp,
+    /// Raw mode. No parsing, delivers chunks as they arrive.
+    Raw,
+}
+
 /// Status of a managed process.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -144,6 +157,9 @@ pub struct StartRequest {
     /// Environment variables to set (in addition to inherited).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env: Vec<(String, String)>,
+    /// I/O mode for parsing stdout/stderr.
+    #[serde(default)]
+    pub mode: ProcessMode,
 }
 
 /// Summary information about a process (for listing).

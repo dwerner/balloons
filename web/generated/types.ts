@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-03-03T09:17:58.104233
+// Generated: 2026-03-03T11:24:00.043276
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -1115,6 +1115,7 @@ export interface ProcessInfo {
   exitCode?: number | null;
   startedAt?: string | null;
   runtimeSeconds?: number | null;
+  processType?: string;
 }
 
 export interface ProcessOutput {
@@ -1190,6 +1191,40 @@ export interface SupervisorEvent {
 export interface EventHistoryResult {
   events: SupervisorEvent[];
   totalBuffered: number;
+}
+
+export interface LSPServerConfig {
+  name: string;
+  command: string;
+  extensions: string[];
+  languages: string[];
+  idleTimeoutSeconds: number;
+}
+
+export interface LSPServerInstance {
+  key: string;
+  serverName: string;
+  workspace: string;
+  processId: string;
+  initialized: boolean;
+  idleSeconds: number;
+  pendingRequests: number;
+  processStatus: string;
+}
+
+export interface LSPStatusResult {
+  configuredServers: LSPServerConfig[];
+  runningInstances: LSPServerInstance[];
+}
+
+export interface LSPActionResult {
+  success: boolean;
+  action: string;
+  key: string;
+  server: string;
+  workspace: string;
+  processId?: string | null;
+  error?: string | null;
 }
 
 export interface KanbanTaskInfo {

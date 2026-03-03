@@ -31,6 +31,7 @@ import {
   DebugLogServiceClient,
   FileStateServiceClient,
   SupervisorStateServiceClient,
+  LSPServiceClient,
   KanbanWebSocketServiceClient,
 } from './client';
 
@@ -75,6 +76,7 @@ export class BalloonsClient {
   private _debugLog: DebugLogServiceClient | null = null;
   private _files: FileStateServiceClient | null = null;
   private _supervisor: SupervisorStateServiceClient | null = null;
+  private _lsp: LSPServiceClient | null = null;
   private _kanban: KanbanWebSocketServiceClient | null = null;
 
   constructor(url: string, options: BalloonsClientOptions = {}) {
@@ -194,6 +196,14 @@ export class BalloonsClient {
       throw new Error('Not connected. Call connect() first.');
     }
     return this._supervisor;
+  }
+
+  /** LSP service (language server management) */
+  get lsp(): LSPServiceClient {
+    if (!this._lsp) {
+      throw new Error('Not connected. Call connect() first.');
+    }
+    return this._lsp;
   }
 
   /** Kanban service (boards, columns, tasks) */
@@ -340,6 +350,7 @@ export class BalloonsClient {
     this._debugLog = new DebugLogServiceClient(this.ws);
     this._files = new FileStateServiceClient(this.ws);
     this._supervisor = new SupervisorStateServiceClient(this.ws);
+    this._lsp = new LSPServiceClient(this.ws);
     this._kanban = new KanbanWebSocketServiceClient(this.ws);
   }
 
@@ -354,6 +365,7 @@ export class BalloonsClient {
     this._debugLog = null;
     this._files = null;
     this._supervisor = null;
+    this._lsp = null;
     this._kanban = null;
     this._clientId = null;
   }
@@ -385,6 +397,7 @@ export {
   DebugLogServiceClient,
   FileStateServiceClient,
   SupervisorStateServiceClient,
+  LSPServiceClient,
   KanbanWebSocketServiceClient,
 } from './client';
 export type { Unsubscribe } from './client';

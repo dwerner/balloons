@@ -14,7 +14,7 @@ use balloons_core::{
     StorageClient, TaskData, TodoData, TodoDependency, TodoPlanLink, UserData, UserPrefs,
     WatcherRelation,
 };
-use balloons_supervisor::{ProcessSupervisor, StartRequest};
+use balloons_supervisor::{ProcessMode, ProcessSupervisor, StartRequest};
 
 // Global executor for supervisor operations - needs multiple threads since
 // each supervised process runs a long-lived event handler task
@@ -1600,10 +1600,11 @@ impl Supervisor {
     ///     working_dir: Optional working directory
     ///     name: Optional friendly name for the process
     ///     env_json: Optional JSON object of environment variables
+    ///     mode: I/O mode - "lines" (default) or "lsp" for Content-Length framing
     ///
     /// Returns:
     ///     Process ID (UUID string)
-    #[pyo3(signature = (command, session_id, working_dir=None, name=None, env_json=None))]
+    #[pyo3(signature = (command, session_id, working_dir=None, name=None, env_json=None, mode=None))]
     fn start(
         &self,
         py: Python<'_>,
@@ -1612,6 +1613,7 @@ impl Supervisor {
         working_dir: Option<&str>,
         name: Option<&str>,
         env_json: Option<&str>,
+        mode: Option<&str>,
     ) -> PyResult<String> {
         let env: Vec<(String, String)> = if let Some(json) = env_json {
             let map: std::collections::HashMap<String, String> =
@@ -1621,12 +1623,18 @@ impl Supervisor {
             vec![]
         };
 
+        let process_mode = match mode {
+            Some("lsp") => ProcessMode::Lsp,
+            _ => ProcessMode::Lines,
+        };
+
         let request = StartRequest {
             command: command.to_string(),
             working_dir: working_dir.map(|s| s.to_string()),
             session_id: session_id.to_string(),
             name: name.map(|s| s.to_string()),
             env,
+            mode: process_mode,
         };
 
         let supervisor = Arc::clone(&self.inner);

@@ -22,6 +22,7 @@ from .supervisor_tools import SUPERVISOR_TOOL_NAMES as SUP_TOOL_NAMES, execute_s
 from .goal_tools import GOAL_TOOL_NAMES, execute_goal_tool
 from .debug_tools import DEBUG_TOOL_NAMES, execute_debug_tool
 from .watcher_tools import WATCHER_TOOL_NAMES, execute_watcher_tool
+from .lsp_tools import LSP_TOOL_NAMES, execute_lsp_tool
 from .fork import ForkProposal, ContextAssignment, MergeProposal
 from .tts import get_tts_runner, TTSConfig
 
@@ -135,6 +136,12 @@ async def execute_tool(
             if session is None:
                 return "Error: Watcher tools require a session context", True
             return await execute_watcher_tool(name, args, session)
+
+        # LSP semantic code tools
+        if name in LSP_TOOL_NAMES:
+            if session is None:
+                return "Error: LSP tools require a session context", True
+            return await execute_lsp_tool(name, args, session, working_dir)
 
         # Standard file/shell tools
         if name == "Read":

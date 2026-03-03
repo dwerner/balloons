@@ -38,11 +38,13 @@
 //! ```
 
 mod error;
+pub mod lsp;
 mod process;
 mod supervisor;
 pub mod types;
 
 pub use error::{Error, Result};
-pub use process::{StdinSender, SupervisedProcess};
+pub use lsp::{frame_lsp_message, LspReader};
+pub use process::{handle_lsp_events, StdinSender, SupervisedProcess};
 pub use supervisor::{OutputCallback, ProcessSupervisor};
-pub use types::{LogEntry, LogSource, OutputQuery, ProcessId, ProcessInfo, ProcessStatus, StartRequest};
+pub use types::{LogEntry, LogSource, OutputQuery, ProcessId, ProcessInfo, ProcessMode, ProcessStatus, StartRequest};

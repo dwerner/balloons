@@ -5,13 +5,16 @@ use std::sync::Arc;
 
 use async_channel;
 use async_lock::RwLock;
+use async_process::Stdio;
+use futures_lite::io::BufReader;
 use procstream::{Command, Executor, ManagedProcess, ProcessHandle, Target};
 use tracing::info;
 use uuid::Uuid;
 
 use crate::error::{Error, Result};
-use crate::process::{handle_process_events, SupervisedProcess};
-use crate::types::{LogEntry, OutputQuery, ProcessId, ProcessInfo, StartRequest};
+use crate::lsp::LspReader;
+use crate::process::{handle_process_events, handle_lsp_events, SupervisedProcess};
+use crate::types::{LogEntry, OutputQuery, ProcessId, ProcessInfo, ProcessMode, StartRequest};
 
 /// Callback type for streaming output events.
 ///
@@ -70,6 +73,15 @@ impl ProcessSupervisor {
             return Err(Error::InvalidCommand("command cannot be empty".to_string()));
         }
 
+        // Route to appropriate handler based on mode
+        match request.mode {
+            ProcessMode::Lsp => self.start_lsp(request).await,
+            ProcessMode::Lines | ProcessMode::Raw => self.start_lines(request).await,
+        }
+    }
+
+    /// Start a process in line-based mode (default procstream behavior).
+    async fn start_lines(&self, request: StartRequest) -> Result<ProcessId> {
         let process_id = Uuid::new_v4().to_string();
         let working_dir = request
             .working_dir
@@ -81,7 +93,8 @@ impl ProcessSupervisor {
             command = %request.command,
             working_dir = %working_dir,
             session_id = %request.session_id,
-            "Starting supervised process"
+            mode = ?request.mode,
+            "Starting supervised process (line mode)"
         );
 
         // Create the command
@@ -95,7 +108,6 @@ impl ProcessSupervisor {
         }
 
         // Create a channel for stdin input
-        // This channel will forward input to the process's stdin
         let (stdin_tx, stdin_rx) = async_channel::unbounded::<String>();
 
         // Configure the command to use our stdin channel
@@ -119,7 +131,6 @@ impl ProcessSupervisor {
         let pid = handle.pid().unwrap_or(0);
 
         // Take the stdin handle and start the forwarding task
-        // This forwards input from our channel to the process's stdin
         if let Some(stdin_handle) = handle.take_stdin() {
             smol::spawn(async move {
                 if let Err(e) = stdin_handle.forward_channel().await {
@@ -129,7 +140,7 @@ impl ProcessSupervisor {
             .detach();
         }
 
-        // Create stop channel (bounded(1) similar to mpsc::channel(1))
+        // Create stop channel
         let (stop_tx, stop_rx) = async_channel::bounded(1);
 
         // Create the supervised process with stdin channel
@@ -158,18 +169,116 @@ impl ProcessSupervisor {
             processes.insert(process_id.clone(), Arc::clone(&supervised));
         }
 
-        // Get the output callback (if any) to pass to the event handler
+        // Get the output callback
         let output_callback = self.get_output_callback().await;
 
-        // Spawn task to handle events using smol (fire-and-forget).
-        // We use smol because procstream uses smol internally for its async streams,
-        // so the event handler needs to run on smol's executor to poll correctly.
-        //
-        // IMPORTANT: We move `handle` into this task to keep it alive. If the handle
-        // is dropped, procstream kills the process via its Drop impl.
+        // Spawn task to handle events
         let process_clone = Arc::clone(&supervised);
         smol::spawn(async move {
             handle_process_events(process_clone, events, stop_rx, output_callback, handle).await;
+        })
+        .detach();
+
+        Ok(process_id)
+    }
+
+    /// Start a process in LSP mode (Content-Length framed JSON-RPC).
+    async fn start_lsp(&self, request: StartRequest) -> Result<ProcessId> {
+        let process_id = Uuid::new_v4().to_string();
+        let working_dir = request
+            .working_dir
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap().to_string_lossy().to_string());
+
+        info!(
+            process_id = %process_id,
+            command = %request.command,
+            working_dir = %working_dir,
+            session_id = %request.session_id,
+            "Starting supervised process (LSP mode)"
+        );
+
+        // Build the async-process command directly (bypass procstream's line-based reading)
+        let mut async_cmd = async_process::Command::new("sh");
+        async_cmd.arg("-c").arg(&request.command);
+        async_cmd.current_dir(&working_dir);
+
+        // Add environment variables
+        for (key, value) in &request.env {
+            async_cmd.env(key, value);
+        }
+
+        // Configure stdio
+        async_cmd.stdout(Stdio::piped());
+        async_cmd.stderr(Stdio::piped());
+        async_cmd.stdin(Stdio::piped());
+
+        // Spawn the process
+        let mut child = async_cmd
+            .spawn()
+            .map_err(|e| Error::SpawnFailed(e.to_string()))?;
+
+        let pid = child.id();
+
+        // Take the stdio handles
+        let stdout = child.stdout.take()
+            .ok_or_else(|| Error::SpawnFailed("Failed to capture stdout".to_string()))?;
+        let stderr = child.stderr.take()
+            .ok_or_else(|| Error::SpawnFailed("Failed to capture stderr".to_string()))?;
+        let stdin = child.stdin.take()
+            .ok_or_else(|| Error::SpawnFailed("Failed to capture stdin".to_string()))?;
+
+        // Create LSP readers for stdout (LSP uses stdout for messages)
+        let lsp_reader = LspReader::new(stdout);
+        // stderr is still line-based for logging
+        let stderr_reader = BufReader::new(stderr);
+
+        // Create channels for control
+        let (stop_tx, stop_rx) = async_channel::bounded(1);
+        let (stdin_tx, stdin_rx) = async_channel::unbounded::<String>();
+
+        // Create the supervised process
+        let supervised = Arc::new(SupervisedProcess::new(
+            process_id.clone(),
+            request.name,
+            request.command,
+            working_dir,
+            request.session_id,
+            pid,
+            stop_tx,
+            Some(stdin_tx),
+        ));
+
+        // Add initial log entry
+        supervised
+            .add_log(LogEntry::system(format!(
+                "Starting LSP process: sh -c '{}'",
+                supervised.command
+            )))
+            .await;
+
+        // Store the process
+        {
+            let mut processes = self.processes.write().await;
+            processes.insert(process_id.clone(), Arc::clone(&supervised));
+        }
+
+        // Get the output callback
+        let output_callback = self.get_output_callback().await;
+
+        // Spawn task to handle LSP events
+        let process_clone = Arc::clone(&supervised);
+        smol::spawn(async move {
+            handle_lsp_events(
+                process_clone,
+                lsp_reader,
+                stderr_reader,
+                stdin,
+                stdin_rx,
+                child,
+                stop_rx,
+                output_callback,
+            ).await;
         })
         .detach();
 
@@ -325,6 +434,7 @@ mod tests {
             session_id: "test-session".to_string(),
             name: Some("echo-test".to_string()),
             env: vec![],
+            mode: ProcessMode::Lines,
         };
 
         let process_id = supervisor.start(request).await.expect("should start");
@@ -357,6 +467,7 @@ mod tests {
             session_id: "session-a".to_string(),
             name: Some("sleep-a".to_string()),
             env: vec![],
+            mode: ProcessMode::Lines,
         };
 
         let request2 = StartRequest {
@@ -365,6 +476,7 @@ mod tests {
             session_id: "session-b".to_string(),
             name: Some("sleep-b".to_string()),
             env: vec![],
+            mode: ProcessMode::Lines,
         };
 
         supervisor.start(request1).await.expect("should start");
@@ -398,6 +510,7 @@ mod tests {
             session_id: "test-session".to_string(),
             name: None,
             env: vec![],
+            mode: ProcessMode::Lines,
         };
 
         let result = supervisor.start(request).await;

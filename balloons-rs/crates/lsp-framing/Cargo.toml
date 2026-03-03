@@ -1,0 +1,14 @@
+[package]
+name = "lsp-framing"
+version.workspace = true
+edition = "2021"
+description = "LSP Content-Length framing parser using nom"
+license.workspace = true
+
+[dependencies]
+nom.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest = "1"

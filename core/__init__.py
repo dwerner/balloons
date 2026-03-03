@@ -104,6 +104,10 @@ from .tools import (
 # Goal tools
 from .goal_tools import execute_goal_tool
 
+# LSP tools
+from .lsp_tools import execute_lsp_tool, LSP_TOOL_NAMES, LSP_TOOLS
+from .lsp_client import get_lsp_client, LSPClient
+
 # Tool executor
 from .tool_executor import execute_tool, parse_fork_proposal, parse_create_slide, SlideData, parse_merge_proposal
 
@@ -367,6 +371,12 @@ __all__ = [
     "get_tools_for_request",
     # Goal tools
     "execute_goal_tool",
+    # LSP tools
+    "execute_lsp_tool",
+    "LSP_TOOL_NAMES",
+    "LSP_TOOLS",
+    "get_lsp_client",
+    "LSPClient",
     # Tool executor
     "execute_tool",
     "parse_fork_proposal",

@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-03-03T09:17:58.108553
+// Generated: 2026-03-03T11:24:00.049676
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -4138,11 +4138,12 @@ export interface SupervisorStateService {
    * Args:
    * session_id: Filter to processes for this session
    * host: Filter to processes on this host
+   * process_type: Filter by type: "general", "lsp", or None for all
    * 
    * Returns:
    * List of processes with summary
    */
-  listProcesses(sessionId?: string | null, host?: string | null): Promise<Types.ProcessListResult>;
+  listProcesses(sessionId?: string | null, host?: string | null, processType?: string | null): Promise<Types.ProcessListResult>;
 
   /**
    * Reload supervisor configuration from disk.
@@ -4316,8 +4317,8 @@ export class SupervisorStateServiceClient implements SupervisorStateService {
     return this.call('listHosts', { tags: tags, hostType: hostType });
   }
 
-  async listProcesses(sessionId?: string | null, host?: string | null): Promise<Types.ProcessListResult> {
-    return this.call('listProcesses', { sessionId: sessionId, host: host });
+  async listProcesses(sessionId?: string | null, host?: string | null, processType?: string | null): Promise<Types.ProcessListResult> {
+    return this.call('listProcesses', { sessionId: sessionId, host: host, processType: processType });
   }
 
   async reloadConfig(): Promise<boolean> {
@@ -4366,6 +4367,165 @@ export class SupervisorStateServiceClient implements SupervisorStateService {
 
   supervisorStateUpdated(callback: (data: Types.SupervisorState) => void): Unsubscribe {
     return this.subscribe('supervisorStateUpdated', callback);
+  }
+
+}
+
+/**
+ * WebSocket-exposed service for LSP server management.
+ */
+export interface LSPService {
+  /**
+   * Get complete LSP status.
+   * 
+   * Returns configured servers and all running instances.
+   */
+  getStatus(): Promise<Types.LSPStatusResult>;
+
+  /**
+   * Restart an LSP server.
+   * 
+   * Args:
+   * language: Language server name
+   * workspace: Workspace root
+   * key: Instance key (alternative to language+workspace)
+   * 
+   * Returns:
+   * Action result with status
+   */
+  restartServer(language?: string | null, workspace?: string | null, key?: string | null): Promise<Types.LSPActionResult>;
+
+  /**
+   * Start an LSP server.
+   * 
+   * Args:
+   * language: Language server name (e.g., "python")
+   * workspace: Workspace root (defaults to cwd)
+   * 
+   * Returns:
+   * Action result with status
+   */
+  startServer(language: string, workspace?: string | null): Promise<Types.LSPActionResult>;
+
+  /**
+   * Stop all running LSP servers.
+   * 
+   * Returns:
+   * Number of servers stopped
+   */
+  stopAllServers(): Promise<number>;
+
+  /**
+   * Stop an LSP server.
+   * 
+   * Can specify by language+workspace or by key.
+   * 
+   * Args:
+   * language: Language server name
+   * workspace: Workspace root
+   * key: Instance key (alternative to language+workspace)
+   * 
+   * Returns:
+   * Action result with status
+   */
+  stopServer(language?: string | null, workspace?: string | null, key?: string | null): Promise<Types.LSPActionResult>;
+
+}
+
+export interface LSPEvents {
+  /**
+   * Fired when an LSP server restarts.
+   */
+  lspServerRestarted(callback: (data: Record<string, unknown>) => void): Unsubscribe;
+
+  /**
+   * Fired when an LSP server starts.
+   */
+  lspServerStarted(callback: (data: Record<string, unknown>) => void): Unsubscribe;
+
+  /**
+   * Fired when an LSP server stops.
+   */
+  lspServerStopped(callback: (data: Record<string, unknown>) => void): Unsubscribe;
+
+}
+
+export class LSPServiceClient implements LSPService {
+  private ws: WebSocket;
+  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
+  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
+
+  constructor(ws: WebSocket) {
+    this.ws = ws;
+    this.ws.addEventListener('message', this.handleMessage.bind(this));
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    const msg = JSON.parse(event.data);
+    if (msg.id && this.pending.has(msg.id)) {
+      const { resolve, reject } = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      if (msg.error) {
+        reject(new Error(msg.error.message));
+      } else {
+        resolve(msg.result);
+      }
+    } else if (msg.event) {
+      const handlers = this.eventHandlers.get(msg.event);
+      if (handlers) {
+        handlers.forEach(h => h(msg.data));
+      }
+    }
+  }
+
+  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const id = generateRequestId();
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, new Set());
+    }
+    this.eventHandlers.get(event)!.add(callback);
+    return () => {
+      this.eventHandlers.get(event)?.delete(callback);
+    };
+  }
+
+  async getStatus(): Promise<Types.LSPStatusResult> {
+    return this.call('getStatus', {  });
+  }
+
+  async restartServer(language?: string | null, workspace?: string | null, key?: string | null): Promise<Types.LSPActionResult> {
+    return this.call('restartServer', { language: language, workspace: workspace, key: key });
+  }
+
+  async startServer(language: string, workspace?: string | null): Promise<Types.LSPActionResult> {
+    return this.call('startServer', { language: language, workspace: workspace });
+  }
+
+  async stopAllServers(): Promise<number> {
+    return this.call('stopAllServers', {  });
+  }
+
+  async stopServer(language?: string | null, workspace?: string | null, key?: string | null): Promise<Types.LSPActionResult> {
+    return this.call('stopServer', { language: language, workspace: workspace, key: key });
+  }
+
+  lspServerRestarted(callback: (data: Record<string, unknown>) => void): Unsubscribe {
+    return this.subscribe('lspServerRestarted', callback);
+  }
+
+  lspServerStarted(callback: (data: Record<string, unknown>) => void): Unsubscribe {
+    return this.subscribe('lspServerStarted', callback);
+  }
+
+  lspServerStopped(callback: (data: Record<string, unknown>) => void): Unsubscribe {
+    return this.subscribe('lspServerStopped', callback);
   }
 
 }

@@ -53,6 +53,7 @@ class ProcessInfo:
     exit_code: Optional[int] = None
     started_at: Optional[str] = None
     runtime_seconds: Optional[float] = None
+    process_type: str = "general"  # "general" or "lsp"
 
 
 @ws_type
@@ -758,12 +759,14 @@ class SupervisorStateService:
         self,
         session_id: Optional[str] = None,
         host: Optional[str] = None,
+        process_type: Optional[str] = None,
     ) -> ProcessListResult:
         """List supervised processes.
 
         Args:
             session_id: Filter to processes for this session
             host: Filter to processes on this host
+            process_type: Filter by type: "general", "lsp", or None for all
 
         Returns:
             List of processes with summary
@@ -784,8 +787,19 @@ class SupervisorStateService:
             processes = []
             for p in process_list:
                 proc_host = p.get("host", "local")
+                proc_session = p.get("session_id", "")
+                proc_name = p.get("name")
+
+                # Determine process type
+                is_lsp = proc_session == "__lsp__" or (proc_name and proc_name.startswith("lsp:"))
+                proc_type = "lsp" if is_lsp else "general"
+
                 # Filter by host if specified
                 if host and proc_host != host:
+                    continue
+
+                # Filter by process type if specified
+                if process_type and proc_type != process_type:
                     continue
 
                 status_info = p.get("status", {})
@@ -793,16 +807,26 @@ class SupervisorStateService:
                 processes.append(ProcessInfo(
                     process_id=p.get("id", ""),
                     command=p.get("command", ""),
-                    name=p.get("name"),
+                    name=proc_name,
                     host=proc_host,
-                    session_id=p.get("session_id", ""),
+                    session_id=proc_session,
                     status=state,
                     exit_code=status_info.get("code"),
                     started_at=p.get("started_at"),
+                    process_type=proc_type,
                 ))
 
+            # Build summary with type breakdown
             running = sum(1 for p in processes if p.status == "running")
-            summary = f"{running} running, {len(processes)} total"
+            lsp_count = sum(1 for p in processes if p.process_type == "lsp")
+            general_count = len(processes) - lsp_count
+
+            if process_type == "lsp":
+                summary = f"{running} running LSP servers, {len(processes)} total"
+            elif process_type == "general":
+                summary = f"{running} running, {len(processes)} total"
+            else:
+                summary = f"{running} running ({lsp_count} LSP, {general_count} general), {len(processes)} total"
 
             return ProcessListResult(summary=summary, processes=processes)
 

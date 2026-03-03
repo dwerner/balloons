@@ -75,6 +75,7 @@ from service.sound_service import SoundService
 from service.debug_log_service import DebugLogService
 from service.file_state_service import FileStateService
 from service.supervisor_state_service import SupervisorStateService
+from service.lsp_service import LSPService
 from service.kanban_ws_service import KanbanWebSocketService
 from service.ws_server import WsServer, create_server
 from service.jwt_auth import JWTAuth, JWTConfig, TokenClaims
@@ -103,6 +104,7 @@ __all__ = [
     "DebugLogService",
     "FileStateService",
     "SupervisorStateService",
+    "LSPService",
     "KanbanWebSocketService",
     "WsServer",
     "create_server",

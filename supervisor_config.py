@@ -3,6 +3,7 @@
 This module handles the ~/.balloons/supervisor.yaml configuration which defines:
 - Hosts (local and SSH-accessible remote machines)
 - Backend-to-host mappings (which LLM backend runs on which host)
+- LSP server definitions (language servers for code intelligence)
 
 The supervisor config is separate from the main config.yaml to keep concerns
 separated and allow independent evolution.
@@ -14,6 +15,44 @@ from typing import Optional
 
 import aiofiles
 import yaml
+
+
+@dataclass
+class LSPServerConfig:
+    """Configuration for a language server.
+
+    Attributes:
+        name: Server identifier (e.g., "python", "typescript", "rust")
+        command: Shell command to start the server (must support --stdio)
+        extensions: File extensions this server handles (e.g., [".py", ".pyi"])
+        languages: Language identifiers for LSP (e.g., ["python", "pythonpath"])
+        idle_timeout_seconds: Stop server after this many seconds of inactivity (0 = never)
+        memory_limit_mb: Memory limit in MB (0 = no limit)
+        root_patterns: Files/dirs that indicate project root (e.g., ["pyproject.toml"])
+        initialization_options: Extra options passed during LSP initialize
+    """
+
+    name: str
+    command: str
+    extensions: list[str] = field(default_factory=list)
+    languages: list[str] = field(default_factory=list)
+    idle_timeout_seconds: int = 300  # 5 minutes default
+    memory_limit_mb: int = 0  # No limit by default
+    root_patterns: list[str] = field(default_factory=list)
+    initialization_options: dict = field(default_factory=dict)
+
+    def validate(self) -> None:
+        """Validate LSP server configuration.
+
+        Raises:
+            ValueError: If required fields are missing.
+        """
+        if not self.command:
+            raise ValueError(f"LSP server '{self.name}' requires 'command' field")
+        if not self.extensions and not self.languages:
+            raise ValueError(
+                f"LSP server '{self.name}' requires 'extensions' or 'languages' field"
+            )
 
 
 @dataclass
@@ -88,10 +127,12 @@ class SupervisorConfig:
     Attributes:
         hosts: Dictionary of host configurations by name
         backend_hosts: Mapping of backend names to host names
+        lsp_servers: Dictionary of LSP server configurations by name
     """
 
     hosts: dict[str, HostConfig] = field(default_factory=dict)
     backend_hosts: dict[str, str] = field(default_factory=dict)
+    lsp_servers: dict[str, LSPServerConfig] = field(default_factory=dict)
     _config_path: Optional[Path] = field(default=None, repr=False)
 
     @classmethod
@@ -179,11 +220,87 @@ class SupervisorConfig:
         # Parse backend-to-host mappings
         backend_hosts = data.get("backend_hosts", {})
 
+        # Parse LSP server definitions
+        lsp_servers = cls._parse_lsp_servers(data.get("lsp_servers", {}))
+
         return cls(
             hosts=hosts,
             backend_hosts=backend_hosts,
+            lsp_servers=lsp_servers,
             _config_path=path,
         )
+
+    @classmethod
+    def _parse_lsp_servers(cls, lsp_data: dict) -> dict[str, LSPServerConfig]:
+        """Parse LSP server definitions from config data.
+
+        Includes built-in defaults that can be overridden.
+        """
+        # Default LSP servers (can be overridden by config)
+        defaults = {
+            "python": LSPServerConfig(
+                name="python",
+                command="pyright-langserver --stdio",
+                extensions=[".py", ".pyi"],
+                languages=["python"],
+                root_patterns=["pyproject.toml", "setup.py", "requirements.txt"],
+            ),
+            "typescript": LSPServerConfig(
+                name="typescript",
+                command="typescript-language-server --stdio",
+                extensions=[".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"],
+                languages=["typescript", "typescriptreact", "javascript", "javascriptreact"],
+                root_patterns=["package.json", "tsconfig.json"],
+            ),
+            "rust": LSPServerConfig(
+                name="rust",
+                command="rust-analyzer",
+                extensions=[".rs"],
+                languages=["rust"],
+                idle_timeout_seconds=600,  # RA is slow to start
+                root_patterns=["Cargo.toml"],
+            ),
+            "go": LSPServerConfig(
+                name="go",
+                command="gopls",
+                extensions=[".go"],
+                languages=["go"],
+                root_patterns=["go.mod"],
+            ),
+        }
+
+        servers = dict(defaults)
+
+        # Parse and merge user config
+        for name, server_data in lsp_data.items():
+            if server_data is None:
+                # Explicitly disabled
+                servers.pop(name, None)
+                continue
+
+            if not isinstance(server_data, dict):
+                continue
+
+            # Check if this is disabling a default
+            if server_data.get("enabled") is False:
+                servers.pop(name, None)
+                continue
+
+            server = LSPServerConfig(
+                name=name,
+                command=server_data.get("command", defaults.get(name, LSPServerConfig(name=name, command="")).command),
+                extensions=server_data.get("extensions", defaults.get(name, LSPServerConfig(name=name, command="")).extensions),
+                languages=server_data.get("languages", defaults.get(name, LSPServerConfig(name=name, command="")).languages),
+                idle_timeout_seconds=server_data.get("idle_timeout_seconds", 300),
+                memory_limit_mb=server_data.get("memory_limit_mb", 0),
+                root_patterns=server_data.get("root_patterns", defaults.get(name, LSPServerConfig(name=name, command="")).root_patterns),
+                initialization_options=server_data.get("initialization_options", {}),
+            )
+            if server.command:  # Only validate if command is set
+                server.validate()
+                servers[name] = server
+
+        return servers
 
     def get_host(self, name: str) -> HostConfig:
         """Get a host configuration by name.
@@ -244,6 +361,59 @@ class SupervisorConfig:
         if host_name and host_name in self.hosts:
             return self.hosts[host_name]
         return None
+
+    def get_lsp_server(self, name: str) -> Optional[LSPServerConfig]:
+        """Get an LSP server configuration by name.
+
+        Args:
+            name: Server name (e.g., "python", "typescript")
+
+        Returns:
+            LSPServerConfig if found, None otherwise
+        """
+        return self.lsp_servers.get(name)
+
+    def get_lsp_server_for_file(self, file_path: str) -> Optional[LSPServerConfig]:
+        """Get the LSP server that handles a given file.
+
+        Args:
+            file_path: Path to a file
+
+        Returns:
+            LSPServerConfig if a matching server is found, None otherwise
+        """
+        # Get file extension
+        ext = Path(file_path).suffix.lower()
+        if not ext:
+            return None
+
+        for server in self.lsp_servers.values():
+            if ext in server.extensions:
+                return server
+
+        return None
+
+    def get_lsp_server_for_language(self, language_id: str) -> Optional[LSPServerConfig]:
+        """Get the LSP server for a language ID.
+
+        Args:
+            language_id: LSP language identifier (e.g., "python", "typescript")
+
+        Returns:
+            LSPServerConfig if found, None otherwise
+        """
+        for server in self.lsp_servers.values():
+            if language_id in server.languages:
+                return server
+        return None
+
+    def list_lsp_servers(self) -> list[LSPServerConfig]:
+        """Get all configured LSP servers.
+
+        Returns:
+            List of all LSP server configurations
+        """
+        return list(self.lsp_servers.values())
 
     def to_dict(self) -> dict:
         """Convert config to dictionary for serialization."""

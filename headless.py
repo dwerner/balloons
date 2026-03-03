@@ -297,10 +297,14 @@ async def run_server(
     ws_server.register_service(kanban_ws_service)
 
     # Supervisor service for process/host management
-    from service import SupervisorStateService
+    from service import SupervisorStateService, LSPService
     from service.supervisor_state_service import register_output_callback
     supervisor_service = SupervisorStateService()
     ws_server.register_service(supervisor_service)
+
+    # LSP service for language server management
+    lsp_service = LSPService()
+    ws_server.register_service(lsp_service)
 
     # Register output callback for real-time process output streaming
     register_output_callback()

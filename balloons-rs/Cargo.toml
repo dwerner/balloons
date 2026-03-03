@@ -34,6 +34,7 @@ async-trait = "0.1"
 futures-lite = { version = "2", features = ["race"] }
 async-lock = "3"
 async-channel = "2"
+async-process = "2"
 smol = "2"
 
 # Error handling
@@ -60,8 +61,13 @@ pyo3-async-runtimes = { path = "../../pyo3-async-runtimes", features = ["smol-ru
 # Git operations
 git2 = "0.20"
 
+# Parsing
+nom = "8"
+bytes = "1"
+
 # Internal crates
 balloons-core = { path = "crates/balloons-core" }
 balloons-supervisor = { path = "crates/balloons-supervisor" }
 balloons-browser = { path = "crates/balloons-browser" }
 balloons-git = { path = "crates/balloons-git" }
+lsp-framing = { path = "crates/lsp-framing" }

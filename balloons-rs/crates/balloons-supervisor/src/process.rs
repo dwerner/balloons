@@ -5,12 +5,15 @@ use std::sync::Arc;
 
 use async_channel::{Receiver, Sender};
 use async_lock::RwLock;
+use async_process::{Child, ChildStdin};
 use chrono::{DateTime, Utc};
+use futures_lite::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use futures_lite::{future, StreamExt};
 use procstream::{ProcessEvent, ProcessEventType, ProcessHandle};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::error::{Error, Result};
+use crate::lsp::LspReader;
 use crate::types::{LogEntry, LogSource, OutputQuery, ProcessId, ProcessInfo, ProcessStatus};
 
 /// Maximum number of log entries to keep in memory per process.
@@ -344,4 +347,148 @@ pub async fn handle_process_events<H: ProcessHandle>(
     }
 
     debug!(process_id = %process.id, "Event handler finished");
+}
+
+/// Handle LSP process events with Content-Length framing.
+///
+/// Unlike line-based handling, this reads complete JSON-RPC messages
+/// from stdout and delivers them as single log entries.
+pub async fn handle_lsp_events(
+    process: Arc<SupervisedProcess>,
+    mut lsp_reader: LspReader<async_process::ChildStdout>,
+    stderr_reader: BufReader<async_process::ChildStderr>,
+    mut stdin: ChildStdin,
+    stdin_rx: Receiver<String>,
+    mut child: Child,
+    stop_rx: Receiver<()>,
+    output_callback: Option<OutputCallback>,
+) {
+    debug!(process_id = %process.id, "Starting LSP event handler");
+
+    // Log that process started
+    process.add_log(LogEntry::system(format!("LSP process started (PID {})", child.id()))).await;
+    if let Some(ref callback) = output_callback {
+        callback(&process.id, "system", &format!("LSP process started (PID {})", child.id()));
+    }
+
+    // Spawn a task to forward stdin
+    let stdin_process_id = process.id.clone();
+    let stdin_task = smol::spawn(async move {
+        while let Ok(data) = stdin_rx.recv().await {
+            // LSP stdin needs Content-Length framing
+            let framed = crate::lsp::frame_lsp_message(&data);
+            if let Err(e) = stdin.write_all(&framed).await {
+                warn!(process_id = %stdin_process_id, error = %e, "Failed to write to LSP stdin");
+                break;
+            }
+            if let Err(e) = stdin.flush().await {
+                warn!(process_id = %stdin_process_id, error = %e, "Failed to flush LSP stdin");
+                break;
+            }
+        }
+    });
+
+    // Spawn a task to read stderr (still line-based for error messages)
+    let stderr_process = Arc::clone(&process);
+    let stderr_callback = output_callback.clone();
+    let stderr_task = smol::spawn(async move {
+        let mut lines = stderr_reader.lines();
+        while let Some(line_result) = lines.next().await {
+            match line_result {
+                Ok(line) => {
+                    let entry = LogEntry::stderr(line.clone());
+                    if let Some(ref callback) = stderr_callback {
+                        callback(&stderr_process.id, "stderr", &line);
+                    }
+                    stderr_process.add_log(entry).await;
+                }
+                Err(e) => {
+                    warn!(process_id = %stderr_process.id, error = %e, "Error reading stderr");
+                    break;
+                }
+            }
+        }
+    });
+
+    // Main loop: read LSP messages from stdout, handle stop signal
+    loop {
+        let action = future::or(
+            async {
+                let _ = stop_rx.recv().await;
+                EventLoopAction::Stop
+            },
+            async {
+                match lsp_reader.read_message().await {
+                    Ok(Some(msg)) => EventLoopAction::Event(Some(ProcessEvent::new_with_data(
+                        ProcessEventType::Stdout,
+                        msg,
+                    ))),
+                    Ok(None) => EventLoopAction::Event(None), // EOF
+                    Err(e) => {
+                        warn!(process_id = %process.id, error = %e, "Error reading LSP message");
+                        EventLoopAction::Event(None)
+                    }
+                }
+            },
+        )
+        .await;
+
+        match action {
+            EventLoopAction::Stop => {
+                info!(process_id = %process.id, "Received stop signal, killing LSP process");
+                let _ = child.kill();
+                process.mark_killed().await;
+                break;
+            }
+            EventLoopAction::Event(Some(event)) => {
+                if let ProcessEventType::Stdout = event.event_type {
+                    let content = event.data.clone().unwrap_or_default();
+                    let entry = LogEntry::stdout(content.clone());
+
+                    if let Some(ref callback) = output_callback {
+                        callback(&process.id, "stdout", &content);
+                    }
+                    process.add_log(entry).await;
+                }
+            }
+            EventLoopAction::Event(None) => {
+                // Stream ended, wait for process to exit
+                debug!(process_id = %process.id, "LSP stdout ended, waiting for process exit");
+                match child.status().await {
+                    Ok(status) => {
+                        let code = status.code();
+                        #[cfg(unix)]
+                        let signal = {
+                            use std::os::unix::process::ExitStatusExt;
+                            status.signal()
+                        };
+                        #[cfg(not(unix))]
+                        let signal = None;
+
+                        let msg = match (code, signal) {
+                            (Some(c), _) => format!("LSP process exited with code {}", c),
+                            (_, Some(s)) => format!("LSP process killed by signal {}", s),
+                            (None, None) => "LSP process exited".to_string(),
+                        };
+
+                        process.add_log(LogEntry::system(msg.clone())).await;
+                        if let Some(ref callback) = output_callback {
+                            callback(&process.id, "system", &msg);
+                        }
+                    }
+                    Err(e) => {
+                        let msg = format!("Error waiting for LSP process: {}", e);
+                        process.add_log(LogEntry::system(msg)).await;
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    // Cancel background tasks
+    stdin_task.cancel().await;
+    stderr_task.cancel().await;
+
+    debug!(process_id = %process.id, "LSP event handler finished");
 }

@@ -3120,6 +3120,7 @@ function AppContent() {
           {detailTab === 'supervisor' && (
             <SupervisorTab
               supervisorClient={connectionState === 'connected' ? clientRef.current?.supervisor : undefined}
+              lspClient={connectionState === 'connected' ? clientRef.current?.lsp : undefined}
               isLoading={connectionState !== 'connected'}
               onViewLogs={(processId) => {
                 debugLog('View logs for process', { processId });

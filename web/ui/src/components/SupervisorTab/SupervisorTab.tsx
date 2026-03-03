@@ -26,9 +26,10 @@ import type {
   SupervisorState,
   HostUpdateRequest,
 } from '../../../../generated/balloons-client';
-import { SupervisorStateServiceClient } from '../../../../generated/client';
+import { SupervisorStateServiceClient, LSPServiceClient } from '../../../../generated/client';
 import { useDialog } from '../Dialog';
 import { ProcessLogViewer } from './ProcessLogViewer';
+import { LSPSection } from './LSPSection';
 import './SupervisorTab.css';
 
 // Form state for host editing
@@ -494,6 +495,8 @@ function SectionHeader({
 export interface SupervisorTabProps {
   /** Supervisor service client */
   supervisorClient?: SupervisorStateServiceClient;
+  /** LSP service client */
+  lspClient?: LSPServiceClient;
   /** Whether loading */
   isLoading?: boolean;
   /** Callback when process logs requested */
@@ -504,6 +507,7 @@ export interface SupervisorTabProps {
 
 export function SupervisorTab({
   supervisorClient,
+  lspClient,
   isLoading = false,
   onViewLogs,
   onStopProcess,
@@ -516,6 +520,9 @@ export function SupervisorTab({
 
   // Process log viewer state
   const [viewingProcess, setViewingProcess] = useState<ProcessInfo | null>(null);
+
+  // LSP section collapse state
+  const [lspCollapsed, setLspCollapsed] = useState(false);
 
   // Host edit modal state
   const [editModalOpen, setEditModalOpen] = useState(false);
@@ -909,6 +916,13 @@ export function SupervisorTab({
           ))}
         </div>
       </section>
+
+      {/* LSP Servers Section */}
+      <LSPSection
+        lspClient={lspClient}
+        isCollapsed={lspCollapsed}
+        onToggleCollapse={() => setLspCollapsed(!lspCollapsed)}
+      />
 
       {/* Processes Section */}
       <section className="supervisor-section">
