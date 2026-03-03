@@ -59,6 +59,7 @@ from service import (
     SoundService,
     DebugLogService,
     FileStateService,
+    KanbanWebSocketService,
     # Auth
     UserAuthService,
     get_user_storage,
@@ -288,6 +289,12 @@ async def run_server(
     ws_server.register_service(sound_service)
     ws_server.register_service(debug_log_service)
     ws_server.register_service(file_service)
+
+    # Kanban service for board/task management
+    from core.kanban_service import KanbanService
+    kanban_service = KanbanService(storage)
+    kanban_ws_service = KanbanWebSocketService(kanban_service)
+    ws_server.register_service(kanban_ws_service)
 
     # Supervisor service for process/host management
     from service import SupervisorStateService

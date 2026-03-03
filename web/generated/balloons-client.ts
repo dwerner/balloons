@@ -31,6 +31,7 @@ import {
   DebugLogServiceClient,
   FileStateServiceClient,
   SupervisorStateServiceClient,
+  KanbanWebSocketServiceClient,
 } from './client';
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -74,6 +75,7 @@ export class BalloonsClient {
   private _debugLog: DebugLogServiceClient | null = null;
   private _files: FileStateServiceClient | null = null;
   private _supervisor: SupervisorStateServiceClient | null = null;
+  private _kanban: KanbanWebSocketServiceClient | null = null;
 
   constructor(url: string, options: BalloonsClientOptions = {}) {
     this.url = url;
@@ -192,6 +194,14 @@ export class BalloonsClient {
       throw new Error('Not connected. Call connect() first.');
     }
     return this._supervisor;
+  }
+
+  /** Kanban service (boards, columns, tasks) */
+  get kanban(): KanbanWebSocketServiceClient {
+    if (!this._kanban) {
+      throw new Error('Not connected. Call connect() first.');
+    }
+    return this._kanban;
   }
 
   // --- Connection Management ---
@@ -330,6 +340,7 @@ export class BalloonsClient {
     this._debugLog = new DebugLogServiceClient(this.ws);
     this._files = new FileStateServiceClient(this.ws);
     this._supervisor = new SupervisorStateServiceClient(this.ws);
+    this._kanban = new KanbanWebSocketServiceClient(this.ws);
   }
 
   private clearClients(): void {
@@ -343,6 +354,7 @@ export class BalloonsClient {
     this._debugLog = null;
     this._files = null;
     this._supervisor = null;
+    this._kanban = null;
     this._clientId = null;
   }
 
@@ -373,5 +385,6 @@ export {
   DebugLogServiceClient,
   FileStateServiceClient,
   SupervisorStateServiceClient,
+  KanbanWebSocketServiceClient,
 } from './client';
 export type { Unsubscribe } from './client';

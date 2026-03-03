@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-03-01T20:08:44.746036
+// Generated: 2026-03-02T11:07:31.747592
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -1124,6 +1124,19 @@ export interface ProcessOutput {
   ts: number;
 }
 
+export interface ProcessLogEntry {
+  ts: number;
+  source: string;
+  content: string;
+}
+
+export interface ProcessOutputBatch {
+  processId: string;
+  entries: ProcessLogEntry[];
+  totalCount: number;
+  hasMore: boolean;
+}
+
 export interface BackendHostMapping {
   backendName: string;
   hostName: string;
@@ -1177,5 +1190,96 @@ export interface SupervisorEvent {
 export interface EventHistoryResult {
   events: SupervisorEvent[];
   totalBuffered: number;
+}
+
+export interface TaskInfo {
+  id: string;
+  title: string;
+  description: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ColumnInfo {
+  id: string;
+  name: string;
+  position: number;
+  taskIds?: string[];
+}
+
+export interface BoardInfo {
+  id: string;
+  name: string;
+  defaultColumnId: string;
+  createdAt: string;
+}
+
+export interface BoardStateInfo {
+  board: BoardInfo;
+  columns: ColumnInfo[];
+  tasks: TaskInfo[];
+}
+
+export interface BoardSubscriptionResult {
+  boardId: string;
+  subscribed: boolean;
+  board?: BoardStateInfo | null;
+  error?: string | null;
+}
+
+export interface BoardUnsubscribeResult {
+  boardId: string;
+  unsubscribed: boolean;
+  error?: string | null;
+}
+
+export interface TaskMovedEvent {
+  boardId: string;
+  taskId: string;
+  fromColumnId: string;
+  toColumnId: string;
+  newPosition: number;
+}
+
+export interface TaskCreatedEvent {
+  boardId: string;
+  task: TaskInfo;
+  columnId: string;
+  position: number;
+}
+
+export interface TaskUpdatedEvent {
+  boardId: string;
+  task: TaskInfo;
+}
+
+export interface TaskDeletedEvent {
+  boardId: string;
+  taskId: string;
+}
+
+export interface TasksReorderedEvent {
+  boardId: string;
+  columnId: string;
+  taskIds: string[];
+}
+
+export interface BoardCreatedEvent {
+  board: BoardStateInfo;
+}
+
+export interface BoardDeletedEvent {
+  boardId: string;
+}
+
+export interface ColumnAddedEvent {
+  boardId: string;
+  column: ColumnInfo;
+}
+
+export interface ColumnDeletedEvent {
+  boardId: string;
+  columnId: string;
+  tasksMovedTo: string | null;
 }
 

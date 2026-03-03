@@ -40,9 +40,9 @@
 mod error;
 mod process;
 mod supervisor;
-mod types;
+pub mod types;
 
 pub use error::{Error, Result};
-pub use process::SupervisedProcess;
+pub use process::{StdinSender, SupervisedProcess};
 pub use supervisor::{OutputCallback, ProcessSupervisor};
-pub use types::{LogEntry, LogSource, ProcessId, ProcessInfo, ProcessStatus, StartRequest};
+pub use types::{LogEntry, LogSource, OutputQuery, ProcessId, ProcessInfo, ProcessStatus, StartRequest};

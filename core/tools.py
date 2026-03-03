@@ -667,7 +667,14 @@ Returns recent log entries (stdout, stderr, system messages) from a process.
 Use this to check on the status of a background process, see build output,
 or diagnose issues.
 
-The output includes timestamps and source (stdout/stderr/system) for each entry.""",
+The output includes timestamps and source (stdout/stderr/system/stdin) for each entry.
+
+Filtering options allow efficient querying:
+- Use `source` to filter to specific output types (e.g., just stderr for errors)
+- Use `pattern` to search for specific text (like grep)
+- Use `since` with a Unix timestamp to get only recent entries
+
+Results are returned in chronological order, with `limit` applied as a tail (most recent N entries).""",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -678,6 +685,19 @@ The output includes timestamps and source (stdout/stderr/system) for each entry.
                     "limit": {
                         "type": "integer",
                         "description": "Maximum number of log entries to return. Default: 50"
+                    },
+                    "source": {
+                        "type": "string",
+                        "enum": ["stdout", "stderr", "system", "stdin"],
+                        "description": "Filter to only entries from this source. Useful for isolating errors (stderr) or input history (stdin)."
+                    },
+                    "pattern": {
+                        "type": "string",
+                        "description": "Substring to search for in log content. Case-sensitive. Like grep."
+                    },
+                    "since": {
+                        "type": "number",
+                        "description": "Unix timestamp. Only return entries after this time. Get from previous output timestamps to see 'what happened since then'."
                     }
                 },
                 "required": ["process_id"]
@@ -707,11 +727,42 @@ query its output with supervisor_output.""",
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "supervisor_input",
+            "description": """Send input to a running process's stdin.
+
+Use this to interact with processes that accept interactive input, such as:
+- REPLs (Python, Node, etc.)
+- Prompts for passwords or confirmations
+- Interactive CLIs (e.g., npm init, inquirer prompts)
+
+The input is sent as a line with a newline appended automatically.
+The input will be echoed in the process logs with source 'stdin' for visibility.
+
+Note: The process must be running and have stdin available.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "process_id": {
+                        "type": "string",
+                        "description": "The process ID to send input to"
+                    },
+                    "data": {
+                        "type": "string",
+                        "description": "The input data to send (newline appended automatically)"
+                    }
+                },
+                "required": ["process_id", "data"]
+            }
+        }
+    },
 ]
 
 # Names of supervisor tools
 SUPERVISOR_TOOL_NAMES = {
-    "supervisor_start", "supervisor_list", "supervisor_output", "supervisor_stop",
+    "supervisor_start", "supervisor_list", "supervisor_output", "supervisor_stop", "supervisor_input",
 }
 
 # Session review tools for quality evaluation

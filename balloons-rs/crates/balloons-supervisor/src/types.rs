@@ -51,6 +51,8 @@ pub enum LogSource {
     Stderr,
     /// System message (started, exited, etc.).
     System,
+    /// Standard input (echoed back for visibility).
+    Stdin,
 }
 
 impl std::fmt::Display for LogSource {
@@ -59,6 +61,7 @@ impl std::fmt::Display for LogSource {
             LogSource::Stdout => write!(f, "stdout"),
             LogSource::Stderr => write!(f, "stderr"),
             LogSource::System => write!(f, "system"),
+            LogSource::Stdin => write!(f, "stdin"),
         }
     }
 }
@@ -103,6 +106,16 @@ impl LogEntry {
         Self {
             timestamp: Utc::now(),
             source: LogSource::System,
+            content: content.into(),
+            parsed: None,
+        }
+    }
+
+    /// Create a new stdin log entry (echoed input).
+    pub fn stdin(content: impl Into<String>) -> Self {
+        Self {
+            timestamp: Utc::now(),
+            source: LogSource::Stdin,
             content: content.into(),
             parsed: None,
         }

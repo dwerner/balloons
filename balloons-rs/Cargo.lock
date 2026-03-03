@@ -289,6 +289,7 @@ dependencies = [
  "balloons-core",
  "balloons-git",
  "balloons-supervisor",
+ "chrono",
  "core-executor",
  "futures-lite 2.6.1",
  "pyo3",

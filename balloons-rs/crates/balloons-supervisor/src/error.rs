@@ -39,4 +39,8 @@ pub enum Error {
     /// Invalid command (empty or malformed).
     #[error("invalid command: {0}")]
     InvalidCommand(String),
+
+    /// Failed to write to process stdin.
+    #[error("failed to write to stdin: {0}")]
+    StdinWriteFailed(String),
 }

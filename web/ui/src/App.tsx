@@ -9,6 +9,7 @@ import { FileBrowserView, type FileBrowserViewRef } from './components/FileBrows
 import { SupervisorTab } from './components/SupervisorTab';
 import { OptionsTab } from './components/OptionsTab';
 import { SettingsTab } from './components/SettingsTab';
+import { KanbanTab } from './components/KanbanTab';
 import { LogsTab } from './components/LogsTab';
 import { LLMTab } from './components/LLMTab';
 import { CodeTab, type CodeReview, type CodeTabHandle, type GitStatusInfo } from './components/CodeTab';
@@ -2976,6 +2977,13 @@ function AppContent() {
                   error={soundNotifications.error}
                 />
               )}
+              {mainContentTab === 'kanban' && (
+                <KanbanTab
+                  kanbanClient={connectionState === 'connected' ? clientRef.current?.kanban : undefined}
+                  clientId={connectionState === 'connected' && clientRef.current?.hasClientId ? clientRef.current.clientId : undefined}
+                  isConnected={connectionState === 'connected'}
+                />
+              )}
             </div>
 
             {/* Input area - only show on chat tab */}
@@ -3115,9 +3123,14 @@ function AppContent() {
                 debugLog('View logs for process', { processId });
                 // TODO: Open process logs in a modal or new tab
               }}
-              onStopProcess={(processId) => {
+              onStopProcess={async (processId) => {
                 debugLog('Stop process', { processId });
-                // TODO: Call supervisor to stop process
+                if (clientRef.current?.supervisor) {
+                  const result = await clientRef.current.supervisor.stopProcess(processId);
+                  if (!result.success) {
+                    console.error('Failed to stop process:', result.error);
+                  }
+                }
               }}
             />
           )}
@@ -3357,12 +3370,12 @@ function MobileHeader({ connectionState, selectedSession }: MobileHeaderProps) {
 // Main content tab type
 // Session tabs: streaming, context, properties, slides (depend on selected session)
 // Global tabs: code, logs, llm, settings (app-wide)
-type MainContentTab = 'streaming' | 'context' | 'properties' | 'slides' | 'code' | 'logs' | 'llm' | 'settings';
+type MainContentTab = 'streaming' | 'context' | 'properties' | 'slides' | 'code' | 'logs' | 'llm' | 'settings' | 'kanban';
 type OuterTab = 'session' | 'global';
 
 // Helper to determine which outer tab a content tab belongs to
 const SESSION_TABS: MainContentTab[] = ['streaming', 'context', 'properties', 'slides'];
-const GLOBAL_TABS: MainContentTab[] = ['code', 'logs', 'llm', 'settings'];
+const GLOBAL_TABS: MainContentTab[] = ['code', 'logs', 'llm', 'settings', 'kanban'];
 
 function getOuterTab(tab: MainContentTab): OuterTab {
   return SESSION_TABS.includes(tab) ? 'session' : 'global';
@@ -3546,6 +3559,12 @@ function MainContentHeader({
               onClick={() => onTabChange('settings')}
             >
               Settings
+            </button>
+            <button
+              className={`view-toggle-btn ${activeTab === 'kanban' ? 'active' : ''}`}
+              onClick={() => onTabChange('kanban')}
+            >
+              Kanban
             </button>
           </>
         )}

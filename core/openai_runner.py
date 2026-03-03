@@ -474,6 +474,21 @@ class OpenAICompatibleRunner(BaseRunner):
                         "content": result,
                     })
 
+                # Check for mid-stream injection after tool execution
+                if self._injection_callback:
+                    injection = await self._injection_callback()
+                    if injection:
+                        debug_log.info(
+                            f"Injecting user steering message",
+                            category=Category.RUNNER,
+                            details={"injection_len": len(injection)},
+                            run_id=self._run_id,
+                        )
+                        openai_messages.append({
+                            "role": "user",
+                            "content": injection,
+                        })
+
             debug_log.info(
                 f"OpenAI stream complete",
                 category=Category.RUNNER,

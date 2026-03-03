@@ -2,7 +2,7 @@
 //!
 //! Generated from Python domain entities marked with @rust_schema.
 //! Source: models.py and other domain modules
-//! Generated: 2026-02-28T18:47:30.148326
+//! Generated: 2026-03-02T09:08:03.334256
 //!
 //! To regenerate:
 //!     python -m codegen.generate_rust
@@ -216,4 +216,41 @@ pub struct UserPrefs {
     pub goal_tree_collapsed_ids: Vec<String>,
     #[serde(default)]
     pub pinned_session_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskData {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BoardData {
+    pub id: String,
+    pub name: String,
+    pub default_column_id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColumnData {
+    pub id: String,
+    pub name: String,
+    pub position: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdgeData {
+    pub id: String,
+    pub source_type: String,
+    pub source_id: String,
+    pub target_type: String,
+    pub target_id: String,
+    pub relationship: String,
+    #[serde(default)]
+    pub position: Option<i64>,
+    pub created_at: String,
 }

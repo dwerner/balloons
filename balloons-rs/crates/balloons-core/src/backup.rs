@@ -708,6 +708,7 @@ mod tests {
             sentiment: None,
             started_at: None,
             ended_at: None,
+            parallel_group_id: None,
         }
     }
 

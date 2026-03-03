@@ -863,11 +863,6 @@ export function SupervisorTab({
       {/* Header */}
       <div className="supervisor-tab__header">
         <h2>Supervisor</h2>
-        <ActionButton
-          label={isRefreshing ? 'Refreshing...' : 'Refresh'}
-          onClick={loadState}
-          disabled={isRefreshing}
-        />
       </div>
 
       {/* Host Edit Modal */}

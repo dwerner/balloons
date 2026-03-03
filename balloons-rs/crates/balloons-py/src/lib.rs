@@ -10,8 +10,9 @@ use pyo3::types::PyAny;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use balloons_core::{
-    GoalData, LmdbEngine, PlanData, SessionBinding, SessionData, StorageClient, TodoData,
-    TodoDependency, TodoPlanLink, UserData, UserPrefs, WatcherRelation,
+    BoardData, ColumnData, EdgeData, GoalData, LmdbEngine, PlanData, SessionBinding, SessionData,
+    StorageClient, TaskData, TodoData, TodoDependency, TodoPlanLink, UserData, UserPrefs,
+    WatcherRelation,
 };
 use balloons_supervisor::{ProcessSupervisor, StartRequest};
 
@@ -1177,6 +1178,395 @@ impl Storage {
             serde_json::to_string(&users).map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })
     }
+
+    // =========================================================================
+    // Kanban System - Tasks
+    // =========================================================================
+
+    /// Save a task from JSON string (upsert).
+    ///
+    /// Args:
+    ///     task_json: JSON-encoded TaskData
+    fn save_task(&self, py: Python<'_>, task_json: &str) -> PyResult<()> {
+        let task: TaskData =
+            serde_json::from_str(task_json).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        let client = Arc::clone(&self.client);
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task_future = executor.spawn_on_any(async move { client.save_task(&task).await });
+            future::block_on(task_future)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Load a task by ID, returns JSON string or None.
+    fn load_task(&self, py: Python<'_>, task_id: &str) -> PyResult<Option<String>> {
+        let client = Arc::clone(&self.client);
+        let task_id = task_id.to_string();
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task_future = executor.spawn_on_any(async move { client.load_task(&task_id).await });
+            let result = future::block_on(task_future)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+            match result {
+                Some(task) => {
+                    let json =
+                        serde_json::to_string(&task).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+                    Ok(Some(json))
+                }
+                None => Ok(None),
+            }
+        })
+    }
+
+    /// Delete a task by ID.
+    fn delete_task(&self, py: Python<'_>, task_id: &str) -> PyResult<()> {
+        let client = Arc::clone(&self.client);
+        let task_id = task_id.to_string();
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task_future = executor.spawn_on_any(async move { client.delete_task(&task_id).await });
+            future::block_on(task_future)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// List all tasks. Returns JSON array.
+    fn list_tasks(&self, py: Python<'_>) -> PyResult<String> {
+        let client = Arc::clone(&self.client);
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task_future = executor.spawn_on_any(async move { client.list_tasks().await });
+            let tasks = future::block_on(task_future)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+            serde_json::to_string(&tasks).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    // =========================================================================
+    // Kanban System - Boards
+    // =========================================================================
+
+    /// Save a board from JSON string (upsert).
+    fn save_board(&self, py: Python<'_>, board_json: &str) -> PyResult<()> {
+        let board: BoardData =
+            serde_json::from_str(board_json).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        let client = Arc::clone(&self.client);
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move { client.save_board(&board).await });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Load a board by ID, returns JSON string or None.
+    fn load_board(&self, py: Python<'_>, board_id: &str) -> PyResult<Option<String>> {
+        let client = Arc::clone(&self.client);
+        let board_id = board_id.to_string();
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move { client.load_board(&board_id).await });
+            let result = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+            match result {
+                Some(board) => {
+                    let json =
+                        serde_json::to_string(&board).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+                    Ok(Some(json))
+                }
+                None => Ok(None),
+            }
+        })
+    }
+
+    /// Delete a board by ID.
+    fn delete_board(&self, py: Python<'_>, board_id: &str) -> PyResult<()> {
+        let client = Arc::clone(&self.client);
+        let board_id = board_id.to_string();
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move { client.delete_board(&board_id).await });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// List all boards. Returns JSON array.
+    fn list_boards(&self, py: Python<'_>) -> PyResult<String> {
+        let client = Arc::clone(&self.client);
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move { client.list_boards().await });
+            let boards = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+            serde_json::to_string(&boards).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    // =========================================================================
+    // Kanban System - Columns
+    // =========================================================================
+
+    /// Save a column from JSON string (upsert).
+    fn save_column(&self, py: Python<'_>, column_json: &str) -> PyResult<()> {
+        let column: ColumnData =
+            serde_json::from_str(column_json).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        let client = Arc::clone(&self.client);
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move { client.save_column(&column).await });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Load a column by ID, returns JSON string or None.
+    fn load_column(&self, py: Python<'_>, column_id: &str) -> PyResult<Option<String>> {
+        let client = Arc::clone(&self.client);
+        let column_id = column_id.to_string();
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move { client.load_column(&column_id).await });
+            let result = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+            match result {
+                Some(column) => {
+                    let json =
+                        serde_json::to_string(&column).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+                    Ok(Some(json))
+                }
+                None => Ok(None),
+            }
+        })
+    }
+
+    /// Delete a column by ID.
+    fn delete_column(&self, py: Python<'_>, column_id: &str) -> PyResult<()> {
+        let client = Arc::clone(&self.client);
+        let column_id = column_id.to_string();
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move { client.delete_column(&column_id).await });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    // =========================================================================
+    // Graph System - Edges
+    // =========================================================================
+
+    /// Save an edge from JSON string (upsert).
+    ///
+    /// Args:
+    ///     edge_json: JSON-encoded EdgeData
+    fn save_edge(&self, py: Python<'_>, edge_json: &str) -> PyResult<()> {
+        let edge: EdgeData =
+            serde_json::from_str(edge_json).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        let client = Arc::clone(&self.client);
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move { client.save_edge(&edge).await });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Load an edge by ID, returns JSON string or None.
+    fn load_edge(&self, py: Python<'_>, edge_id: &str) -> PyResult<Option<String>> {
+        let client = Arc::clone(&self.client);
+        let edge_id = edge_id.to_string();
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move { client.load_edge(&edge_id).await });
+            let result = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+            match result {
+                Some(edge) => {
+                    let json =
+                        serde_json::to_string(&edge).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+                    Ok(Some(json))
+                }
+                None => Ok(None),
+            }
+        })
+    }
+
+    /// Delete an edge by ID.
+    fn delete_edge(&self, py: Python<'_>, edge_id: &str) -> PyResult<()> {
+        let client = Arc::clone(&self.client);
+        let edge_id = edge_id.to_string();
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move { client.delete_edge(&edge_id).await });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Get edges by source entity. Returns JSON array.
+    ///
+    /// Args:
+    ///     source_type: Entity type ("task", "column", "board", etc.)
+    ///     source_id: Entity ID
+    fn get_edges_by_source(&self, py: Python<'_>, source_type: &str, source_id: &str) -> PyResult<String> {
+        let client = Arc::clone(&self.client);
+        let source_type = source_type.to_string();
+        let source_id = source_id.to_string();
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor
+                .spawn_on_any(async move { client.get_edges_by_source(&source_type, &source_id).await });
+            let edges = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+            serde_json::to_string(&edges).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Get edges by target entity. Returns JSON array.
+    ///
+    /// Args:
+    ///     target_type: Entity type ("task", "column", "board", etc.)
+    ///     target_id: Entity ID
+    fn get_edges_by_target(&self, py: Python<'_>, target_type: &str, target_id: &str) -> PyResult<String> {
+        let client = Arc::clone(&self.client);
+        let target_type = target_type.to_string();
+        let target_id = target_id.to_string();
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor
+                .spawn_on_any(async move { client.get_edges_by_target(&target_type, &target_id).await });
+            let edges = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+            serde_json::to_string(&edges).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Get edges by source and relationship type. Returns JSON array.
+    ///
+    /// Args:
+    ///     source_type: Entity type
+    ///     source_id: Entity ID
+    ///     relationship: Relationship type ("part_of", "in_column", "tracked_on", etc.)
+    fn get_edges_by_source_and_relationship(
+        &self,
+        py: Python<'_>,
+        source_type: &str,
+        source_id: &str,
+        relationship: &str,
+    ) -> PyResult<String> {
+        let client = Arc::clone(&self.client);
+        let source_type = source_type.to_string();
+        let source_id = source_id.to_string();
+        let relationship = relationship.to_string();
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move {
+                client
+                    .get_edges_by_source_and_relationship(&source_type, &source_id, &relationship)
+                    .await
+            });
+            let edges = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+            serde_json::to_string(&edges).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Get edges by target and relationship type. Returns JSON array.
+    ///
+    /// Args:
+    ///     target_type: Entity type
+    ///     target_id: Entity ID
+    ///     relationship: Relationship type ("part_of", "in_column", "tracked_on", etc.)
+    fn get_edges_by_target_and_relationship(
+        &self,
+        py: Python<'_>,
+        target_type: &str,
+        target_id: &str,
+        relationship: &str,
+    ) -> PyResult<String> {
+        let client = Arc::clone(&self.client);
+        let target_type = target_type.to_string();
+        let target_id = target_id.to_string();
+        let relationship = relationship.to_string();
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move {
+                client
+                    .get_edges_by_target_and_relationship(&target_type, &target_id, &relationship)
+                    .await
+            });
+            let edges = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+            serde_json::to_string(&edges).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// List all edges. Returns JSON array.
+    fn list_edges(&self, py: Python<'_>) -> PyResult<String> {
+        let client = Arc::clone(&self.client);
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move { client.list_edges().await });
+            let edges = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+            serde_json::to_string(&edges).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
 }
 
 // =============================================================================
@@ -1297,27 +1687,66 @@ impl Supervisor {
         })
     }
 
-    /// Get output from a process.
+    /// Get output from a process with optional filtering.
     ///
     /// Args:
     ///     process_id: The process ID
     ///     limit: Maximum number of log entries to return (default 50)
+    ///     source: Filter to entries from this source ("stdout", "stderr", "system", "stdin")
+    ///     pattern: Substring to search for in log content (case-sensitive)
+    ///     since: Unix timestamp - only return entries after this time
     ///
     /// Returns:
     ///     Awaitable that resolves to JSON array of log entries
-    #[pyo3(signature = (process_id, limit=50))]
+    #[pyo3(signature = (process_id, limit=50, source=None, pattern=None, since=None))]
     fn get_output<'py>(
         &self,
         py: Python<'py>,
         process_id: &str,
         limit: usize,
+        source: Option<&str>,
+        pattern: Option<&str>,
+        since: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        use balloons_supervisor::types::{LogSource, OutputQuery};
+        use chrono::{TimeZone, Utc};
+
         let supervisor = Arc::clone(&self.inner);
         let process_id = process_id.to_string();
 
+        // Parse source filter
+        let source_filter = source.map(|s| match s {
+            "stdout" => LogSource::Stdout,
+            "stderr" => LogSource::Stderr,
+            "system" => LogSource::System,
+            "stdin" => LogSource::Stdin,
+            _ => LogSource::Stdout, // Default fallback
+        });
+
+        // Parse since timestamp
+        let since_dt = since.map(|ts| {
+            let secs = ts as i64;
+            let nanos = ((ts - secs as f64) * 1_000_000_000.0) as u32;
+            Utc.timestamp_opt(secs, nanos).single().unwrap_or_else(Utc::now)
+        });
+
+        let pattern_str = pattern.map(|s| s.to_string());
+
         pyo3_async_runtimes::smol::future_into_py(py, async move {
+            // Build query with filters
+            let mut query = OutputQuery::new().limit(limit);
+            if let Some(src) = source_filter {
+                query = query.source(src);
+            }
+            if let Some(pat) = pattern_str {
+                query = query.pattern(pat);
+            }
+            if let Some(dt) = since_dt {
+                query = query.since(dt);
+            }
+
             let logs = supervisor
-                .get_output(&process_id, limit)
+                .query_output(&process_id, &query)
                 .await
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
@@ -1337,6 +1766,26 @@ impl Supervisor {
             let mut executor = get_supervisor_executor().lock().unwrap();
             let task =
                 executor.spawn_on_any(async move { supervisor.stop_process(&process_id).await });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Send input to a running process's stdin.
+    ///
+    /// Args:
+    ///     process_id: The process ID to send input to
+    ///     data: The input data to send (newline appended automatically)
+    fn send_input(&self, py: Python<'_>, process_id: &str, data: &str) -> PyResult<()> {
+        let supervisor = Arc::clone(&self.inner);
+        let process_id = process_id.to_string();
+        let data = data.to_string();
+
+        py.detach(|| {
+            let mut executor = get_supervisor_executor().lock().unwrap();
+            let task = executor
+                .spawn_on_any(async move { supervisor.send_input(&process_id, &data).await });
             future::block_on(task)
                 .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))

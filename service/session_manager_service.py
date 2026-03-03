@@ -1175,6 +1175,42 @@ class SessionManagerService:
         # Submit the combined message
         await self.submit_message(session_id, combined_prompt)
 
+    def _create_injection_callback(self, session_id: str):
+        """Create a callback for mid-stream message injection.
+
+        Returns a callback that drains queued messages and returns them
+        for injection into the conversation. This enables users to steer
+        the conversation mid-stream without cancelling.
+
+        Args:
+            session_id: The session to create the callback for
+
+        Returns:
+            Async callback that returns message to inject, or None
+        """
+        async def check_queue() -> str | None:
+            if not self._queue_state:
+                return None
+            if not self._queue_state.has_messages(session_id):
+                return None
+            if self._queue_state.is_blocked(session_id):
+                return None
+
+            # Drain all non-paused messages
+            messages = self._queue_state.drain(session_id)
+            if not messages:
+                return None
+
+            combined = "\n\n".join(messages)
+            debug_log.info(
+                f"Injecting {len(messages)} queued messages ({len(combined)} chars)",
+                category=Category.RUNNER,
+                session_id=session_id,
+            )
+            return combined
+
+        return check_queue
+
     def register_streaming_context(
         self,
         session_id: str,
@@ -5156,6 +5192,9 @@ Summary:""")
             {"exchange_id": exchange_id, "turn_index": turn_index, "content": content},
         )
 
+        # Set up mid-stream injection callback for user steering
+        runner.set_injection_callback(self._create_injection_callback(session_id))
+
         # Start background streaming
         # Use provided messages for context, or fall back to all session turns
         context_messages = messages if messages is not None else session.turns
@@ -5358,6 +5397,9 @@ Summary:""")
         if hasattr(runner._runner, 'set_pending_images'):
             runner._runner.set_pending_images(image_blocks)
 
+        # Set up mid-stream injection callback for user steering
+        runner.set_injection_callback(self._create_injection_callback(session_id))
+
         runner.start_background(
             prompt=content,
             messages=session.turns,
@@ -5519,6 +5561,9 @@ Summary:""")
                 "content_type": "markdown",
             },
         )
+
+        # Set up mid-stream injection callback for user steering
+        runner.set_injection_callback(self._create_injection_callback(session_id))
 
         # Start background streaming
         runner.start_background(

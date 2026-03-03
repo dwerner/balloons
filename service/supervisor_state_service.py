@@ -68,6 +68,30 @@ class ProcessOutput:
 
 @ws_type
 @dataclass
+class ProcessLogEntry:
+    """A single log entry from process output history."""
+
+    ts: float  # Unix timestamp
+    source: str  # "stdout", "stderr", "system", "stdin"
+    content: str
+
+
+@ws_type
+@dataclass
+class ProcessOutputBatch:
+    """Batch of process output for history fetching.
+
+    Supports pagination - use offset to fetch older entries.
+    """
+
+    process_id: str
+    entries: list[ProcessLogEntry]
+    total_count: int  # Total entries available
+    has_more: bool  # True if more entries exist before offset
+
+
+@ws_type
+@dataclass
 class BackendHostMapping:
     """Mapping between LLM backend and host."""
 
@@ -279,22 +303,22 @@ def emit_supervisor_event(event_type: str, data: dict) -> SupervisorEvent:
 
 # Global reference to the service instance for callback access
 _service_instance: Optional["SupervisorStateService"] = None
+_main_event_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
 def _output_callback(process_id: str, source: str, content: str) -> None:
     """Callback invoked by Rust supervisor for each process output line.
 
-    This is called from a background thread, so we need to be careful about
-    thread safety. We emit a WebSocket event to stream the output to clients.
+    This is called from a background thread, so we need to dispatch
+    to the main event loop for thread-safe WebSocket event emission.
+
+    Also detects process exit messages and emits processStopped events.
 
     Args:
         process_id: UUID of the process
         source: "stdout", "stderr", or "system"
         content: The output line
     """
-    # DEBUG: Log that callback was invoked
-    print(f"[OUTPUT_CALLBACK] {process_id[:8]} {source}: {content[:50]}")
-
     # Create the output event
     output = ProcessOutput(
         process_id=process_id,
@@ -303,16 +327,40 @@ def _output_callback(process_id: str, source: str, content: str) -> None:
         ts=time.time(),
     )
 
-    # Emit the WebSocket event if service is initialized
-    if _service_instance is not None:
+    # Dispatch to main event loop for thread-safe emission
+    if _service_instance is not None and _main_event_loop is not None:
         try:
-            print(f"[OUTPUT_CALLBACK] Emitting to WebSocket")
-            _service_instance._emit_process_output(output)
+            # Use call_soon_threadsafe to dispatch to the main loop
+            _main_event_loop.call_soon_threadsafe(
+                _service_instance._emit_process_output, output
+            )
+
+            # Check for process exit messages (emitted by Rust supervisor as "system" logs)
+            if source == "system" and content.startswith("Process exited"):
+                # Parse exit code if present: "Process exited with code N" or "Process exited"
+                exit_code = None
+                if "with code" in content:
+                    try:
+                        exit_code = int(content.split("with code")[1].strip())
+                    except (ValueError, IndexError):
+                        pass
+
+                # Emit processStopped event
+                def emit_stopped():
+                    _service_instance._emit_event("processStopped", {
+                        "processId": process_id,
+                        "status": "exited",
+                        "exitCode": exit_code,
+                    })
+
+                _main_event_loop.call_soon_threadsafe(emit_stopped)
+
         except Exception as e:
-            debug_log.error(f"Error emitting process output: {e}", category=Category.SUPERVISOR)
-            print(f"[OUTPUT_CALLBACK] ERROR: {e}")
-    else:
-        print(f"[OUTPUT_CALLBACK] WARNING: _service_instance is None")
+            debug_log.error(f"Error dispatching process output: {e}", category=Category.SUPERVISOR)
+    elif _service_instance is None:
+        debug_log.warning("Output callback: service instance not initialized", category=Category.SUPERVISOR)
+    elif _main_event_loop is None:
+        debug_log.warning("Output callback: event loop not set", category=Category.SUPERVISOR)
 
 
 def register_output_callback() -> None:
@@ -356,13 +404,27 @@ class SupervisorStateService:
         # Event handlers for WebSocket broadcasting
         self._event_handlers: list[Callable[[str, dict], None]] = []
 
-        # Register this instance globally for callback access
-        global _service_instance
+        # Register this instance and event loop globally for callback access
+        global _service_instance, _main_event_loop
         _service_instance = self
+        # Capture the current event loop (should be the main server loop)
+        try:
+            _main_event_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop yet - will be set when first async method is called
+            _main_event_loop = None
 
     def add_event_handler(self, handler: Callable[[str, dict], None]) -> None:
         """Register an event handler for WebSocket broadcasting."""
         self._event_handlers.append(handler)
+
+        # Ensure we have the event loop reference for thread-safe callbacks
+        global _main_event_loop
+        if _main_event_loop is None:
+            try:
+                _main_event_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                pass
 
     def remove_event_handler(self, handler: Callable[[str, dict], None]) -> None:
         """Unregister an event handler."""
@@ -462,6 +524,100 @@ class SupervisorStateService:
             processes=processes,
             backend_hosts=backend_hosts,
         )
+
+    @ws_expose
+    async def get_process_output(
+        self,
+        process_id: str,
+        limit: int = 100,
+        offset: int = 0,
+        source: Optional[str] = None,
+    ) -> ProcessOutputBatch:
+        """Get historical output from a process.
+
+        Supports pagination - entries are returned in chronological order.
+        Use offset to fetch older entries.
+
+        Args:
+            process_id: The process ID to get output from
+            limit: Maximum entries to return (default 100, max 500)
+            offset: Number of entries to skip from the end (for pagination)
+            source: Filter to specific source ("stdout", "stderr", "stdin", "system")
+
+        Returns:
+            Batch of log entries with pagination info
+        """
+        import json
+        from core.supervisor_tools import get_supervisor
+
+        # Clamp limit
+        limit = min(max(1, limit), 500)
+
+        supervisor = get_supervisor()
+        if not supervisor:
+            return ProcessOutputBatch(
+                process_id=process_id,
+                entries=[],
+                total_count=0,
+                has_more=False,
+            )
+
+        try:
+            # Use the async get_output method from Rust supervisor
+            # Note: The Rust API returns newest first, we want chronological
+            output_json = await supervisor.get_output(
+                process_id,
+                limit + offset,  # Fetch enough to skip offset entries
+                source=source,
+            )
+            logs = json.loads(output_json)
+
+            # logs is a list of {"timestamp": "...", "source": "...", "content": "..."}
+            total_fetched = len(logs)
+
+            # Apply offset (skip N entries from the end/newest)
+            if offset > 0 and offset < len(logs):
+                logs = logs[:-offset]
+            elif offset >= len(logs):
+                logs = []
+
+            # Convert to ProcessLogEntry
+            entries = []
+            for log in logs:
+                # Parse ISO timestamp to Unix timestamp
+                ts_str = log.get("timestamp", "")
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    ts = dt.timestamp()
+                except Exception:
+                    ts = 0.0
+
+                entries.append(ProcessLogEntry(
+                    ts=ts,
+                    source=log.get("source", "system"),
+                    content=log.get("content", ""),
+                ))
+
+            # Determine if there are more entries
+            # If we fetched limit+offset and got that many, there's probably more
+            has_more = total_fetched >= (limit + offset)
+
+            return ProcessOutputBatch(
+                process_id=process_id,
+                entries=entries,
+                total_count=total_fetched,
+                has_more=has_more,
+            )
+
+        except Exception as e:
+            debug_log.error(f"Error getting process output: {e}", category=Category.SUPERVISOR)
+            return ProcessOutputBatch(
+                process_id=process_id,
+                entries=[],
+                total_count=0,
+                has_more=False,
+            )
 
     @ws_expose
     def list_hosts(
@@ -930,6 +1086,70 @@ class SupervisorStateService:
 
         except Exception as e:
             debug_log.error(f"Error removing backend host: {e}", category=Category.SUPERVISOR)
+            return ConfigUpdateResult(success=False, error=str(e))
+
+    @ws_expose
+    def send_process_input(self, process_id: str, data: str) -> ConfigUpdateResult:
+        """Send input to a running process's stdin.
+
+        Args:
+            process_id: The process ID to send input to
+            data: The input data to send (newline is appended automatically)
+
+        Returns:
+            Success/failure result
+        """
+        from core.supervisor_tools import get_supervisor
+
+        supervisor = get_supervisor()
+        if not supervisor:
+            return ConfigUpdateResult(
+                success=False,
+                error="Supervisor not initialized",
+            )
+
+        try:
+            supervisor.send_input(process_id, data)
+            debug_log.info(
+                f"Sent input to process: {process_id[:8]}",
+                category=Category.SUPERVISOR,
+                details={"data_length": len(data)},
+            )
+            return ConfigUpdateResult(success=True)
+
+        except Exception as e:
+            debug_log.error(f"Error sending input: {e}", category=Category.SUPERVISOR)
+            return ConfigUpdateResult(success=False, error=str(e))
+
+    @ws_expose
+    async def stop_process(self, process_id: str) -> ConfigUpdateResult:
+        """Stop a running supervised process.
+
+        Args:
+            process_id: The process ID to stop
+
+        Returns:
+            Success/failure result
+        """
+        from core.supervisor_tools import get_supervisor
+
+        supervisor = get_supervisor()
+        if not supervisor:
+            return ConfigUpdateResult(
+                success=False,
+                error="Supervisor not initialized",
+            )
+
+        try:
+            await supervisor.stop_process(process_id)
+            debug_log.info(
+                f"Stopped process: {process_id[:8]}",
+                category=Category.SUPERVISOR,
+            )
+            return ConfigUpdateResult(success=True)
+
+        except Exception as e:
+            debug_log.error(f"Error stopping process: {e}", category=Category.SUPERVISOR)
             return ConfigUpdateResult(success=False, error=str(e))
 
     # Events for real-time updates

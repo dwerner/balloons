@@ -228,6 +228,19 @@ class SessionRunner:
     def is_done(self) -> bool:
         return self._status in (RunnerStatus.IDLE, RunnerStatus.ERROR, RunnerStatus.CANCELLED)
 
+    def set_injection_callback(self, callback) -> None:
+        """Set a callback for mid-stream message injection.
+
+        The callback is called after each tool execution. If it returns
+        a string, that message is injected into the conversation before
+        the next LLM call, allowing users to steer without cancelling.
+
+        Args:
+            callback: Async function returning message to inject, or None
+        """
+        if hasattr(self._runner, 'set_injection_callback'):
+            self._runner.set_injection_callback(callback)
+
     def _make_event(self, event_type: str, data: Any = None) -> StreamEvent:
         """Create an event tagged with this session's ID."""
         return StreamEvent(event_type, data, session_id=self.session.id)

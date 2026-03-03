@@ -336,3 +336,74 @@ class UserPrefs:
 
     # Session pinning
     pinned_session_ids: list[str] = field(default_factory=list)  # IDs of pinned sessions
+
+
+# =============================================================================
+# Kanban / Graph System
+# =============================================================================
+
+
+@rust_schema
+@dataclass
+class TaskData:
+    """A work item in the kanban system.
+
+    Tasks are the primary work unit. They can be placed on boards via edges
+    and associated with other entities (goals, sessions) via the graph.
+    """
+    id: str  # UUID
+    title: str
+    description: str
+    created_at: str  # ISO 8601
+    updated_at: str  # ISO 8601
+
+
+@rust_schema
+@dataclass
+class BoardData:
+    """A kanban board with configurable columns.
+
+    Boards track task progress through columns. Each board has a default
+    column where new tasks are placed.
+    """
+    id: str  # UUID
+    name: str
+    default_column_id: str  # Column ID for new tasks
+    created_at: str  # ISO 8601
+
+
+@rust_schema
+@dataclass
+class ColumnData:
+    """A column in a kanban board.
+
+    Columns represent stages in a workflow (e.g., Todo, In Progress, Done).
+    Position determines display order within the board.
+    """
+    id: str  # UUID
+    name: str
+    position: int  # Ordering within board (0-indexed)
+
+
+@rust_schema
+@dataclass
+class EdgeData:
+    """A directed relationship between two entities in the graph.
+
+    Edges connect entities with typed relationships. The position field
+    enables ordering (e.g., task order within a column).
+
+    Entity types: "task", "board", "column", "session"
+    Relationships:
+      - "tracked_on": Task → Board (task appears on board)
+      - "part_of": Column → Board (column belongs to board)
+      - "in_column": Task → Column (task's position in column)
+    """
+    id: str  # UUID
+    source_type: str  # Entity type of source
+    source_id: str
+    target_type: str  # Entity type of target
+    target_id: str
+    relationship: str  # Relationship type
+    position: Optional[int] = None  # For ordering (e.g., task in column)
+    created_at: str = ""  # ISO 8601

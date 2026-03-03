@@ -19,3 +19,4 @@ serde_json.workspace = true
 futures-lite.workspace = true
 tiktoken-rs.workspace = true
 smol.workspace = true
+chrono.workspace = true

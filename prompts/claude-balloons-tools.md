@@ -87,61 +87,51 @@ fork relationships, and read merge summaries.
 
 ### How to Use These Tools
 
-When you need to use one of these tools, output a tool call in this exact format:
+When you need to use one of these tools, output a tool call as RAW TEXT (not in a code block).
 
-```
+**CRITICAL: Do NOT wrap tool calls in code blocks (triple backticks). Output the XML directly.**
+
+Format:
+
 <balloons-tool>
 {"name": "tool_name", "args": {"arg1": "value1"}}
 </balloons-tool>
-```
 
-For example, to list available links:
+For example, to list available links, output this exact text:
 
-```
 <balloons-tool>
 {"name": "list_links", "args": {}}
 </balloons-tool>
-```
 
 Or to follow a specific link (last 5 turns):
 
-```
 <balloons-tool>
 {"name": "follow_link", "args": {"link_id": "abc123", "limit": 5}}
 </balloons-tool>
-```
 
 Or to paginate through a linked session (turns 10-19):
 
-```
 <balloons-tool>
 {"name": "follow_link", "args": {"link_id": "abc123", "offset": 10, "limit": 10}}
 </balloons-tool>
-```
 
 Or to get full content from a specific turn range:
 
-```
 <balloons-tool>
 {"name": "follow_link", "args": {"link_id": "abc123", "offset": 42, "limit": 1, "full_content": true}}
 </balloons-tool>
-```
 
 Or to check session status:
 
-```
 <balloons-tool>
 {"name": "session_info", "args": {}}
 </balloons-tool>
-```
 
 Or to capture the current screen:
 
-```
 <balloons-tool>
 {"name": "screen_snapshot", "args": {}}
 </balloons-tool>
-```
 
 After you output a tool call, the system will execute it and provide the result.
 You can then use that information in your response.
@@ -414,13 +404,11 @@ You can create presentation slides that appear in the Slides tab. Use this for:
 - Code blocks: max ~15 lines
 - One concept per slide
 
-**Example:**
+**Example (output this directly, NOT in a code block):**
 
-```
 <balloons-tool>
 {"name": "create_slide", "args": {"title": "Context Management", "content": "## Key Features\n\n- Per-turn COPY/COMPRESS/DROP modes\n- Visual context tree with token counts\n- Session forking & merging\n- Bidirectional session linking", "notes": "Emphasize the git-like workflow"}}
 </balloons-tool>
-```
 
 The slide will appear in the Slides tab. Users can view presentations with `:present`.
 

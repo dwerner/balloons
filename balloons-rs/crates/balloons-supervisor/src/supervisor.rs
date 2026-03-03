@@ -94,6 +94,13 @@ impl ProcessSupervisor {
             cmd.env(key, value);
         }
 
+        // Create a channel for stdin input
+        // This channel will forward input to the process's stdin
+        let (stdin_tx, stdin_rx) = async_channel::unbounded::<String>();
+
+        // Configure the command to use our stdin channel
+        cmd.stdin_channel(stdin_rx);
+
         // Build the managed process target
         let target = Target::ManagedProcess(ManagedProcess::new());
 
@@ -103,7 +110,7 @@ impl ProcessSupervisor {
         );
 
         // Launch the process
-        let (events, handle) = executor
+        let (events, mut handle) = executor
             .launch(&target, cmd)
             .await
             .map_err(|e| Error::SpawnFailed(e.to_string()))?;
@@ -111,10 +118,21 @@ impl ProcessSupervisor {
         // Get the PID
         let pid = handle.pid().unwrap_or(0);
 
+        // Take the stdin handle and start the forwarding task
+        // This forwards input from our channel to the process's stdin
+        if let Some(stdin_handle) = handle.take_stdin() {
+            smol::spawn(async move {
+                if let Err(e) = stdin_handle.forward_channel().await {
+                    tracing::warn!("Stdin forwarding ended: {}", e);
+                }
+            })
+            .detach();
+        }
+
         // Create stop channel (bounded(1) similar to mpsc::channel(1))
         let (stop_tx, stop_rx) = async_channel::bounded(1);
 
-        // Create the supervised process
+        // Create the supervised process with stdin channel
         let supervised = Arc::new(SupervisedProcess::new(
             process_id.clone(),
             request.name,
@@ -123,6 +141,7 @@ impl ProcessSupervisor {
             request.session_id,
             pid,
             stop_tx,
+            Some(stdin_tx),
         ));
 
         // Add initial log entry
@@ -221,6 +240,21 @@ impl ProcessSupervisor {
 
         info!(process_id = %process_id, "Stopping process");
         process.stop().await
+    }
+
+    /// Send input to a running process's stdin.
+    ///
+    /// Args:
+    ///     process_id: The process ID
+    ///     data: The input data to send (newline appended automatically)
+    pub async fn send_input(&self, process_id: &str, data: &str) -> Result<()> {
+        let processes = self.processes.read().await;
+        let process = processes
+            .get(process_id)
+            .ok_or_else(|| Error::ProcessNotFound(process_id.to_string()))?;
+
+        info!(process_id = %process_id, "Sending input to process");
+        process.send_input(data).await
     }
 
     /// Stop all processes for a session.

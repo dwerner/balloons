@@ -2,8 +2,9 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 use crate::generated::{
-    GoalData, PlanData, SessionBinding, SessionData, SessionMetadata, TodoData, TodoDependency,
-    TodoPlanLink, TurnData, UserData, UserPrefs, WatcherRelation,
+    BoardData, ColumnData, EdgeData, GoalData, PlanData, SessionBinding, SessionData,
+    SessionMetadata, TaskData, TodoData, TodoDependency, TodoPlanLink, TurnData, UserData,
+    UserPrefs, WatcherRelation,
 };
 
 #[derive(Debug, Error)]
@@ -28,6 +29,18 @@ pub enum Error {
 
     #[error("User not found: {0}")]
     UserNotFound(String),
+
+    #[error("Task not found: {0}")]
+    TaskNotFound(String),
+
+    #[error("Board not found: {0}")]
+    BoardNotFound(String),
+
+    #[error("Column not found: {0}")]
+    ColumnNotFound(String),
+
+    #[error("Edge not found: {0}")]
+    EdgeNotFound(String),
 
     #[error("Database error: {0}")]
     Database(String),
@@ -343,4 +356,120 @@ pub trait StorageEngine: Send + Sync {
 
     /// List all users.
     async fn list_users(&self) -> Result<Vec<UserData>>;
+
+    // =========================================================================
+    // Kanban System - Tasks
+    // =========================================================================
+
+    /// Save a task (upsert).
+    async fn save_task(&self, task: &TaskData) -> Result<()>;
+
+    /// Load a task by ID.
+    async fn load_task(&self, id: &str) -> Result<Option<TaskData>>;
+
+    /// Delete a task by ID.
+    ///
+    /// Note: This does not cascade delete edges. Callers should handle
+    /// cleanup of related edges if needed.
+    async fn delete_task(&self, id: &str) -> Result<()>;
+
+    /// List all tasks.
+    async fn list_tasks(&self) -> Result<Vec<TaskData>>;
+
+    // =========================================================================
+    // Kanban System - Boards
+    // =========================================================================
+
+    /// Save a board (upsert).
+    async fn save_board(&self, board: &BoardData) -> Result<()>;
+
+    /// Load a board by ID.
+    async fn load_board(&self, id: &str) -> Result<Option<BoardData>>;
+
+    /// Delete a board by ID.
+    ///
+    /// Note: This does not cascade delete columns or edges. Callers should
+    /// handle cleanup of related entities if needed.
+    async fn delete_board(&self, id: &str) -> Result<()>;
+
+    /// List all boards.
+    async fn list_boards(&self) -> Result<Vec<BoardData>>;
+
+    // =========================================================================
+    // Kanban System - Columns
+    // =========================================================================
+
+    /// Save a column (upsert).
+    async fn save_column(&self, column: &ColumnData) -> Result<()>;
+
+    /// Load a column by ID.
+    async fn load_column(&self, id: &str) -> Result<Option<ColumnData>>;
+
+    /// Delete a column by ID.
+    ///
+    /// Note: This does not cascade delete edges. Callers should handle
+    /// cleanup of related edges if needed.
+    async fn delete_column(&self, id: &str) -> Result<()>;
+
+    // =========================================================================
+    // Graph System - Edges
+    // =========================================================================
+
+    /// Save an edge (upsert).
+    ///
+    /// Automatically maintains the edges_by_source and edges_by_target indexes.
+    async fn save_edge(&self, edge: &EdgeData) -> Result<()>;
+
+    /// Load an edge by ID.
+    async fn load_edge(&self, id: &str) -> Result<Option<EdgeData>>;
+
+    /// Delete an edge by ID.
+    ///
+    /// Automatically cleans up both indexes.
+    async fn delete_edge(&self, id: &str) -> Result<()>;
+
+    /// Query edges by source entity.
+    ///
+    /// Returns all edges where the source matches the given type and ID.
+    /// Results are ordered by position (if set), then by created_at.
+    async fn get_edges_by_source(
+        &self,
+        source_type: &str,
+        source_id: &str,
+    ) -> Result<Vec<EdgeData>>;
+
+    /// Query edges by target entity.
+    ///
+    /// Returns all edges where the target matches the given type and ID.
+    /// Results are ordered by position (if set), then by created_at.
+    async fn get_edges_by_target(
+        &self,
+        target_type: &str,
+        target_id: &str,
+    ) -> Result<Vec<EdgeData>>;
+
+    /// Query edges by source and relationship type.
+    ///
+    /// Returns all edges from the source with the given relationship.
+    /// Results are ordered by position (if set), then by created_at.
+    async fn get_edges_by_source_and_relationship(
+        &self,
+        source_type: &str,
+        source_id: &str,
+        relationship: &str,
+    ) -> Result<Vec<EdgeData>>;
+
+    /// Query edges by target and relationship type.
+    ///
+    /// Returns all edges to the target with the given relationship.
+    /// Results are ordered by position (if set), then by created_at.
+    async fn get_edges_by_target_and_relationship(
+        &self,
+        target_type: &str,
+        target_id: &str,
+        relationship: &str,
+    ) -> Result<Vec<EdgeData>>;
+
+    /// List all edges.
+    async fn list_edges(&self) -> Result<Vec<EdgeData>>;
 }

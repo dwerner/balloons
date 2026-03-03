@@ -580,6 +580,24 @@ class ClaudeRunner(BaseRunner):
         }
         await self._send_message(msg)
 
+    async def _send_user_injection(self, text: str) -> None:
+        """Send a user steering message mid-stream.
+
+        This injects a user message into the conversation while Claude
+        is processing, allowing the user to steer without cancelling.
+
+        Args:
+            text: The user's message to inject
+        """
+        msg = {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": text}]
+            }
+        }
+        await self._send_message(msg)
+
     async def _process_stream(self, working_dir: str) -> AsyncIterator[RunnerEvent]:
         """Process the JSON stream from Claude, handling tool calls.
 
@@ -781,6 +799,18 @@ class ClaudeRunner(BaseRunner):
 
                         # Send result back to Claude
                         await self._send_tool_result(tc["id"], result, is_error)
+
+                    # Check for mid-stream injection after tool execution
+                    if self._injection_callback:
+                        injection = await self._injection_callback()
+                        if injection:
+                            debug_log.info(
+                                f"Injecting user steering message",
+                                category=Category.RUNNER,
+                                details={"injection_len": len(injection)},
+                                run_id=self._run_id,
+                            )
+                            await self._send_user_injection(injection)
 
                     pending_tool_calls.clear()
                     # Continue processing - Claude will respond to the tool results

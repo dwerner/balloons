@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use crate::generated::{
-    GoalData, PlanData, SessionBinding, SessionData, SessionMetadata, TodoData, TodoDependency,
-    TodoPlanLink, TurnData, UserData, UserPrefs, WatcherRelation,
+    BoardData, ColumnData, EdgeData, GoalData, PlanData, SessionBinding, SessionData,
+    SessionMetadata, TaskData, TodoData, TodoDependency, TodoPlanLink, TurnData, UserData,
+    UserPrefs, WatcherRelation,
 };
 use super::traits::{Result, StorageEngine};
 
@@ -333,5 +334,138 @@ impl StorageClient {
     /// List all users.
     pub async fn list_users(&self) -> Result<Vec<UserData>> {
         self.engine.list_users().await
+    }
+
+    // =========================================================================
+    // Kanban System - Tasks
+    // =========================================================================
+
+    /// Save a task (upsert).
+    pub async fn save_task(&self, task: &TaskData) -> Result<()> {
+        self.engine.save_task(task).await
+    }
+
+    /// Load a task by ID.
+    pub async fn load_task(&self, id: &str) -> Result<Option<TaskData>> {
+        self.engine.load_task(id).await
+    }
+
+    /// Delete a task by ID.
+    pub async fn delete_task(&self, id: &str) -> Result<()> {
+        self.engine.delete_task(id).await
+    }
+
+    /// List all tasks.
+    pub async fn list_tasks(&self) -> Result<Vec<TaskData>> {
+        self.engine.list_tasks().await
+    }
+
+    // =========================================================================
+    // Kanban System - Boards
+    // =========================================================================
+
+    /// Save a board (upsert).
+    pub async fn save_board(&self, board: &BoardData) -> Result<()> {
+        self.engine.save_board(board).await
+    }
+
+    /// Load a board by ID.
+    pub async fn load_board(&self, id: &str) -> Result<Option<BoardData>> {
+        self.engine.load_board(id).await
+    }
+
+    /// Delete a board by ID.
+    pub async fn delete_board(&self, id: &str) -> Result<()> {
+        self.engine.delete_board(id).await
+    }
+
+    /// List all boards.
+    pub async fn list_boards(&self) -> Result<Vec<BoardData>> {
+        self.engine.list_boards().await
+    }
+
+    // =========================================================================
+    // Kanban System - Columns
+    // =========================================================================
+
+    /// Save a column (upsert).
+    pub async fn save_column(&self, column: &ColumnData) -> Result<()> {
+        self.engine.save_column(column).await
+    }
+
+    /// Load a column by ID.
+    pub async fn load_column(&self, id: &str) -> Result<Option<ColumnData>> {
+        self.engine.load_column(id).await
+    }
+
+    /// Delete a column by ID.
+    pub async fn delete_column(&self, id: &str) -> Result<()> {
+        self.engine.delete_column(id).await
+    }
+
+    // =========================================================================
+    // Graph System - Edges
+    // =========================================================================
+
+    /// Save an edge (upsert).
+    pub async fn save_edge(&self, edge: &EdgeData) -> Result<()> {
+        self.engine.save_edge(edge).await
+    }
+
+    /// Load an edge by ID.
+    pub async fn load_edge(&self, id: &str) -> Result<Option<EdgeData>> {
+        self.engine.load_edge(id).await
+    }
+
+    /// Delete an edge by ID.
+    pub async fn delete_edge(&self, id: &str) -> Result<()> {
+        self.engine.delete_edge(id).await
+    }
+
+    /// Query edges by source entity.
+    pub async fn get_edges_by_source(
+        &self,
+        source_type: &str,
+        source_id: &str,
+    ) -> Result<Vec<EdgeData>> {
+        self.engine.get_edges_by_source(source_type, source_id).await
+    }
+
+    /// Query edges by target entity.
+    pub async fn get_edges_by_target(
+        &self,
+        target_type: &str,
+        target_id: &str,
+    ) -> Result<Vec<EdgeData>> {
+        self.engine.get_edges_by_target(target_type, target_id).await
+    }
+
+    /// Query edges by source and relationship type.
+    pub async fn get_edges_by_source_and_relationship(
+        &self,
+        source_type: &str,
+        source_id: &str,
+        relationship: &str,
+    ) -> Result<Vec<EdgeData>> {
+        self.engine
+            .get_edges_by_source_and_relationship(source_type, source_id, relationship)
+            .await
+    }
+
+    /// Query edges by target and relationship type.
+    pub async fn get_edges_by_target_and_relationship(
+        &self,
+        target_type: &str,
+        target_id: &str,
+        relationship: &str,
+    ) -> Result<Vec<EdgeData>> {
+        self.engine
+            .get_edges_by_target_and_relationship(target_type, target_id, relationship)
+            .await
+    }
+
+    /// List all edges.
+    pub async fn list_edges(&self) -> Result<Vec<EdgeData>> {
+        self.engine.list_edges().await
     }
 }

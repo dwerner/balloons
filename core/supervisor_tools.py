@@ -28,6 +28,7 @@ SUPERVISOR_TOOL_NAMES = {
     "supervisor_list",
     "supervisor_output",
     "supervisor_stop",
+    "supervisor_input",
     "supervisor_query",
     "supervisor_host_status",
 }
@@ -47,6 +48,52 @@ def set_supervisor(supervisor) -> None:
     global _supervisor
     _supervisor = supervisor
     debug_log.info("Supervisor tools: supervisor instance set", category=Category.SUPERVISOR)
+
+
+def _emit_process_started(
+    process_id: str,
+    command: str,
+    name: str | None,
+    host: str,
+    session_id: str,
+) -> None:
+    """Emit a processStarted event for real-time UI updates.
+
+    This is called after a process is successfully started to notify
+    connected WebSocket clients.
+    """
+    try:
+        from service.supervisor_state_service import _service_instance, _main_event_loop
+        from service.supervisor_state_service import ProcessInfo
+
+        if _service_instance is None or _main_event_loop is None:
+            return
+
+        # Build ProcessInfo for the event
+        process_info = ProcessInfo(
+            process_id=process_id,
+            command=command,
+            name=name,
+            host=host,
+            session_id=session_id,
+            status="running",
+        )
+
+        # Dispatch to main event loop
+        def emit():
+            _service_instance._emit_event("processStarted", {
+                "processId": process_info.process_id,
+                "command": process_info.command,
+                "name": process_info.name,
+                "host": process_info.host,
+                "sessionId": process_info.session_id,
+                "status": process_info.status,
+            })
+
+        _main_event_loop.call_soon_threadsafe(emit)
+
+    except Exception as e:
+        debug_log.error(f"Failed to emit processStarted: {e}", category=Category.SUPERVISOR)
 
 
 def get_supervisor():
@@ -95,6 +142,8 @@ async def execute_supervisor_tool(
             return await _execute_output(args)
         elif name == "supervisor_stop":
             return _execute_stop(args)
+        elif name == "supervisor_input":
+            return _execute_input(args)
         else:
             return f"Unknown supervisor tool: {name}", True
     except Exception as e:
@@ -209,6 +258,16 @@ async def _execute_start(
             "name": name,
             "working_dir": cwd or effective_cwd,
         }
+
+        # Emit processStarted event for real-time UI updates
+        _emit_process_started(
+            process_id=process_id,
+            command=command,
+            name=name,
+            host=host_name,
+            session_id=session.id,
+        )
+
         return json.dumps(result, indent=2), False
 
     except Exception as e:
@@ -256,13 +315,13 @@ async def _execute_list(
 
 
 async def _execute_output(args: dict[str, Any]) -> tuple[str, bool]:
-    """Get output from a supervised process.
+    """Get output from a supervised process with optional filtering.
 
-    Uses the async get_output_async() method from the Rust supervisor,
+    Uses the async get_output() method from the Rust supervisor,
     which allows other Python async tasks to run while waiting for output.
 
     Args:
-        args: Tool arguments (process_id, limit)
+        args: Tool arguments (process_id, limit, source, pattern, since)
 
     Returns:
         Tuple of (result_string, is_error)
@@ -272,14 +331,23 @@ async def _execute_output(args: dict[str, Any]) -> tuple[str, bool]:
         return "Error: process_id is required", True
 
     limit = args.get("limit", 50)
+    source = args.get("source")  # "stdout", "stderr", "system", "stdin"
+    pattern = args.get("pattern")  # substring search
+    since = args.get("since")  # Unix timestamp
 
     try:
         # Get process info (now async)
         process_json = await _supervisor.get_process(process_id)
         process = json.loads(process_json)
 
-        # Get output (now async)
-        output_json = await _supervisor.get_output(process_id, limit)
+        # Get output with optional filters (now async)
+        output_json = await _supervisor.get_output(
+            process_id,
+            limit,
+            source=source,
+            pattern=pattern,
+            since=since,
+        )
         logs = json.loads(output_json)
 
         # Format output nicely
@@ -291,6 +359,18 @@ async def _execute_output(args: dict[str, Any]) -> tuple[str, bool]:
             "log_count": len(logs),
             "logs": logs,
         }
+
+        # Include filter info if any were applied
+        filters_applied = []
+        if source:
+            filters_applied.append(f"source={source}")
+        if pattern:
+            filters_applied.append(f"pattern=\"{pattern}\"")
+        if since:
+            filters_applied.append(f"since={since}")
+        if filters_applied:
+            result["filters"] = filters_applied
+
         return json.dumps(result, indent=2), False
 
     except Exception as e:
@@ -322,6 +402,42 @@ def _execute_stop(args: dict[str, Any]) -> tuple[str, bool]:
 
     except Exception as e:
         return f"Error stopping process: {e}", True
+
+
+def _execute_input(args: dict[str, Any]) -> tuple[str, bool]:
+    """Send input to a supervised process's stdin.
+
+    Args:
+        args: Tool arguments (process_id, data)
+
+    Returns:
+        Tuple of (result_string, is_error)
+    """
+    process_id = args.get("process_id")
+    if not process_id:
+        return "Error: process_id is required", True
+
+    data = args.get("data")
+    if data is None:
+        return "Error: data is required", True
+
+    try:
+        _supervisor.send_input(process_id, data)
+
+        debug_log.info(
+            f"Sent input to process: {process_id[:8]}",
+            category=Category.SUPERVISOR,
+            details={"data_length": len(data)},
+        )
+
+        return json.dumps({
+            "process_id": process_id,
+            "status": "sent",
+            "data_length": len(data),
+        }, indent=2), False
+
+    except Exception as e:
+        return f"Error sending input: {e}", True
 
 
 # =============================================================================

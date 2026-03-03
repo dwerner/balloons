@@ -16,6 +16,11 @@ use crate::types::{LogEntry, LogSource, OutputQuery, ProcessId, ProcessInfo, Pro
 /// Maximum number of log entries to keep in memory per process.
 const MAX_LOG_ENTRIES: usize = 10_000;
 
+/// Channel for sending stdin input to a process.
+/// Using a channel allows us to send input from anywhere while the event
+/// handler task owns the actual stdin handle.
+pub type StdinSender = Sender<String>;
+
 /// A process being supervised with its log buffer.
 pub struct SupervisedProcess {
     /// Unique identifier for this process.
@@ -38,6 +43,8 @@ pub struct SupervisedProcess {
     logs: RwLock<VecDeque<LogEntry>>,
     /// Channel to send stop signal.
     stop_tx: Option<Sender<()>>,
+    /// Channel to send stdin input to the process.
+    stdin_tx: Option<StdinSender>,
 }
 
 impl SupervisedProcess {
@@ -50,6 +57,7 @@ impl SupervisedProcess {
         session_id: String,
         pid: u32,
         stop_tx: Sender<()>,
+        stdin_tx: Option<StdinSender>,
     ) -> Self {
         Self {
             id,
@@ -62,6 +70,7 @@ impl SupervisedProcess {
             status: RwLock::new(ProcessStatus::Running { pid }),
             logs: RwLock::new(VecDeque::with_capacity(MAX_LOG_ENTRIES)),
             stop_tx: Some(stop_tx),
+            stdin_tx,
         }
     }
 
@@ -212,6 +221,32 @@ impl SupervisedProcess {
         } else {
             Err(Error::ProcessNotRunning(self.id.clone()))
         }
+    }
+
+    /// Send input to the process's stdin.
+    ///
+    /// The input is sent as a line (newline appended automatically).
+    pub async fn send_input(&self, data: &str) -> Result<()> {
+        if !self.is_running().await {
+            return Err(Error::ProcessNotRunning(self.id.clone()));
+        }
+
+        if let Some(tx) = &self.stdin_tx {
+            tx.send(data.to_string())
+                .await
+                .map_err(|_| Error::StdinWriteFailed("stdin channel closed".to_string()))?;
+
+            // Log the input we sent
+            self.add_log(LogEntry::stdin(data.to_string())).await;
+            Ok(())
+        } else {
+            Err(Error::StdinWriteFailed("stdin not available for this process".to_string()))
+        }
+    }
+
+    /// Check if stdin is available for this process.
+    pub fn has_stdin(&self) -> bool {
+        self.stdin_tx.is_some()
     }
 }
 

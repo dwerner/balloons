@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-03-01T20:08:44.749844
+// Generated: 2026-03-02T11:07:31.752035
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -4078,6 +4078,23 @@ export interface SupervisorStateService {
   checkHostStatus(hostName: string): Promise<Types.HostStatusResult>;
 
   /**
+   * Get historical output from a process.
+   * 
+   * Supports pagination - entries are returned in chronological order.
+   * Use offset to fetch older entries.
+   * 
+   * Args:
+   * process_id: The process ID to get output from
+   * limit: Maximum entries to return (default 100, max 500)
+   * offset: Number of entries to skip from the end (for pagination)
+   * source: Filter to specific source ("stdout", "stderr", "stdin", "system")
+   * 
+   * Returns:
+   * Batch of log entries with pagination info
+   */
+  getProcessOutput(processId: string, limit?: number, offset?: number, source?: string | null): Promise<Types.ProcessOutputBatch>;
+
+  /**
    * Get the complete supervisor state.
    * 
    * Returns all hosts, processes, and backend mappings.
@@ -4139,6 +4156,18 @@ export interface SupervisorStateService {
   removeHost(hostName: string): Promise<Types.ConfigUpdateResult>;
 
   /**
+   * Send input to a running process's stdin.
+   * 
+   * Args:
+   * process_id: The process ID to send input to
+   * data: The input data to send (newline is appended automatically)
+   * 
+   * Returns:
+   * Success/failure result
+   */
+  sendProcessInput(processId: string, data: string): Promise<Types.ConfigUpdateResult>;
+
+  /**
    * Map a backend to a host.
    * 
    * Args:
@@ -4149,6 +4178,17 @@ export interface SupervisorStateService {
    * Success/failure result
    */
   setBackendHost(backendName: string, hostName: string): Promise<Types.ConfigUpdateResult>;
+
+  /**
+   * Stop a running supervised process.
+   * 
+   * Args:
+   * process_id: The process ID to stop
+   * 
+   * Returns:
+   * Success/failure result
+   */
+  stopProcess(processId: string): Promise<Types.ConfigUpdateResult>;
 
   /**
    * Update an existing host in the configuration.
@@ -4245,6 +4285,10 @@ export class SupervisorStateServiceClient implements SupervisorStateService {
     return this.call('checkHostStatus', { hostName: hostName });
   }
 
+  async getProcessOutput(processId: string, limit?: number, offset?: number, source?: string | null): Promise<Types.ProcessOutputBatch> {
+    return this.call('getProcessOutput', { processId: processId, limit: limit, offset: offset, source: source });
+  }
+
   async getState(): Promise<Types.SupervisorState> {
     return this.call('getState', {  });
   }
@@ -4269,8 +4313,16 @@ export class SupervisorStateServiceClient implements SupervisorStateService {
     return this.call('removeHost', { hostName: hostName });
   }
 
+  async sendProcessInput(processId: string, data: string): Promise<Types.ConfigUpdateResult> {
+    return this.call('sendProcessInput', { processId: processId, data: data });
+  }
+
   async setBackendHost(backendName: string, hostName: string): Promise<Types.ConfigUpdateResult> {
     return this.call('setBackendHost', { backendName: backendName, hostName: hostName });
+  }
+
+  async stopProcess(processId: string): Promise<Types.ConfigUpdateResult> {
+    return this.call('stopProcess', { processId: processId });
   }
 
   async updateHost(request: Types.HostUpdateRequest | Record<string, unknown>): Promise<Types.ConfigUpdateResult> {
@@ -4295,6 +4347,400 @@ export class SupervisorStateServiceClient implements SupervisorStateService {
 
   supervisorStateUpdated(callback: (data: Types.SupervisorState) => void): Unsubscribe {
     return this.subscribe('supervisorStateUpdated', callback);
+  }
+
+}
+
+/**
+ * WebSocket-exposed service for kanban board management.
+ * 
+ * Provides CRUD operations for boards, columns, and tasks,
+ * with subscription-based real-time events for state changes.
+ * 
+ * Subscription model:
+ * - Clients call subscribeBoard(boardId, clientId) to start receiving events
+ * - Events are only sent to clients subscribed to the affected board
+ * - Board lifecycle events (created/deleted) are broadcast to all clients
+ */
+export interface KanbanWebSocketService {
+  /**
+   * Add a new column to a board.
+   * 
+   * Emits columnAdded event to board subscribers.
+   * 
+   * Args:
+   * board_id: The board to add the column to
+   * name: Column name
+   * position: Position in board (defaults to end)
+   * 
+   * Returns:
+   * Created column info, or None if board not found
+   */
+  addColumn(boardId: string, name: string, position?: number | null): Promise<Types.ColumnInfo | null>;
+
+  /**
+   * Create a new board with default columns.
+   * 
+   * Broadcasts boardCreated event to all connected clients.
+   * 
+   * Args:
+   * name: Display name for the board
+   * 
+   * Returns:
+   * Full board state with columns (Backlog, To Do, In Progress, Done)
+   */
+  createBoard(name: string): Promise<Types.BoardStateInfo>;
+
+  /**
+   * Create a new task on a board.
+   * 
+   * Emits taskCreated event to board subscribers.
+   * 
+   * Args:
+   * board_id: The board to add the task to
+   * title: Task title
+   * description: Task description (optional)
+   * column_id: Column to place task in (defaults to board's default column)
+   * 
+   * Returns:
+   * Created task info, or None if board not found
+   */
+  createTask(boardId: string, title: string, description?: string, columnId?: string | null): Promise<Types.TaskInfo | null>;
+
+  /**
+   * Delete a board.
+   * 
+   * Broadcasts boardDeleted event to all connected clients.
+   * Also cleans up subscriptions for the deleted board.
+   * 
+   * Args:
+   * board_id: The board ID to delete
+   * 
+   * Returns:
+   * True if deleted, False if not found
+   */
+  deleteBoard(boardId: string): Promise<boolean>;
+
+  /**
+   * Delete a column from a board.
+   * 
+   * Emits columnDeleted event to board subscribers.
+   * 
+   * Args:
+   * column_id: The column ID to delete
+   * board_id: The board the column belongs to (for event routing)
+   * move_tasks_to: Optional column ID to move tasks to
+   * 
+   * Returns:
+   * True if deleted, False if not found
+   */
+  deleteColumn(columnId: string, boardId: string, moveTasksTo?: string | null): Promise<boolean>;
+
+  /**
+   * Delete a task.
+   * 
+   * Emits taskDeleted event to board subscribers.
+   * 
+   * Args:
+   * task_id: The task ID to delete
+   * board_id: The board the task belongs to (for event routing)
+   * 
+   * Returns:
+   * True if deleted, False if not found
+   */
+  deleteTask(taskId: string, boardId: string): Promise<boolean>;
+
+  /**
+   * Get full board state by ID.
+   * 
+   * Args:
+   * board_id: The board ID
+   * 
+   * Returns:
+   * BoardStateInfo with columns and tasks, or None if not found
+   */
+  getBoard(boardId: string): Promise<Types.BoardStateInfo | null>;
+
+  /**
+   * Get list of board IDs a client is subscribed to.
+   * 
+   * Args:
+   * client_id: The client's identifier
+   * 
+   * Returns:
+   * List of subscribed board IDs
+   */
+  getSubscribedBoards(clientId: string): Promise<string[]>;
+
+  /**
+   * List all boards.
+   * 
+   * Returns:
+   * List of board info (without columns/tasks for efficiency)
+   */
+  listBoards(): Promise<Types.BoardInfo[]>;
+
+  /**
+   * Move a task to a different column or position.
+   * 
+   * Emits taskMoved event to board subscribers.
+   * 
+   * Args:
+   * task_id: The task to move
+   * board_id: The board the task belongs to (for event routing)
+   * to_column_id: Target column ID
+   * position: Position in target column (defaults to end)
+   * from_column_id: Source column ID (for event, optional)
+   * 
+   * Returns:
+   * True if moved, False if task not found
+   */
+  moveTask(taskId: string, boardId: string, toColumnId: string, position?: number | null, fromColumnId?: string | null): Promise<boolean>;
+
+  /**
+   * Reorder tasks within a column.
+   * 
+   * Emits tasksReordered event to board subscribers.
+   * 
+   * Args:
+   * column_id: The column containing the tasks
+   * board_id: The board the column belongs to (for event routing)
+   * task_ids: List of task IDs in desired order
+   * 
+   * Returns:
+   * True if reordered, False if column has mismatched tasks
+   */
+  reorderTasks(columnId: string, boardId: string, taskIds: string[]): Promise<boolean>;
+
+  /**
+   * Subscribe to real-time updates for a board.
+   * 
+   * On subscription, returns the full board state. After subscribing,
+   * the client will receive events for any changes to this board.
+   * 
+   * Args:
+   * board_id: The board to subscribe to
+   * client_id: Unique identifier for the client
+   * 
+   * Returns:
+   * Subscription result with initial board state
+   */
+  subscribeBoard(boardId: string, clientId: string): Promise<Types.BoardSubscriptionResult>;
+
+  /**
+   * Unsubscribe from real-time updates for a board.
+   * 
+   * Args:
+   * board_id: The board to unsubscribe from
+   * client_id: The client's identifier
+   * 
+   * Returns:
+   * Unsubscription result
+   */
+  unsubscribeBoard(boardId: string, clientId: string): Promise<Types.BoardUnsubscribeResult>;
+
+  /**
+   * Update a task's title and/or description.
+   * 
+   * Emits taskUpdated event to board subscribers.
+   * 
+   * Args:
+   * task_id: The task ID
+   * board_id: The board the task belongs to (for event routing)
+   * title: New title (optional)
+   * description: New description (optional)
+   * 
+   * Returns:
+   * Updated task info, or None if not found
+   */
+  updateTask(taskId: string, boardId: string, title?: string | null, description?: string | null): Promise<Types.TaskInfo | null>;
+
+}
+
+export interface KanbanWebSocketEvents {
+  /**
+   * Fired when a new board is created (broadcast to all clients).
+   */
+  boardCreated(callback: (data: Types.BoardCreatedEvent) => void): Unsubscribe;
+
+  /**
+   * Fired when a board is deleted (broadcast to all clients).
+   */
+  boardDeleted(callback: (data: Types.BoardDeletedEvent) => void): Unsubscribe;
+
+  /**
+   * Fired when a column is added to a board (sent to board subscribers).
+   */
+  columnAdded(callback: (data: Types.ColumnAddedEvent) => void): Unsubscribe;
+
+  /**
+   * Fired when a column is deleted from a board (sent to board subscribers).
+   */
+  columnDeleted(callback: (data: Types.ColumnDeletedEvent) => void): Unsubscribe;
+
+  /**
+   * Fired when a task is created (sent to board subscribers).
+   */
+  taskCreated(callback: (data: Types.TaskCreatedEvent) => void): Unsubscribe;
+
+  /**
+   * Fired when a task is deleted (sent to board subscribers).
+   */
+  taskDeleted(callback: (data: Types.TaskDeletedEvent) => void): Unsubscribe;
+
+  /**
+   * Fired when a task is moved between columns (sent to board subscribers).
+   */
+  taskMoved(callback: (data: Types.TaskMovedEvent) => void): Unsubscribe;
+
+  /**
+   * Fired when a task is updated (sent to board subscribers).
+   */
+  taskUpdated(callback: (data: Types.TaskUpdatedEvent) => void): Unsubscribe;
+
+  /**
+   * Fired when tasks are reordered within a column (sent to board subscribers).
+   */
+  tasksReordered(callback: (data: Types.TasksReorderedEvent) => void): Unsubscribe;
+
+}
+
+export class KanbanWebSocketServiceClient implements KanbanWebSocketService {
+  private ws: WebSocket;
+  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
+  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
+
+  constructor(ws: WebSocket) {
+    this.ws = ws;
+    this.ws.addEventListener('message', this.handleMessage.bind(this));
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    const msg = JSON.parse(event.data);
+    if (msg.id && this.pending.has(msg.id)) {
+      const { resolve, reject } = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      if (msg.error) {
+        reject(new Error(msg.error.message));
+      } else {
+        resolve(msg.result);
+      }
+    } else if (msg.event) {
+      const handlers = this.eventHandlers.get(msg.event);
+      if (handlers) {
+        handlers.forEach(h => h(msg.data));
+      }
+    }
+  }
+
+  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const id = generateRequestId();
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, new Set());
+    }
+    this.eventHandlers.get(event)!.add(callback);
+    return () => {
+      this.eventHandlers.get(event)?.delete(callback);
+    };
+  }
+
+  async addColumn(boardId: string, name: string, position?: number | null): Promise<Types.ColumnInfo | null> {
+    return this.call('addColumn', { boardId: boardId, name: name, position: position });
+  }
+
+  async createBoard(name: string): Promise<Types.BoardStateInfo> {
+    return this.call('createBoard', { name: name });
+  }
+
+  async createTask(boardId: string, title: string, description?: string, columnId?: string | null): Promise<Types.TaskInfo | null> {
+    return this.call('createTask', { boardId: boardId, title: title, description: description, columnId: columnId });
+  }
+
+  async deleteBoard(boardId: string): Promise<boolean> {
+    return this.call('deleteBoard', { boardId: boardId });
+  }
+
+  async deleteColumn(columnId: string, boardId: string, moveTasksTo?: string | null): Promise<boolean> {
+    return this.call('deleteColumn', { columnId: columnId, boardId: boardId, moveTasksTo: moveTasksTo });
+  }
+
+  async deleteTask(taskId: string, boardId: string): Promise<boolean> {
+    return this.call('deleteTask', { taskId: taskId, boardId: boardId });
+  }
+
+  async getBoard(boardId: string): Promise<Types.BoardStateInfo | null> {
+    return this.call('getBoard', { boardId: boardId });
+  }
+
+  async getSubscribedBoards(clientId: string): Promise<string[]> {
+    return this.call('getSubscribedBoards', { clientId: clientId });
+  }
+
+  async listBoards(): Promise<Types.BoardInfo[]> {
+    return this.call('listBoards', {  });
+  }
+
+  async moveTask(taskId: string, boardId: string, toColumnId: string, position?: number | null, fromColumnId?: string | null): Promise<boolean> {
+    return this.call('moveTask', { taskId: taskId, boardId: boardId, toColumnId: toColumnId, position: position, fromColumnId: fromColumnId });
+  }
+
+  async reorderTasks(columnId: string, boardId: string, taskIds: string[]): Promise<boolean> {
+    return this.call('reorderTasks', { columnId: columnId, boardId: boardId, taskIds: taskIds });
+  }
+
+  async subscribeBoard(boardId: string, clientId: string): Promise<Types.BoardSubscriptionResult> {
+    return this.call('subscribeBoard', { boardId: boardId, clientId: clientId });
+  }
+
+  async unsubscribeBoard(boardId: string, clientId: string): Promise<Types.BoardUnsubscribeResult> {
+    return this.call('unsubscribeBoard', { boardId: boardId, clientId: clientId });
+  }
+
+  async updateTask(taskId: string, boardId: string, title?: string | null, description?: string | null): Promise<Types.TaskInfo | null> {
+    return this.call('updateTask', { taskId: taskId, boardId: boardId, title: title, description: description });
+  }
+
+  boardCreated(callback: (data: Types.BoardCreatedEvent) => void): Unsubscribe {
+    return this.subscribe('boardCreated', callback);
+  }
+
+  boardDeleted(callback: (data: Types.BoardDeletedEvent) => void): Unsubscribe {
+    return this.subscribe('boardDeleted', callback);
+  }
+
+  columnAdded(callback: (data: Types.ColumnAddedEvent) => void): Unsubscribe {
+    return this.subscribe('columnAdded', callback);
+  }
+
+  columnDeleted(callback: (data: Types.ColumnDeletedEvent) => void): Unsubscribe {
+    return this.subscribe('columnDeleted', callback);
+  }
+
+  taskCreated(callback: (data: Types.TaskCreatedEvent) => void): Unsubscribe {
+    return this.subscribe('taskCreated', callback);
+  }
+
+  taskDeleted(callback: (data: Types.TaskDeletedEvent) => void): Unsubscribe {
+    return this.subscribe('taskDeleted', callback);
+  }
+
+  taskMoved(callback: (data: Types.TaskMovedEvent) => void): Unsubscribe {
+    return this.subscribe('taskMoved', callback);
+  }
+
+  taskUpdated(callback: (data: Types.TaskUpdatedEvent) => void): Unsubscribe {
+    return this.subscribe('taskUpdated', callback);
+  }
+
+  tasksReordered(callback: (data: Types.TasksReorderedEvent) => void): Unsubscribe {
+    return this.subscribe('tasksReordered', callback);
   }
 
 }

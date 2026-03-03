@@ -6,8 +6,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::generated::{
-    GoalData, PlanData, SessionBinding, SessionData, SessionMetadata, TodoData, TodoDependency,
-    TodoPlanLink, TurnData, TurnOrder, UserData, UserPrefs, WatcherRelation,
+    BoardData, ColumnData, EdgeData, GoalData, PlanData, SessionBinding, SessionData,
+    SessionMetadata, TaskData, TodoData, TodoDependency, TodoPlanLink, TurnData, TurnOrder,
+    UserData, UserPrefs, WatcherRelation,
 };
 use super::traits::{Error, Result, StorageEngine};
 
@@ -161,6 +162,16 @@ pub struct LmdbEngine {
     // User management
     users: Database<Str, Bytes>,              // user_id → UserData
     users_by_username: Database<Str, Bytes>,  // lowercase_username → user_id
+
+    // Kanban system - entity tables
+    tasks: Database<Str, Bytes>,              // task_id → TaskData
+    boards: Database<Str, Bytes>,             // board_id → BoardData
+    columns: Database<Str, Bytes>,            // column_id → ColumnData
+
+    // Graph system - edges and indexes
+    edges: Database<Str, Bytes>,              // edge_id → EdgeData
+    edges_by_source: Database<Str, Bytes>,    // "source_type:source_id" → [edge_id]
+    edges_by_target: Database<Str, Bytes>,    // "target_type:target_id" → [edge_id]
 }
 
 /// Key used for session history in the metadata table
@@ -185,11 +196,11 @@ impl LmdbEngine {
         // Create directory if it doesn't exist
         std::fs::create_dir_all(path)?;
 
-        // Database count: 4 session + 3 goal entities + 5 goal indexes + 3 binding + 3 watcher + 2 users = 20
+        // Database count: 4 session + 3 goal entities + 5 goal indexes + 3 binding + 3 watcher + 2 users + 3 kanban + 3 graph = 26
         let env = unsafe {
             EnvOpenOptions::new()
                 .map_size(map_size)
-                .max_dbs(20)
+                .max_dbs(26)
                 .open(path)
                 .map_err(|e| Error::Database(e.to_string()))?
         };
@@ -271,6 +282,28 @@ impl LmdbEngine {
             .create_database(&mut wtxn, Some("users_by_username"))
             .map_err(|e| Error::Database(e.to_string()))?;
 
+        // Kanban system - entity tables
+        let tasks = env
+            .create_database(&mut wtxn, Some("tasks"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let boards = env
+            .create_database(&mut wtxn, Some("boards"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let columns = env
+            .create_database(&mut wtxn, Some("columns"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        // Graph system - edges and indexes
+        let edges = env
+            .create_database(&mut wtxn, Some("edges"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let edges_by_source = env
+            .create_database(&mut wtxn, Some("edges_by_source"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let edges_by_target = env
+            .create_database(&mut wtxn, Some("edges_by_target"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+
         wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
 
         let engine = Self {
@@ -307,6 +340,16 @@ impl LmdbEngine {
             // User management
             users,
             users_by_username,
+
+            // Kanban system
+            tasks,
+            boards,
+            columns,
+
+            // Graph system
+            edges,
+            edges_by_source,
+            edges_by_target,
         };
 
         // Ensure schema version is compatible and up-to-date
@@ -2096,6 +2139,421 @@ impl StorageEngine for LmdbEngine {
 
         Ok(users)
     }
+
+    // =========================================================================
+    // Kanban System - Tasks
+    // =========================================================================
+
+    async fn save_task(&self, task: &TaskData) -> Result<()> {
+        let bytes = serde_json::to_vec(task).map_err(|e| Error::Serialization(e.to_string()))?;
+
+        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        self.tasks
+            .put(&mut wtxn, &task.id, &bytes)
+            .map_err(|e| Error::Database(e.to_string()))?;
+        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn load_task(&self, id: &str) -> Result<Option<TaskData>> {
+        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        match self.tasks.get(&rtxn, id).map_err(|e| Error::Database(e.to_string()))? {
+            Some(bytes) => {
+                let data: TaskData = serde_json::from_slice(bytes)
+                    .map_err(|e| Error::Serialization(e.to_string()))?;
+                Ok(Some(data))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_task(&self, id: &str) -> Result<()> {
+        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        self.tasks
+            .delete(&mut wtxn, id)
+            .map_err(|e| Error::Database(e.to_string()))?;
+        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn list_tasks(&self) -> Result<Vec<TaskData>> {
+        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        let mut tasks = Vec::new();
+        for entry in self.tasks.iter(&rtxn).map_err(|e| Error::Database(e.to_string()))? {
+            let (_key, value) = entry.map_err(|e| Error::Database(e.to_string()))?;
+            let data: TaskData = serde_json::from_slice(value)
+                .map_err(|e| Error::Serialization(e.to_string()))?;
+            tasks.push(data);
+        }
+
+        Ok(tasks)
+    }
+
+    // =========================================================================
+    // Kanban System - Boards
+    // =========================================================================
+
+    async fn save_board(&self, board: &BoardData) -> Result<()> {
+        let bytes = serde_json::to_vec(board).map_err(|e| Error::Serialization(e.to_string()))?;
+
+        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        self.boards
+            .put(&mut wtxn, &board.id, &bytes)
+            .map_err(|e| Error::Database(e.to_string()))?;
+        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn load_board(&self, id: &str) -> Result<Option<BoardData>> {
+        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        match self.boards.get(&rtxn, id).map_err(|e| Error::Database(e.to_string()))? {
+            Some(bytes) => {
+                let data: BoardData = serde_json::from_slice(bytes)
+                    .map_err(|e| Error::Serialization(e.to_string()))?;
+                Ok(Some(data))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_board(&self, id: &str) -> Result<()> {
+        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        self.boards
+            .delete(&mut wtxn, id)
+            .map_err(|e| Error::Database(e.to_string()))?;
+        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn list_boards(&self) -> Result<Vec<BoardData>> {
+        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        let mut boards = Vec::new();
+        for entry in self.boards.iter(&rtxn).map_err(|e| Error::Database(e.to_string()))? {
+            let (_key, value) = entry.map_err(|e| Error::Database(e.to_string()))?;
+            let data: BoardData = serde_json::from_slice(value)
+                .map_err(|e| Error::Serialization(e.to_string()))?;
+            boards.push(data);
+        }
+
+        Ok(boards)
+    }
+
+    // =========================================================================
+    // Kanban System - Columns
+    // =========================================================================
+
+    async fn save_column(&self, column: &ColumnData) -> Result<()> {
+        let bytes = serde_json::to_vec(column).map_err(|e| Error::Serialization(e.to_string()))?;
+
+        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        self.columns
+            .put(&mut wtxn, &column.id, &bytes)
+            .map_err(|e| Error::Database(e.to_string()))?;
+        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn load_column(&self, id: &str) -> Result<Option<ColumnData>> {
+        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        match self.columns.get(&rtxn, id).map_err(|e| Error::Database(e.to_string()))? {
+            Some(bytes) => {
+                let data: ColumnData = serde_json::from_slice(bytes)
+                    .map_err(|e| Error::Serialization(e.to_string()))?;
+                Ok(Some(data))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_column(&self, id: &str) -> Result<()> {
+        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+        self.columns
+            .delete(&mut wtxn, id)
+            .map_err(|e| Error::Database(e.to_string()))?;
+        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    // =========================================================================
+    // Graph System - Edges
+    // =========================================================================
+
+    async fn save_edge(&self, edge: &EdgeData) -> Result<()> {
+        let bytes = serde_json::to_vec(edge).map_err(|e| Error::Serialization(e.to_string()))?;
+
+        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        // Check if this edge already exists (for index cleanup on update)
+        let old_edge: Option<EdgeData> = match self.edges.get(&wtxn, &edge.id).map_err(|e| Error::Database(e.to_string()))? {
+            Some(old_bytes) => Some(serde_json::from_slice(old_bytes).map_err(|e| Error::Serialization(e.to_string()))?),
+            None => None,
+        };
+
+        // Save edge to primary table
+        self.edges
+            .put(&mut wtxn, &edge.id, &bytes)
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        // Update source index
+        let source_key = format!("{}:{}", edge.source_type, edge.source_id);
+        let mut source_edges: Vec<String> = match self.edges_by_source
+            .get(&wtxn, &source_key)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
+            Some(bytes) => serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?,
+            None => vec![],
+        };
+
+        // Remove from old source index if source changed
+        if let Some(ref old) = old_edge {
+            let old_source_key = format!("{}:{}", old.source_type, old.source_id);
+            if old_source_key != source_key {
+                let mut old_source_edges: Vec<String> = match self.edges_by_source
+                    .get(&wtxn, &old_source_key)
+                    .map_err(|e| Error::Database(e.to_string()))?
+                {
+                    Some(bytes) => serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?,
+                    None => vec![],
+                };
+                old_source_edges.retain(|id| id != &edge.id);
+                if old_source_edges.is_empty() {
+                    self.edges_by_source.delete(&mut wtxn, &old_source_key).map_err(|e| Error::Database(e.to_string()))?;
+                } else {
+                    let old_bytes = serde_json::to_vec(&old_source_edges).map_err(|e| Error::Serialization(e.to_string()))?;
+                    self.edges_by_source.put(&mut wtxn, &old_source_key, &old_bytes).map_err(|e| Error::Database(e.to_string()))?;
+                }
+            }
+        }
+
+        // Add to source index if not already present
+        if !source_edges.contains(&edge.id) {
+            source_edges.push(edge.id.clone());
+            let source_bytes = serde_json::to_vec(&source_edges).map_err(|e| Error::Serialization(e.to_string()))?;
+            self.edges_by_source.put(&mut wtxn, &source_key, &source_bytes).map_err(|e| Error::Database(e.to_string()))?;
+        }
+
+        // Update target index
+        let target_key = format!("{}:{}", edge.target_type, edge.target_id);
+        let mut target_edges: Vec<String> = match self.edges_by_target
+            .get(&wtxn, &target_key)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
+            Some(bytes) => serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?,
+            None => vec![],
+        };
+
+        // Remove from old target index if target changed
+        if let Some(ref old) = old_edge {
+            let old_target_key = format!("{}:{}", old.target_type, old.target_id);
+            if old_target_key != target_key {
+                let mut old_target_edges: Vec<String> = match self.edges_by_target
+                    .get(&wtxn, &old_target_key)
+                    .map_err(|e| Error::Database(e.to_string()))?
+                {
+                    Some(bytes) => serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?,
+                    None => vec![],
+                };
+                old_target_edges.retain(|id| id != &edge.id);
+                if old_target_edges.is_empty() {
+                    self.edges_by_target.delete(&mut wtxn, &old_target_key).map_err(|e| Error::Database(e.to_string()))?;
+                } else {
+                    let old_bytes = serde_json::to_vec(&old_target_edges).map_err(|e| Error::Serialization(e.to_string()))?;
+                    self.edges_by_target.put(&mut wtxn, &old_target_key, &old_bytes).map_err(|e| Error::Database(e.to_string()))?;
+                }
+            }
+        }
+
+        // Add to target index if not already present
+        if !target_edges.contains(&edge.id) {
+            target_edges.push(edge.id.clone());
+            let target_bytes = serde_json::to_vec(&target_edges).map_err(|e| Error::Serialization(e.to_string()))?;
+            self.edges_by_target.put(&mut wtxn, &target_key, &target_bytes).map_err(|e| Error::Database(e.to_string()))?;
+        }
+
+        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn load_edge(&self, id: &str) -> Result<Option<EdgeData>> {
+        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        match self.edges.get(&rtxn, id).map_err(|e| Error::Database(e.to_string()))? {
+            Some(bytes) => {
+                let data: EdgeData = serde_json::from_slice(bytes)
+                    .map_err(|e| Error::Serialization(e.to_string()))?;
+                Ok(Some(data))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_edge(&self, id: &str) -> Result<()> {
+        let mut wtxn = self.env.write_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        // Load edge to get index keys
+        let edge: Option<EdgeData> = match self.edges.get(&wtxn, id).map_err(|e| Error::Database(e.to_string()))? {
+            Some(bytes) => Some(serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?),
+            None => None,
+        };
+
+        // Delete from primary table
+        self.edges
+            .delete(&mut wtxn, id)
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        // Clean up indexes
+        if let Some(edge) = edge {
+            // Remove from source index
+            let source_key = format!("{}:{}", edge.source_type, edge.source_id);
+            if let Some(bytes) = self.edges_by_source.get(&wtxn, &source_key).map_err(|e| Error::Database(e.to_string()))? {
+                let mut source_edges: Vec<String> = serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?;
+                source_edges.retain(|eid| eid != id);
+                if source_edges.is_empty() {
+                    self.edges_by_source.delete(&mut wtxn, &source_key).map_err(|e| Error::Database(e.to_string()))?;
+                } else {
+                    let bytes = serde_json::to_vec(&source_edges).map_err(|e| Error::Serialization(e.to_string()))?;
+                    self.edges_by_source.put(&mut wtxn, &source_key, &bytes).map_err(|e| Error::Database(e.to_string()))?;
+                }
+            }
+
+            // Remove from target index
+            let target_key = format!("{}:{}", edge.target_type, edge.target_id);
+            if let Some(bytes) = self.edges_by_target.get(&wtxn, &target_key).map_err(|e| Error::Database(e.to_string()))? {
+                let mut target_edges: Vec<String> = serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?;
+                target_edges.retain(|eid| eid != id);
+                if target_edges.is_empty() {
+                    self.edges_by_target.delete(&mut wtxn, &target_key).map_err(|e| Error::Database(e.to_string()))?;
+                } else {
+                    let bytes = serde_json::to_vec(&target_edges).map_err(|e| Error::Serialization(e.to_string()))?;
+                    self.edges_by_target.put(&mut wtxn, &target_key, &bytes).map_err(|e| Error::Database(e.to_string()))?;
+                }
+            }
+        }
+
+        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn get_edges_by_source(
+        &self,
+        source_type: &str,
+        source_id: &str,
+    ) -> Result<Vec<EdgeData>> {
+        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        let source_key = format!("{}:{}", source_type, source_id);
+        let edge_ids: Vec<String> = match self.edges_by_source
+            .get(&rtxn, &source_key)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
+            Some(bytes) => serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?,
+            None => return Ok(vec![]),
+        };
+
+        let mut edges = Vec::with_capacity(edge_ids.len());
+        for edge_id in edge_ids {
+            if let Some(bytes) = self.edges.get(&rtxn, &edge_id).map_err(|e| Error::Database(e.to_string()))? {
+                let edge: EdgeData = serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?;
+                edges.push(edge);
+            }
+        }
+
+        // Sort by position (if set), then by created_at
+        edges.sort_by(|a, b| {
+            match (a.position, b.position) {
+                (Some(pa), Some(pb)) => pa.cmp(&pb),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => a.created_at.cmp(&b.created_at),
+            }
+        });
+
+        Ok(edges)
+    }
+
+    async fn get_edges_by_target(
+        &self,
+        target_type: &str,
+        target_id: &str,
+    ) -> Result<Vec<EdgeData>> {
+        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        let target_key = format!("{}:{}", target_type, target_id);
+        let edge_ids: Vec<String> = match self.edges_by_target
+            .get(&rtxn, &target_key)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
+            Some(bytes) => serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?,
+            None => return Ok(vec![]),
+        };
+
+        let mut edges = Vec::with_capacity(edge_ids.len());
+        for edge_id in edge_ids {
+            if let Some(bytes) = self.edges.get(&rtxn, &edge_id).map_err(|e| Error::Database(e.to_string()))? {
+                let edge: EdgeData = serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?;
+                edges.push(edge);
+            }
+        }
+
+        // Sort by position (if set), then by created_at
+        edges.sort_by(|a, b| {
+            match (a.position, b.position) {
+                (Some(pa), Some(pb)) => pa.cmp(&pb),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => a.created_at.cmp(&b.created_at),
+            }
+        });
+
+        Ok(edges)
+    }
+
+    async fn get_edges_by_source_and_relationship(
+        &self,
+        source_type: &str,
+        source_id: &str,
+        relationship: &str,
+    ) -> Result<Vec<EdgeData>> {
+        let edges = self.get_edges_by_source(source_type, source_id).await?;
+        Ok(edges.into_iter().filter(|e| e.relationship == relationship).collect())
+    }
+
+    async fn get_edges_by_target_and_relationship(
+        &self,
+        target_type: &str,
+        target_id: &str,
+        relationship: &str,
+    ) -> Result<Vec<EdgeData>> {
+        let edges = self.get_edges_by_target(target_type, target_id).await?;
+        Ok(edges.into_iter().filter(|e| e.relationship == relationship).collect())
+    }
+
+    async fn list_edges(&self) -> Result<Vec<EdgeData>> {
+        let rtxn = self.env.read_txn().map_err(|e| Error::Database(e.to_string()))?;
+
+        let mut edges = Vec::new();
+        for entry in self.edges.iter(&rtxn).map_err(|e| Error::Database(e.to_string()))? {
+            let (_key, value) = entry.map_err(|e| Error::Database(e.to_string()))?;
+            let data: EdgeData = serde_json::from_slice(value)
+                .map_err(|e| Error::Serialization(e.to_string()))?;
+            edges.push(data);
+        }
+
+        Ok(edges)
+    }
 }
 
 #[cfg(test)]
@@ -2145,6 +2603,7 @@ mod tests {
             sentiment: None,
             started_at: None,
             ended_at: None,
+            parallel_group_id: None,
         }
     }
 
@@ -3399,4 +3858,264 @@ mod tests {
         });
     }
 
+    // =========================================================================
+    // Kanban / Graph System Tests
+    // =========================================================================
+
+    fn make_task(id: &str, title: &str) -> TaskData {
+        TaskData {
+            id: id.to_string(),
+            title: title.to_string(),
+            description: "Test task".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    fn make_board(id: &str, name: &str, default_column: &str) -> BoardData {
+        BoardData {
+            id: id.to_string(),
+            name: name.to_string(),
+            default_column_id: default_column.to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    fn make_column(id: &str, name: &str, position: i64) -> ColumnData {
+        ColumnData {
+            id: id.to_string(),
+            name: name.to_string(),
+            position,
+        }
+    }
+
+    fn make_edge(id: &str, src_type: &str, src_id: &str, tgt_type: &str, tgt_id: &str, rel: &str, pos: Option<i64>) -> EdgeData {
+        EdgeData {
+            id: id.to_string(),
+            source_type: src_type.to_string(),
+            source_id: src_id.to_string(),
+            target_type: tgt_type.to_string(),
+            target_id: tgt_id.to_string(),
+            relationship: rel.to_string(),
+            position: pos,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_task_crud() {
+        let dir = TestDir::new("lmdb_test_task_crud");
+        let engine = LmdbEngine::open(dir.db_path()).unwrap();
+
+        let task = make_task("task-1", "Buy paint");
+
+        future::block_on(async {
+            // Create
+            engine.save_task(&task).await.unwrap();
+
+            // Read
+            let loaded = engine.load_task("task-1").await.unwrap();
+            assert!(loaded.is_some());
+            assert_eq!(loaded.unwrap().title, "Buy paint");
+
+            // List
+            let tasks = engine.list_tasks().await.unwrap();
+            assert_eq!(tasks.len(), 1);
+
+            // Delete
+            engine.delete_task("task-1").await.unwrap();
+            let loaded = engine.load_task("task-1").await.unwrap();
+            assert!(loaded.is_none());
+        });
+    }
+
+    #[test]
+    fn test_board_crud() {
+        let dir = TestDir::new("lmdb_test_board_crud");
+        let engine = LmdbEngine::open(dir.db_path()).unwrap();
+
+        let board = make_board("board-1", "Sprint 1", "col-todo");
+
+        future::block_on(async {
+            engine.save_board(&board).await.unwrap();
+
+            let loaded = engine.load_board("board-1").await.unwrap();
+            assert!(loaded.is_some());
+            assert_eq!(loaded.unwrap().name, "Sprint 1");
+
+            let boards = engine.list_boards().await.unwrap();
+            assert_eq!(boards.len(), 1);
+
+            engine.delete_board("board-1").await.unwrap();
+            let loaded = engine.load_board("board-1").await.unwrap();
+            assert!(loaded.is_none());
+        });
+    }
+
+    #[test]
+    fn test_column_crud() {
+        let dir = TestDir::new("lmdb_test_column_crud");
+        let engine = LmdbEngine::open(dir.db_path()).unwrap();
+
+        let column = make_column("col-1", "Todo", 0);
+
+        future::block_on(async {
+            engine.save_column(&column).await.unwrap();
+
+            let loaded = engine.load_column("col-1").await.unwrap();
+            assert!(loaded.is_some());
+            assert_eq!(loaded.unwrap().name, "Todo");
+
+            engine.delete_column("col-1").await.unwrap();
+            let loaded = engine.load_column("col-1").await.unwrap();
+            assert!(loaded.is_none());
+        });
+    }
+
+    #[test]
+    fn test_edge_crud_and_indexes() {
+        let dir = TestDir::new("lmdb_test_edge_crud");
+        let engine = LmdbEngine::open(dir.db_path()).unwrap();
+
+        // Create edge: Column belongs to Board
+        let edge = make_edge("edge-1", "column", "col-todo", "board", "board-1", "part_of", Some(0));
+
+        future::block_on(async {
+            // Create
+            engine.save_edge(&edge).await.unwrap();
+
+            // Read
+            let loaded = engine.load_edge("edge-1").await.unwrap();
+            assert!(loaded.is_some());
+            assert_eq!(loaded.unwrap().relationship, "part_of");
+
+            // Query by source
+            let by_source = engine.get_edges_by_source("column", "col-todo").await.unwrap();
+            assert_eq!(by_source.len(), 1);
+            assert_eq!(by_source[0].id, "edge-1");
+
+            // Query by target
+            let by_target = engine.get_edges_by_target("board", "board-1").await.unwrap();
+            assert_eq!(by_target.len(), 1);
+            assert_eq!(by_target[0].id, "edge-1");
+
+            // Delete and verify indexes cleaned up
+            engine.delete_edge("edge-1").await.unwrap();
+            let by_source = engine.get_edges_by_source("column", "col-todo").await.unwrap();
+            assert_eq!(by_source.len(), 0);
+            let by_target = engine.get_edges_by_target("board", "board-1").await.unwrap();
+            assert_eq!(by_target.len(), 0);
+        });
+    }
+
+    #[test]
+    fn test_edge_filtering_by_relationship() {
+        let dir = TestDir::new("lmdb_test_edge_filter");
+        let engine = LmdbEngine::open(dir.db_path()).unwrap();
+
+        future::block_on(async {
+            // Create multiple edges from same source with different relationships
+            engine.save_edge(&make_edge("e1", "task", "t1", "board", "b1", "tracked_on", None)).await.unwrap();
+            engine.save_edge(&make_edge("e2", "task", "t1", "column", "c1", "in_column", Some(0))).await.unwrap();
+
+            // Query all edges from task
+            let all = engine.get_edges_by_source("task", "t1").await.unwrap();
+            assert_eq!(all.len(), 2);
+
+            // Query only tracked_on edges
+            let tracked = engine.get_edges_by_source_and_relationship("task", "t1", "tracked_on").await.unwrap();
+            assert_eq!(tracked.len(), 1);
+            assert_eq!(tracked[0].target_type, "board");
+
+            // Query only in_column edges
+            let in_col = engine.get_edges_by_source_and_relationship("task", "t1", "in_column").await.unwrap();
+            assert_eq!(in_col.len(), 1);
+            assert_eq!(in_col[0].target_type, "column");
+        });
+    }
+
+    #[test]
+    fn test_edge_position_ordering() {
+        let dir = TestDir::new("lmdb_test_edge_order");
+        let engine = LmdbEngine::open(dir.db_path()).unwrap();
+
+        future::block_on(async {
+            // Create columns with positions out of order
+            engine.save_edge(&make_edge("e2", "column", "done", "board", "b1", "part_of", Some(2))).await.unwrap();
+            engine.save_edge(&make_edge("e0", "column", "todo", "board", "b1", "part_of", Some(0))).await.unwrap();
+            engine.save_edge(&make_edge("e1", "column", "wip", "board", "b1", "part_of", Some(1))).await.unwrap();
+
+            // Query should return sorted by position
+            let edges = engine.get_edges_by_target("board", "b1").await.unwrap();
+            assert_eq!(edges.len(), 3);
+            assert_eq!(edges[0].source_id, "todo");   // pos 0
+            assert_eq!(edges[1].source_id, "wip");    // pos 1
+            assert_eq!(edges[2].source_id, "done");   // pos 2
+        });
+    }
+
+    #[test]
+    fn test_full_kanban_setup() {
+        let dir = TestDir::new("lmdb_test_full_kanban");
+        let engine = LmdbEngine::open(dir.db_path()).unwrap();
+
+        future::block_on(async {
+            // Create a board
+            let board = make_board("board-sprint", "Sprint 1", "col-todo");
+            engine.save_board(&board).await.unwrap();
+
+            // Create columns
+            let col_todo = make_column("col-todo", "Todo", 0);
+            let col_wip = make_column("col-wip", "In Progress", 1);
+            let col_done = make_column("col-done", "Done", 2);
+            engine.save_column(&col_todo).await.unwrap();
+            engine.save_column(&col_wip).await.unwrap();
+            engine.save_column(&col_done).await.unwrap();
+
+            // Link columns to board
+            engine.save_edge(&make_edge("e-col-todo", "column", "col-todo", "board", "board-sprint", "part_of", Some(0))).await.unwrap();
+            engine.save_edge(&make_edge("e-col-wip", "column", "col-wip", "board", "board-sprint", "part_of", Some(1))).await.unwrap();
+            engine.save_edge(&make_edge("e-col-done", "column", "col-done", "board", "board-sprint", "part_of", Some(2))).await.unwrap();
+
+            // Create tasks
+            let task1 = make_task("task-1", "Buy paint");
+            let task2 = make_task("task-2", "Paint canvas");
+            engine.save_task(&task1).await.unwrap();
+            engine.save_task(&task2).await.unwrap();
+
+            // Add tasks to board (tracked_on)
+            engine.save_edge(&make_edge("e-t1-board", "task", "task-1", "board", "board-sprint", "tracked_on", None)).await.unwrap();
+            engine.save_edge(&make_edge("e-t2-board", "task", "task-2", "board", "board-sprint", "tracked_on", None)).await.unwrap();
+
+            // Place tasks in columns (in_column)
+            engine.save_edge(&make_edge("e-t1-col", "task", "task-1", "column", "col-wip", "in_column", Some(0))).await.unwrap();
+            engine.save_edge(&make_edge("e-t2-col", "task", "task-2", "column", "col-todo", "in_column", Some(0))).await.unwrap();
+
+            // Query: get all columns for board
+            let columns = engine.get_edges_by_target_and_relationship("board", "board-sprint", "part_of").await.unwrap();
+            assert_eq!(columns.len(), 3);
+
+            // Query: get all tasks on board
+            let tasks = engine.get_edges_by_target_and_relationship("board", "board-sprint", "tracked_on").await.unwrap();
+            assert_eq!(tasks.len(), 2);
+
+            // Query: get tasks in specific column
+            let wip_tasks = engine.get_edges_by_target_and_relationship("column", "col-wip", "in_column").await.unwrap();
+            assert_eq!(wip_tasks.len(), 1);
+            assert_eq!(wip_tasks[0].source_id, "task-1");
+
+            // Move task to done (update edge)
+            let move_edge = make_edge("e-t1-col", "task", "task-1", "column", "col-done", "in_column", Some(0));
+            engine.save_edge(&move_edge).await.unwrap();
+
+            // Verify old column is empty
+            let wip_tasks = engine.get_edges_by_target_and_relationship("column", "col-wip", "in_column").await.unwrap();
+            assert_eq!(wip_tasks.len(), 0);
+
+            // Verify new column has the task
+            let done_tasks = engine.get_edges_by_target_and_relationship("column", "col-done", "in_column").await.unwrap();
+            assert_eq!(done_tasks.len(), 1);
+            assert_eq!(done_tasks[0].source_id, "task-1");
+        });
+    }
 }
