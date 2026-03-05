@@ -1160,6 +1160,20 @@ function AppContent() {
   // Voice input preferences
   const { voiceInputEnabled, voiceInputHost, voiceInputPort } = usePreferences();
 
+  // Input area height - resizable by dragging top edge
+  const [inputAreaHeight, setInputAreaHeight] = useState(() => {
+    const saved = localStorage.getItem('balloons:input-area-height');
+    return saved ? parseInt(saved, 10) : 100;
+  });
+  const inputAreaResizing = useRef(false);
+  const inputAreaStartY = useRef(0);
+  const inputAreaStartHeight = useRef(0);
+
+  // Persist input area height
+  useEffect(() => {
+    localStorage.setItem('balloons:input-area-height', String(inputAreaHeight));
+  }, [inputAreaHeight]);
+
   // Server slot (A=8765, B=8766) - persisted to localStorage
   const [serverSlot, setServerSlot] = useState<ServerSlot>(getInitialSlot);
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
@@ -2104,6 +2118,56 @@ function AppContent() {
     });
   }, []);
 
+  // Input area resize handlers
+  const handleInputAreaResizeStart = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault();
+    inputAreaResizing.current = true;
+    const clientY = 'touches' in e ? e.touches[0]?.clientY ?? 0 : e.clientY;
+    inputAreaStartY.current = clientY;
+    inputAreaStartHeight.current = inputAreaHeight;
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+  }, [inputAreaHeight]);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!inputAreaResizing.current) return;
+      // Dragging up (negative delta) should increase height
+      const delta = inputAreaStartY.current - e.clientY;
+      const newHeight = Math.max(60, Math.min(500, inputAreaStartHeight.current + delta));
+      setInputAreaHeight(newHeight);
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (!inputAreaResizing.current) return;
+      const touch = e.touches[0];
+      if (!touch) return;
+      const delta = inputAreaStartY.current - touch.clientY;
+      const newHeight = Math.max(60, Math.min(500, inputAreaStartHeight.current + delta));
+      setInputAreaHeight(newHeight);
+    };
+
+    const handleEnd = () => {
+      if (inputAreaResizing.current) {
+        inputAreaResizing.current = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      }
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleEnd);
+    document.addEventListener('touchmove', handleTouchMove);
+    document.addEventListener('touchend', handleEnd);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleEnd);
+      document.removeEventListener('touchmove', handleTouchMove);
+      document.removeEventListener('touchend', handleEnd);
+    };
+  }, []);
+
   // Track the committed text (from final transcriptions) for voice input
   const voiceCommittedTextRef = useRef('');
   // Track partial (uncommitted) text for display in italic
@@ -2119,6 +2183,20 @@ function AppContent() {
     messageInputRef.current?.setValue('');
     messageInputRef.current?.focus();
   }, []);
+
+  // Commit partial text to the input (called on disconnect to save work)
+  const handleVoiceCommitPartial = useCallback(() => {
+    if (voicePartialText) {
+      // Append partial text to committed text
+      const newCommitted = voiceCommittedTextRef.current
+        ? `${voiceCommittedTextRef.current} ${voicePartialText}`
+        : voicePartialText;
+      voiceCommittedTextRef.current = newCommitted;
+      messageInputRef.current?.setValue(newCommitted);
+      setVoicePartialText('');
+      setHasVoiceContent(true);
+    }
+  }, [voicePartialText]);
 
   // Sync voice state when user manually edits the input
   const handleInputChange = useCallback((value: string) => {
@@ -3156,7 +3234,19 @@ function AppContent() {
 
             {/* Input area - show on streaming and context tabs */}
             {(mainContentTab === 'streaming' || mainContentTab === 'context') && (
-              <div className={`input-area ${selectedSession?.isStreaming ? 'queue-mode' : ''}`}>
+              <div
+                className={`input-area ${selectedSession?.isStreaming ? 'queue-mode' : ''}`}
+                style={{ minHeight: inputAreaHeight }}
+              >
+                {/* Resize handle at top */}
+                <div
+                  className="input-area-resize-handle"
+                  onMouseDown={handleInputAreaResizeStart}
+                  onTouchStart={handleInputAreaResizeStart}
+                  role="separator"
+                  aria-orientation="horizontal"
+                  aria-label="Resize input area"
+                />
                 {/* Image preview area */}
                 {imageAttachments.length > 0 && (
                   <div className="image-preview-area">
@@ -3202,6 +3292,8 @@ function AppContent() {
                       disabled={connectionState !== 'connected' || isLoadingTurns}
                       onClear={handleVoiceClear}
                       hasContent={hasVoiceContent}
+                      hasPartialText={!!voicePartialText}
+                      onCommitPartial={handleVoiceCommitPartial}
                     />
                   )}
                   <MessageInput

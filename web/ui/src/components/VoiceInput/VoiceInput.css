@@ -1,7 +1,22 @@
 .voice-input-container {
   display: flex;
+  flex-direction: column;
   align-items: center;
   gap: 2px;
+  align-self: flex-end; /* Don't stretch with container */
+}
+
+.voice-input-main {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.voice-input-secondary {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 20px; /* Reserve space to prevent layout shift */
 }
 
 .voice-input-button {
@@ -43,6 +58,20 @@
   background: var(--danger-hover-bg, #e53935);
 }
 
+.voice-input-button.disconnected {
+  background: var(--warning-bg, #f57c00);
+  animation: flash 0.5s ease-in-out 3;
+}
+
+@keyframes flash {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
 .voice-icon {
   font-size: 16px;
   line-height: 1;
@@ -75,6 +104,33 @@
   to {
     opacity: 0.4;
   }
+}
+
+.voice-commit-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--success-bg, #2e7d32);
+  color: white;
+  font-size: 12px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background-color 0.2s, transform 0.1s;
+}
+
+.voice-commit-button:hover {
+  background: var(--success-hover-bg, #388e3c);
+  transform: scale(1.1);
+}
+
+.voice-commit-button:active {
+  transform: scale(0.95);
 }
 
 .voice-clear-button {

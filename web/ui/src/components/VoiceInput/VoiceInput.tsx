@@ -24,6 +24,10 @@ interface VoiceInputProps {
   onClear?: () => void;
   /** Whether there's content to clear (shows clear button when true) */
   hasContent?: boolean;
+  /** Whether there's partial (uncommitted) text */
+  hasPartialText?: boolean;
+  /** Called to commit partial text (e.g., on disconnect or manual commit) */
+  onCommitPartial?: () => void;
 }
 
 // Helper to create the message format expected by RealtimeSTT server
@@ -57,10 +61,13 @@ export function VoiceInput({
   disabled = false,
   onClear,
   hasContent = false,
+  hasPartialText = false,
+  onCommitPartial,
 }: VoiceInputProps) {
   const [isRecording, setIsRecording] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [wasDisconnected, setWasDisconnected] = useState(false);
 
   // Use ref to track recording state for callbacks (avoids stale closure)
   const isRecordingRef = useRef(false);
@@ -205,7 +212,17 @@ export function VoiceInput({
       ws.onclose = () => {
         setIsConnected(false);
         if (isRecordingRef.current) {
+          // Show disconnection indicator
+          setWasDisconnected(true);
+          setError('Disconnected');
+          // Commit any partial text before stopping (so user doesn't lose work)
+          onCommitPartial?.();
           stopRecording();
+          // Clear the disconnected state after a few seconds
+          setTimeout(() => {
+            setWasDisconnected(false);
+            setError(null);
+          }, 3000);
         }
       };
     } catch (err) {
@@ -240,36 +257,56 @@ export function VoiceInput({
     }
   }, [onClear]);
 
+  const handleCommit = useCallback(() => {
+    if (onCommitPartial) {
+      onCommitPartial();
+    }
+  }, [onCommitPartial]);
+
   return (
     <div className="voice-input-container">
-      <button
-        type="button"
-        className={`voice-input-button ${isRecording ? 'recording' : ''} ${isConnected ? 'connected' : ''}`}
-        onClick={toggleRecording}
-        disabled={disabled}
-        title={
-          error
-            ? `Error: ${error}`
-            : isRecording
-              ? 'Click to stop recording'
-              : 'Click to start voice input'
-        }
-      >
-        <span className="voice-icon">
-          {isRecording ? '🔴' : '🎤'}
-        </span>
-        {isRecording && <span className="recording-indicator" />}
-      </button>
-      {hasContent && onClear && (
+      <div className="voice-input-main">
         <button
           type="button"
-          className="voice-clear-button"
-          onClick={handleClear}
-          title="Clear voice input"
+          className={`voice-input-button ${isRecording ? 'recording' : ''} ${isConnected ? 'connected' : ''} ${wasDisconnected ? 'disconnected' : ''}`}
+          onClick={toggleRecording}
+          disabled={disabled}
+          title={
+            error
+              ? `Error: ${error}`
+              : isRecording
+                ? 'Click to stop recording'
+                : 'Click to start voice input'
+          }
         >
-          ✕
+          <span className="voice-icon">
+            {wasDisconnected ? '⚠️' : isRecording ? '🔴' : '🎤'}
+          </span>
+          {isRecording && <span className="recording-indicator" />}
         </button>
-      )}
+      </div>
+      <div className="voice-input-secondary">
+        {hasPartialText && onCommitPartial && (
+          <button
+            type="button"
+            className="voice-commit-button"
+            onClick={handleCommit}
+            title="Commit partial text"
+          >
+            ✓
+          </button>
+        )}
+        {hasContent && onClear && (
+          <button
+            type="button"
+            className="voice-clear-button"
+            onClick={handleClear}
+            title="Clear voice input"
+          >
+            ✕
+          </button>
+        )}
+      </div>
     </div>
   );
 }
