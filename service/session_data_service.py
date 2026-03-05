@@ -111,6 +111,7 @@ class TurnSnapshot:
     order: int = 0  # Turn position in session (for sorting)
     exchange_id: str | None = None
     timestamp: str | None = None  # ISO 8601 format, when turn was created
+    parallel_group_id: str | None = None  # Groups parallel tool calls from same LLM response
 
 
 @ws_type
@@ -198,6 +199,16 @@ class SessionTurnFinishedEvent:
     # Cumulative token counts for the exchange
     context_tokens: int = 0  # Total context/input tokens sent to LLM
     output_tokens_total: int = 0  # Total output tokens generated so far in this exchange
+
+
+@ws_type
+@dataclass
+class SessionTurnsDeletedEvent:
+    """Event payload when turns are deleted (e.g., during archive)."""
+
+    session_id: str
+    turn_indices: list[int]  # Indices of deleted turns
+    turn_ids: list[str]  # IDs of deleted turns
 
 
 @ws_type
@@ -787,6 +798,7 @@ class SessionDataService:
                     content_block=turn.content_block if hasattr(turn, 'content_block') else None,
                     exchange_id=getattr(turn, 'exchange_id', None),
                     timestamp=getattr(turn, 'timestamp', None),
+                    parallel_group_id=getattr(turn, 'parallel_group_id', None),
                 )
                 turn_snapshots.append(snapshot)
 
@@ -893,6 +905,7 @@ class SessionDataService:
                 content_block=content_block,
                 exchange_id=getattr(turn, 'exchange_id', None),
                 timestamp=getattr(turn, 'timestamp', None),
+                parallel_group_id=getattr(turn, 'parallel_group_id', None),
             )
             turn_snapshots.append(turn_snapshot)
 
@@ -1086,6 +1099,7 @@ class SessionDataService:
             order=order,  # Turn position for client-side sorting
             exchange_id=exchange_id,
             timestamp=turn_dict.get("timestamp"),
+            parallel_group_id=turn_dict.get("parallel_group_id"),
         )
 
     def _deserialize_content_block(self, data: dict) -> ContentBlock:
@@ -2140,6 +2154,35 @@ class SessionDataService:
         event_data = SessionRemovedEvent(session_id=session_id)
         self._emit_event("sessionDataSessionRemoved", event_data.__dict__)
 
+    def emit_turns_deleted(
+        self,
+        session_id: str,
+        turn_indices: list[int],
+        turn_ids: list[str],
+    ) -> None:
+        """Emit a turns deleted event to subscribed clients.
+
+        Called when turns are deleted from a session (e.g., during archive).
+        Clients should remove these turns from their local state.
+
+        Args:
+            session_id: The session ID
+            turn_indices: Indices of the deleted turns
+            turn_ids: IDs of the deleted turns
+        """
+        from core.debug_log import debug_log
+        debug_log.info(
+            f"emit_turns_deleted: session={session_id[:8]}, count={len(turn_ids)}",
+            category=Category.API,
+            details={"turn_indices": turn_indices},
+        )
+        event_data = SessionTurnsDeletedEvent(
+            session_id=session_id,
+            turn_indices=turn_indices,
+            turn_ids=turn_ids,
+        )
+        self._emit_event("sessionDataTurnsDeleted", event_data.__dict__)
+
     # --- Events (for TypeScript generation) ---
     # Event names are prefixed with "sessionData" to avoid collisions with
     # TaskStateService and TreeStateService which also have turn events.
@@ -2158,6 +2201,14 @@ class SessionDataService:
 
         Clients should append the delta to their accumulated content.
         Use accumulated_length to verify sync.
+        """
+        ...
+
+    @ws_event(name="sessionDataTurnsDeleted")
+    async def on_session_data_turns_deleted(self) -> SessionTurnsDeletedEvent:
+        """Emitted when turns are deleted from a session (e.g., during archive).
+
+        Clients should remove the deleted turns from their local state.
         """
         ...
 

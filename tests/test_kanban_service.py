@@ -523,3 +523,236 @@ class TestKanbanIntegration:
         full_state2 = await kanban.get_board_state(state2.board.id)
         all_tasks2 = sum(len(c.tasks) for c in full_state2.columns)
         assert all_tasks2 == 0
+
+
+# =============================================================================
+# Session-Board Association Tests
+# =============================================================================
+
+
+class TestSessionBoardAssociations:
+    """Tests for session-board association operations."""
+
+    @pytest.mark.asyncio
+    async def test_associate_board_with_session(self, kanban):
+        """Test associating a board with a session."""
+        state = await kanban.create_board("Test Board")
+        session_id = "test-session-123"
+
+        assoc = await kanban.associate_board_with_session(
+            board_id=state.board.id,
+            session_id=session_id,
+            role="primary",
+            created_by="user",
+        )
+
+        assert assoc is not None
+        assert assoc.board_id == state.board.id
+        assert assoc.session_id == session_id
+        assert assoc.role == "primary"
+        assert assoc.created_by == "user"
+        assert assoc.inherited_from is None
+
+    @pytest.mark.asyncio
+    async def test_associate_board_with_inheritance(self, kanban):
+        """Test associating a board with inheritance tracking."""
+        state = await kanban.create_board("Test Board")
+        session_id = "child-session"
+        parent_id = "parent-session"
+
+        assoc = await kanban.associate_board_with_session(
+            board_id=state.board.id,
+            session_id=session_id,
+            role="reference",
+            created_by="fork",
+            inherited_from=parent_id,
+        )
+
+        assert assoc.inherited_from == parent_id
+        assert assoc.created_by == "fork"
+        assert assoc.role == "reference"
+
+    @pytest.mark.asyncio
+    async def test_get_associations_for_session(self, kanban):
+        """Test getting all board associations for a session."""
+        session_id = "test-session-456"
+
+        # Create and associate multiple boards
+        board1 = await kanban.create_board("Board 1")
+        board2 = await kanban.create_board("Board 2")
+
+        await kanban.associate_board_with_session(
+            board_id=board1.board.id,
+            session_id=session_id,
+            role="primary",
+        )
+        await kanban.associate_board_with_session(
+            board_id=board2.board.id,
+            session_id=session_id,
+            role="reference",
+        )
+
+        associations = await kanban.get_associations_for_session(session_id)
+
+        assert len(associations) == 2
+        board_ids = {a.board_id for a in associations}
+        assert board1.board.id in board_ids
+        assert board2.board.id in board_ids
+
+    @pytest.mark.asyncio
+    async def test_get_associations_for_session_empty(self, kanban):
+        """Test getting associations for a session with no boards."""
+        associations = await kanban.get_associations_for_session("nonexistent-session")
+        assert associations == []
+
+    @pytest.mark.asyncio
+    async def test_get_boards_for_session(self, kanban):
+        """Test getting boards with their associations for a session."""
+        session_id = "test-session-789"
+
+        board_state = await kanban.create_board("My Board")
+        await kanban.associate_board_with_session(
+            board_id=board_state.board.id,
+            session_id=session_id,
+        )
+
+        boards = await kanban.get_boards_for_session(session_id)
+
+        assert len(boards) == 1
+        assoc, board = boards[0]
+        assert board.id == board_state.board.id
+        assert board.name == "My Board"
+        assert assoc.session_id == session_id
+
+    @pytest.mark.asyncio
+    async def test_dissociate_board_from_session(self, kanban):
+        """Test removing a board association from a session."""
+        session_id = "test-session-abc"
+        board_state = await kanban.create_board("Board to Remove")
+
+        await kanban.associate_board_with_session(
+            board_id=board_state.board.id,
+            session_id=session_id,
+        )
+
+        # Verify association exists
+        assocs = await kanban.get_associations_for_session(session_id)
+        assert len(assocs) == 1
+
+        # Dissociate
+        result = await kanban.dissociate_board_from_session(
+            board_id=board_state.board.id,
+            session_id=session_id,
+        )
+
+        assert result is True
+
+        # Verify association removed
+        assocs = await kanban.get_associations_for_session(session_id)
+        assert len(assocs) == 0
+
+    @pytest.mark.asyncio
+    async def test_dissociate_nonexistent_association(self, kanban):
+        """Test dissociating a non-existent association returns False."""
+        result = await kanban.dissociate_board_from_session(
+            board_id="nonexistent-board",
+            session_id="nonexistent-session",
+        )
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_create_board_for_session(self, kanban):
+        """Test creating a board that's automatically associated with a session."""
+        session_id = "test-session-def"
+
+        assoc, board_state = await kanban.create_board_for_session(
+            session_id=session_id,
+            name="Auto-associated Board",
+        )
+
+        assert assoc.session_id == session_id
+        assert assoc.board_id == board_state.board.id
+        assert assoc.role == "primary"
+        assert assoc.created_by == "user"
+
+        # Verify the board exists
+        board = await kanban.get_board(board_state.board.id)
+        assert board is not None
+        assert board.name == "Auto-associated Board"
+
+    @pytest.mark.asyncio
+    async def test_inherit_board_associations(self, kanban):
+        """Test inheriting board associations from parent to child session."""
+        parent_id = "parent-session-xyz"
+        child_id = "child-session-xyz"
+
+        # Create boards and associate with parent
+        board1 = await kanban.create_board("Inherited Board 1")
+        board2 = await kanban.create_board("Inherited Board 2")
+
+        await kanban.associate_board_with_session(
+            board_id=board1.board.id,
+            session_id=parent_id,
+            role="primary",
+        )
+        await kanban.associate_board_with_session(
+            board_id=board2.board.id,
+            session_id=parent_id,
+            role="reference",
+        )
+
+        # Inherit to child
+        child_assocs = await kanban.inherit_board_associations(
+            parent_session_id=parent_id,
+            child_session_id=child_id,
+        )
+
+        assert len(child_assocs) == 2
+
+        # All child associations should reference the parent
+        for assoc in child_assocs:
+            assert assoc.session_id == child_id
+            assert assoc.created_by == "fork"
+            assert assoc.inherited_from == parent_id
+
+        # Child should have both boards
+        child_boards = await kanban.get_boards_for_session(child_id)
+        assert len(child_boards) == 2
+
+        # Parent associations should be unchanged
+        parent_assocs = await kanban.get_associations_for_session(parent_id)
+        assert len(parent_assocs) == 2
+
+    @pytest.mark.asyncio
+    async def test_inherit_board_associations_empty_parent(self, kanban):
+        """Test inheriting from a parent with no boards."""
+        child_assocs = await kanban.inherit_board_associations(
+            parent_session_id="empty-parent",
+            child_session_id="empty-child",
+        )
+        assert child_assocs == []
+
+    @pytest.mark.asyncio
+    async def test_multiple_sessions_same_board(self, kanban):
+        """Test that multiple sessions can share the same board."""
+        board = await kanban.create_board("Shared Board")
+
+        session1 = "session-1"
+        session2 = "session-2"
+
+        await kanban.associate_board_with_session(
+            board_id=board.board.id,
+            session_id=session1,
+        )
+        await kanban.associate_board_with_session(
+            board_id=board.board.id,
+            session_id=session2,
+        )
+
+        # Both sessions should see the board
+        boards1 = await kanban.get_boards_for_session(session1)
+        boards2 = await kanban.get_boards_for_session(session2)
+
+        assert len(boards1) == 1
+        assert len(boards2) == 1
+        assert boards1[0][1].id == boards2[0][1].id

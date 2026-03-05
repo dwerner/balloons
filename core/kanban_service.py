@@ -788,3 +788,204 @@ class KanbanService:
             column_id
         )
         return True
+
+    # -------------------------------------------------------------------------
+    # Session-Board Association Operations
+    # -------------------------------------------------------------------------
+
+    async def associate_board_with_session(
+        self,
+        board_id: str,
+        session_id: str,
+        role: str = "primary",
+        created_by: str = "user",
+        inherited_from: str | None = None,
+    ) -> "SessionBoardAssociation":
+        """Associate a board with a session.
+
+        Args:
+            board_id: The board to associate
+            session_id: The session to associate with
+            role: Role of this association (primary, reference, archive)
+            created_by: Who created this association (user, llm, fork)
+            inherited_from: Parent session ID if inherited via fork
+
+        Returns:
+            The created SessionBoardAssociation
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        assoc_id = str(uuid.uuid4())
+
+        assoc_data = {
+            "id": assoc_id,
+            "session_id": session_id,
+            "board_id": board_id,
+            "role": role,
+            "created_at": now,
+            "created_by": created_by,
+            "inherited_from": inherited_from,
+        }
+
+        await self._storage._run_sync(
+            self._storage._storage.save_session_board_association,
+            json.dumps(assoc_data)
+        )
+
+        return SessionBoardAssociation(
+            id=assoc_id,
+            session_id=session_id,
+            board_id=board_id,
+            role=role,
+            created_at=now,
+            created_by=created_by,
+            inherited_from=inherited_from,
+        )
+
+    async def dissociate_board_from_session(
+        self,
+        board_id: str,
+        session_id: str,
+    ) -> bool:
+        """Remove a board association from a session.
+
+        Args:
+            board_id: The board to dissociate
+            session_id: The session to dissociate from
+
+        Returns:
+            True if an association was removed, False if not found
+        """
+        associations = await self.get_associations_for_session(session_id)
+        for assoc in associations:
+            if assoc.board_id == board_id:
+                await self._storage._run_sync(
+                    self._storage._storage.delete_session_board_association,
+                    assoc.id
+                )
+                return True
+        return False
+
+    async def get_associations_for_session(
+        self,
+        session_id: str,
+    ) -> list["SessionBoardAssociation"]:
+        """Get all board associations for a session.
+
+        Args:
+            session_id: The session ID
+
+        Returns:
+            List of SessionBoardAssociation objects
+        """
+        result = await self._storage._run_sync(
+            self._storage._storage.get_board_associations_for_session,
+            session_id
+        )
+        assoc_data_list = json.loads(result)
+        return [
+            SessionBoardAssociation(
+                id=a["id"],
+                session_id=a["session_id"],
+                board_id=a["board_id"],
+                role=a["role"],
+                created_at=a["created_at"],
+                created_by=a["created_by"],
+                inherited_from=a.get("inherited_from"),
+            )
+            for a in assoc_data_list
+        ]
+
+    async def get_boards_for_session(
+        self,
+        session_id: str,
+    ) -> list[tuple["SessionBoardAssociation", Board]]:
+        """Get all boards associated with a session.
+
+        Args:
+            session_id: The session ID
+
+        Returns:
+            List of (association, board) tuples
+        """
+        associations = await self.get_associations_for_session(session_id)
+        result: list[tuple[SessionBoardAssociation, Board]] = []
+
+        for assoc in associations:
+            board = await self.get_board(assoc.board_id)
+            if board:
+                result.append((assoc, board))
+
+        return result
+
+    async def create_board_for_session(
+        self,
+        session_id: str,
+        name: str,
+        columns: list[tuple[str, int]] | None = None,
+    ) -> tuple["SessionBoardAssociation", BoardState]:
+        """Create a new board and associate it with a session.
+
+        Args:
+            session_id: The session to associate with
+            name: Display name for the board
+            columns: Optional list of (name, position) tuples
+
+        Returns:
+            Tuple of (association, board_state)
+        """
+        board_state = await self.create_board(name, columns)
+        assoc = await self.associate_board_with_session(
+            board_id=board_state.board.id,
+            session_id=session_id,
+            role="primary",
+            created_by="user",
+        )
+        return assoc, board_state
+
+    async def inherit_board_associations(
+        self,
+        parent_session_id: str,
+        child_session_id: str,
+    ) -> list["SessionBoardAssociation"]:
+        """Copy board associations from parent to child session.
+
+        Called during fork to inherit parent's kanban boards.
+
+        Args:
+            parent_session_id: The parent session to copy from
+            child_session_id: The child session to copy to
+
+        Returns:
+            List of new associations created for the child
+        """
+        parent_assocs = await self.get_associations_for_session(parent_session_id)
+        child_assocs: list[SessionBoardAssociation] = []
+
+        for assoc in parent_assocs:
+            child_assoc = await self.associate_board_with_session(
+                board_id=assoc.board_id,
+                session_id=child_session_id,
+                role=assoc.role,
+                created_by="fork",
+                inherited_from=parent_session_id,
+            )
+            child_assocs.append(child_assoc)
+
+        return child_assocs
+
+
+# =============================================================================
+# Session-Board Association Data Class
+# =============================================================================
+
+
+@dataclass
+class SessionBoardAssociation:
+    """Association between a session and a kanban board."""
+    id: str
+    session_id: str
+    board_id: str
+    role: str  # "primary", "reference", "archive"
+    created_at: str
+    created_by: str  # "user", "llm", "fork"
+    inherited_from: Optional[str] = None  # Parent session ID if inherited

@@ -32,13 +32,17 @@ import type {
   WatchStopBlock,
   WatchSummaryBlock,
 } from '../../../../../generated/types';
-import { useSelectSession } from './ClientContext';
+import { useSelectSession, useClient } from './ClientContext';
+import { createLogger } from '../../../utils/debugLog';
 import './cards.css';
+
+const debugLog = createLogger('SystemCard');
 
 type DisplayMode = 'formatted' | 'raw';
 
 interface SystemCardProps {
   turn: SessionDataTurn;
+  sessionId?: string;
 }
 
 // System block type configuration
@@ -297,13 +301,15 @@ function getDisplayContent(block: SessionDataTurn['contentBlock']): string {
   }
 }
 
-export const SystemCard = React.memo(function SystemCard({ turn }: SystemCardProps) {
+export const SystemCard = React.memo(function SystemCard({ turn, sessionId }: SystemCardProps) {
   const { contentBlock, streaming, order, timestamp } = turn;
   const blockType = contentBlock?.type || 'unknown';
   const selectSession = useSelectSession();
+  const client = useClient();
 
   // Display mode state - formatted (default) or raw JSON
   const [displayMode, setDisplayMode] = useState<DisplayMode>('formatted');
+  const [isRehydrating, setIsRehydrating] = useState(false);
 
   const config = SYSTEM_CONFIG[blockType] || {
     icon: '📄',
@@ -322,6 +328,24 @@ export const SystemCard = React.memo(function SystemCard({ turn }: SystemCardPro
     }
   }, [linkedSessionId, selectSession]);
 
+  // Handler for rehydrating archive blocks
+  const handleRehydrate = useCallback(async () => {
+    if (!client || !sessionId || blockType !== 'archive' || typeof order !== 'number') {
+      return;
+    }
+    setIsRehydrating(true);
+    try {
+      const result = await client.sessions.rehydrate(sessionId, order);
+      if (!result.success) {
+        console.error('Rehydrate failed:', result.error);
+      }
+    } catch (err) {
+      console.error('Rehydrate error:', err);
+    } finally {
+      setIsRehydrating(false);
+    }
+  }, [client, sessionId, blockType, order]);
+
   // Render body content based on display mode
   const renderBody = () => {
     if (displayMode === 'raw') {
@@ -337,6 +361,17 @@ export const SystemCard = React.memo(function SystemCard({ turn }: SystemCardPro
 
   const body = renderBody();
   const showNavigationButton = linkedSessionId && selectSession && navigationLabel;
+  const showRehydrateButton = blockType === 'archive' && client && sessionId && typeof order === 'number';
+
+  // Debug archive button visibility
+  if (blockType === 'archive') {
+    debugLog('archive block debug', {
+      hasClient: !!client,
+      sessionId,
+      order,
+      showRehydrateButton,
+    });
+  }
 
   return (
     <div className={`turn-card system-card ${config.className} ${streaming ? 'streaming' : ''} ${displayMode === 'raw' ? 'raw-mode' : ''}`}>
@@ -352,15 +387,28 @@ export const SystemCard = React.memo(function SystemCard({ turn }: SystemCardPro
           {body}
         </div>
       )}
-      {showNavigationButton && (
+      {(showNavigationButton || showRehydrateButton) && (
         <div className="turn-card-actions">
-          <button
-            className="btn btn-primary btn-small session-link-btn"
-            onClick={handleNavigate}
-            type="button"
-          >
-            {navigationLabel} →
-          </button>
+          {showNavigationButton && (
+            <button
+              className="btn btn-primary btn-small session-link-btn"
+              onClick={handleNavigate}
+              type="button"
+            >
+              {navigationLabel} →
+            </button>
+          )}
+          {showRehydrateButton && (
+            <button
+              className="btn btn-secondary btn-small rehydrate-btn"
+              onClick={handleRehydrate}
+              type="button"
+              disabled={isRehydrating}
+              title="Restore archived turns"
+            >
+              {isRehydrating ? '⏳ Restoring...' : '↩ Restore'}
+            </button>
+          )}
         </div>
       )}
     </div>

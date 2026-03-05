@@ -136,6 +136,11 @@ if (!noWatch) {
 // Debug log file for browser logs
 const debugLogPath = join(projectDir, "browser-debug.log");
 
+// STT WebSocket proxy configuration
+// This proxies wss:// connections to the RealtimeSTT server (ws://)
+const STT_PROXY_HOST = process.env.STT_HOST || "192.168.0.120";
+const STT_PROXY_PORT = parseInt(process.env.STT_PORT || "8012", 10);
+
 const server = Bun.serve({
   port: port,
   hostname: "0.0.0.0", // Bind to all interfaces for LAN access
@@ -143,9 +148,63 @@ const server = Bun.serve({
     cert: certFile,
     key: keyFile,
   },
-  async fetch(req) {
+  // WebSocket handler for STT proxy
+  websocket: {
+    open(ws) {
+      // Connection to client opened, connect to upstream STT server
+      const upstream = new WebSocket(`ws://${STT_PROXY_HOST}:${STT_PROXY_PORT}`);
+
+      upstream.onopen = () => {
+        console.log(`[STT Proxy] Connected to upstream ${STT_PROXY_HOST}:${STT_PROXY_PORT}`);
+        // Store upstream reference on ws for later use
+        (ws as any).upstream = upstream;
+      };
+
+      upstream.onmessage = (event) => {
+        // Forward messages from STT server to browser
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(event.data);
+        }
+      };
+
+      upstream.onerror = (error) => {
+        console.error("[STT Proxy] Upstream error:", error);
+        ws.close();
+      };
+
+      upstream.onclose = () => {
+        console.log("[STT Proxy] Upstream closed");
+        ws.close();
+      };
+    },
+    message(ws, message) {
+      // Forward messages from browser to STT server
+      const upstream = (ws as any).upstream as WebSocket | undefined;
+      if (upstream && upstream.readyState === WebSocket.OPEN) {
+        upstream.send(message);
+      }
+    },
+    close(ws) {
+      // Clean up upstream connection
+      const upstream = (ws as any).upstream as WebSocket | undefined;
+      if (upstream) {
+        upstream.close();
+      }
+      console.log("[STT Proxy] Client disconnected");
+    },
+  },
+  async fetch(req, server) {
     const url = new URL(req.url);
     let path = url.pathname;
+
+    // WebSocket upgrade for STT proxy
+    if (path === "/stt-proxy") {
+      const upgraded = server.upgrade(req);
+      if (upgraded) {
+        return undefined; // Bun handles the upgrade
+      }
+      return new Response("WebSocket upgrade failed", { status: 400 });
+    }
 
     // Debug log endpoint - receives logs from browser
     if (path === "/debug-log" && req.method === "POST") {

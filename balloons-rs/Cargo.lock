@@ -285,6 +285,7 @@ dependencies = [
 name = "balloons-py"
 version = "0.1.0"
 dependencies = [
+ "async-lock 3.4.2",
  "balloons-browser",
  "balloons-core",
  "balloons-git",
@@ -2007,7 +2008,17 @@ dependencies = [
  "once_cell",
  "pin-project-lite",
  "pyo3",
+ "pyo3-async-runtimes-macros",
  "smol",
+]
+
+[[package]]
+name = "pyo3-async-runtimes-macros"
+version = "0.28.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
 ]
 
 [[package]]
@@ -2627,6 +2638,16 @@ dependencies = [
  "once_cell",
  "rustix 1.1.3",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "test-smol-channel"
+version = "0.1.0"
+dependencies = [
+ "async-channel 2.5.0",
+ "pyo3",
+ "pyo3-async-runtimes",
+ "smol",
 ]
 
 [[package]]

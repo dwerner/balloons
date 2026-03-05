@@ -66,14 +66,17 @@ interface StreamingTurnsViewProps {
   onTurnsChange?: (turns: SessionDataTurn[]) => void;
   /** Turn indices currently being archived (show spinner overlay) */
   archivingTurnIndices?: Set<number>;
+  /** Increment to force re-subscription (e.g., after archive) */
+  refreshKey?: number;
 }
 
 // Threshold in pixels to consider "at bottom"
 const AT_BOTTOM_THRESHOLD = 150;
 
-export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrollStateChange, onStreamingProgressChange, onTurnsChange, archivingTurnIndices }: StreamingTurnsViewProps) {
+export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrollStateChange, onStreamingProgressChange, onTurnsChange, archivingTurnIndices, refreshKey }: StreamingTurnsViewProps) {
   // useSessionData now gets the clientId directly from client.clientId when connected
-  const { turns, isLoading, isStreaming, streamError, error, streamingProgress } = useSessionData(client, sessionId);
+  // refreshKey forces re-subscription when incremented (e.g., after archive)
+  const { turns, isLoading, isStreaming, streamError, error, streamingProgress } = useSessionData(client, sessionId, refreshKey);
 
   // Report turns changes to parent
   useEffect(() => {

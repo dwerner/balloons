@@ -36,9 +36,13 @@ class ArchiveResult:
 
     # Archive info (on success)
     archive_block: Optional[ArchiveBlock] = None
+    archive_turn: Optional[Turn] = None  # The new archive turn (for UI update)
     new_turns: list[Turn] = field(default_factory=list)
     archived_count: int = 0
     file_path: str = ""
+    # Turn IDs that were deleted (for client notification)
+    deleted_turn_ids: list[str] = field(default_factory=list)
+    deleted_turn_indices: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -49,7 +53,11 @@ class RehydrateResult:
 
     # Rehydration info (on success)
     new_turns: list[Turn] = field(default_factory=list)
+    restored_turns: list[Turn] = field(default_factory=list)  # The actual restored turns (for UI update)
     restored_count: int = 0
+    # Turn IDs/indices for the deleted archive turn
+    deleted_turn_id: str = ""
+    deleted_turn_index: int = -1
 
 
 @dataclass
@@ -192,6 +200,10 @@ class CommandExecutor:
         turn_start = min(turn_indices)
         turn_end = max(turn_indices) + 1
 
+        # Collect turn IDs that will be deleted
+        deleted_turn_ids = [t.id for t in session.turns[turn_start:turn_end]]
+        deleted_turn_indices = list(range(turn_start, turn_end))
+
         # Perform the archive
         archiver = Archiver()
         try:
@@ -203,12 +215,22 @@ class CommandExecutor:
                 summary,
             )
 
+            # Find the archive turn in new_turns (it's at turn_start position)
+            archive_turn = None
+            if new_turns and turn_start < len(new_turns):
+                candidate = new_turns[turn_start]
+                if hasattr(candidate.content_block, 'archive_id'):
+                    archive_turn = candidate
+
             return ArchiveResult(
                 success=True,
                 archive_block=archive_block,
+                archive_turn=archive_turn,
                 new_turns=new_turns,
                 archived_count=archive_block.message_count,
                 file_path=archive_block.file_path,
+                deleted_turn_ids=deleted_turn_ids,
+                deleted_turn_indices=deleted_turn_indices,
             )
 
         except ArchiveError as e:
@@ -251,15 +273,25 @@ class CommandExecutor:
         if not archive_block:
             return RehydrateResult(success=False, error="Selected turn is not an archive")
 
+        # Track the archive turn ID before rehydration
+        archive_turn_id = turn.id
+
         # Perform rehydration
         archiver = Archiver()
         try:
             new_turns = archiver.rehydrate(session.turns, turn_index)
 
+            # Find the restored turns (the turns that replaced the archive turn)
+            # They're at positions turn_index to turn_index + restored_count - 1
+            restored_turns = new_turns[turn_index:turn_index + archive_block.message_count]
+
             return RehydrateResult(
                 success=True,
                 new_turns=new_turns,
+                restored_turns=restored_turns,
                 restored_count=archive_block.message_count,
+                deleted_turn_id=archive_turn_id,
+                deleted_turn_index=turn_index,
             )
 
         except ArchiveError as e:

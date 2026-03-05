@@ -407,3 +407,31 @@ class EdgeData:
     relationship: str  # Relationship type
     position: Optional[int] = None  # For ordering (e.g., task in column)
     created_at: str = ""  # ISO 8601
+
+
+@rust_schema
+@dataclass
+class SessionBoardAssociation:
+    """Associates a kanban board with a session.
+
+    Enables per-session kanban boards while allowing boards to be
+    shared across multiple sessions if needed. Associations are
+    inherited when a session is forked.
+
+    Roles:
+      - "primary": Main board for session's work tracking
+      - "reference": Board viewed but not actively managed
+      - "archive": Completed/historical board
+
+    created_by tracks who created the association:
+      - "user": Manual association via UI
+      - "llm": Created by LLM tool
+      - "fork": Inherited from parent session
+    """
+    id: str  # UUID
+    session_id: str
+    board_id: str
+    role: str  # "primary", "reference", "archive"
+    created_at: str  # ISO 8601
+    created_by: str  # "user" | "llm" | "fork"
+    inherited_from: Optional[str] = None  # Parent session ID if inherited via fork

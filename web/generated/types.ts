@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-03-03T11:24:00.043276
+// Generated: 2026-03-03T16:02:10.657109
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -420,6 +420,14 @@ export interface CompleteArchiveResult {
   error?: string;
 }
 
+export interface RehydrateResult {
+  success: boolean;
+  sessionId?: string;
+  turnIndex?: number;
+  turnsRestored?: number;
+  error?: string;
+}
+
 export interface StartSessionReviewResult {
   success: boolean;
   helperId?: string;
@@ -699,6 +707,7 @@ export interface TurnSnapshot {
   order?: number;
   exchangeId?: string | null;
   timestamp?: string | null;
+  parallelGroupId?: string | null;
 }
 
 export interface SessionSnapshot {
@@ -750,6 +759,12 @@ export interface SessionTurnFinishedEvent {
   finalContent?: string;
   contextTokens?: number;
   outputTokensTotal?: number;
+}
+
+export interface SessionTurnsDeletedEvent {
+  sessionId: string;
+  turnIndices: number[];
+  turnIds: string[];
 }
 
 export interface SessionStreamStartedEvent {

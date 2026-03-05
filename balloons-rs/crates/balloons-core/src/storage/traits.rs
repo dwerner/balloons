@@ -2,9 +2,9 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 use crate::generated::{
-    BoardData, ColumnData, EdgeData, GoalData, PlanData, SessionBinding, SessionData,
-    SessionMetadata, TaskData, TodoData, TodoDependency, TodoPlanLink, TurnData, UserData,
-    UserPrefs, WatcherRelation,
+    BoardData, ColumnData, EdgeData, GoalData, PlanData, SessionBinding, SessionBoardAssociation,
+    SessionData, SessionMetadata, TaskData, TodoData, TodoDependency, TodoPlanLink, TurnData,
+    UserData, UserPrefs, WatcherRelation,
 };
 
 #[derive(Debug, Error)]
@@ -472,4 +472,38 @@ pub trait StorageEngine: Send + Sync {
 
     /// List all edges.
     async fn list_edges(&self) -> Result<Vec<EdgeData>>;
+
+    // =========================================================================
+    // Session-Board Associations
+    // =========================================================================
+
+    /// Save a session-board association (upsert).
+    ///
+    /// Automatically maintains the boards_by_session index.
+    async fn save_session_board_association(
+        &self,
+        association: &SessionBoardAssociation,
+    ) -> Result<()>;
+
+    /// Load a session-board association by ID.
+    async fn load_session_board_association(
+        &self,
+        id: &str,
+    ) -> Result<Option<SessionBoardAssociation>>;
+
+    /// Delete a session-board association by ID.
+    ///
+    /// Automatically cleans up the boards_by_session index.
+    async fn delete_session_board_association(&self, id: &str) -> Result<()>;
+
+    /// Get all board associations for a session.
+    ///
+    /// Returns associations ordered by created_at.
+    async fn get_board_associations_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<SessionBoardAssociation>>;
+
+    /// List all session-board associations.
+    async fn list_session_board_associations(&self) -> Result<Vec<SessionBoardAssociation>>;
 }

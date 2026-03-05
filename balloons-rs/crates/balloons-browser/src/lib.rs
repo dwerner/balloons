@@ -6,12 +6,17 @@
 use serde::{Deserialize, Serialize};
 use surfer_rs::{
     BrowserConfig as SurferConfig, BrowserType, ButtonInfo, InputInfo, LinkInfo, Surfer,
-    SurferError, WebDriverSurfer,
+    SurferError, WebDriverSurfer, start_driver, stop_driver,
 };
 use thiserror::Error;
 use uuid::Uuid;
 
 pub use surfer_rs::BrowserType as BrowserKind;
+// Re-export types needed for public API
+pub use surfer_rs::Cookie;
+pub use surfer_rs::NewWindowResponse;
+pub use surfer_rs::{PageItem, PageSection, PageVision};
+pub use surfer_rs::WindowHandle;
 
 /// Browser automation errors
 #[derive(Error, Debug)]
@@ -230,6 +235,9 @@ impl Browser {
     /// Connect to the browser (starts webdriver and browser)
     pub async fn connect(&mut self) -> Result<(), BrowserError> {
         let surfer_config = self.config.to_surfer_config();
+        // Start the WebDriver process first (geckodriver/chromedriver)
+        start_driver(&surfer_config).await?;
+        // Then connect to it
         let surfer = WebDriverSurfer::connect(&surfer_config).await?;
         self.surfer = Some(surfer);
         Ok(())
@@ -240,6 +248,8 @@ impl Browser {
         if let Some(surfer) = self.surfer.take() {
             surfer.close().await?;
         }
+        // Stop the WebDriver process
+        stop_driver().await?;
         Ok(())
     }
 
@@ -354,6 +364,149 @@ impl Browser {
     pub async fn execute_js(&self, script: &str) -> Result<serde_json::Value, BrowserError> {
         let result = self.surfer()?.execute_js(script).await?;
         Ok(result)
+    }
+
+    /// Get a structured view of visible page content (PageVision)
+    ///
+    /// Returns semantic sections (Navigation, Sidebar, Content, Form, Messages, etc.)
+    /// with their visible items. Useful for LLM understanding of page state.
+    pub async fn see(&self) -> Result<surfer_rs::PageVision, BrowserError> {
+        let vision = self.surfer()?.see().await?;
+        Ok(vision)
+    }
+
+    // -------------------------------------------------------------------------
+    // Additional Interaction Methods
+    // -------------------------------------------------------------------------
+
+    /// Select an option from a dropdown by input index and option text
+    pub async fn select_option(&self, index: usize, value: &str) -> Result<(), BrowserError> {
+        self.surfer()?.select_option(index, value).await?;
+        Ok(())
+    }
+
+    /// Press Enter on an input by its index from inputs()
+    pub async fn press_enter(&self, index: usize) -> Result<(), BrowserError> {
+        self.surfer()?.press_enter(index).await?;
+        Ok(())
+    }
+
+    /// Find a search input, type query, and submit
+    pub async fn search(&self, query: &str) -> Result<(), BrowserError> {
+        self.surfer()?.search(query).await?;
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------------
+    // Cookies
+    // -------------------------------------------------------------------------
+
+    /// Get all cookies for the current page
+    pub async fn get_cookies(&self) -> Result<Vec<Cookie<'static>>, BrowserError> {
+        let cookies = self.surfer()?.get_cookies().await?;
+        Ok(cookies)
+    }
+
+    /// Get a specific cookie by name
+    pub async fn get_cookie(&self, name: &str) -> Result<Option<Cookie<'static>>, BrowserError> {
+        let cookie = self.surfer()?.get_cookie(name).await?;
+        Ok(cookie)
+    }
+
+    /// Set a cookie
+    pub async fn set_cookie(&self, cookie: Cookie<'static>) -> Result<(), BrowserError> {
+        self.surfer()?.set_cookie(cookie).await?;
+        Ok(())
+    }
+
+    /// Delete a specific cookie by name
+    pub async fn delete_cookie(&self, name: &str) -> Result<(), BrowserError> {
+        self.surfer()?.delete_cookie(name).await?;
+        Ok(())
+    }
+
+    /// Delete all cookies
+    pub async fn delete_all_cookies(&self) -> Result<(), BrowserError> {
+        self.surfer()?.delete_all_cookies().await?;
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------------
+    // Frames
+    // -------------------------------------------------------------------------
+
+    /// Enter an iframe by index
+    pub async fn enter_frame(&self, index: u16) -> Result<(), BrowserError> {
+        self.surfer()?.enter_frame(index).await?;
+        Ok(())
+    }
+
+    /// Return to the parent frame
+    pub async fn enter_parent_frame(&self) -> Result<(), BrowserError> {
+        self.surfer()?.enter_parent_frame().await?;
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------------
+    // Windows/Tabs
+    // -------------------------------------------------------------------------
+
+    /// Get the current window handle
+    pub async fn current_window(&self) -> Result<WindowHandle, BrowserError> {
+        let handle = self.surfer()?.current_window().await?;
+        Ok(handle)
+    }
+
+    /// Get all window handles
+    pub async fn windows(&self) -> Result<Vec<WindowHandle>, BrowserError> {
+        let handles = self.surfer()?.windows().await?;
+        Ok(handles)
+    }
+
+    /// Switch to a different window/tab
+    pub async fn switch_to_window(&self, handle: WindowHandle) -> Result<(), BrowserError> {
+        self.surfer()?.switch_to_window(handle).await?;
+        Ok(())
+    }
+
+    /// Open a new window or tab
+    pub async fn new_window(&self, as_tab: bool) -> Result<NewWindowResponse, BrowserError> {
+        let response = self.surfer()?.new_window(as_tab).await?;
+        Ok(response)
+    }
+
+    /// Close the current window/tab
+    pub async fn close_window(&self) -> Result<(), BrowserError> {
+        self.surfer()?.close_window().await?;
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------------
+    // Storage
+    // -------------------------------------------------------------------------
+
+    /// Get a value from localStorage
+    pub async fn local_storage_get(&self, key: &str) -> Result<Option<String>, BrowserError> {
+        let value = self.surfer()?.local_storage_get(key).await?;
+        Ok(value)
+    }
+
+    /// Set a value in localStorage
+    pub async fn local_storage_set(&self, key: &str, value: &str) -> Result<(), BrowserError> {
+        self.surfer()?.local_storage_set(key, value).await?;
+        Ok(())
+    }
+
+    /// Get a value from sessionStorage
+    pub async fn session_storage_get(&self, key: &str) -> Result<Option<String>, BrowserError> {
+        let value = self.surfer()?.session_storage_get(key).await?;
+        Ok(value)
+    }
+
+    /// Set a value in sessionStorage
+    pub async fn session_storage_set(&self, key: &str, value: &str) -> Result<(), BrowserError> {
+        self.surfer()?.session_storage_set(key, value).await?;
+        Ok(())
     }
 }
 

@@ -226,6 +226,7 @@ class Session:
         exchange_id: str | None = None,
         timestamp: str | None = None,
         context_mode: ContextMode = ContextMode.COMPRESS,
+        parallel_group_id: str | None = None,
     ) -> Turn:
         """Add a single turn with one content block.
 
@@ -236,6 +237,7 @@ class Session:
             exchange_id: Groups turns in an agentic loop (user prompt + all responses)
             timestamp: Optional timestamp (defaults to now)
             context_mode: How to handle in context compilation
+            parallel_group_id: Groups parallel tool calls from same LLM response
         """
         turn = Turn(
             role=role,
@@ -244,6 +246,7 @@ class Session:
             exchange_id=exchange_id,
             timestamp=timestamp or datetime.now().isoformat(),
             context_mode=context_mode,
+            parallel_group_id=parallel_group_id,
         )
         self.turns.append(turn)
         # Accumulate token count

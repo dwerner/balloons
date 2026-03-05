@@ -157,6 +157,61 @@
   background-color: white;
 }
 
+/* Text input for settings */
+.appearance-settings__input {
+  padding: 6px 10px;
+  font-size: 13px;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-primary);
+  min-width: 150px;
+}
+
+.appearance-settings__input:hover:not(:disabled) {
+  border-color: var(--color-border-secondary);
+}
+
+.appearance-settings__input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.appearance-settings__input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Info/help text */
+.appearance-settings__info {
+  padding: 8px 12px;
+  background: var(--color-bg-tertiary);
+  border-radius: 4px;
+  margin-top: 8px;
+}
+
+.appearance-settings__info-text {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.appearance-settings__info-text a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+.appearance-settings__info-text a:hover {
+  text-decoration: underline;
+}
+
+.appearance-settings__info-text code {
+  background: var(--color-bg-primary);
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
 /* Sound Settings */
 .sound-settings {
   display: flex;

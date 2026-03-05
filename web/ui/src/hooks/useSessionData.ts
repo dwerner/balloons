@@ -239,11 +239,12 @@ function appendTextDelta(block: ContentBlock, delta: string): ContentBlock {
  *
  * @param client - BalloonsClient instance
  * @param autoSubscribe - Session ID to automatically subscribe to (optional)
- * @param clientId - Stable client identifier for subscriptions (optional, generates one if not provided)
+ * @param refreshKey - Increment to force re-subscription (useful after archive/delete)
  */
 export function useSessionData(
   client: BalloonsClient | null,
-  autoSubscribe?: string | null
+  autoSubscribe?: string | null,
+  refreshKey?: number
 ): UseSessionDataReturn {
   // Get the server-assigned clientId directly from the client when needed
   // This is set when the websocket connects and receives the 'connected' event
@@ -815,6 +816,7 @@ export function useSessionData(
                     tokens: turn.tokens || 0,
                     contextMode: turn.contextMode || 'copy',
                     exchangeId: turn.exchangeId ?? undefined,
+                    parallelGroupId: (turn as unknown as { parallelGroupId?: string }).parallelGroupId ?? undefined,
                     timestamp: (turn as unknown as { timestamp?: string }).timestamp ?? undefined,
                   });
                 }
@@ -841,6 +843,27 @@ export function useSessionData(
 
             setIsLoadingHistory(false);
             setHistoryWatermark(event.finalWatermark);
+          })
+        );
+
+        // Turns deleted - remove turns from state (e.g., during archive)
+        handlers.push(
+          client.sessionData.sessionDataTurnsDeleted((event) => {
+            if (event.sessionId !== newSessionId) return;
+            debugLog('sessionDataTurnsDeleted', {
+              turnIndices: event.turnIndices,
+              turnIds: event.turnIds,
+            });
+
+            // Remove the deleted turns from state by their IDs
+            setTurnsById((prev) => {
+              const next = new Map(prev);
+              for (const turnId of event.turnIds) {
+                next.delete(turnId);
+              }
+              debugLog('Removed turns from state', { removedCount: event.turnIds.length, remaining: next.size });
+              return next;
+            });
           })
         );
 
@@ -957,8 +980,9 @@ export function useSessionData(
       unsubStateChange();
     };
     // Note: we intentionally don't depend on subscribe to avoid infinite loops
+    // refreshKey forces re-subscription when incremented (e.g., after archive)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, autoSubscribe]);
+  }, [client, autoSubscribe, refreshKey]);
 
   // Start/stop delta flush interval based on streaming state
   useEffect(() => {

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, memo, useMemo, forward
 import { BalloonsClient } from '../../generated/balloons-client';
 import type { ConnectionState, SessionInfo, TurnInfo, TaskInfo, Unsubscribe, ToolUseStartedEvent, ToolInputDeltaEvent, ToolResultEvent, GoalTreeStateServiceClient, TurnSnapshot, SessionHistoryChunkEvent, SessionHistoryCompleteEvent } from '../../generated/balloons-client';
 import { MarkdownContent } from './MarkdownContent';
-import { AppLayout, useLayout, useTheme, usePreferences } from './components/layout';
+import { AppLayout, useLayout, useTheme, usePreferences, PreferencesProvider } from './components/layout';
 import { SessionTreeView } from './components/SessionTreeView';
 import { GoalTreeView } from './components/GoalTreeView';
 import { FileBrowserView, type FileBrowserViewRef } from './components/FileBrowserView';
@@ -20,9 +20,11 @@ import { CreateTodoModal, type CreateTodoResult } from './components/CreateTodoM
 import { SessionReviewModal, type SessionReview, type BackendInfo } from './components/SessionReviewModal';
 import { PropertiesTab } from './components/PropertiesTab';
 import { StreamingTurnsView, type StreamingProgress } from './components/StreamingTurnsView';
+import { ContextTabView, type ContextMode as ContextTabMode, type ExchangeAction as ContextTabExchangeAction } from './components/ContextTabView';
 import { DialogProvider, useDialog } from './components/Dialog';
 import { useWakeLock, useSoundNotifications, useLongPress } from './hooks';
 import { RenameSessionModal } from './components/RenameSessionModal';
+import { VoiceInput } from './components/VoiceInput';
 import { setDebugClient, createLogger, isDebugEnabled, setDebugEnabled } from './utils/debugLog';
 import { logout, isAuthenticated, getToken } from './utils/auth';
 import { Login } from './components/Login';
@@ -1020,6 +1022,10 @@ interface MessageInputProps {
   disabled: boolean;
   onSubmit: (message: string) => void;
   onPaste: (e: React.ClipboardEvent) => void;
+  /** Partial voice transcription text to show in italic */
+  partialText?: string;
+  /** Called when user manually types/edits the input */
+  onChange?: (value: string) => void;
 }
 
 /**
@@ -1041,14 +1047,16 @@ interface MessageInputProps {
  * 4. Custom memo comparison - only re-renders for placeholder/disabled changes, not callback changes
  */
 const MessageInputInner = forwardRef<MessageInputHandle, MessageInputProps>(
-  function MessageInput({ placeholder, disabled, onSubmit, onPaste }, ref) {
+  function MessageInput({ placeholder, disabled, onSubmit, onPaste, partialText, onChange }, ref) {
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const valueRef = useRef('');
     // Store callbacks in refs to avoid re-creating handlers when they change
     const onSubmitRef = useRef(onSubmit);
     const onPasteRef = useRef(onPaste);
+    const onChangeRef = useRef(onChange);
     onSubmitRef.current = onSubmit;
     onPasteRef.current = onPaste;
+    onChangeRef.current = onChange;
 
     // Expose imperative handle for parent to get/set value
     useImperativeHandle(ref, () => ({
@@ -1065,6 +1073,8 @@ const MessageInputInner = forwardRef<MessageInputHandle, MessageInputProps>(
     const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
       // Just update the ref, no state change = no re-render
       valueRef.current = e.target.value;
+      // Notify parent of changes (for voice input sync)
+      onChangeRef.current?.(e.target.value);
     }, []);
 
     const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1082,26 +1092,34 @@ const MessageInputInner = forwardRef<MessageInputHandle, MessageInputProps>(
     }, []); // No dependencies - uses ref
 
     return (
-      <textarea
-        ref={textareaRef}
-        className="input-field"
-        placeholder={placeholder}
-        defaultValue=""
-        onChange={handleChange}
-        onKeyDown={handleKeyDown}
-        onPaste={handlePaste}
-        disabled={disabled}
-        rows={1}
-      />
+      <div className="input-field-wrapper">
+        <textarea
+          ref={textareaRef}
+          className="input-field"
+          placeholder={placeholder}
+          defaultValue=""
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
+          disabled={disabled}
+          rows={1}
+        />
+        {partialText && (
+          <div className="input-field-partial">
+            <span className="partial-text">{partialText}</span>
+          </div>
+        )}
+      </div>
     );
   }
 );
 
-// Custom memo comparison - only re-render for placeholder/disabled changes
+// Custom memo comparison - re-render for placeholder/disabled/partialText changes
 // Callbacks are stored in refs inside the component, so we can safely ignore them
 const MessageInput = memo(MessageInputInner, (prevProps, nextProps) => {
   return prevProps.placeholder === nextProps.placeholder &&
-         prevProps.disabled === nextProps.disabled;
+         prevProps.disabled === nextProps.disabled &&
+         prevProps.partialText === nextProps.partialText;
 });
 
 /**
@@ -1124,9 +1142,11 @@ export function App() {
   }
 
   return (
-    <DialogProvider>
-      <AppContent />
-    </DialogProvider>
+    <PreferencesProvider>
+      <DialogProvider>
+        <AppContent />
+      </DialogProvider>
+    </PreferencesProvider>
   );
 }
 
@@ -1136,6 +1156,9 @@ export function App() {
 function AppContent() {
   // Dialog hook for confirm/alert dialogs
   const { confirm } = useDialog();
+
+  // Voice input preferences
+  const { voiceInputEnabled, voiceInputHost, voiceInputPort } = usePreferences();
 
   // Server slot (A=8765, B=8766) - persisted to localStorage
   const [serverSlot, setServerSlot] = useState<ServerSlot>(getInitialSlot);
@@ -1160,6 +1183,8 @@ function AppContent() {
   // loaded in the connection handler (see the "Load initial session list" section below).
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [turns, setTurns] = useState<TurnInfo[]>([]);
+  // Raw SessionDataTurns for components that need rich contentBlock data (e.g., ContextTabView)
+  const [rawTurns, setRawTurns] = useState<SessionDataTurn[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [queuedMessageCount, setQueuedMessageCount] = useState(0);
   const [streamingTask, setStreamingTask] = useState<TaskInfo | null>(null);
@@ -1169,6 +1194,8 @@ function AppContent() {
   // Track turn indices being archived (for showing spinners)
   // Track archiving state: Map from helperId to Set of turn indices being archived
   const [archivingByHelper, setArchivingByHelper] = useState<Map<string, Set<number>>>(new Map());
+  // Refresh key: increment to force session data re-subscription (e.g., after archive)
+  const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
   // Derived: all turn indices currently being archived
   const archivingTurnIndices = useMemo(() => {
     const allIndices = new Set<number>();
@@ -1639,8 +1666,9 @@ function AppContent() {
             // Fallback: clear all if no helperId (backwards compatibility)
             setArchivingByHelper(new Map());
           }
-          // Note: Turn updates after archive are handled by useSessionData via events
-          // The archive creates/updates turns which flow through the subscription
+          // Note: Turn updates are now handled incrementally via:
+          // 1. sessionDataTurnsDeleted event removes the archived turns
+          // 2. sessionDataTurnCreated event adds the new archive turn
         })
       );
 
@@ -1942,6 +1970,8 @@ function AppContent() {
   // Handle turns change from StreamingTurnsView
   // This callback is called whenever useSessionData's turns change
   const handleTurnsChange = useCallback((sessionDataTurns: SessionDataTurn[]) => {
+    // Store raw turns for components that need rich contentBlock data
+    setRawTurns(sessionDataTurns);
     // Convert SessionDataTurn[] to TurnInfo[]
     const turnInfos = sessionDataTurns.map(sessionDataTurnToInfo);
     debugLog('handleTurnsChange', { turnCount: turnInfos.length });
@@ -2074,6 +2104,60 @@ function AppContent() {
     });
   }, []);
 
+  // Track the committed text (from final transcriptions) for voice input
+  const voiceCommittedTextRef = useRef('');
+  // Track partial (uncommitted) text for display in italic
+  const [voicePartialText, setVoicePartialText] = useState('');
+  // Track whether there's any voice content (for clear button)
+  const [hasVoiceContent, setHasVoiceContent] = useState(false);
+
+  // Clear voice input state
+  const handleVoiceClear = useCallback(() => {
+    voiceCommittedTextRef.current = '';
+    setVoicePartialText('');
+    setHasVoiceContent(false);
+    messageInputRef.current?.setValue('');
+    messageInputRef.current?.focus();
+  }, []);
+
+  // Sync voice state when user manually edits the input
+  const handleInputChange = useCallback((value: string) => {
+    // Sync the committed text ref with what the user typed
+    voiceCommittedTextRef.current = value;
+    // Clear partial text since user is editing manually
+    if (voicePartialText) {
+      setVoicePartialText('');
+    }
+    // Update hasVoiceContent based on whether there's text
+    setHasVoiceContent(value.length > 0);
+  }, [voicePartialText]);
+
+  // Handle voice transcription from VoiceInput component
+  const handleVoiceTranscription = useCallback((text: string, isFinal: boolean) => {
+    if (!text) return;
+
+    if (isFinal) {
+      // For final transcription, append to committed text
+      const newCommitted = voiceCommittedTextRef.current
+        ? `${voiceCommittedTextRef.current} ${text}`
+        : text;
+      voiceCommittedTextRef.current = newCommitted;
+      messageInputRef.current?.setValue(newCommitted);
+      // Clear partial text since it's now committed
+      setVoicePartialText('');
+      setHasVoiceContent(true);
+    } else {
+      // For partial (realtime) transcription, show committed in textarea, partial in overlay
+      messageInputRef.current?.setValue(voiceCommittedTextRef.current);
+      setVoicePartialText(text);
+      // Mark as having content if there's partial text
+      if (text) setHasVoiceContent(true);
+    }
+
+    // Keep focus on input
+    messageInputRef.current?.focus();
+  }, []);
+
   // Send a message - called from MessageInput component or form submit
   // Note: messageContent is passed directly when called from MessageInput's onSubmit
   const handleSubmit = useCallback(async (eOrMessage: React.FormEvent | string) => {
@@ -2105,6 +2189,9 @@ function AppContent() {
 
     // Clear input state
     messageInputRef.current?.setValue('');
+    voiceCommittedTextRef.current = ''; // Clear voice input buffer
+    setVoicePartialText(''); // Clear partial text display
+    setHasVoiceContent(false); // Clear voice content flag
     setImageAttachments([]);
     setError(null);
 
@@ -2325,11 +2412,12 @@ function AppContent() {
                 // Start archive (with auto-completion after LLM generates summary)
                 const result = await client.sessions.startArchive(sessionId, turnIndices, true);
                 if (result.success && result.helperId) {
-                  debugLog('Archive started', { sessionId, turnIndices, helperId: result.helperId });
+                  const helperId = result.helperId; // Capture for closure
+                  debugLog('Archive started', { sessionId, turnIndices, helperId });
                   // Track archiving turns by helper ID for concurrent archive support
                   setArchivingByHelper(prev => {
                     const next = new Map(prev);
-                    next.set(result.helperId, new Set(turnIndices));
+                    next.set(helperId, new Set(turnIndices));
                     return next;
                   });
                   // archivingByHelper cleared on completion via onArchiveCompleted event
@@ -2665,29 +2753,107 @@ function AppContent() {
 
             <div className="turns-container">
               {/* Session-specific tabs */}
-              {mainContentTab === 'streaming' && (
+              {/* StreamingTurnsView is rendered for both 'streaming' and 'context' tabs
+                  to keep the useSessionData hook active. It's hidden when on context tab. */}
+              {(mainContentTab === 'streaming' || mainContentTab === 'context') && (
                 clientRef.current && connectionState === 'connected' ? (
-                  <StreamingTurnsView
-                    sessionId={selectedSessionId}
-                    client={clientRef.current}
-                    onSelectSession={setSelectedSessionId}
-                    onScrollStateChange={setScrollState}
-                    onStreamingProgressChange={handleStreamingProgressChange}
-                    onTurnsChange={handleTurnsChange}
-                    archivingTurnIndices={archivingTurnIndices}
-                  />
-                ) : (
-                  <div className="empty-state">
-                    <h2>Connecting...</h2>
-                    <p>Waiting for connection.</p>
+                  <div style={{ display: mainContentTab === 'streaming' ? 'contents' : 'none' }}>
+                    <StreamingTurnsView
+                      sessionId={selectedSessionId}
+                      client={clientRef.current}
+                      onSelectSession={setSelectedSessionId}
+                      onScrollStateChange={setScrollState}
+                      onStreamingProgressChange={handleStreamingProgressChange}
+                      onTurnsChange={handleTurnsChange}
+                      archivingTurnIndices={archivingTurnIndices}
+                      refreshKey={sessionRefreshKey}
+                    />
                   </div>
+                ) : (
+                  mainContentTab === 'streaming' && (
+                    <div className="empty-state">
+                      <h2>Connecting...</h2>
+                      <p>Waiting for connection.</p>
+                    </div>
+                  )
                 )
               )}
               {mainContentTab === 'context' && (
-                <div className="empty-state">
-                  <h2>Context</h2>
-                  <p>Context view coming soon.</p>
-                </div>
+                <ContextTabView
+                  sessionId={selectedSessionId}
+                  sessionName={selectedSession?.forkName || selectedSession?.title || undefined}
+                  turns={turns}
+                  rawTurns={rawTurns}
+                  client={clientRef.current}
+                  isLoading={connectionState !== 'connected'}
+                  archivingTurnIndices={archivingTurnIndices}
+                  // No onSelectTurn - clicking nodes just expands/collapses in context view
+                  onExchangeContextModeChange={async (turnIndices, mode) => {
+                    const client = clientRef.current;
+                    if (!client || connectionState !== 'connected' || !selectedSessionId) return;
+
+                    // Set context mode for all turns in the exchange
+                    try {
+                      for (const turnIdx of turnIndices) {
+                        await client.sessionData.setContextMode(selectedSessionId, turnIdx, mode.toLowerCase());
+                      }
+                      debugLog('Set context mode for exchange', { sessionId: selectedSessionId, turnIndices, mode });
+                    } catch (err) {
+                      console.error('Failed to set context mode:', err);
+                    }
+                  }}
+                  onExchangeAction={async (turnIndices, action) => {
+                    const client = clientRef.current;
+                    if (!client || connectionState !== 'connected' || !selectedSessionId) return;
+
+                    try {
+                      if (action === 'delete') {
+                        // Confirm before deleting
+                        const turnCount = turnIndices.length;
+                        const confirmed = await confirm({
+                          title: 'Delete Turns?',
+                          message: `Delete ${turnCount} turn${turnCount > 1 ? 's' : ''}? This action cannot be undone.`,
+                          confirmText: 'Delete',
+                          cancelText: 'Cancel',
+                          variant: 'danger',
+                        });
+                        if (!confirmed) return;
+
+                        const deletedCount = await client.sessionData.deleteTurns(selectedSessionId, turnIndices);
+                        debugLog('Deleted turns', { sessionId: selectedSessionId, turnIndices, deletedCount });
+                      } else if (action === 'archive') {
+                        // Start archive (with auto-completion after LLM generates summary)
+                        const result = await client.sessions.startArchive(selectedSessionId, turnIndices, true);
+                        if (result.success && result.helperId) {
+                          const helperId = result.helperId; // Capture for closure
+                          debugLog('Archive started', { sessionId: selectedSessionId, turnIndices, helperId });
+                          // Track archiving turns by helper ID for concurrent archive support
+                          setArchivingByHelper(prev => {
+                            const next = new Map(prev);
+                            next.set(helperId, new Set(turnIndices));
+                            return next;
+                          });
+                        } else {
+                          console.warn('Archive request failed:', result.error);
+                        }
+                      } else if (action === 'restore') {
+                        // Rehydrate archive - restore archived turns
+                        // turnIndices[0] should be the archive turn index
+                        const archiveTurnIndex = turnIndices[0];
+                        if (archiveTurnIndex !== undefined) {
+                          const result = await client.sessions.rehydrate(selectedSessionId, archiveTurnIndex);
+                          if (result.success) {
+                            debugLog('Rehydrated archive', { sessionId: selectedSessionId, turnIndex: archiveTurnIndex, turnsRestored: result.turnsRestored });
+                          } else {
+                            console.warn('Rehydrate failed:', result.error);
+                          }
+                        }
+                      }
+                    } catch (err) {
+                      console.error(`Failed to ${action} turns:`, err);
+                    }
+                  }}
+                />
               )}
               {mainContentTab === 'properties' && (
                 <PropertiesTab
@@ -2988,8 +3154,8 @@ function AppContent() {
               )}
             </div>
 
-            {/* Input area - only show on chat tab */}
-            {mainContentTab === 'streaming' && (
+            {/* Input area - show on streaming and context tabs */}
+            {(mainContentTab === 'streaming' || mainContentTab === 'context') && (
               <div className={`input-area ${selectedSession?.isStreaming ? 'queue-mode' : ''}`}>
                 {/* Image preview area */}
                 {imageAttachments.length > 0 && (
@@ -3028,6 +3194,16 @@ function AppContent() {
                   >
                     📎
                   </button>
+                  {voiceInputEnabled && (
+                    <VoiceInput
+                      serverHost={voiceInputHost}
+                      dataPort={parseInt(voiceInputPort, 10) || 8012}
+                      onTranscription={handleVoiceTranscription}
+                      disabled={connectionState !== 'connected' || isLoadingTurns}
+                      onClear={handleVoiceClear}
+                      hasContent={hasVoiceContent}
+                    />
+                  )}
                   <MessageInput
                     ref={messageInputRef}
                     placeholder={isLoadingTurns
@@ -3038,6 +3214,8 @@ function AppContent() {
                     disabled={connectionState !== 'connected' || isLoadingTurns}
                     onSubmit={handleSubmit}
                     onPaste={handlePaste}
+                    partialText={voicePartialText}
+                    onChange={handleInputChange}
                   />
                   {selectedSession?.isStreaming ? (
                     <button

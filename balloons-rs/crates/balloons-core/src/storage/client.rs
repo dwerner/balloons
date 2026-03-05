@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use crate::generated::{
-    BoardData, ColumnData, EdgeData, GoalData, PlanData, SessionBinding, SessionData,
-    SessionMetadata, TaskData, TodoData, TodoDependency, TodoPlanLink, TurnData, UserData,
-    UserPrefs, WatcherRelation,
+    BoardData, ColumnData, EdgeData, GoalData, PlanData, SessionBinding, SessionBoardAssociation,
+    SessionData, SessionMetadata, TaskData, TodoData, TodoDependency, TodoPlanLink, TurnData,
+    UserData, UserPrefs, WatcherRelation,
 };
 use super::traits::{Result, StorageEngine};
 
@@ -467,5 +467,43 @@ impl StorageClient {
     /// List all edges.
     pub async fn list_edges(&self) -> Result<Vec<EdgeData>> {
         self.engine.list_edges().await
+    }
+
+    // =========================================================================
+    // Session-Board Associations
+    // =========================================================================
+
+    /// Save a session-board association (upsert).
+    pub async fn save_session_board_association(
+        &self,
+        association: &SessionBoardAssociation,
+    ) -> Result<()> {
+        self.engine.save_session_board_association(association).await
+    }
+
+    /// Load a session-board association by ID.
+    pub async fn load_session_board_association(
+        &self,
+        id: &str,
+    ) -> Result<Option<SessionBoardAssociation>> {
+        self.engine.load_session_board_association(id).await
+    }
+
+    /// Delete a session-board association by ID.
+    pub async fn delete_session_board_association(&self, id: &str) -> Result<()> {
+        self.engine.delete_session_board_association(id).await
+    }
+
+    /// Get all board associations for a session.
+    pub async fn get_board_associations_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<SessionBoardAssociation>> {
+        self.engine.get_board_associations_for_session(session_id).await
+    }
+
+    /// List all session-board associations.
+    pub async fn list_session_board_associations(&self) -> Result<Vec<SessionBoardAssociation>> {
+        self.engine.list_session_board_associations().await
     }
 }

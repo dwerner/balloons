@@ -663,6 +663,7 @@ class SessionRunner:
         started_at: str | None = None,
         ended_at: str | None = None,
         turn_id: str | None = None,
+        parallel_group_id: str | None = None,
     ) -> Turn:
         """Create a Turn with the current exchange_id and timing info.
 
@@ -673,6 +674,7 @@ class SessionRunner:
             started_at: ISO timestamp when this turn began streaming (optional)
             ended_at: ISO timestamp when this turn completed (optional, defaults to now)
             turn_id: Pre-generated turn ID (optional, auto-generated if not provided)
+            parallel_group_id: Groups parallel tool calls from same LLM response
 
         Returns:
             Turn with exchange_id and timing fields set
@@ -687,6 +689,7 @@ class SessionRunner:
             exchange_id=self._exchange_id,
             started_at=started_at,
             ended_at=ended_at or now,  # Default ended_at to now if not specified
+            parallel_group_id=parallel_group_id,
         )
         # Use pre-generated ID if provided (e.g., from turn_started event)
         if turn_id:

@@ -95,3 +95,12 @@ backends:
 #   #   enabled: false
 #   #   secret: your-secret-key
 #   #   expiration_seconds: 86400
+
+# Voice input configuration (speech-to-text)
+# Uses RealtimeSTT server for transcription
+# See: https://github.com/KoljaB/RealtimeSTT
+# voice_input:
+#   enabled: false         # Set to true to show voice input button in web UI
+#   server_host: 192.168.0.120  # RealtimeSTT server hostname/IP
+#   data_port: 8012        # WebSocket port for audio streaming
+#   control_port: 8011     # WebSocket port for control messages (optional)

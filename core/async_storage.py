@@ -627,6 +627,7 @@ class AsyncStorage:
             "sentiment": turn.sentiment.value if turn.sentiment else None,
             "started_at": turn.started_at,
             "ended_at": turn.ended_at,
+            "parallel_group_id": turn.parallel_group_id,
         }
 
     def _serialize_content_block(self, block: ContentBlock) -> dict:
@@ -884,6 +885,7 @@ class AsyncStorage:
             sentiment=sentiment,
             started_at=data.get("started_at"),
             ended_at=data.get("ended_at"),
+            parallel_group_id=data.get("parallel_group_id"),
             id=turn_id,
             # Loaded turns start clean - they're fresh from storage
             _dirty=False,

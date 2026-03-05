@@ -134,7 +134,7 @@ export const TurnCard = memo(function TurnCard({ turn, toolResultMap = EMPTY_MAP
 
   // Non-interactive system cards (includes legacy proposal block types)
   if (SYSTEM_TYPES.has(blockType)) {
-    return <SystemCard turn={turn} />;
+    return <SystemCard turn={turn} sessionId={sessionId} />;
   }
 
   // Default to text card for text blocks and unknown types

@@ -10,11 +10,12 @@
  * - See docs/url-routing.md for the full routing design
  */
 
-import React, { memo, useCallback } from 'react';
+import React, { memo, useCallback, useState } from 'react';
 import type { SoundInfo } from '../../../../generated/types';
 import type { SoundConfig } from '../../hooks/useSoundNotifications';
 import { useTheme } from '../layout/ThemeContext';
 import { useWakeLock } from '../../hooks/useWakeLock';
+import { usePreferences } from '../layout/PreferencesContext';
 import './SettingsTab.css';
 
 interface SettingsTabProps {
@@ -58,6 +59,32 @@ export const SettingsTab = memo(function SettingsTab({
   // Theme and wake lock hooks
   const { resolvedTheme, setTheme } = useTheme();
   const { isActive: wakeLockActive, isSupported: wakeLockSupported, toggle: toggleWakeLock } = useWakeLock();
+
+  // Voice input preferences
+  const {
+    voiceInputEnabled,
+    voiceInputHost,
+    voiceInputPort,
+    setPreference,
+    setStringPreference,
+  } = usePreferences();
+
+  // Local state for voice input form inputs (to avoid constant saves while typing)
+  const [localHost, setLocalHost] = useState(voiceInputHost);
+  const [localPort, setLocalPort] = useState(voiceInputPort);
+
+  // Save voice input settings when blurred
+  const handleVoiceHostBlur = useCallback(() => {
+    if (localHost !== voiceInputHost) {
+      setStringPreference('voiceInputHost', localHost);
+    }
+  }, [localHost, voiceInputHost, setStringPreference]);
+
+  const handleVoicePortBlur = useCallback(() => {
+    if (localPort !== voiceInputPort) {
+      setStringPreference('voiceInputPort', localPort);
+    }
+  }, [localPort, voiceInputPort, setStringPreference]);
 
   // Handle volume change
   const handleVolumeChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -144,6 +171,87 @@ export const SettingsTab = memo(function SettingsTab({
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      </div>
+
+      {/* Voice Input Settings Card */}
+      <div className="settings-card">
+        <div className="settings-card__header">
+          <h3 className="settings-card__title">Voice Input</h3>
+        </div>
+
+        <div className="settings-card__content">
+          <div className="appearance-settings">
+            {/* Enable/disable toggle */}
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Enable Voice Input</span>
+                <span className="appearance-settings__label-description">
+                  Show microphone button in input area for speech-to-text
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <label className="appearance-settings__toggle">
+                  <input
+                    type="checkbox"
+                    checked={voiceInputEnabled}
+                    onChange={() => setPreference('voiceInputEnabled', !voiceInputEnabled)}
+                  />
+                  <span className="appearance-settings__toggle-slider" />
+                </label>
+              </div>
+            </div>
+
+            {/* Server host */}
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">STT Server Host</span>
+                <span className="appearance-settings__label-description">
+                  RealtimeSTT server hostname or IP address
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <input
+                  type="text"
+                  className="appearance-settings__input"
+                  value={localHost}
+                  onChange={(e) => setLocalHost(e.target.value)}
+                  onBlur={handleVoiceHostBlur}
+                  placeholder="192.168.0.120"
+                  disabled={!voiceInputEnabled}
+                />
+              </div>
+            </div>
+
+            {/* Server port */}
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">STT Server Port</span>
+                <span className="appearance-settings__label-description">
+                  WebSocket port for audio streaming (default: 8012)
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <input
+                  type="text"
+                  className="appearance-settings__input"
+                  value={localPort}
+                  onChange={(e) => setLocalPort(e.target.value)}
+                  onBlur={handleVoicePortBlur}
+                  placeholder="8012"
+                  disabled={!voiceInputEnabled}
+                />
+              </div>
+            </div>
+
+            {/* Info about setting up RealtimeSTT */}
+            <div className="appearance-settings__info">
+              <span className="appearance-settings__info-text">
+                Requires a <a href="https://github.com/KoljaB/RealtimeSTT" target="_blank" rel="noopener noreferrer">RealtimeSTT</a> server.
+                Run with: <code>stt-server --control 8011 --data 8012</code>
+              </span>
+            </div>
           </div>
         </div>
       </div>

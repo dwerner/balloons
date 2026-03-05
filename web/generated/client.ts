@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-03-03T11:24:00.049676
+// Generated: 2026-03-03T16:02:10.661599
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -724,6 +724,20 @@ export interface SessionManagerService {
   mergeSession(forkSessionId: string, mergeSummary: string, filesChanged?: string[] | null, keyAccomplishments?: string[] | null, reason?: string): Promise<Types.MergeSessionResult>;
 
   /**
+   * Restore archived turns back into the conversation.
+   * 
+   * Replaces the archive marker with the original messages.
+   * 
+   * Args:
+   * session_id: ID of the session containing the archive
+   * turn_index: Index of the archive turn to rehydrate
+   * 
+   * Returns:
+   * RehydrateResult with restoration details
+   */
+  rehydrate(sessionId: string, turnIndex: number): Promise<Types.RehydrateResult>;
+
+  /**
    * Respond to a fork proposal by accepting or rejecting it.
    * 
    * When accepting, optionally provide modified context_plan and initial_prompt.
@@ -1176,6 +1190,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   async mergeSession(forkSessionId: string, mergeSummary: string, filesChanged?: string[] | null, keyAccomplishments?: string[] | null, reason?: string): Promise<Types.MergeSessionResult> {
     return this.call('mergeSession', { forkSessionId: forkSessionId, mergeSummary: mergeSummary, filesChanged: filesChanged, keyAccomplishments: keyAccomplishments, reason: reason });
+  }
+
+  async rehydrate(sessionId: string, turnIndex: number): Promise<Types.RehydrateResult> {
+    return this.call('rehydrate', { sessionId: sessionId, turnIndex: turnIndex });
   }
 
   async respondToForkProposal(sessionId: string, proposalId: string, accepted: boolean, contextPlan?: Record<string, unknown>[] | null, initialPrompt?: string | null, name?: string | null, description?: string | null, startStreaming?: boolean): Promise<Types.RespondToForkProposalResult> {
@@ -2787,6 +2805,13 @@ export interface SessionDataEvents {
    */
   sessionDataTurnFinished(callback: (data: Types.SessionTurnFinishedEvent) => void): Unsubscribe;
 
+  /**
+   * Emitted when turns are deleted from a session (e.g., during archive).
+   * 
+   * Clients should remove the deleted turns from their local state.
+   */
+  sessionDataTurnsDeleted(callback: (data: Types.SessionTurnsDeletedEvent) => void): Unsubscribe;
+
 }
 
 export class SessionDataServiceClient implements SessionDataService {
@@ -2965,6 +2990,10 @@ export class SessionDataServiceClient implements SessionDataService {
 
   sessionDataTurnFinished(callback: (data: Types.SessionTurnFinishedEvent) => void): Unsubscribe {
     return this.subscribe('sessionDataTurnFinished', callback);
+  }
+
+  sessionDataTurnsDeleted(callback: (data: Types.SessionTurnsDeletedEvent) => void): Unsubscribe {
+    return this.subscribe('sessionDataTurnsDeleted', callback);
   }
 
 }

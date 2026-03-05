@@ -349,6 +349,18 @@ class CompleteArchiveResult:
 
 @ws_type
 @dataclass
+class RehydrateResult:
+    """Result of rehydrating (restoring) archived turns."""
+
+    success: bool
+    session_id: str = ""
+    turn_index: int = 0  # Index where the archive turn was
+    turns_restored: int = 0  # Number of turns restored
+    error: str = ""
+
+
+@ws_type
+@dataclass
 class StartSessionReviewResult:
     """Result of starting a session review operation.
 
@@ -703,6 +715,25 @@ class SessionManagerService:
             return
 
         self._session_data_service.emit_session_removed(session_id)
+
+    async def _notify_session_data_service(self, method: str, **kwargs) -> None:
+        """Call a method on SessionDataService.
+
+        Helper for emitting turn-level events from session operations.
+
+        Args:
+            method: Method name to call on SessionDataService
+            **kwargs: Arguments to pass to the method
+        """
+        if self._session_data_service is None:
+            return
+
+        func = getattr(self._session_data_service, method, None)
+        if func:
+            if asyncio.iscoroutinefunction(func):
+                await func(**kwargs)
+            else:
+                func(**kwargs)
 
     def _get_turns_grouped_by_exchange(self, session: Any) -> list[list[tuple[int, Any]]]:
         """Group session turns by exchange_id, including their indices.
@@ -1510,7 +1541,7 @@ class SessionManagerService:
                             "turns_archived": 0,
                         }
                         for handler in self._event_handlers:
-                            handler("onArchiveCompleted", archive_error_data)
+                            handler("archiveCompleted", archive_error_data)
                 except Exception as e:
                     debug_log.warning(
                         f"Auto-complete archive failed with exception: {e}",
@@ -1527,7 +1558,7 @@ class SessionManagerService:
                         "turns_archived": 0,
                     }
                     for handler in self._event_handlers:
-                        handler("onArchiveCompleted", archive_error_data)
+                        handler("archiveCompleted", archive_error_data)
 
             # Auto-complete session review if flagged to do so
             if (
@@ -1927,6 +1958,16 @@ class SessionManagerService:
             import sys
             print(f"[TURN_ORDER] tool_use_turn_started: order={turn_idx}, id={turn_id[:8] if turn_id else 'none'}, tool={data.get('tool_name', '?')}, parallel_group={ctx.parallel_group_id[:8] if ctx.parallel_group_id else 'none'}", file=sys.stderr, flush=True)
 
+            # Update the turn's parallel_group_id (turn was created by runner without it)
+            if turn_id and ctx.parallel_group_id:
+                session = self._manager.get_session(session_id)
+                if session:
+                    for turn in session.turns:
+                        if turn.id == turn_id:
+                            turn.parallel_group_id = ctx.parallel_group_id
+                            turn.mark_dirty()  # Mark for save
+                            break
+
             # Notify observers with typed event
             await self._notify_observers(
                 "on_turn_created",
@@ -2056,6 +2097,16 @@ class SessionManagerService:
             ctx.tool_turn_ids[(tool_use_id, "tool_result")] = turn_id
             import sys
             print(f"[TURN_ORDER] tool_result_turn_started: order={turn_idx}, id={turn_id[:8] if turn_id else 'none'}, parallel_group={ctx.parallel_group_id[:8] if ctx.parallel_group_id else 'none'}", file=sys.stderr, flush=True)
+
+            # Update the turn's parallel_group_id (turn was created by runner without it)
+            if turn_id and ctx.parallel_group_id:
+                session = self._manager.get_session(session_id)
+                if session:
+                    for turn in session.turns:
+                        if turn.id == turn_id:
+                            turn.parallel_group_id = ctx.parallel_group_id
+                            turn.mark_dirty()  # Mark for save
+                            break
 
             # Notify observers with typed event
             await self._notify_observers(
@@ -4722,6 +4773,45 @@ Summary:""")
         session.turns = result.new_turns
         await session.save()
 
+        # Emit turn-level events so clients can update incrementally
+        # 1. Emit turns deleted event for the archived turns
+        if result.deleted_turn_ids:
+            await self._notify_session_data_service(
+                "emit_turns_deleted",
+                session_id=session_id,
+                turn_indices=result.deleted_turn_indices,
+                turn_ids=result.deleted_turn_ids,
+            )
+
+        # 2. Emit turn created + finished events for the new archive turn
+        if result.archive_turn:
+            from service.session_events import TurnCreatedEvent, TurnFinishedEvent
+            await self._notify_observers(
+                "on_turn_created",
+                TurnCreatedEvent(
+                    session_id=session_id,
+                    turn_id=result.archive_turn.id,
+                    turn_index=turn_start,
+                    role="system",
+                    exchange_id=result.archive_turn.exchange_id or "",
+                    content_block_type="archive",
+                ),
+            )
+            # Also emit turn finished with the full content block
+            # This ensures the client gets the archive data (message_count, summary, etc.)
+            await self._notify_observers(
+                "on_turn_finished",
+                TurnFinishedEvent(
+                    session_id=session_id,
+                    turn_id=result.archive_turn.id,
+                    turn_index=turn_start,
+                    role="system",
+                    content=result.archive_turn.content_block.summary if hasattr(result.archive_turn.content_block, 'summary') else "",
+                    tokens=result.archive_turn.tokens,
+                    content_block=result.archive_turn.content_block,
+                ),
+            )
+
         # Emit session updated event for React UI
         self._emit_session_updated(session, is_streaming=False)
 
@@ -4751,14 +4841,97 @@ Summary:""")
             "helper_id": helper_id,
         }
         debug_log.info(
-            f"Emitting onArchiveCompleted event to {len(self._event_handlers)} handlers",
+            f"Emitting archiveCompleted event to {len(self._event_handlers)} handlers",
             category=Category.SESSION,
             details=archive_event_data,
         )
         for handler in self._event_handlers:
-            handler("onArchiveCompleted", archive_event_data)
+            handler("archiveCompleted", archive_event_data)
 
         return archive_result
+
+    @ws_expose
+    async def rehydrate(
+        self,
+        session_id: str,
+        turn_index: int,
+    ) -> RehydrateResult:
+        """Restore archived turns back into the conversation.
+
+        Replaces the archive marker with the original messages.
+
+        Args:
+            session_id: ID of the session containing the archive
+            turn_index: Index of the archive turn to rehydrate
+
+        Returns:
+            RehydrateResult with restoration details
+        """
+        from core.command_executor import CommandExecutor
+
+        # Load the session
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                return RehydrateResult(success=False, error=f"Session {session_id} not found")
+
+        # Use command executor to perform rehydration
+        executor = CommandExecutor()
+        result = executor.prepare_rehydrate(
+            session=session,
+            turn_index=turn_index,
+        )
+
+        if not result.success:
+            return RehydrateResult(success=False, error=result.error or "Rehydrate failed")
+
+        # Emit turn-level events so clients can update incrementally
+        # 1. Emit turn deleted event for the archive turn
+        if result.deleted_turn_id:
+            await self._notify_session_data_service(
+                "emit_turns_deleted",
+                session_id=session_id,
+                turn_indices=[result.deleted_turn_index],
+                turn_ids=[result.deleted_turn_id],
+            )
+
+        # 2. Emit turn created events for each restored turn
+        from service.session_events import TurnCreatedEvent
+        for i, turn in enumerate(result.restored_turns):
+            await self._notify_observers(
+                "on_turn_created",
+                TurnCreatedEvent(
+                    session_id=session_id,
+                    turn_id=turn.id,
+                    turn_index=turn_index + i,
+                    role=turn.role,
+                    exchange_id=turn.exchange_id or "",
+                    content_block_type=turn.content_block.type if hasattr(turn.content_block, 'type') else "text",
+                ),
+            )
+
+        # Update session with new turns
+        session.turns = result.new_turns
+        await session.save()
+
+        # Emit session updated event for React UI
+        self._emit_session_updated(session, is_streaming=False)
+
+        # Emit session updated event
+        self._emit_event(SessionManagerEvent.SESSION_UPDATED, session_id)
+
+        debug_log.info(
+            f"Rehydrate complete: session={session_id[:8]}, restored={result.restored_count} turns",
+            category=Category.SESSION,
+        )
+
+        return RehydrateResult(
+            success=True,
+            session_id=session_id,
+            turn_index=turn_index,
+            turns_restored=result.restored_count,
+        )
 
     @ws_expose
     async def find_switch_target(
@@ -5949,7 +6122,7 @@ Summary:""")
             "success": True,
         }
         for handler in self._event_handlers:
-            handler("onSessionReviewCompleted", review_completed_data)
+            handler("sessionReviewCompleted", review_completed_data)
 
         return result
 

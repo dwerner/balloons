@@ -6,9 +6,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::generated::{
-    BoardData, ColumnData, EdgeData, GoalData, PlanData, SessionBinding, SessionData,
-    SessionMetadata, TaskData, TodoData, TodoDependency, TodoPlanLink, TurnData, TurnOrder,
-    UserData, UserPrefs, WatcherRelation,
+    BoardData, ColumnData, EdgeData, GoalData, PlanData, SessionBinding, SessionBoardAssociation,
+    SessionData, SessionMetadata, TaskData, TodoData, TodoDependency, TodoPlanLink, TurnData,
+    TurnOrder, UserData, UserPrefs, WatcherRelation,
 };
 use super::traits::{Error, Result, StorageEngine};
 
@@ -172,6 +172,10 @@ pub struct LmdbEngine {
     edges: Database<Str, Bytes>,              // edge_id → EdgeData
     edges_by_source: Database<Str, Bytes>,    // "source_type:source_id" → [edge_id]
     edges_by_target: Database<Str, Bytes>,    // "target_type:target_id" → [edge_id]
+
+    // Session-board associations
+    session_board_associations: Database<Str, Bytes>,  // assoc_id → SessionBoardAssociation
+    boards_by_session: Database<Str, Bytes>,           // session_id → [assoc_id]
 }
 
 /// Key used for session history in the metadata table
@@ -196,11 +200,11 @@ impl LmdbEngine {
         // Create directory if it doesn't exist
         std::fs::create_dir_all(path)?;
 
-        // Database count: 4 session + 3 goal entities + 5 goal indexes + 3 binding + 3 watcher + 2 users + 3 kanban + 3 graph = 26
+        // Database count: 4 session + 3 goal entities + 5 goal indexes + 3 binding + 3 watcher + 2 users + 3 kanban + 3 graph + 2 session-board = 28
         let env = unsafe {
             EnvOpenOptions::new()
                 .map_size(map_size)
-                .max_dbs(26)
+                .max_dbs(28)
                 .open(path)
                 .map_err(|e| Error::Database(e.to_string()))?
         };
@@ -304,6 +308,14 @@ impl LmdbEngine {
             .create_database(&mut wtxn, Some("edges_by_target"))
             .map_err(|e| Error::Database(e.to_string()))?;
 
+        // Session-board association tables
+        let session_board_associations = env
+            .create_database(&mut wtxn, Some("session_board_associations"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+        let boards_by_session = env
+            .create_database(&mut wtxn, Some("boards_by_session"))
+            .map_err(|e| Error::Database(e.to_string()))?;
+
         wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
 
         let engine = Self {
@@ -350,6 +362,10 @@ impl LmdbEngine {
             edges,
             edges_by_source,
             edges_by_target,
+
+            // Session-board associations
+            session_board_associations,
+            boards_by_session,
         };
 
         // Ensure schema version is compatible and up-to-date
@@ -2553,6 +2569,223 @@ impl StorageEngine for LmdbEngine {
         }
 
         Ok(edges)
+    }
+
+    // =========================================================================
+    // Session-Board Associations
+    // =========================================================================
+
+    async fn save_session_board_association(
+        &self,
+        association: &SessionBoardAssociation,
+    ) -> Result<()> {
+        let bytes =
+            serde_json::to_vec(association).map_err(|e| Error::Serialization(e.to_string()))?;
+
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        // Check if association already exists to handle session_id changes
+        let old_association: Option<SessionBoardAssociation> = match self
+            .session_board_associations
+            .get(&wtxn, &association.id)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
+            Some(old_bytes) => Some(
+                serde_json::from_slice(old_bytes).map_err(|e| Error::Serialization(e.to_string()))?,
+            ),
+            None => None,
+        };
+
+        // Save the association
+        self.session_board_associations
+            .put(&mut wtxn, &association.id, &bytes)
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        // Handle index updates if session_id changed
+        if let Some(ref old) = old_association {
+            if old.session_id != association.session_id {
+                // Remove from old session index
+                if let Some(index_bytes) = self
+                    .boards_by_session
+                    .get(&wtxn, &old.session_id)
+                    .map_err(|e| Error::Database(e.to_string()))?
+                {
+                    let mut assoc_ids: Vec<String> = serde_json::from_slice(index_bytes)
+                        .map_err(|e| Error::Serialization(e.to_string()))?;
+                    assoc_ids.retain(|id| id != &association.id);
+                    if assoc_ids.is_empty() {
+                        self.boards_by_session
+                            .delete(&mut wtxn, &old.session_id)
+                            .map_err(|e| Error::Database(e.to_string()))?;
+                    } else {
+                        let new_bytes = serde_json::to_vec(&assoc_ids)
+                            .map_err(|e| Error::Serialization(e.to_string()))?;
+                        self.boards_by_session
+                            .put(&mut wtxn, &old.session_id, &new_bytes)
+                            .map_err(|e| Error::Database(e.to_string()))?;
+                    }
+                }
+            }
+        }
+
+        // Update boards_by_session index
+        let mut session_assoc_ids: Vec<String> = match self
+            .boards_by_session
+            .get(&wtxn, &association.session_id)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
+            Some(index_bytes) => {
+                serde_json::from_slice(index_bytes).map_err(|e| Error::Serialization(e.to_string()))?
+            }
+            None => vec![],
+        };
+
+        if !session_assoc_ids.contains(&association.id) {
+            session_assoc_ids.push(association.id.clone());
+            let index_bytes =
+                serde_json::to_vec(&session_assoc_ids).map_err(|e| Error::Serialization(e.to_string()))?;
+            self.boards_by_session
+                .put(&mut wtxn, &association.session_id, &index_bytes)
+                .map_err(|e| Error::Database(e.to_string()))?;
+        }
+
+        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn load_session_board_association(
+        &self,
+        id: &str,
+    ) -> Result<Option<SessionBoardAssociation>> {
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        match self
+            .session_board_associations
+            .get(&rtxn, id)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
+            Some(bytes) => {
+                let data: SessionBoardAssociation = serde_json::from_slice(bytes)
+                    .map_err(|e| Error::Serialization(e.to_string()))?;
+                Ok(Some(data))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_session_board_association(&self, id: &str) -> Result<()> {
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        // Get the association to find its session for index cleanup
+        if let Some(bytes) = self
+            .session_board_associations
+            .get(&wtxn, id)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
+            let assoc: SessionBoardAssociation = serde_json::from_slice(bytes)
+                .map_err(|e| Error::Serialization(e.to_string()))?;
+
+            // Remove from boards_by_session index
+            if let Some(index_bytes) = self
+                .boards_by_session
+                .get(&wtxn, &assoc.session_id)
+                .map_err(|e| Error::Database(e.to_string()))?
+            {
+                let mut assoc_ids: Vec<String> = serde_json::from_slice(index_bytes)
+                    .map_err(|e| Error::Serialization(e.to_string()))?;
+                assoc_ids.retain(|aid| aid != id);
+                if assoc_ids.is_empty() {
+                    self.boards_by_session
+                        .delete(&mut wtxn, &assoc.session_id)
+                        .map_err(|e| Error::Database(e.to_string()))?;
+                } else {
+                    let new_bytes = serde_json::to_vec(&assoc_ids)
+                        .map_err(|e| Error::Serialization(e.to_string()))?;
+                    self.boards_by_session
+                        .put(&mut wtxn, &assoc.session_id, &new_bytes)
+                        .map_err(|e| Error::Database(e.to_string()))?;
+                }
+            }
+        }
+
+        // Delete the association itself
+        self.session_board_associations
+            .delete(&mut wtxn, id)
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        wtxn.commit().map_err(|e| Error::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn get_board_associations_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<SessionBoardAssociation>> {
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        let assoc_ids: Vec<String> = match self
+            .boards_by_session
+            .get(&rtxn, session_id)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
+            Some(bytes) => {
+                serde_json::from_slice(bytes).map_err(|e| Error::Serialization(e.to_string()))?
+            }
+            None => return Ok(vec![]),
+        };
+
+        let mut associations = Vec::with_capacity(assoc_ids.len());
+        for id in assoc_ids {
+            if let Some(bytes) = self
+                .session_board_associations
+                .get(&rtxn, &id)
+                .map_err(|e| Error::Database(e.to_string()))?
+            {
+                let assoc: SessionBoardAssociation = serde_json::from_slice(bytes)
+                    .map_err(|e| Error::Serialization(e.to_string()))?;
+                associations.push(assoc);
+            }
+        }
+
+        // Sort by created_at
+        associations.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
+        Ok(associations)
+    }
+
+    async fn list_session_board_associations(&self) -> Result<Vec<SessionBoardAssociation>> {
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| Error::Database(e.to_string()))?;
+
+        let mut associations = Vec::new();
+        for entry in self
+            .session_board_associations
+            .iter(&rtxn)
+            .map_err(|e| Error::Database(e.to_string()))?
+        {
+            let (_key, value) = entry.map_err(|e| Error::Database(e.to_string()))?;
+            let data: SessionBoardAssociation = serde_json::from_slice(value)
+                .map_err(|e| Error::Serialization(e.to_string()))?;
+            associations.push(data);
+        }
+
+        Ok(associations)
     }
 }
 

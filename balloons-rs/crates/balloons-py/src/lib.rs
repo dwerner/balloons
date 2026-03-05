@@ -10,9 +10,9 @@ use pyo3::types::PyAny;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use balloons_core::{
-    BoardData, ColumnData, EdgeData, GoalData, LmdbEngine, PlanData, SessionBinding, SessionData,
-    StorageClient, TaskData, TodoData, TodoDependency, TodoPlanLink, UserData, UserPrefs,
-    WatcherRelation,
+    BoardData, ColumnData, EdgeData, GoalData, LmdbEngine, PlanData, SessionBinding,
+    SessionBoardAssociation, SessionData, StorageClient, TaskData, TodoData, TodoDependency,
+    TodoPlanLink, UserData, UserPrefs, WatcherRelation,
 };
 use balloons_supervisor::{ProcessMode, ProcessSupervisor, StartRequest};
 
@@ -1567,6 +1567,112 @@ impl Storage {
             serde_json::to_string(&edges).map_err(|e| PyRuntimeError::new_err(e.to_string()))
         })
     }
+
+    // =========================================================================
+    // Session-Board Associations
+    // =========================================================================
+
+    /// Save a session-board association from JSON string.
+    fn save_session_board_association(
+        &self,
+        py: Python<'_>,
+        association_json: &str,
+    ) -> PyResult<()> {
+        let association: SessionBoardAssociation = serde_json::from_str(association_json)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        let client = Arc::clone(&self.client);
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor
+                .spawn_on_any(async move { client.save_session_board_association(&association).await });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Load a session-board association by ID. Returns JSON string or None.
+    fn load_session_board_association(
+        &self,
+        py: Python<'_>,
+        id: &str,
+    ) -> PyResult<Option<String>> {
+        let client = Arc::clone(&self.client);
+        let id = id.to_string();
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task =
+                executor.spawn_on_any(async move { client.load_session_board_association(&id).await });
+            let result = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+            match result {
+                Some(data) => {
+                    let json = serde_json::to_string(&data)
+                        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+                    Ok(Some(json))
+                }
+                None => Ok(None),
+            }
+        })
+    }
+
+    /// Delete a session-board association by ID.
+    fn delete_session_board_association(&self, py: Python<'_>, id: &str) -> PyResult<()> {
+        let client = Arc::clone(&self.client);
+        let id = id.to_string();
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor
+                .spawn_on_any(async move { client.delete_session_board_association(&id).await });
+            future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// Get all board associations for a session. Returns JSON array.
+    fn get_board_associations_for_session(
+        &self,
+        py: Python<'_>,
+        session_id: &str,
+    ) -> PyResult<String> {
+        let client = Arc::clone(&self.client);
+        let session_id = session_id.to_string();
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task = executor.spawn_on_any(async move {
+                client.get_board_associations_for_session(&session_id).await
+            });
+            let associations = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+            serde_json::to_string(&associations).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
+
+    /// List all session-board associations. Returns JSON array.
+    fn list_session_board_associations(&self, py: Python<'_>) -> PyResult<String> {
+        let client = Arc::clone(&self.client);
+
+        py.detach(|| {
+            let mut executor = self.executor.lock().unwrap();
+            let task =
+                executor.spawn_on_any(async move { client.list_session_board_associations().await });
+            let associations = future::block_on(task)
+                .map_err(|e| PyRuntimeError::new_err(format!("executor error: {:?}", e)))?
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+            serde_json::to_string(&associations).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
+    }
 }
 
 // =============================================================================
@@ -2346,11 +2452,10 @@ impl BrowserConfig {
 /// Python-facing browser for web automation.
 ///
 /// Uses surfer-rs for browser automation via WebDriver protocol.
-/// All operations are synchronous from Python's perspective but release
-/// the GIL to allow other Python threads to run.
+/// All async operations return Python awaitables via pyo3-async-runtimes.
 #[pyclass]
 struct Browser {
-    inner: Option<RustBrowser>,
+    inner: Arc<async_lock::Mutex<Option<RustBrowser>>>,
 }
 
 #[pymethods]
@@ -2361,225 +2466,313 @@ impl Browser {
     #[new]
     fn new(config: &BrowserConfig) -> Self {
         Self {
-            inner: Some(RustBrowser::new(config.inner.clone())),
+            inner: Arc::new(async_lock::Mutex::new(Some(RustBrowser::new(
+                config.inner.clone(),
+            )))),
         }
     }
 
     /// Get the browser ID.
-    #[getter]
-    fn id(&self) -> PyResult<String> {
-        self.inner
-            .as_ref()
-            .map(|b| b.id().to_string())
-            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to the browser ID string.
+    fn id<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            guard
+                .as_ref()
+                .map(|b| b.id().to_string())
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))
+        })
     }
 
     /// Check if browser is connected.
-    fn is_connected(&self) -> bool {
-        self.inner.as_ref().map(|b| b.is_connected()).unwrap_or(false)
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to a boolean.
+    fn is_connected<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            Ok(guard.as_ref().map(|b| b.is_connected()).unwrap_or(false))
+        })
     }
 
     /// Connect to the browser (starts webdriver and browser).
     ///
     /// This must be called before any navigation or interaction methods.
-    fn connect(&mut self, py: Python<'_>) -> PyResult<()> {
-        let browser = self
-            .inner
-            .as_mut()
-            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
-
-        py.detach(|| {
-            smol::block_on(async { browser.connect().await })
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn connect<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let mut guard = inner.lock().await;
+            let browser = guard
+                .as_mut()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .connect()
+                .await
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
     }
 
     /// Disconnect and close the browser.
-    fn disconnect(&mut self, py: Python<'_>) -> PyResult<()> {
-        let browser = self
-            .inner
-            .as_mut()
-            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
-
-        py.detach(|| {
-            smol::block_on(async { browser.disconnect().await })
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn disconnect<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let mut guard = inner.lock().await;
+            let browser = guard
+                .as_mut()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .disconnect()
+                .await
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
     }
 
     /// Navigate to a URL.
-    fn goto(&self, py: Python<'_>, url: &str) -> PyResult<()> {
-        let browser = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn goto<'py>(&self, py: Python<'py>, url: &str) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
         let url = url.to_string();
-
-        py.detach(|| {
-            smol::block_on(async { browser.goto(&url).await })
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .goto(&url)
+                .await
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
     }
 
     /// Go back in history.
-    fn back(&self, py: Python<'_>) -> PyResult<()> {
-        let browser = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
-
-        py.detach(|| {
-            smol::block_on(async { browser.back().await })
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn back<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .back()
+                .await
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
     }
 
     /// Go forward in history.
-    fn forward(&self, py: Python<'_>) -> PyResult<()> {
-        let browser = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
-
-        py.detach(|| {
-            smol::block_on(async { browser.forward().await })
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn forward<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .forward()
+                .await
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
     }
 
     /// Refresh the page.
-    fn refresh(&self, py: Python<'_>) -> PyResult<()> {
-        let browser = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
-
-        py.detach(|| {
-            smol::block_on(async { browser.refresh().await })
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn refresh<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .refresh()
+                .await
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
     }
 
     /// Get the current URL.
-    fn url(&self, py: Python<'_>) -> PyResult<String> {
-        let browser = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
-
-        py.detach(|| {
-            smol::block_on(async { browser.url().await })
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to the URL string.
+    fn url<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .url()
+                .await
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
     }
 
     /// Get the page title.
-    fn title(&self, py: Python<'_>) -> PyResult<String> {
-        let browser = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
-
-        py.detach(|| {
-            smol::block_on(async { browser.title().await })
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to the title string.
+    fn title<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .title()
+                .await
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
     }
 
     /// Get the page HTML.
-    fn html(&self, py: Python<'_>) -> PyResult<String> {
-        let browser = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
-
-        py.detach(|| {
-            smol::block_on(async { browser.html().await })
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to the HTML string.
+    fn html<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .html()
+                .await
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
     }
 
     /// Take a screenshot (returns PNG bytes).
-    fn screenshot(&self, py: Python<'_>) -> PyResult<Vec<u8>> {
-        let browser = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
-
-        py.detach(|| {
-            smol::block_on(async { browser.screenshot().await })
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to PNG bytes.
+    fn screenshot<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .screenshot()
+                .await
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
     }
 
     /// Click an element by CSS selector.
-    fn click(&self, py: Python<'_>, selector: &str) -> PyResult<()> {
-        let browser = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn click<'py>(&self, py: Python<'py>, selector: &str) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
         let selector = selector.to_string();
-
-        py.detach(|| {
-            smol::block_on(async { browser.click(&selector).await })
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .click(&selector)
+                .await
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
     }
 
     /// Fill an input by CSS selector (clears first, then types).
-    fn fill(&self, py: Python<'_>, selector: &str, text: &str) -> PyResult<()> {
-        let browser = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn fill<'py>(&self, py: Python<'py>, selector: &str, text: &str) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
         let selector = selector.to_string();
         let text = text.to_string();
-
-        py.detach(|| {
-            smol::block_on(async { browser.fill(&selector, &text).await })
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .fill(&selector, &text)
+                .await
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
     }
 
     /// Type text into an element (without clearing first).
-    fn type_text(&self, py: Python<'_>, selector: &str, text: &str) -> PyResult<()> {
-        let browser = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn type_text<'py>(&self, py: Python<'py>, selector: &str, text: &str) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
         let selector = selector.to_string();
         let text = text.to_string();
-
-        py.detach(|| {
-            smol::block_on(async { browser.type_text(&selector, &text).await })
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .type_text(&selector, &text)
+                .await
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
     }
 
     /// Submit the currently focused form.
-    fn submit(&self, py: Python<'_>) -> PyResult<()> {
-        let browser = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
-
-        py.detach(|| {
-            smol::block_on(async { browser.submit().await })
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn submit<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .submit()
+                .await
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
     }
 
     /// Discover all input elements on the page.
     ///
-    /// Returns a JSON array of input info objects.
-    fn inputs(&self, py: Python<'_>) -> PyResult<String> {
-        let browser = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
-
-        py.detach(|| {
-            let inputs = smol::block_on(async { browser.inputs().await })
+    /// Returns:
+    ///     Awaitable that resolves to a JSON array of input info objects.
+    fn inputs<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            let inputs = browser
+                .inputs()
+                .await
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))?;
             serde_json::to_string(&inputs)
                 .map_err(|e| PyRuntimeError::new_err(format!("JSON error: {}", e)))
@@ -2588,15 +2781,18 @@ impl Browser {
 
     /// Discover all button elements on the page.
     ///
-    /// Returns a JSON array of button info objects.
-    fn buttons(&self, py: Python<'_>) -> PyResult<String> {
-        let browser = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
-
-        py.detach(|| {
-            let buttons = smol::block_on(async { browser.buttons().await })
+    /// Returns:
+    ///     Awaitable that resolves to a JSON array of button info objects.
+    fn buttons<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            let buttons = browser
+                .buttons()
+                .await
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))?;
             serde_json::to_string(&buttons)
                 .map_err(|e| PyRuntimeError::new_err(format!("JSON error: {}", e)))
@@ -2608,16 +2804,19 @@ impl Browser {
     /// Args:
     ///     limit: Optional maximum number of links to return
     ///
-    /// Returns a JSON array of link info objects.
+    /// Returns:
+    ///     Awaitable that resolves to a JSON array of link info objects.
     #[pyo3(signature = (limit=None))]
-    fn links(&self, py: Python<'_>, limit: Option<usize>) -> PyResult<String> {
-        let browser = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
-
-        py.detach(|| {
-            let links = smol::block_on(async { browser.links(limit).await })
+    fn links<'py>(&self, py: Python<'py>, limit: Option<usize>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            let links = browser
+                .links(limit)
+                .await
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))?;
             serde_json::to_string(&links)
                 .map_err(|e| PyRuntimeError::new_err(format!("JSON error: {}", e)))
@@ -2625,45 +2824,551 @@ impl Browser {
     }
 
     /// Click a button by index (from buttons() discovery).
-    fn click_button(&self, py: Python<'_>, index: usize) -> PyResult<()> {
-        let browser = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
-
-        py.detach(|| {
-            smol::block_on(async { browser.click_button(index).await })
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn click_button<'py>(&self, py: Python<'py>, index: usize) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .click_button(index)
+                .await
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
     }
 
     /// Set an input by index (from inputs() discovery).
-    fn set_input(&self, py: Python<'_>, index: usize, value: &str) -> PyResult<()> {
-        let browser = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn set_input<'py>(&self, py: Python<'py>, index: usize, value: &str) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
         let value = value.to_string();
-
-        py.detach(|| {
-            smol::block_on(async { browser.set_input(index, &value).await })
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .set_input(index, &value)
+                .await
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
     }
 
     /// Execute JavaScript and return the result as JSON string.
-    fn execute_js(&self, py: Python<'_>, script: &str) -> PyResult<String> {
-        let browser = self
-            .inner
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to the JSON result string.
+    fn execute_js<'py>(&self, py: Python<'py>, script: &str) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
         let script = script.to_string();
-
-        py.detach(|| {
-            let result = smol::block_on(async { browser.execute_js(&script).await })
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            let result = browser
+                .execute_js(&script)
+                .await
                 .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))?;
             serde_json::to_string(&result)
                 .map_err(|e| PyRuntimeError::new_err(format!("JSON error: {}", e)))
+        })
+    }
+
+    /// Get a structured view of visible page content (PageVision).
+    ///
+    /// Returns semantic sections (Navigation, Sidebar, Content, Form, Messages, etc.)
+    /// with their visible items. Useful for LLM understanding of page state.
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to a JSON object with title, url, and sections.
+    fn see<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            let vision = browser
+                .see()
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))?;
+            serde_json::to_string(&vision)
+                .map_err(|e| PyRuntimeError::new_err(format!("JSON error: {}", e)))
+        })
+    }
+
+    // =========================================================================
+    // Additional Interaction Methods
+    // =========================================================================
+
+    /// Select an option from a dropdown by input index and option text.
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn select_option<'py>(
+        &self,
+        py: Python<'py>,
+        index: usize,
+        value: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        let value = value.to_string();
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .select_option(index, &value)
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Press Enter on an input by its index from inputs().
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn press_enter<'py>(&self, py: Python<'py>, index: usize) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .press_enter(index)
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Find a search input, type query, and submit.
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn search<'py>(&self, py: Python<'py>, query: &str) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        let query = query.to_string();
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .search(&query)
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    // =========================================================================
+    // Cookies
+    // =========================================================================
+
+    /// Get all cookies for the current page as JSON array.
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to a JSON array of cookie objects.
+    fn get_cookies<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            let cookies = browser
+                .get_cookies()
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))?;
+            // Convert cookies to a JSON-serializable format
+            let cookie_list: Vec<serde_json::Value> = cookies
+                .into_iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "name": c.name(),
+                        "value": c.value(),
+                        "domain": c.domain(),
+                        "path": c.path(),
+                        "secure": c.secure(),
+                        "http_only": c.http_only(),
+                        "same_site": c.same_site().map(|s| format!("{:?}", s)),
+                    })
+                })
+                .collect();
+            serde_json::to_string(&cookie_list)
+                .map_err(|e| PyRuntimeError::new_err(format!("JSON error: {}", e)))
+        })
+    }
+
+    /// Get a specific cookie by name as JSON object (or null if not found).
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to a JSON cookie object or null.
+    fn get_cookie<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        let name = name.to_string();
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            let cookie = browser
+                .get_cookie(&name)
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))?;
+            let result = match cookie {
+                Some(c) => serde_json::json!({
+                    "name": c.name(),
+                    "value": c.value(),
+                    "domain": c.domain(),
+                    "path": c.path(),
+                    "secure": c.secure(),
+                    "http_only": c.http_only(),
+                    "same_site": c.same_site().map(|s| format!("{:?}", s)),
+                }),
+                None => serde_json::Value::Null,
+            };
+            serde_json::to_string(&result)
+                .map_err(|e| PyRuntimeError::new_err(format!("JSON error: {}", e)))
+        })
+    }
+
+    /// Set a cookie from a JSON object.
+    ///
+    /// The JSON object should have: name, value, and optionally domain, path, secure, http_only.
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn set_cookie<'py>(&self, py: Python<'py>, cookie_json: &str) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        let cookie_json = cookie_json.to_string();
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+
+            // Parse the JSON and build a Cookie
+            let obj: serde_json::Value = serde_json::from_str(&cookie_json)
+                .map_err(|e| PyRuntimeError::new_err(format!("JSON parse error: {}", e)))?;
+
+            let name = obj
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| PyRuntimeError::new_err("Cookie must have 'name' field"))?;
+            let value = obj
+                .get("value")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| PyRuntimeError::new_err("Cookie must have 'value' field"))?;
+
+            let mut cookie = balloons_browser::Cookie::new(name.to_string(), value.to_string());
+
+            if let Some(domain) = obj.get("domain").and_then(|v| v.as_str()) {
+                cookie.set_domain(domain.to_string());
+            }
+            if let Some(path) = obj.get("path").and_then(|v| v.as_str()) {
+                cookie.set_path(path.to_string());
+            }
+            if let Some(secure) = obj.get("secure").and_then(|v| v.as_bool()) {
+                cookie.set_secure(secure);
+            }
+            if let Some(http_only) = obj.get("http_only").and_then(|v| v.as_bool()) {
+                cookie.set_http_only(http_only);
+            }
+
+            browser
+                .set_cookie(cookie)
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Delete a specific cookie by name.
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn delete_cookie<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        let name = name.to_string();
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .delete_cookie(&name)
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Delete all cookies.
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn delete_all_cookies<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .delete_all_cookies()
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    // =========================================================================
+    // Frames
+    // =========================================================================
+
+    /// Enter an iframe by index.
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn enter_frame<'py>(&self, py: Python<'py>, index: u16) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .enter_frame(index)
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Return to the parent frame.
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn enter_parent_frame<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .enter_parent_frame()
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    // =========================================================================
+    // Windows/Tabs
+    // =========================================================================
+
+    /// Get the current window handle as a string.
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to the window handle string.
+    fn current_window<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            let handle = browser
+                .current_window()
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))?;
+            Ok(String::from(handle))
+        })
+    }
+
+    /// Get all window handles as a JSON array of strings.
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to a JSON array of window handle strings.
+    fn windows<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            let handles = browser
+                .windows()
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))?;
+            let handle_strs: Vec<String> = handles.into_iter().map(String::from).collect();
+            serde_json::to_string(&handle_strs)
+                .map_err(|e| PyRuntimeError::new_err(format!("JSON error: {}", e)))
+        })
+    }
+
+    /// Switch to a different window/tab by handle.
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn switch_to_window<'py>(&self, py: Python<'py>, handle: &str) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        let handle_str = handle.to_string();
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            let handle: balloons_browser::WindowHandle =
+                std::borrow::Cow::from(handle_str)
+                    .try_into()
+                    .map_err(|e| PyRuntimeError::new_err(format!("Invalid window handle: {:?}", e)))?;
+            browser
+                .switch_to_window(handle)
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Open a new window or tab.
+    ///
+    /// Args:
+    ///     as_tab: If True, open as tab; if False, open as window.
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to a JSON object with 'handle' and 'type' fields.
+    fn new_window<'py>(&self, py: Python<'py>, as_tab: bool) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            let response = browser
+                .new_window(as_tab)
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))?;
+            let result = serde_json::json!({
+                "handle": String::from(response.handle),
+                "type": format!("{:?}", response.typ),
+            });
+            serde_json::to_string(&result)
+                .map_err(|e| PyRuntimeError::new_err(format!("JSON error: {}", e)))
+        })
+    }
+
+    /// Close the current window/tab.
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn close_window<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .close_window()
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    // =========================================================================
+    // Storage
+    // =========================================================================
+
+    /// Get a value from localStorage.
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to the value string or None.
+    fn local_storage_get<'py>(&self, py: Python<'py>, key: &str) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        let key = key.to_string();
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .local_storage_get(&key)
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Set a value in localStorage.
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn local_storage_set<'py>(
+        &self,
+        py: Python<'py>,
+        key: &str,
+        value: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        let key = key.to_string();
+        let value = value.to_string();
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .local_storage_set(&key, &value)
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Get a value from sessionStorage.
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to the value string or None.
+    fn session_storage_get<'py>(&self, py: Python<'py>, key: &str) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        let key = key.to_string();
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .session_storage_get(&key)
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
+        })
+    }
+
+    /// Set a value in sessionStorage.
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to None on success.
+    fn session_storage_set<'py>(
+        &self,
+        py: Python<'py>,
+        key: &str,
+        value: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        let key = key.to_string();
+        let value = value.to_string();
+        pyo3_async_runtimes::smol::future_into_py(py, async move {
+            let guard = inner.lock().await;
+            let browser = guard
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("Browser was closed"))?;
+            browser
+                .session_storage_set(&key, &value)
+                .await
+                .map_err(|e| PyRuntimeError::new_err(format!("Browser error: {}", e)))
         })
     }
 }

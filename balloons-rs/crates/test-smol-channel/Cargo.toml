@@ -1,0 +1,14 @@
+[package]
+name = "test-smol-channel"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "test_smol_channel"
+crate-type = ["cdylib"]
+
+[dependencies]
+smol = "2"
+async-channel = "2"
+pyo3 = { version = "0.28", features = ["extension-module"] }
+pyo3-async-runtimes = { path = "/home/dan/Development/pyo3-async-runtimes", features = ["smol-runtime", "attributes"] }
