@@ -39,13 +39,13 @@ pub struct SupervisedProcess {
     /// When the process was started.
     pub started_at: DateTime<Utc>,
     /// When the process ended (if completed).
-    pub ended_at: Option<DateTime<Utc>>,
+    ended_at: RwLock<Option<DateTime<Utc>>>,
     /// Current status.
     status: RwLock<ProcessStatus>,
     /// Captured log entries (circular buffer).
     logs: RwLock<VecDeque<LogEntry>>,
-    /// Channel to send stop signal.
-    stop_tx: Option<Sender<()>>,
+    /// Channel to send stop signal (cleared when process exits).
+    stop_tx: RwLock<Option<Sender<()>>>,
     /// Channel to send stdin input to the process.
     stdin_tx: Option<StdinSender>,
 }
@@ -69,10 +69,10 @@ impl SupervisedProcess {
             working_dir,
             session_id,
             started_at: Utc::now(),
-            ended_at: None,
+            ended_at: RwLock::new(None),
             status: RwLock::new(ProcessStatus::Running { pid }),
             logs: RwLock::new(VecDeque::with_capacity(MAX_LOG_ENTRIES)),
-            stop_tx: Some(stop_tx),
+            stop_tx: RwLock::new(Some(stop_tx)),
             stdin_tx,
         }
     }
@@ -166,57 +166,86 @@ impl SupervisedProcess {
             session_id: self.session_id.clone(),
             status: self.status().await,
             started_at: self.started_at,
-            ended_at: self.ended_at,
+            ended_at: *self.ended_at.read().await,
             log_count: self.log_count().await,
             output_preview: self.output_preview().await,
         }
     }
 
-    /// Mark the process as exited.
-    #[allow(dead_code)]
-    pub async fn set_exited(&mut self, code: Option<i32>, signal: Option<i32>) {
-        let mut status = self.status.write().await;
-        *status = ProcessStatus::Exited { code, signal };
-        self.ended_at = Some(Utc::now());
-        self.stop_tx = None; // No longer need the stop channel
-
-        // Add system log entry
-        let exit_msg = match (code, signal) {
-            (Some(c), _) => format!("Process exited with code {}", c),
-            (_, Some(s)) => format!("Process killed by signal {}", s),
-            (None, None) => "Process exited".to_string(),
-        };
-        self.add_log(LogEntry::system(exit_msg)).await;
+    /// Mark the process as exited (for use from Arc<Self>).
+    ///
+    /// This clears the stop channel since the process has already exited.
+    pub async fn mark_exited(&self, code: Option<i32>, signal: Option<i32>) {
+        // Update status
+        {
+            let mut status = self.status.write().await;
+            *status = ProcessStatus::Exited { code, signal };
+        }
+        // Set end time
+        {
+            let mut ended = self.ended_at.write().await;
+            *ended = Some(Utc::now());
+        }
+        // Clear stop channel - process already exited, no need to stop it
+        {
+            let mut stop = self.stop_tx.write().await;
+            *stop = None;
+        }
     }
 
     /// Mark the process as killed (for use from Arc<Self>).
+    ///
+    /// This clears the stop channel since the process has been killed.
     pub async fn mark_killed(&self) {
-        let mut status = self.status.write().await;
-        *status = ProcessStatus::Exited {
-            code: None,
-            signal: Some(9), // SIGKILL
-        };
+        // Update status
+        {
+            let mut status = self.status.write().await;
+            *status = ProcessStatus::Exited {
+                code: None,
+                signal: Some(9), // SIGKILL
+            };
+        }
+        // Set end time
+        {
+            let mut ended = self.ended_at.write().await;
+            *ended = Some(Utc::now());
+        }
+        // Clear stop channel
+        {
+            let mut stop = self.stop_tx.write().await;
+            *stop = None;
+        }
         self.add_log(LogEntry::system("Process killed by supervisor".to_string()))
             .await;
     }
 
-    /// Mark the process as failed.
-    #[allow(dead_code)]
-    pub async fn set_failed(&mut self, error: String) {
-        let mut status = self.status.write().await;
-        *status = ProcessStatus::Failed {
-            error: error.clone(),
-        };
-        self.ended_at = Some(Utc::now());
-        self.stop_tx = None;
-
+    /// Mark the process as failed (for use from Arc<Self>).
+    pub async fn mark_failed(&self, error: String) {
+        // Update status
+        {
+            let mut status = self.status.write().await;
+            *status = ProcessStatus::Failed {
+                error: error.clone(),
+            };
+        }
+        // Set end time
+        {
+            let mut ended = self.ended_at.write().await;
+            *ended = Some(Utc::now());
+        }
+        // Clear stop channel
+        {
+            let mut stop = self.stop_tx.write().await;
+            *stop = None;
+        }
         self.add_log(LogEntry::system(format!("Process failed: {}", error)))
             .await;
     }
 
     /// Request the process to stop.
     pub async fn stop(&self) -> Result<()> {
-        if let Some(tx) = &self.stop_tx {
+        let stop_tx = self.stop_tx.read().await;
+        if let Some(tx) = stop_tx.as_ref() {
             tx.send(())
                 .await
                 .map_err(|_| Error::StopFailed("stop channel closed".to_string()))?;
@@ -317,6 +346,10 @@ pub async fn handle_process_events<H: ProcessHandle>(
                             signal = ?signal,
                             "Process exited"
                         );
+                        // Mark the process as exited - this clears the stop channel
+                        // so that stop() won't fail with "stop channel closed"
+                        process.mark_exited(*code, *signal).await;
+
                         let msg = match (code, signal) {
                             (Some(c), _) => format!("Process exited with code {}", c),
                             (_, Some(s)) => format!("Process killed by signal {}", s),
@@ -465,6 +498,9 @@ pub async fn handle_lsp_events(
                         #[cfg(not(unix))]
                         let signal = None;
 
+                        // Mark the process as exited - this clears the stop channel
+                        process.mark_exited(code, signal).await;
+
                         let msg = match (code, signal) {
                             (Some(c), _) => format!("LSP process exited with code {}", c),
                             (_, Some(s)) => format!("LSP process killed by signal {}", s),
@@ -479,6 +515,8 @@ pub async fn handle_lsp_events(
                     Err(e) => {
                         let msg = format!("Error waiting for LSP process: {}", e);
                         process.add_log(LogEntry::system(msg)).await;
+                        // Mark as failed since we couldn't get exit status
+                        process.mark_failed(format!("Error waiting for process: {}", e)).await;
                     }
                 }
                 break;

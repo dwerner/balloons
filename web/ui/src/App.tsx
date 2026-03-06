@@ -1154,6 +1154,7 @@ export function App() {
  * AppContent - the actual app implementation (wrapped by DialogProvider)
  */
 function AppContent() {
+
   // Dialog hook for confirm/alert dialogs
   const { confirm } = useDialog();
 
@@ -3626,6 +3627,25 @@ function MobileHeader({ connectionState, selectedSession }: MobileHeaderProps) {
     openDetail();
   };
 
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Track fullscreen state changes
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      document.documentElement.requestFullscreen();
+    }
+  }, []);
+
   return (
     <>
       <button className="menu-button" onClick={openSidebar} aria-label="Open menu">
@@ -3633,6 +3653,14 @@ function MobileHeader({ connectionState, selectedSession }: MobileHeaderProps) {
       </button>
       <div className={`connection-status ${connectionState}`} title={connectionState} />
       <h1>{headerTitle}</h1>
+      <button
+        className="menu-button menu-button--fullscreen"
+        onClick={toggleFullscreen}
+        aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+        title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+      >
+        {isFullscreen ? '⛶' : '⛶'}
+      </button>
       <button className="menu-button menu-button--right" onClick={handleOpenDetail} aria-label="Open detail panel">
         ⋮
       </button>

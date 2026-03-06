@@ -34,6 +34,7 @@ from core.kanban_service import (
     Column,
     Board,
     BoardState,
+    SessionBoardAssociation,
 )
 
 
@@ -186,6 +187,50 @@ class ColumnDeletedEvent:
     board_id: str
     column_id: str
     tasks_moved_to: str | None  # Column tasks were migrated to, if any
+
+
+# =============================================================================
+# Session-Board Association Types
+# =============================================================================
+
+
+@ws_type
+@dataclass
+class BoardAssociationInfo:
+    """Information about a session-board association."""
+    id: str
+    session_id: str
+    board_id: str
+    role: str  # "primary", "reference", "archive"
+    created_at: str
+    created_by: str  # "user", "llm", "fork"
+    inherited_from: str | None = None  # Parent session ID if inherited
+
+
+@ws_type
+@dataclass
+class SessionBoardsResult:
+    """Result of getting boards for a session."""
+    session_id: str
+    associations: list[BoardAssociationInfo]
+    boards: list[BoardInfo]  # Matching boards in same order
+
+
+@ws_type
+@dataclass
+class BoardAssociatedEvent:
+    """Event fired when a board is associated with a session."""
+    association: BoardAssociationInfo
+    board: BoardInfo
+
+
+@ws_type
+@dataclass
+class BoardDisassociatedEvent:
+    """Event fired when a board is disassociated from a session."""
+    session_id: str
+    board_id: str
+    association_id: str
 
 
 # =============================================================================
@@ -753,6 +798,156 @@ class KanbanWebSocketService:
             ))
         return success
 
+    # --- Session-Board Association Operations ---
+
+    def _association_to_info(self, assoc: SessionBoardAssociation) -> BoardAssociationInfo:
+        """Convert SessionBoardAssociation to BoardAssociationInfo wire type."""
+        return BoardAssociationInfo(
+            id=assoc.id,
+            session_id=assoc.session_id,
+            board_id=assoc.board_id,
+            role=assoc.role,
+            created_at=assoc.created_at,
+            created_by=assoc.created_by,
+            inherited_from=assoc.inherited_from,
+        )
+
+    @ws_expose
+    async def get_boards_for_session(self, session_id: str) -> SessionBoardsResult:
+        """Get all boards associated with a session.
+
+        Args:
+            session_id: The session ID
+
+        Returns:
+            SessionBoardsResult with associations and matching boards
+        """
+        board_tuples = await self._kanban.get_boards_for_session(session_id)
+
+        associations: list[BoardAssociationInfo] = []
+        boards: list[BoardInfo] = []
+
+        for assoc, board in board_tuples:
+            associations.append(self._association_to_info(assoc))
+            boards.append(self._board_to_info(board))
+
+        return SessionBoardsResult(
+            session_id=session_id,
+            associations=associations,
+            boards=boards,
+        )
+
+    @ws_expose
+    async def associate_board_with_session(
+        self,
+        board_id: str,
+        session_id: str,
+        role: str = "primary",
+    ) -> BoardAssociationInfo | None:
+        """Associate a board with a session.
+
+        Emits boardAssociated event to all connected clients.
+
+        Args:
+            board_id: The board to associate
+            session_id: The session to associate with
+            role: Role of this association (primary, reference, archive)
+
+        Returns:
+            Association info, or None if board not found
+        """
+        # Verify board exists
+        board = await self._kanban.get_board(board_id)
+        if not board:
+            return None
+
+        assoc = await self._kanban.associate_board_with_session(
+            board_id=board_id,
+            session_id=session_id,
+            role=role,
+            created_by="user",
+        )
+
+        info = self._association_to_info(assoc)
+        self._emit_broadcast("boardAssociated", BoardAssociatedEvent(
+            association=info,
+            board=self._board_to_info(board),
+        ))
+        return info
+
+    @ws_expose
+    async def dissociate_board_from_session(
+        self,
+        board_id: str,
+        session_id: str,
+    ) -> bool:
+        """Remove a board association from a session.
+
+        Emits boardDisassociated event to all connected clients.
+
+        Args:
+            board_id: The board to dissociate
+            session_id: The session to dissociate from
+
+        Returns:
+            True if an association was removed, False if not found
+        """
+        # Get the association ID before deleting
+        associations = await self._kanban.get_associations_for_session(session_id)
+        assoc_id = None
+        for assoc in associations:
+            if assoc.board_id == board_id:
+                assoc_id = assoc.id
+                break
+
+        success = await self._kanban.dissociate_board_from_session(
+            board_id=board_id,
+            session_id=session_id,
+        )
+
+        if success and assoc_id:
+            self._emit_broadcast("boardDisassociated", BoardDisassociatedEvent(
+                session_id=session_id,
+                board_id=board_id,
+                association_id=assoc_id,
+            ))
+        return success
+
+    @ws_expose
+    async def create_board_for_session(
+        self,
+        session_id: str,
+        name: str,
+    ) -> BoardStateInfo | None:
+        """Create a new board and associate it with a session.
+
+        Emits boardCreated and boardAssociated events.
+
+        Args:
+            session_id: The session to associate with
+            name: Display name for the board
+
+        Returns:
+            Full board state, or None on error
+        """
+        assoc, board_state = await self._kanban.create_board_for_session(
+            session_id=session_id,
+            name=name,
+        )
+
+        info = self._board_state_to_info(board_state)
+
+        # Emit boardCreated to all
+        self._emit_broadcast("boardCreated", BoardCreatedEvent(board=info))
+
+        # Emit boardAssociated to all
+        self._emit_broadcast("boardAssociated", BoardAssociatedEvent(
+            association=self._association_to_info(assoc),
+            board=info.board,
+        ))
+
+        return info
+
     # --- Event Declarations (for codegen) ---
     # These are stub methods that declare event shapes for TypeScript client generation.
     # The actual events are emitted via _emit_to_board() and _emit_broadcast().
@@ -800,4 +995,14 @@ class KanbanWebSocketService:
     @ws_event
     def column_deleted(self, event: ColumnDeletedEvent) -> ColumnDeletedEvent:
         """Fired when a column is deleted from a board (sent to board subscribers)."""
+        pass
+
+    @ws_event
+    def board_associated(self, event: BoardAssociatedEvent) -> BoardAssociatedEvent:
+        """Fired when a board is associated with a session (broadcast to all clients)."""
+        pass
+
+    @ws_event
+    def board_disassociated(self, event: BoardDisassociatedEvent) -> BoardDisassociatedEvent:
+        """Fired when a board is disassociated from a session (broadcast to all clients)."""
         pass

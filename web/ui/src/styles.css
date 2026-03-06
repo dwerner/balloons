@@ -272,6 +272,7 @@ html, body {
   height: 100%;
   overflow: hidden;
   background: var(--color-bg-primary);
+  overscroll-behavior: none; /* Prevent overscroll/bounce on mobile */
 }
 
 body {
@@ -282,6 +283,7 @@ body {
 #root {
   height: 100%;
   overflow: hidden;
+  overscroll-behavior: none; /* Prevent overscroll/bounce on mobile */
 }
 
 /* ----- App Layout ----- */
@@ -298,8 +300,29 @@ body {
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
+  /* Add safe area padding for notched devices, but use calc to add to base padding */
+  padding-top: calc(12px + env(safe-area-inset-top, 0px));
   background: var(--color-bg-secondary);
   border-bottom: 1px solid var(--color-border-primary);
+}
+
+/* In fullscreen mode, extend content to edges (no safe area padding) */
+:fullscreen .mobile-header {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+/* Reset safe area insets in fullscreen - content should fill entire screen */
+:fullscreen,
+:fullscreen #root,
+:fullscreen .app {
+  /* Use full viewport in fullscreen */
+  height: 100vh !important;
+  width: 100vw !important;
+}
+
+:fullscreen .input-area {
+  padding-bottom: 4px; /* No safe area needed in fullscreen */
 }
 
 .menu-button {
@@ -316,6 +339,10 @@ body {
 .menu-button--right {
   font-size: 20px;
   letter-spacing: 2px;
+}
+
+.menu-button--fullscreen {
+  font-size: 18px;
 }
 
 .mobile-header h1 {
@@ -1233,15 +1260,86 @@ body {
 .input-area {
   border-top: 1px solid var(--color-border-primary);
   padding: 4px;
+  padding-top: 12px; /* Extra space for resize handle */
   background: var(--color-bg-secondary);
   margin-top: auto; /* Push to bottom of flex container */
   flex-shrink: 0; /* Don't shrink the input area */
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Resize handle at top of input area */
+.input-area-resize-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 12px;
+  cursor: row-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+}
+
+.input-area-resize-handle::after {
+  content: '';
+  width: 48px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-border-primary);
+  opacity: 0.5;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.input-area-resize-handle:hover::after {
+  opacity: 1;
+  background: var(--color-accent-green);
+}
+
+/* Hide resize handle on mobile and adjust padding */
+@media (max-width: 767px) {
+  .input-area-resize-handle {
+    display: none;
+  }
+
+  .input-area {
+    padding: 4px;
+    padding-top: 4px; /* No resize handle, so no extra top padding */
+  }
+
+  /* Make form elements fill height on mobile */
+  .input-form {
+    align-items: stretch; /* Make all items same height */
+  }
+
+  .input-field {
+    min-height: 54px;
+  }
+
+  /* Make send/queue buttons taller on mobile to match textarea */
+  .send-button,
+  .queue-button {
+    align-self: stretch;
+    min-height: 58px;
+    padding: 12px 16px;
+  }
+
+  /* Buttons at bottom of container - match textarea height */
+  .attach-button,
+  .voice-input-container {
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    min-height: 54px;
+  }
 }
 
 /* Safe area padding for notched devices - only add what's needed */
 @supports (padding-bottom: env(safe-area-inset-bottom)) {
   .input-area {
-    padding-bottom: max(4px, env(safe-area-inset-bottom));
+    padding-bottom: max(24px, env(safe-area-inset-bottom));
   }
 }
 
@@ -1273,7 +1371,11 @@ body {
 .input-form {
   display: flex;
   gap: 8px;
+  flex: 1;
+  min-height: 0; /* Allow shrinking */
+  align-items: stretch; /* Make children fill height */
 }
+
 
 .input-field {
   flex: 1;
@@ -1283,9 +1385,8 @@ body {
   background: var(--color-bg-primary);
   color: var(--color-text-primary);
   font-size: 16px;
-  resize: vertical;  /* Allow vertical resize */
-  min-height: 60px;  /* Increased min height */
-  max-height: 300px; /* Increased max height */
+  resize: none;  /* Disable native resize - we use custom handle */
+  min-height: 0; /* Allow growing with container */
 }
 
 .input-field:focus {
@@ -1299,10 +1400,12 @@ body {
   position: relative;
   display: flex;
   flex-direction: column;
+  min-height: 0; /* Allow proper flex sizing */
 }
 
 .input-field-wrapper .input-field {
   flex: 1;
+  height: 100%; /* Fill the wrapper */
 }
 
 /* Partial text overlay (uncommitted voice transcription) */
@@ -1333,6 +1436,7 @@ body {
   color: var(--color-bg-primary);
   border: none;
   border-radius: 8px;
+  align-self: flex-end; /* Don't stretch with container */
   font-weight: 600;
   cursor: pointer;
   transition: background 0.2s;
@@ -1342,13 +1446,13 @@ body {
 @media (min-width: 768px) {
   .input-area {
     padding: 6px 6px;
+    padding-top: 12px; /* Space for resize handle */
   }
 
   .input-field {
     padding: 14px 18px;
     font-size: 14px;
-    min-height: 72px;   /* Increased min height */
-    max-height: 400px;  /* Increased max height */
+    min-height: 0;   /* Allow growing with container */
   }
 
   .send-button {
@@ -1448,6 +1552,7 @@ body {
   color: var(--color-bg-primary);
   border: none;
   border-radius: 8px;
+  align-self: flex-end; /* Don't stretch with container */
   font-weight: 600;
   cursor: pointer;
   transition: background 0.2s;
@@ -2149,6 +2254,7 @@ body {
   border: 1px solid var(--color-border-secondary);
   border-radius: 8px;
   font-size: 18px;
+  align-self: flex-end; /* Don't stretch with container */
   cursor: pointer;
   transition: all 0.2s;
   flex-shrink: 0;

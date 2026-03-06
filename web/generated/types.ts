@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-03-03T16:02:10.657109
+// Generated: 2026-03-05T09:18:14.813744
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -1331,5 +1331,32 @@ export interface ColumnDeletedEvent {
   boardId: string;
   columnId: string;
   tasksMovedTo: string | null;
+}
+
+export interface BoardAssociationInfo {
+  id: string;
+  sessionId: string;
+  boardId: string;
+  role: string;
+  createdAt: string;
+  createdBy: string;
+  inheritedFrom?: string | null;
+}
+
+export interface SessionBoardsResult {
+  sessionId: string;
+  associations: BoardAssociationInfo[];
+  boards: BoardInfo[];
+}
+
+export interface BoardAssociatedEvent {
+  association: BoardAssociationInfo;
+  board: BoardInfo;
+}
+
+export interface BoardDisassociatedEvent {
+  sessionId: string;
+  boardId: string;
+  associationId: string;
 }
 

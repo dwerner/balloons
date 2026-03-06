@@ -454,6 +454,13 @@
     padding-right: calc(16px + env(safe-area-inset-right));
   }
 
+  /* In fullscreen, no safe area padding needed - content fills entire screen */
+  :fullscreen .app-layout__header {
+    padding-top: 8px !important;
+    padding-left: 16px !important;
+    padding-right: 16px !important;
+  }
+
   .app-layout--mobile .app-layout__sidebar {
     padding-top: env(safe-area-inset-top);
     padding-left: env(safe-area-inset-left);

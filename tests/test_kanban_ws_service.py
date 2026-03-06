@@ -550,3 +550,178 @@ class TestEventHandlers:
 
         assert len(events1) == 1
         assert len(events2) == 1
+
+
+# =============================================================================
+# Session-Board Association Tests
+# =============================================================================
+
+
+class TestSessionBoardAssociations:
+    """Tests for session-board association WebSocket methods."""
+
+    @pytest.mark.asyncio
+    async def test_get_boards_for_session_empty(self, ws_service):
+        """Test getting boards for a session with no associations."""
+        result = await ws_service.get_boards_for_session("nonexistent-session")
+
+        assert result.session_id == "nonexistent-session"
+        assert result.associations == []
+        assert result.boards == []
+
+    @pytest.mark.asyncio
+    async def test_associate_board_with_session(self, ws_service, event_collector):
+        """Test associating a board with a session."""
+        board = await ws_service.create_board("Board to Associate")
+        event_collector.clear()
+
+        assoc = await ws_service.associate_board_with_session(
+            board_id=board.board.id,
+            session_id="test-session-123",
+            role="primary",
+        )
+
+        assert assoc is not None
+        assert assoc.board_id == board.board.id
+        assert assoc.session_id == "test-session-123"
+        assert assoc.role == "primary"
+        assert assoc.created_by == "user"
+        assert assoc.inherited_from is None
+
+        # Check broadcast event
+        event_name, event_data, target_clients = event_collector[0]
+        assert event_name == "boardAssociated"
+        assert target_clients is None  # Broadcast
+        assert event_data["association"]["board_id"] == board.board.id
+        assert event_data["board"]["id"] == board.board.id
+
+    @pytest.mark.asyncio
+    async def test_associate_nonexistent_board(self, ws_service):
+        """Test associating a non-existent board returns None."""
+        result = await ws_service.associate_board_with_session(
+            board_id="nonexistent-board",
+            session_id="test-session",
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_boards_for_session(self, ws_service):
+        """Test getting boards for a session with associations."""
+        board1 = await ws_service.create_board("Board 1")
+        board2 = await ws_service.create_board("Board 2")
+        session_id = "test-session-456"
+
+        await ws_service.associate_board_with_session(
+            board_id=board1.board.id,
+            session_id=session_id,
+            role="primary",
+        )
+        await ws_service.associate_board_with_session(
+            board_id=board2.board.id,
+            session_id=session_id,
+            role="reference",
+        )
+
+        result = await ws_service.get_boards_for_session(session_id)
+
+        assert result.session_id == session_id
+        assert len(result.associations) == 2
+        assert len(result.boards) == 2
+
+        board_ids = {b.id for b in result.boards}
+        assert board1.board.id in board_ids
+        assert board2.board.id in board_ids
+
+    @pytest.mark.asyncio
+    async def test_dissociate_board_from_session(self, ws_service, event_collector):
+        """Test dissociating a board from a session."""
+        board = await ws_service.create_board("Board to Remove")
+        session_id = "test-session-789"
+
+        await ws_service.associate_board_with_session(
+            board_id=board.board.id,
+            session_id=session_id,
+        )
+        event_collector.clear()
+
+        result = await ws_service.dissociate_board_from_session(
+            board_id=board.board.id,
+            session_id=session_id,
+        )
+
+        assert result is True
+
+        # Check broadcast event
+        event_name, event_data, target_clients = event_collector[0]
+        assert event_name == "boardDisassociated"
+        assert target_clients is None  # Broadcast
+        assert event_data["session_id"] == session_id
+        assert event_data["board_id"] == board.board.id
+
+        # Verify association removed
+        boards = await ws_service.get_boards_for_session(session_id)
+        assert len(boards.associations) == 0
+
+    @pytest.mark.asyncio
+    async def test_dissociate_nonexistent_association(self, ws_service, event_collector):
+        """Test dissociating a non-existent association returns False."""
+        event_collector.clear()
+
+        result = await ws_service.dissociate_board_from_session(
+            board_id="nonexistent-board",
+            session_id="nonexistent-session",
+        )
+
+        assert result is False
+        # No event should be emitted
+        assert len(event_collector) == 0
+
+    @pytest.mark.asyncio
+    async def test_create_board_for_session(self, ws_service, event_collector):
+        """Test creating a board that's automatically associated with a session."""
+        event_collector.clear()
+        session_id = "test-session-abc"
+
+        board = await ws_service.create_board_for_session(
+            session_id=session_id,
+            name="Auto-associated Board",
+        )
+
+        assert board is not None
+        assert board.board.name == "Auto-associated Board"
+
+        # Should have emitted boardCreated and boardAssociated events
+        event_names = [e[0] for e in event_collector]
+        assert "boardCreated" in event_names
+        assert "boardAssociated" in event_names
+
+        # Verify association exists
+        boards = await ws_service.get_boards_for_session(session_id)
+        assert len(boards.associations) == 1
+        assert boards.associations[0].board_id == board.board.id
+        assert boards.associations[0].role == "primary"
+
+    @pytest.mark.asyncio
+    async def test_multiple_sessions_same_board(self, ws_service):
+        """Test that multiple sessions can share the same board."""
+        board = await ws_service.create_board("Shared Board")
+
+        session1 = "session-1"
+        session2 = "session-2"
+
+        await ws_service.associate_board_with_session(
+            board_id=board.board.id,
+            session_id=session1,
+        )
+        await ws_service.associate_board_with_session(
+            board_id=board.board.id,
+            session_id=session2,
+        )
+
+        # Both sessions should see the board
+        boards1 = await ws_service.get_boards_for_session(session1)
+        boards2 = await ws_service.get_boards_for_session(session2)
+
+        assert len(boards1.associations) == 1
+        assert len(boards2.associations) == 1
+        assert boards1.boards[0].id == boards2.boards[0].id

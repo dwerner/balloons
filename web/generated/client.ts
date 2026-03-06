@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-03-03T16:02:10.661599
+// Generated: 2026-03-05T09:18:14.818499
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -4587,6 +4587,21 @@ export interface KanbanWebSocketService {
   addColumn(boardId: string, name: string, position?: number | null): Promise<Types.ColumnInfo | null>;
 
   /**
+   * Associate a board with a session.
+   * 
+   * Emits boardAssociated event to all connected clients.
+   * 
+   * Args:
+   * board_id: The board to associate
+   * session_id: The session to associate with
+   * role: Role of this association (primary, reference, archive)
+   * 
+   * Returns:
+   * Association info, or None if board not found
+   */
+  associateBoardWithSession(boardId: string, sessionId: string, role?: string): Promise<Types.BoardAssociationInfo | null>;
+
+  /**
    * Create a new board with default columns.
    * 
    * Broadcasts boardCreated event to all connected clients.
@@ -4598,6 +4613,20 @@ export interface KanbanWebSocketService {
    * Full board state with columns (Backlog, To Do, In Progress, Done)
    */
   createBoard(name: string): Promise<Types.BoardStateInfo>;
+
+  /**
+   * Create a new board and associate it with a session.
+   * 
+   * Emits boardCreated and boardAssociated events.
+   * 
+   * Args:
+   * session_id: The session to associate with
+   * name: Display name for the board
+   * 
+   * Returns:
+   * Full board state, or None on error
+   */
+  createBoardForSession(sessionId: string, name: string): Promise<Types.BoardStateInfo | null>;
 
   /**
    * Create a new task on a board.
@@ -4659,6 +4688,20 @@ export interface KanbanWebSocketService {
   deleteTask(taskId: string, boardId: string): Promise<boolean>;
 
   /**
+   * Remove a board association from a session.
+   * 
+   * Emits boardDisassociated event to all connected clients.
+   * 
+   * Args:
+   * board_id: The board to dissociate
+   * session_id: The session to dissociate from
+   * 
+   * Returns:
+   * True if an association was removed, False if not found
+   */
+  dissociateBoardFromSession(boardId: string, sessionId: string): Promise<boolean>;
+
+  /**
    * Get full board state by ID.
    * 
    * Args:
@@ -4668,6 +4711,17 @@ export interface KanbanWebSocketService {
    * BoardStateInfo with columns and tasks, or None if not found
    */
   getBoard(boardId: string): Promise<Types.BoardStateInfo | null>;
+
+  /**
+   * Get all boards associated with a session.
+   * 
+   * Args:
+   * session_id: The session ID
+   * 
+   * Returns:
+   * SessionBoardsResult with associations and matching boards
+   */
+  getBoardsForSession(sessionId: string): Promise<Types.SessionBoardsResult>;
 
   /**
    * Get list of board IDs a client is subscribed to.
@@ -4767,6 +4821,11 @@ export interface KanbanWebSocketService {
 
 export interface KanbanWebSocketEvents {
   /**
+   * Fired when a board is associated with a session (broadcast to all clients).
+   */
+  boardAssociated(callback: (data: Types.BoardAssociatedEvent) => void): Unsubscribe;
+
+  /**
    * Fired when a new board is created (broadcast to all clients).
    */
   boardCreated(callback: (data: Types.BoardCreatedEvent) => void): Unsubscribe;
@@ -4775,6 +4834,11 @@ export interface KanbanWebSocketEvents {
    * Fired when a board is deleted (broadcast to all clients).
    */
   boardDeleted(callback: (data: Types.BoardDeletedEvent) => void): Unsubscribe;
+
+  /**
+   * Fired when a board is disassociated from a session (broadcast to all clients).
+   */
+  boardDisassociated(callback: (data: Types.BoardDisassociatedEvent) => void): Unsubscribe;
 
   /**
    * Fired when a column is added to a board (sent to board subscribers).
@@ -4863,8 +4927,16 @@ export class KanbanWebSocketServiceClient implements KanbanWebSocketService {
     return this.call('addColumn', { boardId: boardId, name: name, position: position });
   }
 
+  async associateBoardWithSession(boardId: string, sessionId: string, role?: string): Promise<Types.BoardAssociationInfo | null> {
+    return this.call('associateBoardWithSession', { boardId: boardId, sessionId: sessionId, role: role });
+  }
+
   async createBoard(name: string): Promise<Types.BoardStateInfo> {
     return this.call('createBoard', { name: name });
+  }
+
+  async createBoardForSession(sessionId: string, name: string): Promise<Types.BoardStateInfo | null> {
+    return this.call('createBoardForSession', { sessionId: sessionId, name: name });
   }
 
   async createTask(boardId: string, title: string, description?: string, columnId?: string | null): Promise<Types.KanbanTaskInfo | null> {
@@ -4883,8 +4955,16 @@ export class KanbanWebSocketServiceClient implements KanbanWebSocketService {
     return this.call('deleteTask', { taskId: taskId, boardId: boardId });
   }
 
+  async dissociateBoardFromSession(boardId: string, sessionId: string): Promise<boolean> {
+    return this.call('dissociateBoardFromSession', { boardId: boardId, sessionId: sessionId });
+  }
+
   async getBoard(boardId: string): Promise<Types.BoardStateInfo | null> {
     return this.call('getBoard', { boardId: boardId });
+  }
+
+  async getBoardsForSession(sessionId: string): Promise<Types.SessionBoardsResult> {
+    return this.call('getBoardsForSession', { sessionId: sessionId });
   }
 
   async getSubscribedBoards(clientId: string): Promise<string[]> {
@@ -4915,12 +4995,20 @@ export class KanbanWebSocketServiceClient implements KanbanWebSocketService {
     return this.call('updateTask', { taskId: taskId, boardId: boardId, title: title, description: description });
   }
 
+  boardAssociated(callback: (data: Types.BoardAssociatedEvent) => void): Unsubscribe {
+    return this.subscribe('boardAssociated', callback);
+  }
+
   boardCreated(callback: (data: Types.BoardCreatedEvent) => void): Unsubscribe {
     return this.subscribe('boardCreated', callback);
   }
 
   boardDeleted(callback: (data: Types.BoardDeletedEvent) => void): Unsubscribe {
     return this.subscribe('boardDeleted', callback);
+  }
+
+  boardDisassociated(callback: (data: Types.BoardDisassociatedEvent) => void): Unsubscribe {
+    return this.subscribe('boardDisassociated', callback);
   }
 
   columnAdded(callback: (data: Types.ColumnAddedEvent) => void): Unsubscribe {

@@ -318,6 +318,33 @@ async def copy_session_bindings(parent_session_id: str, child_session_id: str) -
     return copied
 
 
+async def inherit_kanban_boards(parent_session_id: str, child_session_id: str) -> int:
+    """Inherit kanban board associations from parent to child session.
+
+    When a session is forked, its kanban board associations should be
+    inherited by the child session so work tracking continues seamlessly.
+
+    Args:
+        parent_session_id: The parent session to copy associations from
+        child_session_id: The child session to copy associations to
+
+    Returns:
+        Number of associations copied
+    """
+    from .async_storage import AsyncStorage
+    from .kanban_service import KanbanService
+
+    storage = AsyncStorage()
+    kanban_service = KanbanService(storage)
+
+    child_assocs = await kanban_service.inherit_board_associations(
+        parent_session_id=parent_session_id,
+        child_session_id=child_session_id,
+    )
+
+    return len(child_assocs)
+
+
 # =============================================================================
 # ForkManager - Handles fork/merge/derive business logic
 # =============================================================================
@@ -434,6 +461,9 @@ class ForkManager:
 
             # Inherit bindings from parent
             await copy_session_bindings(current_session.id, child_session.id)
+
+            # Inherit kanban board associations from parent
+            await inherit_kanban_boards(current_session.id, child_session.id)
 
             # Register child in parent
             current_session.add_child(
@@ -566,6 +596,9 @@ class ForkManager:
 
         # Inherit bindings from parent
         await copy_session_bindings(parent_session.id, child_session.id)
+
+        # Inherit kanban board associations from parent
+        await inherit_kanban_boards(parent_session.id, child_session.id)
 
         # Register child in parent
         parent_session.add_child(
