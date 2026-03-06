@@ -24,6 +24,7 @@ export interface ExchangeDOMRect {
   colorIndex: number;
   top: number;      // Relative to scroll container's scrollTop=0
   height: number;   // Rendered height in pixels
+  turnRange?: string;  // e.g., "#0-5" or "#12"
 }
 
 // Calculated layout positions
@@ -40,6 +41,7 @@ export interface MinimapExchangeLayout {
   y: number;
   height: number;
   turns: MinimapTurnLayout[];
+  turnRange?: string;  // e.g., "#0-5" for labeling in the minimap
 }
 
 export interface MinimapLayout {

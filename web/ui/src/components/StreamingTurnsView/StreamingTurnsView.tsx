@@ -369,14 +369,26 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
       // Calculate position relative to scroll container's scroll origin
       const top = rect.top - containerTop + scrollOffset;
 
-      // Find the color index from exchangeGroups
+      // Find the exchange group to get color index and turn range
       const group = exchangeGroups.find(g => g.exchangeId === id);
+
+      // Calculate turn range from the exchange group
+      let turnRange: string | undefined;
+      if (group) {
+        const allTurns = group.items.flatMap(item => item.turns);
+        const firstOrder = allTurns[0]?.order;
+        const lastOrder = allTurns[allTurns.length - 1]?.order;
+        if (firstOrder !== undefined) {
+          turnRange = firstOrder === lastOrder ? `#${firstOrder}` : `#${firstOrder}-${lastOrder}`;
+        }
+      }
 
       rects.push({
         id,
         colorIndex: group?.colorIndex ?? 0,
         top,
         height: rect.height,
+        turnRange,
       });
     });
 

@@ -70,15 +70,17 @@ export function ChatMinimap({
   const [canvasHeight, setCanvasHeight] = useState(0);
 
   // Detect theme (check for data-theme attribute or prefers-color-scheme)
-  const [isDarkTheme, setIsDarkTheme] = useState(true);
+  // Possible values: 'dark', 'light', 'dark-flat'
+  const [theme, setTheme] = useState<string>('dark');
 
   useEffect(() => {
     const checkTheme = () => {
-      const theme = document.documentElement.getAttribute('data-theme');
-      if (theme) {
-        setIsDarkTheme(theme === 'dark');
+      const dataTheme = document.documentElement.getAttribute('data-theme');
+      if (dataTheme) {
+        setTheme(dataTheme);
       } else {
-        setIsDarkTheme(window.matchMedia('(prefers-color-scheme: dark)').matches);
+        // Fall back to system preference
+        setTheme(window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
       }
     };
 
@@ -101,7 +103,7 @@ export function ChatMinimap({
   }, []);
 
   // Get colors based on theme
-  const colors = useMemo(() => getMinimapColors(isDarkTheme), [isDarkTheme]);
+  const colors = useMemo(() => getMinimapColors(theme), [theme]);
 
   // Track canvas height via ResizeObserver
   useEffect(() => {

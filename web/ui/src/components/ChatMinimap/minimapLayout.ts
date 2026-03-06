@@ -57,6 +57,7 @@ export function calculateMinimapLayoutFromDOM(
       y,
       height,
       turns: [], // Individual turns rendered as a block
+      turnRange: rect.turnRange,
     });
   }
 

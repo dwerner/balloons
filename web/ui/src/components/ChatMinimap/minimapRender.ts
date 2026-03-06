@@ -155,6 +155,29 @@ export function renderMinimap(
       ctx.globalAlpha = 0.5;
       ctx.fillRect(contentX, fillY, contentWidth, fillH);
       ctx.globalAlpha = 1.0;
+
+      // Draw turn range label if exchange is tall enough (at least 10px)
+      if (exLayout.turnRange && exHeight >= 10) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+        ctx.font = '7px monospace';
+        ctx.textBaseline = 'middle';
+        ctx.textAlign = 'center';
+
+        // Draw label centered in the exchange
+        const labelX = CONTENT_PADDING_X + (width - CONTENT_PADDING_X * 2) / 2;
+        const labelY = y + exHeight / 2;
+
+        // Shorten label if needed (use just the first number for very small spaces)
+        let label = exLayout.turnRange;
+        if (exHeight < 14 && label.includes('-')) {
+          // Just show first number for very small blocks
+          label = label.split('-')[0] || label;
+        }
+
+        ctx.fillText(label, labelX, labelY);
+        ctx.restore();
+      }
     }
   }
 
