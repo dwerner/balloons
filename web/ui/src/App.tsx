@@ -1163,9 +1163,13 @@ function AppContent() {
   const { voiceInputEnabled, voiceInputHost, voiceInputPort } = usePreferences();
 
   // Input area height - resizable by dragging top edge
+  // On mobile, cap the height to a reasonable max to prevent huge text areas
   const [inputAreaHeight, setInputAreaHeight] = useState(() => {
     const saved = localStorage.getItem('balloons:input-area-height');
-    return saved ? parseInt(saved, 10) : 100;
+    const height = saved ? parseInt(saved, 10) : 100;
+    // On mobile, cap at 150px by default
+    const isMobile = typeof window !== 'undefined' && window.innerWidth <= 767;
+    return isMobile ? Math.min(height, 150) : height;
   });
   const inputAreaResizing = useRef(false);
   const inputAreaStartY = useRef(0);

@@ -36,11 +36,12 @@ Note: Unknown categories go to a default buffer for backward compatibility.
 
 **Debug Tools (LLM self-debugging):**
 
-Query log entries from in-memory buffer:
+Query log entries from in-memory buffer (default: 10 entries, compact format):
 ```json
-{"name": "debug_log_query", "args": {"category": "api", "limit": 20}}
+{"name": "debug_log_query", "args": {"category": "api"}}
 {"name": "debug_log_query", "args": {"category": "api", "level": "error"}}
-{"name": "debug_log_query", "args": {"category": "runner", "run_id": "run-123"}}
+{"name": "debug_log_query", "args": {"category": "api", "limit": 20, "offset": 10}}
+{"name": "debug_log_query", "args": {"category": "runner", "run_id": "run-123", "verbose": true}}
 ```
 
 Configure logging and check server identity:
@@ -50,10 +51,11 @@ Configure logging and check server identity:
 {"name": "debug_log_config", "args": {"action": "enable", "category": "api"}}
 ```
 
-Tail log files for historical debugging:
+Tail log files for historical debugging (default: 20 lines, compact format):
 ```json
-{"name": "debug_log_tail", "args": {"category": "api", "lines": 100}}
+{"name": "debug_log_tail", "args": {"category": "api"}}
 {"name": "debug_log_tail", "args": {"category": "api", "grep": "error"}}
+{"name": "debug_log_tail", "args": {"category": "api", "lines": 50, "offset": 20, "verbose": true}}
 ```
 
 **Tailing logs (bash):**

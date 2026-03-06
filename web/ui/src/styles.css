@@ -1367,15 +1367,18 @@ html.keyboard-visible .turns-container {
   background: var(--color-accent-green);
 }
 
-/* Hide resize handle on mobile and adjust padding */
+/* Mobile input area adjustments */
 @media (max-width: 767px) {
+  /* Keep resize handle visible on mobile - just adjust position */
   .input-area-resize-handle {
-    display: none;
+    height: 14px; /* Slightly larger touch target */
   }
 
   .input-area {
     padding: 4px;
-    padding-top: 4px; /* No resize handle, so no extra top padding */
+    padding-top: 12px; /* Space for resize handle */
+    /* Cap the height on mobile - localStorage value might be too large */
+    max-height: 200px !important;
   }
 
   /* Make form elements fill height on mobile */

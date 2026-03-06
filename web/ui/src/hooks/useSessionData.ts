@@ -704,7 +704,6 @@ export function useSessionData(
                 toolUseId: event.toolUseId,
                 toolName: event.toolName,
                 turnsCount: prev.size,
-                turnOrders: Array.from(prev.values()).map((t) => ({ order: t.order, type: t.contentBlock?.type })),
               });
               return prev;
             });

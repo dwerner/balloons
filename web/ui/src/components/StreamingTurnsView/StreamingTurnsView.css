@@ -1,5 +1,13 @@
 /* StreamingTurnsView styles */
 
+/* Wrapper contains the scroll container + minimap side by side */
+.streaming-turns-view-wrapper {
+  position: relative;
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+
 /* Container is the scrollable element with position:relative for the
  * scroll-to-bottom indicator positioning.
  *
@@ -11,6 +19,7 @@
   position: relative;
   display: flex;
   flex-direction: column;
+  flex: 1;
   height: 100%;
   overflow-y: auto;
   background: var(--bg-primary, #ffffff);
@@ -18,6 +27,11 @@
   touch-action: pan-y;
   overscroll-behavior: contain; /* Contain scroll chaining to prevent document bounce */
   -webkit-overflow-scrolling: touch; /* Smooth momentum scrolling on iOS */
+}
+
+/* Add right margin when minimap is visible */
+.streaming-turns-view-container--with-minimap {
+  margin-right: 60px;
 }
 
 .streaming-turns-view {
@@ -618,4 +632,121 @@
 [data-theme="light"] .parallel-group-header {
   background: rgba(160, 80, 208, 0.1);
   border-bottom: 1px solid rgba(160, 80, 208, 0.2);
+}
+
+/* ========================================
+ * Minimap integration styles
+ * ======================================== */
+
+/* Minimap toggle button - positioned in the wrapper, stays visible during scroll */
+.streaming-turns-view-wrapper .chat-minimap-toggle {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 51;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+
+  background: var(--bg-elevated, #1a1a1a);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+  border-radius: 4px;
+  color: var(--text-secondary, #888);
+  cursor: pointer;
+
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.streaming-turns-view-wrapper .chat-minimap-toggle:hover {
+  background: var(--bg-hover, #2a2a2a);
+  color: var(--text-primary, #fff);
+  border-color: var(--border-color-hover, rgba(255, 255, 255, 0.2));
+}
+
+.streaming-turns-view-wrapper .chat-minimap-toggle:focus-visible {
+  outline: 2px solid var(--color-primary, #3b82f6);
+  outline-offset: 2px;
+}
+
+.streaming-turns-view-wrapper .chat-minimap-toggle--active {
+  color: var(--color-primary, #3b82f6);
+  border-color: var(--color-primary, #3b82f6);
+}
+
+.streaming-turns-view-wrapper .chat-minimap-toggle__icon {
+  width: 16px;
+  height: 16px;
+}
+
+/* When minimap is visible, move toggle to the left of it */
+.streaming-turns-view-wrapper .chat-minimap-toggle--with-minimap {
+  right: calc(var(--minimap-width, 60px) + 8px);
+}
+
+/* Light theme adjustments for toggle */
+[data-theme="light"] .streaming-turns-view-wrapper .chat-minimap-toggle {
+  background: var(--bg-primary, #fff);
+  border-color: var(--border-color, rgba(0, 0, 0, 0.1));
+  color: var(--text-secondary, #666);
+}
+
+[data-theme="light"] .streaming-turns-view-wrapper .chat-minimap-toggle:hover {
+  background: var(--bg-secondary, #f5f5f5);
+  color: var(--text-primary, #1a1a1a);
+}
+
+/* Mobile: minimap controlled by toggle, narrower width */
+@media (max-width: 768px) {
+  .streaming-turns-view-wrapper .chat-minimap {
+    width: 50px;  /* Narrower on mobile */
+  }
+
+  /* Only hide when explicitly hidden */
+  .streaming-turns-view-wrapper .chat-minimap.chat-minimap--hidden {
+    display: none;
+  }
+
+  /* Adjust margin when minimap is visible on mobile */
+  .streaming-turns-view-container--with-minimap {
+    margin-right: 50px;  /* Match narrower mobile width */
+  }
+
+  .streaming-turns-view-wrapper .chat-minimap-toggle {
+    right: 8px;
+  }
+
+  .streaming-turns-view-wrapper .chat-minimap-toggle--with-minimap {
+    right: calc(50px + 8px);  /* Adjust for narrower mobile minimap */
+  }
+}
+
+/* ========================================
+ * ScrollToBottom positioning
+ * ======================================== */
+
+/* ScrollToBottom is now inside the wrapper (not scroll container)
+ * so it stays fixed while content scrolls */
+.streaming-turns-view-wrapper .scroll-to-bottom {
+  /* Keep the same positioning but relative to wrapper */
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(100px);
+}
+
+.streaming-turns-view-wrapper .scroll-to-bottom.visible {
+  transform: translateX(-50%) translateY(0);
+}
+
+.streaming-turns-view-wrapper .scroll-to-bottom:active {
+  transform: translateX(-50%) scale(0.98);
+}
+
+/* When minimap is visible, adjust position slightly to center in visible area */
+.streaming-turns-view-wrapper:has(.chat-minimap:not(.chat-minimap--hidden)) .scroll-to-bottom {
+  left: calc(50% - 30px); /* Offset by half minimap width */
 }

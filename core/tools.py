@@ -897,7 +897,7 @@ DEBUG_TOOLS = [
             "description": """Query log entries from the server's in-memory buffer.
 
 Use this tool to debug issues by viewing recent log entries. Each category has its own
-ring buffer (500 entries by default). Entries are returned newest-first.
+ring buffer (500 entries by default). Entries are returned newest-first in compact format.
 
 Categories (8 core):
 - client: Web UI events
@@ -910,7 +910,11 @@ Categories (8 core):
 - perf: Timing markers
 
 Example: Query recent API errors
-  debug_log_query(category="api", limit=20, level="error")""",
+  debug_log_query(category="api", level="error")
+Example: Paginate through results
+  debug_log_query(category="api", limit=10, offset=10)
+Example: Get full details
+  debug_log_query(category="runner", verbose=true)""",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -920,7 +924,11 @@ Example: Query recent API errors
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Max entries to return (default 50)"
+                        "description": "Max entries to return (default 10)"
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Skip first N entries for pagination (default 0)"
                     },
                     "level": {
                         "type": "string",
@@ -934,6 +942,10 @@ Example: Query recent API errors
                     "session_id": {
                         "type": "string",
                         "description": "Filter by session ID (optional)"
+                    },
+                    "verbose": {
+                        "type": "boolean",
+                        "description": "Include full details JSON (default false - shows truncated summary)"
                     }
                 },
                 "required": ["category"]
@@ -987,7 +999,11 @@ Note: This only works if the category was enabled for file logging when the
 events occurred.
 
 Example: Search API logs for errors
-  debug_log_tail(category="api", lines=500, grep="error")""",
+  debug_log_tail(category="api", grep="error")
+Example: Paginate backward through logs
+  debug_log_tail(category="api", lines=20, offset=40)
+Example: Get full details
+  debug_log_tail(category="runner", verbose=true)""",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -997,11 +1013,19 @@ Example: Search API logs for errors
                     },
                     "lines": {
                         "type": "integer",
-                        "description": "Number of lines to return (default 100)"
+                        "description": "Number of lines to return (default 20)"
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Skip last N lines for pagination (default 0)"
                     },
                     "grep": {
                         "type": "string",
                         "description": "Optional filter pattern (case-insensitive)"
+                    },
+                    "verbose": {
+                        "type": "boolean",
+                        "description": "Include full details in output (default false)"
                     }
                 },
                 "required": ["category"]

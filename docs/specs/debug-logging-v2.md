@@ -114,22 +114,25 @@ Events logged to the `lifecycle` category:
 
 ### debug_log_query
 
-Query recent log entries from in-memory buffer.
+Query recent log entries from in-memory buffer. Returns compact output by default.
 
 ```json
 {
   "name": "debug_log_query",
   "args": {
     "category": "api",           // required
-    "limit": 50,                 // optional, default 50
+    "limit": 10,                 // optional, default 10
+    "offset": 0,                 // optional, skip first N entries for pagination
     "level": "error",            // optional, filter by level
     "run_id": "run-123",         // optional, filter by run
-    "session_id": "sess-456"     // optional, filter by session
+    "session_id": "sess-456",    // optional, filter by session
+    "verbose": false             // optional, default false - shows truncated details
   }
 }
 ```
 
-Returns: Array of log entries (most recent first)
+Returns: Formatted log entries (newest first). When more entries are available,
+output includes pagination hint: `[more available, use offset=N]`
 
 ### debug_log_config
 
@@ -151,15 +154,17 @@ Query or modify log configuration.
 
 ### debug_log_tail
 
-Tail a log file (for historical/long-term debugging).
+Tail a log file (for historical/long-term debugging). Returns compact output by default.
 
 ```json
 {
   "name": "debug_log_tail",
   "args": {
     "category": "api",
-    "lines": 100,                // last N lines
-    "grep": "error"              // optional, filter pattern
+    "lines": 20,                 // optional, default 20
+    "offset": 0,                 // optional, skip last N lines for pagination
+    "grep": "error",             // optional, filter pattern
+    "verbose": false             // optional, default false - shows truncated details
   }
 }
 ```
@@ -219,13 +224,15 @@ The Options tab will show:
 ## Usage Patterns
 
 ### "Something just broke"
-1. Use `debug_log_query(category="api", limit=20)` to see recent entries
+1. Use `debug_log_query(category="api")` to see the last 10 entries
 2. Check for errors/warnings
 3. Filter by `run_id` if you know which call failed
+4. Use `verbose=true` if you need full details
 
 ### "When did this start happening"
-1. Tail the log file: `tail -100 ~/.balloons/logs/api.log | grep error`
-2. Or use `debug_log_tail(category="api", lines=500, grep="error")`
+1. Tail the log file: `tail -20 ~/.balloons/logs/api.log | grep error`
+2. Or use `debug_log_tail(category="api", grep="error")`
+3. Paginate backward with `offset` parameter
 
 ### "Am I running my changes"
 1. Use `debug_log_config(action="identity")`

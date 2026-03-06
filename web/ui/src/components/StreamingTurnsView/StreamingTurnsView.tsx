@@ -1,5 +1,5 @@
 /**
- * StreamingTurnsView - Chat log view using SessionDataService
+ * StreamingTurnsView - Chat log view using SessionDataService (v2)
  *
  * This component displays turns using the new SessionDataService subscription
  * model (turn_id based) rather than TaskStateService (turn_index based).
@@ -28,7 +28,11 @@ import { useSessionData, type SessionDataTurn, type StreamingProgress } from '..
 import type { ToolResultBlock } from '../../../../generated/types';
 import { TurnCard, ClientContext } from './cards';
 import { ScrollToBottom } from '../ScrollToBottom';
+import { ChatMinimap, type MinimapExchange, type ExchangeDOMRect } from '../ChatMinimap';
+import { createLogger } from '../../utils/debugLog';
 import './StreamingTurnsView.css';
+
+const log = createLogger('StreamingTurnsView');
 
 // Re-export StreamingProgress for consumers
 export type { StreamingProgress } from '../../hooks';
@@ -95,7 +99,15 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
   }, [isLoading, error, onLoadingChange]);
 
   // Ref for the scrollable container
+  // Also track the element in state so we can re-run effects when it changes
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [scrollContainerElement, setScrollContainerElement] = useState<HTMLDivElement | null>(null);
+
+  // Callback ref to track when the DOM element actually changes
+  const scrollContainerCallbackRef = useCallback((node: HTMLDivElement | null) => {
+    scrollContainerRef.current = node;
+    setScrollContainerElement(node);
+  }, []);
 
   // Track whether user is following the stream (auto-scroll enabled)
   // Use a ref alongside state to avoid race conditions during rapid updates
@@ -291,6 +303,159 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     return groups;
   }, [turnsOrGroups]);
 
+  // Convert exchange groups to minimap format
+  const minimapExchanges = useMemo((): MinimapExchange[] => {
+    return exchangeGroups.map((group) => ({
+      id: group.exchangeId,
+      colorIndex: group.colorIndex,
+      turns: group.items.flatMap((item) =>
+        item.turns.map((turn) => ({
+          id: turn.turnId,
+          role: turn.role as 'user' | 'assistant' | 'system' | 'tool',
+          contentType: turn.contentBlock?.type || 'text',
+          tokens: turn.tokens || 100, // Default to 100 if no token count
+          parallelGroupId: turn.parallelGroupId,
+        }))
+      ),
+    }));
+  }, [exchangeGroups]);
+
+  // Minimap visibility state (persisted to localStorage)
+  const [showMinimap, setShowMinimap] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('balloons:minimap-visible');
+      // Default to true on desktop, false on mobile
+      if (stored !== null) return stored === 'true';
+      return window.innerWidth > 768;
+    }
+    return true;
+  });
+
+  // Persist minimap visibility
+  useEffect(() => {
+    localStorage.setItem('balloons:minimap-visible', String(showMinimap));
+  }, [showMinimap]);
+
+  // Track scroll metrics for minimap
+  const [scrollMetrics, setScrollMetrics] = useState({
+    scrollTop: 0,
+    scrollHeight: 0,
+    clientHeight: 0,
+  });
+
+  // DOM-measured exchange positions for accurate minimap
+  const [exchangeRects, setExchangeRects] = useState<ExchangeDOMRect[]>([]);
+  const exchangeRefsMap = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  // Measure exchange DOM positions for minimap
+  const measureExchanges = useCallback(() => {
+    const scrollContainer = scrollContainerRef.current;
+    if (!scrollContainer) return;
+
+    const rects: ExchangeDOMRect[] = [];
+    const containerTop = scrollContainer.getBoundingClientRect().top;
+    const scrollOffset = scrollContainer.scrollTop;
+
+    console.log('[MINIMAP] measureExchanges:', {
+      refsCount: exchangeRefsMap.current.size,
+      containerTop,
+      scrollOffset,
+    });
+
+    exchangeRefsMap.current.forEach((element, id) => {
+      if (!element) return;
+      const rect = element.getBoundingClientRect();
+
+      // Calculate position relative to scroll container's scroll origin
+      const top = rect.top - containerTop + scrollOffset;
+
+      // Find the color index from exchangeGroups
+      const group = exchangeGroups.find(g => g.exchangeId === id);
+
+      rects.push({
+        id,
+        colorIndex: group?.colorIndex ?? 0,
+        top,
+        height: rect.height,
+      });
+    });
+
+    // Sort by top position
+    rects.sort((a, b) => a.top - b.top);
+
+    // Debug log the first few and last few
+    if (rects.length > 0) {
+      console.log('[MINIMAP] measured rects:', {
+        count: rects.length,
+        first: rects.slice(0, 3).map(r => ({ id: r.id.slice(0, 8), top: Math.round(r.top), height: Math.round(r.height) })),
+        last: rects.slice(-2).map(r => ({ id: r.id.slice(0, 8), top: Math.round(r.top), height: Math.round(r.height) })),
+      });
+    }
+
+    setExchangeRects(rects);
+  }, [exchangeGroups]);
+
+  // Measure exchanges when content changes
+  useEffect(() => {
+    // Defer measurement to allow DOM to settle
+    const timeout = setTimeout(measureExchanges, 50);
+    return () => clearTimeout(timeout);
+  }, [exchangeGroups.length, measureExchanges]);
+
+  // Also measure on scroll (in case of lazy-loaded content)
+  useEffect(() => {
+    if (scrollContainerRef.current) {
+      // Debounced measurement on scroll
+      let timeout: ReturnType<typeof setTimeout>;
+      const handleScroll = () => {
+        clearTimeout(timeout);
+        timeout = setTimeout(measureExchanges, 100);
+      };
+      scrollContainerRef.current.addEventListener('scroll', handleScroll, { passive: true });
+      return () => {
+        clearTimeout(timeout);
+        scrollContainerRef.current?.removeEventListener('scroll', handleScroll);
+      };
+    }
+  }, [scrollContainerElement, measureExchanges]);
+
+  // Track the last turn index seen before scrolling away (for "new content" indicator)
+  const lastSeenTurnIndexRef = useRef<number>(turnsOrGroups.length);
+
+  // Update lastSeenTurnIndex when following
+  useEffect(() => {
+    if (isFollowing) {
+      lastSeenTurnIndexRef.current = turnsOrGroups.length;
+    }
+  }, [isFollowing, turnsOrGroups.length]);
+
+  // Update scroll metrics when content changes (needed for minimap to size correctly)
+  useEffect(() => {
+    const element = scrollContainerRef.current;
+    if (!element) return;
+
+    // Use RAF to ensure DOM has updated
+    requestAnimationFrame(() => {
+      if (scrollContainerRef.current) {
+        setScrollMetrics({
+          scrollTop: scrollContainerRef.current.scrollTop,
+          scrollHeight: scrollContainerRef.current.scrollHeight,
+          clientHeight: scrollContainerRef.current.clientHeight,
+        });
+      }
+    });
+  }, [turnsOrGroups.length, exchangeGroups.length]);
+
+  // Debug: log minimap-related state
+  useEffect(() => {
+    log('Minimap state', {
+      minimapExchanges: minimapExchanges.length,
+      scrollMetrics,
+      showMinimap,
+      visible: showMinimap && minimapExchanges.length > 0,
+    });
+  }, [minimapExchanges.length, scrollMetrics, showMinimap]);
+
   // Report scroll state changes to parent (for status bar indicator)
   useEffect(() => {
     if (onScrollStateChange) {
@@ -329,8 +494,36 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     isFollowingRef.current = true;
     setIsAtBottom(true);
 
-    // Use native scroll to bottom
-    scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+    const element = scrollContainerRef.current;
+
+    // Use scrollTo with behavior smooth for better UX, then force to exact bottom
+    element.scrollTo({
+      top: element.scrollHeight,
+      behavior: 'instant'
+    });
+
+    // Double-check we're at the bottom after a short delay (DOM might update)
+    requestAnimationFrame(() => {
+      if (scrollContainerRef.current) {
+        scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+      }
+      setTimeout(() => {
+        programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
+      }, 50);
+    });
+  }, []);
+
+  // Handle minimap navigation - scroll to position and pause following
+  const handleMinimapNavigate = useCallback((scrollPosition: number) => {
+    if (!scrollContainerRef.current) return;
+
+    programmaticScrollCountRef.current++;
+
+    // Pause following when using minimap to navigate
+    setIsFollowing(false);
+    isFollowingRef.current = false;
+
+    scrollContainerRef.current.scrollTop = scrollPosition;
 
     // Reset flag after scroll settles
     setTimeout(() => {
@@ -373,25 +566,33 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
 
     const atBottom = checkAtBottom();
     const scrollDirection = element.scrollTop - lastScrollTopRef.current;
+
     lastScrollTopRef.current = element.scrollTop;
 
     setIsAtBottom(atBottom);
 
+    // Update scroll metrics for minimap
+    setScrollMetrics({
+      scrollTop: element.scrollTop,
+      scrollHeight: element.scrollHeight,
+      clientHeight: element.clientHeight,
+    });
+
     // Skip following-state changes if this is a programmatic scroll
-    // BUT only if user isn't actively scrolling (wheel takes priority)
+    // Check this FIRST to avoid fighting with scrollToBottom/auto-scroll
     if (programmaticScrollCountRef.current > 0 && !userScrollingRef.current) {
       return;
     }
 
-    // User scrolled UP and away from bottom - pause following
-    // Use a more significant threshold to avoid false triggers
-    if (scrollDirection < -20 && !atBottom) {
+    // User scrolled UP - pause following (only if not programmatic)
+    if (scrollDirection < -5) {
       setIsFollowing(false);
       isFollowingRef.current = false;
+      return;
     }
 
-    // User scrolled to bottom - resume following
-    if (atBottom) {
+    // User scrolled DOWN to bottom - resume following
+    if (atBottom && scrollDirection > 5 && !isFollowingRef.current) {
       setIsFollowing(true);
       isFollowingRef.current = true;
     }
@@ -402,19 +603,54 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     const element = scrollContainerRef.current;
     if (!element) return;
 
+    // Initialize scroll metrics on mount
+    const updateScrollMetrics = () => {
+      if (scrollContainerRef.current) {
+        setScrollMetrics({
+          scrollTop: scrollContainerRef.current.scrollTop,
+          scrollHeight: scrollContainerRef.current.scrollHeight,
+          clientHeight: scrollContainerRef.current.clientHeight,
+        });
+      }
+    };
+
+    updateScrollMetrics();
+
     element.addEventListener('scroll', handleScroll, { passive: true });
     element.addEventListener('wheel', handleWheel, { passive: true });
     element.addEventListener('touchstart', handleTouchStart, { passive: true });
+
+    // Use ResizeObserver to detect content size changes
+    // When content grows (e.g., large tool result loads) and we're following,
+    // we need to scroll to bottom and protect against scroll-up detection
+    let lastScrollHeight = element.scrollHeight;
+    const resizeObserver = new ResizeObserver(() => {
+      updateScrollMetrics();
+
+      // Check if scrollHeight increased (content grew)
+      const newScrollHeight = element.scrollHeight;
+      if (newScrollHeight > lastScrollHeight && isFollowingRef.current && !userScrollingRef.current) {
+        // Content grew while following - auto-scroll to bottom
+        programmaticScrollCountRef.current++;
+        element.scrollTop = newScrollHeight;
+        setTimeout(() => {
+          programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
+        }, 100);
+      }
+      lastScrollHeight = newScrollHeight;
+    });
+    resizeObserver.observe(element);
 
     return () => {
       element.removeEventListener('scroll', handleScroll);
       element.removeEventListener('wheel', handleWheel);
       element.removeEventListener('touchstart', handleTouchStart);
+      resizeObserver.disconnect();
       if (userScrollTimeoutRef.current) {
         clearTimeout(userScrollTimeoutRef.current);
       }
     };
-  }, [handleScroll, handleWheel, handleTouchStart]);
+  }, [handleScroll, handleWheel, handleTouchStart, scrollContainerElement]);
 
   // Auto-scroll when NEW content arrives and we're following
   // Use ref to check following state to avoid race conditions with setState
@@ -442,8 +678,17 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         return;
       }
 
+      const element = scrollContainerRef.current;
+
       // Native scroll to bottom
-      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+      element.scrollTop = element.scrollHeight;
+
+      // Update scroll metrics for minimap
+      setScrollMetrics({
+        scrollTop: element.scrollTop,
+        scrollHeight: element.scrollHeight,
+        clientHeight: element.clientHeight,
+      });
 
       setTimeout(() => {
         programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
@@ -476,10 +721,50 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
 
   return (
     <ClientContext.Provider value={contextValue}>
-      <div
-        className="streaming-turns-view-container"
-        ref={scrollContainerRef}
-      >
+      <div className="streaming-turns-view-wrapper">
+        {/* Minimap toggle button - outside scroll container so it stays fixed */}
+        <button
+          className={`chat-minimap-toggle ${showMinimap ? 'chat-minimap-toggle--active chat-minimap-toggle--with-minimap' : ''}`}
+          style={{ '--minimap-width': '60px' } as React.CSSProperties}
+          onClick={() => setShowMinimap(!showMinimap)}
+          title={showMinimap ? 'Hide minimap' : 'Show minimap'}
+          aria-label={showMinimap ? 'Hide minimap' : 'Show minimap'}
+        >
+          <svg
+            className="chat-minimap-toggle__icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            {/* Minimap icon: small rectangles representing overview */}
+            <rect x="3" y="3" width="7" height="4" rx="1" />
+            <rect x="3" y="10" width="7" height="4" rx="1" />
+            <rect x="3" y="17" width="7" height="4" rx="1" />
+            <rect x="14" y="3" width="7" height="18" rx="1" />
+          </svg>
+        </button>
+
+        {/* Minimap - outside scroll container */}
+        <ChatMinimap
+          exchangeRects={exchangeRects}
+          exchanges={minimapExchanges}
+          scrollTop={scrollMetrics.scrollTop}
+          scrollHeight={scrollMetrics.scrollHeight}
+          viewportHeight={scrollMetrics.clientHeight}
+          isFollowing={isFollowing}
+          lastSeenTurnIndex={lastSeenTurnIndexRef.current}
+          onNavigate={handleMinimapNavigate}
+          visible={showMinimap && exchangeRects.length > 0}
+          width={60}
+        />
+
+        <div
+          className={`streaming-turns-view-container ${showMinimap ? 'streaming-turns-view-container--with-minimap' : ''}`}
+          ref={scrollContainerCallbackRef}
+        >
         <div className="streaming-turns-view">
           {/* Direct rendering of all turns grouped by exchange */}
           <div className="streaming-turns-list">
@@ -503,6 +788,16 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
               return (
                 <div
                   key={`${exchangeGroup.exchangeId || 'no-exchange'}-${groupIndex}`}
+                  ref={(el) => {
+                    const id = exchangeGroup.exchangeId;
+                    if (id) {
+                      if (el) {
+                        exchangeRefsMap.current.set(id, el);
+                      } else {
+                        exchangeRefsMap.current.delete(id);
+                      }
+                    }
+                  }}
                   className={`exchange-group exchange-group--color-${exchangeGroup.colorIndex} ${isArchivingExchange ? 'exchange-group--archiving' : ''}`}
                   data-exchange-id={exchangeGroup.exchangeId || undefined}
                 >
@@ -603,6 +898,9 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
             </div>
           )}
         </div>
+      </div>
+
+        {/* ScrollToBottom - outside scroll container so it stays fixed */}
         <ScrollToBottom
           visible={showScrollIndicator}
           onClick={scrollToBottom}
