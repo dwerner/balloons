@@ -10,6 +10,7 @@ import { SupervisorTab } from './components/SupervisorTab';
 import { OptionsTab } from './components/OptionsTab';
 import { SettingsTab } from './components/SettingsTab';
 import { KanbanTab } from './components/KanbanTab';
+import { SessionKanbanTab } from './components/SessionKanbanTab';
 import { LogsTab } from './components/LogsTab';
 import { LLMTab } from './components/LLMTab';
 import { CodeTab, type CodeReview, type CodeTabHandle, type GitStatusInfo } from './components/CodeTab';
@@ -22,7 +23,7 @@ import { PropertiesTab } from './components/PropertiesTab';
 import { StreamingTurnsView, type StreamingProgress } from './components/StreamingTurnsView';
 import { ContextTabView, type ContextMode as ContextTabMode, type ExchangeAction as ContextTabExchangeAction } from './components/ContextTabView';
 import { DialogProvider, useDialog } from './components/Dialog';
-import { useWakeLock, useSoundNotifications, useLongPress } from './hooks';
+import { useWakeLock, useSoundNotifications, useLongPress, useVisualViewport } from './hooks';
 import { RenameSessionModal } from './components/RenameSessionModal';
 import { VoiceInput } from './components/VoiceInput';
 import { setDebugClient, createLogger, isDebugEnabled, setDebugEnabled } from './utils/debugLog';
@@ -1338,6 +1339,10 @@ function AppContent() {
           }
 
           if (sessionIdToLoad) {
+            // Track which session we're loading (for race condition detection)
+            // Must be set BEFORE isLoadingTurns so handleTurnsChange can clear loading
+            // even for empty sessions
+            loadingSessionRef.current = sessionIdToLoad;
             setSelectedSessionId(sessionIdToLoad);
             setIsLoadingTurns(true);
 
@@ -1997,6 +2002,32 @@ function AppContent() {
       setIsLoadingTurns(false);
     }
   }, [isLoadingTurns]);
+
+  // Handle loading state changes from StreamingTurnsView
+  // This ensures isLoadingTurns is cleared when the session data hook finishes loading,
+  // even if there's an error or the session is empty
+  const handleSessionLoadingChange = useCallback((isLoading: boolean, error: string | null) => {
+    debugLog('handleSessionLoadingChange', { isLoading, error, isLoadingTurns });
+    // When StreamingTurnsView reports it's done loading, clear our loading state
+    if (!isLoading && isLoadingTurns) {
+      setIsLoadingTurns(false);
+    }
+    // If there's an error, also set it on our error state
+    if (error) {
+      setError(error);
+    }
+  }, [isLoadingTurns]);
+
+  // Safety net: Clear loading state if connection drops while loading
+  // This prevents the input from being stuck in "Loading session..." state
+  // when StreamingTurnsView unmounts due to connection loss
+  useEffect(() => {
+    if (connectionState !== 'connected' && isLoadingTurns) {
+      debugLog('Clearing isLoadingTurns due to connection loss', { connectionState });
+      setIsLoadingTurns(false);
+      loadingSessionRef.current = null;
+    }
+  }, [connectionState, isLoadingTurns]);
 
   // Scroll to a specific turn in the chat log
   // Uses data-turn-order attribute on turn wrappers in StreamingTurnsView
@@ -2844,6 +2875,7 @@ function AppContent() {
                       onScrollStateChange={setScrollState}
                       onStreamingProgressChange={handleStreamingProgressChange}
                       onTurnsChange={handleTurnsChange}
+                      onLoadingChange={handleSessionLoadingChange}
                       archivingTurnIndices={archivingTurnIndices}
                       refreshKey={sessionRefreshKey}
                     />
@@ -3036,6 +3068,14 @@ function AppContent() {
                       console.error('Failed to change working directory:', err);
                     }
                   }}
+                />
+              )}
+              {mainContentTab === 'session-kanban' && (
+                <SessionKanbanTab
+                  sessionId={selectedSessionId}
+                  kanbanClient={connectionState === 'connected' ? clientRef.current?.kanban : undefined}
+                  clientId={connectionState === 'connected' && clientRef.current?.hasClientId ? clientRef.current.clientId : undefined}
+                  isConnected={connectionState === 'connected'}
                 />
               )}
               {mainContentTab === 'slides' && (
@@ -3638,6 +3678,12 @@ function MobileHeader({ connectionState, selectedSession }: MobileHeaderProps) {
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
   }, []);
 
+  // Handle virtual keyboard in fullscreen mode
+  // This hook sets --keyboard-offset CSS variable when keyboard appears
+  // Always enable on mobile to handle keyboard regardless of fullscreen state
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+  useVisualViewport(isFullscreen || isMobile);
+
   const toggleFullscreen = useCallback(() => {
     if (document.fullscreenElement) {
       document.exitFullscreen();
@@ -3676,12 +3722,12 @@ function MobileHeader({ connectionState, selectedSession }: MobileHeaderProps) {
 // - docs/url-routing.md (add route to URL scheme)
 // - routes.ts (add route constant when created)
 // - useRouter hook (add route handler when created)
-type MainContentTab = 'streaming' | 'context' | 'properties' | 'slides' | 'code' | 'logs' | 'llm' | 'settings' | 'kanban';
+type MainContentTab = 'streaming' | 'context' | 'session-kanban' | 'properties' | 'slides' | 'code' | 'logs' | 'llm' | 'settings' | 'kanban';
 type OuterTab = 'session' | 'global';
 
 // Helper to determine which outer tab a content tab belongs to
 // URL ROUTING: Add new session tabs to SESSION_TABS, global tabs to GLOBAL_TABS
-const SESSION_TABS: MainContentTab[] = ['streaming', 'context', 'properties', 'slides'];
+const SESSION_TABS: MainContentTab[] = ['streaming', 'context', 'session-kanban', 'properties', 'slides'];
 const GLOBAL_TABS: MainContentTab[] = ['code', 'logs', 'llm', 'settings', 'kanban'];
 
 function getOuterTab(tab: MainContentTab): OuterTab {
@@ -3823,6 +3869,12 @@ function MainContentHeader({
               onClick={() => onTabChange('context')}
             >
               Context
+            </button>
+            <button
+              className={`view-toggle-btn ${activeTab === 'session-kanban' ? 'active' : ''}`}
+              onClick={() => onTabChange('session-kanban')}
+            >
+              Kanban
             </button>
             <button
               className={`view-toggle-btn ${activeTab === 'properties' ? 'active' : ''}`}

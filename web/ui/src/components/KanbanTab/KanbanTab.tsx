@@ -356,14 +356,15 @@ function MoveTaskModal({
 // Board View
 // =============================================================================
 
-interface BoardViewProps {
+export interface BoardViewProps {
   boardState: BoardStateInfo;
   kanbanClient: KanbanWebSocketServiceClient;
   clientId: string;
-  onBack: () => void;
+  /** Back button handler. If not provided, back button is not shown. */
+  onBack?: () => void;
 }
 
-function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardViewProps) {
+export function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardViewProps) {
   const { layoutMode } = useLayout();
   const isMobile = layoutMode === 'mobile';
 
@@ -554,9 +555,11 @@ function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardViewProp
     <div className={`kanban-board-view ${isMobile ? 'kanban-board-view--mobile' : ''}`}>
       {/* Board header */}
       <div className="kanban-board-view__header">
-        <button className="kanban-back-btn" onClick={onBack}>
-          ← Back
-        </button>
+        {onBack && (
+          <button className="kanban-back-btn" onClick={onBack}>
+            ← Back
+          </button>
+        )}
         <h3 className="kanban-board-view__title">{localState.board.name}</h3>
       </div>
 

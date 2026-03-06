@@ -1019,6 +1019,9 @@ from .goal_tools import GOAL_TOOLS, GOAL_TOOL_NAMES
 # Import LSP tools
 from .lsp_tools import LSP_TOOLS, LSP_TOOL_NAMES
 
+# Import kanban tools
+from .kanban_tools import KANBAN_TOOLS, KANBAN_TOOL_NAMES
+
 
 def get_tools_for_request(
     allowed_tools: list[str] | None = None,
@@ -1031,12 +1034,14 @@ def get_tools_for_request(
     include_debug_tools: bool = True,
     include_watcher_tools: bool = False,
     include_lsp_tools: bool = True,
+    include_kanban_tools: bool = True,
 ) -> list[dict] | None:
     """Get the list of tools to include in an API request.
 
     Includes standard file/shell tools and optionally Balloons-specific tools
     (workflow, UI, session/link navigation), supervisor tools, review tools,
-    goal management tools, MIDI tools, debug tools, watcher tools, and LSP tools.
+    goal management tools, MIDI tools, debug tools, watcher tools, LSP tools,
+    and kanban tools.
 
     Args:
         allowed_tools: List of tool names to allow, or None for all
@@ -1049,6 +1054,7 @@ def get_tools_for_request(
         include_debug_tools: If True, include debug logging tools (debug_log_query, etc.)
         include_watcher_tools: If True, include watcher mode tools (send_to_target)
         include_lsp_tools: If True, include LSP semantic code tools (lsp_hover, etc.)
+        include_kanban_tools: If True, include kanban board tools (kanban_create_task, etc.)
 
     Returns:
         List of tool definitions, or None if tools disabled
@@ -1074,6 +1080,8 @@ def get_tools_for_request(
         all_tools = all_tools + WATCHER_TOOLS
     if include_lsp_tools:
         all_tools = all_tools + LSP_TOOLS
+    if include_kanban_tools:
+        all_tools = all_tools + KANBAN_TOOLS
 
     if allowed_tools is None:
         return all_tools

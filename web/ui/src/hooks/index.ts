@@ -26,3 +26,5 @@ export type {
   UseLongPressOptions,
   UseLongPressReturn,
 } from './useLongPress';
+
+export { useVisualViewport } from './useVisualViewport';

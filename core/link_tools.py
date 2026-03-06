@@ -10,7 +10,8 @@ the execution logic.
 import json
 from typing import Any, Callable
 
-from core.async_storage import GoalStorage
+from core.async_storage import GoalStorage, AsyncStorage
+from core.kanban_service import KanbanService
 from session import Session
 
 
@@ -361,9 +362,40 @@ async def _execute_session_info(session: Session) -> tuple[str, bool]:
         })
     result["forked_to"] = forked_to
 
+    # Get kanban board associations for this session (with tasks)
+    try:
+        storage = AsyncStorage()
+        kanban = KanbanService(storage)
+        board_tuples = await kanban.get_boards_for_session(session.id)
+        if board_tuples:
+            boards_info = []
+            for assoc, board in board_tuples:
+                # Get full board state to include tasks
+                board_state = await kanban.get_board_state(board.id)
+                if board_state:
+                    # Build task list with column name as state
+                    tasks = []
+                    col_name_by_id = {col.id: col.name for col in board_state.columns}
+                    for col in board_state.columns:
+                        for task in col.tasks:
+                            tasks.append({
+                                "title": task.title,
+                                "state": col.name,
+                            })
+                    boards_info.append({
+                        "id": board.id,
+                        "name": board.name,
+                        "tasks": tasks,
+                    })
+            if boards_info:
+                result["boards"] = boards_info
+    except Exception:
+        # Don't fail session_info if kanban lookup fails
+        pass
+
     # Get session binding if any
-    storage = GoalStorage()
-    bindings = await storage.get_bindings_for_session(session.id, active_only=True)
+    goal_storage = GoalStorage()
+    bindings = await goal_storage.get_bindings_for_session(session.id, active_only=True)
     if bindings:
         # Use the most recent active binding
         binding = bindings[-1]

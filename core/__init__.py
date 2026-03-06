@@ -98,11 +98,16 @@ from .tools import (
     REVIEW_TOOL_NAMES,
     GOAL_TOOLS,
     GOAL_TOOL_NAMES,
+    KANBAN_TOOLS,
+    KANBAN_TOOL_NAMES,
     get_tools_for_request,
 )
 
 # Goal tools
 from .goal_tools import execute_goal_tool
+
+# Kanban tools
+from .kanban_tools import execute_kanban_tool
 
 # LSP tools
 from .lsp_tools import execute_lsp_tool, LSP_TOOL_NAMES, LSP_TOOLS
@@ -368,9 +373,13 @@ __all__ = [
     "REVIEW_TOOL_NAMES",
     "GOAL_TOOLS",
     "GOAL_TOOL_NAMES",
+    "KANBAN_TOOLS",
+    "KANBAN_TOOL_NAMES",
     "get_tools_for_request",
     # Goal tools
     "execute_goal_tool",
+    # Kanban tools
+    "execute_kanban_tool",
     # LSP tools
     "execute_lsp_tool",
     "LSP_TOOL_NAMES",

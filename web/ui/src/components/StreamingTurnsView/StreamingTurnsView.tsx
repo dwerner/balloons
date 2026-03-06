@@ -64,6 +64,8 @@ interface StreamingTurnsViewProps {
   onStreamingProgressChange?: (progress: StreamingProgress | null) => void;
   /** Callback when turns change (for sharing with sidebar/tree view) */
   onTurnsChange?: (turns: SessionDataTurn[]) => void;
+  /** Callback when session data loading state changes (for clearing parent loading indicators) */
+  onLoadingChange?: (isLoading: boolean, error: string | null) => void;
   /** Turn indices currently being archived (show spinner overlay) */
   archivingTurnIndices?: Set<number>;
   /** Increment to force re-subscription (e.g., after archive) */
@@ -73,7 +75,7 @@ interface StreamingTurnsViewProps {
 // Threshold in pixels to consider "at bottom"
 const AT_BOTTOM_THRESHOLD = 150;
 
-export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrollStateChange, onStreamingProgressChange, onTurnsChange, archivingTurnIndices, refreshKey }: StreamingTurnsViewProps) {
+export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrollStateChange, onStreamingProgressChange, onTurnsChange, onLoadingChange, archivingTurnIndices, refreshKey }: StreamingTurnsViewProps) {
   // useSessionData now gets the clientId directly from client.clientId when connected
   // refreshKey forces re-subscription when incremented (e.g., after archive)
   const { turns, isLoading, isStreaming, streamError, error, streamingProgress } = useSessionData(client, sessionId, refreshKey);
@@ -84,6 +86,13 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
       onTurnsChange(turns);
     }
   }, [turns, onTurnsChange]);
+
+  // Report loading state changes to parent (for clearing parent loading indicators)
+  useEffect(() => {
+    if (onLoadingChange) {
+      onLoadingChange(isLoading, error);
+    }
+  }, [isLoading, error, onLoadingChange]);
 
   // Ref for the scrollable container
   const scrollContainerRef = useRef<HTMLDivElement>(null);

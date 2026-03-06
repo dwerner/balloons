@@ -23,6 +23,7 @@ from .goal_tools import GOAL_TOOL_NAMES, execute_goal_tool
 from .debug_tools import DEBUG_TOOL_NAMES, execute_debug_tool
 from .watcher_tools import WATCHER_TOOL_NAMES, execute_watcher_tool
 from .lsp_tools import LSP_TOOL_NAMES, execute_lsp_tool
+from .kanban_tools import KANBAN_TOOL_NAMES, execute_kanban_tool
 from .fork import ForkProposal, ContextAssignment, MergeProposal
 from .tts import get_tts_runner, TTSConfig
 
@@ -142,6 +143,12 @@ async def execute_tool(
             if session is None:
                 return "Error: LSP tools require a session context", True
             return await execute_lsp_tool(name, args, session, working_dir)
+
+        # Kanban board tools
+        if name in KANBAN_TOOL_NAMES:
+            if session is None:
+                return "Error: Kanban tools require a session context", True
+            return await execute_kanban_tool(name, args, session)
 
         # Standard file/shell tools
         if name == "Read":

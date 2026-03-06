@@ -34,6 +34,8 @@
   grid-template-areas:
     "header"
     "main";
+  /* Prevent iOS overscroll bounce at container level */
+  overscroll-behavior: none;
 }
 
 /* ----- Mobile Layout ----- */

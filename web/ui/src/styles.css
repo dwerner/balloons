@@ -273,17 +273,21 @@ html, body {
   overflow: hidden;
   background: var(--color-bg-primary);
   overscroll-behavior: none; /* Prevent overscroll/bounce on mobile */
+  touch-action: none; /* Prevent iOS Safari elastic scrolling on root */
 }
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
   color: var(--color-text-primary);
+  position: fixed; /* Prevent iOS Safari address bar scroll bounce */
+  width: 100%;
 }
 
 #root {
   height: 100%;
   overflow: hidden;
   overscroll-behavior: none; /* Prevent overscroll/bounce on mobile */
+  touch-action: pan-x pan-y; /* Allow touch scrolling within content, not on root */
 }
 
 /* ----- App Layout ----- */
@@ -313,16 +317,81 @@ body {
 }
 
 /* Reset safe area insets in fullscreen - content should fill entire screen */
+/* Use dvh (dynamic viewport height) to account for virtual keyboard on iOS */
 :fullscreen,
 :fullscreen #root,
 :fullscreen .app {
-  /* Use full viewport in fullscreen */
-  height: 100vh !important;
+  /* Use dynamic viewport in fullscreen - adjusts for virtual keyboard */
+  height: 100dvh !important;
+  height: 100vh !important; /* Fallback for browsers without dvh support */
   width: 100vw !important;
+}
+
+/* Modern browsers: prefer dvh which accounts for keyboard */
+@supports (height: 100dvh) {
+  :fullscreen,
+  :fullscreen #root,
+  :fullscreen .app {
+    height: 100dvh !important;
+  }
 }
 
 :fullscreen .input-area {
   padding-bottom: 4px; /* No safe area needed in fullscreen */
+}
+
+/* Keyboard handling - use visual viewport offset */
+/* The --keyboard-offset CSS variable is set by useVisualViewport hook */
+/* The .keyboard-visible class is added to <html> when keyboard is detected */
+
+/* When keyboard is visible, adjust the layout to keep input visible */
+/* This works in both normal and fullscreen modes on all browsers */
+html.keyboard-visible .main-panel {
+  /* Add padding at bottom to account for keyboard height */
+  padding-bottom: var(--keyboard-offset, 0px);
+}
+
+html.keyboard-visible .input-area {
+  /* No additional transform needed - padding-bottom on main-panel handles it */
+  /* But keep input pinned to bottom with higher z-index */
+  position: relative;
+  z-index: 10;
+}
+
+html.keyboard-visible .turns-container {
+  /* Let the turns container shrink to make room */
+  flex: 1 1 0;
+  min-height: 50px;
+}
+
+/* Fullscreen-specific: ensure content uses dynamic viewport height */
+/* and input area stays above virtual keyboard */
+:fullscreen .main-panel,
+:-webkit-full-screen .main-panel,
+:-moz-full-screen .main-panel {
+  /* Use dvh which responds to virtual keyboard on most browsers */
+  height: 100dvh;
+  height: 100vh; /* Fallback */
+  display: flex;
+  flex-direction: column;
+}
+
+/* In fullscreen, use bottom positioning to keep input above keyboard */
+:fullscreen .input-area,
+:-webkit-full-screen .input-area,
+:-moz-full-screen .input-area {
+  /* Ensure input is at the bottom of the visual viewport, not layout viewport */
+  margin-top: auto;
+  flex-shrink: 0;
+}
+
+/* Turns container should fill remaining space in fullscreen */
+:fullscreen .turns-container,
+:-webkit-full-screen .turns-container,
+:-moz-full-screen .turns-container {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .menu-button {
