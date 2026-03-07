@@ -14,9 +14,11 @@ import type {
   LSPServerConfig,
   LSPServerInstance,
   LSPStatusResult,
+  ProcessInfo,
 } from '../../../../generated/balloons-client';
-import type { LSPServiceClient } from '../../../../generated/client';
+import type { LSPServiceClient, SupervisorStateServiceClient } from '../../../../generated/client';
 import { useDialog } from '../Dialog';
+import { ProcessLogViewer } from './ProcessLogViewer';
 
 // Language icons mapping
 const LANGUAGE_ICONS: Record<string, string> = {
@@ -97,6 +99,7 @@ function ActionButton({
 // Instance card - shows a running LSP server instance
 interface LSPInstanceCardProps {
   instance: LSPServerInstance;
+  onViewLogs: (instance: LSPServerInstance) => void;
   onRestart: (key: string) => void;
   onStop: (key: string) => void;
   isRestarting: boolean;
@@ -105,6 +108,7 @@ interface LSPInstanceCardProps {
 
 const LSPInstanceCard = memo(function LSPInstanceCard({
   instance,
+  onViewLogs,
   onRestart,
   onStop,
   isRestarting,
@@ -145,6 +149,10 @@ const LSPInstanceCard = memo(function LSPInstanceCard({
 
       <div className="lsp-instance-card__actions">
         <ActionButton
+          label="Logs"
+          onClick={() => onViewLogs(instance)}
+        />
+        <ActionButton
           label={isRestarting ? '...' : 'Restart'}
           onClick={() => onRestart(instance.key)}
           disabled={isRestarting || isStopping}
@@ -167,6 +175,7 @@ interface LSPServerConfigCardProps {
   config: LSPServerConfig;
   instances: LSPServerInstance[];
   onStart: (language: string) => void;
+  onViewLogs: (instance: LSPServerInstance) => void;
   onRestart: (key: string) => void;
   onStop: (key: string) => void;
   restartingKeys: Set<string>;
@@ -178,6 +187,7 @@ const LSPServerConfigCard = memo(function LSPServerConfigCard({
   config,
   instances,
   onStart,
+  onViewLogs,
   onRestart,
   onStop,
   restartingKeys,
@@ -220,6 +230,7 @@ const LSPServerConfigCard = memo(function LSPServerConfigCard({
             <LSPInstanceCard
               key={instance.key}
               instance={instance}
+              onViewLogs={onViewLogs}
               onRestart={onRestart}
               onStop={onStop}
               isRestarting={restartingKeys.has(instance.key)}
@@ -244,12 +255,14 @@ const LSPServerConfigCard = memo(function LSPServerConfigCard({
 // Main section component
 export interface LSPSectionProps {
   lspClient?: LSPServiceClient;
+  supervisorClient?: SupervisorStateServiceClient;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
 }
 
 export function LSPSection({
   lspClient,
+  supervisorClient,
   isCollapsed = false,
   onToggleCollapse,
 }: LSPSectionProps) {
@@ -262,6 +275,9 @@ export function LSPSection({
   const [startingServers, setStartingServers] = useState<Set<string>>(new Set());
   const [restartingKeys, setRestartingKeys] = useState<Set<string>>(new Set());
   const [stoppingKeys, setStoppingKeys] = useState<Set<string>>(new Set());
+
+  // Log viewer state
+  const [viewingLogsInstance, setViewingLogsInstance] = useState<LSPServerInstance | null>(null);
 
   // Load initial status
   const loadStatus = useCallback(async () => {
@@ -413,6 +429,16 @@ export function LSPSection({
     [lspClient, loadStatus, alert]
   );
 
+  // View logs for an LSP server instance
+  const handleViewLogs = useCallback((instance: LSPServerInstance) => {
+    setViewingLogsInstance(instance);
+  }, []);
+
+  // Close log viewer
+  const handleCloseLogViewer = useCallback(() => {
+    setViewingLogsInstance(null);
+  }, []);
+
   // Stop all servers
   const handleStopAll = useCallback(async () => {
     if (!lspClient) return;
@@ -518,6 +544,7 @@ export function LSPSection({
                   config={config}
                   instances={instancesByServer.get(config.name) || []}
                   onStart={handleStart}
+                  onViewLogs={handleViewLogs}
                   onRestart={handleRestart}
                   onStop={handleStop}
                   restartingKeys={restartingKeys}
@@ -529,8 +556,36 @@ export function LSPSection({
           )}
         </div>
       )}
+
+      {/* Process Log Viewer Modal */}
+      {viewingLogsInstance && supervisorClient && (
+        <div className="supervisor-modal-overlay" onClick={handleCloseLogViewer}>
+          <div className="supervisor-modal supervisor-modal--logs" onClick={(e) => e.stopPropagation()}>
+            <ProcessLogViewer
+              process={lspInstanceToProcessInfo(viewingLogsInstance)}
+              client={supervisorClient}
+              onClose={handleCloseLogViewer}
+            />
+          </div>
+        </div>
+      )}
     </section>
   );
+}
+
+/**
+ * Convert an LSPServerInstance to a ProcessInfo for the log viewer.
+ */
+function lspInstanceToProcessInfo(instance: LSPServerInstance): ProcessInfo {
+  return {
+    processId: instance.processId,
+    command: `LSP: ${instance.serverName}`,
+    name: `${instance.serverName} (${instance.workspace.split('/').pop() || instance.workspace})`,
+    host: 'local',
+    sessionId: '', // Not used by log viewer
+    status: instance.processStatus,
+    processType: 'lsp',
+  };
 }
 
 export default LSPSection;

@@ -920,6 +920,7 @@ export function SupervisorTab({
       {/* LSP Servers Section */}
       <LSPSection
         lspClient={lspClient}
+        supervisorClient={supervisorClient}
         isCollapsed={lspCollapsed}
         onToggleCollapse={() => setLspCollapsed(!lspCollapsed)}
       />
