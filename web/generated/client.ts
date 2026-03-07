@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-03-06T12:21:40.404646
+// Generated: 2026-03-06T22:37:36.531719
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -4417,6 +4417,20 @@ export class SupervisorStateServiceClient implements SupervisorStateService {
  */
 export interface LSPService {
   /**
+   * Get all symbols in a document.
+   * 
+   * Uses the LSP textDocument/documentSymbol request.
+   * The language server is automatically started if needed.
+   * 
+   * Args:
+   * file_path: Absolute path to the file
+   * 
+   * Returns:
+   * List of document symbols (hierarchical)
+   */
+  getDocumentSymbols(filePath: string): Promise<Types.LSPDocumentSymbolsResult>;
+
+  /**
    * Get complete LSP status.
    * 
    * Returns configured servers and all running instances.
@@ -4535,6 +4549,10 @@ export class LSPServiceClient implements LSPService {
     return () => {
       this.eventHandlers.get(event)?.delete(callback);
     };
+  }
+
+  async getDocumentSymbols(filePath: string): Promise<Types.LSPDocumentSymbolsResult> {
+    return this.call('getDocumentSymbols', { filePath: filePath });
   }
 
   async getStatus(): Promise<Types.LSPStatusResult> {

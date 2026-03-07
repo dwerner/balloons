@@ -16,12 +16,13 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo, memo, useImperativeHandle, forwardRef } from 'react';
-import type { WorkingTreeStatus, DiffFile, UntrackedFile, FileStateServiceClient } from '../../../../generated/balloons-client';
+import type { WorkingTreeStatus, DiffFile, UntrackedFile, FileStateServiceClient, LSPServiceClient } from '../../../../generated/balloons-client';
 import type { CodeReview, CodeReviewComment } from './types';
 import { FileList } from './FileList';
 import { DiffView } from './DiffView';
 import { OpenFilesList, type OpenFile } from './OpenFilesList';
 import { FileContentView } from './FileContentView';
+import { EditorView } from './EditorView';
 import { CommitModal } from '../CommitModal';
 import { useDialog } from '../Dialog';
 import { createLogger } from '../../utils/debugLog';
@@ -49,6 +50,8 @@ export interface CodeTabProps {
   cwd?: string;
   /** FileStateService client for git operations */
   client?: FileStateServiceClient;
+  /** LSP service client for code intelligence */
+  lspClient?: LSPServiceClient;
   /** Callback when a review is submitted */
   onSubmitReview?: (review: CodeReview) => void;
   /** Callback to start AI commit message generation with streaming */
@@ -72,7 +75,7 @@ export interface CodeTabHandle {
 }
 
 // Sub-tab type
-type CodeSubTab = 'changes' | 'files';
+type CodeSubTab = 'changes' | 'files' | 'editor';
 
 // Generate unique ID
 function generateId(): string {
@@ -168,6 +171,7 @@ function formatSize(bytes: number): string {
 export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function CodeTab({
   cwd,
   client,
+  lspClient,
   onSubmitReview,
   onStartAICommitMessage,
   onGitStatusChange,
@@ -690,6 +694,12 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
               </span>
             )}
           </button>
+          <button
+            className={`code-tab__subtab ${activeSubTab === 'editor' ? 'code-tab__subtab--active' : ''}`}
+            onClick={() => setActiveSubTab('editor')}
+          >
+            Editor
+          </button>
         </div>
 
         {/* Actions */}
@@ -795,7 +805,7 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
               )}
             </div>
           </>
-        ) : (
+        ) : activeSubTab === 'files' ? (
           <>
             {/* Open files sidebar */}
             <div className="code-tab__sidebar">
@@ -833,6 +843,19 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
               )}
             </div>
           </>
+        ) : (
+          /* Editor view with Monaco + Code Map */
+          <EditorView
+            client={client}
+            lspClient={lspClient}
+            isDarkMode={true}
+            isMobile={false}
+            initialFiles={openFiles.map(f => ({
+              path: f.path,
+              content: fileContents.get(f.path),
+            }))}
+            onOpenFile={openFile}
+          />
         )}
       </div>
 

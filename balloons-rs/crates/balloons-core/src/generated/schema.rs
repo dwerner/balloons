@@ -2,7 +2,7 @@
 //!
 //! Generated from Python domain entities marked with @rust_schema.
 //! Source: models.py and other domain modules
-//! Generated: 2026-03-04T08:31:19.297998
+//! Generated: 2026-03-06T22:37:36.802052
 //!
 //! To regenerate:
 //!     python -m codegen.generate_rust

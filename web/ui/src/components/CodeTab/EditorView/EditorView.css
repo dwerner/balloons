@@ -1,0 +1,687 @@
+/**
+ * EditorView styles - Editor + Code Map split view
+ */
+
+/* ============================================
+   Editor View Container
+   ============================================ */
+
+.editor-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.editor-view--desktop {
+  position: relative;
+}
+
+/* ============================================
+   Editor Tabs
+   ============================================ */
+
+.editor-tabs {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  background: var(--bg-secondary, #21262d);
+  border-bottom: 1px solid var(--border-primary, #30363d);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.editor-tabs::-webkit-scrollbar {
+  height: 4px;
+}
+
+.editor-tabs::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.editor-tabs::-webkit-scrollbar-thumb {
+  background: var(--border-primary, #30363d);
+  border-radius: 2px;
+}
+
+.editor-tabs--empty {
+  justify-content: center;
+}
+
+.editor-tabs__placeholder {
+  color: var(--text-tertiary, #6e7681);
+  font-size: 12px;
+}
+
+.editor-tabs__list {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+  gap: 1px;
+}
+
+/* Individual tab */
+.editor-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  height: 100%;
+  background: var(--bg-tertiary, #161b22);
+  border-right: 1px solid var(--border-primary, #30363d);
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 200px;
+}
+
+.editor-tab:hover {
+  background: var(--bg-secondary, #21262d);
+}
+
+.editor-tab--active {
+  background: var(--bg-primary, #0d1117);
+  border-bottom: 2px solid var(--accent-primary, #58a6ff);
+}
+
+.editor-tab--dirty .editor-tab__name {
+  font-style: italic;
+}
+
+/* Language indicator dot */
+.editor-tab__lang-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* File name */
+.editor-tab__name {
+  color: var(--text-primary, #c9d1d9);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editor-tab__dirty-dot {
+  color: var(--warning-fg, #d29922);
+  margin-left: 2px;
+}
+
+/* Path hint */
+.editor-tab__path-hint {
+  color: var(--text-tertiary, #6e7681);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Map toggle checkbox */
+.editor-tab__map-toggle {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  padding: 2px;
+  margin-left: auto;
+}
+
+.editor-tab__map-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.editor-tab__map-icon {
+  color: var(--text-tertiary, #6e7681);
+  font-size: 12px;
+  transition: color 0.15s ease;
+}
+
+.editor-tab__map-toggle:hover .editor-tab__map-icon {
+  color: var(--accent-primary, #58a6ff);
+}
+
+.editor-tab__map-toggle input:checked + .editor-tab__map-icon {
+  color: var(--accent-primary, #58a6ff);
+}
+
+/* Close button */
+.editor-tab__close {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary, #6e7681);
+  font-size: 14px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: all 0.15s ease;
+  opacity: 0;
+}
+
+.editor-tab:hover .editor-tab__close {
+  opacity: 1;
+}
+
+.editor-tab__close:hover {
+  background: var(--danger-subtle, #490202);
+  color: var(--danger-fg, #f85149);
+}
+
+/* ============================================
+   Map Toggle Button (Desktop)
+   ============================================ */
+
+.editor-view__map-toggle {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: var(--bg-secondary, #21262d);
+  border: 1px solid var(--border-primary, #30363d);
+  border-radius: 4px;
+  color: var(--text-secondary, #8b949e);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.editor-view__map-toggle:hover {
+  background: var(--bg-tertiary, #161b22);
+  border-color: var(--accent-primary, #58a6ff);
+}
+
+.editor-view__map-toggle--active {
+  background: var(--accent-subtle, #388bfd26);
+  border-color: var(--accent-primary, #58a6ff);
+  color: var(--accent-primary, #58a6ff);
+}
+
+.editor-view__badge {
+  background: var(--accent-primary, #58a6ff);
+  color: var(--bg-primary, #0d1117);
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+/* ============================================
+   Split Container
+   ============================================ */
+
+.editor-view__split {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.editor-view__pane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+.editor-view__pane--editor {
+  min-width: 200px;
+}
+
+.editor-view__pane--map {
+  min-width: 200px;
+}
+
+/* Fullscreen pane */
+.editor-view__pane--fullscreen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  width: 100% !important;
+  background: var(--bg-primary, #0d1117);
+}
+
+/* Pane fullscreen toggle button */
+.editor-view__pane-fullscreen-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-secondary, #21262d);
+  border: 1px solid var(--border-primary, #30363d);
+  border-radius: 4px;
+  color: var(--text-tertiary, #6e7681);
+  font-size: 14px;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.15s ease;
+}
+
+.editor-view__pane:hover .editor-view__pane-fullscreen-btn {
+  opacity: 1;
+}
+
+.editor-view__pane-fullscreen-btn:hover {
+  background: var(--bg-tertiary, #161b22);
+  color: var(--text-primary, #c9d1d9);
+  border-color: var(--accent-primary, #58a6ff);
+}
+
+/* Always show fullscreen button when in fullscreen mode */
+.editor-view__pane--fullscreen .editor-view__pane-fullscreen-btn {
+  opacity: 1;
+}
+
+/* Empty state */
+.editor-view__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-tertiary, #6e7681);
+  text-align: center;
+  padding: 20px;
+}
+
+.editor-view__empty p {
+  margin: 4px 0;
+}
+
+.editor-view__empty-hint {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+/* ============================================
+   Split Handle
+   ============================================ */
+
+.split-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--border-primary, #30363d);
+  transition: background-color 0.15s ease;
+  user-select: none;
+}
+
+.split-handle--horizontal {
+  width: 6px;
+  cursor: col-resize;
+}
+
+.split-handle--vertical {
+  height: 6px;
+  cursor: row-resize;
+}
+
+.split-handle:hover,
+.split-handle--dragging {
+  background: var(--accent-primary, #58a6ff);
+}
+
+.split-handle__grip {
+  display: flex;
+  gap: 2px;
+}
+
+.split-handle--horizontal .split-handle__grip {
+  flex-direction: column;
+}
+
+.split-handle--vertical .split-handle__grip {
+  flex-direction: row;
+}
+
+.split-handle__dot {
+  width: 3px;
+  height: 3px;
+  background: var(--text-tertiary, #6e7681);
+  border-radius: 50%;
+}
+
+.split-handle:hover .split-handle__dot,
+.split-handle--dragging .split-handle__dot {
+  background: var(--bg-primary, #0d1117);
+}
+
+/* ============================================
+   Monaco Wrapper
+   ============================================ */
+
+.monaco-wrapper {
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Line highlight for map selection */
+.monaco-highlight-line {
+  background: var(--accent-subtle, #388bfd26) !important;
+}
+
+.monaco-highlight-glyph {
+  background: var(--accent-primary, #58a6ff);
+  margin-left: 2px;
+  width: 3px !important;
+}
+
+/* ============================================
+   Code Map Pane
+   ============================================ */
+
+.code-map-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-primary, #0d1117);
+}
+
+.code-map-pane--empty {
+  align-items: center;
+  justify-content: center;
+}
+
+.code-map-pane__empty-state {
+  text-align: center;
+  color: var(--text-tertiary, #6e7681);
+}
+
+.code-map-pane__empty-icon {
+  font-size: 32px;
+  opacity: 0.5;
+}
+
+.code-map-pane__empty-hint {
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+/* Fullscreen mode */
+.code-map-pane--fullscreen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+}
+
+/* Fullscreen toggle button */
+.code-map-pane__fullscreen-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-secondary, #21262d);
+  border: 1px solid var(--border-primary, #30363d);
+  border-radius: 4px;
+  color: var(--text-secondary, #8b949e);
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.code-map-pane__fullscreen-btn:hover {
+  background: var(--bg-tertiary, #161b22);
+  color: var(--text-primary, #c9d1d9);
+  border-color: var(--accent-primary, #58a6ff);
+}
+
+/* Mobile zoom controls */
+.code-map-controls {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  background: var(--bg-secondary, #21262d);
+  border: 1px solid var(--border-primary, #30363d);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.code-map-controls__btn {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-tertiary, #161b22);
+  border: 1px solid var(--border-primary, #30363d);
+  border-radius: 6px;
+  color: var(--text-secondary, #8b949e);
+  font-size: 18px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.code-map-controls__btn:hover,
+.code-map-controls__btn:active {
+  background: var(--accent-subtle, #388bfd26);
+  color: var(--accent-primary, #58a6ff);
+  border-color: var(--accent-primary, #58a6ff);
+}
+
+.code-map-controls__level {
+  min-width: 50px;
+  text-align: center;
+  color: var(--text-secondary, #8b949e);
+  font-size: 13px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* React Flow customization */
+.code-map--dark .react-flow__background {
+  background: var(--bg-primary, #0d1117);
+}
+
+.code-map--light .react-flow__background {
+  background: var(--bg-primary, #ffffff);
+}
+
+/* ============================================
+   Code Node (in map)
+   ============================================ */
+
+.code-node {
+  background: var(--bg-secondary, #21262d);
+  border: 2px solid;
+  border-radius: 6px;
+  min-width: 140px;
+  overflow: hidden;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.code-node:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  transform: translateY(-1px);
+}
+
+.code-node--selected {
+  box-shadow: 0 0 0 2px var(--accent-primary, #58a6ff);
+}
+
+.code-node__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 10px;
+  color: #fff;
+  text-transform: uppercase;
+}
+
+.code-node__type-icon {
+  font-weight: 700;
+}
+
+.code-node__language {
+  opacity: 0.8;
+}
+
+.code-node__body {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 8px;
+  background: var(--bg-primary, #0d1117);
+}
+
+.code-node__name {
+  color: var(--text-primary, #c9d1d9);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+.code-node__badge {
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.code-node__badge--async {
+  background: var(--accent-subtle, #388bfd26);
+  color: var(--accent-primary, #58a6ff);
+}
+
+.code-node__badge--export {
+  background: var(--success-subtle, #23863626);
+  color: var(--success-fg, #3fb950);
+}
+
+/* ============================================
+   Mobile Layout
+   ============================================ */
+
+.editor-view--mobile {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.editor-view__mobile-header {
+  display: flex;
+  height: 40px;
+  background: var(--bg-secondary, #21262d);
+  border-bottom: 1px solid var(--border-primary, #30363d);
+}
+
+.editor-view__mobile-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary, #8b949e);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.editor-view__mobile-tab--active {
+  color: var(--text-primary, #c9d1d9);
+  border-bottom: 2px solid var(--accent-primary, #58a6ff);
+}
+
+.editor-view__editor-container,
+.editor-view__map-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Mobile fullscreen map */
+.editor-view__map-container--fullscreen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+}
+
+/* ============================================
+   Light Theme Overrides
+   ============================================ */
+
+:root[data-theme="light"] .editor-tabs {
+  background: #f6f8fa;
+  border-color: #d0d7de;
+}
+
+:root[data-theme="light"] .editor-tab {
+  background: #ffffff;
+  border-color: #d0d7de;
+}
+
+:root[data-theme="light"] .editor-tab--active {
+  background: #f6f8fa;
+}
+
+:root[data-theme="light"] .editor-tab__name {
+  color: #24292f;
+}
+
+:root[data-theme="light"] .editor-view__map-toggle {
+  background: #f6f8fa;
+  border-color: #d0d7de;
+  color: #57606a;
+}
+
+:root[data-theme="light"] .split-handle {
+  background: #d0d7de;
+}
+
+:root[data-theme="light"] .code-node {
+  background: #f6f8fa;
+}
+
+:root[data-theme="light"] .code-node__body {
+  background: #ffffff;
+}
+
+:root[data-theme="light"] .code-node__name {
+  color: #24292f;
+}
+
+:root[data-theme="light"] .code-map-pane {
+  background: #ffffff;
+}

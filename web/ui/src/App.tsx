@@ -3107,6 +3107,7 @@ function AppContent() {
                     ref={codeTabRef}
                     cwd={selectedSession?.workingDirectory}
                     client={clientRef.current.files}
+                    lspClient={clientRef.current.lsp}
                     onSubmitReview={(review) => {
                       // Format the review as markdown and send to chat
                       const formatReviewAsMarkdown = (review: CodeReview): string => {

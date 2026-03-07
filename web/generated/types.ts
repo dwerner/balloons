@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-03-06T12:21:40.398359
+// Generated: 2026-03-06T22:37:36.526807
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -1249,6 +1249,26 @@ export interface LSPActionResult {
   server: string;
   workspace: string;
   processId?: string | null;
+  error?: string | null;
+}
+
+export interface LSPDocumentSymbol {
+  name: string;
+  kind: number;
+  kindName: string;
+  filePath: string;
+  lineStart: number;
+  lineEnd: number;
+  characterStart: number;
+  characterEnd: number;
+  detail?: string | null;
+  children?: LSPDocumentSymbol[];
+}
+
+export interface LSPDocumentSymbolsResult {
+  success: boolean;
+  filePath: string;
+  symbols?: LSPDocumentSymbol[];
   error?: string | null;
 }
 

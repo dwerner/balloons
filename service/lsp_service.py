@@ -67,6 +67,65 @@ class LSPActionResult:
     error: Optional[str] = None
 
 
+@ws_type
+@dataclass
+class LSPDocumentSymbol:
+    """A symbol in a document (function, class, etc.)."""
+
+    name: str
+    kind: int  # LSP SymbolKind enum
+    kind_name: str  # Human-readable kind
+    file_path: str
+    line_start: int  # 0-indexed
+    line_end: int  # 0-indexed
+    character_start: int
+    character_end: int
+    detail: Optional[str] = None
+    children: list["LSPDocumentSymbol"] = field(default_factory=list)
+
+
+@ws_type
+@dataclass
+class LSPDocumentSymbolsResult:
+    """Result of getting document symbols."""
+
+    success: bool
+    file_path: str
+    symbols: list[LSPDocumentSymbol] = field(default_factory=list)
+    error: Optional[str] = None
+
+
+# LSP SymbolKind enum to human-readable names
+LSP_SYMBOL_KINDS = {
+    1: "File",
+    2: "Module",
+    3: "Namespace",
+    4: "Package",
+    5: "Class",
+    6: "Method",
+    7: "Property",
+    8: "Field",
+    9: "Constructor",
+    10: "Enum",
+    11: "Interface",
+    12: "Function",
+    13: "Variable",
+    14: "Constant",
+    15: "String",
+    16: "Number",
+    17: "Boolean",
+    18: "Array",
+    19: "Object",
+    20: "Key",
+    21: "Null",
+    22: "EnumMember",
+    23: "Struct",
+    24: "Event",
+    25: "Operator",
+    26: "TypeParameter",
+}
+
+
 @ws_service
 class LSPService:
     """WebSocket-exposed service for LSP server management."""
@@ -414,6 +473,124 @@ class LSPService:
             self._emit_event("lspAllServersStopped", {"count": count})
 
         return count
+
+    @ws_expose
+    async def get_document_symbols(
+        self,
+        file_path: str,
+    ) -> LSPDocumentSymbolsResult:
+        """Get all symbols in a document.
+
+        Uses the LSP textDocument/documentSymbol request.
+        The language server is automatically started if needed.
+
+        Args:
+            file_path: Absolute path to the file
+
+        Returns:
+            List of document symbols (hierarchical)
+        """
+        from core.lsp_client import get_lsp_client
+
+        client = get_lsp_client()
+
+        try:
+            raw_symbols = await client.get_document_symbols(file_path)
+
+            if raw_symbols is None:
+                return LSPDocumentSymbolsResult(
+                    success=False,
+                    file_path=file_path,
+                    error="No LSP server available for this file type",
+                )
+
+            # Convert to our type
+            symbols = self._convert_symbols(raw_symbols, file_path)
+
+            return LSPDocumentSymbolsResult(
+                success=True,
+                file_path=file_path,
+                symbols=symbols,
+            )
+
+        except Exception as e:
+            debug_log.error(
+                f"Failed to get document symbols: {e}",
+                category=Category.SUPERVISOR,
+            )
+            return LSPDocumentSymbolsResult(
+                success=False,
+                file_path=file_path,
+                error=str(e),
+            )
+
+    def _convert_symbols(
+        self,
+        raw_symbols: list,
+        file_path: str,
+    ) -> list[LSPDocumentSymbol]:
+        """Convert LSP symbols to our type.
+
+        Handles both DocumentSymbol (hierarchical) and SymbolInformation (flat) formats.
+        """
+        symbols = []
+
+        for raw in raw_symbols:
+            # DocumentSymbol has 'range', SymbolInformation has 'location'
+            if "range" in raw:
+                # DocumentSymbol format (hierarchical)
+                rng = raw["range"]
+                start = rng["start"]
+                end = rng["end"]
+
+                kind = raw.get("kind", 0)
+                kind_name = LSP_SYMBOL_KINDS.get(kind, "Unknown")
+
+                children = []
+                if "children" in raw:
+                    children = self._convert_symbols(raw["children"], file_path)
+
+                symbols.append(LSPDocumentSymbol(
+                    name=raw.get("name", ""),
+                    kind=kind,
+                    kind_name=kind_name,
+                    file_path=file_path,
+                    line_start=start.get("line", 0),
+                    line_end=end.get("line", 0),
+                    character_start=start.get("character", 0),
+                    character_end=end.get("character", 0),
+                    detail=raw.get("detail"),
+                    children=children,
+                ))
+
+            elif "location" in raw:
+                # SymbolInformation format (flat)
+                loc = raw["location"]
+                rng = loc.get("range", {})
+                start = rng.get("start", {})
+                end = rng.get("end", {})
+
+                kind = raw.get("kind", 0)
+                kind_name = LSP_SYMBOL_KINDS.get(kind, "Unknown")
+
+                # Extract file path from URI
+                uri = loc.get("uri", "")
+                symbol_file = uri.replace("file://", "") if uri.startswith("file://") else file_path
+
+                symbols.append(LSPDocumentSymbol(
+                    name=raw.get("name", ""),
+                    kind=kind,
+                    kind_name=kind_name,
+                    file_path=symbol_file,
+                    line_start=start.get("line", 0),
+                    line_end=end.get("line", 0),
+                    character_start=start.get("character", 0),
+                    character_end=end.get("character", 0),
+                    detail=raw.get("containerName"),
+                    children=[],
+                ))
+
+        return symbols
 
     # Events
     @ws_event
