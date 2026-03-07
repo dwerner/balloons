@@ -287,7 +287,7 @@ async def execute_kanban_tool(
     storage = AsyncStorage()
     kanban = KanbanService(storage)
 
-    session_id = session.session_id
+    session_id = session.id
 
     try:
         if name == "kanban_get_boards":

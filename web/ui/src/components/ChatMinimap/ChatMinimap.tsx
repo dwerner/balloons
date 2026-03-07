@@ -18,10 +18,7 @@ import type { MinimapExchange, ExchangeDOMRect } from './minimapTypes';
 import { calculateMinimapLayout, calculateMinimapLayoutFromDOM, minimapYToScrollPosition, findExchangeAtPosition } from './minimapLayout';
 import { renderMinimap } from './minimapRender';
 import { getMinimapColors } from './minimapColors';
-import { createLogger } from '../../utils/debugLog';
 import './ChatMinimap.css';
-
-const log = createLogger('ChatMinimap');
 
 export interface ChatMinimapProps {
   /** Exchange data to render (legacy, used if exchangeRects not provided) */
@@ -113,7 +110,6 @@ export function ChatMinimap({
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const newHeight = entry.contentRect.height;
-        log('ResizeObserver height', { newHeight, visible });
         if (newHeight > 0) {
           setCanvasHeight(newHeight);
         }
@@ -122,7 +118,6 @@ export function ChatMinimap({
 
     observer.observe(container);
     const initialHeight = container.clientHeight;
-    log('Initial container height', { initialHeight, visible });
     if (initialHeight > 0) {
       setCanvasHeight(initialHeight);
     }
@@ -134,7 +129,6 @@ export function ChatMinimap({
   useEffect(() => {
     if (visible && containerRef.current) {
       const height = containerRef.current.clientHeight;
-      log('Visibility changed, re-measuring', { visible, height });
       if (height > 0) {
         setCanvasHeight(height);
       }
@@ -191,7 +185,6 @@ export function ChatMinimap({
   // Render canvas
   useEffect(() => {
     const canvas = canvasRef.current;
-    log('Render effect', { hasCanvas: !!canvas, hasLayout: !!layout, exchanges: layout?.exchanges.length, canvasHeight });
     if (!canvas || !layout) return;
 
     const ctx = canvas.getContext('2d');
@@ -200,7 +193,6 @@ export function ChatMinimap({
     // Handle high-DPI displays
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
-    log('Canvas rect', { width: rect.width, height: rect.height });
 
     // Set canvas resolution
     canvas.width = rect.width * dpr;
@@ -233,18 +225,6 @@ export function ChatMinimap({
       scrollHeight,
       viewportHeight
     );
-
-    log('handleNavigateToY', {
-      clientY,
-      rectTop: rect.top,
-      y,
-      targetY,
-      scrollPosition,
-      layoutScale: layout.scale,
-      layoutViewportHeight: layout.viewportHeight,
-      scrollHeight,
-      viewportHeight,
-    });
 
     onNavigate(scrollPosition);
   }, [layout, scrollHeight, viewportHeight, onNavigate]);

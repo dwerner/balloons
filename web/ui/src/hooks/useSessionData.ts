@@ -29,6 +29,7 @@ import type {
   SessionToolResultEvent,
   SessionHistoryChunkEvent,
   SessionHistoryCompleteEvent,
+  SessionTurnsReorderedEvent,
   TurnSnapshot,
   TextBlock,
   MarkdownBlock,
@@ -862,6 +863,43 @@ export function useSessionData(
               }
               debugLog('Removed turns from state', { removedCount: event.turnIds.length, remaining: next.size });
               return next;
+            });
+          })
+        );
+
+        // Turns reordered - update turn order fields (e.g., after archive/rehydrate)
+        handlers.push(
+          client.sessionData.sessionDataTurnsReordered((event) => {
+            if (event.sessionId !== newSessionId) return;
+            debugLog('[TURN_ORDER] sessionDataTurnsReordered', {
+              mappingCount: event.mappings?.length ?? 0,
+            });
+
+            // Update the order field for each turn in the mapping
+            setTurnsById((prev) => {
+              const next = new Map(prev);
+              let hasChanges = false;
+
+              for (const mapping of event.mappings ?? []) {
+                const existing = next.get(mapping.turnId);
+                if (existing && existing.order !== mapping.newOrder) {
+                  debugLog('[TURN_ORDER] Updating turn order', {
+                    turnId: mapping.turnId.substring(0, 8),
+                    oldOrder: existing.order,
+                    newOrder: mapping.newOrder,
+                  });
+                  next.set(mapping.turnId, {
+                    ...existing,
+                    order: mapping.newOrder,
+                  });
+                  hasChanges = true;
+                }
+              }
+
+              if (hasChanges) {
+                debugLog('[TURN_ORDER] Order update complete', { updatedCount: event.mappings?.length ?? 0 });
+              }
+              return hasChanges ? next : prev;
             });
           })
         );

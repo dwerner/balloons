@@ -213,6 +213,29 @@ class SessionTurnsDeletedEvent:
 
 @ws_type
 @dataclass
+class TurnOrderMapping:
+    """Mapping of a turn ID to its new order."""
+
+    turn_id: str
+    new_order: int
+
+
+@ws_type
+@dataclass
+class SessionTurnsReorderedEvent:
+    """Event payload when turn orders are recomputed (e.g., after archive).
+
+    After archiving turns, the remaining turns' `order` fields may have gaps.
+    This event provides the new order for each turn so clients can update
+    their local state without refetching the entire session.
+    """
+
+    session_id: str
+    mappings: list[TurnOrderMapping]  # List of (turn_id, new_order) mappings
+
+
+@ws_type
+@dataclass
 class SessionStreamStartedEvent:
     """Event payload when streaming starts for a session."""
 
@@ -2183,6 +2206,41 @@ class SessionDataService:
         )
         self._emit_event("sessionDataTurnsDeleted", event_data.__dict__)
 
+    def emit_turns_reordered(
+        self,
+        session_id: str,
+        mappings: list[tuple[str, int]],
+    ) -> None:
+        """Emit a turns reordered event to subscribed clients.
+
+        Called after archive/rehydrate when turn orders have been recomputed.
+        Clients should update their local turn order fields.
+
+        Args:
+            session_id: The session ID
+            mappings: List of (turn_id, new_order) tuples
+        """
+        from core.debug_log import debug_log
+        debug_log.info(
+            f"emit_turns_reordered: session={session_id[:8]}, count={len(mappings)}",
+            category=Category.API,
+        )
+        # Convert tuples to TurnOrderMapping dataclass instances
+        mapping_objects = [
+            TurnOrderMapping(turn_id=turn_id, new_order=new_order)
+            for turn_id, new_order in mappings
+        ]
+        event_data = SessionTurnsReorderedEvent(
+            session_id=session_id,
+            mappings=mapping_objects,
+        )
+        # Convert to dict with proper nested structure
+        event_dict = {
+            "session_id": event_data.session_id,
+            "mappings": [{"turn_id": m.turn_id, "new_order": m.new_order} for m in event_data.mappings],
+        }
+        self._emit_event("sessionDataTurnsReordered", event_dict)
+
     # --- Events (for TypeScript generation) ---
     # Event names are prefixed with "sessionData" to avoid collisions with
     # TaskStateService and TreeStateService which also have turn events.
@@ -2209,6 +2267,15 @@ class SessionDataService:
         """Emitted when turns are deleted from a session (e.g., during archive).
 
         Clients should remove the deleted turns from their local state.
+        """
+        ...
+
+    @ws_event(name="sessionDataTurnsReordered")
+    async def on_session_data_turns_reordered(self) -> SessionTurnsReorderedEvent:
+        """Emitted when turn orders are recomputed (e.g., after archive/rehydrate).
+
+        Clients should update the order field for each turn in the mapping.
+        This fixes visual gaps in turn numbering after archive operations.
         """
         ...
 

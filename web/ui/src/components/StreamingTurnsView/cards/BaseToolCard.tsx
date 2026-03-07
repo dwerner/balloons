@@ -105,14 +105,12 @@ function ModeSwitcher({
   const handleFormatted = (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
-    console.log('ModeSwitcher: switching to formatted, current mode:', mode);
     onModeChange('formatted');
   };
 
   const handleRaw = (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
-    console.log('ModeSwitcher: switching to raw, current mode:', mode);
     onModeChange('raw');
   };
 

@@ -995,44 +995,62 @@ You can play musical notes through the browser using Web Audio synthesis.
 **Note:** Requires user interaction first (browser audio policy). The UI will show a play button that the user can click to start playback.
 
 
-## Headless Server Architecture
+## Server Management Tool
 
 Balloons runs as a headless WebSocket server with A/B slot support for safe self-modification:
 
-- **Slot A (port 8765)**: Primary/stable instance
-- **Slot B (port 8766)**: Secondary/experimental instance
+- **Slot A (port 8700)**: Primary/stable instance
+- **Slot B (port 8710)**: Secondary/experimental instance
 
-**Key files:**
-- `headless.py` - Headless server entry point
-- `balloons-server.py` - Server management script (start/stop/restart/list)
-- `docs/headless-mode.md` - Full documentation
+### server_manage Tool
 
-**Quick commands:**
-```bash
-python balloons-server.py list        # Show running instances
-python balloons-server.py start       # Start Slot A
-python balloons-server.py start -b    # Start Slot B
-python balloons-server.py restart -b  # Restart Slot B with new code
-```
+**CRITICAL: Use this tool instead of bash commands for server management!**
 
-**IMPORTANT: Before restarting a server, ALWAYS check the current server identity first:**
+**NEVER use Bash to run `balloons-server.py` or restart servers!** Always use the `server_manage`
+tool. Using Bash bypasses the safety mechanism and can kill the server you're running on.
+
+The `server_manage` tool lets you safely manage server slots. It automatically prevents
+you from restarting the slot you're currently running on.
+
+**Actions:**
+
 ```json
-{"name": "debug_log_config", "args": {"action": "identity"}}
+{"name": "server_manage", "args": {"action": "status"}}
 ```
-This confirms which slot you're connected to, its git commit/diff hash, and uptime.
-If you're connected to the slot you're about to restart, you'll lose your connection!
+Shows which slots are running and which one you're on.
+
+```json
+{"name": "server_manage", "args": {"action": "restart"}}
+```
+Restarts the OTHER slot (not the one you're on) with new code.
+
+```json
+{"name": "server_manage", "args": {"action": "start"}}
+```
+Starts the other slot if it's not running.
+
+```json
+{"name": "server_manage", "args": {"action": "stop"}}
+```
+Stops the other slot.
+
+**Why this tool exists:**
+
+The tool enforces a critical safety rule: you can ONLY manage the other slot, never your
+own. This prevents you from accidentally killing your own connection by restarting the
+server you're running on.
 
 **Self-modification workflow:**
-1. Check server identity to confirm which slot you're on
-2. Code changes to source files don't affect running servers
-3. Start/restart Slot B to test changes (safe if you're on Slot A)
-4. If changes work, restart Slot A to promote
-5. If changes break, Slot A still runs stable code
+1. `server_manage(action="status")` - See which slot you're on
+2. Make code changes to source files
+3. `server_manage(action="restart")` - Restart the OTHER slot to pick up changes
+4. Test changes on the other slot (user can switch in the UI)
+5. If changes work, the user can restart this slot later (or you can from the other slot)
 
 **CRITICAL: Never import app modules in test commands!**
 Do NOT run `python -c "from core import ..."` or `from service import ...` to test imports.
 These imports can clobber/conflict with the running server's state and cause instability.
-To test if code works, restart the appropriate slot instead.
+To test if code works, use `server_manage(action="restart")` to restart the other slot.
 
 The React UI can toggle between slots via the "Server: A/B" control in the sidebar.
 

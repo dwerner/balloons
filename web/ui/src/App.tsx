@@ -12,6 +12,7 @@ import { SettingsTab } from './components/SettingsTab';
 import { KanbanTab } from './components/KanbanTab';
 import { SessionKanbanTab } from './components/SessionKanbanTab';
 import { LogsTab } from './components/LogsTab';
+import { SurveysTab } from './components/SurveysTab';
 import { LLMTab } from './components/LLMTab';
 import { CodeTab, type CodeReview, type CodeTabHandle, type GitStatusInfo } from './components/CodeTab';
 import { SessionStatusBar } from './components/SessionStatusBar';
@@ -3275,6 +3276,9 @@ function AppContent() {
                   isConnected={connectionState === 'connected'}
                 />
               )}
+              {mainContentTab === 'surveys' && (
+                <SurveysTab />
+              )}
             </div>
 
             {/* Input area - show on streaming and context tabs */}
@@ -3726,13 +3730,13 @@ function MobileHeader({ connectionState, selectedSession }: MobileHeaderProps) {
 // - docs/url-routing.md (add route to URL scheme)
 // - routes.ts (add route constant when created)
 // - useRouter hook (add route handler when created)
-type MainContentTab = 'streaming' | 'context' | 'session-kanban' | 'properties' | 'slides' | 'code' | 'logs' | 'llm' | 'settings' | 'kanban';
+type MainContentTab = 'streaming' | 'context' | 'session-kanban' | 'properties' | 'slides' | 'code' | 'logs' | 'llm' | 'settings' | 'kanban' | 'surveys';
 type OuterTab = 'session' | 'global';
 
 // Helper to determine which outer tab a content tab belongs to
 // URL ROUTING: Add new session tabs to SESSION_TABS, global tabs to GLOBAL_TABS
 const SESSION_TABS: MainContentTab[] = ['streaming', 'context', 'session-kanban', 'properties', 'slides'];
-const GLOBAL_TABS: MainContentTab[] = ['code', 'logs', 'llm', 'settings', 'kanban'];
+const GLOBAL_TABS: MainContentTab[] = ['code', 'logs', 'llm', 'settings', 'kanban', 'surveys'];
 
 function getOuterTab(tab: MainContentTab): OuterTab {
   return SESSION_TABS.includes(tab) ? 'session' : 'global';
@@ -3928,6 +3932,12 @@ function MainContentHeader({
               onClick={() => onTabChange('kanban')}
             >
               Kanban
+            </button>
+            <button
+              className={`view-toggle-btn ${activeTab === 'surveys' ? 'active' : ''}`}
+              onClick={() => onTabChange('surveys')}
+            >
+              Surveys
             </button>
           </>
         )}

@@ -4812,6 +4812,16 @@ Summary:""")
                 ),
             )
 
+        # 3. Emit turns reordered event with new order for all turns
+        # After archive, turns have gaps in their order (e.g., 0,1,2,archive,13,14,15)
+        # Recompute sequential orders: 0,1,2,3,4,5,6
+        order_mappings = [(turn.id, idx) for idx, turn in enumerate(session.turns)]
+        await self._notify_session_data_service(
+            "emit_turns_reordered",
+            session_id=session_id,
+            mappings=order_mappings,
+        )
+
         # Emit session updated event for React UI
         self._emit_session_updated(session, is_streaming=False)
 
@@ -4896,8 +4906,8 @@ Summary:""")
                 turn_ids=[result.deleted_turn_id],
             )
 
-        # 2. Emit turn created events for each restored turn
-        from service.session_events import TurnCreatedEvent
+        # 2. Emit turn created + finished events for each restored turn
+        from service.session_events import TurnCreatedEvent, TurnFinishedEvent
         for i, turn in enumerate(result.restored_turns):
             await self._notify_observers(
                 "on_turn_created",
@@ -4910,10 +4920,38 @@ Summary:""")
                     content_block_type=turn.content_block.type if hasattr(turn.content_block, 'type') else "text",
                 ),
             )
+            # Also emit turn finished with the full content block
+            # This ensures the client gets the actual content for each restored turn
+            content_text = ""
+            if hasattr(turn.content_block, 'text'):
+                content_text = turn.content_block.text
+            elif hasattr(turn.content_block, 'content'):
+                content_text = turn.content_block.content
+            await self._notify_observers(
+                "on_turn_finished",
+                TurnFinishedEvent(
+                    session_id=session_id,
+                    turn_id=turn.id,
+                    turn_index=turn_index + i,
+                    role=turn.role,
+                    content=content_text,
+                    tokens=turn.tokens,
+                    content_block=turn.content_block,
+                ),
+            )
 
         # Update session with new turns
         session.turns = result.new_turns
         await session.save()
+
+        # 3. Emit turns reordered event with new order for all turns
+        # After rehydrate, turns need sequential ordering
+        order_mappings = [(turn.id, idx) for idx, turn in enumerate(session.turns)]
+        await self._notify_session_data_service(
+            "emit_turns_reordered",
+            session_id=session_id,
+            mappings=order_mappings,
+        )
 
         # Emit session updated event for React UI
         self._emit_session_updated(session, is_streaming=False)

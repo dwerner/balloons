@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-03-05T09:18:14.813744
+// Generated: 2026-03-06T12:21:40.398359
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -765,6 +765,16 @@ export interface SessionTurnsDeletedEvent {
   sessionId: string;
   turnIndices: number[];
   turnIds: string[];
+}
+
+export interface TurnOrderMapping {
+  turnId: string;
+  newOrder: number;
+}
+
+export interface SessionTurnsReorderedEvent {
+  sessionId: string;
+  mappings: TurnOrderMapping[];
 }
 
 export interface SessionStreamStartedEvent {

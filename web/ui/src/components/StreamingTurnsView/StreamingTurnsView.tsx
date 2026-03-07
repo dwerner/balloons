@@ -32,7 +32,7 @@ import { ChatMinimap, type MinimapExchange, type ExchangeDOMRect } from '../Chat
 import { createLogger } from '../../utils/debugLog';
 import './StreamingTurnsView.css';
 
-const log = createLogger('StreamingTurnsView');
+const debugLog = createLogger('StreamingTurnsView');
 
 // Re-export StreamingProgress for consumers
 export type { StreamingProgress } from '../../hooks';
@@ -83,6 +83,18 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
   // useSessionData now gets the clientId directly from client.clientId when connected
   // refreshKey forces re-subscription when incremented (e.g., after archive)
   const { turns, isLoading, isStreaming, streamError, error, streamingProgress } = useSessionData(client, sessionId, refreshKey);
+
+  // Debug: log turns on every change
+  useEffect(() => {
+    if (turns.length > 0) {
+      const orders = turns.map(t => t.order);
+      const minOrder = Math.min(...orders);
+      const maxOrder = Math.max(...orders);
+      debugLog(`turns changed: count=${turns.length}, orders=${minOrder}-${maxOrder}`, {
+        firstFive: turns.slice(0, 5).map(t => ({ order: t.order, type: t.contentBlock?.type, role: t.role }))
+      });
+    }
+  }, [turns]);
 
   // Report turns changes to parent
   useEffect(() => {
@@ -180,6 +192,16 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         return tBlockType === 'tool_use' && tToolUseBlock?.id === toolUseId;
       });
     });
+    // Debug: log filtered vs unfiltered
+    if (turns.length > 0 && filtered.length !== turns.length) {
+      debugLog(`filteredTurns: ${filtered.length} of ${turns.length} kept`);
+    }
+    if (filtered.length > 0) {
+      const orders = filtered.map(t => t.order);
+      const minOrder = Math.min(...orders);
+      const maxOrder = Math.max(...orders);
+      debugLog(`filteredTurns orders: ${minOrder}-${maxOrder}`);
+    }
     return filtered;
   }, [turns]);
 
@@ -356,12 +378,6 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     const containerTop = scrollContainer.getBoundingClientRect().top;
     const scrollOffset = scrollContainer.scrollTop;
 
-    console.log('[MINIMAP] measureExchanges:', {
-      refsCount: exchangeRefsMap.current.size,
-      containerTop,
-      scrollOffset,
-    });
-
     exchangeRefsMap.current.forEach((element, id) => {
       if (!element) return;
       const rect = element.getBoundingClientRect();
@@ -394,15 +410,6 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
 
     // Sort by top position
     rects.sort((a, b) => a.top - b.top);
-
-    // Debug log the first few and last few
-    if (rects.length > 0) {
-      console.log('[MINIMAP] measured rects:', {
-        count: rects.length,
-        first: rects.slice(0, 3).map(r => ({ id: r.id.slice(0, 8), top: Math.round(r.top), height: Math.round(r.height) })),
-        last: rects.slice(-2).map(r => ({ id: r.id.slice(0, 8), top: Math.round(r.top), height: Math.round(r.height) })),
-      });
-    }
 
     setExchangeRects(rects);
   }, [exchangeGroups]);
@@ -457,16 +464,6 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
       }
     });
   }, [turnsOrGroups.length, exchangeGroups.length]);
-
-  // Debug: log minimap-related state
-  useEffect(() => {
-    log('Minimap state', {
-      minimapExchanges: minimapExchanges.length,
-      scrollMetrics,
-      showMinimap,
-      visible: showMinimap && minimapExchanges.length > 0,
-    });
-  }, [minimapExchanges.length, scrollMetrics, showMinimap]);
 
   // Report scroll state changes to parent (for status bar indicator)
   useEffect(() => {

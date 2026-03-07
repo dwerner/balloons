@@ -232,6 +232,28 @@ const server = Bun.serve({
       return new Response(content, { headers: { "Content-Type": "text/plain" } });
     }
 
+    // Proxy survey API requests to the survey server (port 3001)
+    // This avoids mixed content issues (HTTPS page -> HTTP API)
+    if (path.startsWith("/api/survey")) {
+      try {
+        const surveyUrl = `http://localhost:3001${path}`;
+        const proxyRes = await fetch(surveyUrl, {
+          method: req.method,
+          headers: req.headers,
+          body: req.method !== "GET" && req.method !== "HEAD" ? await req.text() : undefined,
+        });
+        return new Response(proxyRes.body, {
+          status: proxyRes.status,
+          headers: proxyRes.headers,
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: "Survey server not reachable" }), {
+          status: 503,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+
     // Serve index.html for root
     if (path === "/") {
       path = "/index.html";

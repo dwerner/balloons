@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-03-05T09:18:14.818499
+// Generated: 2026-03-06T12:21:40.404646
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -2812,6 +2812,14 @@ export interface SessionDataEvents {
    */
   sessionDataTurnsDeleted(callback: (data: Types.SessionTurnsDeletedEvent) => void): Unsubscribe;
 
+  /**
+   * Emitted when turn orders are recomputed (e.g., after archive/rehydrate).
+   * 
+   * Clients should update the order field for each turn in the mapping.
+   * This fixes visual gaps in turn numbering after archive operations.
+   */
+  sessionDataTurnsReordered(callback: (data: Types.SessionTurnsReorderedEvent) => void): Unsubscribe;
+
 }
 
 export class SessionDataServiceClient implements SessionDataService {
@@ -2994,6 +3002,10 @@ export class SessionDataServiceClient implements SessionDataService {
 
   sessionDataTurnsDeleted(callback: (data: Types.SessionTurnsDeletedEvent) => void): Unsubscribe {
     return this.subscribe('sessionDataTurnsDeleted', callback);
+  }
+
+  sessionDataTurnsReordered(callback: (data: Types.SessionTurnsReorderedEvent) => void): Unsubscribe {
+    return this.subscribe('sessionDataTurnsReordered', callback);
   }
 
 }
