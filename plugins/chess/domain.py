@@ -253,7 +253,13 @@ Use chess_new_game to start, chess_move to play, chess_show to see the board."""
             )
 
         # Try to make the move
-        error, captured = engine.make_move(move_str)
+        result = engine.make_move(move_str)
+        # Handle both old (str | None) and new (tuple) return formats
+        if isinstance(result, tuple):
+            error, captured = result
+        else:
+            error = result
+            captured = None
         if error:
             return ToolResult(f"Invalid move: {error}", is_error=True)
 
