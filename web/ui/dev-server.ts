@@ -153,6 +153,60 @@ const server = Bun.serve({
       });
     }
 
+    // Serve plugin bundles - /api/plugins/{pluginId}/bundle.js
+    const pluginMatch = path.match(/^\/api\/plugins\/([^/]+)\/(.+)$/);
+    if (pluginMatch) {
+      const pluginId = pluginMatch[1];
+      const filename = pluginMatch[2];
+      if (!pluginId || !filename) {
+        return new Response("Invalid plugin path", { status: 400 });
+      }
+      const pluginsDir = join(dirname(projectDir), "..", "plugins", "dist", pluginId);
+      const pluginFile = Bun.file(join(pluginsDir, filename));
+
+      if (await pluginFile.exists()) {
+        const contentType = filename.endsWith(".js")
+          ? "application/javascript"
+          : filename.endsWith(".css")
+          ? "text/css"
+          : filename.endsWith(".json")
+          ? "application/json"
+          : "application/octet-stream";
+
+        return new Response(pluginFile, {
+          headers: {
+            "Content-Type": contentType,
+            "Cache-Control": "no-cache",
+          },
+        });
+      }
+      return new Response(`Plugin file not found: ${pluginId}/${filename}`, { status: 404 });
+    }
+
+    // List available plugins - /api/plugins
+    if (path === "/api/plugins") {
+      const pluginsDistDir = join(dirname(projectDir), "..", "plugins", "dist");
+      const plugins: { id: string; manifest: any }[] = [];
+
+      try {
+        const entries = await Array.fromAsync(new Bun.Glob("*/manifest.json").scan({ cwd: pluginsDistDir }));
+        for (const entry of entries) {
+          const pluginId = entry.replace("/manifest.json", "");
+          const manifestFile = Bun.file(join(pluginsDistDir, entry));
+          if (await manifestFile.exists()) {
+            const manifest = await manifestFile.json();
+            plugins.push({ id: pluginId, manifest });
+          }
+        }
+      } catch (e) {
+        // dist dir may not exist
+      }
+
+      return new Response(JSON.stringify(plugins), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     // Try to serve static files
     const filePath = join(projectDir, path);
     const file = Bun.file(filePath);

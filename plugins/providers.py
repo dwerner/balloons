@@ -85,20 +85,6 @@ class PromptProvider(Protocol):
         """
         ...
 
-    def get_context(self, session: "Session") -> str | None:
-        """Return dynamic per-session context.
-
-        Called before each LLM turn. Returns context that should be
-        injected based on current session state.
-
-        Args:
-            session: Current session
-
-        Returns:
-            Context string to inject, or None if no context needed
-        """
-        ...
-
 
 class ToolAndPromptProvider(ToolProvider, PromptProvider, Protocol):
     """Combined protocol for providers that offer both tools and prompts."""

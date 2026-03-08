@@ -8,6 +8,12 @@ from typing import Any, TYPE_CHECKING
 from ..base import Domain, DomainEvent, StatefulDomain, ToolDef, ToolResult
 from ..storage import JsonFileStorage, InMemoryStorage, CompositeStorage
 from .engine import ChessEngine, Color
+from .events import (
+    ChessGameStartedPayload,
+    ChessMovePayload,
+    ChessGameOverPayload,
+    ChessStateSyncPayload,
+)
 
 if TYPE_CHECKING:
     from session import Session
@@ -179,20 +185,6 @@ Use chess_new_game to start, chess_move to play, chess_show to see the board."""
             ],
         }
 
-    def get_context(self, session: "Session") -> str | None:
-        """Return current game state if a game is in progress."""
-        engine = _session_games.get(session.id)
-        if engine is None:
-            return None
-
-        result = engine.get_game_result()
-        if result:
-            return f"[Chess game over: {result}]"
-
-        turn = "White" if engine.turn == Color.WHITE else "Black"
-        check_str = " (CHECK!)" if engine.is_in_check() else ""
-        return f"[Chess: {turn} to move{check_str}]"
-
     async def handle_tool(
         self,
         tool_name: str,
@@ -230,10 +222,10 @@ Use chess_new_game to start, chess_move to play, chess_show to see the board."""
         event = DomainEvent(
             type="chess_game_started",
             source_domain=self.id,
-            payload={
-                "fen": engine.get_fen(),
-                "legalMoves": legal_moves,
-            },
+            payload=ChessGameStartedPayload(
+                fen=engine.get_fen(),
+                legal_moves=legal_moves,
+            ),
             target_session=session.id,
         )
 
@@ -261,7 +253,7 @@ Use chess_new_game to start, chess_move to play, chess_show to see the board."""
             )
 
         # Try to make the move
-        error = engine.make_move(move_str)
+        error, captured = engine.make_move(move_str)
         if error:
             return ToolResult(f"Invalid move: {error}", is_error=True)
 
@@ -276,11 +268,12 @@ Use chess_new_game to start, chess_move to play, chess_show to see the board."""
         events.append(DomainEvent(
             type="chess_move_made",
             source_domain=self.id,
-            payload={
-                "move": move_str,
-                "fen": engine.get_fen(),
-                "legalMoves": legal_moves,
-            },
+            payload=ChessMovePayload(
+                move=move_str,
+                fen=engine.get_fen(),
+                legal_moves=legal_moves,
+                captured=captured,
+            ),
             target_session=session.id,
         ))
 
@@ -297,10 +290,10 @@ Use chess_new_game to start, chess_move to play, chess_show to see the board."""
             events.append(DomainEvent(
                 type="chess_game_over",
                 source_domain=self.id,
-                payload={
-                    "result": game_result,
-                    "reason": "checkmate" if engine.is_checkmate() else draw_reason or "unknown",
-                },
+                payload=ChessGameOverPayload(
+                    result=game_result,
+                    reason="checkmate" if engine.is_checkmate() else draw_reason or "unknown",
+                ),
                 target_session=session.id,
             ))
 
@@ -343,12 +336,12 @@ Use chess_new_game to start, chess_move to play, chess_show to see the board."""
         event = DomainEvent(
             type="chess_state_sync",
             source_domain=self.id,
-            payload={
-                "fen": fen,
-                "legalMoves": legal_moves,
-                "gameOver": result is not None,
-                "result": result,
-            },
+            payload=ChessStateSyncPayload(
+                fen=fen,
+                legal_moves=legal_moves,
+                game_over=result is not None,
+                result=result,
+            ),
             target_session=session.id,
         )
 
@@ -411,10 +404,10 @@ Use chess_new_game to start, chess_move to play, chess_show to see the board."""
         event = DomainEvent(
             type="chess_game_over",
             source_domain=self.id,
-            payload={
-                "result": game_result,
-                "reason": "resignation",
-            },
+            payload=ChessGameOverPayload(
+                result=game_result,
+                reason="resignation",
+            ),
             target_session=session.id,
         )
 
@@ -445,6 +438,25 @@ Use chess_new_game to start, chess_move to play, chess_show to see the board."""
             return ToolResult(f"Invalid FEN: {e}", is_error=True)
 
     # StatefulDomain methods
+
+    async def get_state(self, session: "Session") -> dict[str, Any] | None:
+        """Return current chess game state.
+
+        Called when a client requests a state sync (e.g., on reconnection).
+        The service layer wraps this in a DomainEvent for WebSocket broadcast.
+        """
+        engine = _session_games.get(session.id)
+        if engine is None:
+            return None
+
+        result = engine.get_game_result()
+
+        return {
+            "fen": engine.get_fen(),
+            "legal_moves": [m.to_uci() for m in engine.get_legal_moves()],
+            "game_over": result is not None,
+            "result": result,
+        }
 
     async def save_state(self, session: "Session") -> dict[str, Any]:
         """Save chess game state to memory and persistent storage."""

@@ -11,12 +11,18 @@ import importlib
 import importlib.util
 import sys
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any, Awaitable, Callable, TYPE_CHECKING
 
-from .base import Domain, DomainEvent, ToolDef, ToolResult
+from .base import Domain, DomainEvent, StatefulDomain, ToolDef, ToolResult
+from .events import payload_to_dict
 
 if TYPE_CHECKING:
     from session import Session
+
+
+# Type alias for the event emitter callback
+EventEmitter = Callable[[str, str, str, dict[str, Any]], Awaitable[None]]
+"""Callback signature: (domain_id, event_type, session_id, payload_dict) -> None"""
 
 
 class DomainRegistry:
@@ -38,18 +44,38 @@ class DomainRegistry:
         result = await registry.execute_tool("chess_move", {"move": "e4"}, session)
     """
 
-    def __init__(self, plugins_dir: Path | None = None):
+    def __init__(
+        self,
+        plugins_dir: Path | None = None,
+        event_emitter: EventEmitter | None = None,
+    ):
         """Initialize the registry.
 
         Args:
             plugins_dir: Directory containing domain plugins.
                         Defaults to the 'plugins' directory next to this file.
+            event_emitter: Optional callback for emitting events to the service layer.
+                          Signature: (domain_id, event_type, session_id, payload_dict) -> None
+                          If not provided, events are emitted via the service locator
+                          (backwards compatible behavior).
         """
         if plugins_dir is None:
             plugins_dir = Path(__file__).parent
         self.plugins_dir = plugins_dir
         self._domains: dict[str, Domain] = {}
         self._tool_to_domain: dict[str, str] = {}  # tool_name -> domain_id
+        self._event_emitter = event_emitter
+
+    def set_event_emitter(self, emitter: EventEmitter | None) -> None:
+        """Set the event emitter callback.
+
+        This allows setting the emitter after construction, which is useful
+        when the registry is created before the service layer is initialized.
+
+        Args:
+            emitter: Callback for emitting events, or None to use service locator
+        """
+        self._event_emitter = emitter
 
     @property
     def loaded_domains(self) -> list[str]:
@@ -259,11 +285,6 @@ class DomainRegistry:
         """Get combined prompts (PromptProvider protocol)."""
         return self.get_all_prompts()
 
-    def get_context(self, session: "Session") -> str | None:
-        """Get combined context (PromptProvider protocol)."""
-        context = self.get_all_context(session)
-        return context if context else None
-
     # Prompt Aggregation
 
     def get_all_prompts(self) -> str:
@@ -277,22 +298,6 @@ class DomainRegistry:
             prompt = domain.get_prompt()
             if prompt:
                 parts.append(f"## {domain.name} Domain\n\n{prompt}")
-        return "\n\n".join(parts)
-
-    def get_all_context(self, session: "Session") -> str:
-        """Get combined dynamic context from all loaded domains.
-
-        Args:
-            session: Current session
-
-        Returns:
-            Combined context string
-        """
-        parts = []
-        for domain in self._domains.values():
-            context = domain.get_context(session)
-            if context:
-                parts.append(context)
         return "\n\n".join(parts)
 
     # Tool Execution
@@ -364,27 +369,47 @@ class DomainRegistry:
         """Emit domain events through the session manager to WebSocket clients.
 
         This bridges the domain plugin event system to the Balloons WebSocket layer.
-        """
-        try:
-            # Get the session manager service instance
-            from service import get_session_manager_service
-            session_manager = get_session_manager_service()
-            if session_manager is None:
-                return
 
-            for event in events:
+        If an event_emitter callback was provided at construction, it is used.
+        Otherwise, falls back to the service locator pattern for backwards
+        compatibility.
+        """
+        for event in events:
+            session_id = event.target_session or session.id
+            payload_dict = payload_to_dict(event.payload)
+
+            # Use injected emitter if available
+            if self._event_emitter is not None:
+                try:
+                    await self._event_emitter(
+                        event.source_domain,
+                        event.type,
+                        session_id,
+                        payload_dict,
+                    )
+                except Exception as e:
+                    print(f"Warning: Event emitter failed: {e}")
+                continue
+
+            # Fallback to service locator (backwards compatible)
+            try:
+                from service import get_session_manager_service
+                session_manager = get_session_manager_service()
+                if session_manager is None:
+                    continue
+
                 await session_manager.emit_domain_event(
                     domain_id=event.source_domain,
                     event_type=event.type,
-                    session_id=event.target_session or session.id,
-                    data=event.payload,
+                    session_id=session_id,
+                    data=payload_dict,
                 )
-        except ImportError:
-            # Session manager not available (e.g., in tests)
-            pass
-        except Exception as e:
-            # Log but don't fail the tool execution
-            print(f"Warning: Failed to emit domain event: {e}")
+            except ImportError:
+                # Session manager not available (e.g., in tests)
+                pass
+            except Exception as e:
+                # Log but don't fail the tool execution
+                print(f"Warning: Failed to emit domain event: {e}")
 
     # Event Routing
 
@@ -445,6 +470,35 @@ class DomainRegistry:
             pending.extend(new_events)
 
         return all_events
+
+    # State Sync
+
+    async def get_state(
+        self,
+        domain_id: str,
+        session: "Session",
+    ) -> dict[str, Any] | None:
+        """Get current state from a stateful domain.
+
+        This allows core services to request domain state without knowing
+        about domain internals. The service layer wraps the result in a
+        DomainEvent for WebSocket broadcast.
+
+        Args:
+            domain_id: ID of the domain to query
+            session: Session to get state for
+
+        Returns:
+            State dict, or None if domain not found or has no state
+        """
+        domain = self._domains.get(domain_id)
+        if domain is None:
+            return None
+
+        if not isinstance(domain, StatefulDomain):
+            return None
+
+        return await domain.get_state(session)
 
 
 # Global registry instance

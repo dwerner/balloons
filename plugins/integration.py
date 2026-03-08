@@ -81,21 +81,6 @@ def get_domain_prompt() -> str:
     return registry.get_prompt()
 
 
-def get_domain_context(session: "Session") -> str | None:
-    """Get combined dynamic context from all loaded domains.
-
-    Call this before each LLM turn to inject domain-specific state.
-
-    Args:
-        session: Current session
-
-    Returns:
-        Combined context string, or None if no context
-    """
-    registry = get_registry()
-    return registry.get_context(session)
-
-
 async def execute_domain_tool(
     tool_name: str,
     params: dict[str, Any],
@@ -148,3 +133,20 @@ def list_loaded_domains() -> list[str]:
     """
     registry = get_registry()
     return registry.loaded_domains
+
+
+async def get_domain_state(domain_id: str, session: "Session") -> dict | None:
+    """Get current state from a stateful domain.
+
+    This allows core services to request domain state without knowing
+    about domain internals.
+
+    Args:
+        domain_id: ID of the domain to query
+        session: Session to get state for
+
+    Returns:
+        State dict, or None if domain not found or has no state
+    """
+    registry = get_registry()
+    return await registry.get_state(domain_id, session)

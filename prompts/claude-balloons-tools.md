@@ -1055,4 +1055,60 @@ To test if code works, use `server_manage(action="restart")` to restart the othe
 The React UI can toggle between slots via the "Server: A/B" control in the sidebar.
 
 
+## Domain Plugin Tools
+
+You can dynamically load domain plugins to gain new capabilities. Domain plugins provide
+specialized tools for specific tasks (like playing chess, managing databases, etc.).
+
+### Available Tools
+
+**load_domain** - Load a domain plugin
+```json
+{
+  "name": "load_domain",
+  "args": {
+    "domain_id": "chess"  // ID of the domain to load
+  }
+}
+```
+
+Once loaded, the domain's tools become available and its documentation is added to your context.
+
+**unload_domain** - Unload a domain plugin
+```json
+{
+  "name": "unload_domain",
+  "args": {
+    "domain_id": "chess"  // ID of the domain to unload
+  }
+}
+```
+
+Frees resources when you're done with a domain's capabilities.
+
+**list_domains** - List available and loaded domains
+```json
+{
+  "name": "list_domains",
+  "args": {}
+}
+```
+
+Shows which domains are available to load and which are currently loaded.
+
+### When to Use Domain Plugins
+
+- **User asks for specialized capabilities**: "Let's play chess" → load chess domain
+- **Task requires domain-specific tools**: Load the relevant domain before starting work
+- **Cleaning up**: Unload domains you no longer need to reduce context usage
+
+### Example Workflow
+
+1. User says "Let's play chess"
+2. Call `list_domains` to see what's available
+3. Call `load_domain` with `domain_id: "chess"`
+4. The chess tools (like `chess_new_game`, `chess_move`) become available
+5. When done, call `unload_domain` to clean up
+
+
 <!-- #include shared/debug-logging.md -->

@@ -8,6 +8,9 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol, TYPE_CHECKING
 from enum import Enum
 
+# Re-export DomainEvent from the new events module for backwards compatibility
+from .events import DomainEvent, payload_to_dict, RawPayload
+
 if TYPE_CHECKING:
     from session import Session
 
@@ -33,21 +36,6 @@ class ToolDef:
                 "parameters": self.parameters,
             },
         }
-
-
-@dataclass
-class DomainEvent:
-    """Event emitted by or sent to a domain.
-
-    Events are the primary mechanism for inter-domain communication.
-    For example, a chess domain might emit "move_made" events that
-    an agent domain can react to.
-    """
-
-    type: str  # e.g., "move_made", "game_over", "error"
-    source_domain: str  # Domain ID that emitted this event
-    payload: dict[str, Any] = field(default_factory=dict)
-    target_session: str | None = None  # Optional: specific session to route to
 
 
 @dataclass
@@ -144,18 +132,6 @@ class Domain(ABC):
         """
         return ""
 
-    def get_context(self, session: "Session") -> str | None:
-        """Return dynamic per-session context.
-
-        Called before each LLM turn. Returns context that should be
-        injected based on current session state (e.g., current chess
-        position, game status).
-
-        Returns:
-            Context string to inject, or None if no context needed
-        """
-        return None
-
     # Event Interface
     async def handle_event(
         self,
@@ -222,6 +198,11 @@ class StatefulDomain(Domain):
     Extends Domain with methods for saving/loading session-scoped state.
     Use this when your domain needs to maintain state across turns
     (e.g., chess position, conversation context).
+
+    State flows:
+    - Tool results push state changes via events
+    - `get_state()` returns current state on demand (reconnection, explicit sync)
+    - `save_state()`/`load_state()` handle persistence
     """
 
     @abstractmethod
@@ -246,3 +227,20 @@ class StatefulDomain(Domain):
         Called when session is reset or domain is unloaded from session.
         """
         pass
+
+    async def get_state(self, session: "Session") -> dict[str, Any] | None:
+        """Return current domain state for a session.
+
+        Called when:
+        - A client requests state sync (e.g., on reconnection)
+        - Session starts and needs initial state
+
+        The service layer wraps this in a DomainEvent for WebSocket broadcast.
+
+        Args:
+            session: The session to get state for
+
+        Returns:
+            State dict, or None if no state available
+        """
+        return None

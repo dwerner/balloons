@@ -160,7 +160,9 @@ class TestProviderProtocol:
 
         # Check PromptProvider methods
         assert hasattr(registry, "get_prompt")
-        assert hasattr(registry, "get_context")
+
+        # Check state methods
+        assert hasattr(registry, "get_state")
 
     def test_handles_tool(self):
         """Test handles_tool method."""
@@ -206,6 +208,38 @@ class TestProviderProtocol:
 
         assert is_error
         assert "Unknown" in result
+
+    async def test_get_state(self):
+        """Test getting state from a stateful domain."""
+        class MockSession:
+            id = "test-state-session"
+
+        registry = DomainRegistry(Path(__file__).parent)
+        registry.load_domain("chess")
+
+        # No state before starting a game
+        state = await registry.get_state("chess", MockSession())
+        assert state is None
+
+        # Start a game
+        await registry.execute_tool("chess_new_game", {}, MockSession())
+
+        # Now we should have state
+        state = await registry.get_state("chess", MockSession())
+        assert state is not None
+        assert "fen" in state
+        assert "legal_moves" in state
+        assert state["game_over"] is False
+
+    async def test_get_state_unknown_domain(self):
+        """Test that get_state returns None for unknown domains."""
+        class MockSession:
+            id = "test-state-session-2"
+
+        registry = DomainRegistry(Path(__file__).parent)
+
+        state = await registry.get_state("unknown_domain", MockSession())
+        assert state is None
 
 
 if __name__ == "__main__":

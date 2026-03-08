@@ -598,19 +598,21 @@ class ChessEngine:
 
         return moves
 
-    def make_move(self, move_str: str) -> str | None:
-        """Make a move and return error message or None on success.
+    def make_move(self, move_str: str) -> tuple[str | None, str | None]:
+        """Make a move and return (error, captured_piece).
 
         Args:
             move_str: Move in UCI notation (e.g., 'e2e4', 'e7e8q')
 
         Returns:
-            Error message or None on success
+            Tuple of (error_message, captured_piece_symbol)
+            - On error: (error_msg, None)
+            - On success: (None, captured_piece or None if no capture)
         """
         try:
             move = Move.from_str(move_str)
         except ValueError as e:
-            return str(e)
+            return str(e), None
 
         # Check if the move is legal
         legal_moves = self.get_legal_moves(move.from_sq)
@@ -627,16 +629,27 @@ class ChessEngine:
         if matching_move is None:
             piece = self.state.get_piece(move.from_sq)
             if piece is None:
-                return f"No piece at {move.from_sq}"
+                return f"No piece at {move.from_sq}", None
             if piece.color != self.state.turn:
-                return f"It's {self.state.turn.value}'s turn"
-            return f"Illegal move: {move}"
+                return f"It's {self.state.turn.value}'s turn", None
+            return f"Illegal move: {move}", None
+
+        # Get captured piece BEFORE applying move
+        captured = self.state.get_piece(matching_move.to_sq)
+
+        # Handle en passant capture (captured piece is on different square)
+        moving_piece = self.state.get_piece(matching_move.from_sq)
+        if (moving_piece and moving_piece.type == PieceType.PAWN and
+            matching_move.to_sq == self.state.en_passant_target):
+            captured = self.state.get_piece(Square(matching_move.to_sq.file, matching_move.from_sq.rank))
+
+        captured_symbol = str(captured) if captured else None
 
         # Apply the move
         self._apply_move_unchecked(matching_move)
         self.state.move_history.append(str(matching_move))
 
-        return None
+        return None, captured_symbol
 
     def is_checkmate(self) -> bool:
         """Check if the current side is in checkmate."""

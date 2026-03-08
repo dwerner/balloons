@@ -1879,6 +1879,52 @@ class SessionDataService:
         pinned_ids = await self._load_pinned_session_ids()
         return list(pinned_ids)
 
+    @ws_expose
+    async def request_domain_state(self, session_id: str, domain_id: str) -> bool:
+        """Request a domain to emit its current state.
+
+        This triggers the domain to emit a state sync event for the specified session.
+        The client should already be subscribed to receive domain events.
+
+        Gets raw state from the domain and wraps it in a state_sync event.
+
+        Args:
+            session_id: The session ID
+            domain_id: The domain ID (e.g., "chess")
+
+        Returns:
+            True if state was emitted, False if no state available
+        """
+        from plugins.registry import get_registry
+        from plugins.events import _convert_keys_to_camel
+
+        # Get the session (needed for the registry call)
+        if self._manager is None:
+            return False
+
+        session = await self._manager.get(session_id)
+        if session is None:
+            return False
+
+        # Get raw state from the registry
+        registry = get_registry()
+        state = await registry.get_state(domain_id, session)
+
+        if state is None:
+            return False
+
+        # Emit via session manager, wrapping state in a state_sync event
+        if self._session_manager:
+            await self._session_manager.emit_domain_event(
+                domain_id=domain_id,
+                event_type=f"{domain_id}_state_sync",
+                session_id=session_id,
+                data=_convert_keys_to_camel(state),
+            )
+            return True
+
+        return False
+
     # --- Client Lifecycle ---
 
     def client_disconnected(self, client_id: str) -> None:

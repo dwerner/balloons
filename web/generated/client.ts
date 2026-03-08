@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-03-07T13:52:18.421214
+// Generated: 2026-03-07T16:48:22.167295
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -2621,6 +2621,24 @@ export interface SessionDataService {
   pinSession(sessionId: string): Promise<boolean>;
 
   /**
+   * Request a domain to emit its current state.
+   * 
+   * This triggers the domain to emit a state sync event for the specified session.
+   * The client should already be subscribed to receive domain events.
+   * 
+   * Currently supports:
+   * - chess: Emits chess_state_sync event with current game state
+   * 
+   * Args:
+   * session_id: The session ID
+   * domain_id: The domain ID (e.g., "chess")
+   * 
+   * Returns:
+   * True if state was emitted, False if no state available
+   */
+  requestDomainState(sessionId: string, domainId: string): Promise<boolean>;
+
+  /**
    * Set the context mode for a turn.
    * 
    * Args:
@@ -2914,6 +2932,10 @@ export class SessionDataServiceClient implements SessionDataService {
 
   async pinSession(sessionId: string): Promise<boolean> {
     return this.call('pinSession', { sessionId: sessionId });
+  }
+
+  async requestDomainState(sessionId: string, domainId: string): Promise<boolean> {
+    return this.call('requestDomainState', { sessionId: sessionId, domainId: domainId });
   }
 
   async setContextMode(sessionId: string, turnIdx: number, mode: string): Promise<null> {
