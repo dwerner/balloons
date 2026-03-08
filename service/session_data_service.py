@@ -42,6 +42,7 @@ from service.session_events import (
     ToolInputDeltaEvent,
     ToolUseEvent,
     ToolResultEvent,
+    DomainEventWrapper,
 )
 from models import (
     TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock,
@@ -336,6 +337,21 @@ class SessionToolResultEvent:
     result: str
     is_error: bool
     tool_index: int
+
+
+@ws_type
+@dataclass
+class SessionDomainEvent:
+    """Event payload when a domain plugin emits an event.
+
+    This bridges domain state changes (chess moves, game over, etc.) to the UI.
+    Clients can subscribe to specific domains/event_types as needed.
+    """
+
+    session_id: str
+    domain_id: str  # e.g., "chess"
+    event_type: str  # e.g., "move_made", "game_over"
+    data: dict[str, Any]  # Event-specific payload
 
 
 @ws_type
@@ -2330,6 +2346,15 @@ class SessionDataService:
         """Emitted when a tool finishes execution."""
         ...
 
+    @ws_event(name="sessionDataDomainEvent")
+    async def on_session_data_domain_event(self) -> SessionDomainEvent:
+        """Emitted when a domain plugin sends an event.
+
+        This bridges domain plugins (chess, etc.) to the frontend.
+        Contains domain_id, event_type, and event-specific data.
+        """
+        ...
+
     @ws_event(name="sessionDataHistoryChunk")
     async def on_session_data_history_chunk(self) -> SessionHistoryChunkEvent:
         """Emitted when a chunk of historical turns is ready.
@@ -2602,3 +2627,24 @@ class SessionDataService:
             "tool_index": event.tool_index,
         }
         self._emit_event("sessionDataToolResult", event_data, subscribers)
+
+    async def on_domain_event(self, event: DomainEventWrapper) -> None:
+        """Handle domain plugin event from SessionManagerService.
+
+        Emits domainEvent WebSocket event to DELTA layer subscribers.
+        This bridges domain plugins (like chess) to the frontend.
+        """
+        print(f"[SessionDataService] on_domain_event: {event.domain_id}/{event.event_type} for session {event.session_id}")
+        session_id = event.session_id
+        subscribers = self._subscription_manager.get_clients_for_layer(session_id, Layer.DELTA)
+        print(f"[SessionDataService] Found {len(subscribers)} subscribers for DELTA layer")
+        if not subscribers:
+            return
+
+        event_data = {
+            "session_id": session_id,
+            "domain_id": event.domain_id,
+            "event_type": event.event_type,
+            "data": event.data,
+        }
+        self._emit_event("sessionDataDomainEvent", event_data, subscribers)

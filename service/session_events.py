@@ -306,6 +306,21 @@ class HelperErrorEvent:
     cancelled: bool = False  # True if cancelled rather than errored
 
 
+@ws_type
+@dataclass
+class DomainEventWrapper:
+    """Emitted when a domain plugin sends an event.
+
+    Wraps domain events (chess moves, game state changes, etc.) for WebSocket broadcast.
+    The frontend can subscribe to specific domains and event types.
+    """
+
+    domain_id: str  # e.g., "chess"
+    event_type: str  # e.g., "move_made", "game_started", "game_over"
+    session_id: str  # Session this event belongs to
+    data: dict[str, Any] = field(default_factory=dict)  # Event-specific payload
+
+
 # --- Observer Protocol ---
 
 
@@ -376,4 +391,8 @@ class SessionEventObserver(Protocol):
 
     async def on_helper_error(self, event: HelperErrorEvent) -> None:
         """Called when a helper task fails or is cancelled."""
+        ...
+
+    async def on_domain_event(self, event: "DomainEventWrapper") -> None:
+        """Called when a domain plugin emits an event."""
         ...

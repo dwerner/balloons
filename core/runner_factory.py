@@ -232,6 +232,15 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
         if balloons_prompt:
             parts.append(balloons_prompt)
 
+        # Add domain plugin prompts
+        try:
+            from plugins.integration import get_domain_prompt
+            domain_prompt = get_domain_prompt()
+            if domain_prompt:
+                parts.append(domain_prompt)
+        except ImportError:
+            pass  # Plugin system not available
+
         system_prompt = "\n\n".join(parts) if parts else None
 
         return OpenAICompatibleRunner(
@@ -248,6 +257,15 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
         balloons_prompt = _load_claude_balloons_tools_prompt()
         if balloons_prompt:
             parts.append(balloons_prompt)
+
+        # Add domain plugin prompts
+        try:
+            from plugins.integration import get_domain_prompt
+            domain_prompt = get_domain_prompt()
+            if domain_prompt:
+                parts.append(domain_prompt)
+        except ImportError:
+            pass  # Plugin system not available
 
         system_prompt = "\n\n".join(parts) if parts else None
 

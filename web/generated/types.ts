@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-03-06T22:37:36.526807
+// Generated: 2026-03-07T13:52:18.415188
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -273,6 +273,13 @@ export interface HelperErrorEvent {
   sessionId?: string | null;
   error?: string | null;
   cancelled?: boolean;
+}
+
+export interface DomainEventWrapper {
+  domainId: string;
+  eventType: string;
+  sessionId: string;
+  data?: Record<string, unknown>;
 }
 
 export interface ManagedSessionInfo {
@@ -843,6 +850,13 @@ export interface SessionToolResultEvent {
   result: string;
   isError: boolean;
   toolIndex: number;
+}
+
+export interface SessionDomainEvent {
+  sessionId: string;
+  domainId: string;
+  eventType: string;
+  data: Record<string, unknown>;
 }
 
 export interface SessionHistoryChunkEvent {

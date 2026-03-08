@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-03-06T22:37:36.531719
+// Generated: 2026-03-07T13:52:18.421214
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -2694,6 +2694,14 @@ export interface SessionDataService {
 
 export interface SessionDataEvents {
   /**
+   * Emitted when a domain plugin sends an event.
+   * 
+   * This bridges domain plugins (chess, etc.) to the frontend.
+   * Contains domain_id, event_type, and event-specific data.
+   */
+  sessionDataDomainEvent(callback: (data: Types.SessionDomainEvent) => void): Unsubscribe;
+
+  /**
    * Emitted when a chunk of historical turns is ready.
    * 
    * Sent incrementally during session subscription when the session
@@ -2926,6 +2934,10 @@ export class SessionDataServiceClient implements SessionDataService {
 
   async unpinSession(sessionId: string): Promise<boolean> {
     return this.call('unpinSession', { sessionId: sessionId });
+  }
+
+  sessionDataDomainEvent(callback: (data: Types.SessionDomainEvent) => void): Unsubscribe {
+    return this.subscribe('sessionDataDomainEvent', callback);
   }
 
   sessionDataHistoryChunk(callback: (data: Types.SessionHistoryChunkEvent) => void): Unsubscribe {

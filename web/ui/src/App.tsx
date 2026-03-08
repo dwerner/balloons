@@ -7,6 +7,7 @@ import { SessionTreeView } from './components/SessionTreeView';
 import { GoalTreeView } from './components/GoalTreeView';
 import { FileBrowserView, type FileBrowserViewRef } from './components/FileBrowserView';
 import { SupervisorTab } from './components/SupervisorTab';
+import { ChessTab } from './components/ChessTab';
 import { OptionsTab } from './components/OptionsTab';
 import { SettingsTab } from './components/SettingsTab';
 import { KanbanTab } from './components/KanbanTab';
@@ -1258,8 +1259,8 @@ function AppContent() {
   const fileBrowserRef = useRef<FileBrowserViewRef>(null);
   const codeTabRef = useRef<CodeTabHandle>(null);
 
-  // Detail panel tab state ('files', 'supervisor', or 'options')
-  type DetailTab = 'files' | 'supervisor' | 'options';
+  // Detail panel tab state ('files', 'supervisor', 'chess', or 'options')
+  type DetailTab = 'files' | 'supervisor' | 'chess' | 'options';
   const [detailTab, setDetailTab] = useState<DetailTab>('files');
 
   // Track the session we're currently loading to handle race conditions
@@ -3400,6 +3401,12 @@ function AppContent() {
             Supervisor
           </button>
           <button
+            className={`detail-panel-tab ${detailTab === 'chess' ? 'active' : ''}`}
+            onClick={() => setDetailTab('chess')}
+          >
+            ♟ Chess
+          </button>
+          <button
             className={`detail-panel-tab ${detailTab === 'options' ? 'active' : ''}`}
             onClick={() => setDetailTab('options')}
           >
@@ -3453,6 +3460,18 @@ function AppContent() {
                   if (!result.success) {
                     console.error('Failed to stop process:', result.error);
                   }
+                }
+              }}
+            />
+          )}
+
+          {detailTab === 'chess' && (
+            <ChessTab
+              sessionId={selectedSessionId || undefined}
+              sessionDataClient={connectionState === 'connected' ? clientRef.current?.sessionData : undefined}
+              sendMessage={(msg) => {
+                if (selectedSessionId && clientRef.current) {
+                  clientRef.current.sessions.submitMessage(selectedSessionId, msg);
                 }
               }}
             />

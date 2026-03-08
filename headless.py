@@ -243,6 +243,10 @@ async def run_server(
     session_service.set_task_state_service(task_service)
     session_service.set_session_data_service(session_data_service)
 
+    # Register session service globally for plugin event emission
+    from service import set_session_manager_service
+    set_session_manager_service(session_service)
+
     # Initialize async components (rebuilds watcher relationships)
     await session_service.initialize()
 

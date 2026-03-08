@@ -1049,6 +1049,9 @@ from .kanban_tools import KANBAN_TOOLS, KANBAN_TOOL_NAMES
 # Import server management tools
 from .server_tools import SERVER_TOOLS, SERVER_TOOL_NAMES
 
+# Import domain management tools
+from .domain_tools import DOMAIN_TOOLS, DOMAIN_TOOL_NAMES
+
 
 def get_tools_for_request(
     allowed_tools: list[str] | None = None,
@@ -1063,6 +1066,7 @@ def get_tools_for_request(
     include_lsp_tools: bool = True,
     include_kanban_tools: bool = True,
     include_server_tools: bool = True,
+    include_domain_tools: bool = True,
 ) -> list[dict] | None:
     """Get the list of tools to include in an API request.
 
@@ -1084,6 +1088,7 @@ def get_tools_for_request(
         include_lsp_tools: If True, include LSP semantic code tools (lsp_hover, etc.)
         include_kanban_tools: If True, include kanban board tools (kanban_create_task, etc.)
         include_server_tools: If True, include server management tools (server_manage)
+        include_domain_tools: If True, include tools from loaded domain plugins
 
     Returns:
         List of tool definitions, or None if tools disabled
@@ -1113,6 +1118,15 @@ def get_tools_for_request(
         all_tools = all_tools + KANBAN_TOOLS
     if include_server_tools:
         all_tools = all_tools + SERVER_TOOLS
+    if include_domain_tools:
+        # Add domain management tools (load_domain, unload_domain, list_domains)
+        all_tools = all_tools + DOMAIN_TOOLS
+        # Add tools from currently loaded domains
+        try:
+            from plugins.integration import get_domain_tools
+            all_tools = all_tools + get_domain_tools()
+        except ImportError:
+            pass  # Plugin system not available
 
     if allowed_tools is None:
         return all_tools

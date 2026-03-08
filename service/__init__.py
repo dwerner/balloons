@@ -127,4 +127,31 @@ __all__ = [
     "HttpAuthServer",
     "ServerConfig",
     "create_http_auth_server",
+    # Service locator
+    "get_session_manager_service",
+    "set_session_manager_service",
 ]
+
+# Simple service locator for accessing the session manager service from plugins
+_session_manager_service: SessionManagerService | None = None
+
+
+def get_session_manager_service() -> SessionManagerService | None:
+    """Get the global session manager service instance.
+
+    Returns:
+        The session manager service, or None if not initialized
+    """
+    return _session_manager_service
+
+
+def set_session_manager_service(service: SessionManagerService | None) -> None:
+    """Set the global session manager service instance.
+
+    Called by headless.py during server startup.
+
+    Args:
+        service: The session manager service instance
+    """
+    global _session_manager_service
+    _session_manager_service = service

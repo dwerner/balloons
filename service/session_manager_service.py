@@ -658,6 +658,34 @@ class SessionManagerService:
                         category=Category.API,
                     )
 
+    async def emit_domain_event(
+        self,
+        domain_id: str,
+        event_type: str,
+        session_id: str,
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        """Emit a domain plugin event to all observers.
+
+        This is the bridge between domain plugins and the WebSocket event system.
+        Domains call this to broadcast state changes to connected clients.
+
+        Args:
+            domain_id: The domain ID (e.g., "chess")
+            event_type: The event type (e.g., "move_made", "game_over")
+            session_id: The session this event belongs to
+            data: Event-specific payload (will be JSON serialized)
+        """
+        from service.session_events import DomainEventWrapper
+
+        event = DomainEventWrapper(
+            domain_id=domain_id,
+            event_type=event_type,
+            session_id=session_id,
+            data=data or {},
+        )
+        await self._notify_observers("on_domain_event", event)
+
     # --- Session Lifecycle Events (Phase 8) ---
 
     def _emit_session_added(self, session: Any, is_streaming: bool = False) -> None:

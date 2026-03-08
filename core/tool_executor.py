@@ -25,6 +25,7 @@ from .watcher_tools import WATCHER_TOOL_NAMES, execute_watcher_tool
 from .lsp_tools import LSP_TOOL_NAMES, execute_lsp_tool
 from .kanban_tools import KANBAN_TOOL_NAMES, execute_kanban_tool
 from .server_tools import SERVER_TOOL_NAMES, execute_server_tool
+from .domain_tools import DOMAIN_TOOL_NAMES, execute_domain_management_tool
 from .fork import ForkProposal, ContextAssignment, MergeProposal
 from .tts import get_tts_runner, TTSConfig
 
@@ -92,6 +93,16 @@ async def execute_tool(
     )
 
     try:
+        # Domain plugin tools (check first for clean routing)
+        try:
+            from plugins.integration import is_domain_tool, execute_domain_tool
+            if is_domain_tool(name):
+                if session is None:
+                    return "Error: Domain tools require a session context", True
+                return await execute_domain_tool(name, args, session, working_dir)
+        except ImportError:
+            pass  # Plugin system not available
+
         # Link navigation tools
         if name in LINK_TOOL_NAMES:
             if session is None:
@@ -154,6 +165,12 @@ async def execute_tool(
         # Server management tools (safe A/B slot operations)
         if name in SERVER_TOOL_NAMES:
             return await execute_server_tool(name, args, session)
+
+        # Domain management tools (load_domain, unload_domain, list_domains)
+        if name in DOMAIN_TOOL_NAMES:
+            if session is None:
+                return "Error: Domain tools require a session context", True
+            return await execute_domain_management_tool(name, args, session)
 
         # Standard file/shell tools
         if name == "Read":
