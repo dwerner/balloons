@@ -40,7 +40,9 @@ function isStreamingInput(input: Record<string, unknown>): boolean {
 // Handles both camelCase (wire format) and snake_case (legacy) keys
 function extractProposalData(input: Record<string, unknown>) {
   // Get context plan from either camelCase or snake_case key
-  const rawContextPlan = (input.contextPlan || input.context_plan) as unknown[] || [];
+  // Must validate it's actually an array before using .map()
+  const rawContextPlanValue = input.contextPlan ?? input.context_plan;
+  const rawContextPlan = Array.isArray(rawContextPlanValue) ? rawContextPlanValue : [];
 
   // Get bind_to from either format
   const bindToRaw = input.bindTo ?? input.bind_to;
