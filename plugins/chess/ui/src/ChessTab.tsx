@@ -1,6 +1,10 @@
 /**
  * ChessTab - Interactive chess board for playing against the LLM
  *
+ * This is a plugin-ready version that can be dynamically loaded.
+ * It receives its dependencies via props (sendMessage, sessionDataClient, etc.)
+ * rather than importing from the main app.
+ *
  * Features:
  * - Visual chess board with piece animations
  * - Click-to-move interaction
@@ -10,7 +14,6 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import type { SessionDataServiceClient } from '../../../../generated/balloons-client';
 import './ChessTab.css';
 
 // Piece unicode characters with better styling
@@ -19,15 +22,29 @@ const PIECES: Record<string, string> = {
   k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟',
 };
 
-interface ChessTabProps {
+// Plugin context provided by the host app
+export interface PluginContext {
   /** Send a message to the LLM */
   sendMessage?: (message: string) => void;
   /** Current session ID */
   sessionId?: string;
-  /** Session data service client for domain event subscriptions */
-  sessionDataClient?: SessionDataServiceClient;
+  /** Subscribe to domain events, returns unsubscribe function */
+  subscribeToDomainEvents?: (
+    domainId: string,
+    callback: (event: DomainEventData) => void
+  ) => () => void;
+  /** Request current domain state */
+  requestDomainState?: (domainId: string) => Promise<boolean>;
   /** Whether the LLM is currently responding (streaming) */
   isLLMResponding?: boolean;
+}
+
+// Domain event structure
+export interface DomainEventData {
+  sessionId: string;
+  domainId: string;
+  eventType: string;
+  data: Record<string, unknown>;
 }
 
 interface Position {
@@ -88,7 +105,7 @@ function notationToSquare(notation: string): { file: number; rank: number } {
   };
 }
 
-export function ChessTab({ sendMessage, sessionId, sessionDataClient, isLLMResponding = false }: ChessTabProps) {
+export function ChessTab({ sendMessage, sessionId, subscribeToDomainEvents, requestDomainState, isLLMResponding = false }: PluginContext) {
   const [localFen, setLocalFen] = useState<string>(DEFAULT_FEN);
   const [selectedSquare, setSelectedSquare] = useState<string | null>(null);
   const [legalMoves, setLegalMoves] = useState<string[]>([]);
@@ -103,28 +120,26 @@ export function ChessTab({ sendMessage, sessionId, sessionDataClient, isLLMRespo
   const [gameResult, setGameResult] = useState<string | null>(null);
   const [capturedByWhite, setCapturedByWhite] = useState<string[]>([]);  // Pieces white captured
   const [capturedByBlack, setCapturedByBlack] = useState<string[]>([]);  // Pieces black captured
-  const [previousFen, setPreviousFen] = useState<string>(DEFAULT_FEN);   // For detecting captures
   const boardRef = useRef<HTMLDivElement>(null);
 
   // Subscribe to domain events
   useEffect(() => {
-    if (!sessionDataClient || !sessionId) return;
+    if (!subscribeToDomainEvents || !sessionId) return;
 
     console.log('[ChessTab] Subscribing to domain events for session:', sessionId);
 
-    const unsubscribe = sessionDataClient.sessionDataDomainEvent((event) => {
+    const unsubscribe = subscribeToDomainEvents('chess', (event) => {
       console.log('[ChessTab] Received domain event:', event);
-      // Only process chess events for our session
-      if (event.sessionId !== sessionId || event.domainId !== 'chess') return;
+      // Only process events for our session
+      if (event.sessionId !== sessionId) return;
 
       console.log('[ChessTab] Processing chess event:', event.eventType);
-      const data = event.data as Record<string, unknown>;
+      const data = event.data;
 
       switch (event.eventType) {
         case 'chess_game_started':
           console.log('[ChessTab] Game started, legal moves:', data.legalMoves);
           setLocalFen(data.fen as string || DEFAULT_FEN);
-          setPreviousFen(data.fen as string || DEFAULT_FEN);
           setLegalMoves((data.legalMoves as string[]) || []);
           setMoveHistory([]);
           setGameOver(false);
@@ -141,6 +156,19 @@ export function ChessTab({ sendMessage, sessionId, sessionDataClient, isLLMRespo
         case 'chess_move_made': {
           const moveStr = data.move as string;
           const newFen = data.fen as string;
+          const capturedPiece = data.captured as string | null;
+
+          // Track captured piece from server (authoritative source)
+          if (capturedPiece) {
+            // Determine who captured based on piece color
+            if (capturedPiece === capturedPiece.toUpperCase()) {
+              // White piece was captured (by black)
+              setCapturedByBlack(prev => [...prev, capturedPiece]);
+            } else {
+              // Black piece was captured (by white)
+              setCapturedByWhite(prev => [...prev, capturedPiece]);
+            }
+          }
 
           // Animate opponent's move (if it wasn't our optimistic move)
           if (moveStr && moveStr.length >= 4) {
@@ -153,20 +181,6 @@ export function ChessTab({ sendMessage, sessionId, sessionDataClient, isLLMRespo
             const oldPosition = parseFEN(localFen);
             const fromRow = oldPosition.board[from.rank];
             const movedPiece = fromRow ? fromRow[from.file] : null;
-
-            // Check if a piece was captured (destination had a piece)
-            const toRow = oldPosition.board[to.rank];
-            const capturedPiece = toRow ? toRow[to.file] : null;
-            if (capturedPiece) {
-              // Determine who captured (based on piece color)
-              if (capturedPiece === capturedPiece.toUpperCase()) {
-                // White piece was captured (by black)
-                setCapturedByBlack(prev => [...prev, capturedPiece]);
-              } else {
-                // Black piece was captured (by white)
-                setCapturedByWhite(prev => [...prev, capturedPiece]);
-              }
-            }
 
             // Animate if this is opponent's move (not our optimistic move)
             // We know it's opponent's move if current turn matches our color
@@ -183,7 +197,6 @@ export function ChessTab({ sendMessage, sessionId, sessionDataClient, isLLMRespo
             }
           }
 
-          setPreviousFen(localFen);
           setLocalFen(newFen);
           setLegalMoves((data.legalMoves as string[]) || []);
           setLastMove(moveStr);
@@ -216,20 +229,20 @@ export function ChessTab({ sendMessage, sessionId, sessionDataClient, isLLMRespo
     });
 
     return unsubscribe;
-  }, [sessionDataClient, sessionId]);
+  }, [subscribeToDomainEvents, sessionId, localFen, playerColor]);
 
   // Request current chess state on mount (for tab switching / page reload)
   useEffect(() => {
-    if (!sessionDataClient || !sessionId) return;
+    if (!requestDomainState || !sessionId) return;
 
     // Request domain state - the server will emit a chess_state_sync event if a game exists
     console.log('[ChessTab] Requesting chess state for session:', sessionId);
-    sessionDataClient.requestDomainState(sessionId, 'chess').then((hasState) => {
+    requestDomainState('chess').then((hasState) => {
       console.log('[ChessTab] State request result:', hasState);
     }).catch((err) => {
       console.warn('[ChessTab] Failed to request domain state:', err);
     });
-  }, [sessionDataClient, sessionId]);
+  }, [requestDomainState, sessionId]);
 
   // Use chess state from events
   const fen = localFen;
