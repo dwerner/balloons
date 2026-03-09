@@ -104,12 +104,16 @@ class ClaudeRunner(BaseRunner):
     Uses --input-format stream-json and --output-format stream-json for
     proper message passing. Executes tools ourselves and sends results
     back via the bidirectional stream.
+
+    System prompts are built per-turn to include fresh domain prompts and
+    other dynamic context. The user_prompt (from backend config) is stored
+    and combined with balloons tools and domain prompts each turn.
     """
 
     def __init__(
         self,
         backend_env: dict[str, str] | None = None,
-        system_prompt: str | None = None,
+        user_prompt: str | None = None,
         context_window: int = 150000,
     ):
         self.process: asyncio.subprocess.Process | None = None
@@ -117,7 +121,7 @@ class ClaudeRunner(BaseRunner):
         self._current_tool_use: dict | None = None  # Track tool use being built
         self._run_id: str = ""  # Current process PID for debug logging
         self._backend_env = backend_env or {}  # Environment overrides for LLM backend
-        self.system_prompt = system_prompt  # Additional system context to prepend
+        self._user_prompt = user_prompt  # Base prompt from backend config
         self.context_window = context_window  # Max context tokens
         self._json_errors: list[tuple[str, str | None]] = []  # Track (error_detail, dump_path) tuples
         self._current_session: "Session | None" = None  # Session for tool execution
@@ -372,6 +376,18 @@ class ClaudeRunner(BaseRunner):
             )
             return None
 
+    def _get_system_prompt(self) -> str | None:
+        """Build the system prompt for this turn.
+
+        Combines user prompt with balloons tools and domain prompts.
+        Called per-turn to ensure domain prompts are fresh.
+
+        Returns:
+            Complete system prompt, or None if no content
+        """
+        from core.prompt_builder import build_system_prompt
+        return build_system_prompt(backend_type="claude", user_prompt=self._user_prompt)
+
     def build_message_content(
         self,
         messages: list[Message],
@@ -437,6 +453,9 @@ class ClaudeRunner(BaseRunner):
         self._text_buffer = ""  # Reset text buffer for balloons-tool detection
         self._sent_continuation = False  # Reset continuation flag
 
+        # Build system prompt fresh for this turn (includes domain prompts)
+        system_prompt = self._get_system_prompt()
+
         # Build command with bidirectional JSON streaming
         cmd = [
             "claude",
@@ -448,8 +467,8 @@ class ClaudeRunner(BaseRunner):
             "--disallowedTools", "Task,TodoWrite,NotebookEdit,AskUserQuestion,EnterPlanMode,ExitPlanMode",
         ]
 
-        if self.system_prompt:
-            cmd.extend(["--system-prompt", self.system_prompt])
+        if system_prompt:
+            cmd.extend(["--system-prompt", system_prompt])
 
         if disable_tools:
             cmd.extend(["--tools", ""])

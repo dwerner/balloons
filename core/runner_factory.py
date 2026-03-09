@@ -16,28 +16,6 @@ _CLAUDE_BALLOONS_TOOLS_FILENAME = "claude-balloons-tools.md"
 _OPENAI_BALLOONS_TOOLS_FILENAME = "openai-balloons-tools.md"
 
 
-def _get_prompt_path(filename: str) -> Path | None:
-    """Get path to a prompt file, checking user dir first then source dir.
-
-    Args:
-        filename: Name of the prompt file
-
-    Returns:
-        Path to the file, or None if not found in either location.
-    """
-    # Check user directory first (~/.balloons/prompts/)
-    user_path = _USER_PROMPTS_DIR / filename
-    if user_path.exists():
-        return user_path
-
-    # Fall back to source directory
-    source_path = _SOURCE_PROMPTS_DIR / filename
-    if source_path.exists():
-        return source_path
-
-    return None
-
-
 def ensure_prompts_installed() -> None:
     """Copy default prompts to user directory if missing or outdated.
 
@@ -63,90 +41,6 @@ def ensure_prompts_installed() -> None:
 
         if should_copy:
             user_path.write_text(source_path.read_text())
-
-
-# Regex for include directives: <!-- #include path/to/file.md -->
-_INCLUDE_PATTERN = re.compile(r'<!--\s*#include\s+(\S+)\s*-->')
-
-
-def _process_includes(content: str, base_dir: Path, seen: set[Path] | None = None) -> str:
-    """Process #include directives in prompt content.
-
-    Replaces <!-- #include path/to/file.md --> with the file contents.
-    Paths are relative to prompts/ directory. Handles circular includes.
-
-    Args:
-        content: Prompt content with potential includes
-        base_dir: Base directory for resolving relative paths
-        seen: Set of already-included paths (for cycle detection)
-
-    Returns:
-        Content with includes expanded
-    """
-    if seen is None:
-        seen = set()
-
-    def replace_include(match: re.Match) -> str:
-        include_path = match.group(1)
-        # Resolve relative to prompts directory
-        full_path = (base_dir / include_path).resolve()
-
-        # Cycle detection
-        if full_path in seen:
-            return f"<!-- ERROR: circular include {include_path} -->"
-        if not full_path.exists():
-            return f"<!-- ERROR: include not found {include_path} -->"
-
-        seen.add(full_path)
-        try:
-            included_content = full_path.read_text()
-            # Recursively process includes in the included file
-            return _process_includes(included_content, full_path.parent, seen)
-        except Exception as e:
-            return f"<!-- ERROR: failed to include {include_path}: {e} -->"
-
-    return _INCLUDE_PATTERN.sub(replace_include, content)
-
-
-def _load_prompt_file(filename: str) -> str:
-    """Load a prompt file from user or source directory.
-
-    Looks in ~/.balloons/prompts/ first, then falls back to source directory.
-    Processes <!-- #include path/to/file.md --> directives.
-
-    Args:
-        filename: Name of the prompt file to load
-
-    Returns:
-        File contents with includes expanded, or empty string if not found
-    """
-    path = _get_prompt_path(filename)
-    if path:
-        try:
-            content = path.read_text()
-            # Process includes relative to the prompts directory
-            return _process_includes(content, _SOURCE_PROMPTS_DIR)
-        except Exception:
-            pass
-    return ""
-
-
-def _load_claude_balloons_tools_prompt() -> str:
-    """Load the Claude-specific balloons tools prompt from file.
-
-    This prompt instructs Claude to use XML-style <balloons-tool> tags for
-    workflow and link navigation tools.
-    """
-    return _load_prompt_file(_CLAUDE_BALLOONS_TOOLS_FILENAME)
-
-
-def _load_openai_balloons_tools_prompt() -> str:
-    """Load the OpenAI-specific balloons tools prompt from file.
-
-    This prompt documents the supervisor and other Balloons tools
-    for OpenAI-compatible backends that use native function calling.
-    """
-    return _load_prompt_file(_OPENAI_BALLOONS_TOOLS_FILENAME)
 
 
 def validate_backend_config(backend: BackendConfig) -> str | None:
@@ -197,6 +91,10 @@ def resolve_env_var(value: str) -> str:
 def create_runner(backend: BackendConfig) -> BaseRunner:
     """Create the appropriate runner for a backend configuration.
 
+    System prompts are now built per-turn by the runners to include fresh
+    domain prompts and other dynamic context. We only pass the user's
+    custom prompt here.
+
     Args:
         backend: Backend configuration
 
@@ -208,15 +106,12 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
     """
     backend_type = backend.type or "claude"
 
-    # Build system prompt from user's custom prompt
-    parts = []
+    # Load user's custom system prompt from backend config
+    # The runners will combine this with balloons tools and domain prompts per-turn
     user_prompt = backend.load_system_prompt()
-    if user_prompt:
-        parts.append(user_prompt)
 
     if backend_type == "openai":
         # OpenAI-compatible backend (OpenRouter, llamacpp, etc.)
-        # Uses native function calling for tools - add documentation prompt
         from .openai_runner import OpenAICompatibleRunner
 
         if not backend.base_url:
@@ -227,48 +122,16 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
         # Model defaults to "default" for local servers like llama.cpp that ignore this field
         model = backend.model or "default"
 
-        # Add OpenAI-specific tool documentation prompt
-        balloons_prompt = _load_openai_balloons_tools_prompt()
-        if balloons_prompt:
-            parts.append(balloons_prompt)
-
-        # Add domain plugin prompts
-        try:
-            from plugins.integration import get_domain_prompt
-            domain_prompt = get_domain_prompt()
-            if domain_prompt:
-                parts.append(domain_prompt)
-        except ImportError:
-            pass  # Plugin system not available
-
-        system_prompt = "\n\n".join(parts) if parts else None
-
         return OpenAICompatibleRunner(
             base_url=backend.base_url,
             api_key=api_key,
             model=model,
-            system_prompt=system_prompt,
+            user_prompt=user_prompt,
             context_window=backend.context_window,
         )
 
     elif backend_type == "claude":
         # Claude CLI backend
-        # Add Claude-specific tool prompts for XML-style <balloons-tool> calls
-        balloons_prompt = _load_claude_balloons_tools_prompt()
-        if balloons_prompt:
-            parts.append(balloons_prompt)
-
-        # Add domain plugin prompts
-        try:
-            from plugins.integration import get_domain_prompt
-            domain_prompt = get_domain_prompt()
-            if domain_prompt:
-                parts.append(domain_prompt)
-        except ImportError:
-            pass  # Plugin system not available
-
-        system_prompt = "\n\n".join(parts) if parts else None
-
         from claude_runner import ClaudeRunner
 
         # Build environment for Claude CLI
@@ -280,7 +143,7 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
 
         return ClaudeRunner(
             backend_env=env if env else None,
-            system_prompt=system_prompt,
+            user_prompt=user_prompt,
             context_window=backend.context_window,
         )
 

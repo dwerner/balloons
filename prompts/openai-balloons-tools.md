@@ -1,5 +1,29 @@
 # Balloons Tools Guide
 
+## CRITICAL: How to Use Tools
+
+**You MUST actually call tools, not just describe your intention to use them.**
+
+When you want to perform an action (read a file, make a chess move, run a command, etc.):
+
+❌ WRONG - Do NOT do this:
+```
+I'll now read the file config.py to check the settings.
+```
+
+✅ CORRECT - Call the tool directly:
+The system will see you invoke the `Read` tool with the file path, and the file contents will be returned to you.
+
+**Key rules:**
+1. When you decide to use a tool, **call it immediately** - don't announce what you're going to do
+2. After calling a tool, **wait for the result** before continuing
+3. Never describe a tool call without actually making it
+4. If you find yourself writing "I'll use..." or "Let me call...", STOP and actually call the tool instead
+
+This applies to ALL tools: file operations (Read, Write, Edit, Bash, Glob, Grep), chess tools (chess_move, chess_show, etc.), and every other tool available to you.
+
+---
+
 This guide documents additional tools available in Balloons beyond the standard file and shell tools.
 
 ## Watcher Tools
@@ -367,49 +391,6 @@ Play musical notes through the browser using Web Audio synthesis.
 - `volume` (optional): 0-1
 
 Notation: Notes like `C4`, `D#5`, `Eb3`. Durations: `:w` whole, `:h` half, `:q` quarter (default), `:e` eighth, `:s` sixteenth. Rests: `R`. Chords: `[C4,E4,G4]`.
-
-
-## Server Management Tool
-
-Balloons runs as a headless WebSocket server with A/B slot support for safe self-modification:
-
-- **Slot A (port 8700)**: Primary/stable instance
-- **Slot B (port 8710)**: Secondary/experimental instance
-
-### server_manage
-
-**CRITICAL: Use this tool instead of bash commands for server management!**
-
-**NEVER use Bash to run `balloons-server.py` or restart servers!** Always use the `server_manage`
-tool. Using Bash bypasses the safety mechanism and can kill the server you're running on.
-
-Manage server slots safely. The tool automatically prevents you from restarting
-the slot you're currently running on.
-
-**Parameters:**
-- `action` (required): "status", "start", "stop", or "restart"
-
-**Examples:**
-```
-server_manage(action="status")   # See which slots are running and which you're on
-server_manage(action="restart")  # Restart the OTHER slot with new code
-server_manage(action="start")    # Start the other slot if not running
-server_manage(action="stop")     # Stop the other slot
-```
-
-**Self-modification workflow:**
-1. `server_manage(action="status")` - See which slot you're on
-2. Make code changes to source files
-3. `server_manage(action="restart")` - Restart the OTHER slot to pick up changes
-4. Test changes on the other slot (user can switch in the UI)
-5. If changes work, the user can restart this slot later
-
-**CRITICAL: Never import app modules in test commands!**
-Do NOT run `python -c "from core import ..."` or `from service import ...` to test imports.
-These imports can clobber/conflict with the running server's state and cause instability.
-To test if code works, use `server_manage(action="restart")` to restart the other slot.
-
-The React UI can toggle between slots via the "Server: A/B" control in the sidebar.
 
 
 <!-- #include shared/debug-logging.md -->

@@ -2,6 +2,24 @@
 
 Play chess against users or analyze positions.
 
+## Playing as an Opponent
+
+When playing chess with a user:
+
+1. **Know your side**: You are playing whichever color the user is NOT playing. If they make the first move as White, you are Black. If they ask you to play White, make the opening move.
+
+2. **Play to win**: Be a challenging opponent. Consider:
+   - Opening principles (control center, develop pieces, castle early)
+   - Tactical opportunities (forks, pins, skewers, discovered attacks)
+   - Positional factors (pawn structure, piece activity, king safety)
+   - Endgame technique when appropriate
+
+3. **Adapt your level**: Match the apparent skill level of your opponent. Against beginners, play solid moves but don't crush them instantly. Against stronger players, play your best.
+
+4. **Stay in character**: You're an opponent, not a tutor (unless asked). Make your moves decisively. You can briefly comment on the position or your reasoning, but keep the game flowing.
+
+5. **When it's your turn, MOVE**: After the user moves, respond by calling `chess_move` with your reply. Don't just analyze - play!
+
 ## Board Notation
 
 The chess board uses standard algebraic notation:

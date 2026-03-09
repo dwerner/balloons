@@ -1,0 +1,565 @@
+/**
+ * SystemPromptView CSS
+ *
+ * Styles for the system prompt components view.
+ * Shows prompt components with expandable previews and token counts.
+ */
+
+/* ===== Main container ===== */
+.syspr-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--color-bg-primary, #121212);
+}
+
+.syspr-view--empty {
+  align-items: center;
+  justify-content: center;
+}
+
+.syspr-view__empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: #888;
+}
+
+.syspr-view__empty-state h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 500;
+  color: #aaa;
+}
+
+.syspr-view__empty-state p {
+  margin: 0;
+  font-size: 14px;
+}
+
+/* ===== Header ===== */
+.syspr-view__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.syspr-view__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: #e0e0e0;
+}
+
+.syspr-view__total {
+  font-size: 13px;
+  font-weight: 500;
+  color: #4ade80;
+}
+
+/* ===== List container ===== */
+.syspr-view__list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px 0;
+}
+
+/* ===== Component wrapper ===== */
+.syspr-component {
+  margin-bottom: 2px;
+}
+
+.syspr-component--domains {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.syspr-component__children {
+  background: rgba(255, 255, 255, 0.02);
+  border-left: 2px solid rgba(255, 255, 255, 0.08);
+  margin-left: 28px;
+  padding: 4px 8px;
+}
+
+/* ===== Component row ===== */
+.syspr-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: default;
+  user-select: none;
+  transition: background 0.1s ease;
+}
+
+.syspr-row--expandable {
+  cursor: pointer;
+}
+
+.syspr-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.syspr-row--expandable:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* Expand icon */
+.syspr-row__expand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.syspr-row__spacer {
+  width: 16px;
+}
+
+/* Chevron animation */
+.syspr-chevron {
+  color: #666;
+  transition: transform 0.15s ease;
+}
+
+.syspr-chevron--open {
+  transform: rotate(90deg);
+}
+
+/* ===== Row content ===== */
+.syspr-row__content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.syspr-row__name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #e0e0e0;
+}
+
+.syspr-row__desc {
+  font-size: 11px;
+  color: #888;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Token count with bar */
+.syspr-row__tokens-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 60px;
+}
+
+.syspr-row__tokens {
+  font-size: 11px;
+  font-family: ui-monospace, 'SF Mono', Monaco, monospace;
+  color: #666;
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.syspr-row__tokens--active {
+  color: #4ade80;
+}
+
+/* Token bar */
+.syspr-token-bar {
+  width: 100%;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.syspr-token-bar__fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4ade80 0%, #22c55e 100%);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+/* Expanded content */
+.syspr-row__expanded {
+  margin: 8px 12px 12px 36px;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.syspr-row__expanded-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.syspr-row__expanded-tokens {
+  font-size: 11px;
+  font-family: ui-monospace, 'SF Mono', Monaco, monospace;
+  color: #888;
+}
+
+/* ===== Prompt preview ===== */
+.syspr-preview {
+  font-family: ui-monospace, 'SF Mono', Monaco, monospace;
+}
+
+.syspr-preview__content {
+  margin: 0;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #ccc;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.syspr-preview__toggle {
+  margin-top: 8px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: #60a5fa;
+  background: rgba(96, 165, 250, 0.1);
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.syspr-preview__toggle:hover {
+  background: rgba(96, 165, 250, 0.2);
+}
+
+/* ===== Domains section ===== */
+.syspr-domains-empty {
+  padding: 12px 16px;
+  font-size: 12px;
+  color: #666;
+  font-style: italic;
+}
+
+.syspr-domain {
+  padding: 8px 12px;
+  margin: 4px 0;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 4px;
+  transition: background 0.1s ease;
+}
+
+.syspr-domain:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.syspr-domain--loaded {
+  border-left: 2px solid #4ade80;
+}
+
+.syspr-domain__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.syspr-domain__expand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.syspr-domain__name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #e0e0e0;
+}
+
+.syspr-domain__id {
+  font-size: 11px;
+  color: #666;
+}
+
+.syspr-domain__action {
+  margin-left: auto;
+  padding: 3px 8px;
+  font-size: 11px;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.syspr-domain__action--load {
+  background: rgba(74, 222, 128, 0.15);
+  color: #4ade80;
+}
+
+.syspr-domain__action--load:hover {
+  background: rgba(74, 222, 128, 0.25);
+}
+
+.syspr-domain__action--unload {
+  background: rgba(248, 113, 113, 0.15);
+  color: #f87171;
+}
+
+.syspr-domain__action--unload:hover {
+  background: rgba(248, 113, 113, 0.25);
+}
+
+.syspr-domain__tokens {
+  font-size: 11px;
+  font-family: ui-monospace, 'SF Mono', Monaco, monospace;
+  color: #4ade80;
+}
+
+.syspr-domain__details {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.syspr-domain__detail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.syspr-domain__label {
+  font-size: 11px;
+  color: #666;
+  min-width: 50px;
+}
+
+.syspr-domain__value {
+  font-size: 11px;
+  color: #aaa;
+  font-family: ui-monospace, 'SF Mono', Monaco, monospace;
+}
+
+.syspr-domain__expanded {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* ===== Footer ===== */
+.syspr-view__footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.2);
+  flex-shrink: 0;
+}
+
+.syspr-view__stat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.syspr-view__stat-label {
+  font-size: 12px;
+  color: #888;
+}
+
+.syspr-view__stat-value {
+  font-size: 12px;
+  font-family: ui-monospace, 'SF Mono', Monaco, monospace;
+  color: #ccc;
+}
+
+/* Usage bar */
+.syspr-view__usage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.syspr-view__usage-label {
+  font-size: 12px;
+  color: #888;
+}
+
+.syspr-view__usage-bar {
+  flex: 1;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.syspr-view__usage-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4ade80 0%, #22c55e 50%, #fbbf24 90%, #f87171 100%);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.syspr-view__usage-pct {
+  font-size: 11px;
+  font-family: ui-monospace, 'SF Mono', Monaco, monospace;
+  color: #4ade80;
+  min-width: 40px;
+  text-align: right;
+}
+
+/* ===== Light theme ===== */
+[data-theme="light"] .syspr-view {
+  background: var(--color-bg-primary, #fff);
+}
+
+[data-theme="light"] .syspr-view__header {
+  border-bottom-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .syspr-view__title {
+  color: #333;
+}
+
+[data-theme="light"] .syspr-row:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="light"] .syspr-row--expandable:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="light"] .syspr-row__name {
+  color: #333;
+}
+
+[data-theme="light"] .syspr-row__desc {
+  color: #666;
+}
+
+[data-theme="light"] .syspr-row__expanded {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .syspr-preview__content {
+  color: #333;
+}
+
+[data-theme="light"] .syspr-token-bar {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme="light"] .syspr-domain {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+[data-theme="light"] .syspr-domain:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="light"] .syspr-domain__name {
+  color: #333;
+}
+
+[data-theme="light"] .syspr-view__footer {
+  border-top-color: rgba(0, 0, 0, 0.08);
+  background: rgba(0, 0, 0, 0.02);
+}
+
+[data-theme="light"] .syspr-view__stat-label {
+  color: #666;
+}
+
+[data-theme="light"] .syspr-view__stat-value {
+  color: #333;
+}
+
+[data-theme="light"] .syspr-view__usage-bar {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme="light"] .syspr-component__children {
+  background: rgba(0, 0, 0, 0.02);
+  border-left-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .syspr-component--domains {
+  border-top-color: rgba(0, 0, 0, 0.05);
+}
+
+/* ===== Mobile adjustments ===== */
+@media (max-width: 767px) {
+  .syspr-row {
+    padding: 10px 12px;
+  }
+
+  .syspr-row__content {
+    gap: 3px;
+  }
+
+  .syspr-row__name {
+    font-size: 14px;
+  }
+
+  .syspr-row__desc {
+    font-size: 12px;
+  }
+
+  .syspr-view__header {
+    padding: 10px 12px;
+  }
+
+  .syspr-view__footer {
+    padding: 10px 12px;
+  }
+
+  .syspr-domain__header {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .syspr-domain__action {
+    margin-left: 0;
+  }
+}
+
+/* ===== Reduced motion ===== */
+@media (prefers-reduced-motion: reduce) {
+  .syspr-chevron {
+    transition: none;
+  }
+
+  .syspr-token-bar__fill,
+  .syspr-view__usage-fill {
+    transition: none;
+  }
+
+  .syspr-row,
+  .syspr-domain,
+  .syspr-domain__action,
+  .syspr-preview__toggle {
+    transition: none;
+  }
+}

@@ -87,6 +87,9 @@ from .openai_runner import OpenAICompatibleRunner
 # Runner factory
 from .runner_factory import create_runner, resolve_env_var, validate_backend_config, ensure_prompts_installed
 
+# Prompt builder (per-turn system prompt building)
+from .prompt_builder import build_system_prompt, build_system_prompt_for_backend
+
 # Tools
 from .tools import (
     TOOLS,
@@ -363,6 +366,9 @@ __all__ = [
     "resolve_env_var",
     "validate_backend_config",
     "ensure_prompts_installed",
+    # Prompt builder
+    "build_system_prompt",
+    "build_system_prompt_for_backend",
     # Tools
     "TOOLS",
     "BALLOON_TOOLS",

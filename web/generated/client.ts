@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-03-07T16:48:22.167295
+// Generated: 2026-03-08T14:45:38.554778
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -674,6 +674,20 @@ export interface SessionManagerService {
   getStreamingSessions(): Promise<string[]>;
 
   /**
+   * Get information about the system prompt components.
+   * 
+   * Returns details about each component of the system prompt including
+   * token counts, for display in the Context tab's System Prompt section.
+   * 
+   * Args:
+   * session_id: Optional session ID for context-specific info
+   * 
+   * Returns:
+   * SystemPromptInfoResult with component information
+   */
+  getSystemPromptInfo(sessionId?: string | null): Promise<Types.SystemPromptInfoResult>;
+
+  /**
    * Create a bidirectional link between two sessions.
    * 
    * Links allow navigation between sessions without a parent/child relationship.
@@ -704,6 +718,17 @@ export interface SessionManagerService {
    * List of session info objects
    */
   listSessions(): Promise<Types.ManagedSessionInfo[]>;
+
+  /**
+   * Load a domain plugin.
+   * 
+   * Args:
+   * domain_id: ID of the domain to load (e.g., "chess")
+   * 
+   * Returns:
+   * Dict with success status and error message if any
+   */
+  loadDomain(domainId: string): Promise<Record<string, unknown>>;
 
   /**
    * Merge a fork session back to its parent.
@@ -954,6 +979,17 @@ export interface SessionManagerService {
   switchSession(sessionId: string): Promise<boolean>;
 
   /**
+   * Unload a domain plugin.
+   * 
+   * Args:
+   * domain_id: ID of the domain to unload
+   * 
+   * Returns:
+   * Dict with success status and error message if any
+   */
+  unloadDomain(domainId: string): Promise<Record<string, unknown>>;
+
+  /**
    * Validate that a merge is possible for a fork session.
    * 
    * Use this to check if merge is valid before generating a summary.
@@ -1176,6 +1212,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.call('getStreamingSessions', {  });
   }
 
+  async getSystemPromptInfo(sessionId?: string | null): Promise<Types.SystemPromptInfoResult> {
+    return this.call('getSystemPromptInfo', { sessionId: sessionId });
+  }
+
   async linkSessions(sourceSessionId: string, targetSessionId: string, summary?: string): Promise<Types.LinkSessionsResult> {
     return this.call('linkSessions', { sourceSessionId: sourceSessionId, targetSessionId: targetSessionId, summary: summary });
   }
@@ -1186,6 +1226,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   async listSessions(): Promise<Types.ManagedSessionInfo[]> {
     return this.call('listSessions', {  });
+  }
+
+  async loadDomain(domainId: string): Promise<Record<string, unknown>> {
+    return this.call('loadDomain', { domainId: domainId });
   }
 
   async mergeSession(forkSessionId: string, mergeSummary: string, filesChanged?: string[] | null, keyAccomplishments?: string[] | null, reason?: string): Promise<Types.MergeSessionResult> {
@@ -1242,6 +1286,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   async switchSession(sessionId: string): Promise<boolean> {
     return this.call('switchSession', { sessionId: sessionId });
+  }
+
+  async unloadDomain(domainId: string): Promise<Record<string, unknown>> {
+    return this.call('unloadDomain', { domainId: domainId });
   }
 
   async validateMerge(forkSessionId: string): Promise<Types.MergeSessionResult> {
@@ -2626,8 +2674,7 @@ export interface SessionDataService {
    * This triggers the domain to emit a state sync event for the specified session.
    * The client should already be subscribed to receive domain events.
    * 
-   * Currently supports:
-   * - chess: Emits chess_state_sync event with current game state
+   * Gets raw state from the domain and wraps it in a state_sync event.
    * 
    * Args:
    * session_id: The session ID

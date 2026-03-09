@@ -24,7 +24,6 @@ from .debug_tools import DEBUG_TOOL_NAMES, execute_debug_tool
 from .watcher_tools import WATCHER_TOOL_NAMES, execute_watcher_tool
 from .lsp_tools import LSP_TOOL_NAMES, execute_lsp_tool
 from .kanban_tools import KANBAN_TOOL_NAMES, execute_kanban_tool
-from .server_tools import SERVER_TOOL_NAMES, execute_server_tool
 from .domain_tools import DOMAIN_TOOL_NAMES, execute_domain_management_tool
 from .fork import ForkProposal, ContextAssignment, MergeProposal
 from .tts import get_tts_runner, TTSConfig
@@ -161,10 +160,6 @@ async def execute_tool(
             if session is None:
                 return "Error: Kanban tools require a session context", True
             return await execute_kanban_tool(name, args, session)
-
-        # Server management tools (safe A/B slot operations)
-        if name in SERVER_TOOL_NAMES:
-            return await execute_server_tool(name, args, session)
 
         # Domain management tools (load_domain, unload_domain, list_domains)
         if name in DOMAIN_TOOL_NAMES:

@@ -132,21 +132,33 @@ class OpenAICompatibleRunner(BaseRunner):
 
     Uses the OpenAI Python SDK to stream responses. Supports tool calling
     for models that implement OpenAI's function calling API.
+
+    System prompts are built per-turn to include fresh domain prompts and
+    other dynamic context. The user_prompt (from backend config) is stored
+    and combined with balloons tools and domain prompts each turn.
     """
 
-    def __init__(self, base_url: str, api_key: str, model: str, system_prompt: str | None = None, context_window: int = 128000):
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        user_prompt: str | None = None,
+        context_window: int = 128000,
+    ):
         """Initialize the runner.
 
         Args:
             base_url: API base URL (e.g., https://openrouter.ai/api/v1)
             api_key: API key for authentication
             model: Model identifier to use
-            system_prompt: Optional system prompt content to prepend to conversations
+            user_prompt: Optional user-provided system prompt (from backend config).
+                         This is combined with balloons tools and domain prompts per-turn.
             context_window: Max context tokens for this backend
         """
         self.client = AsyncOpenAI(base_url=base_url, api_key=api_key)
         self.model = model
-        self.system_prompt = system_prompt
+        self._user_prompt = user_prompt  # Base prompt from backend config
         self.context_window = context_window
         self._running = False
         self._cancelled = False
@@ -162,6 +174,18 @@ class OpenAICompatibleRunner(BaseRunner):
         """
         self._session = session
 
+    def _get_system_prompt(self) -> str | None:
+        """Build the system prompt for this turn.
+
+        Combines user prompt with balloons tools and domain prompts.
+        Called per-turn to ensure domain prompts are fresh.
+
+        Returns:
+            Complete system prompt, or None if no content
+        """
+        from .prompt_builder import build_system_prompt
+        return build_system_prompt(backend_type="openai", user_prompt=self._user_prompt)
+
     def build_messages(self, messages: list[Message], new_prompt: str) -> list[dict]:
         """Convert internal Message format to OpenAI chat format.
 
@@ -174,11 +198,12 @@ class OpenAICompatibleRunner(BaseRunner):
         """
         openai_messages = []
 
-        # Add system prompt if configured
-        if self.system_prompt:
+        # Build system prompt fresh for this turn (includes domain prompts)
+        system_prompt = self._get_system_prompt()
+        if system_prompt:
             openai_messages.append({
                 "role": "system",
-                "content": self.system_prompt,
+                "content": system_prompt,
             })
 
         for msg in messages:

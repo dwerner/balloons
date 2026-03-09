@@ -84,7 +84,11 @@ def simple_conversation():
 
 @pytest.fixture
 def conversation_with_tool_use():
-    """Conversation with tool use and result."""
+    """Conversation with tool use and result.
+
+    Note: Tool results come from the user role (representing the system
+    executing the tool), not the assistant role.
+    """
     return [
         Message(role="user", content="Read the config file"),
         Message(
@@ -100,7 +104,7 @@ def conversation_with_tool_use():
             ],
         ),
         Message(
-            role="assistant",
+            role="user",  # Tool results come from user role
             content="",
             content_blocks=[
                 ToolResultBlock(
@@ -114,7 +118,10 @@ def conversation_with_tool_use():
 
 @pytest.fixture
 def conversation_with_tool_error():
-    """Conversation with a tool that returns an error."""
+    """Conversation with a tool that returns an error.
+
+    Note: Tool results come from the user role.
+    """
     return [
         Message(role="user", content="Read the missing file"),
         Message(
@@ -129,7 +136,7 @@ def conversation_with_tool_error():
             ],
         ),
         Message(
-            role="assistant",
+            role="user",  # Tool results come from user role
             content="",
             content_blocks=[
                 ToolResultBlock(
@@ -434,11 +441,19 @@ class TestClaudeContextFormat:
 # =============================================================================
 
 class TestOpenAIContextFormat:
-    """Tests for OpenAICompatibleRunner.build_messages() output format."""
+    """Tests for OpenAICompatibleRunner.build_messages() output format.
+
+    Note: Runners now build system prompts per-turn, including balloons tools
+    and domain prompts even when no user_prompt is provided. Tests account for
+    this by checking that system prompts are present.
+    """
 
     @pytest.fixture
     def runner(self):
-        """Create runner without system prompt for basic tests."""
+        """Create runner without user prompt for basic tests.
+
+        Note: Will still have balloons tools prompt from per-turn building.
+        """
         return OpenAICompatibleRunner(
             base_url="http://test",
             api_key="test",
@@ -446,68 +461,82 @@ class TestOpenAIContextFormat:
         )
 
     @pytest.fixture
-    def runner_with_system(self):
-        """Create runner with system prompt."""
+    def runner_with_user_prompt(self):
+        """Create runner with user-provided system prompt."""
         return OpenAICompatibleRunner(
             base_url="http://test",
             api_key="test",
             model="test-model",
-            system_prompt="You are a helpful assistant.",
+            user_prompt="You are a helpful assistant.",
         )
 
-    def test_empty_messages_returns_just_prompt(self, runner):
-        """Empty message list produces just the new prompt."""
+    def test_empty_messages_includes_system_prompt(self, runner):
+        """Empty message list includes system (balloons tools) and user prompt."""
         result = runner.build_messages([], "Hello")
 
-        assert len(result) == 1
-        assert result[0] == {"role": "user", "content": "Hello"}
+        # Should have system prompt (balloons tools) + user message
+        assert len(result) == 2
+        assert result[0]["role"] == "system"
+        assert "Balloons" in result[0]["content"] or "supervisor" in result[0]["content"].lower()
+        assert result[1] == {"role": "user", "content": "Hello"}
 
-    def test_system_prompt_prepended(self, runner_with_system):
-        """System prompt is first message when configured."""
-        result = runner_with_system.build_messages([], "Hello")
+    def test_user_prompt_included_in_system(self, runner_with_user_prompt):
+        """User-provided system prompt is included in system message."""
+        result = runner_with_user_prompt.build_messages([], "Hello")
 
         assert len(result) == 2
-        assert result[0] == {
-            "role": "system",
-            "content": "You are a helpful assistant.",
-        }
+        assert result[0]["role"] == "system"
+        # User prompt should be included in the system message
+        assert "You are a helpful assistant." in result[0]["content"]
         assert result[1] == {"role": "user", "content": "Hello"}
 
     def test_simple_conversation_format(self, runner, simple_conversation):
         """Simple conversation maps to user/assistant roles."""
         result = runner.build_messages(simple_conversation, "follow up")
 
-        assert len(result) == 3
-        assert result[0]["role"] == "user"
-        assert "What is 2+2?" in result[0]["content"]
-        assert result[1]["role"] == "assistant"
-        assert "The answer is 4." in result[1]["content"]
-        assert result[2]["role"] == "user"
-        assert result[2]["content"] == "follow up"
+        # Should have: system, user, assistant, user (follow up)
+        assert len(result) == 4
+        assert result[0]["role"] == "system"  # Balloons tools
+        assert result[1]["role"] == "user"
+        assert "What is 2+2?" in result[1]["content"]
+        assert result[2]["role"] == "assistant"
+        assert "The answer is 4." in result[2]["content"]
+        assert result[3]["role"] == "user"
+        assert result[3]["content"] == "follow up"
 
-    def test_tool_use_serialized_as_text(self, runner, conversation_with_tool_use):
-        """Tool uses are serialized as text in OpenAI format."""
+    def test_tool_use_in_tool_calls_field(self, runner, conversation_with_tool_use):
+        """Tool uses appear in tool_calls field (proper OpenAI format)."""
         result = runner.build_messages(conversation_with_tool_use, "next")
-        all_content = " ".join(m.get("content", "") for m in result)
 
-        assert "[Tool: Read]" in all_content
-        assert '"file_path"' in all_content
+        # Find assistant message with tool_calls
+        assistant_msgs = [m for m in result if m.get("role") == "assistant"]
+        assert len(assistant_msgs) >= 1
 
-    def test_tool_result_serialized_as_text(self, runner, conversation_with_tool_use):
-        """Tool results are serialized as text in OpenAI format."""
+        # First assistant message should have tool_calls
+        tool_msg = assistant_msgs[0]
+        assert "tool_calls" in tool_msg
+        assert len(tool_msg["tool_calls"]) == 1
+        assert tool_msg["tool_calls"][0]["function"]["name"] == "Read"
+        assert '"file_path"' in tool_msg["tool_calls"][0]["function"]["arguments"]
+
+    def test_tool_result_as_tool_role(self, runner, conversation_with_tool_use):
+        """Tool results appear as role=tool messages (proper OpenAI format)."""
         result = runner.build_messages(conversation_with_tool_use, "next")
-        all_content = " ".join(m.get("content", "") for m in result)
 
-        assert "[Result]" in all_content
-        assert "key: value" in all_content
+        # Find tool role messages
+        tool_msgs = [m for m in result if m.get("role") == "tool"]
+        assert len(tool_msgs) >= 1
+        assert tool_msgs[0]["tool_call_id"] == "tool-123"
+        assert "key: value" in tool_msgs[0]["content"]
 
-    def test_tool_error_format(self, runner, conversation_with_tool_error):
-        """Tool errors include (error) marker in OpenAI format."""
+    def test_tool_error_in_tool_result(self, runner, conversation_with_tool_error):
+        """Tool errors appear in tool role messages."""
         result = runner.build_messages(conversation_with_tool_error, "next")
-        all_content = " ".join(m.get("content", "") for m in result)
 
-        assert "[Result (error)]" in all_content
-        assert "File not found" in all_content
+        # Find tool role messages
+        tool_msgs = [m for m in result if m.get("role") == "tool"]
+        assert len(tool_msgs) >= 1
+        assert "File not found" in tool_msgs[0]["content"]
 
     def test_interruption_block_format(self, runner, conversation_with_interruption):
         """Interruption blocks are formatted in OpenAI messages."""
@@ -548,20 +577,46 @@ class TestOpenAIContextFormat:
             assert "content" in msg
 
     def test_role_mapping(self, runner, simple_conversation):
-        """Roles are correctly mapped."""
+        """Roles are correctly mapped (accounting for system prompt)."""
         result = runner.build_messages(simple_conversation, "next")
 
-        assert result[0]["role"] == "user"
-        assert result[1]["role"] == "assistant"
-        assert result[2]["role"] == "user"
+        # First message is system (balloons tools), then conversation follows
+        assert result[0]["role"] == "system"  # Balloons tools
+        assert result[1]["role"] == "user"    # First user message
+        assert result[2]["role"] == "assistant"
+        assert result[3]["role"] == "user"    # New prompt
 
 
 # =============================================================================
 # Cross-Backend Consistency
 # =============================================================================
 
+def _openai_content_str(result: list[dict]) -> str:
+    """Join all content fields from OpenAI messages, handling None values."""
+    parts = []
+    for m in result:
+        content = m.get("content")
+        if content is not None:
+            parts.append(content if isinstance(content, str) else str(content))
+    return " ".join(parts)
+
+
+def _openai_has_tool(result: list[dict], tool_name: str) -> bool:
+    """Check if any message has a tool_call with the given name."""
+    for m in result:
+        if "tool_calls" in m:
+            for tc in m["tool_calls"]:
+                if tc.get("function", {}).get("name") == tool_name:
+                    return True
+    return False
+
+
 class TestCrossBackendConsistency:
-    """Tests ensuring both backends handle the same scenarios consistently."""
+    """Tests ensuring both backends handle the same scenarios consistently.
+
+    Note: ContextBuilder uses XML text format, while OpenAI uses structured
+    tool_calls array. Tests check equivalent semantics, not identical text.
+    """
 
     @pytest.fixture
     def openai_runner(self):
@@ -579,21 +634,20 @@ class TestCrossBackendConsistency:
         """Both backends include all tool uses from conversation."""
         context_result = builder.build_context(conversation_with_multiple_tools, "done")
         openai_result = openai_runner.build_messages(conversation_with_multiple_tools, "done")
-        openai_content = " ".join(m.get("content", "") for m in openai_result)
 
         # ContextBuilder uses XML format
         assert '<tool_use name="Glob"' in context_result
         assert '<tool_use name="Read"' in context_result
 
-        # OpenAI uses text format
-        assert "[Tool: Glob]" in openai_content
-        assert "[Tool: Read]" in openai_content
+        # OpenAI uses tool_calls array (not text)
+        assert _openai_has_tool(openai_result, "Glob")
+        assert _openai_has_tool(openai_result, "Read")
 
     def test_both_respect_drop_mode(self, builder, openai_runner, conversation_with_context_modes):
         """Both backends respect DROP context mode."""
         context_result = builder.build_context(conversation_with_context_modes, "new")
         openai_result = openai_runner.build_messages(conversation_with_context_modes, "new")
-        openai_content = " ".join(m.get("content", "") for m in openai_result)
+        openai_content = _openai_content_str(openai_result)
 
         # Neither should have dropped content
         assert "Off-topic tangent" not in context_result
@@ -603,23 +657,24 @@ class TestCrossBackendConsistency:
         """Both backends use summary field in SUMMARIZE mode."""
         context_result = builder.build_context(conversation_with_context_modes, "new")
         openai_result = openai_runner.build_messages(conversation_with_context_modes, "new")
-        openai_content = " ".join(m.get("content", "") for m in openai_result)
+        openai_content = _openai_content_str(openai_result)
 
         # Both should use summary
         assert "[Summary]" in context_result
         assert "[Summary]" in openai_content
 
-    def test_both_handle_tool_errors(self, builder, openai_runner, conversation_with_tool_error):
-        """Both backends indicate tool errors."""
+    def test_both_handle_tool_results(self, builder, openai_runner, conversation_with_tool_error):
+        """Both backends include tool results."""
         context_result = builder.build_context(conversation_with_tool_error, "next")
         openai_result = openai_runner.build_messages(conversation_with_tool_error, "next")
-        openai_content = " ".join(m.get("content", "") for m in openai_result)
 
-        # ContextBuilder uses XML attribute
+        # ContextBuilder uses XML attribute for errors
         assert 'error="true"' in context_result
 
-        # OpenAI uses text marker
-        assert "[Result (error)]" in openai_content
+        # OpenAI uses role="tool" messages for results
+        tool_msgs = [m for m in openai_result if m.get("role") == "tool"]
+        assert len(tool_msgs) >= 1
+        assert "File not found" in tool_msgs[0]["content"]
 
 
 # =============================================================================
@@ -627,7 +682,11 @@ class TestCrossBackendConsistency:
 # =============================================================================
 
 class TestEdgeCases:
-    """Tests for edge cases and boundary conditions."""
+    """Tests for edge cases and boundary conditions.
+
+    Note: OpenAI messages include a system prompt first, so user content
+    is typically at index 1+. Use _openai_content_str() to join all content.
+    """
 
     @pytest.fixture
     def builder(self):
@@ -649,9 +708,10 @@ class TestEdgeCases:
 
         context_result = builder.build_context(messages, "new")
         openai_result = openai_runner.build_messages(messages, "new")
+        openai_content = _openai_content_str(openai_result)
 
         assert "plain text" in context_result
-        assert "plain text" in openai_result[0]["content"]
+        assert "plain text" in openai_content
 
     def test_special_characters_in_content(self, builder, openai_runner):
         """Special characters are preserved."""
@@ -661,17 +721,18 @@ class TestEdgeCases:
 
         context_result = builder.build_context(messages, "new")
         openai_result = openai_runner.build_messages(messages, "new")
+        openai_content = _openai_content_str(openai_result)
 
         assert '`x = 1`' in context_result
         assert '{"a": 1}' in context_result
-        assert '`x = 1`' in openai_result[0]["content"]
+        assert '`x = 1`' in openai_content
 
     def test_very_long_tool_result(self, builder, openai_runner):
         """Long tool results are included fully (truncation is display concern)."""
         long_content = "x" * 50000
         messages = [
             Message(
-                role="assistant",
+                role="user",  # Tool results come from user role
                 content="",
                 content_blocks=[
                     ToolResultBlock(tool_use_id="t1", content=long_content),
@@ -683,7 +744,10 @@ class TestEdgeCases:
         openai_result = openai_runner.build_messages(messages, "new")
 
         assert long_content in context_result
-        assert long_content in openai_result[0]["content"]
+        # Find tool role message for the result
+        tool_msgs = [m for m in openai_result if m.get("role") == "tool"]
+        assert len(tool_msgs) >= 1
+        assert long_content in tool_msgs[0]["content"]
 
     def test_unicode_content(self, builder, openai_runner):
         """Unicode content is handled correctly."""
@@ -693,9 +757,10 @@ class TestEdgeCases:
 
         context_result = builder.build_context(messages, "new")
         openai_result = openai_runner.build_messages(messages, "new")
+        openai_content = _openai_content_str(openai_result)
 
         assert "🌍" in context_result
-        assert "🌍" in openai_result[0]["content"]
+        assert "🌍" in openai_content
 
     def test_nested_json_in_tool_input(self, builder, openai_runner):
         """Nested JSON in tool input is properly serialized."""
@@ -722,13 +787,18 @@ class TestEdgeCases:
         # Both should have the nested structure serialized
         assert '"nested"' in context_result
         assert '"deep"' in context_result
-        assert '"nested"' in openai_result[0]["content"]
+
+        # OpenAI puts tool input in tool_calls[].function.arguments
+        assistant_msgs = [m for m in openai_result if m.get("tool_calls")]
+        assert len(assistant_msgs) >= 1
+        args_json = assistant_msgs[0]["tool_calls"][0]["function"]["arguments"]
+        assert '"nested"' in args_json
 
     def test_newlines_in_tool_result(self, builder, openai_runner):
         """Newlines in tool results are preserved."""
         messages = [
             Message(
-                role="assistant",
+                role="user",  # Tool results come from user role
                 content="",
                 content_blocks=[
                     ToolResultBlock(
@@ -743,7 +813,11 @@ class TestEdgeCases:
         openai_result = openai_runner.build_messages(messages, "new")
 
         assert "line1\nline2\nline3" in context_result
-        assert "line1\nline2\nline3" in openai_result[0]["content"]
+
+        # OpenAI puts tool results in role=tool messages
+        tool_msgs = [m for m in openai_result if m.get("role") == "tool"]
+        assert len(tool_msgs) >= 1
+        assert "line1\nline2\nline3" in tool_msgs[0]["content"]
 
 
 # =============================================================================

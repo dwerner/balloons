@@ -44,6 +44,7 @@ from typing import Callable, Any, TYPE_CHECKING
 from codegen import ws_service, ws_expose, ws_event, ws_type
 from core.debug_log import debug_log, Category
 from core.context import ContextBuilder
+from tokenizer import count_tokens
 from core.fork import ForkManager, ForkResult, MergeResult, ForkData, DeriveResult, DeriveData, SwitchResult, ForkProposal, MergeProposal
 from core.tool_executor import parse_fork_proposal, parse_merge_proposal
 from core.manager import SessionManager
@@ -258,6 +259,45 @@ class ExchangeSummary:
     index: int  # Exchange index (0-based)
     summary: str  # Short summary of the exchange content
     mode: str = "compress"  # Default context mode for this exchange
+
+
+@ws_type
+@dataclass
+class PromptComponentInfo:
+    """Information about a system prompt component for UI display."""
+
+    id: str
+    name: str
+    description: str
+    tokens: int
+    enabled: bool = True
+    content_preview: str = ""
+    full_content: str = ""  # Full content for expandable preview
+
+
+@ws_type
+@dataclass
+class DomainInfoItem:
+    """Information about a domain plugin for UI display."""
+
+    id: str
+    name: str
+    loaded: bool
+    prompt_tokens: int
+    context_tokens: int
+    tools: list[str] = field(default_factory=list)
+    prompt_content: str = ""  # Full prompt for loaded domains
+
+
+@ws_type
+@dataclass
+class SystemPromptInfoResult:
+    """Complete system prompt information for UI display."""
+
+    components: list[PromptComponentInfo] = field(default_factory=list)
+    domains: list[DomainInfoItem] = field(default_factory=list)
+    total_tokens: int = 0
+    context_window: int = 150000
 
 
 @ws_type
@@ -1822,6 +1862,9 @@ class SessionManagerService:
             context_tokens = stream.input_tokens if stream else 0
             output_tokens_total = stream.output_tokens if stream else 0
 
+            # Count tokens accurately using tiktoken
+            text_tokens = count_tokens(text) if text else 0
+
             # Notify observers with typed event
             await self._notify_observers(
                 "on_turn_finished",
@@ -1831,7 +1874,7 @@ class SessionManagerService:
                     turn_index=turn_idx,
                     role="assistant",
                     content=text,
-                    tokens=len(text) // 4,
+                    tokens=text_tokens,
                     content_block=TextBlock(type="text", text=text),
                     context_tokens=context_tokens,
                     output_tokens_total=output_tokens_total,
@@ -2315,6 +2358,9 @@ class SessionManagerService:
             # Only emit turn_finished if there's unflushed content
             # If content was already flushed via text_flush, ctx.content will be empty
             if ctx.content:
+                # Count tokens accurately using tiktoken
+                content_tokens = count_tokens(ctx.content)
+
                 await self._notify_observers(
                     "on_turn_finished",
                     TurnFinishedEvent(
@@ -2323,7 +2369,7 @@ class SessionManagerService:
                         turn_index=ctx.assistant_turn_idx,
                         role="assistant",
                         content=ctx.content,
-                        tokens=len(ctx.content) // 4,
+                        tokens=content_tokens,
                         content_block=TextBlock(type="text", text=ctx.content),
                         context_tokens=input_tokens,
                         output_tokens_total=output_tokens,
@@ -2490,6 +2536,9 @@ class SessionManagerService:
 
             # Notify observers with typed events
             if ctx.content:
+                # Count tokens accurately using tiktoken
+                content_tokens = count_tokens(ctx.content)
+
                 await self._notify_observers(
                     "on_turn_finished",
                     TurnFinishedEvent(
@@ -2498,7 +2547,7 @@ class SessionManagerService:
                         turn_index=ctx.assistant_turn_idx,
                         role="assistant",
                         content=ctx.content,
-                        tokens=len(ctx.content) // 4,
+                        tokens=content_tokens,
                         content_block=TextBlock(type="text", text=ctx.content),
                         context_tokens=context_tokens,
                         output_tokens_total=output_tokens_total,
@@ -3058,6 +3107,122 @@ class SessionManagerService:
             ))
 
         return summaries
+
+    @ws_expose
+    async def get_system_prompt_info(
+        self,
+        session_id: str | None = None,
+    ) -> SystemPromptInfoResult:
+        """Get information about the system prompt components.
+
+        Returns details about each component of the system prompt including
+        token counts, for display in the Context tab's System Prompt section.
+
+        Args:
+            session_id: Optional session ID for context-specific info
+
+        Returns:
+            SystemPromptInfoResult with component information
+        """
+        from core.prompt_info import get_system_prompt_info
+
+        session = None
+        backend_name = ""
+        backend_type = "claude"
+
+        if session_id:
+            session = self._manager.get_session(session_id)
+            if not session:
+                session = await self._manager.load_session(session_id)
+            if session:
+                backend_name = getattr(session, 'backend_name', '')
+                print(f"[getSystemPromptInfo] session {session_id[:8]} backend_name={backend_name!r}")
+
+        # Get the actual backend type from config
+        if backend_name:
+            from config import get_config
+            config = get_config()
+            backend = config.get_backend(backend_name)
+            if backend:
+                backend_type = backend.type or "claude"
+                print(f"[getSystemPromptInfo] resolved backend_type={backend_type!r}")
+
+        # Get prompt info
+        info = get_system_prompt_info(
+            session=session,
+            backend_name=backend_name,
+            backend_type=backend_type,
+        )
+
+        # Convert to WS types
+        components = [
+            PromptComponentInfo(
+                id=c.id,
+                name=c.name,
+                description=c.description,
+                tokens=c.tokens,
+                enabled=c.enabled,
+                content_preview=c.content_preview,
+                full_content=c.full_content,
+            )
+            for c in info.components
+        ]
+
+        domains = [
+            DomainInfoItem(
+                id=d.id,
+                name=d.name,
+                loaded=d.loaded,
+                prompt_tokens=d.prompt_tokens,
+                context_tokens=d.context_tokens,
+                tools=d.tools,
+                prompt_content=d.prompt_content,
+            )
+            for d in info.domains
+        ]
+
+        return SystemPromptInfoResult(
+            components=components,
+            domains=domains,
+            total_tokens=info.total_tokens,
+            context_window=info.context_window,
+        )
+
+    @ws_expose
+    async def load_domain(self, domain_id: str) -> dict:
+        """Load a domain plugin.
+
+        Args:
+            domain_id: ID of the domain to load (e.g., "chess")
+
+        Returns:
+            Dict with success status and error message if any
+        """
+        try:
+            from plugins.integration import load_domain
+            # Event emission is handled by integration.load_domain()
+            load_domain(domain_id, emit_event=True)
+            return {"success": True, "domain_id": domain_id}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @ws_expose
+    async def unload_domain(self, domain_id: str) -> dict:
+        """Unload a domain plugin.
+
+        Args:
+            domain_id: ID of the domain to unload
+
+        Returns:
+            Dict with success status and error message if any
+        """
+        try:
+            from plugins.integration import unload_domain
+            # Event emission is handled by integration.unload_domain()
+            unload_domain(domain_id, emit_event=True)
+            return {"success": True, "domain_id": domain_id}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     # =========================================================================
     # Fork/Merge Proposal Handling (Internal)

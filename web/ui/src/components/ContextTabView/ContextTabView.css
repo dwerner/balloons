@@ -116,9 +116,45 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
+  padding: 8px 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   flex-shrink: 0;
+  gap: 12px;
+}
+
+/* ===== Sub-tabs ===== */
+.ctx-tab-view__subtabs {
+  display: flex;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.ctx-tab-view__subtab {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: #888;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.ctx-tab-view__subtab:hover {
+  color: #ccc;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.ctx-tab-view__subtab--active {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.ctx-tab-view__subtab--active:hover {
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .ctx-tab-view__session-info {
@@ -472,6 +508,28 @@
 }
 
 [data-theme="light"] .ctx-exchange-menu__divider {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme="light"] .ctx-tab-view__subtabs {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="light"] .ctx-tab-view__subtab {
+  color: #666;
+}
+
+[data-theme="light"] .ctx-tab-view__subtab:hover {
+  color: #333;
+  background: rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="light"] .ctx-tab-view__subtab--active {
+  background: rgba(0, 0, 0, 0.08);
+  color: #000;
+}
+
+[data-theme="light"] .ctx-tab-view__subtab--active:hover {
   background: rgba(0, 0, 0, 0.1);
 }
 

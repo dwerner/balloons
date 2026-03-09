@@ -82,6 +82,35 @@ class DomainRegistry:
         """List of currently loaded domain IDs."""
         return list(self._domains.keys())
 
+    @property
+    def available_domains(self) -> list[str]:
+        """List of all available domain IDs (loaded or not).
+
+        Discovers domains by looking for:
+        - plugins/{domain}/domain.py
+        - plugins/{domain}/__init__.py with create_domain()
+        """
+        domains = []
+        if not self.plugins_dir.exists():
+            return domains
+
+        for item in self.plugins_dir.iterdir():
+            if not item.is_dir():
+                continue
+            # Check for domain.py
+            if (item / "domain.py").exists():
+                domains.append(item.name)
+            # Or __init__.py with create_domain
+            elif (item / "__init__.py").exists():
+                init_file = item / "__init__.py"
+                try:
+                    content = init_file.read_text()
+                    if "def create_domain" in content:
+                        domains.append(item.name)
+                except Exception:
+                    pass
+        return sorted(domains)
+
     def get_domain(self, domain_id: str) -> Domain | None:
         """Get a loaded domain by ID."""
         return self._domains.get(domain_id)

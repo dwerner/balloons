@@ -16,6 +16,7 @@ import type { TurnInfo, BalloonsClient } from '../../../../generated/balloons-cl
 import type { SessionDataTurn } from '../../hooks/useSessionData';
 import { TurnCard } from '../StreamingTurnsView/cards';
 import { ClientContext } from '../StreamingTurnsView/cards/ClientContext';
+import { SystemPromptView } from './SystemPromptView';
 import { createLogger } from '../../utils/debugLog';
 import './ContextTabView.css';
 
@@ -961,6 +962,9 @@ interface ContextTabViewProps {
   archivingTurnIndices?: Set<number>;
 }
 
+// Sub-tab type for context view
+type ContextSubTab = 'exchanges' | 'system';
+
 export const ContextTabView = memo(function ContextTabView({
   sessionId,
   sessionName,
@@ -978,6 +982,9 @@ export const ContextTabView = memo(function ContextTabView({
   useEffect(() => {
     debugLog('ContextTabView mounted', { sessionId, turnCount: turns.length });
   }, [sessionId, turns.length]);
+
+  // Active sub-tab
+  const [activeSubTab, setActiveSubTab] = useState<ContextSubTab>('exchanges');
 
   // Track which exchanges are expanded
   const [expandedExchanges, setExpandedExchanges] = useState<Set<string>>(new Set());
@@ -1108,26 +1115,49 @@ export const ContextTabView = memo(function ContextTabView({
 
   return (
     <div className={`ctx-tab-view ${selectedRawTurn ? 'ctx-tab-view--with-preview' : ''}`}>
-      {/* Header with session info and total tokens */}
+      {/* Header with session info and sub-tabs */}
       <div className="ctx-tab-view__header">
-        <div className="ctx-tab-view__session-info">
-          <span className="ctx-tab-view__session-id">{sessionId.slice(0, 8)}</span>
-          {sessionName && (
-            <span className="ctx-tab-view__session-name">{sessionName}</span>
-          )}
+        {/* Sub-tabs */}
+        <div className="ctx-tab-view__subtabs">
+          <button
+            className={`ctx-tab-view__subtab ${activeSubTab === 'exchanges' ? 'ctx-tab-view__subtab--active' : ''}`}
+            onClick={() => setActiveSubTab('exchanges')}
+          >
+            Exchanges
+          </button>
+          <button
+            className={`ctx-tab-view__subtab ${activeSubTab === 'system' ? 'ctx-tab-view__subtab--active' : ''}`}
+            onClick={() => setActiveSubTab('system')}
+          >
+            System
+          </button>
         </div>
-        <div className="ctx-tab-view__stats">
-          <span className="ctx-tab-view__stat">
-            {exchanges.length} exchange{exchanges.length !== 1 ? 's' : ''}
-          </span>
-          <span className="ctx-tab-view__stat ctx-tab-view__stat--tokens">
-            {formatKt(calculatedTotalTokens) || '0kt'}
-          </span>
-        </div>
+
+        {/* Stats - only show on exchanges tab */}
+        {activeSubTab === 'exchanges' && (
+          <div className="ctx-tab-view__stats">
+            <span className="ctx-tab-view__stat">
+              {exchanges.length} exchange{exchanges.length !== 1 ? 's' : ''}
+            </span>
+            <span className="ctx-tab-view__stat ctx-tab-view__stat--tokens">
+              {formatKt(calculatedTotalTokens) || '0kt'}
+            </span>
+          </div>
+        )}
       </div>
 
-      {/* Tree section (top half when preview is open) */}
-      <div className="ctx-tab-view__tree-section">
+      {/* System Prompt view */}
+      {activeSubTab === 'system' && (
+        <SystemPromptView
+          sessionId={sessionId}
+          client={client}
+          isLoading={isLoading}
+        />
+      )}
+
+      {/* Exchanges view - Tree section (top half when preview is open) */}
+      {activeSubTab === 'exchanges' && (
+        <div className="ctx-tab-view__tree-section">
         <ul className="ctx-tree-view">
           {exchanges.length > 0 ? (
             exchanges.map(exchange => {
@@ -1181,9 +1211,10 @@ export const ContextTabView = memo(function ContextTabView({
         )}
         </ul>
       </div>
+      )}
 
-      {/* Preview section (bottom half when a turn is selected) */}
-      {selectedRawTurn && (
+      {/* Preview section (bottom half when a turn is selected) - only on exchanges tab */}
+      {activeSubTab === 'exchanges' && selectedRawTurn && (
         <div className="ctx-tab-view__preview-section">
           <div className="ctx-tab-view__preview-header">
             <span className="ctx-tab-view__preview-title">

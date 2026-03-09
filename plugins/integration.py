@@ -105,24 +105,62 @@ async def execute_domain_tool(
 
 
 # Convenience function for loading domains
-def load_domain(domain_id: str) -> None:
+def load_domain(domain_id: str, emit_event: bool = True) -> None:
     """Load a domain into the global registry.
 
     Args:
         domain_id: ID of the domain to load (e.g., "chess")
+        emit_event: Whether to emit a domain_loaded event (default True)
     """
     registry = get_registry()
     registry.load_domain(domain_id)
 
+    if emit_event:
+        _emit_domain_event("domain_loaded", domain_id)
 
-def unload_domain(domain_id: str) -> None:
+
+def unload_domain(domain_id: str, emit_event: bool = True) -> None:
     """Unload a domain from the global registry.
 
     Args:
         domain_id: ID of the domain to unload
+        emit_event: Whether to emit a domain_unloaded event (default True)
     """
     registry = get_registry()
     registry.unload_domain(domain_id)
+
+    if emit_event:
+        _emit_domain_event("domain_unloaded", domain_id)
+
+
+def _emit_domain_event(event_type: str, domain_id: str) -> None:
+    """Emit a domain load/unload event to WebSocket clients.
+
+    This is fire-and-forget - runs the async emit in a background task.
+    """
+    import asyncio
+
+    async def emit():
+        try:
+            from service import get_session_manager_service
+            session_manager = get_session_manager_service()
+            if session_manager:
+                await session_manager.emit_domain_event(
+                    domain_id="system",
+                    event_type=event_type,
+                    session_id="*",  # Broadcast to all
+                    data={"domainId": domain_id},
+                )
+        except Exception as e:
+            print(f"Warning: Failed to emit {event_type} event: {e}")
+
+    # Try to get the running loop and schedule the task
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(emit())
+    except RuntimeError:
+        # No running loop - we're in a sync context, skip the event
+        pass
 
 
 def list_loaded_domains() -> list[str]:

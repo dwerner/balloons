@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-03-07T16:48:22.162336
+// Generated: 2026-03-08T14:45:38.549617
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -376,6 +376,33 @@ export interface ExchangeSummary {
   index: number;
   summary: string;
   mode?: string;
+}
+
+export interface PromptComponentInfo {
+  id: string;
+  name: string;
+  description: string;
+  tokens: number;
+  enabled?: boolean;
+  contentPreview?: string;
+  fullContent?: string;
+}
+
+export interface DomainInfoItem {
+  id: string;
+  name: string;
+  loaded: boolean;
+  promptTokens: number;
+  contextTokens: number;
+  tools?: string[];
+  promptContent?: string;
+}
+
+export interface SystemPromptInfoResult {
+  components?: PromptComponentInfo[];
+  domains?: DomainInfoItem[];
+  totalTokens?: number;
+  contextWindow?: number;
 }
 
 export interface RespondToForkProposalResult {
