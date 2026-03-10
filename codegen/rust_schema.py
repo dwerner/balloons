@@ -136,14 +136,20 @@ def collect_rust_imports(cls: type) -> set[str]:
     return imports
 
 
-def needs_serde_default(py_type: type) -> bool:
+def needs_serde_default(py_type: type, has_default: bool = False) -> bool:
     """Check if a field type should have #[serde(default)].
 
-    Returns True for Optional<T> and Vec<T> types, which enables graceful
-    deserialization when these fields are missing from stored data.
-    This supports schema evolution - new optional/collection fields can
-    be added without breaking existing stored data.
+    Returns True for:
+    - Optional<T> and Vec<T> types
+    - Fields with default values in Python
+
+    This enables graceful deserialization when fields are missing from stored data,
+    supporting schema evolution - new fields can be added without breaking existing data.
     """
+    # If field has a default value in Python, it should use #[serde(default)] in Rust
+    if has_default:
+        return True
+
     origin = get_origin(py_type)
 
     # Check for Optional[T] (Union[T, None])
@@ -162,6 +168,8 @@ def needs_serde_default(py_type: type) -> bool:
 
 def generate_rust_struct(cls: type) -> str:
     """Generate Rust struct definition from a Python dataclass."""
+    from dataclasses import MISSING
+
     if not is_dataclass(cls):
         raise TypeError(f"Expected dataclass, got {cls}")
 
@@ -175,10 +183,13 @@ def generate_rust_struct(cls: type) -> str:
         py_type = type_hints[f.name]
         rust_type = python_type_to_rust(py_type, type_hints)
 
-        # Add #[serde(default)] for Option<T> and Vec<T> fields
+        # Check if field has a default value in Python
+        has_default = f.default is not MISSING or f.default_factory is not MISSING
+
+        # Add #[serde(default)] for Option<T>, Vec<T>, and fields with defaults
         # This enables graceful schema evolution - new optional/collection fields
-        # will deserialize as None/[] even if missing from stored data
-        if needs_serde_default(py_type):
+        # will deserialize as None/[]/default even if missing from stored data
+        if needs_serde_default(py_type, has_default):
             lines.append(f"    #[serde(default)]")
 
         lines.append(f"    pub {f.name}: {rust_type},")

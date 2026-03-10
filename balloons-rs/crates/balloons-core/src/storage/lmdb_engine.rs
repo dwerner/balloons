@@ -821,6 +821,11 @@ impl StorageEngine for LmdbEngine {
                 working_directories: data.working_directories.clone(),
                 cached_context_tokens: data.cached_context_tokens,
                 context_window: data.context_window,
+                // Fork hierarchy fields
+                parent_id: data.parent_id.clone(),
+                fork_name: data.fork_name.clone(),
+                fork_status: data.fork_status.clone(),
+                children: data.children.clone(),
             });
         }
 

@@ -1,0 +1,348 @@
+/**
+ * HierarchyView CSS
+ *
+ * Unified session hierarchy showing fork relationships.
+ * Root sessions at top, forks nested underneath.
+ */
+
+/* ===== Root container ===== */
+.hierarchy-view {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--color-text-primary, #e0e0e0);
+}
+
+.hierarchy-view--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #888;
+  padding: 20px;
+}
+
+/* ===== Mode toggle ===== */
+.hierarchy-mode-toggle {
+  display: flex;
+  gap: 4px;
+  padding: 8px;
+  margin-bottom: 4px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--color-bg-primary, #1e1e1e);
+}
+
+.hierarchy-mode-btn {
+  flex: 1;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #888;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.hierarchy-mode-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ccc;
+}
+
+.hierarchy-mode-btn.active {
+  background: rgba(96, 165, 250, 0.2);
+  color: #60a5fa;
+}
+
+[data-theme="light"] .hierarchy-mode-btn {
+  background: rgba(0, 0, 0, 0.05);
+  color: #666;
+}
+
+[data-theme="light"] .hierarchy-mode-btn:hover {
+  background: rgba(0, 0, 0, 0.1);
+  color: #333;
+}
+
+[data-theme="light"] .hierarchy-mode-btn.active {
+  background: rgba(96, 165, 250, 0.2);
+  color: #2563eb;
+}
+
+[data-theme="light"] .hierarchy-mode-toggle {
+  background: var(--color-bg-primary, #ffffff);
+}
+
+/* ===== Lists ===== */
+.hierarchy-root,
+.hierarchy-children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* ===== Node ===== */
+.hierarchy-node {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+}
+
+/* ===== Node content row ===== */
+.hierarchy-node__content {
+  --depth-tint: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  margin: 1px 0;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  border-left: 3px solid transparent;
+  transition: background 0.1s ease;
+  /* Dark theme: lighter as depth increases */
+  background: rgba(255, 255, 255, var(--depth-tint));
+}
+
+.hierarchy-node__content:hover {
+  background: rgba(255, 255, 255, calc(var(--depth-tint) + 0.05));
+}
+
+.hierarchy-node__content--selected {
+  background: rgba(96, 165, 250, 0.2);
+  /* Keep the session's provenance color for the left border - don't override */
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.3);
+}
+
+.hierarchy-node__content--selected:hover {
+  background: rgba(96, 165, 250, 0.25);
+}
+
+/* ===== Toggle button ===== */
+.hierarchy-node__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.hierarchy-node__toggle:hover {
+  opacity: 0.8;
+}
+
+/* ===== Arrow icon ===== */
+.hierarchy-arrow {
+  transition: transform 0.15s ease;
+}
+
+.hierarchy-arrow--open {
+  transform: rotate(-90deg);
+}
+
+/* ===== Node parts ===== */
+.hierarchy-node__id {
+  font-family: ui-monospace, 'SF Mono', Monaco, monospace;
+  font-size: 11px;
+  color: #888;
+  flex-shrink: 0;
+}
+
+/* ID shown after label - more de-emphasized */
+.hierarchy-node__id--secondary {
+  color: #555;
+  font-size: 10px;
+}
+
+.hierarchy-node__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-primary, #fff);
+}
+
+.hierarchy-node__meta {
+  font-size: 11px;
+  color: #666;
+  flex-shrink: 0;
+}
+
+.hierarchy-node__time {
+  font-size: 10px;
+  color: #555;
+  flex-shrink: 0;
+}
+
+/* ===== Badges ===== */
+.hierarchy-node__badge {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.hierarchy-node__badge--streaming {
+  color: #4ade80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* SVG spinner - rotates smoothly without wobble */
+.hierarchy-spinner {
+  animation: spin 1s linear infinite;
+}
+
+.hierarchy-node__badge--fork {
+  color: #c084fc;
+}
+
+.hierarchy-node__badge--children {
+  color: #c084fc;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.hierarchy-node__badge--merged {
+  color: #4ade80;
+  font-weight: 600;
+}
+
+.hierarchy-node__badge--parent {
+  color: #60a5fa;
+}
+
+.hierarchy-node__badge--siblings {
+  color: #f59e0b;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 3px;
+  border-radius: 3px;
+  background: rgba(245, 158, 11, 0.15);
+}
+
+/* Leaf indicator (debug) */
+.hierarchy-node__badge--leaf {
+  font-size: 11px;
+  opacity: 0.5;
+}
+
+/* Warning badge for sessions with children appearing in leaves mode */
+.hierarchy-node__badge--has-children {
+  color: #ef4444;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 3px;
+  border-radius: 3px;
+  background: rgba(239, 68, 68, 0.15);
+}
+
+/* Merged session styling */
+.hierarchy-node__content--merged {
+  opacity: 0.75;
+}
+
+.hierarchy-node__content--merged .hierarchy-node__label {
+  font-style: italic;
+}
+
+@keyframes spin {
+  from { transform: rotate(360deg); }
+  to { transform: rotate(0deg); }
+}
+
+/* ===== Token count display ===== */
+.hierarchy-node__tokens {
+  font-family: ui-monospace, 'SF Mono', Monaco, monospace;
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #888;
+  flex-shrink: 0;
+}
+
+.hierarchy-node__tokens--low {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.1);
+}
+
+.hierarchy-node__tokens--medium {
+  color: #facc15;
+  background: rgba(250, 204, 21, 0.1);
+}
+
+.hierarchy-node__tokens--high {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.15);
+}
+
+/* ===== Mobile adjustments ===== */
+@media (max-width: 767px) {
+  .hierarchy-node__content {
+    padding: 10px 8px;
+  }
+}
+
+/* ===== Reduced motion ===== */
+@media (prefers-reduced-motion: reduce) {
+  .hierarchy-arrow {
+    transition: none;
+  }
+
+  .hierarchy-spinner {
+    animation: none;
+  }
+}
+
+/* ===== Light theme support ===== */
+[data-theme="light"] .hierarchy-node__id--secondary {
+  color: #999;
+}
+
+/* Light theme: darker (more black) as depth increases */
+[data-theme="light"] .hierarchy-node__content {
+  background: rgba(0, 0, 0, var(--depth-tint));
+}
+
+[data-theme="light"] .hierarchy-node__content:hover {
+  background: rgba(0, 0, 0, calc(var(--depth-tint) + 0.05));
+}
+
+[data-theme="light"] .hierarchy-node__content--selected {
+  background: rgba(96, 165, 250, 0.2);
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.3);
+}
+
+[data-theme="light"] .hierarchy-node__content--selected:hover {
+  background: rgba(96, 165, 250, 0.25);
+}
+
+[data-theme="light"] .hierarchy-node__tokens {
+  background: rgba(0, 0, 0, 0.06);
+  color: #666;
+}
+
+[data-theme="light"] .hierarchy-node__tokens--low {
+  color: #16a34a;
+  background: rgba(22, 163, 74, 0.1);
+}
+
+[data-theme="light"] .hierarchy-node__tokens--medium {
+  color: #ca8a04;
+  background: rgba(202, 138, 4, 0.1);
+}
+
+[data-theme="light"] .hierarchy-node__tokens--high {
+  color: #dc2626;
+  background: rgba(220, 38, 38, 0.12);
+}

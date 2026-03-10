@@ -2,7 +2,7 @@
 //!
 //! Generated from Python domain entities marked with @rust_schema.
 //! Source: models.py and other domain modules
-//! Generated: 2026-03-09T14:27:16.824302
+//! Generated: 2026-03-10T09:50:11.332947
 //!
 //! To regenerate:
 //!     python -m codegen.generate_rust
@@ -11,6 +11,20 @@
 
 use serde::{Deserialize, Serialize};
 
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForkChildData {
+    pub session_id: String,
+    pub name: String,
+    pub status: String,
+    pub fork_point: i64,
+    #[serde(default)]
+    pub merge_point: i64,
+    #[serde(default)]
+    pub return_condition: String,
+    #[serde(default)]
+    pub prompt: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnData {
@@ -46,20 +60,32 @@ pub struct SessionData {
     #[serde(default)]
     pub parent_id: Option<String>,
     #[serde(default)]
-    pub children: Vec<serde_json::Value>,
+    pub children: Vec<ForkChildData>,
+    #[serde(default)]
     pub returned: bool,
+    #[serde(default)]
     pub return_condition: String,
     #[serde(default)]
     pub working_directories: Vec<String>,
+    #[serde(default)]
     pub title: String,
+    #[serde(default)]
     pub summary: String,
+    #[serde(default)]
     pub fork_name: String,
+    #[serde(default)]
     pub fork_status: String,
+    #[serde(default)]
     pub fork_point_turn: i64,
+    #[serde(default)]
     pub merge_point_turn: i64,
+    #[serde(default)]
     pub merge_message: String,
+    #[serde(default)]
     pub backend_name: String,
+    #[serde(default)]
     pub cached_context_tokens: i64,
+    #[serde(default)]
     pub message_queue: serde_json::Value,
 }
 
@@ -77,10 +103,20 @@ pub struct SessionMetadata {
     pub created_at: i64,
     pub updated_at: i64,
     pub turn_count: i64,
+    #[serde(default)]
     pub cached_context_tokens: i64,
+    #[serde(default)]
     pub context_window: i64,
     #[serde(default)]
     pub working_directories: Vec<String>,
+    #[serde(default)]
+    pub parent_id: Option<String>,
+    #[serde(default)]
+    pub fork_name: String,
+    #[serde(default)]
+    pub fork_status: String,
+    #[serde(default)]
+    pub children: Vec<ForkChildData>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,10 +137,13 @@ pub struct ReviewData {
     pub task_description: String,
     pub user_summary: String,
     pub llm_commentary: String,
+    #[serde(default)]
     pub spec_version: String,
     #[serde(default)]
     pub session_duration_minutes: Option<i64>,
+    #[serde(default)]
     pub turn_count: i64,
+    #[serde(default)]
     pub sentiment_counts: serde_json::Value,
 }
 
@@ -207,6 +246,7 @@ pub struct UserData {
     pub created_by: Option<String>,
     #[serde(default)]
     pub last_login: Option<String>,
+    #[serde(default)]
     pub disabled: bool,
 }
 
@@ -223,8 +263,11 @@ pub struct TaskData {
     pub id: String,
     pub title: String,
     pub description: String,
+    #[serde(default)]
     pub resolution: String,
+    #[serde(default)]
     pub created_at: String,
+    #[serde(default)]
     pub updated_at: String,
 }
 
@@ -253,6 +296,7 @@ pub struct EdgeData {
     pub relationship: String,
     #[serde(default)]
     pub position: Option<i64>,
+    #[serde(default)]
     pub created_at: String,
 }
 

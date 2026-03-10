@@ -213,7 +213,13 @@
 }
 
 .tree-node__content--selected {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(96, 165, 250, 0.2);
+  border-left-color: #60a5fa !important;
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.3);
+}
+
+.tree-node__content--selected:hover {
+  background: rgba(96, 165, 250, 0.25);
 }
 
 /* ===== Toggle button (arrow container) ===== */
@@ -304,8 +310,40 @@
   color: #22d3ee;
 }
 
+.tree-node__badge--has-forks {
+  color: #c084fc;
+  font-size: 11px;
+  font-weight: 500;
+}
+
 .tree-node__badge--pin {
   font-size: 11px;
+}
+
+/* ===== Token count display ===== */
+.tree-node__tokens {
+  font-family: ui-monospace, 'SF Mono', Monaco, monospace;
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #888;
+  flex-shrink: 0;
+}
+
+.tree-node__tokens--low {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.1);
+}
+
+.tree-node__tokens--medium {
+  color: #facc15;
+  background: rgba(250, 204, 21, 0.1);
+}
+
+.tree-node__tokens--high {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.15);
 }
 
 /* ===== Pin toggle ===== */
@@ -454,7 +492,32 @@
 }
 
 [data-theme="light"] .tree-node__content--selected {
-  background: rgba(0, 0, 0, 0.1);
+  background: rgba(96, 165, 250, 0.2);
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.3);
+}
+
+[data-theme="light"] .tree-node__content--selected:hover {
+  background: rgba(96, 165, 250, 0.25);
+}
+
+[data-theme="light"] .tree-node__tokens {
+  background: rgba(0, 0, 0, 0.06);
+  color: #666;
+}
+
+[data-theme="light"] .tree-node__tokens--low {
+  color: #16a34a;
+  background: rgba(22, 163, 74, 0.1);
+}
+
+[data-theme="light"] .tree-node__tokens--medium {
+  color: #ca8a04;
+  background: rgba(202, 138, 4, 0.1);
+}
+
+[data-theme="light"] .tree-node__tokens--high {
+  color: #dc2626;
+  background: rgba(220, 38, 38, 0.12);
 }
 
 [data-theme="light"] .tree-group__header {
@@ -563,7 +626,36 @@
   background: rgba(0, 0, 0, 0.05);
 }
 
-/* ===== Fork children section ===== */
+/* ===== Fork tree section ===== */
+.tree-node--fork-tree > .tree-node__content {
+  cursor: pointer;
+}
+
+.tree-node--fork-tree > .tree-node__content:hover {
+  background: rgba(192, 132, 252, 0.1);
+}
+
+.tree-node--fork-tree > .tree-node__content--current {
+  background: rgba(96, 165, 250, 0.15);
+  border-left: 2px solid #60a5fa;
+  margin-left: -2px;
+}
+
+.tree-node--fork-tree > .tree-node__content--current:hover {
+  background: rgba(96, 165, 250, 0.2);
+  cursor: default;
+}
+
+/* Light theme fork tree */
+[data-theme="light"] .tree-node--fork-tree > .tree-node__content:hover {
+  background: rgba(192, 132, 252, 0.15);
+}
+
+[data-theme="light"] .tree-node--fork-tree > .tree-node__content--current {
+  background: rgba(96, 165, 250, 0.2);
+}
+
+/* ===== Fork children section (fallback) ===== */
 .tree-node--fork-header > .tree-node__content {
   padding-top: 8px;
   margin-top: 4px;

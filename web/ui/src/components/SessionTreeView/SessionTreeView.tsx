@@ -23,12 +23,31 @@
 
 import React, { useState, useCallback, useMemo, memo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import type { SessionInfo, ForkChild } from '../../../../generated/balloons-client';
+import type { SessionInfo, ForkChild, ForkTreeNode, SessionDataServiceClient } from '../../../../generated/balloons-client';
 import { createLogger } from '../../utils/debugLog';
 import './SessionTreeView.css';
 
 // Create scoped logger for this module
 const debugLog = createLogger('SessionTreeView');
+
+// Helper to format token count compactly
+function formatTokenCount(tokens: number): string {
+  if (tokens >= 1000000) {
+    return `${(tokens / 1000000).toFixed(1)}M`;
+  } else if (tokens >= 1000) {
+    return `${(tokens / 1000).toFixed(0)}k`;
+  }
+  return String(tokens);
+}
+
+// Helper to get CSS class based on token usage percentage
+function getTokenCountClass(tokens: number, contextWindow?: number): string {
+  if (!contextWindow || contextWindow === 0) return '';
+  const pct = (tokens / contextWindow) * 100;
+  if (pct >= 80) return 'tree-node__tokens--high';
+  if (pct >= 50) return 'tree-node__tokens--medium';
+  return 'tree-node__tokens--low';
+}
 
 // Session colors for visual distinction
 const SESSION_COLORS = [
@@ -316,6 +335,130 @@ function SessionContextMenu({
   );
 }
 
+/**
+ * Recursive component to render a fork tree node
+ */
+interface ForkTreeNodeViewProps {
+  node: ForkTreeNode;
+  depth: number;
+  onNavigate?: (sessionId: string) => void;
+}
+
+const ForkTreeNodeView = memo(function ForkTreeNodeView({
+  node,
+  depth,
+  onNavigate,
+}: ForkTreeNodeViewProps) {
+  const hasChildren = node.children && node.children.length > 0;
+  const hasWatchTargets = node.watchTargets && node.watchTargets.length > 0;
+  const hasWatchers = node.watchedBy && node.watchedBy.length > 0;
+  const hasExpandableContent = hasChildren || hasWatchTargets || hasWatchers;
+  const [isExpanded, setIsExpanded] = useState(depth < 3); // Auto-expand first 3 levels
+
+  const handleClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!node.isCurrent && onNavigate) {
+      onNavigate(node.sessionId);
+    }
+  }, [node.sessionId, node.isCurrent, onNavigate]);
+
+  const toggleExpand = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsExpanded(prev => !prev);
+  }, []);
+
+  return (
+    <li className="tree-node tree-node--fork-tree">
+      <div
+        className={`tree-node__content tree-node__content--clickable ${node.isCurrent ? 'tree-node__content--current' : ''}`}
+        onClick={handleClick}
+        style={{ paddingLeft: `${depth * 12 + 8}px` }}
+        title={node.isCurrent ? 'Current session' : `Navigate to ${node.name}`}
+      >
+        {hasExpandableContent ? (
+          <span className="tree-node__toggle" onClick={toggleExpand}>
+            <Arrow open={isExpanded} />
+          </span>
+        ) : (
+          <span className="tree-node__spacer" />
+        )}
+        <span className="tree-node__badge tree-node__badge--fork">
+          {node.isCurrent ? '●' : node.status === 'merged' ? '✓' : '↳'}
+        </span>
+        <span className="tree-node__id">{node.sessionId.slice(0, 8)}</span>
+        <span className="tree-node__label">{node.name}</span>
+        {hasWatchTargets && (
+          <span className="tree-node__badge tree-node__badge--watching" title={`Watching ${node.watchTargets!.length} session(s)`}>
+            👁→{node.watchTargets!.length}
+          </span>
+        )}
+        {hasWatchers && (
+          <span className="tree-node__badge tree-node__badge--watching" title={`Watched by ${node.watchedBy!.length} session(s)`}>
+            ←👁{node.watchedBy!.length}
+          </span>
+        )}
+        {node.status !== 'active' && (
+          <span className="tree-node__meta">({node.status})</span>
+        )}
+      </div>
+      {/* Show children, watch targets, and watchers when expanded */}
+      {isExpanded && hasExpandableContent && (
+        <ul className="tree-children">
+          {/* Render child nodes */}
+          {node.children?.map(child => (
+            <ForkTreeNodeView
+              key={child.sessionId}
+              node={child}
+              depth={depth + 1}
+              onNavigate={onNavigate}
+            />
+          ))}
+          {/* Render watch targets as navigable items */}
+          {node.watchTargets && node.watchTargets.length > 0 && (
+            <>
+              {node.watchTargets.map(targetId => (
+                <li key={`target-${targetId}`} className="tree-node tree-node--watch-target">
+                  <div
+                    className="tree-node__content tree-node__content--clickable"
+                    onClick={(e) => { e.stopPropagation(); onNavigate?.(targetId); }}
+                    style={{ paddingLeft: `${(depth + 1) * 12 + 8}px` }}
+                    title={`Navigate to watched session ${targetId.slice(0, 8)}`}
+                  >
+                    <span className="tree-node__spacer" />
+                    <span className="tree-node__badge tree-node__badge--watching">👁→</span>
+                    <span className="tree-node__id">{targetId.slice(0, 8)}</span>
+                    <span className="tree-node__label tree-node__label--muted">(watching)</span>
+                  </div>
+                </li>
+              ))}
+            </>
+          )}
+          {/* Render watchers (who is watching this session) */}
+          {node.watchedBy && node.watchedBy.length > 0 && (
+            <>
+              {node.watchedBy.map(watcherId => (
+                <li key={`watcher-${watcherId}`} className="tree-node tree-node--watch-target">
+                  <div
+                    className="tree-node__content tree-node__content--clickable"
+                    onClick={(e) => { e.stopPropagation(); onNavigate?.(watcherId); }}
+                    style={{ paddingLeft: `${(depth + 1) * 12 + 8}px` }}
+                    title={`Navigate to watcher session ${watcherId.slice(0, 8)}`}
+                  >
+                    <span className="tree-node__spacer" />
+                    <span className="tree-node__badge tree-node__badge--watching">←👁</span>
+                    <span className="tree-node__id">{watcherId.slice(0, 8)}</span>
+                    <span className="tree-node__label tree-node__label--muted">(watcher)</span>
+                  </div>
+                </li>
+              ))}
+            </>
+          )}
+        </ul>
+      )}
+    </li>
+  );
+});
+
 // Session node props for memoization
 interface SessionNodeProps {
   session: SessionInfo;
@@ -324,6 +467,8 @@ interface SessionNodeProps {
   isChecked: boolean;
   isExpanded: boolean;
   showCheckboxes: boolean;
+  forkTree?: ForkTreeNode | null;  // Full fork tree from root (loaded when expanded)
+  isLoadingForkTree?: boolean;
   onToggle: () => void;
   onSelect: (e: React.MouseEvent) => void;
   onTogglePin?: () => void;
@@ -346,6 +491,7 @@ function sessionNodePropsAreEqual(prev: SessionNodeProps, next: SessionNodeProps
   if (prev.isChecked !== next.isChecked) return false;
   if (prev.isExpanded !== next.isExpanded) return false;
   if (prev.showCheckboxes !== next.showCheckboxes) return false;
+  if (prev.isLoadingForkTree !== next.isLoadingForkTree) return false;
 
   // Session identity and metadata
   if (prev.session.id !== next.session.id) return false;
@@ -361,6 +507,9 @@ function sessionNodePropsAreEqual(prev: SessionNodeProps, next: SessionNodeProps
   const nextChildren = next.session.children || [];
   if (prevChildren.length !== nextChildren.length) return false;
 
+  // Check fork tree changes
+  if (prev.forkTree !== next.forkTree) return false;
+
   return true;
 }
 
@@ -372,6 +521,8 @@ const SessionNode = memo(function SessionNode({
   isChecked,
   isExpanded,
   showCheckboxes,
+  forkTree,
+  isLoadingForkTree,
   onToggle,
   onSelect,
   onTogglePin,
@@ -387,13 +538,12 @@ const SessionNode = memo(function SessionNode({
   const sessionName = session.forkName || session.title || `Session ${session.id.slice(0, 8)}`;
   const isPinned = session.isPinned ?? false;
 
-  // Fork children from this session
+  // Fork children from this session (fallback if tree not loaded)
   const forkChildren = session.children || [];
   const hasForkChildren = forkChildren.length > 0;
 
-  // Note: watchTargets/watchedBy are lazily loaded and not available in session list.
-  // Full watcher navigation is available in the long-press modal (RenameSessionModal)
-  // which uses get_session_fork_tree() to load the complete watcher relationships.
+  // Show expand arrow if we have children OR if session has parent (could have siblings/parents to show)
+  const hasExpandableContent = hasForkChildren || session.parentId;
 
   // Session context menu state
   const [sessionMenuPosition, setSessionMenuPosition] = useState<{ x: number; y: number } | null>(null);
@@ -430,7 +580,7 @@ const SessionNode = memo(function SessionNode({
           className="tree-node__toggle"
           onClick={(e) => { e.stopPropagation(); onToggle(); }}
         >
-          {hasForkChildren ? <Arrow open={isExpanded} color={sessionColor} /> : <span className="tree-node__spacer" />}
+          {hasExpandableContent ? <Arrow open={isExpanded} color={sessionColor} /> : <span className="tree-node__spacer" />}
         </span>
 
         {/* Pin toggle on the left - always visible for pinned, hover for unpinned */}
@@ -444,44 +594,88 @@ const SessionNode = memo(function SessionNode({
           <span key="streaming-badge" className="tree-node__badge tree-node__badge--streaming">⟳</span>
         )}
 
+        {/* Parent indicator (this is a fork) */}
         {session.parentId && (
-          <span key="fork-badge" className="tree-node__badge tree-node__badge--fork">
+          <span key="fork-badge" className="tree-node__badge tree-node__badge--fork" title={`Fork of ${session.parentId.slice(0, 8)}`}>
             {session.forkStatus === 'merged' ? '✓' : '↳'}
+          </span>
+        )}
+
+        {/* Children indicator (has forks) */}
+        {hasForkChildren && !session.parentId && (
+          <span key="children-badge" className="tree-node__badge tree-node__badge--has-forks" title={`${forkChildren.length} fork(s)`}>
+            ⑂{forkChildren.length}
           </span>
         )}
 
         <span key="id" className="tree-node__id">{session.id.slice(0, 8)}</span>
         <span key="label" className="tree-node__label">{sessionName}</span>
+
+        {/* Token count */}
+        {session.cachedContextTokens !== undefined && session.cachedContextTokens > 0 && (
+          <span
+            key="tokens"
+            className={`tree-node__tokens ${getTokenCountClass(session.cachedContextTokens, session.contextWindow)}`}
+            title={session.contextWindow ? `${session.cachedContextTokens.toLocaleString()} / ${session.contextWindow.toLocaleString()} tokens` : `${session.cachedContextTokens.toLocaleString()} tokens`}
+          >
+            {formatTokenCount(session.cachedContextTokens)}
+          </span>
+        )}
+
         <span key="meta" className="tree-node__meta">({session.messageCount}msg)</span>
       </div>
 
-      {/* Fork children - show when expanded */}
-      {isExpanded && hasForkChildren && (
+      {/* Fork tree - show when expanded */}
+      {isExpanded && (
         <ul className="tree-children">
-          {forkChildren.map(child => (
-            <li
-              key={child.sessionId}
-              className={`tree-node tree-node--fork-child tree-node--fork-child--${child.status}`}
-            >
-              <div
-                className="tree-node__content tree-node__content--clickable"
-                onClick={() => onNavigateToSession?.(child.sessionId)}
-                title={`Navigate to ${child.name || child.sessionId.slice(0, 8)}`}
-              >
+          {isLoadingForkTree ? (
+            <li className="tree-node tree-node--loading">
+              <div className="tree-node__content">
                 <span className="tree-node__spacer" />
-                <span className="tree-node__badge tree-node__badge--fork">
-                  {child.status === 'merged' ? '✓' : '↳'}
-                </span>
-                <span className="tree-node__id">{child.sessionId.slice(0, 8)}</span>
-                <span className="tree-node__label">
-                  {child.name || `Fork ${child.sessionId.slice(0, 8)}`}
-                </span>
-                {child.status !== 'active' && (
-                  <span className="tree-node__meta">({child.status})</span>
-                )}
+                <span className="tree-node__label tree-node__label--muted">Loading fork tree...</span>
               </div>
             </li>
-          ))}
+          ) : forkTree ? (
+            /* Show full fork tree from root */
+            <ForkTreeNodeView
+              node={forkTree}
+              depth={0}
+              onNavigate={onNavigateToSession}
+            />
+          ) : hasForkChildren ? (
+            /* Fallback: show direct children if tree not available */
+            forkChildren.map(child => (
+              <li
+                key={child.sessionId}
+                className={`tree-node tree-node--fork-child tree-node--fork-child--${child.status}`}
+              >
+                <div
+                  className="tree-node__content tree-node__content--clickable"
+                  onClick={() => onNavigateToSession?.(child.sessionId)}
+                  title={`Navigate to ${child.name || child.sessionId.slice(0, 8)}`}
+                >
+                  <span className="tree-node__spacer" />
+                  <span className="tree-node__badge tree-node__badge--fork">
+                    {child.status === 'merged' ? '✓' : '↳'}
+                  </span>
+                  <span className="tree-node__id">{child.sessionId.slice(0, 8)}</span>
+                  <span className="tree-node__label">
+                    {child.name || `Fork ${child.sessionId.slice(0, 8)}`}
+                  </span>
+                  {child.status !== 'active' && (
+                    <span className="tree-node__meta">({child.status})</span>
+                  )}
+                </div>
+              </li>
+            ))
+          ) : (
+            <li className="tree-node tree-node--empty">
+              <div className="tree-node__content">
+                <span className="tree-node__spacer" />
+                <span className="tree-node__label tree-node__label--muted">No forks</span>
+              </div>
+            </li>
+          )}
         </ul>
       )}
 
@@ -517,6 +711,7 @@ interface SessionTreeViewProps {
   onBulkAction?: (sessionIds: string[], action: BulkAction) => void;
   onReviewSession?: (sessionId: string) => void;
   onRenameSession?: (sessionId: string) => void;
+  sessionDataClient?: SessionDataServiceClient;  // For loading fork tree
   isLoading?: boolean;
 }
 
@@ -530,6 +725,7 @@ export const SessionTreeView = memo(function SessionTreeView({
   onRenameSession,
   onLinkSession,
   onWatchSession,
+  sessionDataClient,
   isLoading = false,
 }: SessionTreeViewProps) {
   // Log on mount
@@ -554,6 +750,35 @@ export const SessionTreeView = memo(function SessionTreeView({
   const [checkedSessions, setCheckedSessions] = useState<Set<string>>(new Set());
   const [lastClickedSessionId, setLastClickedSessionId] = useState<string | null>(null);
 
+  // Fork tree cache and loading state
+  const [forkTreeCache, setForkTreeCache] = useState<Map<string, ForkTreeNode>>(new Map());
+  const [loadingForkTrees, setLoadingForkTrees] = useState<Set<string>>(new Set());
+
+  // Load fork tree when a session is expanded
+  const loadForkTree = useCallback(async (sessionId: string) => {
+    if (!sessionDataClient || forkTreeCache.has(sessionId) || loadingForkTrees.has(sessionId)) {
+      return;
+    }
+
+    setLoadingForkTrees(prev => new Set(prev).add(sessionId));
+    try {
+      debugLog('Loading fork tree', { sessionId });
+      const tree = await sessionDataClient.getSessionForkTree(sessionId);
+      if (tree) {
+        debugLog('Fork tree loaded', { sessionId, rootName: tree.name });
+        setForkTreeCache(prev => new Map(prev).set(sessionId, tree));
+      }
+    } catch (error) {
+      debugLog('Failed to load fork tree', { sessionId, error: String(error) });
+    } finally {
+      setLoadingForkTrees(prev => {
+        const next = new Set(prev);
+        next.delete(sessionId);
+        return next;
+      });
+    }
+  }, [sessionDataClient, forkTreeCache, loadingForkTrees]);
+
   // Show checkboxes when any session is checked
   const showCheckboxes = checkedSessions.size > 0;
 
@@ -564,10 +789,12 @@ export const SessionTreeView = memo(function SessionTreeView({
         next.delete(sessionId);
       } else {
         next.add(sessionId);
+        // Load fork tree when expanding
+        loadForkTree(sessionId);
       }
       return next;
     });
-  }, []);
+  }, [loadForkTree]);
 
   // Get all session IDs in display order for range selection
   const sessionIdOrder = useMemo(() => {
@@ -814,6 +1041,8 @@ export const SessionTreeView = memo(function SessionTreeView({
     const isSelected = session.id === selectedSessionId;
     const isChecked = checkedSessions.has(session.id);
     const isExpanded = expandedSessions.has(session.id);
+    const forkTree = forkTreeCache.get(session.id);
+    const isLoadingForkTree = loadingForkTrees.has(session.id);
     const idx = sessionIndex++;
 
     return (
@@ -825,6 +1054,8 @@ export const SessionTreeView = memo(function SessionTreeView({
         isChecked={isChecked}
         isExpanded={isExpanded}
         showCheckboxes={showCheckboxes}
+        forkTree={forkTree}
+        isLoadingForkTree={isLoadingForkTree}
         onToggle={() => toggleSession(session.id)}
         onSelect={(e) => handleSessionClick(session.id, e)}
         onTogglePin={onTogglePin ? () => onTogglePin(session.id) : undefined}

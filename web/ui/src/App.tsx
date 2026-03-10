@@ -4,6 +4,7 @@ import type { ConnectionState, SessionInfo, TurnInfo, TaskInfo, Unsubscribe, Too
 import { MarkdownContent } from './MarkdownContent';
 import { AppLayout, useLayout, useTheme, usePreferences, PreferencesProvider } from './components/layout';
 import { SessionTreeView } from './components/SessionTreeView';
+import { HierarchyView } from './components/HierarchyView';
 import { GoalTreeView } from './components/GoalTreeView';
 import { FileBrowserView, type FileBrowserViewRef } from './components/FileBrowserView';
 import { SupervisorTab } from './components/SupervisorTab';
@@ -23,7 +24,7 @@ import { CreateTodoModal, type CreateTodoResult } from './components/CreateTodoM
 import { SessionReviewModal, type SessionReview, type BackendInfo } from './components/SessionReviewModal';
 import { PropertiesTab } from './components/PropertiesTab';
 import { StreamingTurnsView, type StreamingProgress } from './components/StreamingTurnsView';
-import { ContextTabView, type ContextMode as ContextTabMode, type ExchangeAction as ContextTabExchangeAction } from './components/ContextTabView';
+import { ContextTabView, type ExchangeAction as ContextTabExchangeAction } from './components/ContextTabView';
 import { DialogProvider, useDialog } from './components/Dialog';
 import { useWakeLock, useSoundNotifications, useLongPress, useVisualViewport } from './hooks';
 import { RenameSessionModal } from './components/RenameSessionModal';
@@ -2493,18 +2494,25 @@ function AppContent() {
             setCreateTodoModalState({ isOpen: true, planId, planTitle });
           }}
           creatingSessionFor={creatingSessionFor}
-          onExchangeContextModeChange={async (sessionId, turnIndices, mode) => {
+          onDeleteTurn={async (sessionId, turnIdx) => {
             const client = clientRef.current;
             if (!client || connectionState !== 'connected') return;
 
-            // Set context mode for all turns in the exchange
+            // Confirm before deleting
+            const confirmed = await confirm({
+              title: 'Delete Turn?',
+              message: 'Delete this turn? This action cannot be undone.',
+              confirmText: 'Delete',
+              cancelText: 'Cancel',
+              variant: 'danger',
+            });
+            if (!confirmed) return;
+
             try {
-              for (const turnIdx of turnIndices) {
-                await client.sessionData.setContextMode(sessionId, turnIdx, mode.toLowerCase());
-              }
-              debugLog('Set context mode for exchange', { sessionId, turnIndices, mode });
+              const deletedCount = await client.sessionData.deleteTurns(sessionId, [turnIdx]);
+              debugLog('Deleted turn', { sessionId, turnIdx, deletedCount });
             } catch (err) {
-              console.error('Failed to set context mode:', err);
+              console.error('Failed to delete turn:', err);
             }
           }}
           onExchangeAction={async (sessionId, turnIndices, action) => {
@@ -2908,18 +2916,25 @@ function AppContent() {
                   isLoading={connectionState !== 'connected'}
                   archivingTurnIndices={archivingTurnIndices}
                   // No onSelectTurn - clicking nodes just expands/collapses in context view
-                  onExchangeContextModeChange={async (turnIndices, mode) => {
+                  onDeleteTurn={async (turnIdx) => {
                     const client = clientRef.current;
                     if (!client || connectionState !== 'connected' || !selectedSessionId) return;
 
-                    // Set context mode for all turns in the exchange
+                    // Confirm before deleting
+                    const confirmed = await confirm({
+                      title: 'Delete Turn?',
+                      message: 'Delete this turn? This action cannot be undone.',
+                      confirmText: 'Delete',
+                      cancelText: 'Cancel',
+                      variant: 'danger',
+                    });
+                    if (!confirmed) return;
+
                     try {
-                      for (const turnIdx of turnIndices) {
-                        await client.sessionData.setContextMode(selectedSessionId, turnIdx, mode.toLowerCase());
-                      }
-                      debugLog('Set context mode for exchange', { sessionId: selectedSessionId, turnIndices, mode });
+                      const deletedCount = await client.sessionData.deleteTurns(selectedSessionId, [turnIdx]);
+                      debugLog('Deleted turn', { sessionId: selectedSessionId, turnIdx, deletedCount });
                     } catch (err) {
-                      console.error('Failed to set context mode:', err);
+                      console.error('Failed to delete turn:', err);
                     }
                   }}
                   onExchangeAction={async (turnIndices, action) => {
@@ -3998,10 +4013,8 @@ function MainContentHeader({
 }
 
 // Sidebar view mode
-type SidebarView = 'list' | 'tree' | 'goals';
+type SidebarView = 'list' | 'tree' | 'hierarchy' | 'goals';
 
-// Context mode type from SessionTreeView
-type ContextMode = 'COPY' | 'COMPRESS' | 'DROP';
 // Exchange action type from SessionTreeView
 type ExchangeAction = 'archive' | 'delete';
 
@@ -4134,8 +4147,8 @@ interface SidebarContentProps {
   onNewBoundSession?: (entityType: string, entityId: string) => Promise<void>;
   creatingSessionFor?: string | null; // "entityType:entityId" when creating bound session
   // Exchange context menu callbacks
-  onExchangeContextModeChange?: (sessionId: string, turnIndices: number[], mode: ContextMode) => void;
   onExchangeAction?: (sessionId: string, turnIndices: number[], action: ExchangeAction) => void;
+  onDeleteTurn?: (sessionId: string, turnIdx: number) => void;
   // Session review callback
   onReviewSession?: (sessionId: string) => void;
   // Link session callback
@@ -4169,8 +4182,8 @@ function SidebarContent({
   onNewBareSession,
   onNewBoundSession,
   creatingSessionFor = null,
-  onExchangeContextModeChange,
   onExchangeAction,
+  onDeleteTurn,
   onReviewSession,
   onLinkSession,
   onWatchSession,
@@ -4185,7 +4198,7 @@ function SidebarContent({
   const [viewMode, setViewMode] = useState<SidebarView>(() => {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('balloons:sidebar-view');
-      return (stored === 'tree' || stored === 'list' || stored === 'goals') ? stored : 'list';
+      return (stored === 'tree' || stored === 'list' || stored === 'hierarchy' || stored === 'goals') ? stored : 'list';
     }
     return 'list';
   });
@@ -4297,6 +4310,13 @@ function SidebarContent({
           Tree
         </button>
         <button
+          className={`sidebar-view-tab ${viewMode === 'hierarchy' ? 'active' : ''}`}
+          onClick={() => handleViewModeChange('hierarchy')}
+          title="Hierarchy view - unified fork tree"
+        >
+          Hierarchy
+        </button>
+        <button
           className={`sidebar-view-tab ${viewMode === 'goals' ? 'active' : ''}`}
           onClick={() => handleViewModeChange('goals')}
           title="Goals view"
@@ -4395,6 +4415,14 @@ function SidebarContent({
           onReviewSession={onReviewSession}
           onLinkSession={onLinkSession}
           onWatchSession={onWatchSession}
+          sessionDataClient={connectionState === 'connected' ? client?.sessionData : undefined}
+        />
+      ) : viewMode === 'hierarchy' ? (
+        <HierarchyView
+          sessions={sessions}
+          selectedSessionId={selectedSessionId}
+          onSelectSession={handleSelectSession}
+          isLoading={connectionState !== 'connected'}
         />
       ) : (
         <div className="session-list">

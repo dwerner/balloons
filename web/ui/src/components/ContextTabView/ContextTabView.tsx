@@ -190,12 +190,24 @@ function TurnNode({
   indent = false,
   onClick,
   isSelected = false,
+  onDelete,
 }: {
   turn: TurnInfo;
   indent?: boolean;
   onClick?: (turnIdx: number) => void;
   isSelected?: boolean;
+  onDelete?: (turnIdx: number) => void;
 }) {
+  const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (onDelete) {
+      debugLog('Turn context menu triggered', { turnIdx: turn.idx });
+      setMenuPosition({ x: e.clientX, y: e.clientY });
+    }
+  }, [turn.idx, onDelete]);
   // Get icon based on role and content block type
   const getIcon = () => {
     if (turn.role === 'user') return '👤';
@@ -308,6 +320,7 @@ function TurnNode({
       <div
         className={`ctx-tree-node__content ${onClick ? 'ctx-tree-node__content--clickable' : ''} ${isSelected ? 'ctx-tree-node__content--selected' : ''}`}
         onClick={onClick ? handleClick : undefined}
+        onContextMenu={handleContextMenu}
       >
         <span key="spacer" className="ctx-tree-node__spacer" />
         <span key="turnNum" className="ctx-tree-node__turn-num">{turn.idx}</span>
@@ -321,43 +334,43 @@ function TurnNode({
           </span>
         )}
       </div>
+      {menuPosition && onDelete && (
+        <ContextMenu
+          position={menuPosition}
+          isSingleTurn
+          onDelete={() => onDelete(turn.idx)}
+          onClose={() => setMenuPosition(null)}
+        />
+      )}
     </li>
   );
 }
 
-// Context menu for exchanges
-interface ExchangeMenuProps {
+// Context menu for exchanges and turns
+interface ContextMenuProps {
   position: { x: number; y: number };
-  contextMode?: ContextMode;
   isArchiveBlock?: boolean;  // True if this is an archive block (show Restore instead of Archive)
-  onSetContextMode: (mode: ContextMode) => void;
-  onArchive: () => void;
+  isSingleTurn?: boolean;    // True if this is for a single turn (no Archive option)
+  onArchive?: () => void;
   onRestore?: () => void;  // Called for rehydrating archive blocks
   onDelete: () => void;
   onClose: () => void;
 }
 
-function ExchangeContextMenu({
+function ContextMenu({
   position,
-  contextMode,
   isArchiveBlock,
-  onSetContextMode,
+  isSingleTurn,
   onArchive,
   onRestore,
   onDelete,
   onClose,
-}: ExchangeMenuProps) {
+}: ContextMenuProps) {
   const menuRef = React.useRef<HTMLDivElement>(null);
-
-  // Wrap callbacks with logging
-  const handleSetContextMode = useCallback((mode: ContextMode) => {
-    debugLog('Context mode selected', { mode });
-    onSetContextMode(mode);
-  }, [onSetContextMode]);
 
   const handleArchive = useCallback(() => {
     debugLog('Archive action triggered');
-    onArchive();
+    onArchive?.();
   }, [onArchive]);
 
   const handleRestore = useCallback(() => {
@@ -372,17 +385,17 @@ function ExchangeContextMenu({
 
   // Debug log when menu mounts
   useEffect(() => {
-    debugLog('ExchangeContextMenu mounted', { position, contextMode });
+    debugLog('ContextMenu mounted', { position, isArchiveBlock, isSingleTurn });
     return () => {
-      debugLog('ExchangeContextMenu unmounted');
+      debugLog('ContextMenu unmounted');
     };
-  }, [position, contextMode]);
+  }, [position, isArchiveBlock, isSingleTurn]);
 
   // Close on click outside (delay to avoid closing immediately on the opening click)
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        debugLog('ExchangeContextMenu click outside, closing');
+        debugLog('ContextMenu click outside, closing');
         onClose();
       }
     };
@@ -400,7 +413,7 @@ function ExchangeContextMenu({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        debugLog('ExchangeContextMenu escape pressed, closing');
+        debugLog('ContextMenu escape pressed, closing');
         onClose();
       }
     };
@@ -421,34 +434,6 @@ function ExchangeContextMenu({
       }}
     >
       <div className="ctx-exchange-menu__section">
-        <div className="ctx-exchange-menu__label">Context Mode</div>
-        <button
-          className={`ctx-exchange-menu__item ${contextMode === 'COPY' ? 'ctx-exchange-menu__item--active' : ''}`}
-          onClick={() => { handleSetContextMode('COPY'); onClose(); }}
-        >
-          <span className="ctx-exchange-menu__icon">📋</span>
-          Copy
-          <span className="ctx-exchange-menu__hint">Include verbatim</span>
-        </button>
-        <button
-          className={`ctx-exchange-menu__item ${contextMode === 'COMPRESS' ? 'ctx-exchange-menu__item--active' : ''}`}
-          onClick={() => { handleSetContextMode('COMPRESS'); onClose(); }}
-        >
-          <span className="ctx-exchange-menu__icon">📦</span>
-          Compress
-          <span className="ctx-exchange-menu__hint">Summarize</span>
-        </button>
-        <button
-          className={`ctx-exchange-menu__item ${contextMode === 'DROP' ? 'ctx-exchange-menu__item--active' : ''}`}
-          onClick={() => { handleSetContextMode('DROP'); onClose(); }}
-        >
-          <span className="ctx-exchange-menu__icon">🗑️</span>
-          Drop
-          <span className="ctx-exchange-menu__hint">Exclude from context</span>
-        </button>
-      </div>
-      <div className="ctx-exchange-menu__divider" />
-      <div className="ctx-exchange-menu__section">
         {isArchiveBlock ? (
           <button
             className="ctx-exchange-menu__item"
@@ -457,7 +442,7 @@ function ExchangeContextMenu({
             <span className="ctx-exchange-menu__icon">↩</span>
             Restore
           </button>
-        ) : (
+        ) : !isSingleTurn && onArchive ? (
           <button
             className="ctx-exchange-menu__item"
             onClick={() => { handleArchive(); onClose(); }}
@@ -465,7 +450,7 @@ function ExchangeContextMenu({
             <span className="ctx-exchange-menu__icon"><ArchiveIcon /></span>
             Archive
           </button>
-        )}
+        ) : null}
         <button
           className="ctx-exchange-menu__item ctx-exchange-menu__item--danger"
           onClick={() => { handleDelete(); onClose(); }}
@@ -686,13 +671,12 @@ function groupParallelTurns(turns: TurnInfo[], rawTurnByIdx: Map<number, Session
 interface ExchangeNodeProps {
   exchange: Exchange;
   isExpanded: boolean;
-  contextMode?: ContextMode;
   isArchiving?: boolean;
   onToggle: () => void;
-  onContextModeChange?: (mode: ContextMode) => void;
   onArchive?: () => void;
   onRestore?: () => void;  // For rehydrating archive blocks
   onDelete?: () => void;
+  onDeleteTurn?: (turnIdx: number) => void;  // For deleting individual turns
   onTurnClick?: (turnIdx: number) => void;
   /** Currently selected turn index for preview highlight */
   selectedTurnIdx?: number | null;
@@ -704,13 +688,12 @@ interface ExchangeNodeProps {
 const ExchangeNode = memo(function ExchangeNode({
   exchange,
   isExpanded,
-  contextMode,
   isArchiving,
   onToggle,
-  onContextModeChange,
   onArchive,
   onRestore,
   onDelete,
+  onDeleteTurn,
   onTurnClick,
   selectedTurnIdx,
   rawTurnByIdx,
@@ -800,16 +783,6 @@ const ExchangeNode = memo(function ExchangeNode({
   const turnCount = (exchange.userTurn ? 1 : 0) + assistantTurnsOrGroups.length + exchange.systemTurns.length;
   const hasChildren = turnCount > 1;
 
-  // Get context mode badge color
-  const getModeColor = (mode?: ContextMode) => {
-    switch (mode) {
-      case 'COPY': return '#4ade80';      // green
-      case 'COMPRESS': return '#facc15';  // yellow
-      case 'DROP': return '#f87171';      // red
-      default: return undefined;
-    }
-  };
-
   const handleLongPress = useCallback((position: { x: number; y: number }) => {
     debugLog('Long press triggered', { x: position.x, y: position.y, exchangeId: exchange.id });
     setMenuPosition(position);
@@ -860,15 +833,6 @@ const ExchangeNode = memo(function ExchangeNode({
         <span className="ctx-tree-node__icon">
           {isArchiving ? <span className="ctx-tree-node__spinner">⏳</span> : exchangeIcon}
         </span>
-        {contextMode && (
-          <span
-            className="ctx-tree-node__mode-badge"
-            style={{ backgroundColor: getModeColor(contextMode) }}
-            title={`Context: ${contextMode}`}
-          >
-            {contextMode.charAt(0)}
-          </span>
-        )}
         <span className="ctx-tree-node__label ctx-tree-node__label--muted">
           {userPreview || (isSystemOnly ? (systemBlockType || 'System') : 'System')}
           {userPreview && userPreview.length >= 50 ? '...' : ''}
@@ -892,6 +856,7 @@ const ExchangeNode = memo(function ExchangeNode({
               indent
               onClick={onTurnClick}
               isSelected={selectedTurnIdx === turn.idx}
+              onDelete={onDeleteTurn}
             />
           ))}
           {exchange.userTurn && (
@@ -901,6 +866,7 @@ const ExchangeNode = memo(function ExchangeNode({
               indent
               onClick={onTurnClick}
               isSelected={selectedTurnIdx === exchange.userTurn.idx}
+              onDelete={onDeleteTurn}
             />
           )}
           {assistantTurnsOrGroups.map((item) => {
@@ -922,6 +888,7 @@ const ExchangeNode = memo(function ExchangeNode({
                 indent
                 onClick={onTurnClick}
                 isSelected={selectedTurnIdx === item.turn.idx}
+                onDelete={onDeleteTurn}
               />
             );
           })}
@@ -929,13 +896,11 @@ const ExchangeNode = memo(function ExchangeNode({
       )}
 
       {menuPosition && (
-        <ExchangeContextMenu
+        <ContextMenu
           position={menuPosition}
-          contextMode={contextMode}
           isArchiveBlock={isArchiveBlock}
-          onSetContextMode={(mode) => onContextModeChange?.(mode)}
-          onArchive={() => onArchive?.()}
-          onRestore={() => onRestore?.()}
+          onArchive={onArchive}
+          onRestore={onRestore}
           onDelete={() => onDelete?.()}
           onClose={() => setMenuPosition(null)}
         />
@@ -955,8 +920,9 @@ interface ContextTabViewProps {
   client?: BalloonsClient | null;
   totalTokens?: number;
   onSelectTurn?: (turnIdx: number) => void;
-  onExchangeContextModeChange?: (turnIndices: number[], mode: ContextMode) => void;
   onExchangeAction?: (turnIndices: number[], action: ExchangeAction) => void;
+  /** Called when a single turn should be deleted */
+  onDeleteTurn?: (turnIdx: number) => void;
   isLoading?: boolean;
   /** Turn indices currently being archived (show spinner) */
   archivingTurnIndices?: Set<number>;
@@ -973,8 +939,8 @@ export const ContextTabView = memo(function ContextTabView({
   client,
   totalTokens,
   onSelectTurn,
-  onExchangeContextModeChange,
   onExchangeAction,
+  onDeleteTurn,
   isLoading = false,
   archivingTurnIndices,
 }: ContextTabViewProps) {
@@ -1167,9 +1133,6 @@ export const ContextTabView = memo(function ContextTabView({
                 ...(exchange.userTurn ? [exchange.userTurn.idx] : []),
                 ...exchange.assistantTurns.map(t => t.idx),
               ];
-              // Get context mode from the first turn (they should all be the same in an exchange)
-              const firstTurn = exchange.userTurn || exchange.assistantTurns[0] || exchange.systemTurns[0];
-              const contextMode = firstTurn?.contextMode as ContextMode | undefined;
 
               // Check if any turns in this exchange are being archived
               const isArchiving = archivingTurnIndices && turnIndices.some(idx => archivingTurnIndices.has(idx));
@@ -1179,12 +1142,8 @@ export const ContextTabView = memo(function ContextTabView({
                   key={exchange.id}
                   exchange={exchange}
                   isExpanded={expandedExchanges.has(exchange.id)}
-                  contextMode={contextMode}
                   isArchiving={isArchiving}
                   onToggle={() => toggleExchange(exchange.id)}
-                  onContextModeChange={onExchangeContextModeChange
-                    ? (mode) => onExchangeContextModeChange(turnIndices, mode)
-                    : undefined}
                   onArchive={onExchangeAction
                     ? () => onExchangeAction(turnIndices, 'archive')
                     : undefined}
@@ -1194,6 +1153,7 @@ export const ContextTabView = memo(function ContextTabView({
                   onDelete={onExchangeAction
                     ? () => onExchangeAction(turnIndices, 'delete')
                     : undefined}
+                  onDeleteTurn={onDeleteTurn}
                   onTurnClick={handleTurnSelect}
                   selectedTurnIdx={selectedTurnIdx}
                   rawTurnByIdx={rawTurnByIdx}

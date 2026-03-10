@@ -15,6 +15,23 @@ from codegen import rust_schema
 
 @rust_schema
 @dataclass
+class ForkChildData:
+    """A child fork reference stored in the parent session.
+
+    Contains the essential info needed to reconstruct the fork tree
+    without loading the full child session.
+    """
+    session_id: str
+    name: str  # Fork name or first 50 chars of prompt
+    status: str  # "active", "merged", "abandoned"
+    fork_point: int  # Turn index where fork was created (-1 if unknown)
+    merge_point: int = -1  # Turn index where merged (-1 if not merged)
+    return_condition: str = "manual"  # "manual" or "auto"
+    prompt: str = ""  # Initial prompt (may be truncated)
+
+
+@rust_schema
+@dataclass
 class TurnData:
     """A single conversation turn for storage.
 
@@ -61,7 +78,7 @@ class SessionData:
 
     # Forking
     parent_id: Optional[str] = None
-    children: list[dict] = field(default_factory=list)  # [{session_id, status, ...}]
+    children: list[ForkChildData] = field(default_factory=list)
     returned: bool = False
     return_condition: str = "manual"
 
@@ -111,7 +128,12 @@ class SessionMetadata:
     turn_count: int
     cached_context_tokens: int = 0  # Context tokens for display in session tree
     context_window: int = 150000  # Model's context window for percentage calculation
-    working_directories: list[str] = field(default_factory=list)  # Working directories for the session
+    working_directories: list[str] = field(default_factory=list)
+    # Fork hierarchy fields (for HierarchyView)
+    parent_id: Optional[str] = None
+    fork_name: str = ""
+    fork_status: str = "active"  # "active", "merged", "abandoned"
+    children: list[ForkChildData] = field(default_factory=list)
 
 
 @rust_schema
@@ -354,9 +376,9 @@ class TaskData:
     id: str  # UUID
     title: str
     description: str
-    resolution: str  # What was done to complete/resolve this task
-    created_at: str  # ISO 8601
-    updated_at: str  # ISO 8601
+    resolution: str = ""  # What was done to complete/resolve this task
+    created_at: str = ""  # ISO 8601
+    updated_at: str = ""  # ISO 8601
 
 
 @rust_schema

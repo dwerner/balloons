@@ -2801,6 +2801,10 @@ class SessionManagerService:
         # Emit session added event so React UI can display the new session
         self._emit_session_added(child_session, is_streaming=False)
 
+        # Emit session updated for the parent so its children array is refreshed in UI
+        # This ensures the HierarchyView correctly shows the parent has children
+        self._emit_session_updated(parent_session, is_streaming=None)
+
         if result.needs_compression:
             # Start compression helper
             helper_id = result.helper_id

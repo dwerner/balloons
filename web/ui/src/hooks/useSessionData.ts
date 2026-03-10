@@ -846,14 +846,17 @@ export function useSessionData(
           })
         );
 
-        // Turns deleted - remove turns from state (e.g., during archive)
+        // Turns deleted - remove turns from state (e.g., during archive or delete)
         handlers.push(
           client.sessionData.sessionDataTurnsDeleted((event) => {
-            if (event.sessionId !== newSessionId) return;
-            debugLog('sessionDataTurnsDeleted', {
+            debugLog('sessionDataTurnsDeleted received', {
+              eventSessionId: event.sessionId,
+              subscribedSessionId: newSessionId,
+              matches: event.sessionId === newSessionId,
               turnIndices: event.turnIndices,
               turnIds: event.turnIds,
             });
+            if (event.sessionId !== newSessionId) return;
 
             // Remove the deleted turns from state by their IDs
             setTurnsById((prev) => {
