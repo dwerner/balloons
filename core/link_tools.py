@@ -8,6 +8,7 @@ the execution logic.
 """
 
 import json
+from dataclasses import asdict
 from typing import Any, Callable
 
 from core.async_storage import GoalStorage, AsyncStorage
@@ -373,20 +374,8 @@ async def _execute_session_info(session: Session) -> tuple[str, bool]:
                 # Get full board state to include tasks
                 board_state = await kanban.get_board_state(board.id)
                 if board_state:
-                    # Build task list with column name as state
-                    tasks = []
-                    col_name_by_id = {col.id: col.name for col in board_state.columns}
-                    for col in board_state.columns:
-                        for task in col.tasks:
-                            tasks.append({
-                                "title": task.title,
-                                "state": col.name,
-                            })
-                    boards_info.append({
-                        "id": board.id,
-                        "name": board.name,
-                        "tasks": tasks,
-                    })
+                    # Include full board state - columns contain their tasks
+                    boards_info.append(asdict(board_state))
             if boards_info:
                 result["boards"] = boards_info
     except Exception:

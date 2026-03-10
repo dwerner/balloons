@@ -17,6 +17,7 @@ import type {
   BoardStateInfo,
   BoardAssociationInfo,
   KanbanWebSocketServiceClient,
+  KanbanTaskInfo,
 } from '../../../../generated/balloons-client';
 import { BoardView } from '../KanbanTab';
 import '../KanbanTab/KanbanTab.css';
@@ -35,6 +36,8 @@ export interface SessionKanbanTabProps {
   clientId?: string;
   /** Whether connected to server */
   isConnected: boolean;
+  /** Called when user wants to send a task to a session */
+  onSendTaskToSession?: (taskTitle: string, taskDescription: string, targetSessionId: string) => void;
 }
 
 interface SessionBoard {
@@ -204,6 +207,7 @@ export const SessionKanbanTab = memo(function SessionKanbanTab({
   kanbanClient,
   clientId,
   isConnected,
+  onSendTaskToSession,
 }: SessionKanbanTabProps) {
   // Session boards state
   const [sessionBoards, setSessionBoards] = useState<SessionBoard[]>([]);
@@ -508,6 +512,13 @@ export const SessionKanbanTab = memo(function SessionKanbanTab({
     setBoardState(null);
   }, []);
 
+  // Handle sending a task to a session
+  const handleSendTaskToSession = useCallback((task: KanbanTaskInfo, targetSessionId: string) => {
+    if (onSendTaskToSession) {
+      onSendTaskToSession(task.title, task.description, targetSessionId);
+    }
+  }, [onSendTaskToSession]);
+
   // Not connected state
   if (!isConnected) {
     return (
@@ -609,6 +620,7 @@ export const SessionKanbanTab = memo(function SessionKanbanTab({
           kanbanClient={kanbanClient}
           clientId={clientId}
           onBack={sessionBoards.length > 1 ? undefined : handleBackToList}
+          onSendTaskToSession={onSendTaskToSession ? handleSendTaskToSession : undefined}
         />
       </div>
     );

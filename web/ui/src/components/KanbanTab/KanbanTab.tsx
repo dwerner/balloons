@@ -21,6 +21,7 @@ import type {
   KanbanTaskInfo,
   ColumnInfo,
   KanbanWebSocketServiceClient,
+  BoardAssociationInfo,
 } from '../../../../generated/balloons-client';
 import { useLayout } from '../layout';
 import './KanbanTab.css';
@@ -46,6 +47,7 @@ const TaskCardDesktop = memo(function TaskCardDesktop({
   task,
   onEdit,
   onDelete,
+  onSendToSession,
   isDragging,
   onDragStart,
   onDragEnd,
@@ -53,6 +55,7 @@ const TaskCardDesktop = memo(function TaskCardDesktop({
   task: KanbanTaskInfo;
   onEdit: (task: KanbanTaskInfo) => void;
   onDelete: (taskId: string) => void;
+  onSendToSession?: (task: KanbanTaskInfo) => void;
   isDragging?: boolean;
   onDragStart: (e: React.DragEvent, task: KanbanTaskInfo) => void;
   onDragEnd: (e: React.DragEvent) => void;
@@ -68,7 +71,25 @@ const TaskCardDesktop = memo(function TaskCardDesktop({
       {task.description && (
         <div className="kanban-task-card__description">{task.description}</div>
       )}
+      {task.resolution && (
+        <div className="kanban-task-card__resolution">
+          <span className="kanban-task-card__resolution-label">✓</span>
+          {task.resolution}
+        </div>
+      )}
       <div className="kanban-task-card__actions">
+        {onSendToSession && (
+          <button
+            className="kanban-task-card__action"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSendToSession(task);
+            }}
+            title="Send to session"
+          >
+            ➤
+          </button>
+        )}
         <button
           className="kanban-task-card__action"
           onClick={(e) => {
@@ -100,11 +121,13 @@ const TaskCardMobile = memo(function TaskCardMobile({
   onEdit,
   onDelete,
   onMove,
+  onSendToSession,
 }: {
   task: KanbanTaskInfo;
   onEdit: (task: KanbanTaskInfo) => void;
   onDelete: (taskId: string) => void;
   onMove: (task: KanbanTaskInfo) => void;
+  onSendToSession?: (task: KanbanTaskInfo) => void;
 }) {
   return (
     <div className="kanban-task-card kanban-task-card--mobile">
@@ -113,8 +136,26 @@ const TaskCardMobile = memo(function TaskCardMobile({
         {task.description && (
           <div className="kanban-task-card__description">{task.description}</div>
         )}
+        {task.resolution && (
+          <div className="kanban-task-card__resolution">
+            <span className="kanban-task-card__resolution-label">✓</span>
+            {task.resolution}
+          </div>
+        )}
       </div>
       <div className="kanban-task-card__actions kanban-task-card__actions--mobile">
+        {onSendToSession && (
+          <button
+            className="kanban-task-card__action"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSendToSession(task);
+            }}
+            title="Send to session"
+          >
+            ➤
+          </button>
+        )}
         <button
           className="kanban-task-card__action"
           onClick={(e) => {
@@ -182,6 +223,7 @@ const KanbanColumnDesktop = memo(function KanbanColumnDesktop({
   onAddTask,
   onEditTask,
   onDeleteTask,
+  onSendToSession,
   onDragStart,
   onDragEnd,
   onDragOver,
@@ -193,6 +235,7 @@ const KanbanColumnDesktop = memo(function KanbanColumnDesktop({
   onAddTask: (columnId: string) => void;
   onEditTask: (task: KanbanTaskInfo) => void;
   onDeleteTask: (taskId: string) => void;
+  onSendToSession?: (task: KanbanTaskInfo) => void;
   onDragStart: (e: React.DragEvent, task: KanbanTaskInfo, columnId: string) => void;
   onDragEnd: (e: React.DragEvent) => void;
   onDragOver: (e: React.DragEvent, columnId: string) => void;
@@ -223,6 +266,7 @@ const KanbanColumnDesktop = memo(function KanbanColumnDesktop({
             task={task}
             onEdit={onEditTask}
             onDelete={onDeleteTask}
+            onSendToSession={onSendToSession}
             onDragStart={(e, t) => onDragStart(e, t, column.id)}
             onDragEnd={onDragEnd}
           />
@@ -247,6 +291,7 @@ const AccordionColumn = memo(function AccordionColumn({
   onEditTask,
   onDeleteTask,
   onMoveTask,
+  onSendToSession,
 }: {
   column: ColumnInfo;
   tasks: KanbanTaskInfo[];
@@ -256,6 +301,7 @@ const AccordionColumn = memo(function AccordionColumn({
   onEditTask: (task: KanbanTaskInfo) => void;
   onDeleteTask: (taskId: string) => void;
   onMoveTask: (task: KanbanTaskInfo, fromColumnId: string) => void;
+  onSendToSession?: (task: KanbanTaskInfo) => void;
 }) {
   const columnTasks = (column.taskIds || [])
     .map(id => tasks.find(t => t.id === id))
@@ -295,6 +341,7 @@ const AccordionColumn = memo(function AccordionColumn({
                 task={task}
                 onEdit={onEditTask}
                 onDelete={onDeleteTask}
+                onSendToSession={onSendToSession}
                 onMove={(t) => onMoveTask(t, column.id)}
               />
             ))
@@ -362,9 +409,11 @@ export interface BoardViewProps {
   clientId: string;
   /** Back button handler. If not provided, back button is not shown. */
   onBack?: () => void;
+  /** Handler for sending a task to a session. If provided, shows the send button. */
+  onSendTaskToSession?: (task: KanbanTaskInfo, sessionId: string) => void;
 }
 
-export function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardViewProps) {
+export function BoardView({ boardState, kanbanClient, clientId, onBack, onSendTaskToSession }: BoardViewProps) {
   const { layoutMode } = useLayout();
   const isMobile = layoutMode === 'mobile';
 
@@ -392,9 +441,15 @@ export function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardV
   const [editingTask, setEditingTask] = useState<KanbanTaskInfo | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editDescription, setEditDescription] = useState('');
+  const [editResolution, setEditResolution] = useState('');
 
   // Task move modal state (mobile)
   const [movingTask, setMovingTask] = useState<{ task: KanbanTaskInfo; fromColumnId: string } | null>(null);
+
+  // Send to session modal state
+  const [sendingTask, setSendingTask] = useState<KanbanTaskInfo | null>(null);
+  const [boardSessions, setBoardSessions] = useState<BoardAssociationInfo[]>([]);
+  const [isLoadingSessions, setIsLoadingSessions] = useState(false);
 
   // Update local state when prop changes (e.g., from events)
   useEffect(() => {
@@ -445,15 +500,17 @@ export function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardV
         editingTask.id,
         localState.board.id,
         editTitle.trim(),
-        editDescription.trim() || undefined
+        editDescription.trim() || undefined,
+        editResolution.trim() || undefined
       );
       setEditingTask(null);
       setEditTitle('');
       setEditDescription('');
+      setEditResolution('');
     } catch (e) {
       console.error('Failed to update task:', e);
     }
-  }, [kanbanClient, localState.board.id, editingTask, editTitle, editDescription]);
+  }, [kanbanClient, localState.board.id, editingTask, editTitle, editDescription, editResolution]);
 
   // Handle deleting a task
   const handleDeleteTask = useCallback(async (taskId: string) => {
@@ -542,12 +599,39 @@ export function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardV
     setEditingTask(task);
     setEditTitle(task.title);
     setEditDescription(task.description);
+    setEditResolution(task.resolution);
   }, []);
 
   // Open move modal for mobile
   const openMoveTask = useCallback((task: KanbanTaskInfo, fromColumnId: string) => {
     setMovingTask({ task, fromColumnId });
   }, []);
+
+  // Open send to session modal
+  const openSendToSession = useCallback(async (task: KanbanTaskInfo) => {
+    if (!onSendTaskToSession) return;
+
+    setSendingTask(task);
+    setIsLoadingSessions(true);
+
+    try {
+      const result = await kanbanClient.getSessionsForBoard(localState.board.id);
+      setBoardSessions(result.associations);
+    } catch (e) {
+      console.error('Failed to load board sessions:', e);
+      setBoardSessions([]);
+    } finally {
+      setIsLoadingSessions(false);
+    }
+  }, [kanbanClient, localState.board.id, onSendTaskToSession]);
+
+  // Handle sending task to a session
+  const handleSendToSession = useCallback((sessionId: string) => {
+    if (sendingTask && onSendTaskToSession) {
+      onSendTaskToSession(sendingTask, sessionId);
+      setSendingTask(null);
+    }
+  }, [sendingTask, onSendTaskToSession]);
 
   const sortedColumns = localState.columns.sort((a, b) => a.position - b.position);
 
@@ -578,6 +662,7 @@ export function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardV
               onEditTask={openEditTask}
               onDeleteTask={handleDeleteTask}
               onMoveTask={openMoveTask}
+              onSendToSession={onSendTaskToSession ? openSendToSession : undefined}
             />
           ))}
         </div>
@@ -592,6 +677,7 @@ export function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardV
               onAddTask={openAddTask}
               onEditTask={openEditTask}
               onDeleteTask={handleDeleteTask}
+              onSendToSession={onSendTaskToSession ? openSendToSession : undefined}
               onDragStart={handleDragStart}
               onDragEnd={handleDragEnd}
               onDragOver={handleDragOver}
@@ -621,7 +707,11 @@ export function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardV
                   onChange={(e) => setNewTaskTitle(e.target.value)}
                   placeholder="Task title"
                   autoFocus
-                  onKeyDown={(e) => e.key === 'Enter' && handleAddTask()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                      handleAddTask();
+                    }
+                  }}
                 />
               </div>
               <div className="kanban-form-field">
@@ -631,7 +721,15 @@ export function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardV
                   onChange={(e) => setNewTaskDescription(e.target.value)}
                   placeholder="Task description"
                   rows={3}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                      handleAddTask();
+                    }
+                  }}
                 />
+              </div>
+              <div className="kanban-form-hint">
+                Press Ctrl+Enter to create task
               </div>
             </div>
             <div className="kanban-modal__actions">
@@ -669,7 +767,11 @@ export function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardV
                   onChange={(e) => setEditTitle(e.target.value)}
                   placeholder="Task title"
                   autoFocus
-                  onKeyDown={(e) => e.key === 'Enter' && handleEditTask()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                      handleEditTask();
+                    }
+                  }}
                 />
               </div>
               <div className="kanban-form-field">
@@ -679,7 +781,29 @@ export function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardV
                   onChange={(e) => setEditDescription(e.target.value)}
                   placeholder="Task description"
                   rows={3}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                      handleEditTask();
+                    }
+                  }}
                 />
+              </div>
+              <div className="kanban-form-field">
+                <label>Resolution</label>
+                <textarea
+                  value={editResolution}
+                  onChange={(e) => setEditResolution(e.target.value)}
+                  placeholder="What was done to complete this task?"
+                  rows={2}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                      handleEditTask();
+                    }
+                  }}
+                />
+              </div>
+              <div className="kanban-form-hint">
+                Press Ctrl+Enter to save
               </div>
             </div>
             <div className="kanban-modal__actions">
@@ -707,6 +831,50 @@ export function BoardView({ boardState, kanbanClient, clientId, onBack }: BoardV
           onMove={handleMoveTask}
           onClose={() => setMovingTask(null)}
         />
+      )}
+
+      {/* Send to Session Modal */}
+      {sendingTask && (
+        <div className="kanban-modal-overlay" onClick={() => setSendingTask(null)}>
+          <div className="kanban-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="kanban-modal__header">
+              <h3>Send to Session</h3>
+              <button className="kanban-modal__close" onClick={() => setSendingTask(null)}>
+                ×
+              </button>
+            </div>
+            <div className="kanban-modal__content">
+              <p className="kanban-send-task-info">
+                Send "<strong>{sendingTask.title}</strong>" to a session
+              </p>
+              {isLoadingSessions ? (
+                <div className="kanban-send-loading">Loading sessions...</div>
+              ) : boardSessions.length === 0 ? (
+                <div className="kanban-send-empty">No sessions associated with this board.</div>
+              ) : (
+                <div className="kanban-send-sessions">
+                  {boardSessions.map((assoc) => (
+                    <button
+                      key={assoc.sessionId}
+                      className="kanban-send-session-item"
+                      onClick={() => handleSendToSession(assoc.sessionId)}
+                    >
+                      <span className="kanban-send-session-item__id">{assoc.sessionId.slice(0, 8)}</span>
+                      {assoc.role && (
+                        <span className="kanban-send-session-item__role">{assoc.role}</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="kanban-modal__actions">
+              <button className="kanban-btn" onClick={() => setSendingTask(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

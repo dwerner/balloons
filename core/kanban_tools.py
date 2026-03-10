@@ -132,13 +132,17 @@ Use this when:
         "type": "function",
         "function": {
             "name": "kanban_update_task",
-            "description": """Update an existing task's title or description.
+            "description": """Update an existing task's title, description, or resolution.
 
 Only modifies the fields provided; other fields remain unchanged.
+
+The resolution field documents what was done to complete/resolve the task.
+Write the resolution when moving a task to Done to capture the outcome.
 
 Use this when:
 - Renaming a task
 - Adding or editing a task's description
+- Documenting task completion (write the resolution)
 - Clarifying task details""",
             "parameters": {
                 "type": "object",
@@ -154,6 +158,10 @@ Use this when:
                     "description": {
                         "type": "string",
                         "description": "New description for the task"
+                    },
+                    "resolution": {
+                        "type": "string",
+                        "description": "What was done to complete/resolve this task. Write this when moving to Done."
                     }
                 },
                 "required": ["task_id"]
@@ -167,7 +175,7 @@ Use this when:
             "description": """Move a task to a different column.
 
 Common column names are 'Backlog', 'To Do', 'In Progress', and 'Done'.
-Get the board state first to see available column IDs.
+You can use either names or IDs for both task and column.
 
 Use this when:
 - Starting work on a task (move to 'In Progress')
@@ -176,20 +184,20 @@ Use this when:
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "task_id": {
+                    "task": {
                         "type": "string",
-                        "description": "ID of the task to move"
+                        "description": "Task title (e.g., 'ctrl-enter') or task ID"
                     },
-                    "to_column_id": {
+                    "to_column": {
                         "type": "string",
-                        "description": "ID of the column to move the task to"
+                        "description": "Column name (e.g., 'Done', 'In Progress') or column ID"
                     },
                     "position": {
                         "type": "integer",
                         "description": "Optional position within the column (0 = top)"
                     }
                 },
-                "required": ["task_id", "to_column_id"]
+                "required": ["task", "to_column"]
             }
         }
     },
@@ -303,7 +311,7 @@ async def execute_kanban_tool(
             return await _update_task(args, kanban)
 
         elif name == "kanban_move_task":
-            return await _move_task(args, kanban)
+            return await _move_task(args, session_id, kanban)
 
         elif name == "kanban_delete_task":
             return await _delete_task(args, kanban)
@@ -371,6 +379,67 @@ async def _get_primary_board(session_id: str, kanban: KanbanService) -> tuple[st
     return boards[0][1].id, None
 
 
+def _is_uuid(s: str) -> bool:
+    """Check if a string looks like a UUID."""
+    return len(s) == 36 and s.count('-') == 4
+
+
+async def _resolve_column(column_ref: str, session_id: str, kanban: KanbanService) -> str | None:
+    """Resolve a column name or ID to a column ID.
+
+    Args:
+        column_ref: Column name (e.g., 'Done') or column ID (UUID)
+        session_id: Session ID to get boards from
+        kanban: KanbanService instance
+
+    Returns:
+        Column ID if found, None otherwise
+    """
+    # If it looks like a UUID, return it directly
+    if _is_uuid(column_ref):
+        return column_ref
+
+    # Otherwise, search for column by name in session's boards
+    boards = await kanban.get_boards_for_session(session_id)
+    for _, board in boards:
+        board_state = await kanban.get_board_state(board.id)
+        if board_state:
+            for col in board_state.columns:
+                if col.name.lower() == column_ref.lower():
+                    return col.id
+
+    return None
+
+
+async def _resolve_task(task_ref: str, session_id: str, kanban: KanbanService) -> str | None:
+    """Resolve a task title or ID to a task ID.
+
+    Args:
+        task_ref: Task title (e.g., 'ctrl-enter') or task ID (UUID)
+        session_id: Session ID to get boards from
+        kanban: KanbanService instance
+
+    Returns:
+        Task ID if found, None otherwise
+    """
+    # If it looks like a UUID, return it directly
+    if _is_uuid(task_ref):
+        return task_ref
+
+    # Otherwise, search for task by title in session's boards
+    task_ref_lower = task_ref.lower()
+    boards = await kanban.get_boards_for_session(session_id)
+    for _, board in boards:
+        board_state = await kanban.get_board_state(board.id)
+        if board_state:
+            for col in board_state.columns:
+                for task in col.tasks:
+                    if task.title.lower() == task_ref_lower:
+                        return task.id
+
+    return None
+
+
 async def _create_task(args: dict, session_id: str, kanban: KanbanService) -> tuple[str, bool]:
     """Create a new task."""
     title = args.get("title", "").strip()
@@ -412,33 +481,50 @@ async def _update_task(args: dict, kanban: KanbanService) -> tuple[str, bool]:
 
     title = args.get("title")
     description = args.get("description")
+    resolution = args.get("resolution")
 
-    if title is None and description is None:
-        return "Error: At least one of title or description must be provided", True
+    if title is None and description is None and resolution is None:
+        return "Error: At least one of title, description, or resolution must be provided", True
 
     task = await kanban.update_task(
         task_id=task_id,
         title=title.strip() if title else None,
         description=description.strip() if description else None,
+        resolution=resolution.strip() if resolution else None,
     )
 
     if not task:
         return f"Error: Task {task_id} not found", True
 
-    return f"Updated task '{task.title}' (ID: {task.id})", False
+    result = f"Updated task '{task.title}' (ID: {task.id})"
+    if resolution:
+        result += f"\nResolution: {task.resolution}"
+    return result, False
 
 
-async def _move_task(args: dict, kanban: KanbanService) -> tuple[str, bool]:
+async def _move_task(args: dict, session_id: str, kanban: KanbanService) -> tuple[str, bool]:
     """Move a task to a different column."""
-    task_id = args.get("task_id", "").strip()
-    if not task_id:
-        return "Error: task_id is required", True
+    # Support both 'task' (new) and 'task_id' (legacy) parameter names
+    task_ref = args.get("task", "").strip() or args.get("task_id", "").strip()
+    if not task_ref:
+        return "Error: task is required", True
 
-    to_column_id = args.get("to_column_id", "").strip()
-    if not to_column_id:
-        return "Error: to_column_id is required", True
+    # Support both 'to_column' (new) and 'to_column_id' (legacy) parameter names
+    to_column = args.get("to_column", "").strip() or args.get("to_column_id", "").strip()
+    if not to_column:
+        return "Error: to_column is required", True
 
     position = args.get("position")
+
+    # Resolve task name to ID if needed
+    task_id = await _resolve_task(task_ref, session_id, kanban)
+    if not task_id:
+        return f"Error: Task '{task_ref}' not found", True
+
+    # Resolve column name to ID if needed
+    to_column_id = await _resolve_column(to_column, session_id, kanban)
+    if not to_column_id:
+        return f"Error: Column '{to_column}' not found", True
 
     success = await kanban.move_task(
         task_id=task_id,
@@ -447,9 +533,9 @@ async def _move_task(args: dict, kanban: KanbanService) -> tuple[str, bool]:
     )
 
     if not success:
-        return f"Error: Failed to move task {task_id}", True
+        return f"Error: Failed to move task '{task_ref}'", True
 
-    return f"Moved task {task_id} to column {to_column_id}", False
+    return f"Moved task '{task_ref}' to column '{to_column}'", False
 
 
 async def _delete_task(args: dict, kanban: KanbanService) -> tuple[str, bool]:

@@ -354,6 +354,7 @@ class TaskData:
     id: str  # UUID
     title: str
     description: str
+    resolution: str  # What was done to complete/resolve this task
     created_at: str  # ISO 8601
     updated_at: str  # ISO 8601
 

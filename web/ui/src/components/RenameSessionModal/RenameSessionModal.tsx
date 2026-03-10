@@ -1,11 +1,11 @@
 /**
- * RenameSessionModal - Modal for renaming a session and navigating to parents
+ * RenameSessionModal - Modal for renaming a session and navigating the fork tree
  *
  * Features:
  * - Title input field with current session name pre-filled
  * - Save button to confirm rename
- * - Parent session chain display (for forked sessions)
- * - Click parent to navigate to that session
+ * - Full fork tree display (parents, siblings, children)
+ * - Click any session in tree to navigate to it
  * - Cancel button to dismiss without changes
  * - Dismiss on Escape or backdrop click
  * - Calls client.sessions.setSessionTitle() on submit
@@ -14,7 +14,7 @@
 import React, { useState, useCallback, useRef, useEffect, memo } from 'react';
 import { Modal, ModalFooter } from '../Modal/Modal';
 import type { SessionManagerServiceClient, SessionDataServiceClient } from '../../../../generated/client';
-import type { SessionInfo } from '../../../../generated/types';
+import type { ForkTreeNode } from '../../../../generated/types';
 import { createLogger } from '../../utils/debugLog';
 import './RenameSessionModal.css';
 
@@ -42,16 +42,135 @@ export interface RenameSessionModalProps {
   /** Called when session is renamed successfully */
   onRenamed?: (newTitle: string) => void;
 
-  /** Called when user wants to navigate to a parent session */
+  /** Called when user wants to navigate to another session */
   onNavigateToSession?: (sessionId: string) => void;
 }
 
 /**
- * Get display name for a session
+ * Recursive component to render a fork tree node
  */
-function getSessionDisplayName(session: SessionInfo): string {
-  return session.forkName || session.title || `Session ${session.id.slice(0, 8)}`;
+interface ForkTreeNodeViewProps {
+  node: ForkTreeNode;
+  depth: number;
+  onNavigate?: (sessionId: string) => void;
 }
+
+const ForkTreeNodeView = memo(function ForkTreeNodeView({
+  node,
+  depth,
+  onNavigate,
+}: ForkTreeNodeViewProps) {
+  const hasChildren = node.children && node.children.length > 0;
+  const hasWatchTargets = node.watchTargets && node.watchTargets.length > 0;
+  const hasWatchers = node.watchedBy && node.watchedBy.length > 0;
+  const hasExpandableContent = hasChildren || hasWatchTargets || hasWatchers;
+  const [isExpanded, setIsExpanded] = useState(depth < 3); // Auto-expand first 3 levels
+
+  const handleClick = useCallback(() => {
+    if (!node.isCurrent && onNavigate) {
+      onNavigate(node.sessionId);
+    }
+  }, [node.sessionId, node.isCurrent, onNavigate]);
+
+  const toggleExpand = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsExpanded(prev => !prev);
+  }, []);
+
+  return (
+    <div className="fork-tree-node">
+      <div
+        className={`fork-tree-node__content ${node.isCurrent ? 'fork-tree-node__content--current' : ''} ${node.status === 'merged' ? 'fork-tree-node__content--merged' : ''} ${node.status === 'abandoned' ? 'fork-tree-node__content--abandoned' : ''}`}
+        onClick={handleClick}
+        style={{ paddingLeft: `${depth * 16 + 8}px` }}
+        title={node.isCurrent ? 'Current session' : `Navigate to ${node.name}`}
+      >
+        {hasExpandableContent ? (
+          <button
+            type="button"
+            className="fork-tree-node__toggle"
+            onClick={toggleExpand}
+            aria-label={isExpanded ? 'Collapse' : 'Expand'}
+          >
+            {isExpanded ? '▼' : '▶'}
+          </button>
+        ) : (
+          <span className="fork-tree-node__spacer" />
+        )}
+        <span className="fork-tree-node__icon">
+          {node.isCurrent ? '●' : node.status === 'merged' ? '✓' : '⑂'}
+        </span>
+        <span className="fork-tree-node__name">{node.name}</span>
+        <span className="fork-tree-node__id">{node.sessionId.slice(0, 8)}</span>
+        {node.watchTargets && node.watchTargets.length > 0 && (
+          <span className="fork-tree-node__watching" title={`Watching ${node.watchTargets.length} session(s)`}>
+            👁→{node.watchTargets.length}
+          </span>
+        )}
+        {node.watchedBy && node.watchedBy.length > 0 && (
+          <span className="fork-tree-node__watched-by" title={`Watched by ${node.watchedBy.length} session(s)`}>
+            ←👁{node.watchedBy.length}
+          </span>
+        )}
+        {node.status !== 'active' && (
+          <span className="fork-tree-node__status">({node.status})</span>
+        )}
+      </div>
+      {/* Show children, watch targets, and watchers when expanded */}
+      {isExpanded && hasExpandableContent && (
+        <div className="fork-tree-node__children">
+          {/* Render child nodes */}
+          {node.children?.map(child => (
+            <ForkTreeNodeView
+              key={child.sessionId}
+              node={child}
+              depth={depth + 1}
+              onNavigate={onNavigate}
+            />
+          ))}
+          {/* Render watch targets as navigable items */}
+          {node.watchTargets && node.watchTargets.length > 0 && (
+            <div className="fork-tree-node__watch-section">
+              {node.watchTargets.map(targetId => (
+                <div
+                  key={`target-${targetId}`}
+                  className="fork-tree-node__watch-target"
+                  onClick={() => onNavigate?.(targetId)}
+                  style={{ paddingLeft: `${(depth + 1) * 16 + 8}px` }}
+                  title={`Navigate to watched session ${targetId.slice(0, 8)}`}
+                >
+                  <span className="fork-tree-node__spacer" />
+                  <span className="fork-tree-node__icon fork-tree-node__icon--watching">👁→</span>
+                  <span className="fork-tree-node__id">{targetId.slice(0, 8)}</span>
+                  <span className="fork-tree-node__label fork-tree-node__label--muted">(watching)</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Render watchers (who is watching this session) */}
+          {node.watchedBy && node.watchedBy.length > 0 && (
+            <div className="fork-tree-node__watch-section">
+              {node.watchedBy.map(watcherId => (
+                <div
+                  key={`watcher-${watcherId}`}
+                  className="fork-tree-node__watch-target fork-tree-node__watch-target--watcher"
+                  onClick={() => onNavigate?.(watcherId)}
+                  style={{ paddingLeft: `${(depth + 1) * 16 + 8}px` }}
+                  title={`Navigate to watcher session ${watcherId.slice(0, 8)}`}
+                >
+                  <span className="fork-tree-node__spacer" />
+                  <span className="fork-tree-node__icon fork-tree-node__icon--watching">←👁</span>
+                  <span className="fork-tree-node__id">{watcherId.slice(0, 8)}</span>
+                  <span className="fork-tree-node__label fork-tree-node__label--muted">(watcher)</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+});
 
 /**
  * Modal for renaming a session.
@@ -71,9 +190,9 @@ export const RenameSessionModal = memo(function RenameSessionModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Parent chain state
-  const [parentChain, setParentChain] = useState<SessionInfo[]>([]);
-  const [isLoadingParents, setIsLoadingParents] = useState(false);
+  // Fork tree state
+  const [forkTree, setForkTree] = useState<ForkTreeNode | null>(null);
+  const [isLoadingTree, setIsLoadingTree] = useState(false);
 
   // Ref for title input to focus on mount
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -92,26 +211,26 @@ export const RenameSessionModal = memo(function RenameSessionModal({
     }
   }, [isOpen, currentTitle]);
 
-  // Load parent chain when modal opens
+  // Load fork tree when modal opens
   useEffect(() => {
-    debugLog('Parent chain effect triggered', { isOpen, sessionId, hasClient: !!sessionDataClient });
+    debugLog('Fork tree effect triggered', { isOpen, sessionId, hasClient: !!sessionDataClient });
     if (isOpen && sessionDataClient) {
-      setIsLoadingParents(true);
-      debugLog('Fetching parent chain', { sessionId });
-      sessionDataClient.getSessionParentChain(sessionId)
-        .then(parents => {
-          debugLog('Got parent chain', { count: parents.length, parents: parents.map(p => ({ id: p.id.slice(0, 8), name: p.forkName || p.title })) });
-          setParentChain(parents);
+      setIsLoadingTree(true);
+      debugLog('Fetching fork tree', { sessionId });
+      sessionDataClient.getSessionForkTree(sessionId)
+        .then(tree => {
+          debugLog('Got fork tree', { hasTree: !!tree, rootName: tree?.name });
+          setForkTree(tree);
         })
         .catch(err => {
-          debugLog('Failed to load parent chain', { error: String(err) });
-          setParentChain([]);
+          debugLog('Failed to load fork tree', { error: String(err) });
+          setForkTree(null);
         })
         .finally(() => {
-          setIsLoadingParents(false);
+          setIsLoadingTree(false);
         });
     } else if (!isOpen) {
-      setParentChain([]);
+      setForkTree(null);
     }
   }, [isOpen, sessionId, sessionDataClient]);
 
@@ -161,10 +280,10 @@ export const RenameSessionModal = memo(function RenameSessionModal({
     [handleSubmit]
   );
 
-  // Handle parent session click
-  const handleParentClick = useCallback((parentId: string) => {
+  // Handle navigation to any session in the tree
+  const handleNavigateToSession = useCallback((targetSessionId: string) => {
     if (onNavigateToSession) {
-      onNavigateToSession(parentId);
+      onNavigateToSession(targetSessionId);
       onClose();
     }
   }, [onNavigateToSession, onClose]);
@@ -174,7 +293,7 @@ export const RenameSessionModal = memo(function RenameSessionModal({
       isOpen={isOpen}
       onClose={onClose}
       title="Session"
-      size="small"
+      size="medium"
       className="rename-session-modal"
       ariaDescribedBy="rename-session-description"
     >
@@ -205,36 +324,21 @@ export const RenameSessionModal = memo(function RenameSessionModal({
           </label>
         </div>
 
-        {/* Parent chain section */}
-        {(parentChain.length > 0 || isLoadingParents) && (
-          <div className="rename-session-modal__parents">
-            <span className="rename-session-modal__label">Parent Sessions</span>
-            {isLoadingParents ? (
-              <div className="rename-session-modal__parents-loading">Loading...</div>
-            ) : (
-              <div className="rename-session-modal__parents-list">
-                {parentChain.map((parent, index) => (
-                  <button
-                    key={parent.id}
-                    type="button"
-                    className="rename-session-modal__parent-item"
-                    onClick={() => handleParentClick(parent.id)}
-                    disabled={!onNavigateToSession}
-                    title={`Navigate to ${getSessionDisplayName(parent)}`}
-                  >
-                    <span className="rename-session-modal__parent-depth">
-                      {'↑'.repeat(index + 1)}
-                    </span>
-                    <span className="rename-session-modal__parent-name">
-                      {getSessionDisplayName(parent)}
-                    </span>
-                    <span className="rename-session-modal__parent-id">
-                      {parent.id.slice(0, 8)}
-                    </span>
-                  </button>
-                ))}
+        {/* Fork tree section */}
+        {(forkTree || isLoadingTree) && (
+          <div className="rename-session-modal__fork-tree">
+            <span className="rename-session-modal__label">Session Tree</span>
+            {isLoadingTree ? (
+              <div className="rename-session-modal__tree-loading">Loading...</div>
+            ) : forkTree ? (
+              <div className="rename-session-modal__tree-container">
+                <ForkTreeNodeView
+                  node={forkTree}
+                  depth={0}
+                  onNavigate={onNavigateToSession ? handleNavigateToSession : undefined}
+                />
               </div>
-            )}
+            ) : null}
           </div>
         )}
       </div>

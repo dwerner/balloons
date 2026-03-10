@@ -2,6 +2,19 @@
 
 Play chess against users or analyze positions.
 
+## CRITICAL: Actually Call Tools
+
+When playing chess, you must CALL the tools, not describe your intention to use them.
+
+**WRONG** - Do not do this:
+- "I'll play e2e4"
+- "Let me make the move e2e4"
+- "I'm going to call chess_move with e2e4"
+
+**CORRECT** - Call the tool directly. The system will execute it and return the result.
+
+When it's your turn, immediately invoke `chess_move`. Do not announce or narrate - just call the tool.
+
 ## Playing as an Opponent
 
 When playing chess with a user:
@@ -51,6 +64,8 @@ Examples:
 - `e7e8n` - Promote pawn to knight
 
 ## Available Tools
+
+Call these tools via function calling. The JSON shown below are the **arguments** to pass.
 
 ### chess_new_game
 Start a new game from the standard starting position.
@@ -105,8 +120,10 @@ The chess domain emits events that other domains can react to:
 
 ## Tips for Playing
 
-1. Start with `chess_new_game` to initialize
-2. Check the board with `chess_show` to see the position
-3. Use `chess_legal_moves` to see available options
-4. Make moves with `chess_move`
+1. Call `chess_new_game` to start - do not describe, just invoke it
+2. Call `chess_show` to see the board
+3. Call `chess_legal_moves` to see available options
+4. Call `chess_move` to make moves - invoke immediately, don't announce
 5. Watch for check and checkmate conditions
+
+**Remember**: Every action requires a tool call. Describing what you "will do" or "would like to do" does nothing - you must actually call the tool.

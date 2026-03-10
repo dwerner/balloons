@@ -53,6 +53,7 @@ class Task:
     id: str
     title: str
     description: str
+    resolution: str  # What was done to complete/resolve the task
     created_at: str
     updated_at: str
 
@@ -348,6 +349,7 @@ class KanbanService:
                             id=task_data["id"],
                             title=task_data["title"],
                             description=task_data["description"],
+                            resolution=task_data.get("resolution", ""),
                             created_at=task_data["created_at"],
                             updated_at=task_data["updated_at"],
                         ))
@@ -409,6 +411,7 @@ class KanbanService:
             "id": task_id,
             "title": title,
             "description": description,
+            "resolution": "",
             "created_at": now,
             "updated_at": now,
         }
@@ -476,6 +479,7 @@ class KanbanService:
             id=data["id"],
             title=data["title"],
             description=data["description"],
+            resolution=data.get("resolution", ""),
             created_at=data["created_at"],
             updated_at=data["updated_at"],
         )
@@ -485,13 +489,15 @@ class KanbanService:
         task_id: str,
         title: str | None = None,
         description: str | None = None,
+        resolution: str | None = None,
     ) -> Task | None:
-        """Update a task's title and/or description.
+        """Update a task's title, description, and/or resolution.
 
         Args:
             task_id: The task ID
             title: New title (optional)
             description: New description (optional)
+            resolution: What was done to complete/resolve the task (optional)
 
         Returns:
             Updated Task if found, None otherwise
@@ -506,6 +512,7 @@ class KanbanService:
             "id": task_id,
             "title": title if title is not None else task.title,
             "description": description if description is not None else task.description,
+            "resolution": resolution if resolution is not None else task.resolution,
             "created_at": task.created_at,
             "updated_at": now,
         }
@@ -518,6 +525,7 @@ class KanbanService:
             id=task_id,
             title=task_data["title"],
             description=task_data["description"],
+            resolution=task_data["resolution"],
             created_at=task.created_at,
             updated_at=now,
         )
@@ -916,6 +924,37 @@ class KanbanService:
                 result.append((assoc, board))
 
         return result
+
+    async def get_sessions_for_board(
+        self,
+        board_id: str,
+    ) -> list["SessionBoardAssociation"]:
+        """Get all session associations for a board.
+
+        Args:
+            board_id: The board ID
+
+        Returns:
+            List of SessionBoardAssociation objects
+        """
+        # Get all associations and filter by board_id
+        result = await self._storage._run_sync(
+            self._storage._storage.list_session_board_associations
+        )
+        assoc_data_list = json.loads(result)
+        return [
+            SessionBoardAssociation(
+                id=a["id"],
+                session_id=a["session_id"],
+                board_id=a["board_id"],
+                role=a["role"],
+                created_at=a["created_at"],
+                created_by=a["created_by"],
+                inherited_from=a.get("inherited_from"),
+            )
+            for a in assoc_data_list
+            if a["board_id"] == board_id
+        ]
 
     async def create_board_for_session(
         self,

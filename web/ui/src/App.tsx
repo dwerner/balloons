@@ -1415,10 +1415,13 @@ function AppContent() {
           // Update session in place using the event data - no refetch needed
           // The event includes the full SessionInfo with updated fields like
           // cachedContextTokens, isStreaming, etc.
+          // NOTE: Preserve local isPinned state - server events don't include pin status
           console.log('[App] sessionDataSessionUpdated:', data.sessionId?.slice(0,8), 'tokens:', data.session?.cachedContextTokens);
           if (data.session) {
             setSessions(prev => prev.map(s =>
-              s.id === data.sessionId ? data.session : s
+              s.id === data.sessionId
+                ? { ...data.session, isPinned: s.isPinned }  // Preserve local pin state
+                : s
             ));
           }
         })
@@ -3082,6 +3085,21 @@ function AppContent() {
                   kanbanClient={connectionState === 'connected' ? clientRef.current?.kanban : undefined}
                   clientId={connectionState === 'connected' && clientRef.current?.hasClientId ? clientRef.current.clientId : undefined}
                   isConnected={connectionState === 'connected'}
+                  onSendTaskToSession={async (taskTitle, taskDescription, targetSessionId) => {
+                    const client = clientRef.current;
+                    if (!client?.isConnected) return;
+
+                    // Construct a message asking the LLM to work on the task
+                    const message = taskDescription
+                      ? `Please work on this task:\n\n**${taskTitle}**\n\n${taskDescription}`
+                      : `Please work on this task: **${taskTitle}**`;
+
+                    // Submit the message to the target session
+                    await client.sessions.submitMessage(targetSessionId, message);
+
+                    // Switch to the target session so user can see the response
+                    setSelectedSessionId(targetSessionId);
+                  }}
                 />
               )}
               {mainContentTab === 'slides' && (
@@ -4371,18 +4389,12 @@ function SidebarContent({
         <SessionTreeView
           sessions={sessions}
           selectedSessionId={selectedSessionId}
-          turns={turns}
           onSelectSession={handleSelectSession}
-          onSelectTurn={onSelectTurn}
           onTogglePin={onTogglePin}
-          onLoadTurns={onLoadTurns}
           isLoading={connectionState !== 'connected'}
-          onExchangeContextModeChange={onExchangeContextModeChange}
-          onExchangeAction={onExchangeAction}
           onReviewSession={onReviewSession}
           onLinkSession={onLinkSession}
           onWatchSession={onWatchSession}
-          archivingTurnIndices={archivingTurnIndices}
         />
       ) : (
         <div className="session-list">

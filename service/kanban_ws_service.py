@@ -50,6 +50,7 @@ class KanbanTaskInfo:
     id: str
     title: str
     description: str
+    resolution: str  # What was done to complete/resolve the task
     created_at: str
     updated_at: str
 
@@ -218,6 +219,14 @@ class SessionBoardsResult:
 
 @ws_type
 @dataclass
+class BoardSessionsResult:
+    """Result of getting sessions for a board."""
+    board_id: str
+    associations: list[BoardAssociationInfo]
+
+
+@ws_type
+@dataclass
 class BoardAssociatedEvent:
     """Event fired when a board is associated with a session."""
     association: BoardAssociationInfo
@@ -353,6 +362,7 @@ class KanbanWebSocketService:
             id=task.id,
             title=task.title,
             description=task.description,
+            resolution=task.resolution,
             created_at=task.created_at,
             updated_at=task.updated_at,
         )
@@ -618,8 +628,9 @@ class KanbanWebSocketService:
         board_id: str,
         title: str | None = None,
         description: str | None = None,
+        resolution: str | None = None,
     ) -> KanbanTaskInfo | None:
-        """Update a task's title and/or description.
+        """Update a task's title, description, and/or resolution.
 
         Emits taskUpdated event to board subscribers.
 
@@ -628,6 +639,7 @@ class KanbanWebSocketService:
             board_id: The board the task belongs to (for event routing)
             title: New title (optional)
             description: New description (optional)
+            resolution: What was done to complete/resolve the task (optional)
 
         Returns:
             Updated task info, or None if not found
@@ -636,6 +648,7 @@ class KanbanWebSocketService:
             task_id=task_id,
             title=title,
             description=description,
+            resolution=resolution,
         )
         if not task:
             return None
@@ -835,6 +848,22 @@ class KanbanWebSocketService:
             session_id=session_id,
             associations=associations,
             boards=boards,
+        )
+
+    @ws_expose
+    async def get_sessions_for_board(self, board_id: str) -> BoardSessionsResult:
+        """Get all sessions associated with a board.
+
+        Args:
+            board_id: The board ID
+
+        Returns:
+            BoardSessionsResult with associations
+        """
+        associations = await self._kanban.get_sessions_for_board(board_id)
+        return BoardSessionsResult(
+            board_id=board_id,
+            associations=[self._association_to_info(a) for a in associations],
         )
 
     @ws_expose

@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-03-08T14:45:38.554778
+// Generated: 2026-03-09T14:29:58.776618
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -2596,6 +2596,22 @@ export interface SessionDataService {
   getSession(sessionId: string): Promise<Types.SessionInfo | null>;
 
   /**
+   * Get the full fork tree containing this session.
+   * 
+   * Finds the root ancestor and builds a tree of all related sessions,
+   * including siblings, cousins, etc.
+   * 
+   * Args:
+   * session_id: Any session ID in the tree
+   * 
+   * Returns:
+   * ForkTreeNode representing the root, with nested children.
+   * The target session is marked with is_current=True.
+   * Returns None if session not found.
+   */
+  getSessionForkTree(sessionId: string): Promise<Types.ForkTreeNode | null>;
+
+  /**
    * Get the parent chain for a session (ancestors from immediate parent to root).
    * 
    * This traverses the fork tree upward, returning all ancestor sessions
@@ -2634,6 +2650,21 @@ export interface SessionDataService {
    * Number of subscribed clients
    */
   getSessionSubscriberCount(sessionId: string): Promise<number>;
+
+  /**
+   * Get watcher relationships for a session (lazy loading).
+   * 
+   * Returns both:
+   * - watch_targets: sessions this session is watching
+   * - watched_by: sessions that are watching this session
+   * 
+   * Args:
+   * session_id: The session ID to get watcher info for
+   * 
+   * Returns:
+   * SessionWatcherInfo with watch_targets and watched_by lists
+   */
+  getSessionWatcherInfo(sessionId: string): Promise<Types.SessionWatcherInfo>;
 
   /**
    * Get list of sessions a client is subscribed to.
@@ -2957,6 +2988,10 @@ export class SessionDataServiceClient implements SessionDataService {
     return this.call('getSession', { sessionId: sessionId });
   }
 
+  async getSessionForkTree(sessionId: string): Promise<Types.ForkTreeNode | null> {
+    return this.call('getSessionForkTree', { sessionId: sessionId });
+  }
+
   async getSessionParentChain(sessionId: string): Promise<Types.SessionInfo[]> {
     return this.call('getSessionParentChain', { sessionId: sessionId });
   }
@@ -2967,6 +3002,10 @@ export class SessionDataServiceClient implements SessionDataService {
 
   async getSessionSubscriberCount(sessionId: string): Promise<number> {
     return this.call('getSessionSubscriberCount', { sessionId: sessionId });
+  }
+
+  async getSessionWatcherInfo(sessionId: string): Promise<Types.SessionWatcherInfo> {
+    return this.call('getSessionWatcherInfo', { sessionId: sessionId });
   }
 
   async getSubscribedSessions(clientId: string): Promise<string[]> {
@@ -4835,6 +4874,17 @@ export interface KanbanWebSocketService {
   getBoardsForSession(sessionId: string): Promise<Types.SessionBoardsResult>;
 
   /**
+   * Get all sessions associated with a board.
+   * 
+   * Args:
+   * board_id: The board ID
+   * 
+   * Returns:
+   * BoardSessionsResult with associations
+   */
+  getSessionsForBoard(boardId: string): Promise<Types.BoardSessionsResult>;
+
+  /**
    * Get list of board IDs a client is subscribed to.
    * 
    * Args:
@@ -4913,7 +4963,7 @@ export interface KanbanWebSocketService {
   unsubscribeBoard(boardId: string, clientId: string): Promise<Types.BoardUnsubscribeResult>;
 
   /**
-   * Update a task's title and/or description.
+   * Update a task's title, description, and/or resolution.
    * 
    * Emits taskUpdated event to board subscribers.
    * 
@@ -4922,11 +4972,12 @@ export interface KanbanWebSocketService {
    * board_id: The board the task belongs to (for event routing)
    * title: New title (optional)
    * description: New description (optional)
+   * resolution: What was done to complete/resolve the task (optional)
    * 
    * Returns:
    * Updated task info, or None if not found
    */
-  updateTask(taskId: string, boardId: string, title?: string | null, description?: string | null): Promise<Types.KanbanTaskInfo | null>;
+  updateTask(taskId: string, boardId: string, title?: string | null, description?: string | null, resolution?: string | null): Promise<Types.KanbanTaskInfo | null>;
 
 }
 
@@ -5078,6 +5129,10 @@ export class KanbanWebSocketServiceClient implements KanbanWebSocketService {
     return this.call('getBoardsForSession', { sessionId: sessionId });
   }
 
+  async getSessionsForBoard(boardId: string): Promise<Types.BoardSessionsResult> {
+    return this.call('getSessionsForBoard', { boardId: boardId });
+  }
+
   async getSubscribedBoards(clientId: string): Promise<string[]> {
     return this.call('getSubscribedBoards', { clientId: clientId });
   }
@@ -5102,8 +5157,8 @@ export class KanbanWebSocketServiceClient implements KanbanWebSocketService {
     return this.call('unsubscribeBoard', { boardId: boardId, clientId: clientId });
   }
 
-  async updateTask(taskId: string, boardId: string, title?: string | null, description?: string | null): Promise<Types.KanbanTaskInfo | null> {
-    return this.call('updateTask', { taskId: taskId, boardId: boardId, title: title, description: description });
+  async updateTask(taskId: string, boardId: string, title?: string | null, description?: string | null, resolution?: string | null): Promise<Types.KanbanTaskInfo | null> {
+    return this.call('updateTask', { taskId: taskId, boardId: boardId, title: title, description: description, resolution: resolution });
   }
 
   boardAssociated(callback: (data: Types.BoardAssociatedEvent) => void): Unsubscribe {

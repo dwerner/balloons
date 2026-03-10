@@ -2,7 +2,7 @@
 //!
 //! Generated from Python domain entities marked with @rust_schema.
 //! Source: models.py and other domain modules
-//! Generated: 2026-03-07T16:48:22.432407
+//! Generated: 2026-03-09T14:27:16.824302
 //!
 //! To regenerate:
 //!     python -m codegen.generate_rust
@@ -223,6 +223,7 @@ pub struct TaskData {
     pub id: String,
     pub title: String,
     pub description: String,
+    pub resolution: String,
     pub created_at: String,
     pub updated_at: String,
 }

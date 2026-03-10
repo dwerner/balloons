@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-03-08T14:45:38.549617
+// Generated: 2026-03-09T14:29:58.771436
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -901,6 +901,23 @@ export interface SessionHistoryCompleteEvent {
   finalWatermark: number;
 }
 
+export interface ForkChild {
+  sessionId: string;
+  name: string;
+  status: string;
+  forkPoint: number;
+}
+
+export interface ForkTreeNode {
+  sessionId: string;
+  name: string;
+  status: string;
+  isCurrent: boolean;
+  children?: ForkTreeNode[];
+  watchTargets?: string[];
+  watchedBy?: string[];
+}
+
 export interface SessionInfo {
   id: string;
   title: string;
@@ -919,6 +936,15 @@ export interface SessionInfo {
   backendName?: string;
   isPinned?: boolean;
   workingDirectory?: string;
+  children?: ForkChild[];
+  watchTargets?: string[];
+  watchedBy?: string[];
+}
+
+export interface SessionWatcherInfo {
+  sessionId: string;
+  watchTargets?: string[];
+  watchedBy?: string[];
 }
 
 export interface SessionAddedEvent {
@@ -1317,6 +1343,7 @@ export interface KanbanTaskInfo {
   id: string;
   title: string;
   description: string;
+  resolution: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -1418,6 +1445,11 @@ export interface SessionBoardsResult {
   sessionId: string;
   associations: BoardAssociationInfo[];
   boards: BoardInfo[];
+}
+
+export interface BoardSessionsResult {
+  boardId: string;
+  associations: BoardAssociationInfo[];
 }
 
 export interface BoardAssociatedEvent {

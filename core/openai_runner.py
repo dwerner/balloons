@@ -837,6 +837,7 @@ class OpenAICompatibleRunner(BaseRunner):
             (r'\{\s*"function"\s*:\s*\{', "function object in content"),
             (r'\{\s*"tool"\s*:\s*"', "tool field in content"),
             (r'Action:\s*\w+\[', "Action pattern (e.g., Action: Search[query])"),
+            (r'\b(chess_\w+|supervisor_\w+|Read|Write|Edit|Bash|Glob|Grep)\s*\(\s*\w+\s*=', "Python-style function call"),
         ]
 
         for pattern, description in embedded_patterns:

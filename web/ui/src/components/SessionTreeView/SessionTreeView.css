@@ -253,16 +253,6 @@
   font-size: 12px;
 }
 
-.tree-node__turn-num {
-  font-family: ui-monospace, 'SF Mono', Monaco, monospace;
-  font-size: 10px;
-  color: #666;
-  flex-shrink: 0;
-  min-width: 24px;
-  text-align: right;
-  margin-right: 4px;
-}
-
 .tree-node__id {
   font-family: ui-monospace, 'SF Mono', Monaco, monospace;
   font-size: 11px;
@@ -295,17 +285,6 @@
   font-size: 10px;
 }
 
-/* ===== Archiving spinner ===== */
-.tree-node__spinner {
-  display: inline-block;
-  animation: pulse 1.2s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-
 /* ===== Badges ===== */
 .tree-node__badge {
   flex-shrink: 0;
@@ -319,6 +298,10 @@
 
 .tree-node__badge--fork {
   color: #c084fc;
+}
+
+.tree-node__badge--watching {
+  color: #22d3ee;
 }
 
 .tree-node__badge--pin {
@@ -395,25 +378,6 @@
   border-left-style: solid;
 }
 
-/* ===== Turn-specific styles ===== */
-.tree-node--turn > .tree-node__content {
-  padding: 4px 8px;
-  border-left: none;
-}
-
-/* Clickable turn (for scrolling to turn in chat log) */
-.tree-node--turn > .tree-node__content--clickable {
-  cursor: pointer;
-}
-
-.tree-node--turn > .tree-node__content--clickable:hover {
-  background: rgba(96, 165, 250, 0.15);
-}
-
-[data-theme="light"] .tree-node--turn > .tree-node__content--clickable:hover {
-  background: rgba(96, 165, 250, 0.1);
-}
-
 /* ===== Mobile adjustments ===== */
 @media (max-width: 767px) {
   .tree-view {
@@ -477,22 +441,6 @@
   background: rgba(96, 165, 250, 0.1);
 }
 
-/* ===== Exchange node ===== */
-.tree-node--exchange > .tree-node__content {
-  padding: 4px 8px;
-  border-left: none;
-  margin-left: 4px;
-}
-
-.tree-node--exchange > .tree-node__content:hover {
-  background: rgba(255, 255, 255, 0.05);
-}
-
-/* ===== Indented turn ===== */
-.tree-node--indented {
-  margin-left: 8px;
-}
-
 /* ===== Loading/empty states ===== */
 .tree-node--loading > .tree-node__content,
 .tree-node--empty > .tree-node__content {
@@ -531,10 +479,6 @@
   background: rgba(96, 165, 250, 0.15);
 }
 
-[data-theme="light"] .tree-node--exchange > .tree-node__content:hover {
-  background: rgba(0, 0, 0, 0.03);
-}
-
 /* Watcher group light theme - sessions rendered flat, grouped under "Watching" header */
 
 [data-theme="light"] .watcher-pair__missing-target {
@@ -554,22 +498,8 @@
   color: #888;
 }
 
-/* ===== Context mode badge ===== */
-.tree-node__mode-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 3px;
-  font-size: 9px;
-  font-weight: 700;
-  color: #000;
-  flex-shrink: 0;
-  margin-right: 4px;
-}
-
-/* ===== Exchange context menu ===== */
+/* ===== Session context menu ===== */
+/* Used by SessionContextMenu for right-click actions on sessions */
 .exchange-context-menu {
   z-index: 1000;
   min-width: 180px;
@@ -583,21 +513,6 @@
 
 .exchange-context-menu__section {
   padding: 4px 0;
-}
-
-.exchange-context-menu__label {
-  padding: 4px 12px 6px;
-  font-size: 11px;
-  font-weight: 600;
-  color: #888;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.exchange-context-menu__divider {
-  height: 1px;
-  margin: 4px 0;
-  background: rgba(255, 255, 255, 0.1);
 }
 
 .exchange-context-menu__item {
@@ -617,23 +532,6 @@
 
 .exchange-context-menu__item:hover {
   background: rgba(255, 255, 255, 0.08);
-}
-
-.exchange-context-menu__item--active {
-  background: rgba(96, 165, 250, 0.15);
-  color: #60a5fa;
-}
-
-.exchange-context-menu__item--active:hover {
-  background: rgba(96, 165, 250, 0.2);
-}
-
-.exchange-context-menu__item--danger {
-  color: #f87171;
-}
-
-.exchange-context-menu__item--danger:hover {
-  background: rgba(248, 113, 113, 0.15);
 }
 
 .exchange-context-menu__icon {
@@ -665,6 +563,67 @@
   background: rgba(0, 0, 0, 0.05);
 }
 
-[data-theme="light"] .exchange-context-menu__divider {
-  background: rgba(0, 0, 0, 0.1);
+/* ===== Fork children section ===== */
+.tree-node--fork-header > .tree-node__content {
+  padding-top: 8px;
+  margin-top: 4px;
+  border-top: 1px solid rgba(192, 132, 252, 0.2);
+}
+
+.tree-node--fork-child {
+  padding-left: 16px;
+}
+
+.tree-node--fork-child > .tree-node__content {
+  cursor: pointer;
+}
+
+.tree-node--fork-child > .tree-node__content:hover {
+  background: rgba(192, 132, 252, 0.1);
+}
+
+.tree-node--fork-child--merged > .tree-node__content {
+  opacity: 0.7;
+}
+
+.tree-node--fork-child--abandoned > .tree-node__content {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+
+/* Light theme fork children */
+[data-theme="light"] .tree-node--fork-header > .tree-node__content {
+  border-top-color: rgba(192, 132, 252, 0.3);
+}
+
+[data-theme="light"] .tree-node--fork-child > .tree-node__content:hover {
+  background: rgba(192, 132, 252, 0.15);
+}
+
+/* ===== Watch targets section ===== */
+.tree-node--watch-header > .tree-node__content {
+  padding-top: 8px;
+  margin-top: 4px;
+  border-top: 1px solid rgba(34, 211, 238, 0.2);
+}
+
+.tree-node--watch-target {
+  padding-left: 16px;
+}
+
+.tree-node--watch-target > .tree-node__content {
+  cursor: pointer;
+}
+
+.tree-node--watch-target > .tree-node__content:hover {
+  background: rgba(34, 211, 238, 0.1);
+}
+
+/* Light theme watch targets */
+[data-theme="light"] .tree-node--watch-header > .tree-node__content {
+  border-top-color: rgba(34, 211, 238, 0.3);
+}
+
+[data-theme="light"] .tree-node--watch-target > .tree-node__content:hover {
+  background: rgba(34, 211, 238, 0.15);
 }

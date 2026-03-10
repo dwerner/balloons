@@ -4,21 +4,31 @@
 
 **You MUST actually call tools, not just describe your intention to use them.**
 
-When you want to perform an action (read a file, make a chess move, run a command, etc.):
+Tools are invoked through OpenAI's function calling API. When you want to use a tool, you generate a function call - the system then executes it and returns results. Writing about a tool in your text response does **nothing**.
 
-❌ WRONG - Do NOT do this:
+❌ WRONG - Do NOT write this in your response:
 ```
 I'll now read the file config.py to check the settings.
 ```
 
-✅ CORRECT - Call the tool directly:
-The system will see you invoke the `Read` tool with the file path, and the file contents will be returned to you.
+❌ WRONG - This is also bad:
+```
+Let me make the move e2e4.
+```
+
+❌ WRONG - Do NOT try to format tool calls as text:
+```
+chess_move(move="e2e4")
+```
+
+✅ CORRECT - Generate a function call with the tool name and JSON arguments. Do not write text announcing it.
 
 **Key rules:**
-1. When you decide to use a tool, **call it immediately** - don't announce what you're going to do
+1. When you decide to use a tool, **call it immediately** via function call - don't announce what you're going to do
 2. After calling a tool, **wait for the result** before continuing
 3. Never describe a tool call without actually making it
-4. If you find yourself writing "I'll use..." or "Let me call...", STOP and actually call the tool instead
+4. If you find yourself writing "I'll use...", "Let me call...", or "I'm going to..." - STOP and make the function call instead
+5. Narrating actions is NOT the same as performing them
 
 This applies to ALL tools: file operations (Read, Write, Edit, Bash, Glob, Grep), chess tools (chess_move, chess_show, etc.), and every other tool available to you.
 
@@ -39,9 +49,9 @@ when the target completes its current exchange.
 **Parameters:**
 - `message` (required): The message to send to the target session
 
-**Example:**
-```
-send_to_target(message="Consider using a cache here to improve performance")
+**Example arguments:**
+```json
+{"message": "Consider using a cache here to improve performance"}
 ```
 
 **Use cases:**
@@ -99,46 +109,46 @@ The regular `Bash` tool waits for commands to complete, which blocks your workfl
 
 ### Typical Workflow
 
-1. **Start a dev server**:
-   ```
-   supervisor_start(command="npm run dev", name="frontend")
+1. **Start a dev server** - call `supervisor_start` with:
+   ```json
+   {"command": "npm run dev", "name": "frontend"}
    ```
    Returns a process_id for later reference.
 
-2. **Check if it's running**:
-   ```
-   supervisor_list()
+2. **Check if it's running** - call `supervisor_list` with:
+   ```json
+   {}
    ```
    Shows all processes with their status (running/exited/failed).
 
-3. **View recent output**:
-   ```
-   supervisor_output(process_id="...", limit=20)
+3. **View recent output** - call `supervisor_output` with:
+   ```json
+   {"process_id": "abc123", "limit": 20}
    ```
    Shows the last 20 log entries (stdout/stderr).
 
-4. **Stop when done**:
-   ```
-   supervisor_stop(process_id="...")
+4. **Stop when done** - call `supervisor_stop` with:
+   ```json
+   {"process_id": "abc123"}
    ```
 
 ### Remote Host Workflow
 
-1. **Query available hosts**:
-   ```
-   supervisor_query(tags=["docker"])
+1. **Query available hosts** - call `supervisor_query` with:
+   ```json
+   {"tags": ["docker"]}
    ```
    Returns hosts with docker capability.
 
-2. **Check host is reachable**:
-   ```
-   supervisor_host_status(host="gpu-box")
+2. **Check host is reachable** - call `supervisor_host_status` with:
+   ```json
+   {"host": "gpu-box"}
    ```
    Returns connectivity status and latency.
 
-3. **Run command on remote host**:
-   ```
-   supervisor_start(command="nvidia-smi", host="gpu-box", name="gpu-check")
+3. **Run command on remote host** - call `supervisor_start` with:
+   ```json
+   {"command": "nvidia-smi", "host": "gpu-box", "name": "gpu-check"}
    ```
    Executes via SSH, streams output back.
 
@@ -338,10 +348,10 @@ Tools for reviewing and managing session bindings in bulk:
 
 #### Binding Cleanup Workflow
 
-1. `list_all_bindings(mode="summary")` - Get overview
-2. `list_all_bindings(filter="orphaned")` - Find problems
-3. `unbind_sessions(orphans_only=true)` - Clean orphans
-4. `rebind_session(...)` - Fix specific bindings
+1. Call `list_all_bindings` with `{"mode": "summary"}` - Get overview
+2. Call `list_all_bindings` with `{"filter": "orphaned"}` - Find problems
+3. Call `unbind_sessions` with `{"orphans_only": true}` - Clean orphans
+4. Call `rebind_session` with the appropriate session and entity IDs - Fix specific bindings
 
 ### Goal-Driven Session Workflow
 
@@ -382,6 +392,8 @@ Goals integrate with the fork/merge workflow. Each phase uses a dedicated sessio
 
 
 ## MIDI Player
+
+**REMINDER: Call tools, don't describe them.** When you want to play notes, invoke `play_midi` directly.
 
 ### play_midi
 Play musical notes through the browser using Web Audio synthesis.

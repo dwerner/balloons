@@ -395,6 +395,38 @@ class SessionHistoryCompleteEvent:
 
 @ws_type
 @dataclass
+class ForkChild:
+    """Information about a fork child session.
+
+    Used in SessionInfo.children to list forks created from a session.
+    """
+
+    session_id: str
+    name: str  # forkName or title
+    status: str  # "active", "merged", "abandoned"
+    fork_point: int  # Turn index where fork was created (-1 if unknown)
+
+
+@ws_type
+@dataclass
+class ForkTreeNode:
+    """A node in the fork tree structure.
+
+    Used by get_session_fork_tree() to return the full tree of related sessions.
+    The tree is rooted at the original ancestor session.
+    """
+
+    session_id: str
+    name: str  # forkName or title
+    status: str  # "active", "merged", "abandoned"
+    is_current: bool  # True if this is the session we're viewing the tree from
+    children: list["ForkTreeNode"] = field(default_factory=list)
+    watch_targets: list[str] = field(default_factory=list)  # Session IDs this session is watching
+    watched_by: list[str] = field(default_factory=list)  # Session IDs of watchers watching this session
+
+
+@ws_type
+@dataclass
 class SessionInfo:
     """Session metadata for listing and display.
 
@@ -419,6 +451,23 @@ class SessionInfo:
     backend_name: str = ""
     is_pinned: bool = False
     working_directory: str = ""
+    children: list[ForkChild] = field(default_factory=list)  # Fork children from this session
+    watch_targets: list[str] = field(default_factory=list)  # Session IDs this session is watching
+    watched_by: list[str] = field(default_factory=list)  # Session IDs of watchers watching this session
+
+
+@ws_type
+@dataclass
+class SessionWatcherInfo:
+    """Watcher relationship info for a session (lazy-loaded).
+
+    Used by get_session_watcher_info() to return watch relationships
+    without including them in every SessionInfo response.
+    """
+
+    session_id: str
+    watch_targets: list[str] = field(default_factory=list)  # Sessions this session is watching
+    watched_by: list[str] = field(default_factory=list)  # Sessions watching this session
 
 
 @ws_type
@@ -1387,6 +1436,22 @@ class SessionDataService:
         Returns:
             SessionInfo with all fields populated
         """
+        # Convert children list to ForkChild objects
+        children = [
+            ForkChild(
+                session_id=child.get("session_id", ""),
+                name=child.get("name", "") or child.get("prompt", "")[:50],
+                status=child.get("status", "active"),
+                fork_point=child.get("fork_point", -1),
+            )
+            for child in getattr(session, "children", [])
+            if child.get("session_id")
+        ]
+
+        # Note: watch_targets and watched_by are NOT populated here.
+        # They are lazily loaded from the watcher relationship table
+        # in async contexts (e.g., get_session_fork_tree, get_session_watcher_info)
+
         return SessionInfo(
             id=session.id,
             title=session.title,
@@ -1405,6 +1470,8 @@ class SessionDataService:
             backend_name=getattr(session, "backend_name", ""),
             is_pinned=is_pinned,
             working_directory=session.working_directory or "",
+            children=children,
+            # watch_targets and watched_by left empty - load lazily via get_session_watcher_info()
         )
 
     async def _session_dict_to_info(
@@ -1438,6 +1505,18 @@ class SessionDataService:
             working_dirs = [data.get("working_directory", "")] if data.get("working_directory") else []
         working_dir = working_dirs[0] if working_dirs else ""
 
+        # Convert children list to ForkChild objects
+        children = [
+            ForkChild(
+                session_id=child.get("session_id", ""),
+                name=child.get("name", "") or child.get("prompt", "")[:50] if child.get("prompt") else "",
+                status=child.get("status", "active"),
+                fork_point=child.get("fork_point", -1),
+            )
+            for child in data.get("children", [])
+            if child.get("session_id")
+        ]
+
         return SessionInfo(
             id=session_id,
             title=data.get("title") or data.get("name", ""),
@@ -1456,6 +1535,7 @@ class SessionDataService:
             backend_name=data.get("backend_name", ""),
             is_pinned=session_id in pinned_ids,
             working_directory=working_dir,
+            children=children,
         )
 
     @ws_expose
@@ -1635,6 +1715,150 @@ class SessionDataService:
 
         return parents
 
+    @ws_expose
+    async def get_session_fork_tree(self, session_id: str) -> "ForkTreeNode | None":
+        """Get the full fork tree containing this session.
+
+        Finds the root ancestor and builds a tree of all related sessions,
+        including siblings, cousins, etc.
+
+        Args:
+            session_id: Any session ID in the tree
+
+        Returns:
+            ForkTreeNode representing the root, with nested children.
+            The target session is marked with is_current=True.
+            Returns None if session not found.
+        """
+        from core.debug_log import debug_log
+
+        if not self._storage:
+            debug_log.warning(
+                "get_session_fork_tree called without storage configured",
+                category=Category.API,
+            )
+            return None
+
+        # Step 1: Walk up to find the root session
+        root_id = session_id
+        visited: set[str] = {session_id}
+
+        while True:
+            session = await self._storage.load_session(root_id)
+            if not session:
+                debug_log.warning(
+                    f"get_session_fork_tree: session {root_id[:8]} not found",
+                    category=Category.API,
+                )
+                return None
+
+            parent_id = session.parent_id
+            if not parent_id:
+                break  # Found root
+
+            if parent_id in visited:
+                debug_log.warning(
+                    f"Cycle detected in fork tree at {parent_id}",
+                    category=Category.API,
+                )
+                break
+
+            visited.add(parent_id)
+            root_id = parent_id
+
+        # Step 2: Build tree recursively from root
+        async def build_tree(sid: str, depth: int = 0) -> "ForkTreeNode | None":
+            if depth > 20:  # Prevent infinite recursion
+                return None
+
+            sess = await self._storage.load_session(sid)
+            if not sess:
+                return None
+
+            # Build children recursively
+            child_nodes: list[ForkTreeNode] = []
+            for child in sess.children:
+                child_id = child.get("session_id")
+                if child_id:
+                    child_node = await build_tree(child_id, depth + 1)
+                    if child_node:
+                        child_nodes.append(child_node)
+
+            # Get watcher relationships from storage (both directions)
+            watch_targets: list[str] = []
+            watched_by: list[str] = []
+            if self._storage:
+                try:
+                    # Who is this session watching?
+                    targets = await self._storage.get_targets_for_watcher(sess.id)
+                    watch_targets = [t.target_session_id for t in targets]
+                    # Who is watching this session?
+                    watchers = await self._storage.get_watchers_for_target(sess.id)
+                    watched_by = [w.watcher_session_id for w in watchers]
+                except Exception:
+                    pass  # Ignore errors, leave empty
+
+            return ForkTreeNode(
+                session_id=sess.id,
+                name=sess.fork_name or sess.title or f"Session {sess.id[:8]}",
+                status=sess.fork_status or "active",
+                is_current=(sess.id == session_id),
+                children=child_nodes,
+                watch_targets=watch_targets,
+                watched_by=watched_by,
+            )
+
+        return await build_tree(root_id)
+
+    @ws_expose
+    async def get_session_watcher_info(self, session_id: str) -> "SessionWatcherInfo":
+        """Get watcher relationships for a session (lazy loading).
+
+        Returns both:
+        - watch_targets: sessions this session is watching
+        - watched_by: sessions that are watching this session
+
+        Args:
+            session_id: The session ID to get watcher info for
+
+        Returns:
+            SessionWatcherInfo with watch_targets and watched_by lists
+        """
+        from core.debug_log import debug_log
+
+        watch_targets: list[str] = []
+        watched_by: list[str] = []
+
+        if not self._storage:
+            debug_log.warning(
+                "get_session_watcher_info called without storage configured",
+                category=Category.API,
+            )
+            return SessionWatcherInfo(
+                session_id=session_id,
+                watch_targets=watch_targets,
+                watched_by=watched_by,
+            )
+
+        try:
+            # Who is this session watching?
+            targets = await self._storage.get_targets_for_watcher(session_id)
+            watch_targets = [t.target_session_id for t in targets]
+            # Who is watching this session?
+            watchers = await self._storage.get_watchers_for_target(session_id)
+            watched_by = [w.watcher_session_id for w in watchers]
+        except Exception as e:
+            debug_log.error(
+                f"Failed to get watcher info for {session_id[:8]}: {e}",
+                category=Category.API,
+            )
+
+        return SessionWatcherInfo(
+            session_id=session_id,
+            watch_targets=watch_targets,
+            watched_by=watched_by,
+        )
+
     # --- Turn Access ---
     # NOTE: get_turns() and get_turn() have been removed.
     # History is loaded via the subscription API (historyChunk events).
@@ -1729,20 +1953,29 @@ class SessionDataService:
 
         # Sort indices in reverse order to delete from end first
         # This prevents index shifting during deletion
-        sorted_indices = sorted(turn_indices, reverse=True)
+        sorted_indices = sorted(set(turn_indices), reverse=True)
 
-        deleted_count = 0
+        # Collect turn IDs before deletion for event emission
+        deleted_turn_ids: list[str] = []
+        deleted_turn_indices: list[int] = []
         for idx in sorted_indices:
             if 0 <= idx < len(session.turns):
-                del session.turns[idx]
-                deleted_count += 1
+                deleted_turn_ids.append(session.turns[idx].id)
+                deleted_turn_indices.append(idx)
+
+        # Use session.delete_turns() to properly track deletions for incremental save
+        deleted_count = session.delete_turns(turn_indices)
 
         if deleted_count > 0:
             await session.save()
             debug_log.info(
                 f"delete_turns: session {session_id[:8]} deleted {deleted_count} turns",
                 category=Category.API,
+                details={"turn_indices": deleted_turn_indices, "turn_ids": deleted_turn_ids},
             )
+
+            # Emit turns deleted event for incremental UI update
+            self.emit_turns_deleted(session_id, deleted_turn_indices, deleted_turn_ids)
 
             # Emit session updated event
             session_info = self.session_to_info(session)

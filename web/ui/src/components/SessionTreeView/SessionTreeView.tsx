@@ -1,5 +1,5 @@
 /**
- * SessionTreeView - Tree view showing sessions with exchanges and turns
+ * SessionTreeView - Tree view showing sessions and fork hierarchy
  *
  * Following standard tree view patterns:
  * - Semantic <ul>/<li> structure
@@ -8,10 +8,12 @@
  * - Arrow icons for expand/collapse
  *
  * Features:
- * - Exchange grouping (user + assistant turns grouped together)
+ * - Fork hierarchy display (parent/child sessions)
  * - Multi-selection with Shift+click (range) and Ctrl/Cmd+click (toggle)
- * - Lazy turn loading when expanding non-selected sessions
  * - Archive/delete bulk actions
+ *
+ * Note: Turn/exchange display is now handled by the Context tab.
+ * This view focuses on session/fork navigation.
  *
  * URL ROUTING INTEGRATION:
  * - onSelectSession should trigger URL navigation to #/sessions/:sessionId
@@ -19,101 +21,14 @@
  * - See docs/url-routing.md for the full routing design
  */
 
-import React, { useState, useCallback, useMemo, memo, useEffect, useImperativeHandle, forwardRef } from 'react';
+import React, { useState, useCallback, useMemo, memo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import type { SessionInfo, TurnInfo } from '../../../../generated/balloons-client';
+import type { SessionInfo, ForkChild } from '../../../../generated/balloons-client';
 import { createLogger } from '../../utils/debugLog';
 import './SessionTreeView.css';
 
 // Create scoped logger for this module
 const debugLog = createLogger('SessionTreeView');
-
-// Context modes for turns
-export type ContextMode = 'COPY' | 'COMPRESS' | 'DROP';
-
-// Exchange represents a user prompt + assistant response pair
-export interface Exchange {
-  id: string;
-  userTurn: TurnInfo | null;
-  assistantTurns: TurnInfo[];  // Can have multiple (e.g., tool use, then text)
-  systemTurns: TurnInfo[];     // System messages in this exchange
-}
-
-// Group turns into exchanges
-// Uses exchangeId when available to group related turns
-function groupTurnsIntoExchanges(turns: TurnInfo[]): Exchange[] {
-  const exchanges: Exchange[] = [];
-  const exchangeMap = new Map<string, Exchange>();
-  let exchangeIndex = 0;
-  let currentExchangeId: string | null = null;
-
-  for (const turn of turns) {
-    // Check if this turn has its own exchangeId
-    const turnExchangeId = turn.exchangeId;
-
-    if (turn.role === 'user') {
-      // User turn starts a new exchange
-      const exchangeId = turnExchangeId || `exchange-${exchangeIndex++}`;
-      const exchange: Exchange = {
-        id: exchangeId,
-        userTurn: turn,
-        assistantTurns: [],
-        systemTurns: [],
-      };
-      exchangeMap.set(exchangeId, exchange);
-      exchanges.push(exchange);
-      currentExchangeId = exchangeId;
-    } else if (turn.role === 'assistant') {
-      // Assistant turns belong to current exchange or create new one
-      const exchangeId: string = turnExchangeId || currentExchangeId || `exchange-${exchangeIndex++}`;
-      let exchange = exchangeMap.get(exchangeId);
-      if (!exchange) {
-        exchange = {
-          id: exchangeId,
-          userTurn: null,
-          assistantTurns: [],
-          systemTurns: [],
-        };
-        exchangeMap.set(exchangeId, exchange);
-        exchanges.push(exchange);
-        currentExchangeId = exchangeId;
-      }
-      exchange.assistantTurns.push(turn);
-    } else {
-      // System turn - check if it has its own exchangeId (e.g., archive)
-      if (turnExchangeId && turnExchangeId !== currentExchangeId) {
-        // System turn with unique exchangeId - create its own exchange
-        const exchange: Exchange = {
-          id: turnExchangeId,
-          userTurn: null,
-          assistantTurns: [],
-          systemTurns: [turn],
-        };
-        exchangeMap.set(turnExchangeId, exchange);
-        exchanges.push(exchange);
-      } else if (currentExchangeId) {
-        // Add to current exchange
-        const exchange = exchangeMap.get(currentExchangeId);
-        if (exchange) {
-          exchange.systemTurns.push(turn);
-        }
-      } else {
-        // System turn at start - create exchange for it
-        const exchangeId = turnExchangeId || `exchange-${exchangeIndex++}`;
-        const exchange: Exchange = {
-          id: exchangeId,
-          userTurn: null,
-          assistantTurns: [],
-          systemTurns: [turn],
-        };
-        exchangeMap.set(exchangeId, exchange);
-        exchanges.push(exchange);
-      }
-    }
-  }
-
-  return exchanges;
-}
 
 // Session colors for visual distinction
 const SESSION_COLORS = [
@@ -124,14 +39,6 @@ const SESSION_COLORS = [
   '#facc15', // yellow
   '#f87171', // red
 ];
-
-// Format token count as kt
-function formatKt(tokens: number): string {
-  if (tokens <= 0) return '';
-  const kt = Math.ceil(tokens / 100) / 10;
-  if (kt < 1) return `.${Math.floor(kt * 10)}kt`;
-  return `${kt.toFixed(1)}kt`;
-}
 
 // Format a date as a day group label
 function formatDayGroup(dateStr: string): string {
@@ -289,200 +196,6 @@ function TrashIcon() {
   );
 }
 
-// Turn node component (used inside exchanges)
-function TurnNode({
-  turn,
-  indent = false,
-  onClick,
-}: {
-  turn: TurnInfo;
-  indent?: boolean;
-  onClick?: (turnIdx: number) => void;
-}) {
-  // Get icon based on role and content block type
-  const getIcon = () => {
-    if (turn.role === 'user') return '👤';
-    if (turn.role === 'assistant') return '🤖';
-    // System role - check content block type
-    const blockType = turn.contentBlockType;
-    switch (blockType) {
-      case 'archive': return '📦';
-      case 'fork': return '⑂';
-      case 'merge': return '⤴';
-      case 'merged_to': return '⤴';
-      case 'link': return '🔗';
-      case 'interruption': return '⚠';
-      case 'error': return '✗';
-      default: return '⚙';
-    }
-  };
-  const icon = getIcon();
-  const preview = (turn.content || '').slice(0, 60).replace(/\n/g, ' ');
-  const tokenStr = formatKt(turn.tokens);
-
-  const handleClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onClick?.(turn.idx);
-  };
-
-  return (
-    <li className={`tree-node tree-node--turn ${indent ? 'tree-node--indented' : ''}`}>
-      <div
-        className={`tree-node__content ${onClick ? 'tree-node__content--clickable' : ''}`}
-        onClick={onClick ? handleClick : undefined}
-      >
-        <span key="spacer" className="tree-node__spacer" />
-        <span key="turnNum" className="tree-node__turn-num">{turn.idx}</span>
-        <span key="icon" className="tree-node__icon">{icon}</span>
-        <span key="label" className="tree-node__label tree-node__label--muted">
-          {preview || '\u00A0'}
-          {(turn.content || '').length > 60 ? '...' : ''}
-        </span>
-        {tokenStr && (
-          <span key="meta" className="tree-node__meta tree-node__meta--green">
-            {tokenStr}
-          </span>
-        )}
-      </div>
-    </li>
-  );
-}
-
-// Context menu for exchanges
-interface ExchangeMenuProps {
-  position: { x: number; y: number };
-  contextMode?: ContextMode;
-  onSetContextMode: (mode: ContextMode) => void;
-  onArchive: () => void;
-  onDelete: () => void;
-  onClose: () => void;
-}
-
-function ExchangeContextMenu({
-  position,
-  contextMode,
-  onSetContextMode,
-  onArchive,
-  onDelete,
-  onClose,
-}: ExchangeMenuProps) {
-  const menuRef = React.useRef<HTMLDivElement>(null);
-
-  // Wrap callbacks with logging
-  const handleSetContextMode = useCallback((mode: ContextMode) => {
-    debugLog('Context mode selected', { mode });
-    onSetContextMode(mode);
-  }, [onSetContextMode]);
-
-  const handleArchive = useCallback(() => {
-    debugLog('Archive action triggered');
-    onArchive();
-  }, [onArchive]);
-
-  const handleDelete = useCallback(() => {
-    debugLog('Delete action triggered');
-    onDelete();
-  }, [onDelete]);
-
-  // Debug log when menu mounts
-  useEffect(() => {
-    debugLog('ExchangeContextMenu mounted', { position, contextMode });
-    return () => {
-      debugLog('ExchangeContextMenu unmounted');
-    };
-  }, [position, contextMode]);
-
-  // Close on click outside (delay to avoid closing immediately on the opening click)
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        debugLog('ExchangeContextMenu click outside, closing');
-        onClose();
-      }
-    };
-    // Small delay to avoid the mousedown that opened the menu from closing it
-    const timeoutId = setTimeout(() => {
-      document.addEventListener('mousedown', handleClickOutside);
-    }, 100);
-    return () => {
-      clearTimeout(timeoutId);
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [onClose]);
-
-  // Close on escape
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        debugLog('ExchangeContextMenu escape pressed, closing');
-        onClose();
-      }
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
-
-  // Use portal to render at document root to avoid overflow issues
-  return createPortal(
-    <div
-      ref={menuRef}
-      className="exchange-context-menu"
-      style={{
-        position: 'fixed',
-        left: position.x,
-        top: position.y,
-        zIndex: 9999,  // Very high z-index to ensure visibility
-      }}
-    >
-      <div className="exchange-context-menu__section">
-        <div className="exchange-context-menu__label">Context Mode</div>
-        <button
-          className={`exchange-context-menu__item ${contextMode === 'COPY' ? 'exchange-context-menu__item--active' : ''}`}
-          onClick={() => { handleSetContextMode('COPY'); onClose(); }}
-        >
-          <span className="exchange-context-menu__icon">📋</span>
-          Copy
-          <span className="exchange-context-menu__hint">Include verbatim</span>
-        </button>
-        <button
-          className={`exchange-context-menu__item ${contextMode === 'COMPRESS' ? 'exchange-context-menu__item--active' : ''}`}
-          onClick={() => { handleSetContextMode('COMPRESS'); onClose(); }}
-        >
-          <span className="exchange-context-menu__icon">📦</span>
-          Compress
-          <span className="exchange-context-menu__hint">Summarize</span>
-        </button>
-        <button
-          className={`exchange-context-menu__item ${contextMode === 'DROP' ? 'exchange-context-menu__item--active' : ''}`}
-          onClick={() => { handleSetContextMode('DROP'); onClose(); }}
-        >
-          <span className="exchange-context-menu__icon">🗑️</span>
-          Drop
-          <span className="exchange-context-menu__hint">Exclude from context</span>
-        </button>
-      </div>
-      <div className="exchange-context-menu__divider" />
-      <div className="exchange-context-menu__section">
-        <button
-          className="exchange-context-menu__item"
-          onClick={() => { handleArchive(); onClose(); }}
-        >
-          <span className="exchange-context-menu__icon"><ArchiveIcon /></span>
-          Archive
-        </button>
-        <button
-          className="exchange-context-menu__item exchange-context-menu__item--danger"
-          onClick={() => { handleDelete(); onClose(); }}
-        >
-          <span className="exchange-context-menu__icon"><TrashIcon /></span>
-          Delete
-        </button>
-      </div>
-    </div>,
-    document.body
-  );
-}
-
 // Session-level context menu
 interface SessionMenuProps {
   position: { x: number; y: number };
@@ -603,240 +316,6 @@ function SessionContextMenu({
   );
 }
 
-// Long press hook for touch devices
-function useLongPress(
-  onLongPress: (position: { x: number; y: number }) => void,
-  onClick?: () => void,
-  { delay = 500 }: { delay?: number } = {}
-) {
-  const timeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const longPressTriggeredRef = React.useRef(false);
-  const isActiveRef = React.useRef(false);  // Track if we started a valid press
-  const positionRef = React.useRef<{ x: number; y: number }>({ x: 0, y: 0 });
-
-  const start = useCallback((e: React.MouseEvent | React.TouchEvent) => {
-    // Only trigger on primary button for mouse (left-click)
-    if ('button' in e && e.button !== 0) return;
-
-    isActiveRef.current = true;
-    longPressTriggeredRef.current = false;
-
-    // Capture position immediately (before React event pooling)
-    if ('touches' in e) {
-      const touch = e.touches[0];
-      if (touch) {
-        positionRef.current = { x: touch.clientX, y: touch.clientY };
-      }
-    } else {
-      positionRef.current = { x: e.clientX, y: e.clientY };
-    }
-
-    timeoutRef.current = setTimeout(() => {
-      longPressTriggeredRef.current = true;
-      onLongPress(positionRef.current);
-    }, delay);
-  }, [onLongPress, delay]);
-
-  const clear = useCallback((shouldTriggerClick = true) => {
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
-    }
-    // Only trigger onClick if we had an active press that wasn't a long-press
-    if (shouldTriggerClick && isActiveRef.current && !longPressTriggeredRef.current && onClick) {
-      onClick();
-    }
-    isActiveRef.current = false;
-  }, [onClick]);
-
-  return {
-    onMouseDown: start,
-    onMouseUp: () => clear(true),
-    onMouseLeave: () => clear(false),
-    onTouchStart: start,
-    onTouchEnd: () => clear(true),
-  };
-}
-
-// Exchange node props for memoization
-interface ExchangeNodeProps {
-  exchange: Exchange;
-  isExpanded: boolean;
-  contextMode?: ContextMode;
-  isArchiving?: boolean;
-  onToggle: () => void;
-  onContextModeChange?: (mode: ContextMode) => void;
-  onArchive?: () => void;
-  onDelete?: () => void;
-  onTurnClick?: (turnIdx: number) => void;
-}
-
-// Exchange node component - groups user + assistant turns
-// Memoized to prevent re-renders when parent SessionNode re-renders
-const ExchangeNode = memo(function ExchangeNode({
-  exchange,
-  isExpanded,
-  contextMode,
-  isArchiving,
-  onToggle,
-  onContextModeChange,
-  onArchive,
-  onDelete,
-  onTurnClick,
-}: ExchangeNodeProps) {
-  const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
-
-  // Debug log when menuPosition changes
-  useEffect(() => {
-    if (menuPosition) {
-      debugLog('menuPosition set', { menuPosition, exchangeId: exchange.id });
-    }
-  }, [menuPosition, exchange.id]);
-
-  // Check if this is a system-only exchange (like archive, fork, merge)
-  const isSystemOnly = !exchange.userTurn && exchange.assistantTurns.length === 0 && exchange.systemTurns.length > 0;
-  const firstSystemTurn = exchange.systemTurns[0];
-  const systemBlockType = firstSystemTurn?.contentBlockType;
-
-  // Get exchange icon based on content
-  const getExchangeIcon = () => {
-    if (exchange.userTurn) return '💬';
-    if (isSystemOnly && systemBlockType) {
-      switch (systemBlockType) {
-        case 'archive': return '📦';
-        case 'fork': return '⑂';
-        case 'merge': return '⤴';
-        case 'merged_to': return '⤴';
-        case 'link': return '🔗';
-        case 'interruption': return '⚠';
-        case 'error': return '✗';
-      }
-    }
-    return '💬';
-  };
-  const exchangeIcon = getExchangeIcon();
-
-  // Get preview text
-  const userPreview = exchange.userTurn
-    ? (exchange.userTurn.content || '').slice(0, 50).replace(/\n/g, ' ')
-    : isSystemOnly
-      ? (firstSystemTurn?.content || '').slice(0, 50).replace(/\n/g, ' ')
-      : null;
-
-  const totalTokens = (exchange.userTurn?.tokens || 0) +
-    exchange.assistantTurns.reduce((sum, t) => sum + (t.tokens || 0), 0) +
-    exchange.systemTurns.reduce((sum, t) => sum + (t.tokens || 0), 0);
-
-  const tokenStr = formatKt(totalTokens);
-  const turnCount = (exchange.userTurn ? 1 : 0) + exchange.assistantTurns.length + exchange.systemTurns.length;
-  const hasChildren = turnCount > 1;
-
-  // Get context mode badge color
-  const getModeColor = (mode?: ContextMode) => {
-    switch (mode) {
-      case 'COPY': return '#4ade80';      // green
-      case 'COMPRESS': return '#facc15';  // yellow
-      case 'DROP': return '#f87171';      // red
-      default: return undefined;
-    }
-  };
-
-  const handleLongPress = useCallback((position: { x: number; y: number }) => {
-    debugLog('Long press triggered', { x: position.x, y: position.y, exchangeId: exchange.id });
-    setMenuPosition(position);
-  }, [exchange.id]);
-
-  const handleContextMenu = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    debugLog('Context menu triggered', { x: e.clientX, y: e.clientY, exchangeId: exchange.id });
-    setMenuPosition({ x: e.clientX, y: e.clientY });
-  }, [exchange.id]);
-
-  // Get the first turn index for jumping to the exchange
-  const firstTurnIdx = exchange.systemTurns[0]?.idx
-    ?? exchange.userTurn?.idx
-    ?? exchange.assistantTurns[0]?.idx;
-
-  const handleClick = useCallback(() => {
-    // Jump to first turn in exchange
-    if (firstTurnIdx !== undefined && onTurnClick) {
-      onTurnClick(firstTurnIdx);
-    }
-    // Also toggle expansion
-    onToggle();
-  }, [firstTurnIdx, onTurnClick, onToggle]);
-
-  const longPressHandlers = useLongPress(handleLongPress, handleClick, { delay: 500 });
-
-  return (
-    <li className="tree-node tree-node--exchange">
-      <div
-        className="tree-node__content"
-        {...longPressHandlers}
-        onContextMenu={handleContextMenu}
-      >
-        <span className="tree-node__toggle" onClick={(e) => { e.stopPropagation(); onToggle(); }}>
-          {hasChildren ? <Arrow open={isExpanded} /> : <span className="tree-node__spacer" />}
-        </span>
-        <span className="tree-node__turn-num">{firstTurnIdx}</span>
-        <span className="tree-node__icon">
-          {isArchiving ? <span className="tree-node__spinner">⏳</span> : exchangeIcon}
-        </span>
-        {contextMode && (
-          <span
-            className="tree-node__mode-badge"
-            style={{ backgroundColor: getModeColor(contextMode) }}
-            title={`Context: ${contextMode}`}
-          >
-            {contextMode.charAt(0)}
-          </span>
-        )}
-        <span className="tree-node__label tree-node__label--muted">
-          {userPreview || (isSystemOnly ? (systemBlockType || 'System') : 'System')}
-          {userPreview && userPreview.length >= 50 ? '...' : ''}
-        </span>
-        <span className="tree-node__meta">
-          {turnCount > 1 && `${turnCount} turns`}
-        </span>
-        {tokenStr && (
-          <span className="tree-node__meta tree-node__meta--green">
-            {tokenStr}
-          </span>
-        )}
-      </div>
-
-      {isExpanded && hasChildren && (
-        <ul className="tree-children">
-          {exchange.systemTurns.map(turn => (
-            <TurnNode key={turn.idx} turn={turn} indent onClick={onTurnClick} />
-          ))}
-          {exchange.userTurn && (
-            <TurnNode key={exchange.userTurn.idx} turn={exchange.userTurn} indent onClick={onTurnClick} />
-          )}
-          {exchange.assistantTurns.map(turn => (
-            <TurnNode key={turn.idx} turn={turn} indent onClick={onTurnClick} />
-          ))}
-        </ul>
-      )}
-
-      {menuPosition && (
-        <ExchangeContextMenu
-          position={menuPosition}
-          contextMode={contextMode}
-          onSetContextMode={(mode) => onContextModeChange?.(mode)}
-          onArchive={() => onArchive?.()}
-          onDelete={() => onDelete?.()}
-          onClose={() => setMenuPosition(null)}
-        />
-      )}
-    </li>
-  );
-});
-
-// Exchange action type for callbacks
-export type ExchangeAction = 'archive' | 'delete';
-
 // Session node props for memoization
 interface SessionNodeProps {
   session: SessionInfo;
@@ -844,22 +323,17 @@ interface SessionNodeProps {
   isSelected: boolean;
   isChecked: boolean;
   isExpanded: boolean;
-  turns: TurnInfo[];
-  isLoadingTurns: boolean;
   showCheckboxes: boolean;
   onToggle: () => void;
   onSelect: (e: React.MouseEvent) => void;
   onTogglePin?: () => void;
   onToggleCheck?: (e: React.MouseEvent) => void;
-  onExchangeContextModeChange?: (turnIndices: number[], mode: ContextMode) => void;
-  onExchangeAction?: (turnIndices: number[], action: ExchangeAction) => void;
-  onTurnClick?: (turnIdx: number) => void;
   onReview?: () => void;
   onRename?: () => void;
   onLinkSession?: () => void;
   onWatchSession?: () => void;
+  onNavigateToSession?: (sessionId: string) => void;  // Navigate to a fork child
   selectedSessionId: string | null;
-  archivingTurnIndices?: Set<number>;
 }
 
 /**
@@ -871,7 +345,6 @@ function sessionNodePropsAreEqual(prev: SessionNodeProps, next: SessionNodeProps
   if (prev.isSelected !== next.isSelected) return false;
   if (prev.isChecked !== next.isChecked) return false;
   if (prev.isExpanded !== next.isExpanded) return false;
-  if (prev.isLoadingTurns !== next.isLoadingTurns) return false;
   if (prev.showCheckboxes !== next.showCheckboxes) return false;
 
   // Session identity and metadata
@@ -883,25 +356,10 @@ function sessionNodePropsAreEqual(prev: SessionNodeProps, next: SessionNodeProps
   if (prev.session.forkName !== next.session.forkName) return false;
   if (prev.session.forkStatus !== next.session.forkStatus) return false;
 
-  // If collapsed, don't care about turns content
-  if (!next.isExpanded) return true;
-
-  // For expanded nodes, check if turns array changed
-  // Compare by length first (fast check), then by turn IDs/content
-  if (prev.turns.length !== next.turns.length) return false;
-
-  // Check if archiving state changed for any turn
-  if (prev.archivingTurnIndices?.size !== next.archivingTurnIndices?.size) return false;
-
-  // Deep check turns only if same length - compare by idx and tokens (content proxy)
-  for (let i = 0; i < prev.turns.length; i++) {
-    const prevTurn = prev.turns[i];
-    const nextTurn = next.turns[i];
-    if (!prevTurn || !nextTurn) return false;
-    if (prevTurn.idx !== nextTurn.idx) return false;
-    if (prevTurn.tokens !== nextTurn.tokens) return false;
-    if (prevTurn.contextMode !== nextTurn.contextMode) return false;
-  }
+  // Check for children changes (fork tree)
+  const prevChildren = prev.session.children || [];
+  const nextChildren = next.session.children || [];
+  if (prevChildren.length !== nextChildren.length) return false;
 
   return true;
 }
@@ -913,53 +371,32 @@ const SessionNode = memo(function SessionNode({
   isSelected,
   isChecked,
   isExpanded,
-  turns,
-  isLoadingTurns,
   showCheckboxes,
   onToggle,
   onSelect,
   onTogglePin,
   onToggleCheck,
-  onExchangeContextModeChange,
-  onExchangeAction,
-  onTurnClick,
   onReview,
   onRename,
   onLinkSession,
   onWatchSession,
+  onNavigateToSession,
   selectedSessionId,
-  archivingTurnIndices,
 }: SessionNodeProps) {
   const sessionColor = SESSION_COLORS[index % SESSION_COLORS.length] || '#60a5fa';
   const sessionName = session.forkName || session.title || `Session ${session.id.slice(0, 8)}`;
   const isPinned = session.isPinned ?? false;
 
-  // Use message count as indicator when not expanded
-  const hasContent = session.messageCount > 0;
+  // Fork children from this session
+  const forkChildren = session.children || [];
+  const hasForkChildren = forkChildren.length > 0;
+
+  // Note: watchTargets/watchedBy are lazily loaded and not available in session list.
+  // Full watcher navigation is available in the long-press modal (RenameSessionModal)
+  // which uses get_session_fork_tree() to load the complete watcher relationships.
 
   // Session context menu state
   const [sessionMenuPosition, setSessionMenuPosition] = useState<{ x: number; y: number } | null>(null);
-
-  // Group turns into exchanges for display
-  const exchanges = useMemo(() => {
-    const result = groupTurnsIntoExchanges(turns);
-    return result;
-  }, [turns, session.id]);
-
-  // Track which exchanges are expanded
-  const [expandedExchanges, setExpandedExchanges] = useState<Set<string>>(new Set());
-
-  const toggleExchange = useCallback((exchangeId: string) => {
-    setExpandedExchanges(prev => {
-      const next = new Set(prev);
-      if (next.has(exchangeId)) {
-        next.delete(exchangeId);
-      } else {
-        next.add(exchangeId);
-      }
-      return next;
-    });
-  }, []);
 
   const handlePinClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -993,7 +430,7 @@ const SessionNode = memo(function SessionNode({
           className="tree-node__toggle"
           onClick={(e) => { e.stopPropagation(); onToggle(); }}
         >
-          {hasContent ? <Arrow open={isExpanded} color={sessionColor} /> : <span className="tree-node__spacer" />}
+          {hasForkChildren ? <Arrow open={isExpanded} color={sessionColor} /> : <span className="tree-node__spacer" />}
         </span>
 
         {/* Pin toggle on the left - always visible for pinned, hover for unpinned */}
@@ -1018,59 +455,33 @@ const SessionNode = memo(function SessionNode({
         <span key="meta" className="tree-node__meta">({session.messageCount}msg)</span>
       </div>
 
-      {isExpanded && (
+      {/* Fork children - show when expanded */}
+      {isExpanded && hasForkChildren && (
         <ul className="tree-children">
-          {isLoadingTurns ? (
-            <li className="tree-node tree-node--loading">
-              <div className="tree-node__content">
+          {forkChildren.map(child => (
+            <li
+              key={child.sessionId}
+              className={`tree-node tree-node--fork-child tree-node--fork-child--${child.status}`}
+            >
+              <div
+                className="tree-node__content tree-node__content--clickable"
+                onClick={() => onNavigateToSession?.(child.sessionId)}
+                title={`Navigate to ${child.name || child.sessionId.slice(0, 8)}`}
+              >
                 <span className="tree-node__spacer" />
-                <span className="tree-node__label tree-node__label--muted">Loading...</span>
+                <span className="tree-node__badge tree-node__badge--fork">
+                  {child.status === 'merged' ? '✓' : '↳'}
+                </span>
+                <span className="tree-node__id">{child.sessionId.slice(0, 8)}</span>
+                <span className="tree-node__label">
+                  {child.name || `Fork ${child.sessionId.slice(0, 8)}`}
+                </span>
+                {child.status !== 'active' && (
+                  <span className="tree-node__meta">({child.status})</span>
+                )}
               </div>
             </li>
-          ) : exchanges.length > 0 ? (
-            exchanges.map(exchange => {
-              // Get all turn indices in this exchange for callbacks
-              const turnIndices: number[] = [
-                ...exchange.systemTurns.map(t => t.idx),
-                ...(exchange.userTurn ? [exchange.userTurn.idx] : []),
-                ...exchange.assistantTurns.map(t => t.idx),
-              ];
-              // Get context mode from the first turn (they should all be the same in an exchange)
-              const firstTurn = exchange.userTurn || exchange.assistantTurns[0] || exchange.systemTurns[0];
-              const contextMode = firstTurn?.contextMode as ContextMode | undefined;
-
-              // Check if any turns in this exchange are being archived
-              const isArchiving = archivingTurnIndices && turnIndices.some(idx => archivingTurnIndices.has(idx));
-
-              return (
-                <ExchangeNode
-                  key={exchange.id}
-                  exchange={exchange}
-                  isExpanded={expandedExchanges.has(exchange.id)}
-                  contextMode={contextMode}
-                  isArchiving={isArchiving}
-                  onToggle={() => toggleExchange(exchange.id)}
-                  onContextModeChange={onExchangeContextModeChange
-                    ? (mode) => onExchangeContextModeChange(turnIndices, mode)
-                    : undefined}
-                  onArchive={onExchangeAction
-                    ? () => onExchangeAction(turnIndices, 'archive')
-                    : undefined}
-                  onDelete={onExchangeAction
-                    ? () => onExchangeAction(turnIndices, 'delete')
-                    : undefined}
-                  onTurnClick={onTurnClick}
-                />
-              );
-            })
-          ) : (
-            <li className="tree-node tree-node--empty">
-              <div className="tree-node__content">
-                <span className="tree-node__spacer" />
-                <span className="tree-node__label tree-node__label--muted">No messages</span>
-              </div>
-            </li>
-          )}
+          ))}
         </ul>
       )}
 
@@ -1095,61 +506,32 @@ const SessionNode = memo(function SessionNode({
 // Bulk action type
 export type BulkAction = 'archive' | 'delete' | 'unarchive';
 
-// Imperative handle for external control
-export interface SessionTreeViewHandle {
-  /** Update or add a turn in the cache for a specific session */
-  updateTurn: (sessionId: string, turn: TurnInfo) => void;
-  /** Invalidate the cache for a session, forcing reload on next expand */
-  invalidateCache: (sessionId: string) => void;
-  /** Check if a session's turns are currently cached */
-  isCached: (sessionId: string) => boolean;
-}
-
 // Props for main component
 interface SessionTreeViewProps {
   sessions: SessionInfo[];
   selectedSessionId: string | null;
-  turns: TurnInfo[];
   onSelectSession: (sessionId: string) => void;
-  onSelectTurn?: (turnIdx: number) => void;
-  onContextModeChange?: (sessionId: string, turnIdx: number, mode: ContextMode) => void;
-  onExchangeContextModeChange?: (sessionId: string, turnIndices: number[], mode: ContextMode) => void;
-  onExchangeAction?: (sessionId: string, turnIndices: number[], action: ExchangeAction) => void;
   onLinkSession?: (sessionId: string) => void;
   onWatchSession?: (sessionId: string) => void;
   onTogglePin?: (sessionId: string) => void;
   onBulkAction?: (sessionIds: string[], action: BulkAction) => void;
-  onLoadTurns?: (sessionId: string) => Promise<TurnInfo[]>;
   onReviewSession?: (sessionId: string) => void;
   onRenameSession?: (sessionId: string) => void;
   isLoading?: boolean;
-  /** Turn indices currently being archived (show spinner) */
-  archivingTurnIndices?: Set<number>;
 }
 
-// Helper to sort turns by index
-function sortTurnsByIdx(turns: TurnInfo[]): TurnInfo[] {
-  return [...turns].sort((a, b) => a.idx - b.idx);
-}
-
-export const SessionTreeView = memo(forwardRef<SessionTreeViewHandle, SessionTreeViewProps>(function SessionTreeView({
+export const SessionTreeView = memo(function SessionTreeView({
   sessions,
   selectedSessionId,
-  turns,
   onSelectSession,
-  onSelectTurn,
   onTogglePin,
   onBulkAction,
-  onLoadTurns,
-  onExchangeContextModeChange,
-  onExchangeAction,
   onReviewSession,
   onRenameSession,
   onLinkSession,
   onWatchSession,
   isLoading = false,
-  archivingTurnIndices,
-}, ref) {
+}: SessionTreeViewProps) {
   // Log on mount
   useEffect(() => {
     debugLog('SessionTreeView mounted', { sessionCount: sessions.length });
@@ -1171,97 +553,21 @@ export const SessionTreeView = memo(forwardRef<SessionTreeViewHandle, SessionTre
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
   const [checkedSessions, setCheckedSessions] = useState<Set<string>>(new Set());
   const [lastClickedSessionId, setLastClickedSessionId] = useState<string | null>(null);
-  const [loadingTurns, setLoadingTurns] = useState<Set<string>>(new Set());
-  const [sessionTurnsCache, setSessionTurnsCache] = useState<Map<string, TurnInfo[]>>(new Map());
-
-  // Expose imperative methods for external cache updates
-  useImperativeHandle(ref, () => ({
-    updateTurn: (sessionId: string, turn: TurnInfo) => {
-      // Only update if we have this session cached (don't create cache entries for non-expanded sessions)
-      setSessionTurnsCache(prev => {
-        if (!prev.has(sessionId)) {
-          return prev; // Don't cache if not already cached
-        }
-        const existingTurns = prev.get(sessionId) || [];
-        const turnIndex = existingTurns.findIndex(t => t.idx === turn.idx);
-        let newTurns: TurnInfo[];
-        if (turnIndex >= 0) {
-          // Update existing turn
-          newTurns = [...existingTurns];
-          newTurns[turnIndex] = turn;
-        } else {
-          // Add new turn
-          newTurns = sortTurnsByIdx([...existingTurns, turn]);
-        }
-        return new Map(prev).set(sessionId, newTurns);
-      });
-    },
-    invalidateCache: (sessionId: string) => {
-      setSessionTurnsCache(prev => {
-        if (!prev.has(sessionId)) return prev;
-        const next = new Map(prev);
-        next.delete(sessionId);
-        return next;
-      });
-    },
-    isCached: (sessionId: string) => {
-      return sessionTurnsCache.has(sessionId);
-    },
-  }), [sessionTurnsCache]);
 
   // Show checkboxes when any session is checked
   const showCheckboxes = checkedSessions.size > 0;
 
-  // Auto-expand selected session when it changes
-  useEffect(() => {
-    if (selectedSessionId) {
-      setExpandedSessions(prev => {
-        if (prev.has(selectedSessionId)) return prev;
-        const next = new Set(prev);
-        next.add(selectedSessionId);
-        return next;
-      });
-    }
-  }, [selectedSessionId]);
-
-  // Load turns for a session when expanding (if not selected)
-  const loadTurnsForSession = useCallback(async (sessionId: string) => {
-    if (!onLoadTurns || sessionTurnsCache.has(sessionId) || loadingTurns.has(sessionId)) {
-      return;
-    }
-
-    setLoadingTurns(prev => new Set(prev).add(sessionId));
-    try {
-      const sessionTurns = await onLoadTurns(sessionId);
-      setSessionTurnsCache(prev => new Map(prev).set(sessionId, sessionTurns));
-    } catch (error) {
-      console.error('Failed to load turns for session:', sessionId, error);
-    } finally {
-      setLoadingTurns(prev => {
-        const next = new Set(prev);
-        next.delete(sessionId);
-        return next;
-      });
-    }
-  }, [onLoadTurns, sessionTurnsCache, loadingTurns]);
-
   const toggleSession = useCallback((sessionId: string) => {
     setExpandedSessions(prev => {
       const next = new Set(prev);
-      const isExpanding = !next.has(sessionId);
-      if (isExpanding) {
-        next.add(sessionId);
-        // Select the session when expanding to ensure turns are loaded
-        // This prevents "No messages" for sessions that weren't loaded
-        if (sessionId !== selectedSessionId) {
-          onSelectSession(sessionId);
-        }
-      } else {
+      if (next.has(sessionId)) {
         next.delete(sessionId);
+      } else {
+        next.add(sessionId);
       }
       return next;
     });
-  }, [selectedSessionId, onSelectSession]);
+  }, []);
 
   // Get all session IDs in display order for range selection
   const sessionIdOrder = useMemo(() => {
@@ -1346,6 +652,14 @@ export const SessionTreeView = memo(forwardRef<SessionTreeViewHandle, SessionTre
     // Separate pinned and unpinned sessions
     const pinned = sessions.filter(s => s.isPinned);
     const unpinned = sessions.filter(s => !s.isPinned);
+
+    // Debug: log pinned state
+    debugLog('groupedSessions computation', {
+      totalSessions: sessions.length,
+      pinnedCount: pinned.length,
+      pinnedIds: pinned.map(s => ({ id: s.id.slice(0, 8), title: s.title, isPinned: s.isPinned })),
+      sessionsWithIsPinned: sessions.filter(s => s.isPinned !== undefined).length,
+    });
 
     // Sort pinned by last modified (most recent first)
     pinned.sort((a, b) => {
@@ -1495,27 +809,12 @@ export const SessionTreeView = memo(forwardRef<SessionTreeViewHandle, SessionTre
   // Track index for consistent coloring across groups
   let sessionIndex = 0;
 
-  // Helper to get turns for a session (selected uses props, others use cache)
-  const getTurnsForSession = (sessionId: string): TurnInfo[] => {
-    if (sessionId === selectedSessionId) {
-      return turns;
-    }
-    return sessionTurnsCache.get(sessionId) || [];
-  };
-
-  // Helper to render a session node with all the new props
+  // Helper to render a session node
   const renderSessionNode = (session: SessionInfo) => {
     const isSelected = session.id === selectedSessionId;
     const isChecked = checkedSessions.has(session.id);
     const isExpanded = expandedSessions.has(session.id);
-    const sessionTurns = getTurnsForSession(session.id);
-    const isLoadingSessionTurns = loadingTurns.has(session.id);
     const idx = sessionIndex++;
-
-    // Handle turn click: select session if not selected, then scroll to turn
-    const handleTurnClick = onSelectTurn && isSelected
-      ? (turnIdx: number) => onSelectTurn(turnIdx)
-      : undefined;
 
     return (
       <SessionNode
@@ -1525,26 +824,17 @@ export const SessionTreeView = memo(forwardRef<SessionTreeViewHandle, SessionTre
         isSelected={isSelected}
         isChecked={isChecked}
         isExpanded={isExpanded}
-        turns={sessionTurns}
-        isLoadingTurns={isLoadingSessionTurns}
         showCheckboxes={showCheckboxes}
         onToggle={() => toggleSession(session.id)}
         onSelect={(e) => handleSessionClick(session.id, e)}
         onTogglePin={onTogglePin ? () => onTogglePin(session.id) : undefined}
         onToggleCheck={(e) => handleCheckboxClick(session.id, e)}
-        onExchangeContextModeChange={onExchangeContextModeChange
-          ? (turnIndices, mode) => onExchangeContextModeChange(session.id, turnIndices, mode)
-          : undefined}
-        onExchangeAction={onExchangeAction
-          ? (turnIndices, action) => onExchangeAction(session.id, turnIndices, action)
-          : undefined}
-        onTurnClick={handleTurnClick}
         onReview={onReviewSession ? () => onReviewSession(session.id) : undefined}
         onRename={onRenameSession ? () => onRenameSession(session.id) : undefined}
         onLinkSession={onLinkSession ? () => onLinkSession(session.id) : undefined}
         onWatchSession={onWatchSession ? () => onWatchSession(session.id) : undefined}
+        onNavigateToSession={onSelectSession}
         selectedSessionId={selectedSessionId}
-        archivingTurnIndices={isSelected ? archivingTurnIndices : undefined}
       />
     );
   };
@@ -1634,6 +924,6 @@ export const SessionTreeView = memo(forwardRef<SessionTreeViewHandle, SessionTre
       </ul>
     </div>
   );
-}));
+});
 
 export default SessionTreeView;
