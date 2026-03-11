@@ -1072,9 +1072,55 @@ When working with tasks on a kanban board, follow this workflow:
    - When blocked: `kanban_move_task(task="...", to_column="Backlog")` with a note
 
 3. **Write resolutions when completing tasks**:
-   - Before or after moving to Done, document what was accomplished
-   - `kanban_update_task(task_id="...", resolution="Implemented X using Y approach")`
-   - Resolutions capture the outcome for future reference
+
+   Resolutions are the most valuable part of a kanban task. They capture what was
+   actually done, learned, or decided - turning ephemeral work into permanent knowledge.
+
+   **When to write a resolution:**
+   - Before or immediately after moving a task to Done
+   - When abandoning a task (document why)
+   - When a task reveals something unexpected
+
+   **What to include in a resolution:**
+   - **What was done**: Concrete actions taken, files changed, decisions made
+   - **Key insights**: Anything learned that wasn't obvious at the start
+   - **Gotchas**: Problems encountered and how they were solved
+   - **Links**: References to commits, PRs, docs, or other resources
+   - **Follow-ups**: Any spawned work or open questions
+
+   **Resolution quality guidelines:**
+   - Write for your future self who has forgotten the context
+   - Be specific: "Fixed race condition in cache invalidation by adding mutex"
+     not "Fixed bug"
+   - Include the "why" when it's not obvious
+   - For exploration tasks, summarize findings even if inconclusive
+   - Keep it concise but complete - 2-5 sentences is often right
+
+   **Example resolutions:**
+   ```
+   Implemented Redis caching for user sessions. Used cache-aside pattern with
+   30min TTL. Key insight: needed to invalidate on password change, not just
+   logout. See commit abc123.
+   ```
+
+   ```
+   Investigated memory leak in worker process. Root cause: unbounded queue in
+   the job dispatcher. Didn't fix yet - needs design discussion. Created
+   follow-up task for queue redesign.
+   ```
+
+   ```
+   Watched Carmack's "It's Done When It Ships" talk. Main takeaway: feature
+   cuts are a feature, not a failure. Relevant to our current scope creep
+   on the dashboard project.
+   ```
+
+   **Tool usage:**
+   ```json
+   {"name": "kanban_update_task", "args": {"task_id": "...", "resolution": "..."}}
+   ```
+
+   Write the resolution, then move to Done (or do both in sequence).
 
 4. **Keep the board current**:
    - Create tasks for new work items as they come up

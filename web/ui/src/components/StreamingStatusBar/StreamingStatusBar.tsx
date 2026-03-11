@@ -1,6 +1,6 @@
 import React, { memo, useEffect, useState, useRef, useCallback } from 'react';
 import type { TaskInfo, SessionInfo, BalloonsClient } from '../../../../generated/balloons-client';
-import { useLongPress } from '../../hooks';
+import { useLongPress, useNotifications } from '../../hooks';
 import { useLayout } from '../layout';
 import { usePreferences } from '../layout/PreferencesContext';
 import { RenameSessionModal } from '../RenameSessionModal';
@@ -103,6 +103,28 @@ function PinIcon({ isPinned }: { isPinned: boolean }) {
 }
 
 /**
+ * Bell icon component for notifications toggle
+ */
+function BellIcon({ enabled, muted }: { enabled: boolean; muted?: boolean }) {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill={enabled ? 'currentColor' : 'none'}
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+      <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+      {muted && <path d="M2 2l20 20" strokeWidth="2.5" />}
+    </svg>
+  );
+}
+
+/**
  * Get session display name (title, forkName, or fallback to short ID)
  */
 function getSessionDisplayName(session: SessionInfo): string {
@@ -148,6 +170,14 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
 }: StreamingStatusBarProps) {
   const { expandDetail } = useLayout();
   const { expandToolCards, togglePreference } = usePreferences();
+
+  // Notifications hook for per-session notifications
+  const {
+    notificationsEnabled,
+    toggleNotifications,
+    permissionState,
+  } = useNotifications(session?.id ?? null, client);
+
   // Collapsed state - persist in localStorage (shared with SessionStatusBar)
   const [isCollapsed, setIsCollapsed] = useState(() => {
     const stored = localStorage.getItem('sessionStatusBar.collapsed');
@@ -319,6 +349,25 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
                 <PinIcon isPinned={isPinned} />
               </button>
             )}
+            {/* Notification toggle button */}
+            <button
+              type="button"
+              className={`streaming-status-bar__bell-button ${notificationsEnabled ? 'streaming-status-bar__bell-button--active' : ''} ${permissionState === 'denied' ? 'streaming-status-bar__bell-button--denied' : ''}`}
+              onClick={toggleNotifications}
+              title={
+                permissionState === 'denied'
+                  ? 'Notifications blocked by browser'
+                  : permissionState === 'unsupported'
+                  ? 'Notifications not supported'
+                  : notificationsEnabled
+                  ? 'Disable notifications for this session'
+                  : 'Enable notifications for this session'
+              }
+              aria-label={notificationsEnabled ? 'Disable notifications' : 'Enable notifications'}
+              disabled={permissionState === 'denied' || permissionState === 'unsupported'}
+            >
+              <BellIcon enabled={notificationsEnabled} muted={permissionState === 'denied'} />
+            </button>
             {cwd ? (
               <div
                 className={`streaming-status-bar__cwd ${onCwdClick ? 'streaming-status-bar__cwd--clickable' : ''}`}

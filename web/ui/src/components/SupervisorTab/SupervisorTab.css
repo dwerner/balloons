@@ -228,6 +228,18 @@
   color: var(--color-success, #4caf50);
 }
 
+.supervisor-host-card__restart-actions {
+  display: flex;
+  gap: 0.25rem;
+  margin-left: auto;
+}
+
+.supervisor-host-card__restart-actions .supervisor-action {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  min-width: 2.5rem;
+}
+
 .supervisor-host-card__error-block {
   margin-top: 0.25rem;
   padding: 0.5rem;

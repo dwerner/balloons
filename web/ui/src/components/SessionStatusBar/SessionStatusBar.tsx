@@ -1,6 +1,6 @@
 import React, { memo, useState, useEffect, useCallback } from 'react';
 import type { SessionInfo, BalloonsClient } from '../../../../generated/balloons-client';
-import { useLongPress } from '../../hooks';
+import { useLongPress, useNotifications } from '../../hooks';
 import { useLayout } from '../layout';
 import { usePreferences } from '../layout/PreferencesContext';
 import { RenameSessionModal } from '../RenameSessionModal';
@@ -111,6 +111,29 @@ function PinIcon({ isPinned }: { isPinned: boolean }) {
 }
 
 /**
+ * Bell icon component for notifications toggle
+ */
+function BellIcon({ enabled, muted }: { enabled: boolean; muted?: boolean }) {
+  // Bell with optional slash for muted state
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill={enabled ? 'currentColor' : 'none'}
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+      <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+      {muted && <path d="M2 2l20 20" strokeWidth="2.5" />}
+    </svg>
+  );
+}
+
+/**
  * Get session display name (title, forkName, or fallback to short ID)
  */
 function getSessionDisplayName(session: SessionInfo): string {
@@ -158,6 +181,13 @@ export const SessionStatusBar = memo(function SessionStatusBar({
   const modelDisplay = getModelDisplayName(session.model);
   const isPinned = session.isPinned ?? false;
   const sessionName = getSessionDisplayName(session);
+
+  // Notifications hook for per-session notifications
+  const {
+    notificationsEnabled,
+    toggleNotifications,
+    permissionState,
+  } = useNotifications(session.id, client);
 
   // Collapsed state - persist in localStorage
   const [isCollapsed, setIsCollapsed] = useState(() => {
@@ -344,6 +374,25 @@ export const SessionStatusBar = memo(function SessionStatusBar({
                 <PinIcon isPinned={isPinned} />
               </button>
             )}
+            {/* Notification toggle button */}
+            <button
+              type="button"
+              className={`session-status-bar__bell-button ${notificationsEnabled ? 'session-status-bar__bell-button--active' : ''} ${permissionState === 'denied' ? 'session-status-bar__bell-button--denied' : ''}`}
+              onClick={toggleNotifications}
+              title={
+                permissionState === 'denied'
+                  ? 'Notifications blocked by browser'
+                  : permissionState === 'unsupported'
+                  ? 'Notifications not supported'
+                  : notificationsEnabled
+                  ? 'Disable notifications for this session'
+                  : 'Enable notifications for this session'
+              }
+              aria-label={notificationsEnabled ? 'Disable notifications' : 'Enable notifications'}
+              disabled={permissionState === 'denied' || permissionState === 'unsupported'}
+            >
+              <BellIcon enabled={notificationsEnabled} muted={permissionState === 'denied'} />
+            </button>
             {cwd ? (
               <div
                 className={`session-status-bar__cwd ${onCwdClick ? 'session-status-bar__cwd--clickable' : ''}`}

@@ -1024,6 +1024,44 @@ export function useSessionData(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client, autoSubscribe, refreshKey]);
 
+  // Sync streaming state when page becomes visible
+  // This handles the case where the browser was backgrounded and the WebSocket
+  // was disconnected - when the page becomes visible again, we query the server
+  // to get the current streaming state in case it changed while we were away.
+  useEffect(() => {
+    if (!client || !autoSubscribe) return;
+
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState === 'visible' && client.isConnected && currentSessionRef.current) {
+        debugLog('[useSessionData] Page became visible, syncing streaming state');
+        try {
+          // Query the server for current streaming state
+          const actuallyStreaming = await client.sessionData.isSessionStreaming(currentSessionRef.current);
+          debugLog('[useSessionData] Server streaming state sync', { server: actuallyStreaming, local: isStreaming });
+
+          // Only update if our local state is stale
+          if (actuallyStreaming !== isStreaming) {
+            debugLog('[useSessionData] Streaming state was stale, updating:', { was: isStreaming, now: actuallyStreaming });
+            setIsStreaming(actuallyStreaming);
+
+            // If streaming ended while we were away, clear progress
+            if (!actuallyStreaming) {
+              setStreamingProgress(null);
+            }
+          }
+        } catch (err) {
+          // Non-fatal - just log the error
+          debugLog('[useSessionData] Failed to sync streaming state:', err);
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [client, autoSubscribe, isStreaming]);
+
   // Start/stop delta flush interval based on streaming state
   useEffect(() => {
     if (isStreaming) {

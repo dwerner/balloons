@@ -33,6 +33,7 @@ KANBAN_TOOL_NAMES = {
     "kanban_list_tasks",
     "kanban_get_board_state",
     "kanban_create_board",
+    "kanban_delete_column",
 }
 
 # Tools that mutate kanban data
@@ -42,6 +43,7 @@ KANBAN_MUTATION_TOOLS = {
     "kanban_move_task",
     "kanban_delete_task",
     "kanban_create_board",
+    "kanban_delete_column",
 }
 
 
@@ -273,6 +275,34 @@ If no board_id is specified, uses the primary board for this session.""",
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "kanban_delete_column",
+            "description": """Delete a column from a kanban board.
+
+Removes a column. If the column has tasks, you can optionally move them
+to another column; otherwise they become orphaned.
+
+Use this when:
+- Simplifying a board (e.g., removing unused 'To Do' or 'In Progress' columns)
+- Reorganizing board structure""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "column": {
+                        "type": "string",
+                        "description": "Column name (e.g., 'To Do') or column ID"
+                    },
+                    "move_tasks_to": {
+                        "type": "string",
+                        "description": "Optional: column name or ID to move tasks to before deleting"
+                    }
+                },
+                "required": ["column"]
+            }
+        }
+    },
 ]
 
 
@@ -321,6 +351,9 @@ async def execute_kanban_tool(
 
         elif name == "kanban_get_board_state":
             return await _get_board_state(args, session_id, kanban)
+
+        elif name == "kanban_delete_column":
+            return await _delete_column(args, session_id, kanban)
 
         else:
             return f"Unknown kanban tool: {name}", True
@@ -627,3 +660,33 @@ async def _get_board_state(args: dict, session_id: str, kanban: KanbanService) -
         result_lines.append("")
 
     return "\n".join(result_lines), False
+
+
+async def _delete_column(args: dict, session_id: str, kanban: KanbanService) -> tuple[str, bool]:
+    """Delete a column from a board."""
+    column_ref = args.get("column", "").strip()
+    if not column_ref:
+        return "Error: column is required", True
+
+    move_tasks_to = args.get("move_tasks_to", "").strip() if args.get("move_tasks_to") else None
+
+    # Resolve column name to ID
+    column_id = await _resolve_column(column_ref, session_id, kanban)
+    if not column_id:
+        return f"Error: Column '{column_ref}' not found", True
+
+    # Resolve move_tasks_to column if provided
+    move_to_id = None
+    if move_tasks_to:
+        move_to_id = await _resolve_column(move_tasks_to, session_id, kanban)
+        if not move_to_id:
+            return f"Error: Target column '{move_tasks_to}' not found", True
+
+    success = await kanban.delete_column(column_id, move_tasks_to=move_to_id)
+
+    if not success:
+        return f"Error: Failed to delete column '{column_ref}'", True
+
+    if move_to_id:
+        return f"Deleted column '{column_ref}' and moved tasks to '{move_tasks_to}'", False
+    return f"Deleted column '{column_ref}'", False

@@ -110,14 +110,22 @@ const HostCard = memo(function HostCard({
   onCheckStatus,
   onEdit,
   onDelete,
+  onRestartServer,
+  onRestartUI,
   isChecking,
+  isRestarting,
+  serverStatus,
 }: {
   host: HostInfo;
   processCount: number;
   onCheckStatus: (hostName: string) => void;
   onEdit: (host: HostInfo) => void;
   onDelete: (hostName: string) => void;
+  onRestartServer?: (slot: 'a' | 'b') => void;
+  onRestartUI?: () => void;
   isChecking: boolean;
+  isRestarting?: boolean;
+  serverStatus?: { backend_a?: { running: boolean; pid: number | null }; backend_b?: { running: boolean; pid: number | null }; ui?: { running: boolean; pid: number | null } };
 }) {
   const displayStatus = isChecking ? 'checking' : (host.status || 'unknown');
   const isLocal = host.name === 'local';
@@ -176,6 +184,35 @@ const HostCard = memo(function HostCard({
             onClick={() => onCheckStatus(host.name)}
             disabled={isChecking}
           />
+        )}
+        {/* Server restart buttons for local host */}
+        {isLocal && (onRestartServer || onRestartUI) && (
+          <div className="supervisor-host-card__restart-actions">
+            {onRestartServer && (
+              <>
+                <ActionButton
+                  label={isRestarting ? '...' : `↻A${serverStatus?.backend_a?.running ? '' : '○'}`}
+                  onClick={() => onRestartServer('a')}
+                  disabled={isRestarting}
+                  variant="default"
+                />
+                <ActionButton
+                  label={isRestarting ? '...' : `↻B${serverStatus?.backend_b?.running ? '' : '○'}`}
+                  onClick={() => onRestartServer('b')}
+                  disabled={isRestarting}
+                  variant="default"
+                />
+              </>
+            )}
+            {onRestartUI && (
+              <ActionButton
+                label={isRestarting ? '...' : `↻UI${serverStatus?.ui?.running ? '' : '○'}`}
+                onClick={onRestartUI}
+                disabled={isRestarting}
+                variant="default"
+              />
+            )}
+          </div>
         )}
       </div>
 
@@ -532,6 +569,27 @@ export function SupervisorTab({
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  // Server restart state
+  const [isRestartingServer, setIsRestartingServer] = useState(false);
+
+  // Server status state (for showing which servers are running)
+  const [serverStatus, setServerStatus] = useState<{
+    backend_a?: { running: boolean; pid: number | null };
+    backend_b?: { running: boolean; pid: number | null };
+    ui?: { running: boolean; pid: number | null };
+  } | null>(null);
+
+  // Load server status
+  const loadServerStatus = useCallback(async () => {
+    if (!supervisorClient) return;
+    try {
+      const status = await supervisorClient.getServerStatus();
+      setServerStatus(status);
+    } catch (e) {
+      console.error('Failed to load server status:', e);
+    }
+  }, [supervisorClient]);
+
   // Load initial state
   const loadState = useCallback(async () => {
     if (!supervisorClient) return;
@@ -541,12 +599,14 @@ export function SupervisorTab({
       const newState = await supervisorClient.getState();
       setState(newState);
       setError(null);
+      // Also load server status
+      loadServerStatus();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load supervisor state');
     } finally {
       setIsRefreshing(false);
     }
-  }, [supervisorClient]);
+  }, [supervisorClient, loadServerStatus]);
 
   // Initial load
   useEffect(() => {
@@ -825,6 +885,86 @@ export function SupervisorTab({
     [supervisorClient, loadState, confirm, alert]
   );
 
+  // Restart backend server (slot A or B)
+  const handleRestartServer = useCallback(
+    async (slot: 'a' | 'b') => {
+      if (!supervisorClient) return;
+
+      const confirmed = await confirm({
+        title: 'Restart Backend Server',
+        message: `Restart backend server slot ${slot.toUpperCase()}?\n\nThis will disconnect any active sessions on this slot.`,
+        confirmText: 'Restart',
+        variant: 'warning',
+      });
+      if (!confirmed) return;
+
+      setIsRestartingServer(true);
+      try {
+        const result = await supervisorClient.restartBackend(slot);
+        if (!result.success) {
+          await alert({
+            title: 'Error',
+            message: result.error || 'Failed to restart server',
+          });
+        } else {
+          // Give the server a moment to restart, then refresh status
+          setTimeout(() => {
+            loadServerStatus();
+            setIsRestartingServer(false);
+          }, 3000);
+          return; // Don't clear isRestarting immediately
+        }
+      } catch (e) {
+        await alert({
+          title: 'Error',
+          message: e instanceof Error ? e.message : 'Failed to restart server',
+        });
+      }
+      setIsRestartingServer(false);
+    },
+    [supervisorClient, confirm, alert, loadServerStatus]
+  );
+
+  // Restart UI server (bun dev:tls)
+  const handleRestartUI = useCallback(
+    async () => {
+      if (!supervisorClient) return;
+
+      const confirmed = await confirm({
+        title: 'Restart UI Server',
+        message: 'Restart the bun dev server?\n\nThe page may need to be refreshed after restart.',
+        confirmText: 'Restart',
+        variant: 'warning',
+      });
+      if (!confirmed) return;
+
+      setIsRestartingServer(true);
+      try {
+        const result = await supervisorClient.restartUi();
+        if (!result.success) {
+          await alert({
+            title: 'Error',
+            message: result.error || 'Failed to restart UI server',
+          });
+        } else {
+          // Give the server a moment to restart, then refresh status
+          setTimeout(() => {
+            loadServerStatus();
+            setIsRestartingServer(false);
+          }, 3000);
+          return;
+        }
+      } catch (e) {
+        await alert({
+          title: 'Error',
+          message: e instanceof Error ? e.message : 'Failed to restart UI server',
+        });
+      }
+      setIsRestartingServer(false);
+    },
+    [supervisorClient, confirm, alert, loadServerStatus]
+  );
+
   // Group processes by host
   const processesByHost = React.useMemo(() => {
     if (!state?.processes) return new Map<string, ProcessInfo[]>();
@@ -911,7 +1051,11 @@ export function SupervisorTab({
               onCheckStatus={handleCheckHostStatus}
               onEdit={handleEditHost}
               onDelete={handleDeleteHost}
+              onRestartServer={handleRestartServer}
+              onRestartUI={handleRestartUI}
               isChecking={checkingHosts.has(host.name)}
+              isRestarting={isRestartingServer}
+              serverStatus={serverStatus || undefined}
             />
           ))}
         </div>

@@ -2103,6 +2103,25 @@ class SessionDataService:
         return session_id in pinned_ids
 
     @ws_expose
+    async def is_session_streaming(self, session_id: str) -> bool:
+        """Check if a session is currently streaming.
+
+        This is useful for refreshing client state after reconnection
+        or when the page becomes visible after being backgrounded.
+
+        Args:
+            session_id: The session to check
+
+        Returns:
+            True if the session has an active stream
+        """
+        if not self._stream_state:
+            return False
+
+        stream = self._stream_state.get_session_stream(session_id)
+        return stream is not None and stream.is_active
+
+    @ws_expose
     async def get_pinned_sessions(self) -> list[str]:
         """Get all pinned session IDs.
 

@@ -57,22 +57,90 @@ function formatDayGroup(dateStr: string): string {
   }
 }
 
-// Arrow icon
-function Arrow({ open, color }: { open: boolean; color?: string }) {
+
+// Tree branch connector - shows vertical line with optional horizontal branch
+interface TreeConnectorProps {
+  depth: number;
+  isLast: boolean;  // Is this the last child at this level?
+  isLeaf: boolean;  // Is this a leaf node (no children)?
+  hasParent: boolean;  // Does this node have a parent?
+  continuations: boolean[];  // For each ancestor level, should we show a continuation line?
+  color?: string;
+}
+
+function TreeConnector({ depth, isLast, isLeaf, hasParent, continuations, color }: TreeConnectorProps) {
+  if (depth === 0 || !hasParent) return null;
+
+  const strokeColor = color || '#555';
+  // Use viewBox coordinates - SVG will stretch to fill container via CSS
+  const vbHeight = 100;
+
   return (
-    <svg
-      width="12"
-      height="12"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke={color || 'currentColor'}
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={`hierarchy-arrow ${open ? 'hierarchy-arrow--open' : ''}`}
-    >
-      <path d="M6 9l6 6 6-6" />
-    </svg>
+    <span className="hierarchy-tree-connector" style={{ width: `${depth * 16}px` }}>
+      {/* Render continuation lines for ancestors */}
+      {continuations.slice(0, depth - 1).map((showLine, idx) => (
+        <svg
+          key={idx}
+          viewBox={`0 0 16 ${vbHeight}`}
+          preserveAspectRatio="none"
+          className="hierarchy-tree-line"
+          style={{ left: `${idx * 16}px`, width: '16px' }}
+        >
+          {showLine && (
+            <line
+              x1="8"
+              y1="0"
+              x2="8"
+              y2={vbHeight}
+              stroke={strokeColor}
+              strokeWidth="1.5"
+              strokeOpacity="0.8"
+              vectorEffect="non-scaling-stroke"
+            />
+          )}
+        </svg>
+      ))}
+      {/* Branch connector for this node */}
+      <svg
+        viewBox={`0 0 16 ${vbHeight}`}
+        preserveAspectRatio="none"
+        className="hierarchy-tree-branch"
+        style={{ left: `${(depth - 1) * 16}px`, width: '16px' }}
+      >
+        {/* Vertical line - full height if not last, to middle if last */}
+        <line
+          x1="8"
+          y1="0"
+          x2="8"
+          y2={isLast ? vbHeight / 2 : vbHeight}
+          stroke={strokeColor}
+          strokeWidth="1.5"
+          strokeOpacity="0.8"
+          vectorEffect="non-scaling-stroke"
+        />
+        {/* Horizontal branch to the node */}
+        <line
+          x1="8"
+          y1={vbHeight / 2}
+          x2={isLeaf ? 13 : 16}
+          y2={vbHeight / 2}
+          stroke={strokeColor}
+          strokeWidth="1.5"
+          strokeOpacity="0.8"
+          vectorEffect="non-scaling-stroke"
+        />
+        {/* Leaf indicator - small circle at the end */}
+        {isLeaf && (
+          <circle
+            cx="14"
+            cy={vbHeight / 2}
+            r="2.5"
+            fill={strokeColor}
+            fillOpacity="0.8"
+          />
+        )}
+      </svg>
+    </span>
   );
 }
 
@@ -80,27 +148,33 @@ function Arrow({ open, color }: { open: boolean; color?: string }) {
 function StreamingSpinner() {
   return (
     <svg
-      width="12"
-      height="12"
+      width="14"
+      height="14"
       viewBox="0 0 24 24"
       fill="none"
       className="hierarchy-spinner"
+      style={{ display: 'inline-block' }}
     >
-      {/* Background circle (faded) */}
+      {/* Background track */}
       <circle
         cx="12"
         cy="12"
-        r="9"
+        r="10"
         stroke="currentColor"
         strokeWidth="2"
-        opacity="0.25"
+        fill="none"
+        opacity="0.2"
       />
-      {/* Arc segment that rotates */}
-      <path
-        d="M12 3 A9 9 0 0 1 21 12"
+      {/* Spinning arc - uses strokeDasharray to create partial circle */}
+      <circle
+        cx="12"
+        cy="12"
+        r="10"
         stroke="currentColor"
         strokeWidth="2"
+        fill="none"
         strokeLinecap="round"
+        strokeDasharray="47 63"
       />
     </svg>
   );
@@ -116,11 +190,34 @@ const SESSION_COLORS = [
   '#f87171', // red
 ];
 
+// Depth tint colors - cycle through these when depth > 10
+const DEPTH_TINT_COLORS = [
+  '139, 92, 246',   // purple
+  '34, 211, 238',   // cyan
+  '251, 146, 60',   // orange
+];
+
+// Calculate depth-based tint: lerp from 0 to max intensity over 10 levels, then cycle colors
+function getDepthTint(depth: number): { color: string; opacity: number } {
+  const defaultColor = DEPTH_TINT_COLORS[0]!;
+  if (depth === 0) return { color: defaultColor, opacity: 0 };
+
+  const cycleIndex = Math.floor((depth - 1) / 10);
+  const depthInCycle = ((depth - 1) % 10) + 1;
+  const color = DEPTH_TINT_COLORS[cycleIndex % DEPTH_TINT_COLORS.length] ?? defaultColor;
+  const opacity = depthInCycle * 0.03; // 0.03 per level, max 0.3 at depth 10
+
+  return { color, opacity };
+}
+
 interface SessionNodeProps {
   session: SessionInfo;
-  depth: number;
+  depth: number;  // Visual indentation depth
+  treeDepth: number;  // Actual depth from root (for tint calculation)
   isSelected: boolean;
   isExpanded: boolean;
+  isLast: boolean;  // Is this the last sibling?
+  continuations: boolean[];  // Which ancestor levels should show continuation lines?
   childSessions: SessionInfo[];  // Direct children from the sessions list
   onSelect: (sessionId: string) => void;
   onToggle: (sessionId: string) => void;
@@ -128,13 +225,17 @@ interface SessionNodeProps {
   expandedSessions: Set<string>;
   selectedSessionId: string | null;
   rootColorMap: Map<string, number>;  // Maps session ID to root's color index
+  unreadSessionIds: Set<string>;  // Sessions that finished streaming but haven't been viewed
 }
 
 const SessionNode = memo(function SessionNode({
   session,
   depth,
+  treeDepth,
   isSelected,
   isExpanded,
+  isLast,
+  continuations,
   childSessions,
   onSelect,
   onToggle,
@@ -142,12 +243,14 @@ const SessionNode = memo(function SessionNode({
   expandedSessions,
   selectedSessionId,
   rootColorMap,
+  unreadSessionIds,
 }: SessionNodeProps) {
   // Use the root ancestor's color for consistent lineage coloring
   const colorIndex = rootColorMap.get(session.id) ?? 0;
   const sessionColor = SESSION_COLORS[colorIndex % SESSION_COLORS.length] || '#60a5fa';
   const sessionName = session.forkName || session.title || `Session ${session.id.slice(0, 8)}`;
   const hasChildren = childSessions.length > 0;
+  const isUnread = unreadSessionIds.has(session.id);
 
   const handleClick = useCallback(() => {
     onSelect(session.id);
@@ -158,28 +261,33 @@ const SessionNode = memo(function SessionNode({
     onToggle(session.id);
   }, [onToggle, session.id]);
 
-  // Depth-based background tint (gets stronger as depth increases)
-  const depthOpacity = Math.min(depth * 0.03, 0.15);
+  // Depth-based background tint: lerp from 0 at root to max at depth 10, then cycle colors
+  const depthTint = getDepthTint(treeDepth);
+
+  // Padding for tree connector
+  const connectorPadding = depth > 0 && session.parentId ? depth * 16 : 0;
 
   return (
     <li className="hierarchy-node">
       <div
-        className={`hierarchy-node__content ${isSelected ? 'hierarchy-node__content--selected' : ''} ${session.forkStatus === 'merged' ? 'hierarchy-node__content--merged' : ''}`}
+        className={`hierarchy-node__content ${isSelected ? 'hierarchy-node__content--selected' : ''} ${session.forkStatus === 'merged' ? 'hierarchy-node__content--merged' : ''} ${isUnread ? 'hierarchy-node__content--unread' : ''}`}
         onClick={handleClick}
         style={{
-          paddingLeft: `${depth * 16 + 8}px`,
+          paddingLeft: `${8 + connectorPadding}px`,
           borderLeftColor: sessionColor,
-          '--depth-tint': depthOpacity,
+          '--depth-tint-color': depthTint.color,
+          '--depth-tint-opacity': depthTint.opacity,
         } as React.CSSProperties}
       >
-        {/* Expand/collapse toggle */}
-        <span
-          className="hierarchy-node__toggle"
-          onClick={hasChildren ? handleToggle : undefined}
-          style={{ visibility: hasChildren ? 'visible' : 'hidden' }}
-        >
-          <Arrow open={isExpanded} color={sessionColor} />
-        </span>
+        {/* Tree connector graphics */}
+        <TreeConnector
+          depth={depth}
+          isLast={isLast}
+          isLeaf={!hasChildren}
+          hasParent={!!session.parentId}
+          continuations={continuations}
+          color={sessionColor}
+        />
 
         {/* Status indicators */}
         {session.isStreaming && (
@@ -193,33 +301,14 @@ const SessionNode = memo(function SessionNode({
           <span className="hierarchy-node__badge hierarchy-node__badge--merged" title="Merged">✓</span>
         )}
 
-        {/* Fork indicator (only show if not merged) */}
-        {session.parentId && session.forkStatus !== 'merged' && (
-          <span
-            className="hierarchy-node__badge hierarchy-node__badge--fork"
-            title={`Fork of ${session.parentId.slice(0, 8)}`}
-          >
-            ↳
-          </span>
-        )}
-
-        {/* Children count badge */}
+        {/* Children count badge - click to expand/collapse */}
         {hasChildren && (
           <span
-            className="hierarchy-node__badge hierarchy-node__badge--children"
-            title={`${childSessions.length} fork(s)`}
+            className={`hierarchy-node__badge hierarchy-node__badge--children ${isExpanded ? 'hierarchy-node__badge--expanded' : ''}`}
+            title={`${childSessions.length} fork(s) - click to ${isExpanded ? 'collapse' : 'expand'}`}
+            onClick={handleToggle}
           >
             ⑂{childSessions.length}
-          </span>
-        )}
-
-        {/* Leaf indicator (no children) - debug */}
-        {!hasChildren && (
-          <span
-            className="hierarchy-node__badge hierarchy-node__badge--leaf"
-            title="Leaf (no children)"
-          >
-            🍃
           </span>
         )}
 
@@ -249,15 +338,21 @@ const SessionNode = memo(function SessionNode({
       {/* Children (recursive) */}
       {isExpanded && hasChildren && (
         <ul className="hierarchy-children">
-          {childSessions.map((child) => {
+          {childSessions.map((child, idx) => {
             const grandchildren = allSessions.filter(s => s.parentId === child.id);
+            const childIsLast = idx === childSessions.length - 1;
+            // Build continuations for the child: current continuations + whether this child has siblings below
+            const childContinuations = [...continuations, !childIsLast];
             return (
               <SessionNode
                 key={child.id}
                 session={child}
                 depth={depth + 1}
+                treeDepth={treeDepth + 1}
                 isSelected={child.id === selectedSessionId}
                 isExpanded={expandedSessions.has(child.id)}
+                isLast={childIsLast}
+                continuations={childContinuations}
                 childSessions={grandchildren}
                 onSelect={onSelect}
                 onToggle={onToggle}
@@ -265,6 +360,7 @@ const SessionNode = memo(function SessionNode({
                 expandedSessions={expandedSessions}
                 selectedSessionId={selectedSessionId}
                 rootColorMap={rootColorMap}
+                unreadSessionIds={unreadSessionIds}
               />
             );
           })}
@@ -281,16 +377,20 @@ export interface HierarchyViewProps {
   selectedSessionId: string | null;
   onSelectSession: (sessionId: string) => void;
   isLoading?: boolean;
+  /** Set of session IDs that have finished streaming but haven't been viewed */
+  unreadSessionIds?: Set<string>;
 }
 
 // Reversed node for leaves-first mode - shows parent as child
 interface ReversedNodeProps {
   session: SessionInfo;
   depth: number;
+  treeDepth: number;  // Actual depth from root (for tint calculation)
   isSelected: boolean;
   isExpanded: boolean;
+  isLast: boolean;  // Is this the last sibling?
+  continuations: boolean[];  // Which ancestor levels should show continuation lines?
   parentSession: SessionInfo | null;
-  siblingCount: number;  // Number of other children of this session's parent (siblings)
   onSelect: (sessionId: string) => void;
   onToggle: (sessionId: string) => void;
   allSessions: SessionInfo[];
@@ -298,15 +398,18 @@ interface ReversedNodeProps {
   expandedSessions: Set<string>;
   selectedSessionId: string | null;
   rootColorMap: Map<string, number>;  // Maps session ID to root's color index
+  unreadSessionIds: Set<string>;  // Sessions that finished streaming but haven't been viewed
 }
 
 const ReversedNode = memo(function ReversedNode({
   session,
   depth,
+  treeDepth,
   isSelected,
   isExpanded,
+  isLast,
+  continuations,
   parentSession,
-  siblingCount,
   onSelect,
   onToggle,
   allSessions,
@@ -314,12 +417,14 @@ const ReversedNode = memo(function ReversedNode({
   expandedSessions,
   selectedSessionId,
   rootColorMap,
+  unreadSessionIds,
 }: ReversedNodeProps) {
   // Use the root ancestor's color for consistent lineage coloring
   const colorIndex = rootColorMap.get(session.id) ?? 0;
   const sessionColor = SESSION_COLORS[colorIndex % SESSION_COLORS.length] || '#60a5fa';
   const sessionName = session.forkName || session.title || `Session ${session.id.slice(0, 8)}`;
   const hasParent = parentSession !== null;
+  const isUnread = unreadSessionIds.has(session.id);
 
   const handleClick = useCallback(() => {
     onSelect(session.id);
@@ -330,32 +435,39 @@ const ReversedNode = memo(function ReversedNode({
     onToggle(session.id);
   }, [onToggle, session.id]);
 
-  // Depth-based background tint (gets stronger as depth increases)
-  const depthOpacity = Math.min(depth * 0.03, 0.15);
+  // Depth-based background tint: lerp from 0 at root to max at depth 10, then cycle colors
+  const depthTint = getDepthTint(treeDepth);
+
+  // Padding for tree connector
+  const connectorPadding = depth > 0 ? depth * 16 : 0;
 
   return (
     <li className="hierarchy-node">
       <div
-        className={`hierarchy-node__content ${isSelected ? 'hierarchy-node__content--selected' : ''} ${session.forkStatus === 'merged' ? 'hierarchy-node__content--merged' : ''}`}
+        className={`hierarchy-node__content ${isSelected ? 'hierarchy-node__content--selected' : ''} ${session.forkStatus === 'merged' ? 'hierarchy-node__content--merged' : ''} ${isUnread ? 'hierarchy-node__content--unread' : ''}`}
         onClick={handleClick}
         style={{
-          paddingLeft: `${depth * 16 + 8}px`,
+          paddingLeft: `${8 + connectorPadding}px`,
           borderLeftColor: sessionColor,
-          '--depth-tint': depthOpacity,
+          '--depth-tint-color': depthTint.color,
+          '--depth-tint-opacity': depthTint.opacity,
         } as React.CSSProperties}
       >
-        {/* Expand/collapse toggle - shows parent when expanded */}
-        <span
-          className="hierarchy-node__toggle"
-          onClick={hasParent ? handleToggle : undefined}
-          style={{ visibility: hasParent ? 'visible' : 'hidden' }}
-        >
-          <Arrow open={isExpanded} color={sessionColor} />
-        </span>
+        {/* Tree connector graphics */}
+        <TreeConnector
+          depth={depth}
+          isLast={isLast}
+          isLeaf={!(childrenByParent.get(session.id)?.length || session.children?.length)}
+          hasParent={depth > 0}
+          continuations={continuations}
+          color={sessionColor}
+        />
 
         {/* Status indicators */}
         {session.isStreaming && (
-          <span className="hierarchy-node__badge hierarchy-node__badge--streaming">⟳</span>
+          <span className="hierarchy-node__badge hierarchy-node__badge--streaming" title="Streaming">
+            <StreamingSpinner />
+          </span>
         )}
 
         {/* Merge status - prominent indicator */}
@@ -363,31 +475,15 @@ const ReversedNode = memo(function ReversedNode({
           <span className="hierarchy-node__badge hierarchy-node__badge--merged" title="Merged">✓</span>
         )}
 
-        {/* Has parent indicator (in leaves mode) */}
+        {/* Has parent indicator (in leaves mode) - click to expand/collapse */}
+        {/* Shows ↑N where N is total ancestry depth (when collapsed at top level) */}
         {hasParent && (
-          <span className="hierarchy-node__badge hierarchy-node__badge--parent" title={`Parent: ${parentSession.id.slice(0, 8)}`}>
-            ↑
-          </span>
-        )}
-
-        {/* Sibling indicator - shows when parent has other children we're not showing */}
-        {siblingCount > 0 && (
           <span
-            className="hierarchy-node__badge hierarchy-node__badge--siblings"
-            title={`${siblingCount} sibling branch${siblingCount > 1 ? 'es' : ''} (switch to Roots mode to see all)`}
+            className={`hierarchy-node__badge hierarchy-node__badge--parent ${isExpanded ? 'hierarchy-node__badge--expanded' : ''}`}
+            title={`${treeDepth} ancestor${treeDepth > 1 ? 's' : ''} - click to ${isExpanded ? 'collapse' : 'show ancestry'}`}
+            onClick={handleToggle}
           >
-            +{siblingCount}
-          </span>
-        )}
-
-        {/* Leaf indicator - show if session has no children (debug) */}
-        {/* In ReversedNode we need to check both childrenByParent and session.children */}
-        {!childrenByParent.get(session.id)?.length && !session.children?.length && (
-          <span
-            className="hierarchy-node__badge hierarchy-node__badge--leaf"
-            title="Leaf (no children)"
-          >
-            🍃
+            ↑{depth === 0 && treeDepth > 1 ? treeDepth : ''}
           </span>
         )}
 
@@ -431,19 +527,20 @@ const ReversedNode = memo(function ReversedNode({
         const grandparent = parentSession.parentId
           ? allSessions.find(s => s.id === parentSession.parentId)
           : null;
-        const parentSiblingCount = grandparent
-          ? (childrenByParent.get(grandparent.id)?.length ?? 1) - 1
-          : 0;
+        // Build continuations for the parent - in reversed view, we're always showing a single chain
+        const parentContinuations = [...continuations, false];
 
         return (
           <ul className="hierarchy-children">
             <ReversedNode
               session={parentSession}
               depth={depth + 1}
+              treeDepth={treeDepth - 1}
               isSelected={parentSession.id === selectedSessionId}
               isExpanded={expandedSessions.has(parentSession.id)}
+              isLast={true}
+              continuations={parentContinuations}
               parentSession={grandparent || null}
-              siblingCount={parentSiblingCount}
               onSelect={onSelect}
               onToggle={onToggle}
               allSessions={allSessions}
@@ -451,6 +548,7 @@ const ReversedNode = memo(function ReversedNode({
               expandedSessions={expandedSessions}
               selectedSessionId={selectedSessionId}
               rootColorMap={rootColorMap}
+              unreadSessionIds={unreadSessionIds}
             />
           </ul>
         );
@@ -461,11 +559,15 @@ const ReversedNode = memo(function ReversedNode({
 
 const HIERARCHY_MODE_KEY = 'balloons:hierarchy-mode';
 
+// Empty set to use as default when unreadSessionIds is not provided
+const EMPTY_SET = new Set<string>();
+
 export const HierarchyView = memo(function HierarchyView({
   sessions,
   selectedSessionId,
   onSelectSession,
   isLoading = false,
+  unreadSessionIds = EMPTY_SET,
 }: HierarchyViewProps) {
   // View mode: 'roots' = roots at top, 'leaves' = leaves at top (default)
   // Persisted in localStorage
@@ -500,8 +602,8 @@ export const HierarchyView = memo(function HierarchyView({
     return withChildren;
   }, [sessions]);
 
-  // Build session lookup and root-finding function (shared by leafSessions and rootColorMap)
-  const { sessionById, findRoot, rootIds } = useMemo(() => {
+  // Build session lookup, root-finding function, and depth calculator
+  const { sessionById, findRoot, rootIds, getTreeDepth } = useMemo(() => {
     const byId = new Map(sessions.map(s => [s.id, s]));
 
     // Memoized root finding with cache
@@ -520,33 +622,64 @@ export const HierarchyView = memo(function HierarchyView({
       return rootId;
     };
 
+    // Compute depth from root (0 = root, 1 = child of root, etc.)
+    const depthCache = new Map<string, number>();
+    const depth = (sessionId: string): number => {
+      if (depthCache.has(sessionId)) {
+        return depthCache.get(sessionId)!;
+      }
+      const session = byId.get(sessionId);
+      if (!session || !session.parentId) {
+        depthCache.set(sessionId, 0);
+        return 0;
+      }
+      const d = depth(session.parentId) + 1;
+      depthCache.set(sessionId, d);
+      return d;
+    };
+
     // Pre-compute root for each session and collect unique roots
     const roots = new Set<string>();
     for (const session of sessions) {
       roots.add(find(session.id));
     }
 
-    return { sessionById: byId, findRoot: find, rootIds: roots };
+    return { sessionById: byId, findRoot: find, rootIds: roots, getTreeDepth: depth };
   }, [sessions]);
 
+  // Compute most recent leaf lastModified for each root (for sorting)
+  const mostRecentLeafByRoot = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const session of sessions) {
+      if (!sessionsWithChildren.has(session.id)) {
+        // This is a leaf
+        const rootId = findRoot(session.id);
+        const leafTime = new Date(session.lastModified).getTime();
+        const existing = map.get(rootId) || 0;
+        if (leafTime > existing) {
+          map.set(rootId, leafTime);
+        }
+      }
+    }
+    return map;
+  }, [sessions, sessionsWithChildren, findRoot]);
+
   // Compute leaf sessions (no children) for leaves mode
-  // Sort by: 1) root ancestor (to group relatives), 2) last modified within group
+  // Sort by: most recent leaf in each tree, then by lastModified within group
   const leafSessions = useMemo(() => {
     const leaves = sessions
       .filter(s => !sessionsWithChildren.has(s.id));
 
-    // Sort: group by root ancestor, then by lastModified within each group
+    // Sort: group by root ancestor (ordered by most recent leaf), then by lastModified within each group
     leaves.sort((a, b) => {
       const rootA = findRoot(a.id);
       const rootB = findRoot(b.id);
 
-      // Different roots: sort by root's lastModified to keep related groups together
+      // Different roots: sort by most recent leaf in each tree
       if (rootA !== rootB) {
-        const rootSessionA = sessionById.get(rootA);
-        const rootSessionB = sessionById.get(rootB);
-        const rootTimeA = rootSessionA ? new Date(rootSessionA.lastModified).getTime() : 0;
-        const rootTimeB = rootSessionB ? new Date(rootSessionB.lastModified).getTime() : 0;
-        return rootTimeB - rootTimeA; // Most recently modified root first
+        const recentA = mostRecentLeafByRoot.get(rootA) || 0;
+        const recentB = mostRecentLeafByRoot.get(rootB) || 0;
+        return recentB - recentA; // Most recently modified leaf's tree first
       }
 
       // Same root: sort by lastModified
@@ -659,12 +792,16 @@ export const HierarchyView = memo(function HierarchyView({
     });
   }, []);
 
-  // Get root sessions (no parent) sorted by last modified
+  // Get root sessions (no parent) sorted by most recent leaf in their tree
   const rootSessions = useMemo(() => {
     return sessions
       .filter(s => !s.parentId)
-      .sort((a, b) => new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime());
-  }, [sessions]);
+      .sort((a, b) => {
+        const recentA = mostRecentLeafByRoot.get(a.id) || new Date(a.lastModified).getTime();
+        const recentB = mostRecentLeafByRoot.get(b.id) || new Date(b.lastModified).getTime();
+        return recentB - recentA;
+      });
+  }, [sessions, mostRecentLeafByRoot]);
 
   // Build lookup for children
   const childrenByParent = useMemo(() => {
@@ -742,15 +879,18 @@ export const HierarchyView = memo(function HierarchyView({
         </li>
         {mode === 'roots' ? (
           // Roots mode: show root sessions with children nested
-          rootSessions.map((session) => {
+          rootSessions.map((session, idx) => {
             const children = childrenByParent.get(session.id) || [];
             return (
               <SessionNode
                 key={session.id}
                 session={session}
                 depth={0}
+                treeDepth={0}
                 isSelected={session.id === selectedSessionId}
                 isExpanded={expandedSessions.has(session.id)}
+                isLast={idx === rootSessions.length - 1}
+                continuations={[]}
                 childSessions={children}
                 onSelect={onSelectSession}
                 onToggle={toggleExpanded}
@@ -758,28 +898,27 @@ export const HierarchyView = memo(function HierarchyView({
                 expandedSessions={expandedSessions}
                 selectedSessionId={selectedSessionId}
                 rootColorMap={rootColorMap}
+                unreadSessionIds={unreadSessionIds}
               />
             );
           })
         ) : (
           // Leaves mode: show leaf sessions with parents nested
-          leafSessions.map((session) => {
+          leafSessions.map((session, idx) => {
             const parentSession = session.parentId
               ? sessions.find(s => s.id === session.parentId) || null
               : null;
-            // Compute sibling count: how many other children does the parent have?
-            const siblingCount = parentSession
-              ? (childrenByParent.get(parentSession.id)?.length ?? 1) - 1
-              : 0;
             return (
               <ReversedNode
                 key={session.id}
                 session={session}
                 depth={0}
+                treeDepth={getTreeDepth(session.id)}
                 isSelected={session.id === selectedSessionId}
                 isExpanded={expandedSessions.has(session.id)}
+                isLast={idx === leafSessions.length - 1}
+                continuations={[]}
                 parentSession={parentSession}
-                siblingCount={siblingCount}
                 onSelect={onSelectSession}
                 onToggle={toggleExpanded}
                 allSessions={sessions}
@@ -787,6 +926,7 @@ export const HierarchyView = memo(function HierarchyView({
                 expandedSessions={expandedSessions}
                 selectedSessionId={selectedSessionId}
                 rootColorMap={rootColorMap}
+                unreadSessionIds={unreadSessionIds}
               />
             );
           })

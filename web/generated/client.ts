@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-03-09T14:29:58.776618
+// Generated: 2026-03-10T17:19:06.418112
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -2689,6 +2689,20 @@ export interface SessionDataService {
   isPinned(sessionId: string): Promise<boolean>;
 
   /**
+   * Check if a session is currently streaming.
+   * 
+   * This is useful for refreshing client state after reconnection
+   * or when the page becomes visible after being backgrounded.
+   * 
+   * Args:
+   * session_id: The session to check
+   * 
+   * Returns:
+   * True if the session has an active stream
+   */
+  isSessionStreaming(sessionId: string): Promise<boolean>;
+
+  /**
    * Pin a session to appear at top of lists.
    * 
    * Args:
@@ -3014,6 +3028,10 @@ export class SessionDataServiceClient implements SessionDataService {
 
   async isPinned(sessionId: string): Promise<boolean> {
     return this.call('isPinned', { sessionId: sessionId });
+  }
+
+  async isSessionStreaming(sessionId: string): Promise<boolean> {
+    return this.call('isSessionStreaming', { sessionId: sessionId });
   }
 
   async pinSession(sessionId: string): Promise<boolean> {
@@ -4275,6 +4293,14 @@ export interface SupervisorStateService {
   getProcessOutput(processId: string, limit?: number, offset?: number, source?: string | null): Promise<Types.ProcessOutputBatch>;
 
   /**
+   * Get the status of backend and UI servers.
+   * 
+   * Returns:
+   * Dict with backend_a, backend_b, and ui server status
+   */
+  getServerStatus(): Promise<Record<string, unknown>>;
+
+  /**
    * Get the complete supervisor state.
    * 
    * Returns all hosts, processes, and backend mappings.
@@ -4335,6 +4361,28 @@ export interface SupervisorStateService {
    * Success/failure result
    */
   removeHost(hostName: string): Promise<Types.ConfigUpdateResult>;
+
+  /**
+   * Restart a backend server slot.
+   * 
+   * Args:
+   * slot: "a" or "b" for slot A or B
+   * 
+   * Returns:
+   * Success/failure result
+   * 
+   * Note: This triggers a restart of the server via balloons-server.py.
+   * The WebSocket connection will be lost and the client should reconnect.
+   */
+  restartBackend(slot: string): Promise<Types.ConfigUpdateResult>;
+
+  /**
+   * Restart the bun dev server (UI).
+   * 
+   * Returns:
+   * Success/failure result
+   */
+  restartUi(): Promise<Types.ConfigUpdateResult>;
 
   /**
    * Send input to a running process's stdin.
@@ -4470,6 +4518,10 @@ export class SupervisorStateServiceClient implements SupervisorStateService {
     return this.call('getProcessOutput', { processId: processId, limit: limit, offset: offset, source: source });
   }
 
+  async getServerStatus(): Promise<Record<string, unknown>> {
+    return this.call('getServerStatus', {  });
+  }
+
   async getState(): Promise<Types.SupervisorState> {
     return this.call('getState', {  });
   }
@@ -4492,6 +4544,14 @@ export class SupervisorStateServiceClient implements SupervisorStateService {
 
   async removeHost(hostName: string): Promise<Types.ConfigUpdateResult> {
     return this.call('removeHost', { hostName: hostName });
+  }
+
+  async restartBackend(slot: string): Promise<Types.ConfigUpdateResult> {
+    return this.call('restartBackend', { slot: slot });
+  }
+
+  async restartUi(): Promise<Types.ConfigUpdateResult> {
+    return this.call('restartUi', {  });
   }
 
   async sendProcessInput(processId: string, data: string): Promise<Types.ConfigUpdateResult> {

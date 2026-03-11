@@ -26,7 +26,7 @@ import { PropertiesTab } from './components/PropertiesTab';
 import { StreamingTurnsView, type StreamingProgress } from './components/StreamingTurnsView';
 import { ContextTabView, type ExchangeAction as ContextTabExchangeAction } from './components/ContextTabView';
 import { DialogProvider, useDialog } from './components/Dialog';
-import { useWakeLock, useSoundNotifications, useLongPress, useVisualViewport } from './hooks';
+import { useWakeLock, useSoundNotifications, useLongPress, useVisualViewport, useUnreadSessions } from './hooks';
 import { RenameSessionModal } from './components/RenameSessionModal';
 import { VoiceInput } from './components/VoiceInput';
 import { setDebugClient, createLogger, isDebugEnabled, setDebugEnabled } from './utils/debugLog';
@@ -1205,6 +1205,13 @@ function AppContent() {
   // undefined. Instead, the persisted session ID is read from localStorage after sessions are
   // loaded in the connection handler (see the "Load initial session list" section below).
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+
+  // Track sessions that finished streaming but haven't been viewed yet
+  const { unreadSessionIds } = useUnreadSessions({
+    sessions,
+    selectedSessionId,
+  });
+
   const [turns, setTurns] = useState<TurnInfo[]>([]);
   // Raw SessionDataTurns for components that need rich contentBlock data (e.g., ContextTabView)
   const [rawTurns, setRawTurns] = useState<SessionDataTurn[]>([]);
@@ -2817,6 +2824,7 @@ function AppContent() {
             }
           }}
           archivingTurnIndices={archivingTurnIndices}
+          unreadSessionIds={unreadSessionIds}
         />
       </AppLayout.Sidebar>
 
@@ -4162,6 +4170,8 @@ interface SidebarContentProps {
   onLogout?: () => void;
   // Archiving state
   archivingTurnIndices?: Set<number>;
+  // Unread sessions (finished streaming but not viewed)
+  unreadSessionIds?: Set<string>;
 }
 
 function SidebarContent({
@@ -4191,6 +4201,7 @@ function SidebarContent({
   onSlotChange,
   onLogout,
   archivingTurnIndices,
+  unreadSessionIds,
 }: SidebarContentProps) {
   const { closeSidebar, layoutMode } = useLayout();
 
@@ -4423,6 +4434,7 @@ function SidebarContent({
           selectedSessionId={selectedSessionId}
           onSelectSession={handleSelectSession}
           isLoading={connectionState !== 'connected'}
+          unreadSessionIds={unreadSessionIds}
         />
       ) : (
         <div className="session-list">

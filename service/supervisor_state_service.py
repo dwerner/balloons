@@ -1202,3 +1202,148 @@ class SupervisorStateService:
     def process_output(self, output: ProcessOutput) -> ProcessOutput:
         """Fired when a process emits output (stdout/stderr)."""
         pass
+
+    # =========================================================================
+    # Server Management (balloons-server.py wrapper)
+    # =========================================================================
+
+    @ws_expose
+    async def restart_backend(self, slot: str) -> ConfigUpdateResult:
+        """Restart a backend server slot.
+
+        Args:
+            slot: "a" or "b" for slot A or B
+
+        Returns:
+            Success/failure result
+
+        Note: This triggers a restart of the server via balloons-server.py.
+        The WebSocket connection will be lost and the client should reconnect.
+        """
+        import os
+        from pathlib import Path
+
+        slot = slot.lower()
+        if slot not in ("a", "b"):
+            return ConfigUpdateResult(
+                success=False,
+                error=f"Invalid slot: {slot}. Must be 'a' or 'b'",
+            )
+
+        # Find balloons-server.py in the project root
+        project_root = Path(__file__).parent.parent
+        server_script = project_root / "balloons-server.py"
+
+        if not server_script.exists():
+            return ConfigUpdateResult(
+                success=False,
+                error=f"Server script not found: {server_script}",
+            )
+
+        # Use the venv python
+        venv_python = project_root / ".venv" / "bin" / "python"
+        python_exe = str(venv_python) if venv_python.exists() else "python"
+
+        try:
+            # Run restart in background so we can return before the server dies
+            subprocess.Popen(
+                [python_exe, str(server_script), "restart", f"-{slot}"],
+                cwd=str(project_root),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+
+            debug_log.info(
+                f"Initiated backend restart for slot {slot.upper()}",
+                category=Category.SUPERVISOR,
+            )
+
+            return ConfigUpdateResult(success=True)
+
+        except Exception as e:
+            debug_log.error(f"Error restarting backend: {e}", category=Category.SUPERVISOR)
+            return ConfigUpdateResult(success=False, error=str(e))
+
+    @ws_expose
+    async def restart_ui(self) -> ConfigUpdateResult:
+        """Restart the bun dev server (UI).
+
+        Returns:
+            Success/failure result
+        """
+        import os
+        from pathlib import Path
+
+        # Find balloons-server.py in the project root
+        project_root = Path(__file__).parent.parent
+        server_script = project_root / "balloons-server.py"
+
+        if not server_script.exists():
+            return ConfigUpdateResult(
+                success=False,
+                error=f"Server script not found: {server_script}",
+            )
+
+        # Use the venv python
+        venv_python = project_root / ".venv" / "bin" / "python"
+        python_exe = str(venv_python) if venv_python.exists() else "python"
+
+        try:
+            # Run restart synchronously - UI restart doesn't affect this server
+            result = subprocess.run(
+                [python_exe, str(server_script), "ui", "restart"],
+                cwd=str(project_root),
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            if result.returncode != 0:
+                return ConfigUpdateResult(
+                    success=False,
+                    error=result.stderr or "UI restart failed",
+                )
+
+            debug_log.info(
+                "Restarted UI server",
+                category=Category.SUPERVISOR,
+            )
+
+            return ConfigUpdateResult(success=True)
+
+        except subprocess.TimeoutExpired:
+            return ConfigUpdateResult(success=False, error="UI restart timed out")
+        except Exception as e:
+            debug_log.error(f"Error restarting UI: {e}", category=Category.SUPERVISOR)
+            return ConfigUpdateResult(success=False, error=str(e))
+
+    @ws_expose
+    async def get_server_status(self) -> dict:
+        """Get the status of backend and UI servers.
+
+        Returns:
+            Dict with backend_a, backend_b, and ui server status
+        """
+        import os
+        from pathlib import Path
+
+        project_root = Path(__file__).parent.parent
+        pid_dir = Path.home() / ".balloons" / "run"
+
+        def check_pid(pid_file: Path) -> dict:
+            """Check if a PID file exists and process is running."""
+            if not pid_file.exists():
+                return {"running": False, "pid": None}
+            try:
+                pid = int(pid_file.read_text().strip())
+                os.kill(pid, 0)  # Check if process exists
+                return {"running": True, "pid": pid}
+            except (ValueError, ProcessLookupError, PermissionError):
+                return {"running": False, "pid": None}
+
+        return {
+            "backend_a": check_pid(pid_dir / "headless-8700.pid"),
+            "backend_b": check_pid(pid_dir / "headless-8710.pid"),
+            "ui": check_pid(pid_dir / "bun-dev.pid"),
+        }
