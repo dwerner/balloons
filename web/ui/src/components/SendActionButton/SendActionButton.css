@@ -1,0 +1,191 @@
+/* SendActionButton - Dropdown action button for send/fork/conclude/link/merge */
+
+.send-action-button {
+  position: relative;
+  display: inline-flex;
+  align-self: flex-end;
+  flex-shrink: 0; /* Don't shrink - stay visible */
+}
+
+.send-action-button__main {
+  display: flex;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--color-accent-green);
+}
+
+.send-action-button__action {
+  padding: 10px 12px;
+  background: transparent;
+  color: var(--color-bg-primary);
+  border: none;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+  font-size: inherit;
+}
+
+.send-action-button__action:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.send-action-button__action:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.send-action-button__chevron {
+  padding: 10px 8px;
+  background: transparent;
+  color: var(--color-bg-primary);
+  border: none;
+  border-left: 1px solid rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  transition: background 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.send-action-button__chevron:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.send-action-button__chevron:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.send-action-button__chevron-icon {
+  font-size: 10px;
+  transition: transform 0.15s;
+}
+
+.send-action-button__chevron-icon.open {
+  transform: rotate(180deg);
+}
+
+/* Dropdown menu */
+.send-action-button__dropdown {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  right: 0;
+  min-width: 180px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+  overflow: hidden;
+}
+
+.send-action-button__option {
+  width: 100%;
+  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition: background 0.1s;
+}
+
+.send-action-button__option:hover {
+  background: var(--color-bg-tertiary);
+}
+
+.send-action-button__option.selected {
+  background: var(--color-bg-tertiary);
+}
+
+.send-action-button__option.selected::before {
+  content: '•';
+  position: absolute;
+  left: 6px;
+  color: var(--color-accent-green);
+}
+
+.send-action-button__option-label {
+  color: var(--color-text-primary);
+  font-weight: 500;
+  font-size: 14px;
+}
+
+.send-action-button__option-desc {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+/* Disabled state for whole component */
+.send-action-button__main:has(:disabled) {
+  background: var(--color-button-disabled-bg);
+}
+
+/* Mobile adjustments */
+@media (max-width: 767px) {
+  .send-action-button__action {
+    padding: 12px 14px;
+    min-height: 54px;
+  }
+
+  .send-action-button__chevron {
+    padding: 12px 10px;
+    min-height: 54px;
+  }
+
+  .send-action-button__dropdown {
+    min-width: 200px;
+  }
+
+  .send-action-button__option {
+    padding: 14px 16px;
+  }
+}
+
+/* Desktop adjustments */
+@media (min-width: 1024px) {
+  .send-action-button__action {
+    padding: 12px 20px;
+  }
+
+  .send-action-button__chevron {
+    padding: 12px 10px;
+  }
+}
+
+/* Action-specific colors */
+.send-action-button[data-action="btw"] .send-action-button__main {
+  background: var(--accent-btw, #9ca3af);
+}
+
+.send-action-button[data-action="fork"] .send-action-button__main {
+  background: var(--accent-fork, #b098c0);
+}
+
+.send-action-button[data-action="conclude"] .send-action-button__main {
+  background: var(--accent-blue, #7a9bb8);
+}
+
+.send-action-button[data-action="link"] .send-action-button__main {
+  background: var(--accent-link, #7ab8b8);
+}
+
+.send-action-button[data-action="merge"] .send-action-button__main {
+  background: var(--accent-merge, #7ab8b8);
+}
+
+.send-action-button[data-action="reopen"] .send-action-button__main {
+  background: var(--color-accent-yellow, #d4a574);
+}
+
+/* Single button variant (no dropdown) */
+.send-action-button__main--single {
+  border-radius: 8px;
+}
+
+.send-action-button__main--single .send-action-button__action {
+  padding: 10px 16px;
+}

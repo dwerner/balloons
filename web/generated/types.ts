@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-03-10T17:19:06.412731
+// Generated: 2026-03-12T09:46:35.862162
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -244,6 +244,13 @@ export interface QueueEventData {
   data?: Record<string, unknown>;
 }
 
+export interface SteeringInjectedEvent {
+  sessionId: string;
+  exchangeId: string;
+  content: string;
+  injectedAtToolId: string;
+}
+
 export interface HelperStartedEvent {
   helperId: string;
   helperType: string;
@@ -342,6 +349,15 @@ export interface MergeSessionResult {
   error?: string;
 }
 
+export interface ConcludeSessionResult {
+  success: boolean;
+  sessionId?: string;
+  concludedAt?: string;
+  reason?: string;
+  turnIndex?: number;
+  error?: string;
+}
+
 export interface DeriveSessionResult {
   success: boolean;
   newSessionId?: string;
@@ -398,9 +414,19 @@ export interface DomainInfoItem {
   promptContent?: string;
 }
 
+export interface SessionPromptFileInfo {
+  filePath: string;
+  filename: string;
+  tokens: number;
+  exists?: boolean;
+  contentPreview?: string;
+  fullContent?: string;
+}
+
 export interface SystemPromptInfoResult {
   components?: PromptComponentInfo[];
   domains?: DomainInfoItem[];
+  sessionPromptFiles?: SessionPromptFileInfo[];
   totalTokens?: number;
   contextWindow?: number;
 }
@@ -500,6 +526,14 @@ export interface CreateWatcherSessionResult {
   targetSessionId?: string;
   targetSessionName?: string;
   watcherName?: string;
+  error?: string;
+}
+
+export interface RequestProposalResult {
+  success: boolean;
+  sessionId?: string;
+  exchangeId?: string;
+  turnIndex?: number;
   error?: string;
 }
 
@@ -929,6 +963,8 @@ export interface SessionInfo {
   isStreaming: boolean;
   forkName: string;
   forkStatus: string;
+  concluded?: boolean;
+  concludedAt?: string | null;
   parentId?: string | null;
   cachedContextTokens?: number;
   contextWindow?: number;

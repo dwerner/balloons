@@ -15,6 +15,7 @@ from typing import AsyncIterator, Any, Optional
 from models import (
     Message, TextDelta, ResultEvent, InitEvent, RawEvent, ContextTokensEvent,
     ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultEvent,
+    SteeringInjectedEvent,
     TextBlock, ToolUseBlock, ToolResultBlock, ErrorBlock,
 )
 from .exceptions import RateLimitError, InputRequiredError, StreamTimeoutError
@@ -1053,6 +1054,45 @@ class SessionRunner:
                     "result_block": result_block,
                     "turn_index": tool_result_turn_idx,
                     "turn_id": turn.id,
+                }))
+                return events
+
+            elif isinstance(event, SteeringInjectedEvent):
+                # User steering was injected mid-stream at a tool boundary
+                # Create a user turn for this steering message so it appears in the conversation
+                steering_turn_idx = len(self.session.turns)
+                steering_turn_id = str(uuid.uuid4())
+
+                # Create a text block for the steering content
+                steering_block = TextBlock(text=event.content)
+
+                # Create a user turn for the steering message
+                turn = self._create_turn(
+                    "user",
+                    event.content[:100],  # Preview
+                    [steering_block],
+                )
+                self._turns.append(turn)
+                self._save_turn_to_session(turn, save_now=True)
+
+                debug_log.info(
+                    f"Steering injected as user turn {steering_turn_id[:8]}",
+                    category=Category.RUNNER,
+                    session_id=self.session.id,
+                    details={
+                        "content_len": len(event.content),
+                        "injected_at_tool_id": event.injected_at_tool_id[:12] if event.injected_at_tool_id else "",
+                    },
+                )
+
+                events = []
+                # Emit steering_injected event so UI can display it
+                events.append(self._make_event("steering_injected", {
+                    "turn_index": steering_turn_idx,
+                    "turn_id": turn.id,
+                    "exchange_id": self._exchange_id,
+                    "content": event.content,
+                    "injected_at_tool_id": event.injected_at_tool_id,
                 }))
                 return events
 

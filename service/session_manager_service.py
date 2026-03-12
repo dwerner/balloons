@@ -71,6 +71,7 @@ from service.session_events import (
     ToolInputDeltaEvent,
     ToolUseEvent,
     ToolResultEvent,
+    SteeringInjectedEvent,
     HelperStartedEvent,
     HelperDeltaEvent,
     HelperDoneEvent,
@@ -192,6 +193,19 @@ class MergeSessionResult:
 
 @ws_type
 @dataclass
+class ConcludeSessionResult:
+    """Result of a conclude_session operation."""
+
+    success: bool
+    session_id: str = ""
+    concluded_at: str = ""  # ISO timestamp
+    reason: str = ""  # The reason/summary (user-provided or auto-generated)
+    turn_index: int = -1  # Index of the conclude turn added
+    error: str = ""
+
+
+@ws_type
+@dataclass
 class DeriveSessionResult:
     """Result of a derive_session operation.
 
@@ -291,11 +305,25 @@ class DomainInfoItem:
 
 @ws_type
 @dataclass
+class SessionPromptFileInfo:
+    """Information about a session-specific prompt file for UI display."""
+
+    file_path: str
+    filename: str  # Just the basename for display
+    tokens: int
+    exists: bool = True
+    content_preview: str = ""
+    full_content: str = ""
+
+
+@ws_type
+@dataclass
 class SystemPromptInfoResult:
     """Complete system prompt information for UI display."""
 
     components: list[PromptComponentInfo] = field(default_factory=list)
     domains: list[DomainInfoItem] = field(default_factory=list)
+    session_prompt_files: list[SessionPromptFileInfo] = field(default_factory=list)
     total_tokens: int = 0
     context_window: int = 150000
 
@@ -470,6 +498,22 @@ class CreateWatcherSessionResult:
     target_session_id: str = ""  # The session being watched
     target_session_name: str = ""  # Display name of the target
     watcher_name: str = ""  # Name of the watcher session (e.g., "watching:target-name")
+    error: str = ""
+
+
+@ws_type
+@dataclass
+class RequestProposalResult:
+    """Result of requesting the LLM to generate a proposal (fork/merge/conclude).
+
+    The actual proposal will arrive via streaming events when the LLM responds
+    with a propose_fork or propose_merge tool call.
+    """
+
+    success: bool
+    session_id: str = ""
+    exchange_id: str = ""  # ID of the exchange containing the proposal request
+    turn_index: int = 0  # Index of the user message turn
     error: str = ""
 
 
@@ -2308,6 +2352,66 @@ class SessionManagerService:
                     ),
                 )
 
+        elif event_type == "steering_injected":
+            # User steering message was injected mid-stream at a tool boundary
+            # This creates a new user turn that appears in the conversation
+            content = data.get("content", "")
+            turn_idx = data.get("turn_index", 0)
+            turn_id = data.get("turn_id", "")
+            injected_at_tool_id = data.get("injected_at_tool_id", "")
+
+            debug_log.info(
+                f"Steering injected into conversation",
+                category=Category.RUNNER,
+                session_id=session_id,
+                details={
+                    "content_len": len(content),
+                    "turn_idx": turn_idx,
+                    "injected_at_tool_id": injected_at_tool_id[:12] if injected_at_tool_id else "",
+                },
+            )
+
+            # Notify observers with typed event so UI can display the injected user turn
+            await self._notify_observers(
+                "on_steering_injected",
+                SteeringInjectedEvent(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    content=content,
+                    injected_at_tool_id=injected_at_tool_id,
+                ),
+            )
+
+            # Also emit turn_created for this user turn so UI creates a new node
+            await self._notify_observers(
+                "on_turn_created",
+                TurnCreatedEvent(
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    turn_index=turn_idx,
+                    role="user",
+                    exchange_id=ctx.exchange_id,
+                    content_block_type="text",
+                    parallel_group_id=None,
+                ),
+            )
+
+            # Emit turn_finished for the steering turn
+            await self._notify_observers(
+                "on_turn_finished",
+                TurnFinishedEvent(
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    turn_index=turn_idx,
+                    role="user",
+                    content=content,
+                    tokens=0,
+                    content_block=None,
+                    context_tokens=0,
+                    output_tokens_total=0,
+                ),
+            )
+
         elif event_type == "init":
             # Model info - update stream state
             # Note: No SessionDataService equivalent - this is metadata only
@@ -3057,6 +3161,279 @@ class SessionManagerService:
         )
 
     @ws_expose
+    async def conclude_session(
+        self,
+        session_id: str,
+        reason: str = "",
+    ) -> ConcludeSessionResult:
+        """Mark a session as concluded.
+
+        Sets the concluded flag and adds a conclude turn to the conversation.
+        If no reason is provided, an auto-generated summary may be created.
+
+        Args:
+            session_id: ID of the session to conclude
+            reason: Optional reason/summary for concluding (auto-generated if empty)
+
+        Returns:
+            ConcludeSessionResult with conclusion info
+        """
+        from datetime import datetime
+
+        # Get session
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                return ConcludeSessionResult(
+                    success=False,
+                    error=f"Session {session_id} not found"
+                )
+
+        # Check if already concluded
+        if session.concluded:
+            return ConcludeSessionResult(
+                success=False,
+                session_id=session_id,
+                error="Session is already concluded"
+            )
+
+        # Set concluded state
+        concluded_at = datetime.utcnow().isoformat() + "Z"
+        session.concluded = True
+        session.concluded_at = concluded_at
+        session.concluded_reason = reason
+
+        # Add a conclude turn to the conversation
+        from session import SystemBlock, Turn
+        conclude_block = SystemBlock(
+            content=f"Session concluded: {reason}" if reason else "Session concluded"
+        )
+        turn = Turn(
+            role="system",
+            content_blocks=[conclude_block],
+        )
+        turn_index = len(session.turns)
+        session.turns.append(turn)
+
+        # Save session
+        await session.save()
+
+        # Emit session updated event
+        self._emit_session_updated(session, is_streaming=False)
+        self._emit_event(SessionManagerEvent.SESSION_UPDATED, session_id)
+
+        return ConcludeSessionResult(
+            success=True,
+            session_id=session_id,
+            concluded_at=concluded_at,
+            reason=reason,
+            turn_index=turn_index,
+        )
+
+    @ws_expose
+    async def reopen_session(
+        self,
+        session_id: str,
+        reason: str = "",
+    ) -> ConcludeSessionResult:
+        """Reopen a concluded session.
+
+        Clears the concluded flag and adds a reopen turn to the conversation.
+
+        Args:
+            session_id: ID of the session to reopen
+            reason: Optional reason for reopening
+
+        Returns:
+            ConcludeSessionResult (reused for reopen)
+        """
+        from datetime import datetime
+
+        # Get session
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                return ConcludeSessionResult(
+                    success=False,
+                    error=f"Session {session_id} not found"
+                )
+
+        # Check if not concluded
+        if not session.concluded:
+            return ConcludeSessionResult(
+                success=False,
+                session_id=session_id,
+                error="Session is not concluded"
+            )
+
+        # Clear concluded state
+        session.concluded = False
+        session.concluded_at = None
+        session.concluded_reason = ""
+
+        # Add a reopen turn to the conversation
+        from session import SystemBlock, Turn
+        reopen_block = SystemBlock(
+            content=f"Session reopened: {reason}" if reason else "Session reopened"
+        )
+        turn = Turn(
+            role="system",
+            content_blocks=[reopen_block],
+        )
+        turn_index = len(session.turns)
+        session.turns.append(turn)
+
+        # Save session
+        await session.save()
+
+        # Emit session updated event
+        self._emit_session_updated(session, is_streaming=False)
+        self._emit_event(SessionManagerEvent.SESSION_UPDATED, session_id)
+
+        return ConcludeSessionResult(
+            success=True,
+            session_id=session_id,
+            concluded_at="",  # Empty since reopened
+            reason=reason,
+            turn_index=turn_index,
+        )
+
+    @ws_expose
+    async def request_proposal(
+        self,
+        session_id: str,
+        proposal_type: str,
+        seed_prompt: str = "",
+    ) -> RequestProposalResult:
+        """Request the LLM to generate a proposal (fork, merge, or conclude).
+
+        Instead of directly executing a fork/merge/conclude, this method submits
+        a message instructing the LLM to use the appropriate proposal tool
+        (propose_fork, propose_merge). The user can then review and accept/reject
+        the proposal via the UI.
+
+        For conclude, the LLM generates a session summary before concluding.
+
+        Args:
+            session_id: ID of the session to generate a proposal for
+            proposal_type: Type of proposal ("fork", "merge", "conclude")
+            seed_prompt: User's seed text to guide the proposal. For fork, this
+                        describes what the fork should accomplish. For merge,
+                        this describes what was accomplished. For conclude,
+                        this focuses the summary.
+
+        Returns:
+            RequestProposalResult with exchange_id for tracking the proposal
+        """
+        # Validate proposal type
+        valid_types = {"fork", "merge", "conclude"}
+        if proposal_type not in valid_types:
+            return RequestProposalResult(
+                success=False,
+                session_id=session_id,
+                error=f"Invalid proposal type '{proposal_type}'. Must be one of: {valid_types}"
+            )
+
+        # Get session
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                return RequestProposalResult(
+                    success=False,
+                    session_id=session_id,
+                    error=f"Session {session_id} not found"
+                )
+
+        # Build the instruction message based on proposal type
+        if proposal_type == "fork":
+            if seed_prompt:
+                instruction = f"""Please propose a fork for this session.
+
+The user wants to create a fork to: **{seed_prompt}**
+
+Use the `propose_fork` tool to create a fork proposal with:
+- An appropriate name derived from the user's intent
+- A description of what the fork will accomplish
+- A context plan that keeps relevant exchanges and drops/compresses others
+- An initial prompt to start the fork
+
+Analyze the conversation history to determine which exchanges are relevant to the fork's purpose."""
+            else:
+                instruction = """Please propose a fork for this session.
+
+Use the `propose_fork` tool to create a fork proposal. Analyze the conversation history to:
+- Suggest an appropriate name based on what seems like the logical next task
+- Describe what the fork will accomplish
+- Create a context plan that keeps relevant exchanges
+- Write an initial prompt to start the fork"""
+
+        elif proposal_type == "merge":
+            if seed_prompt:
+                instruction = f"""Please propose a merge for this session back to its parent.
+
+The user describes the work completed as: **{seed_prompt}**
+
+Use the `propose_merge` tool to create a merge proposal with:
+- A clear summary of what was accomplished
+- Key files changed (if applicable)
+- Key accomplishments as bullet points
+
+Review the conversation history to identify the main outcomes."""
+            else:
+                instruction = """Please propose a merge for this session back to its parent.
+
+Use the `propose_merge` tool to create a merge proposal. Review the conversation history to:
+- Summarize what was accomplished in this fork
+- List key files changed (if applicable)
+- Identify key accomplishments"""
+
+        else:  # conclude
+            if seed_prompt:
+                instruction = f"""Please help conclude this session.
+
+The user wants to focus the summary on: **{seed_prompt}**
+
+Review the conversation and provide a concise summary of what was discussed and accomplished.
+Then I'll mark the session as concluded."""
+            else:
+                instruction = """Please help conclude this session.
+
+Review the conversation and provide a concise summary of:
+- What was discussed
+- Key decisions made
+- Outcomes achieved
+
+Then I'll mark the session as concluded."""
+
+        # Submit the instruction as a message
+        try:
+            # Use submit_message to send the instruction
+            # The LLM will respond with a propose_fork/propose_merge tool call
+            result = await self.submit_message(
+                session_id=session_id,
+                content=instruction,
+                queue=False,
+                allowed_tools=None,  # Allow all tools so LLM can use propose_fork/propose_merge
+            )
+
+            return RequestProposalResult(
+                success=True,
+                session_id=session_id,
+                exchange_id=result.exchange_id,
+                turn_index=result.turn_index,
+            )
+
+        except Exception as e:
+            return RequestProposalResult(
+                success=False,
+                session_id=session_id,
+                error=str(e),
+            )
+
+    @ws_expose
     async def get_exchange_summaries(
         self,
         session_id: str,
@@ -3185,9 +3562,22 @@ class SessionManagerService:
             for d in info.domains
         ]
 
+        session_prompt_files = [
+            SessionPromptFileInfo(
+                file_path=f.file_path,
+                filename=f.filename,
+                tokens=f.tokens,
+                exists=f.exists,
+                content_preview=f.content_preview,
+                full_content=f.full_content,
+            )
+            for f in info.session_prompt_files
+        ]
+
         return SystemPromptInfoResult(
             components=components,
             domains=domains,
+            session_prompt_files=session_prompt_files,
             total_tokens=info.total_tokens,
             context_window=info.context_window,
         )
@@ -3227,6 +3617,109 @@ class SessionManagerService:
             return {"success": True, "domain_id": domain_id}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    # =========================================================================
+    # Session Prompt Files
+    # =========================================================================
+
+    @ws_expose
+    async def add_session_prompt_file(
+        self,
+        session_id: str,
+        file_path: str,
+    ) -> dict:
+        """Add a file to be included in the system prompt for a session.
+
+        The file content will be loaded fresh each turn and included in the
+        system prompt.
+
+        Args:
+            session_id: Session to add the prompt file to
+            file_path: Absolute path to the file
+
+        Returns:
+            Dict with success status, error message if any, and updated file list
+        """
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+        if not session:
+            return {"success": False, "error": f"Session not found: {session_id}"}
+
+        success = session.add_prompt_file(file_path)
+        if not success:
+            from pathlib import Path
+            if file_path in session.prompt_files or str(Path(file_path).resolve()) in session.prompt_files:
+                return {"success": False, "error": "File already added to session prompts"}
+            return {"success": False, "error": "File does not exist"}
+
+        await session.save()
+
+        # Emit session updated event so UI refreshes
+        self._emit_session_updated(session)
+
+        return {
+            "success": True,
+            "file_path": file_path,
+            "prompt_files": session.get_prompt_files(),
+        }
+
+    @ws_expose
+    async def remove_session_prompt_file(
+        self,
+        session_id: str,
+        file_path: str,
+    ) -> dict:
+        """Remove a file from a session's prompt files.
+
+        Args:
+            session_id: Session to remove the prompt file from
+            file_path: Path of the file to remove
+
+        Returns:
+            Dict with success status, error message if any, and updated file list
+        """
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+        if not session:
+            return {"success": False, "error": f"Session not found: {session_id}"}
+
+        success = session.remove_prompt_file(file_path)
+        if not success:
+            return {"success": False, "error": "File not in session prompts"}
+
+        await session.save()
+
+        # Emit session updated event so UI refreshes
+        self._emit_session_updated(session)
+
+        return {
+            "success": True,
+            "file_path": file_path,
+            "prompt_files": session.get_prompt_files(),
+        }
+
+    @ws_expose
+    async def get_session_prompt_files(self, session_id: str) -> dict:
+        """Get the list of prompt files for a session.
+
+        Args:
+            session_id: Session to get prompt files from
+
+        Returns:
+            Dict with prompt_files list
+        """
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+        if not session:
+            return {"success": False, "error": f"Session not found: {session_id}"}
+
+        return {
+            "success": True,
+            "prompt_files": session.get_prompt_files(),
+        }
 
     # =========================================================================
     # Fork/Merge Proposal Handling (Internal)

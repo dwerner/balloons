@@ -238,6 +238,22 @@ class ToolResultEvent:
     tool_index: int
 
 
+@ws_type
+@dataclass
+class SteeringInjectedEvent:
+    """Emitted when a user steering message is injected mid-stream.
+
+    This happens when the user types a message during tool execution
+    and it gets injected at a tool boundary (soft interrupt).
+    The UI should display this as a user message in the conversation.
+    """
+
+    session_id: str
+    exchange_id: str
+    content: str  # The steering message content
+    injected_at_tool_id: str  # Tool result ID after which this was injected
+
+
 # --- Helper Events ---
 # Helper runners are used for background LLM tasks like context compression,
 # merge summaries, archive summaries, link summaries, etc.

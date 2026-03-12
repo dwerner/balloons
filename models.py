@@ -524,6 +524,18 @@ class ToolResultEvent:
     result: str
 
 
+@dataclass
+class SteeringInjectedEvent:
+    """User steering message was injected mid-stream.
+
+    This event is yielded when a queued user message is injected
+    at a tool boundary, allowing the UI to display the injected
+    message in the conversation.
+    """
+    content: str
+    injected_at_tool_id: str = ""  # The tool result after which this was injected
+
+
 # =============================================================================
 # Message Queue Domain Entities
 # =============================================================================

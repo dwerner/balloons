@@ -444,6 +444,8 @@ class SessionInfo:
     is_streaming: bool
     fork_name: str
     fork_status: str
+    concluded: bool = False
+    concluded_at: str | None = None
     parent_id: str | None = None
     cached_context_tokens: int = 0
     context_window: int = 150000
@@ -1463,6 +1465,8 @@ class SessionDataService:
             is_streaming=is_streaming,
             fork_name=session.fork_name,
             fork_status=session.fork_status,
+            concluded=session.concluded,
+            concluded_at=session.concluded_at,
             parent_id=session.parent_id,
             cached_context_tokens=session.ensure_context_tokens() if hasattr(session, 'ensure_context_tokens') else getattr(session, "cached_context_tokens", 0),
             context_window=getattr(session, "context_window", 150000),
@@ -1528,6 +1532,8 @@ class SessionDataService:
             is_streaming=session_id in streaming_ids,
             fork_name=data.get("fork_name", ""),
             fork_status=data.get("fork_status", "active"),
+            concluded=data.get("concluded", False),
+            concluded_at=data.get("concluded_at"),
             parent_id=data.get("parent_id"),
             cached_context_tokens=data.get("cached_context_tokens", 0),
             context_window=data.get("context_window", 150000),

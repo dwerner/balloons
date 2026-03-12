@@ -13,9 +13,9 @@ from openai import AsyncOpenAI
 from models import (
     Message, TextDelta, ResultEvent, InitEvent,
     TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ArchiveBlock, ContextMode,
-    ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultEvent,
+    ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultEvent, SteeringInjectedEvent,
 )
-from .base_runner import BaseRunner, RunnerEvent
+from .base_runner import BaseRunner, RunnerEvent, SteeringCapability
 from .debug_log import debug_log, dump_failed_json, perf_marker, Category
 from .tools import get_tools_for_request
 from .tool_executor import execute_tool
@@ -166,6 +166,11 @@ class OpenAICompatibleRunner(BaseRunner):
         self._session: "Session | None" = None
         self._collected_chunks: list[dict] = []  # Raw chunks for dump on error
 
+    @property
+    def steering_capability(self) -> SteeringCapability:
+        """OpenAI uses separate messages for tool results and user text."""
+        return SteeringCapability.SEPARATE_MESSAGES
+
     def set_session(self, session: "Session") -> None:
         """Set the session for link tool execution.
 
@@ -177,14 +182,19 @@ class OpenAICompatibleRunner(BaseRunner):
     def _get_system_prompt(self) -> str | None:
         """Build the system prompt for this turn.
 
-        Combines user prompt with balloons tools and domain prompts.
+        Combines user prompt with balloons tools, domain prompts, and
+        session-specific prompt files.
         Called per-turn to ensure domain prompts are fresh.
 
         Returns:
             Complete system prompt, or None if no content
         """
         from .prompt_builder import build_system_prompt
-        return build_system_prompt(backend_type="openai", user_prompt=self._user_prompt)
+        return build_system_prompt(
+            backend_type="openai",
+            user_prompt=self._user_prompt,
+            session=self._session,
+        )
 
     def build_messages(self, messages: list[Message], new_prompt: str) -> list[dict]:
         """Convert internal Message format to OpenAI chat format.
@@ -462,6 +472,9 @@ class OpenAICompatibleRunner(BaseRunner):
                 CLIENT_ONLY_TOOLS = {"play_midi", "propose_fork", "propose_merge"}
 
                 # Execute each tool and add results
+                # Check queue after EACH tool for boundary-aware steering
+                accumulated_steering: list[str] = []
+
                 for tc in tool_calls:
                     if self._cancelled:
                         break
@@ -499,20 +512,38 @@ class OpenAICompatibleRunner(BaseRunner):
                         "content": result,
                     })
 
-                # Check for mid-stream injection after tool execution
-                if self._injection_callback:
-                    injection = await self._injection_callback()
-                    if injection:
-                        debug_log.info(
-                            f"Injecting user steering message",
-                            category=Category.RUNNER,
-                            details={"injection_len": len(injection)},
-                            run_id=self._run_id,
-                        )
-                        openai_messages.append({
-                            "role": "user",
-                            "content": injection,
-                        })
+                    # Check for steering after EACH tool result
+                    # This enables boundary-aware injection (like Claude Code's h2A queue)
+                    if self._injection_callback:
+                        steering = await self._injection_callback()
+                        if steering:
+                            accumulated_steering.append(steering)
+                            debug_log.info(
+                                f"Captured steering after tool {tool_name}",
+                                category=Category.RUNNER,
+                                details={"steering_len": len(steering)},
+                                run_id=self._run_id,
+                            )
+                            # Yield event so UI can display the injected message
+                            yield SteeringInjectedEvent(
+                                content=steering,
+                                injected_at_tool_id=tc["id"],
+                            )
+
+                # Add accumulated steering as a user message after all tool results
+                # OpenAI uses SEPARATE_MESSAGES - steering follows tool results
+                if accumulated_steering:
+                    combined_steering = "\n\n".join(accumulated_steering)
+                    debug_log.info(
+                        f"Adding accumulated steering as user message",
+                        category=Category.RUNNER,
+                        details={"num_messages": len(accumulated_steering), "total_len": len(combined_steering)},
+                        run_id=self._run_id,
+                    )
+                    openai_messages.append({
+                        "role": "user",
+                        "content": combined_steering,
+                    })
 
             debug_log.info(
                 f"OpenAI stream complete",

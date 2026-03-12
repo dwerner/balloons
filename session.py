@@ -69,6 +69,9 @@ class Session:
     # Fork/merge tracking (new model)
     fork_name: str = ""  # User-friendly name for this fork (e.g., "auth-bug")
     fork_status: str = "active"  # "active", "merged", "abandoned"
+    concluded: bool = False  # User marked this session as concluded
+    concluded_at: Optional[str] = None  # ISO timestamp when concluded
+    concluded_reason: str = ""  # User's reason/summary for concluding
     fork_point_turn: int = -1  # Turn index in parent where fork was created
     merge_point_turn: int = -1  # Turn index in parent where merge happened
     merge_message: str = ""  # User's summary when merging back
@@ -79,6 +82,8 @@ class Session:
     cached_context_tokens: int = 0
     # Message queue for prompts submitted during streaming
     message_queue: MessageQueue = field(default_factory=MessageQueue)
+    # Session-specific prompt files (absolute paths to files included in system prompt)
+    prompt_files: list[str] = field(default_factory=list)
     # Note: Links are stored as LinkBlock content blocks in messages (turn-based).
     # The legacy `links` field has been removed - old sessions with links data
     # will have those links ignored (they were never actively used).
@@ -1095,6 +1100,53 @@ class Session:
         else:
             self.working_directories.append(resolved)
 
+    # =========================================================================
+    # Session Prompt Files Methods
+    # =========================================================================
+
+    def add_prompt_file(self, file_path: str) -> bool:
+        """Add a file to be included in the system prompt for this session.
+
+        Args:
+            file_path: Absolute path to the file
+
+        Returns:
+            True if added, False if already exists or path invalid
+        """
+        resolved = str(Path(file_path).resolve())
+        if resolved in self.prompt_files:
+            return False
+        if not Path(resolved).exists():
+            return False
+        self.prompt_files.append(resolved)
+        self._metadata_dirty = True
+        return True
+
+    def remove_prompt_file(self, file_path: str) -> bool:
+        """Remove a file from the session's prompt files.
+
+        Args:
+            file_path: Path to remove (can be original or resolved)
+
+        Returns:
+            True if removed, False if not found
+        """
+        resolved = str(Path(file_path).resolve())
+        # Try both original and resolved path
+        if resolved in self.prompt_files:
+            self.prompt_files.remove(resolved)
+            self._metadata_dirty = True
+            return True
+        if file_path in self.prompt_files:
+            self.prompt_files.remove(file_path)
+            self._metadata_dirty = True
+            return True
+        return False
+
+    def get_prompt_files(self) -> list[str]:
+        """Get list of prompt file paths for this session."""
+        return self.prompt_files.copy()
+
     def _serialize_content_block(self, block: ContentBlock) -> dict:
         """Serialize a content block to a dict."""
         if isinstance(block, TextBlock):
@@ -1320,12 +1372,16 @@ class Session:
             # Fork/merge tracking
             "fork_name": self.fork_name,
             "fork_status": self.fork_status,
+            "concluded": self.concluded,
+            "concluded_at": self.concluded_at,
+            "concluded_reason": self.concluded_reason,
             "fork_point_turn": self.fork_point_turn,
             "merge_point_turn": self.merge_point_turn,
             "merge_message": self.merge_message,
             "backend_name": self.backend_name,
             "cached_context_tokens": self.cached_context_tokens,
             "message_queue": self.message_queue.to_dict() if self.message_queue else {},
+            "prompt_files": self.prompt_files,
         }
 
     async def save(self):
@@ -1579,12 +1635,16 @@ class Session:
             # Fork/merge tracking
             fork_name=data.get("fork_name", ""),
             fork_status=data.get("fork_status", "active"),
+            concluded=data.get("concluded", False),
+            concluded_at=data.get("concluded_at"),
+            concluded_reason=data.get("concluded_reason", ""),
             fork_point_turn=data.get("fork_point_turn", -1),
             merge_point_turn=data.get("merge_point_turn", -1),
             merge_message=data.get("merge_message", ""),
             backend_name=data.get("backend_name", ""),
             cached_context_tokens=data.get("cached_context_tokens", 0),
             message_queue=MessageQueue.from_dict(data.get("message_queue", {})),
+            prompt_files=data.get("prompt_files", []),
         )
 
         # Load turns (new format)

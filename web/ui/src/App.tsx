@@ -29,6 +29,7 @@ import { DialogProvider, useDialog } from './components/Dialog';
 import { useWakeLock, useSoundNotifications, useLongPress, useVisualViewport, useUnreadSessions } from './hooks';
 import { RenameSessionModal } from './components/RenameSessionModal';
 import { VoiceInput } from './components/VoiceInput';
+import { SendActionButton, type SendAction } from './components/SendActionButton';
 import { setDebugClient, createLogger, isDebugEnabled, setDebugEnabled } from './utils/debugLog';
 import { logout, isAuthenticated, getToken } from './utils/auth';
 import { Login } from './components/Login';
@@ -1238,6 +1239,7 @@ function AppContent() {
   }, [archivingByHelper]);
   const [creatingSessionFor, setCreatingSessionFor] = useState<string | null>(null); // "entityType:entityId" when creating bound session
   const [mainContentTab, setMainContentTab] = useState<MainContentTab>('streaming');
+  const [sendAction, setSendAction] = useState<SendAction>('send'); // Current action for send button dropdown
   const [gitStatus, setGitStatus] = useState<GitStatusInfo | null>(null);
 
   // Modal state for CreateTodoModal
@@ -2407,6 +2409,173 @@ function AppContent() {
     }
   }, [connectionState, selectedSessionId]);
 
+  // Handle fork action - request LLM to propose a fork
+  const handleForkAction = useCallback(async (seedPrompt?: string) => {
+    const client = clientRef.current;
+    if (!client || connectionState !== 'connected' || !selectedSessionId) {
+      return;
+    }
+
+    try {
+      // Request the LLM to propose a fork
+      // The LLM will respond with a propose_fork tool call, which renders as ForkProposalCard
+      const result = await client.sessions.requestProposal(
+        selectedSessionId,
+        'fork',
+        seedPrompt || ''
+      );
+
+      if (!result.success) {
+        setError(result.error || 'Failed to request fork proposal');
+      }
+      // The proposal will appear in the conversation as the LLM responds
+    } catch (err) {
+      console.error('Failed to request fork proposal:', err);
+      setError(`Failed to request fork proposal: ${err}`);
+    }
+  }, [connectionState, selectedSessionId]);
+
+  // Handle conclude action - mark session as concluded
+  // If seedPrompt is provided, include it as the reason
+  const handleConcludeAction = useCallback(async (seedPrompt?: string) => {
+    const client = clientRef.current;
+    if (!client || connectionState !== 'connected' || !selectedSessionId) {
+      return;
+    }
+
+    try {
+      // Conclude directly - no LLM proposal needed for conclude
+      // The seedPrompt becomes the reason for concluding
+      const result = await client.sessions.concludeSession(selectedSessionId, seedPrompt);
+      if (!result.success) {
+        setError(result.error || 'Failed to conclude session');
+        return;
+      }
+      // Refresh session list
+      const sessionList = await client.sessionData.getAllSessions();
+      setSessions(sessionList);
+    } catch (err) {
+      console.error('Failed to conclude session:', err);
+      setError(`Failed to conclude session: ${err}`);
+    }
+  }, [connectionState, selectedSessionId]);
+
+  // Handle link action - link to another session
+  const handleLinkAction = useCallback(async (description?: string) => {
+    const client = clientRef.current;
+    if (!client || connectionState !== 'connected' || !selectedSessionId) {
+      return;
+    }
+
+    // TODO: Open session picker dialog, then call linkSessions
+    console.log('Link action triggered with description:', description);
+    setError('Link action: session picker not yet implemented');
+  }, [connectionState, selectedSessionId]);
+
+  // Handle merge action - request LLM to propose a merge
+  const handleMergeAction = useCallback(async (seedPrompt?: string) => {
+    const client = clientRef.current;
+    if (!client || connectionState !== 'connected' || !selectedSessionId) {
+      return;
+    }
+
+    const session = sessions.find(s => s.id === selectedSessionId);
+    if (!session?.parentId) {
+      setError('Cannot merge: this session has no parent');
+      return;
+    }
+
+    try {
+      // Request the LLM to propose a merge
+      // The LLM will respond with a propose_merge tool call, which renders as MergeProposalCard
+      const result = await client.sessions.requestProposal(
+        selectedSessionId,
+        'merge',
+        seedPrompt || ''
+      );
+
+      if (!result.success) {
+        setError(result.error || 'Failed to request merge proposal');
+      }
+      // The proposal will appear in the conversation as the LLM responds
+    } catch (err) {
+      console.error('Failed to request merge proposal:', err);
+      setError(`Failed to request merge proposal: ${err}`);
+    }
+  }, [connectionState, selectedSessionId, sessions]);
+
+  // Handle reopen action - reopen a concluded session
+  const handleReopenAction = useCallback(async (reason?: string) => {
+    const client = clientRef.current;
+    if (!client || connectionState !== 'connected' || !selectedSessionId) {
+      return;
+    }
+
+    try {
+      const result = await client.sessions.reopenSession(selectedSessionId, reason);
+      if (!result.success) {
+        setError(result.error || 'Failed to reopen session');
+        return;
+      }
+      // Refresh session list
+      const sessionList = await client.sessionData.getAllSessions();
+      setSessions(sessionList);
+    } catch (err) {
+      console.error('Failed to reopen session:', err);
+      setError(`Failed to reopen session: ${err}`);
+    }
+  }, [connectionState, selectedSessionId]);
+
+  // Execute the selected send action
+  const handleExecuteAction = useCallback(async () => {
+    const content = (messageInputRef.current?.getValue() || '').trim();
+
+    // Handle reopen for concluded sessions
+    const session = sessions.find(s => s.id === selectedSessionId);
+    if (session?.concluded) {
+      messageInputRef.current?.setValue('');
+      await handleReopenAction(content || undefined);
+      return;
+    }
+
+    switch (sendAction) {
+      case 'send':
+        // Use existing handleSubmit
+        if (content || imageAttachments.length > 0) {
+          handleSubmit(content);
+        }
+        break;
+      case 'btw':
+        // BTW mode: prefix message with instruction not to change course
+        if (content) {
+          const btwMessage = `BTW (don't change course for this, just acknowledge): ${content}`;
+          handleSubmit(btwMessage);
+        }
+        break;
+      case 'fork':
+        messageInputRef.current?.setValue('');
+        await handleForkAction(content || undefined);
+        break;
+      case 'conclude':
+        messageInputRef.current?.setValue('');
+        await handleConcludeAction(content || undefined);
+        break;
+      case 'link':
+        messageInputRef.current?.setValue('');
+        await handleLinkAction(content || undefined);
+        break;
+      case 'merge':
+        messageInputRef.current?.setValue('');
+        await handleMergeAction(content || undefined);
+        break;
+    }
+
+    // Reset action to send after any non-send action
+    if (sendAction !== 'send') {
+      setSendAction('send');
+    }
+  }, [sendAction, imageAttachments, sessions, selectedSessionId, handleSubmit, handleForkAction, handleConcludeAction, handleLinkAction, handleMergeAction, handleReopenAction]);
+
   const selectedSession = sessions.find(s => s.id === selectedSessionId);
 
   // Update document title to show session name and turn count
@@ -3358,7 +3527,7 @@ function AppContent() {
                     ))}
                   </div>
                 )}
-                <form className="input-form" onSubmit={handleSubmit}>
+                <form className="input-form" onSubmit={(e) => { e.preventDefault(); handleExecuteAction(); }}>
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -3394,30 +3563,34 @@ function AppContent() {
                       ? "Loading session..."
                       : selectedSession?.isStreaming
                         ? "Type to queue... (messages will be sent after streaming completes)"
-                        : "Type a message... (Enter to send, Shift+Enter for newline, Ctrl+V to paste image)"}
+                        : sendAction === 'send'
+                          ? "Type a message... (Enter to send, Shift+Enter for newline)"
+                          : sendAction === 'btw'
+                            ? "Side comment (won't change the current task)..."
+                            : sendAction === 'fork'
+                              ? "Initial prompt for fork (optional)..."
+                              : sendAction === 'conclude'
+                                ? "Reason for concluding (optional)..."
+                                : sendAction === 'link'
+                                  ? "Link description (optional)..."
+                                  : sendAction === 'merge'
+                                    ? "Merge summary (optional)..."
+                                    : "Type a message..."}
                     disabled={connectionState !== 'connected' || isLoadingTurns}
-                    onSubmit={handleSubmit}
+                    onSubmit={sendAction === 'send' ? handleSubmit : handleExecuteAction}
                     onPaste={handlePaste}
                     partialText={voicePartialText}
                     onChange={handleInputChange}
                   />
-                  {selectedSession?.isStreaming ? (
-                    <button
-                      type="submit"
-                      className="queue-button"
-                      disabled={connectionState !== 'connected' || isLoadingTurns}
-                    >
-                      Queue
-                    </button>
-                  ) : (
-                    <button
-                      type="submit"
-                      className="send-button"
-                      disabled={connectionState !== 'connected' || isLoadingTurns}
-                    >
-                      Send
-                    </button>
-                  )}
+                  <SendActionButton
+                    action={sendAction}
+                    onActionChange={setSendAction}
+                    onExecute={handleExecuteAction}
+                    disabled={connectionState !== 'connected' || isLoadingTurns}
+                    canMerge={!!selectedSession?.parentId}
+                    isStreaming={selectedSession?.isStreaming}
+                    isConcluded={selectedSession?.concluded}
+                  />
                 </form>
               </div>
             )}
@@ -3477,6 +3650,21 @@ function AppContent() {
                   messageInputRef.current?.setValue(newValue);
                   debugLog('Inserted path into input', { path });
                 }}
+                onAddSessionPrompt={selectedSessionId ? async (path) => {
+                  debugLog('Add as session prompt', { path, sessionId: selectedSessionId });
+                  if (clientRef.current) {
+                    try {
+                      const result = await clientRef.current.sessions.addSessionPromptFile(selectedSessionId, path);
+                      if (result.success) {
+                        debugLog('Added session prompt file', { path });
+                      } else {
+                        console.error('Failed to add session prompt:', result.error);
+                      }
+                    } catch (err) {
+                      console.error('Error adding session prompt:', err);
+                    }
+                  }
+                } : undefined}
               />
             ) : (
               <div style={{ padding: '16px', color: 'var(--color-text-secondary)' }}>

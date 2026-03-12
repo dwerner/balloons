@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-03-10T17:19:06.418112
+// Generated: 2026-03-12T09:46:35.867354
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -368,6 +368,21 @@ export class QueueStateServiceClient implements QueueStateService {
  */
 export interface SessionManagerService {
   /**
+   * Add a file to be included in the system prompt for a session.
+   * 
+   * The file content will be loaded fresh each turn and included in the
+   * system prompt.
+   * 
+   * Args:
+   * session_id: Session to add the prompt file to
+   * file_path: Absolute path to the file
+   * 
+   * Returns:
+   * Dict with success status, error message if any, and updated file list
+   */
+  addSessionPromptFile(sessionId: string, filePath: string): Promise<Record<string, unknown>>;
+
+  /**
    * Approve a session review and update the session title.
    * 
    * Args:
@@ -466,6 +481,21 @@ export interface SessionManagerService {
    * CompleteSessionReviewResult with the parsed review data
    */
   completeSessionReview(helperId: string, resultText: string): Promise<Types.CompleteSessionReviewResult>;
+
+  /**
+   * Mark a session as concluded.
+   * 
+   * Sets the concluded flag and adds a conclude turn to the conversation.
+   * If no reason is provided, an auto-generated summary may be created.
+   * 
+   * Args:
+   * session_id: ID of the session to conclude
+   * reason: Optional reason/summary for concluding (auto-generated if empty)
+   * 
+   * Returns:
+   * ConcludeSessionResult with conclusion info
+   */
+  concludeSession(sessionId: string, reason?: string): Promise<Types.ConcludeSessionResult>;
 
   /**
    * Create a new session.
@@ -641,6 +671,17 @@ export interface SessionManagerService {
   getSessionBackend(sessionId: string): Promise<string | null>;
 
   /**
+   * Get the list of prompt files for a session.
+   * 
+   * Args:
+   * session_id: Session to get prompt files from
+   * 
+   * Returns:
+   * Dict with prompt_files list
+   */
+  getSessionPromptFiles(sessionId: string): Promise<Record<string, unknown>>;
+
+  /**
    * Get all reviews for a session.
    * 
    * Returns a list of review dictionaries with summary info for display
@@ -761,6 +802,55 @@ export interface SessionManagerService {
    * RehydrateResult with restoration details
    */
   rehydrate(sessionId: string, turnIndex: number): Promise<Types.RehydrateResult>;
+
+  /**
+   * Remove a file from a session's prompt files.
+   * 
+   * Args:
+   * session_id: Session to remove the prompt file from
+   * file_path: Path of the file to remove
+   * 
+   * Returns:
+   * Dict with success status, error message if any, and updated file list
+   */
+  removeSessionPromptFile(sessionId: string, filePath: string): Promise<Record<string, unknown>>;
+
+  /**
+   * Reopen a concluded session.
+   * 
+   * Clears the concluded flag and adds a reopen turn to the conversation.
+   * 
+   * Args:
+   * session_id: ID of the session to reopen
+   * reason: Optional reason for reopening
+   * 
+   * Returns:
+   * ConcludeSessionResult (reused for reopen)
+   */
+  reopenSession(sessionId: string, reason?: string): Promise<Types.ConcludeSessionResult>;
+
+  /**
+   * Request the LLM to generate a proposal (fork, merge, or conclude).
+   * 
+   * Instead of directly executing a fork/merge/conclude, this method submits
+   * a message instructing the LLM to use the appropriate proposal tool
+   * (propose_fork, propose_merge). The user can then review and accept/reject
+   * the proposal via the UI.
+   * 
+   * For conclude, the LLM generates a session summary before concluding.
+   * 
+   * Args:
+   * session_id: ID of the session to generate a proposal for
+   * proposal_type: Type of proposal ("fork", "merge", "conclude")
+   * seed_prompt: User's seed text to guide the proposal. For fork, this
+   * describes what the fork should accomplish. For merge,
+   * this describes what was accomplished. For conclude,
+   * this focuses the summary.
+   * 
+   * Returns:
+   * RequestProposalResult with exchange_id for tracking the proposal
+   */
+  requestProposal(sessionId: string, proposalType: string, seedPrompt?: string): Promise<Types.RequestProposalResult>;
 
   /**
    * Respond to a fork proposal by accepting or rejecting it.
@@ -1124,6 +1214,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
     };
   }
 
+  async addSessionPromptFile(sessionId: string, filePath: string): Promise<Record<string, unknown>> {
+    return this.call('addSessionPromptFile', { sessionId: sessionId, filePath: filePath });
+  }
+
   async approveSessionReview(sessionId: string, summaryId: string, approvedTitle: string, editedMarkdown?: string | null): Promise<Types.ApproveSessionReviewResult> {
     return this.call('approveSessionReview', { sessionId: sessionId, summaryId: summaryId, approvedTitle: approvedTitle, editedMarkdown: editedMarkdown });
   }
@@ -1150,6 +1244,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   async completeSessionReview(helperId: string, resultText: string): Promise<Types.CompleteSessionReviewResult> {
     return this.call('completeSessionReview', { helperId: helperId, resultText: resultText });
+  }
+
+  async concludeSession(sessionId: string, reason?: string): Promise<Types.ConcludeSessionResult> {
+    return this.call('concludeSession', { sessionId: sessionId, reason: reason });
   }
 
   async createSession(workingDirectory?: string | null): Promise<Types.ManagedSessionInfo> {
@@ -1200,6 +1298,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.call('getSessionBackend', { sessionId: sessionId });
   }
 
+  async getSessionPromptFiles(sessionId: string): Promise<Record<string, unknown>> {
+    return this.call('getSessionPromptFiles', { sessionId: sessionId });
+  }
+
   async getSessionReviews(sessionId: string): Promise<Record<string, unknown>[]> {
     return this.call('getSessionReviews', { sessionId: sessionId });
   }
@@ -1238,6 +1340,18 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   async rehydrate(sessionId: string, turnIndex: number): Promise<Types.RehydrateResult> {
     return this.call('rehydrate', { sessionId: sessionId, turnIndex: turnIndex });
+  }
+
+  async removeSessionPromptFile(sessionId: string, filePath: string): Promise<Record<string, unknown>> {
+    return this.call('removeSessionPromptFile', { sessionId: sessionId, filePath: filePath });
+  }
+
+  async reopenSession(sessionId: string, reason?: string): Promise<Types.ConcludeSessionResult> {
+    return this.call('reopenSession', { sessionId: sessionId, reason: reason });
+  }
+
+  async requestProposal(sessionId: string, proposalType: string, seedPrompt?: string): Promise<Types.RequestProposalResult> {
+    return this.call('requestProposal', { sessionId: sessionId, proposalType: proposalType, seedPrompt: seedPrompt });
   }
 
   async respondToForkProposal(sessionId: string, proposalId: string, accepted: boolean, contextPlan?: Record<string, unknown>[] | null, initialPrompt?: string | null, name?: string | null, description?: string | null, startStreaming?: boolean): Promise<Types.RespondToForkProposalResult> {
@@ -4088,6 +4202,21 @@ export interface FileStateService {
    */
   unstageFiles(gitRoot: string, paths: string[]): Promise<Types.FileOperationResult>;
 
+  /**
+   * Write content to a file.
+   * 
+   * Creates the file if it doesn't exist. Creates parent directories if needed.
+   * Uses atomic write (write to temp file, then rename) for safety.
+   * 
+   * Args:
+   * path: Absolute path to the file
+   * content: The content to write
+   * 
+   * Returns:
+   * FileOperationResult with success/failure status
+   */
+  writeFile(path: string, content: string): Promise<Types.FileOperationResult>;
+
 }
 
 export interface FileStateEvents {
@@ -4229,6 +4358,10 @@ export class FileStateServiceClient implements FileStateService {
 
   async unstageFiles(gitRoot: string, paths: string[]): Promise<Types.FileOperationResult> {
     return this.call('unstageFiles', { gitRoot: gitRoot, paths: paths });
+  }
+
+  async writeFile(path: string, content: string): Promise<Types.FileOperationResult> {
+    return this.call('writeFile', { path: path, content: content });
   }
 
   onCwdChanged(callback: (data: Types.CwdChangedData) => void): Unsubscribe {

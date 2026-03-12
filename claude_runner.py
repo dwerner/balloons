@@ -10,11 +10,11 @@ import base64
 
 from models import (
     Message, TextDelta, ResultEvent, InitEvent, RawEvent, ContextTokensEvent,
-    ToolUseStartEvent, ToolUseEvent, ToolResultEvent,
+    ToolUseStartEvent, ToolUseEvent, ToolResultEvent, SteeringInjectedEvent,
     TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock, ContextMode,
 )
 from core.debug_log import debug_log, dump_failed_json, Category
-from core.base_runner import BaseRunner, RunnerEvent
+from core.base_runner import BaseRunner, RunnerEvent, SteeringCapability
 from core.exceptions import RateLimitError, StreamTimeoutError
 
 # Timeout for reading lines from Claude stream (3 minutes)
@@ -128,6 +128,11 @@ class ClaudeRunner(BaseRunner):
         self._text_buffer: str = ""  # Buffer for detecting balloons-tool blocks
         self._pending_images: list[ImageBlock] = []  # Images to send with next message
         self._sent_continuation: bool = False  # Whether _handle_balloons_tools sent a continuation
+
+    @property
+    def steering_capability(self) -> SteeringCapability:
+        """Claude supports hybrid turns - tool_result + text in one message."""
+        return SteeringCapability.HYBRID_TURN
 
     def _parse_balloons_tools(self, text: str) -> list[tuple[str, str, dict]]:
         """Parse all <balloons-tool> blocks from text.
@@ -379,14 +384,19 @@ class ClaudeRunner(BaseRunner):
     def _get_system_prompt(self) -> str | None:
         """Build the system prompt for this turn.
 
-        Combines user prompt with balloons tools and domain prompts.
+        Combines user prompt with balloons tools, domain prompts, and
+        session-specific prompt files.
         Called per-turn to ensure domain prompts are fresh.
 
         Returns:
             Complete system prompt, or None if no content
         """
         from core.prompt_builder import build_system_prompt
-        return build_system_prompt(backend_type="claude", user_prompt=self._user_prompt)
+        return build_system_prompt(
+            backend_type="claude",
+            user_prompt=self._user_prompt,
+            session=self._current_session,
+        )
 
     def build_message_content(
         self,
@@ -583,36 +593,73 @@ class ClaudeRunner(BaseRunner):
             run_id=self._run_id,
         )
 
-    async def _send_tool_result(self, tool_use_id: str, result: str, is_error: bool = False) -> None:
-        """Send a tool result back to Claude."""
+    async def _send_tool_result(
+        self,
+        tool_use_id: str,
+        result: str,
+        is_error: bool = False,
+        steering: str | None = None,
+    ) -> None:
+        """Send a tool result back to Claude, optionally with user steering.
+
+        Claude supports hybrid turns where tool_result and user text are
+        bundled in a single message. This allows seamless mid-stream steering
+        without needing a separate user turn.
+
+        Args:
+            tool_use_id: ID of the tool use this is a result for
+            result: The tool execution result
+            is_error: Whether this is an error result
+            steering: Optional user steering text to include with the result
+        """
+        content = [{
+            "type": "tool_result",
+            "tool_use_id": tool_use_id,
+            "content": result,
+            "is_error": is_error,
+        }]
+
+        # If we have steering text, add it as a text block in the same message
+        # This creates a hybrid turn that Claude sees atomically
+        if steering:
+            content.append({"type": "text", "text": steering})
+            debug_log.info(
+                f"Sending hybrid tool_result + steering",
+                category=Category.RUNNER,
+                details={"tool_use_id": tool_use_id[:12], "steering_len": len(steering)},
+                run_id=self._run_id,
+            )
+
         msg = {
             "type": "user",
             "message": {
                 "role": "user",
-                "content": [{
-                    "type": "tool_result",
-                    "tool_use_id": tool_use_id,
-                    "content": result,
-                    "is_error": is_error,
-                }]
+                "content": content,
             }
         }
         await self._send_message(msg)
 
-    async def _send_user_injection(self, text: str) -> None:
-        """Send a user steering message mid-stream.
+    async def _send_tool_result_standalone_steering(self, steering: str) -> None:
+        """Send a standalone steering message when we can't bundle with tool result.
 
-        This injects a user message into the conversation while Claude
-        is processing, allowing the user to steer without cancelling.
+        This is used when the CLI subprocess has already sent tool results and
+        we need to inject steering as a separate user message. Less ideal than
+        hybrid turns, but necessary for CLI-handled tools.
 
         Args:
-            text: The user's message to inject
+            steering: The user steering text to send
         """
+        debug_log.info(
+            f"Sending standalone steering message",
+            category=Category.RUNNER,
+            details={"steering_len": len(steering)},
+            run_id=self._run_id,
+        )
         msg = {
             "type": "user",
             "message": {
                 "role": "user",
-                "content": [{"type": "text", "text": text}]
+                "content": [{"type": "text", "text": steering}]
             }
         }
         await self._send_message(msg)
@@ -760,7 +807,9 @@ class ClaudeRunner(BaseRunner):
             if msg_type == "user":
                 # CLI executed tools and is sending results back
                 # Parse and yield the results, remove from pending_tool_calls
+                # Check queue after EACH tool result for boundary-aware steering
                 message = data.get("message", {})
+
                 for block in message.get("content", []):
                     if block.get("type") == "tool_result":
                         tool_use_id = block.get("tool_use_id", "")
@@ -784,20 +833,29 @@ class ClaudeRunner(BaseRunner):
                             run_id=self._run_id,
                         )
 
+                        # Check for steering after EACH CLI tool result
+                        # IMMEDIATELY send steering for soft interrupt behavior
+                        # This allows Claude to pivot mid-execution rather than waiting
+                        if self._injection_callback:
+                            steering = await self._injection_callback()
+                            if steering:
+                                debug_log.info(
+                                    f"Sending steering immediately after CLI tool",
+                                    category=Category.RUNNER,
+                                    details={"tool_use_id": tool_use_id[:12], "steering_len": len(steering)},
+                                    run_id=self._run_id,
+                                )
+                                # Yield event so UI can display the injected message
+                                yield SteeringInjectedEvent(
+                                    content=steering,
+                                    injected_at_tool_id=tool_use_id,
+                                )
+                                # Send steering RIGHT NOW - soft interrupt, don't wait
+                                await self._send_tool_result_standalone_steering(steering)
+
                 # Tool results received - back to hard timeout for Claude's response
                 if not pending_tool_calls:
                     awaiting_tool_execution = False
-                    # Check for mid-stream injection after CLI tool execution
-                    if self._injection_callback:
-                        injection = await self._injection_callback()
-                        if injection:
-                            debug_log.info(
-                                f"Injecting user steering message after CLI tools",
-                                category=Category.RUNNER,
-                                details={"injection_len": len(injection)},
-                                run_id=self._run_id,
-                            )
-                            await self._send_user_injection(injection)
                 continue
 
             # Handle result event (turn complete)
@@ -813,6 +871,11 @@ class ClaudeRunner(BaseRunner):
                 ]
 
                 if custom_tool_calls:
+                    # Execute all custom tools and collect results
+                    # Check queue after EACH tool for boundary-aware steering
+                    tool_results = []
+                    accumulated_steering: list[str] = []
+
                     for tc in custom_tool_calls:
                         result, is_error = await execute_tool(
                             tc["name"],
@@ -827,20 +890,38 @@ class ClaudeRunner(BaseRunner):
                             result=result,
                         )
 
-                        # Send result back to Claude
-                        await self._send_tool_result(tc["id"], result, is_error)
+                        tool_results.append((tc["id"], result, is_error))
 
-                    # Check for mid-stream injection after tool execution
-                    if self._injection_callback:
-                        injection = await self._injection_callback()
-                        if injection:
-                            debug_log.info(
-                                f"Injecting user steering message",
-                                category=Category.RUNNER,
-                                details={"injection_len": len(injection)},
-                                run_id=self._run_id,
-                            )
-                            await self._send_user_injection(injection)
+                        # Check for steering after EACH tool result
+                        # This enables boundary-aware injection (like Claude Code's h2A queue)
+                        if self._injection_callback:
+                            steering = await self._injection_callback()
+                            if steering:
+                                accumulated_steering.append(steering)
+                                debug_log.info(
+                                    f"Captured steering after tool {tc['name']}",
+                                    category=Category.RUNNER,
+                                    details={"steering_len": len(steering)},
+                                    run_id=self._run_id,
+                                )
+                                # Yield event so UI can display the injected message
+                                yield SteeringInjectedEvent(
+                                    content=steering,
+                                    injected_at_tool_id=tc["id"],
+                                )
+
+                    # Combine all accumulated steering into one message
+                    final_steering = "\n\n".join(accumulated_steering) if accumulated_steering else None
+
+                    # Send all tool results, bundling combined steering with the last one
+                    for i, (tool_id, result, is_error) in enumerate(tool_results):
+                        is_last = (i == len(tool_results) - 1)
+                        await self._send_tool_result(
+                            tool_id,
+                            result,
+                            is_error,
+                            steering=final_steering if is_last else None,
+                        )
 
                     pending_tool_calls.clear()
                     # Continue processing - Claude will respond to the tool results
