@@ -13,11 +13,13 @@
  * - Per-section token counts with visual breakdown
  */
 
-import React, { memo, useState, useCallback, useMemo, useEffect } from 'react';
+import React, { memo, useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import Editor from '@monaco-editor/react';
 import type { BalloonsClient } from '../../../../generated/balloons-client';
 import type {
   PromptComponentInfo as ServerPromptComponentInfo,
   DomainInfoItem as ServerDomainInfoItem,
+  SessionPromptFileInfo as ServerSessionPromptFileInfo,
 } from '../../../../generated/types';
 import { createLogger } from '../../utils/debugLog';
 import './SystemPromptView.css';
@@ -47,10 +49,22 @@ export interface DomainInfo {
   promptContent?: string;
 }
 
+// Session prompt file info
+export interface SessionPromptFile {
+  filePath: string;
+  filename: string;
+  tokens: number;
+  exists: boolean;
+  contentPreview?: string;
+  fullContent?: string;
+}
+
 interface SystemPromptViewProps {
   sessionId: string | null;
   client?: BalloonsClient | null;
   isLoading?: boolean;
+  /** Whether dark mode is enabled */
+  isDarkMode?: boolean;
 }
 
 // Format token count as kt
@@ -295,19 +309,219 @@ const DomainRow = memo(function DomainRow({
   );
 });
 
+// Session prompt file row with remove action, content preview, and edit capability
+const SessionPromptFileRow = memo(function SessionPromptFileRow({
+  file,
+  expanded,
+  onExpand,
+  onRemove,
+  onSave,
+  isDarkMode = true,
+}: {
+  file: SessionPromptFile;
+  expanded: boolean;
+  onExpand: (filePath: string) => void;
+  onRemove?: (filePath: string) => void;
+  onSave?: (filePath: string, content: string) => Promise<boolean>;
+  isDarkMode?: boolean;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editContent, setEditContent] = useState(file.fullContent || '');
+  const [isSaving, setIsSaving] = useState(false);
+  const hasContent = file.fullContent && file.fullContent.length > 0;
+
+  // Sync edit content when file content changes (e.g., after refresh)
+  useEffect(() => {
+    if (!isEditing) {
+      setEditContent(file.fullContent || '');
+    }
+  }, [file.fullContent, isEditing]);
+
+  const handleEdit = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsEditing(true);
+    setEditContent(file.fullContent || '');
+    // Expand if not already expanded
+    if (!expanded) {
+      onExpand(file.filePath);
+    }
+  }, [file.fullContent, file.filePath, expanded, onExpand]);
+
+  const handleSave = useCallback(async () => {
+    if (!onSave) return;
+    setIsSaving(true);
+    try {
+      const success = await onSave(file.filePath, editContent);
+      if (success) {
+        setIsEditing(false);
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  }, [file.filePath, editContent, onSave]);
+
+  const handleCancel = useCallback(() => {
+    setIsEditing(false);
+    setEditContent(file.fullContent || '');
+  }, [file.fullContent]);
+
+  const handleEditorChange = useCallback((value: string | undefined) => {
+    setEditContent(value || '');
+  }, []);
+
+  // Detect language from filename
+  const getLanguage = (filename: string): string => {
+    const ext = filename.split('.').pop()?.toLowerCase() || '';
+    const languageMap: Record<string, string> = {
+      'md': 'markdown',
+      'txt': 'plaintext',
+      'json': 'json',
+      'yaml': 'yaml',
+      'yml': 'yaml',
+      'toml': 'toml',
+      'py': 'python',
+      'js': 'javascript',
+      'ts': 'typescript',
+      'tsx': 'typescript',
+      'jsx': 'javascript',
+    };
+    return languageMap[ext] || 'plaintext';
+  };
+
+  return (
+    <div
+      className={`syspr-prompt-file ${!file.exists ? 'syspr-prompt-file--missing' : ''} ${isEditing ? 'syspr-prompt-file--editing' : ''}`}
+    >
+      <div
+        className="syspr-prompt-file__header"
+        onClick={() => hasContent && onExpand(file.filePath)}
+      >
+        {/* Expand indicator */}
+        <span className="syspr-prompt-file__expand">
+          {hasContent ? (
+            <ChevronIcon open={expanded} />
+          ) : (
+            <span className="syspr-row__spacer" />
+          )}
+        </span>
+
+        <span className="syspr-prompt-file__name">{file.filename}</span>
+        {!file.exists && (
+          <span className="syspr-prompt-file__warning" title="File not found">⚠</span>
+        )}
+
+        {/* Edit button */}
+        {file.exists && !isEditing && onSave && (
+          <button
+            className="syspr-prompt-file__action syspr-prompt-file__action--edit"
+            onClick={handleEdit}
+            title="Edit file"
+          >
+            ✎
+          </button>
+        )}
+
+        {/* Remove button */}
+        <button
+          className="syspr-prompt-file__action syspr-prompt-file__action--remove"
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove?.(file.filePath);
+          }}
+          title="Remove from session prompts"
+        >
+          ✕
+        </button>
+        <span className="syspr-prompt-file__tokens">{formatKt(file.tokens)}</span>
+      </div>
+
+      {/* File path tooltip */}
+      <div className="syspr-prompt-file__path" title={file.filePath}>
+        {file.filePath}
+      </div>
+
+      {/* Editor mode */}
+      {expanded && isEditing && (
+        <div className="syspr-prompt-file__editor">
+          <div className="syspr-prompt-file__editor-toolbar">
+            <button
+              className="syspr-prompt-file__editor-btn syspr-prompt-file__editor-btn--save"
+              onClick={handleSave}
+              disabled={isSaving}
+            >
+              {isSaving ? 'Saving...' : 'Save'}
+            </button>
+            <button
+              className="syspr-prompt-file__editor-btn syspr-prompt-file__editor-btn--cancel"
+              onClick={handleCancel}
+              disabled={isSaving}
+            >
+              Cancel
+            </button>
+          </div>
+          <div className="syspr-prompt-file__editor-container">
+            <Editor
+              height="300px"
+              language={getLanguage(file.filename)}
+              value={editContent}
+              theme={isDarkMode ? 'vs-dark' : 'light'}
+              onChange={handleEditorChange}
+              options={{
+                minimap: { enabled: false },
+                fontSize: 12,
+                lineNumbers: 'on',
+                wordWrap: 'on',
+                scrollBeyondLastLine: false,
+                automaticLayout: true,
+                padding: { top: 8, bottom: 8 },
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Preview mode (non-editing) */}
+      {expanded && !isEditing && hasContent && (
+        <div className="syspr-prompt-file__expanded">
+          <PromptPreview content={file.fullContent!} maxLines={20} />
+        </div>
+      )}
+    </div>
+  );
+});
+
 export const SystemPromptView = memo(function SystemPromptView({
   sessionId,
   client,
   isLoading = false,
+  isDarkMode: isDarkModeProp,
 }: SystemPromptViewProps) {
   // DEBUG: Log every render
   console.log('[SystemPromptView] RENDER', { sessionId, hasClient: !!client, isLoading });
+
+  // Detect dark mode from document attribute or prop
+  const [detectedDarkMode, setDetectedDarkMode] = useState(true);
+  useEffect(() => {
+    const checkDarkMode = () => {
+      const theme = document.documentElement.getAttribute('data-theme');
+      setDetectedDarkMode(theme !== 'light');
+    };
+    checkDarkMode();
+    // Watch for theme changes
+    const observer = new MutationObserver(checkDarkMode);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => observer.disconnect();
+  }, []);
+  const isDarkMode = isDarkModeProp ?? detectedDarkMode;
 
   // Components state
   const [components, setComponents] = useState<PromptComponent[]>([]);
 
   // Domains state
   const [domains, setDomains] = useState<DomainInfo[]>([]);
+
+  // Session prompt files state
+  const [sessionPromptFiles, setSessionPromptFiles] = useState<SessionPromptFile[]>([]);
 
   // Context window from server
   const [contextWindow, setContextWindow] = useState(150000);
@@ -367,6 +581,21 @@ export const SystemPromptView = memo(function SystemPromptView({
           })
         );
         setDomains(mappedDomains);
+      }
+
+      // Map server session prompt files to UI format
+      if (info.sessionPromptFiles) {
+        const mappedFiles: SessionPromptFile[] = info.sessionPromptFiles.map(
+          (f: ServerSessionPromptFileInfo) => ({
+            filePath: f.filePath,
+            filename: f.filename,
+            tokens: f.tokens ?? 0,
+            exists: f.exists ?? true,
+            contentPreview: f.contentPreview,
+            fullContent: f.fullContent,
+          })
+        );
+        setSessionPromptFiles(mappedFiles);
       }
 
       // Set context window
@@ -473,6 +702,48 @@ export const SystemPromptView = memo(function SystemPromptView({
     [client]
   );
 
+  // Handle removing a session prompt file
+  const handleRemovePromptFile = useCallback(
+    async (filePath: string) => {
+      if (!client || !sessionId) return;
+      debugLog('Remove session prompt file', { filePath, sessionId });
+      try {
+        const result = await client.sessions.removeSessionPromptFile(sessionId, filePath);
+        if (!result.success) {
+          debugLog('Failed to remove prompt file', { filePath, error: result.error });
+        }
+        // Session update event will trigger refresh
+      } catch (err) {
+        debugLog('Error removing prompt file', { filePath, error: String(err) });
+      }
+    },
+    [client, sessionId]
+  );
+
+  // Handle saving a session prompt file
+  const handleSavePromptFile = useCallback(
+    async (filePath: string, content: string): Promise<boolean> => {
+      if (!client) return false;
+      debugLog('Save session prompt file', { filePath, contentLength: content.length });
+      try {
+        const result = await client.files.writeFile(filePath, content);
+        if (result.success) {
+          debugLog('Saved prompt file successfully', { filePath });
+          // Refresh to update token counts
+          fetchSystemPromptInfo();
+          return true;
+        } else {
+          debugLog('Failed to save prompt file', { filePath, error: result.message });
+          return false;
+        }
+      } catch (err) {
+        debugLog('Error saving prompt file', { filePath, error: String(err) });
+        return false;
+      }
+    },
+    [client, fetchSystemPromptInfo]
+  );
+
   // Calculate totals
   const totalTokens = useMemo(() => {
     const componentTokens = components
@@ -481,6 +752,7 @@ export const SystemPromptView = memo(function SystemPromptView({
     const domainTokens = domains
       .filter((d) => d.loaded)
       .reduce((sum, d) => sum + d.promptTokens + d.contextTokens, 0);
+    // Session prompt files are already included in components via 'session-prompts'
     return componentTokens + domainTokens;
   }, [components, domains]);
 
@@ -489,13 +761,15 @@ export const SystemPromptView = memo(function SystemPromptView({
     const allTokens = [
       ...components.map((c) => c.tokens),
       ...domains.map((d) => d.promptTokens + d.contextTokens),
+      ...sessionPromptFiles.map((f) => f.tokens),
     ];
     return Math.max(...allTokens, 1);
-  }, [components, domains]);
+  }, [components, domains, sessionPromptFiles]);
 
-  // Find domains component for nested display
+  // Find domains component and session-prompts component for nested display
   const domainsComponent = components.find((c) => c.id === 'domains');
-  const otherComponents = components.filter((c) => c.id !== 'domains');
+  const sessionPromptsComponent = components.find((c) => c.id === 'session-prompts');
+  const otherComponents = components.filter((c) => c.id !== 'domains' && c.id !== 'session-prompts');
 
   if (!sessionId) {
     return (
@@ -590,6 +864,58 @@ export const SystemPromptView = memo(function SystemPromptView({
                       onExpand={(id) => handleExpand(`domain-${id}`)}
                       onLoad={handleDomainLoad}
                       onUnload={handleDomainUnload}
+                    />
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Session Prompts section */}
+        {sessionPromptsComponent && (
+          <div className="syspr-component syspr-component--session-prompts">
+            <div
+              className="syspr-row syspr-row--expandable"
+              onClick={() => handleExpand('session-prompts')}
+            >
+              <span className="syspr-row__expand">
+                <ChevronIcon open={expandedIds.has('session-prompts')} />
+              </span>
+              <div className="syspr-row__content">
+                <span className="syspr-row__name">{sessionPromptsComponent.name}</span>
+                <span className="syspr-row__desc">
+                  {sessionPromptFiles.length} file{sessionPromptFiles.length !== 1 ? 's' : ''}
+                </span>
+              </div>
+              <div className="syspr-row__tokens-wrap">
+                <span
+                  className={`syspr-row__tokens ${
+                    sessionPromptsComponent.tokens > 0 ? 'syspr-row__tokens--active' : ''
+                  }`}
+                >
+                  {formatKt(sessionPromptsComponent.tokens)}
+                </span>
+              </div>
+            </div>
+
+            {/* Expanded session prompt files list */}
+            {expandedIds.has('session-prompts') && (
+              <div className="syspr-component__children">
+                {sessionPromptFiles.length === 0 ? (
+                  <div className="syspr-prompt-files-empty">
+                    No files added. Use the file browser context menu to add files as prompts.
+                  </div>
+                ) : (
+                  sessionPromptFiles.map((file) => (
+                    <SessionPromptFileRow
+                      key={file.filePath}
+                      file={file}
+                      expanded={expandedIds.has(`file-${file.filePath}`)}
+                      onExpand={(path) => handleExpand(`file-${path}`)}
+                      onRemove={handleRemovePromptFile}
+                      onSave={handleSavePromptFile}
+                      isDarkMode={isDarkMode}
                     />
                   ))
                 )}

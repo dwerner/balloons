@@ -366,6 +366,193 @@
   border-top: 1px solid rgba(255, 255, 255, 0.05);
 }
 
+/* ===== Session Prompt Files section ===== */
+.syspr-component--session-prompts {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.syspr-prompt-files-empty {
+  padding: 12px 16px;
+  font-size: 12px;
+  color: #666;
+  font-style: italic;
+}
+
+.syspr-prompt-file {
+  padding: 8px 12px;
+  margin: 4px 0;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 4px;
+  transition: background 0.1s ease;
+  border-left: 2px solid #60a5fa;
+}
+
+.syspr-prompt-file:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.syspr-prompt-file--missing {
+  border-left-color: #f87171;
+  opacity: 0.7;
+}
+
+.syspr-prompt-file__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.syspr-prompt-file__expand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.syspr-prompt-file__name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #e0e0e0;
+}
+
+.syspr-prompt-file__warning {
+  color: #fbbf24;
+  font-size: 12px;
+}
+
+.syspr-prompt-file__action {
+  margin-left: auto;
+  padding: 2px 6px;
+  font-size: 11px;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  background: transparent;
+  color: #888;
+}
+
+.syspr-prompt-file__action--remove:hover {
+  background: rgba(248, 113, 113, 0.15);
+  color: #f87171;
+}
+
+.syspr-prompt-file__action--edit {
+  font-size: 14px;
+}
+
+.syspr-prompt-file__action--edit:hover {
+  background: rgba(96, 165, 250, 0.15);
+  color: #60a5fa;
+}
+
+.syspr-prompt-file__tokens {
+  font-size: 11px;
+  font-family: ui-monospace, 'SF Mono', Monaco, monospace;
+  color: #60a5fa;
+}
+
+.syspr-prompt-file__path {
+  font-size: 10px;
+  color: #555;
+  margin-top: 4px;
+  padding-left: 24px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.syspr-prompt-file__expanded {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Editor mode styles */
+.syspr-prompt-file--editing {
+  border-left-color: #4ade80;
+}
+
+.syspr-prompt-file__editor {
+  margin-top: 8px;
+}
+
+.syspr-prompt-file__editor-toolbar {
+  display: flex;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.syspr-prompt-file__editor-btn {
+  padding: 4px 12px;
+  font-size: 12px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.syspr-prompt-file__editor-btn--save {
+  background: rgba(74, 222, 128, 0.2);
+  color: #4ade80;
+}
+
+.syspr-prompt-file__editor-btn--save:hover:not(:disabled) {
+  background: rgba(74, 222, 128, 0.3);
+}
+
+.syspr-prompt-file__editor-btn--save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.syspr-prompt-file__editor-btn--cancel {
+  background: rgba(248, 113, 113, 0.15);
+  color: #f87171;
+}
+
+.syspr-prompt-file__editor-btn--cancel:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.25);
+}
+
+.syspr-prompt-file__editor-btn--cancel:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.syspr-prompt-file__editor-container {
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Light theme for session prompt files */
+[data-theme="light"] .syspr-prompt-file {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+[data-theme="light"] .syspr-prompt-file:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="light"] .syspr-prompt-file__name {
+  color: #333;
+}
+
+[data-theme="light"] .syspr-prompt-file__path {
+  color: #888;
+}
+
+[data-theme="light"] .syspr-component--session-prompts {
+  border-top-color: rgba(0, 0, 0, 0.05);
+}
+
 /* ===== Footer ===== */
 .syspr-view__footer {
   display: flex;

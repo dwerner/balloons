@@ -51,10 +51,22 @@ class DomainInfo:
 
 
 @dataclass
+class SessionPromptFileInfo:
+    """Information about a session-specific prompt file."""
+    file_path: str
+    filename: str  # Just the basename for display
+    tokens: int
+    exists: bool = True
+    content_preview: str = ""  # First 200 chars
+    full_content: str = ""  # Full content for expandable preview
+
+
+@dataclass
 class SystemPromptInfo:
     """Complete system prompt information for UI display."""
     components: list[PromptComponentInfo] = field(default_factory=list)
     domains: list[DomainInfo] = field(default_factory=list)
+    session_prompt_files: list[SessionPromptFileInfo] = field(default_factory=list)
     total_tokens: int = 0
     context_window: int = 150000
 
@@ -175,6 +187,44 @@ def get_domain_infos() -> list[DomainInfo]:
     return domains
 
 
+def get_session_prompt_files_info(session: "Session | None") -> list[SessionPromptFileInfo]:
+    """Get information about session-specific prompt files.
+
+    Args:
+        session: Session to get prompt files from
+
+    Returns:
+        List of SessionPromptFileInfo for each prompt file
+    """
+    if not session:
+        return []
+
+    files = []
+    for file_path in session.get_prompt_files():
+        path = Path(file_path)
+        exists = path.exists()
+        content = ""
+        tokens = 0
+
+        if exists:
+            try:
+                content = path.read_text()
+                tokens = count_tokens(content)
+            except Exception:
+                exists = False
+
+        files.append(SessionPromptFileInfo(
+            file_path=file_path,
+            filename=path.name,
+            tokens=tokens,
+            exists=exists,
+            content_preview=content[:200] if content else "",
+            full_content=content,
+        ))
+
+    return files
+
+
 def get_system_prompt_info(
     session: "Session | None" = None,
     backend_name: str = "",
@@ -216,6 +266,19 @@ def get_system_prompt_info(
     ))
     total_tokens += domain_tokens
 
+    # Session prompt files
+    session_prompt_files = get_session_prompt_files_info(session)
+    session_prompt_tokens = sum(f.tokens for f in session_prompt_files if f.exists)
+
+    components.append(PromptComponentInfo(
+        id="session-prompts",
+        name="Session Prompts",
+        description="Files added as prompts to this session",
+        tokens=session_prompt_tokens,
+        enabled=True,
+    ))
+    total_tokens += session_prompt_tokens
+
     # Session context (if available)
     session_context_tokens = 0
     if session:
@@ -238,6 +301,7 @@ def get_system_prompt_info(
     return SystemPromptInfo(
         components=components,
         domains=domains,
+        session_prompt_files=session_prompt_files,
         total_tokens=total_tokens,
         context_window=context_window,
     )

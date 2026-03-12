@@ -712,6 +712,72 @@ class FileStateService:
         with open(path, 'r', encoding='utf-8', errors='replace') as f:
             return f.read()
 
+    @ws_expose
+    async def write_file(self, path: str, content: str) -> FileOperationResult:
+        """Write content to a file.
+
+        Creates the file if it doesn't exist. Creates parent directories if needed.
+        Uses atomic write (write to temp file, then rename) for safety.
+
+        Args:
+            path: Absolute path to the file
+            content: The content to write
+
+        Returns:
+            FileOperationResult with success/failure status
+        """
+        import tempfile
+        import shutil
+
+        abs_path = os.path.abspath(path)
+
+        # Don't allow writing to directories
+        if os.path.isdir(abs_path):
+            return FileOperationResult(
+                success=False,
+                message=f"Path is a directory: {abs_path}",
+            )
+
+        # Create parent directories if needed
+        parent_dir = os.path.dirname(abs_path)
+        if parent_dir and not os.path.exists(parent_dir):
+            try:
+                os.makedirs(parent_dir, exist_ok=True)
+            except OSError as e:
+                return FileOperationResult(
+                    success=False,
+                    message=f"Failed to create directory: {e}",
+                )
+
+        try:
+            # Atomic write: write to temp file, then rename
+            fd, temp_path = tempfile.mkstemp(
+                dir=parent_dir,
+                prefix='.balloons_write_',
+                suffix='.tmp',
+            )
+            try:
+                with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                # Rename temp file to target (atomic on most systems)
+                shutil.move(temp_path, abs_path)
+            except Exception:
+                # Clean up temp file on error
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+                raise
+
+            return FileOperationResult(
+                success=True,
+                message=f"Saved {len(content)} bytes to {abs_path}",
+                path=abs_path,
+            )
+        except OSError as e:
+            return FileOperationResult(
+                success=False,
+                message=f"Failed to write file: {e}",
+            )
+
     # --- Git Staging and Commit (via Rust bindings) ---
 
     @ws_expose

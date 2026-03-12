@@ -390,6 +390,9 @@ export interface FileBrowserViewProps {
   /** Callback when "Insert Path" is selected - inserts path into chat input */
   onInsertPath?: (path: string) => void;
 
+  /** Callback when "Add as Session Prompt" is selected on a file */
+  onAddSessionPrompt?: (path: string) => void;
+
   /** FileStateService client - stable reference avoids re-renders */
   client: FileStateServiceClient;
 }
@@ -427,6 +430,7 @@ export const FileBrowserView = memo(forwardRef<FileBrowserViewRef, FileBrowserVi
   onFileSelect,
   onSetWorkingDirectory,
   onInsertPath,
+  onAddSessionPrompt,
   client,
 }, ref) {
   // Current directory listing
@@ -644,6 +648,14 @@ export const FileBrowserView = memo(forwardRef<FileBrowserViewRef, FileBrowserVi
     setContextMenu(null);
   }, [contextMenu, onInsertPath]);
 
+  // Handle add as session prompt from context menu
+  const handleAddSessionPrompt = useCallback(() => {
+    if (contextMenu?.entry && onAddSessionPrompt && !contextMenu.entry.isDirectory) {
+      onAddSessionPrompt(contextMenu.entry.path);
+    }
+    setContextMenu(null);
+  }, [contextMenu, onAddSessionPrompt]);
+
   // Handle toggle show hidden files
   const handleToggleShowHidden = useCallback(() => {
     const newValue = !showHidden;
@@ -841,6 +853,15 @@ export const FileBrowserView = memo(forwardRef<FileBrowserViewRef, FileBrowserVi
                 >
                   <span className="file-browser__context-menu-icon">⌨️</span>
                   Insert Path
+                </button>
+              )}
+              {onAddSessionPrompt && !contextMenu.entry.isDirectory && (
+                <button
+                  className="file-browser__context-menu-item"
+                  onClick={handleAddSessionPrompt}
+                >
+                  <span className="file-browser__context-menu-icon">📝</span>
+                  Add as Session Prompt
                 </button>
               )}
               <div className="file-browser__context-menu-divider" />
