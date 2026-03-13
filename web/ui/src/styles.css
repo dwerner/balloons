@@ -274,6 +274,10 @@ html, body {
   background: var(--color-bg-primary);
   overscroll-behavior: none; /* Prevent overscroll/bounce on mobile */
   touch-action: none; /* Prevent iOS Safari elastic scrolling on root */
+  /* Prevent mobile browsers from inflating text (Firefox, Safari, Chrome) */
+  -webkit-text-size-adjust: 100%;
+  -moz-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {

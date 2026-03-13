@@ -60,11 +60,12 @@ export const SettingsTab = memo(function SettingsTab({
   const { resolvedTheme, setTheme } = useTheme();
   const { isActive: wakeLockActive, isSupported: wakeLockSupported, toggle: toggleWakeLock } = useWakeLock();
 
-  // Voice input preferences
+  // Preferences
   const {
     voiceInputEnabled,
     voiceInputHost,
     voiceInputPort,
+    depthIndicatorStyle,
     setPreference,
     setStringPreference,
   } = usePreferences();
@@ -171,6 +172,26 @@ export const SettingsTab = memo(function SettingsTab({
                 </div>
               </div>
             )}
+
+            {/* Depth indicator style */}
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Depth Indicator Style</span>
+                <span className="appearance-settings__label-description">
+                  How to show session tree depth in Leaves mode
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <select
+                  className="appearance-settings__select"
+                  value={depthIndicatorStyle}
+                  onChange={(e) => setStringPreference('depthIndicatorStyle', e.target.value)}
+                >
+                  <option value="chevrons">Chevrons (stacked notches)</option>
+                  <option value="fractal">Dragon Curve (video wall)</option>
+                </select>
+              </div>
+            </div>
           </div>
         </div>
       </div>

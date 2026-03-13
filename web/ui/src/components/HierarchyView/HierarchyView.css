@@ -133,7 +133,8 @@
   position: absolute;
   left: 0;
   top: 0;
-  bottom: 0;  /* Stretch to fill row height */
+  bottom: 0;
+  /* Stretch to fill row height */
   display: flex;
   flex-shrink: 0;
   pointer-events: none;
@@ -143,7 +144,8 @@
 .hierarchy-tree-branch {
   position: absolute;
   top: 0;
-  height: 100%;  /* Fill parent height */
+  height: 100%;
+  /* Fill parent height */
 }
 
 
@@ -174,12 +176,16 @@
   font-size: 11px;
   color: #666;
   flex-shrink: 0;
+  position: relative;
+  z-index: 1;
 }
 
 .hierarchy-node__time {
   font-size: 10px;
   color: #555;
   flex-shrink: 0;
+  position: relative;
+  z-index: 1;
 }
 
 /* ===== Badges ===== */
@@ -202,8 +208,13 @@
 }
 
 @keyframes hierarchy-spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 .hierarchy-node__badge--fork {
@@ -285,8 +296,13 @@
 }
 
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* ===== Token count display ===== */
@@ -384,4 +400,75 @@
 
 [data-theme="light"] .hierarchy-node__content--unread:hover {
   background: rgba(202, 138, 4, 0.15);
+}
+
+/* ===== Stream depth indicator (ancestry notches) ===== */
+/* Full-height stacked page edges beneath the metadata */
+.hierarchy-node__depth-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  /* Notches align right */
+  pointer-events: none;
+}
+
+.hierarchy-node__depth-notches {
+  display: flex;
+  height: 100%;
+  align-items: stretch;
+  gap: 0;
+}
+
+.hierarchy-node__depth-notch {
+  flex-shrink: 0;
+  height: 100%;
+  width: 20px;
+  margin-left: -3px;
+  /* Overlap for stacked "pages" effect */
+  opacity: 0.3;
+}
+
+/* Fractal notch - wider to contain mini-notches inside */
+.hierarchy-node__depth-notch--fractal {
+  width: 40px;
+  margin-left: 0;
+  margin-right: -3px;
+  opacity: 1;
+  /* Opacity handled per-element in SVG */
+}
+
+/* First notch needs no negative margin */
+.hierarchy-node__depth-notch:first-of-type {
+  margin-left: 0;
+}
+
+/* Dragon curve slice - pre-rendered bitmap image */
+.hierarchy-node__dragon-slice {
+  height: 100%;
+  width: auto;
+  object-fit: contain;
+  pointer-events: none;
+  /* Crisp rendering - no blur/smoothing */
+  image-rendering: crisp-edges;
+  image-rendering: pixelated;
+}
+
+/* Fractal mode depth bar - positions the dragon curve slice on the right edge */
+.hierarchy-node__depth-bar--fractal {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 8px;
+  width: 80px;
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  pointer-events: none;
+  z-index: 1;
+  /* Above background, but content text has higher z-index */
+  opacity: 0.6;
 }

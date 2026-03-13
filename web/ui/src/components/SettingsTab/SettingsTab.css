@@ -2,11 +2,14 @@
 
 .settings-tab {
   padding: 12px;
+  padding-bottom: 48px;  /* Extra padding at bottom for scroll */
   display: flex;
   flex-direction: column;
   gap: 16px;
-  height: 100%;
+  flex: 1;
+  min-height: 0;  /* Allow flex shrinking */
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;  /* Smooth scroll on iOS */
 }
 
 .settings-tab__disconnected {

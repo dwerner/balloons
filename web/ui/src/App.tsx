@@ -28,6 +28,7 @@ import { ContextTabView, type ExchangeAction as ContextTabExchangeAction } from 
 import { DialogProvider, useDialog } from './components/Dialog';
 import { useWakeLock, useSoundNotifications, useLongPress, useVisualViewport, useUnreadSessions } from './hooks';
 import { RenameSessionModal } from './components/RenameSessionModal';
+import { LinkSessionModal } from './components/LinkSessionModal';
 import { VoiceInput } from './components/VoiceInput';
 import { SendActionButton, type SendAction } from './components/SendActionButton';
 import { setDebugClient, createLogger, isDebugEnabled, setDebugEnabled } from './utils/debugLog';
@@ -1263,6 +1264,12 @@ function AppContent() {
   const reviewHelperIdRef = useRef<string | null>(null);
   const reviewAccumulatedTextRef = useRef<string>('');
 
+  // Modal state for LinkSessionModal
+  const [linkModalState, setLinkModalState] = useState<{
+    isOpen: boolean;
+    initialSummary: string;
+  }>({ isOpen: false, initialSummary: '' });
+
   const clientRef = useRef<BalloonsClient | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messageInputRef = useRef<MessageInputHandle>(null);
@@ -2467,9 +2474,11 @@ function AppContent() {
       return;
     }
 
-    // TODO: Open session picker dialog, then call linkSessions
-    console.log('Link action triggered with description:', description);
-    setError('Link action: session picker not yet implemented');
+    // Open the link session modal with the optional description as initial summary
+    setLinkModalState({
+      isOpen: true,
+      initialSummary: description || '',
+    });
   }, [connectionState, selectedSessionId]);
 
   // Handle merge action - request LLM to propose a merge
@@ -3899,6 +3908,22 @@ function AppContent() {
           }
         }}
       />
+
+      {/* LinkSessionModal - rendered at App level for portal */}
+      {connectionState === 'connected' && selectedSessionId && clientRef.current && (
+        <LinkSessionModal
+          isOpen={linkModalState.isOpen}
+          onClose={() => setLinkModalState({ isOpen: false, initialSummary: '' })}
+          currentSessionId={selectedSessionId}
+          initialSummary={linkModalState.initialSummary}
+          sessionClient={clientRef.current.sessions}
+          sessionDataClient={clientRef.current.sessionData}
+          onLinked={(targetSessionId, linkId) => {
+            debugLog('Sessions linked', { targetSessionId, linkId });
+            // Link turn will appear via session data subscription
+          }}
+        />
+      )}
     </AppLayout>
   );
 }

@@ -14,6 +14,7 @@
 import React, { useState, useCallback, useMemo, memo, useEffect } from 'react';
 import type { SessionInfo, ForkChild, SessionDataServiceClient } from '../../../../generated/balloons-client';
 import { createLogger } from '../../utils/debugLog';
+import { usePreferences } from '../layout/PreferencesContext';
 import './HierarchyView.css';
 
 const debugLog = createLogger('HierarchyView');
@@ -188,26 +189,437 @@ const SESSION_COLORS = [
   '#4ade80', // green
   '#facc15', // yellow
   '#f87171', // red
+  '#fb923c', // orange
+  '#f472b6', // pink
+  '#a78bfa', // violet
+  '#2dd4bf', // teal
+  '#a3e635', // lime
+  '#fbbf24', // amber
 ];
 
-// Depth tint colors - cycle through these when depth > 10
-const DEPTH_TINT_COLORS = [
-  '139, 92, 246',   // purple
-  '34, 211, 238',   // cyan
-  '251, 146, 60',   // orange
+// Convert hex color to RGB string for use in rgba()
+function hexToRgb(hex: string): string {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (!result) return '96, 165, 250'; // fallback blue
+  return `${parseInt(result[1]!, 16)}, ${parseInt(result[2]!, 16)}, ${parseInt(result[3]!, 16)}`;
+}
+
+// Stream depth bar - shows ancestry as stacked chevron/page edges
+const MAX_VISIBLE_NOTCHES = 12;
+const DEPTH_NOTCH_PATH = 'M0 0 L4 0 L8 8 L4 16 L0 16 L4 8 Z';
+
+// ============================================================================
+// Dragon Curve Fractal Generator (cached)
+// ============================================================================
+
+// Cache for dragon curve paths at various iterations
+const dragonCurveCache = new Map<number, string>();
+
+/**
+ * Generate dragon curve path at a given iteration level.
+ * Dragon curve: Start with R, then for each iteration, take the sequence,
+ * add R, then add the reverse of the sequence with L/R flipped.
+ *
+ * We build it as a series of direction changes (L=left turn, R=right turn)
+ * then convert to SVG path coordinates.
+ */
+function generateDragonCurve(iterations: number): string {
+  // Check cache first
+  const cached = dragonCurveCache.get(iterations);
+  if (cached) return cached;
+
+  // Generate turn sequence (L = left turn = 1, R = right turn = 0)
+  // Start with single R
+  let turns: number[] = [0]; // 0 = R
+
+  for (let i = 1; i < iterations; i++) {
+    // New sequence = old + R + reversed(old with flips)
+    const reversed = [...turns].reverse().map(t => 1 - t);
+    turns = [...turns, 0, ...reversed];
+  }
+
+  // Convert turns to path
+  // We trace the curve, each segment is a fixed length
+  // Direction: 0=right, 1=down, 2=left, 3=up
+  const segmentLength = 4;
+  let x = 0;
+  let y = 0;
+  let dir = 0; // Start facing right
+
+  const points: [number, number][] = [[x, y]];
+
+  for (const turn of turns) {
+    // Move forward in current direction
+    switch (dir) {
+      case 0: x += segmentLength; break; // right
+      case 1: y += segmentLength; break; // down
+      case 2: x -= segmentLength; break; // left
+      case 3: y -= segmentLength; break; // up
+    }
+    points.push([x, y]);
+
+    // Turn: 0 = turn right (+1), 1 = turn left (-1)
+    dir = (dir + (turn === 0 ? 1 : 3)) % 4;
+  }
+
+  // One more segment after last turn
+  switch (dir) {
+    case 0: x += segmentLength; break;
+    case 1: y += segmentLength; break;
+    case 2: x -= segmentLength; break;
+    case 3: y -= segmentLength; break;
+  }
+  points.push([x, y]);
+
+  // Find bounds to normalize
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const [px, py] of points) {
+    minX = Math.min(minX, px);
+    maxX = Math.max(maxX, px);
+    minY = Math.min(minY, py);
+    maxY = Math.max(maxY, py);
+  }
+
+  // Normalize to fit in viewBox (we'll use 0-100 range)
+  const width = maxX - minX || 1;
+  const height = maxY - minY || 1;
+  const scale = Math.min(96 / width, 96 / height);
+  const offsetX = (100 - width * scale) / 2 - minX * scale;
+  const offsetY = (100 - height * scale) / 2 - minY * scale;
+
+  // Build SVG path
+  const pathParts = points.map(([px, py], i) => {
+    const nx = px * scale + offsetX;
+    const ny = py * scale + offsetY;
+    return i === 0 ? `M${nx.toFixed(1)} ${ny.toFixed(1)}` : `L${nx.toFixed(1)} ${ny.toFixed(1)}`;
+  });
+
+  const path = pathParts.join(' ');
+  dragonCurveCache.set(iterations, path);
+  return path;
+}
+
+// Map depth to dragon curve iterations (1-12 depth = 1-12 iterations, capped)
+function depthToIterations(depth: number): number {
+  return Math.min(Math.max(depth, 1), 14); // Cap at 14 iterations (complex but not insane)
+}
+
+// Dragon curve depth indicator - single node version (legacy)
+function DragonCurveIndicator({ depth, color }: { depth: number; color: string }) {
+  const iterations = depthToIterations(depth);
+  const path = useMemo(() => generateDragonCurve(iterations), [iterations]);
+
+  return (
+    <svg
+      className="hierarchy-node__dragon-curve"
+      viewBox="0 0 100 100"
+      preserveAspectRatio="xMidYMid meet"
+      style={{ color }}
+    >
+      <path
+        d={path}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={Math.max(1, 4 - iterations * 0.2)}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity={0.5}
+      />
+    </svg>
+  );
+}
+
+// ============================================================================
+// Pre-rendered Dragon Curve Slice Cache (by depth + color)
+// ============================================================================
+
+// Cache structure: Map<cacheKey, dataURL> where cacheKey = `${totalDepth}-${rowIndex}-${color}`
+const dragonSliceCache = new Map<string, string>();
+
+// Color palette for dragon curve iterations - muted/desaturated, rotated order
+// Starting from violet/purple and flowing through spectrum for subtle visual depth
+const DRAGON_ITERATION_COLORS = [
+  '#8b7cb5', // muted violet
+  '#7986a8', // muted slate-blue
+  '#6b9a9b', // muted teal
+  '#7ba68f', // muted sage
+  '#8aab7c', // muted olive-green
+  '#a3a873', // muted khaki
+  '#b5a06d', // muted gold
+  '#c29572', // muted tan
+  '#c4877f', // muted coral
+  '#bb7f94', // muted rose
+  '#a67fa8', // muted orchid
+  '#9481b0', // muted lavender
+  '#8186b3', // muted periwinkle
+  '#7590af', // muted steel-blue
 ];
 
-// Calculate depth-based tint: lerp from 0 to max intensity over 10 levels, then cycle colors
-function getDepthTint(depth: number): { color: string; opacity: number } {
-  const defaultColor = DEPTH_TINT_COLORS[0]!;
-  if (depth === 0) return { color: defaultColor, opacity: 0 };
+/**
+ * Render a dragon curve slice to canvas with colors varying by iteration level.
+ * The curve is drawn in segments, each iteration level gets a different color.
+ * Results are cached by (depth, row) for reuse.
+ */
+function getDragonSliceDataUrl(totalDepth: number, rowIndex: number): string {
+  const cacheKey = `${totalDepth}-${rowIndex}`;
 
-  const cycleIndex = Math.floor((depth - 1) / 10);
-  const depthInCycle = ((depth - 1) % 10) + 1;
-  const color = DEPTH_TINT_COLORS[cycleIndex % DEPTH_TINT_COLORS.length] ?? defaultColor;
-  const opacity = depthInCycle * 0.03; // 0.03 per level, max 0.3 at depth 10
+  // Check cache
+  if (dragonSliceCache.has(cacheKey)) {
+    return dragonSliceCache.get(cacheKey)!;
+  }
 
-  return { color, opacity };
+  // Generate turn sequence for the dragon curve
+  const iterations = depthToIterations(totalDepth);
+
+  // Build turns array with iteration level tracking
+  // Each segment knows which iteration added it
+  let turns: Array<{turn: number, iteration: number}> = [{turn: 0, iteration: 1}];
+
+  for (let i = 2; i <= iterations; i++) {
+    // New sequence = old + R + reversed(old with flips)
+    const reversed = [...turns].reverse().map(t => ({turn: 1 - t.turn, iteration: i}));
+    turns = [...turns, {turn: 0, iteration: i}, ...reversed];
+  }
+
+  // Create a canvas to render the full curve at high resolution for crisp lines
+  const fullSize = 600; // Higher res = sharper lines
+  const canvas = document.createElement('canvas');
+  canvas.width = fullSize;
+  canvas.height = fullSize;
+  const ctx = canvas.getContext('2d')!;
+
+  // Disable image smoothing for crisp lines
+  ctx.imageSmoothingEnabled = false;
+
+  // Apply 45 degree rotation around center
+  ctx.translate(fullSize / 2, fullSize / 2);
+  ctx.rotate(Math.PI / 4);
+  ctx.translate(-fullSize / 2, -fullSize / 2);
+
+  // Trace the curve segment by segment, coloring by iteration
+  const segmentLength = 4;
+  const scale = fullSize / 100;
+
+  // Find bounds first to center properly (trace full curve for consistent layout)
+  let x = 0, y = 0, dir = 0;
+  let minX = 0, maxX = 0, minY = 0, maxY = 0;
+  const points: Array<{x: number, y: number, iteration: number}> = [{x: 0, y: 0, iteration: 1}];
+
+  for (const {turn, iteration} of turns) {
+    switch (dir) {
+      case 0: x += segmentLength; break;
+      case 1: y += segmentLength; break;
+      case 2: x -= segmentLength; break;
+      case 3: y -= segmentLength; break;
+    }
+    points.push({x, y, iteration});
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+    dir = (dir + (turn === 0 ? 1 : 3)) % 4;
+  }
+  // Final segment
+  switch (dir) {
+    case 0: x += segmentLength; break;
+    case 1: y += segmentLength; break;
+    case 2: x -= segmentLength; break;
+    case 3: y -= segmentLength; break;
+  }
+  points.push({x, y, iteration: iterations});
+  minX = Math.min(minX, x);
+  maxX = Math.max(maxX, x);
+  minY = Math.min(minY, y);
+  maxY = Math.max(maxY, y);
+
+  // Normalize and position in top-right with zoom
+  const width = maxX - minX || 1;
+  const height = maxY - minY || 1;
+  // Zoom factor: 2.2x bigger than "fit to canvas" for more detail
+  const zoomFactor = 2.2;
+  const normalizeScale = Math.min(96 / width, 96 / height) * zoomFactor;
+  // Position toward top-right: offset so center of curve is at ~80% right, ~20% down
+  const offsetX = 80 - ((minX + maxX) / 2) * normalizeScale;
+  const offsetY = 20 - ((minY + maxY) / 2) * normalizeScale;
+
+  // Draw segments with iteration-based colors
+  // Thicker lines at higher res, scale with canvas size
+  ctx.lineWidth = Math.max(2, 8 - iterations * 0.4);
+  ctx.lineCap = 'square'; // Square caps = crisper
+  ctx.lineJoin = 'miter';
+  ctx.globalAlpha = 0.6;
+
+  // Draw all segments
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1]!;
+    const curr = points[i]!;
+
+    // Color based on which iteration added this segment
+    const colorIdx = (curr.iteration - 1) % DRAGON_ITERATION_COLORS.length;
+    ctx.strokeStyle = DRAGON_ITERATION_COLORS[colorIdx]!;
+
+    ctx.beginPath();
+    ctx.moveTo((prev.x * normalizeScale + offsetX) * scale, (prev.y * normalizeScale + offsetY) * scale);
+    ctx.lineTo((curr.x * normalizeScale + offsetX) * scale, (curr.y * normalizeScale + offsetY) * scale);
+    ctx.stroke();
+  }
+
+  // Extract just this row's slice
+  const sliceHeight = fullSize / totalDepth;
+  const sliceCanvas = document.createElement('canvas');
+  sliceCanvas.width = fullSize;
+  sliceCanvas.height = Math.ceil(sliceHeight);
+  const sliceCtx = sliceCanvas.getContext('2d')!;
+
+  // Disable smoothing for crisp slice extraction
+  sliceCtx.imageSmoothingEnabled = false;
+
+  // Copy the relevant horizontal strip
+  sliceCtx.drawImage(
+    canvas,
+    0, rowIndex * sliceHeight, fullSize, sliceHeight,
+    0, 0, fullSize, sliceHeight
+  );
+
+  // Cache and return
+  const dataUrl = sliceCanvas.toDataURL('image/png');
+  dragonSliceCache.set(cacheKey, dataUrl);
+  return dataUrl;
+}
+
+/**
+ * Dragon curve slice - displays a pre-rendered bitmap slice.
+ * The curve is colored by iteration level (each fractal depth gets its own color).
+ */
+function DragonCurveSlice({
+  totalDepth,
+  rowIndex,
+}: {
+  totalDepth: number;
+  rowIndex: number;
+}) {
+  // Get pre-rendered slice from cache (renders on first access)
+  const dataUrl = useMemo(
+    () => getDragonSliceDataUrl(totalDepth, rowIndex),
+    [totalDepth, rowIndex]
+  );
+
+  return (
+    <img
+      className="hierarchy-node__dragon-slice"
+      src={dataUrl}
+      alt=""
+      draggable={false}
+    />
+  );
+}
+
+// ============================================================================
+// Chevron-based depth indicator (original)
+// ============================================================================
+
+// Fractal notch - contains smaller notches inside to represent overflow
+function FractalNotch({ overflow, color }: { overflow: number; color: string }) {
+  // Each mini-notch represents ~4 levels of overflow
+  const miniCount = Math.min(Math.ceil(overflow / 4), 3);
+
+  return (
+    <svg
+      className="hierarchy-node__depth-notch hierarchy-node__depth-notch--fractal"
+      viewBox="0 0 24 16"
+      preserveAspectRatio="none"
+      style={{ color }}
+    >
+      {/* Outer container notch */}
+      <path d="M0 0 L12 0 L24 8 L12 16 L0 16 L12 8 Z" fill="currentColor" opacity="0.4" />
+      {/* Mini notches inside, stacked */}
+      {Array.from({ length: miniCount }, (_, i) => {
+        const scale = 0.35;
+        const offsetX = 3 + i * 4;
+        const offsetY = 4;
+        return (
+          <g key={i} transform={`translate(${offsetX}, ${offsetY}) scale(${scale})`}>
+            <path d={DEPTH_NOTCH_PATH} fill="currentColor" opacity={0.6 + i * 0.15} />
+          </g>
+        );
+      })}
+      {/* Overflow count badge */}
+      <text
+        x="12"
+        y="10"
+        textAnchor="middle"
+        dominantBaseline="middle"
+        fontSize="6"
+        fontWeight="600"
+        fill="currentColor"
+        opacity="0.8"
+      >
+        +{overflow}
+      </text>
+    </svg>
+  );
+}
+
+function ChevronDepthBar({ depth, color }: { depth: number; color: string }) {
+  const visibleNotches = Math.min(depth, MAX_VISIBLE_NOTCHES);
+  const overflow = depth - MAX_VISIBLE_NOTCHES;
+
+  return (
+    <div className="hierarchy-node__depth-bar">
+      <div className="hierarchy-node__depth-notches">
+        {overflow > 0 && (
+          <FractalNotch overflow={overflow} color={color} />
+        )}
+        {Array.from({ length: visibleNotches }, (_, i) => (
+          <svg
+            key={i}
+            className="hierarchy-node__depth-notch"
+            viewBox="0 0 8 16"
+            preserveAspectRatio="none"
+            style={{ color }}
+          >
+            <path d={DEPTH_NOTCH_PATH} fill="currentColor" />
+          </svg>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// Unified DepthBar that switches based on preference
+// ============================================================================
+
+interface DepthBarProps {
+  depth: number;         // Current node's depth from leaf (0 = leaf)
+  totalDepth: number;    // Total tree depth (for video wall effect)
+  color: string;
+  style: 'chevrons' | 'fractal';
+}
+
+function DepthBar({ depth, totalDepth, color, style }: DepthBarProps) {
+  if (totalDepth <= 0) return null;
+
+  if (style === 'fractal') {
+    return (
+      <div className="hierarchy-node__depth-bar hierarchy-node__depth-bar--fractal">
+        <DragonCurveSlice
+          totalDepth={totalDepth}
+          rowIndex={depth}
+        />
+      </div>
+    );
+  }
+
+  // Chevron mode only shows on leaf nodes (depth=0)
+  if (depth !== 0) return null;
+  return <ChevronDepthBar depth={totalDepth} color={color} />;
+}
+
+// Calculate depth-based opacity - increases with depth, no max
+function getDepthOpacity(depth: number): number {
+  if (depth === 0) return 0;
+  return Math.min(depth * 0.03, 0.4); // 0.03 per level, cap at 0.4
 }
 
 interface SessionNodeProps {
@@ -261,8 +673,8 @@ const SessionNode = memo(function SessionNode({
     onToggle(session.id);
   }, [onToggle, session.id]);
 
-  // Depth-based background tint: lerp from 0 at root to max at depth 10, then cycle colors
-  const depthTint = getDepthTint(treeDepth);
+  // Depth-based background tint using session color
+  const depthOpacity = getDepthOpacity(treeDepth);
 
   // Padding for tree connector
   const connectorPadding = depth > 0 && session.parentId ? depth * 16 : 0;
@@ -275,8 +687,8 @@ const SessionNode = memo(function SessionNode({
         style={{
           paddingLeft: `${8 + connectorPadding}px`,
           borderLeftColor: sessionColor,
-          '--depth-tint-color': depthTint.color,
-          '--depth-tint-opacity': depthTint.opacity,
+          '--depth-tint-color': hexToRgb(sessionColor),
+          '--depth-tint-opacity': depthOpacity,
         } as React.CSSProperties}
       >
         {/* Tree connector graphics */}
@@ -384,8 +796,9 @@ export interface HierarchyViewProps {
 // Reversed node for leaves-first mode - shows parent as child
 interface ReversedNodeProps {
   session: SessionInfo;
-  depth: number;
-  treeDepth: number;  // Actual depth from root (for tint calculation)
+  depth: number;           // Visual indentation depth (0 = leaf at top, increases going to ancestors)
+  treeDepth: number;       // Current node's depth from root (decreases going to ancestors)
+  maxTreeDepth: number;    // Total tree depth (constant, for video wall effect)
   isSelected: boolean;
   isExpanded: boolean;
   isLast: boolean;  // Is this the last sibling?
@@ -399,12 +812,14 @@ interface ReversedNodeProps {
   selectedSessionId: string | null;
   rootColorMap: Map<string, number>;  // Maps session ID to root's color index
   unreadSessionIds: Set<string>;  // Sessions that finished streaming but haven't been viewed
+  depthStyle: 'chevrons' | 'fractal';  // Depth indicator style preference
 }
 
 const ReversedNode = memo(function ReversedNode({
   session,
   depth,
   treeDepth,
+  maxTreeDepth,
   isSelected,
   isExpanded,
   isLast,
@@ -418,6 +833,7 @@ const ReversedNode = memo(function ReversedNode({
   selectedSessionId,
   rootColorMap,
   unreadSessionIds,
+  depthStyle,
 }: ReversedNodeProps) {
   // Use the root ancestor's color for consistent lineage coloring
   const colorIndex = rootColorMap.get(session.id) ?? 0;
@@ -435,8 +851,8 @@ const ReversedNode = memo(function ReversedNode({
     onToggle(session.id);
   }, [onToggle, session.id]);
 
-  // Depth-based background tint: lerp from 0 at root to max at depth 10, then cycle colors
-  const depthTint = getDepthTint(treeDepth);
+  // Depth-based background tint using session color
+  const depthOpacity = getDepthOpacity(treeDepth);
 
   // Padding for tree connector
   const connectorPadding = depth > 0 ? depth * 16 : 0;
@@ -449,8 +865,8 @@ const ReversedNode = memo(function ReversedNode({
         style={{
           paddingLeft: `${8 + connectorPadding}px`,
           borderLeftColor: sessionColor,
-          '--depth-tint-color': depthTint.color,
-          '--depth-tint-opacity': depthTint.opacity,
+          '--depth-tint-color': hexToRgb(sessionColor),
+          '--depth-tint-opacity': depthOpacity,
         } as React.CSSProperties}
       >
         {/* Tree connector graphics */}
@@ -519,6 +935,14 @@ const ReversedNode = memo(function ReversedNode({
 
         {/* Timestamp */}
         <span className="hierarchy-node__time">{formatDayGroup(session.lastModified)}</span>
+
+        {/* Depth bar - video wall shows slice on every node, chevrons only on leaf */}
+        <DepthBar
+          depth={depth}
+          totalDepth={maxTreeDepth}
+          color={sessionColor}
+          style={depthStyle}
+        />
       </div>
 
       {/* Parent (recursive upward) */}
@@ -536,6 +960,7 @@ const ReversedNode = memo(function ReversedNode({
               session={parentSession}
               depth={depth + 1}
               treeDepth={treeDepth - 1}
+              maxTreeDepth={maxTreeDepth}
               isSelected={parentSession.id === selectedSessionId}
               isExpanded={expandedSessions.has(parentSession.id)}
               isLast={true}
@@ -549,6 +974,7 @@ const ReversedNode = memo(function ReversedNode({
               selectedSessionId={selectedSessionId}
               rootColorMap={rootColorMap}
               unreadSessionIds={unreadSessionIds}
+              depthStyle={depthStyle}
             />
           </ul>
         );
@@ -569,6 +995,9 @@ export const HierarchyView = memo(function HierarchyView({
   isLoading = false,
   unreadSessionIds = EMPTY_SET,
 }: HierarchyViewProps) {
+  // Get depth indicator style preference
+  const { depthIndicatorStyle } = usePreferences();
+
   // View mode: 'roots' = roots at top, 'leaves' = leaves at top (default)
   // Persisted in localStorage
   const [mode, setMode] = useState<HierarchyMode>(() => {
@@ -908,12 +1337,14 @@ export const HierarchyView = memo(function HierarchyView({
             const parentSession = session.parentId
               ? sessions.find(s => s.id === session.parentId) || null
               : null;
+            const leafTreeDepth = getTreeDepth(session.id);
             return (
               <ReversedNode
                 key={session.id}
                 session={session}
                 depth={0}
-                treeDepth={getTreeDepth(session.id)}
+                treeDepth={leafTreeDepth}
+                maxTreeDepth={leafTreeDepth}
                 isSelected={session.id === selectedSessionId}
                 isExpanded={expandedSessions.has(session.id)}
                 isLast={idx === leafSessions.length - 1}
@@ -927,6 +1358,7 @@ export const HierarchyView = memo(function HierarchyView({
                 selectedSessionId={selectedSessionId}
                 rootColorMap={rootColorMap}
                 unreadSessionIds={unreadSessionIds}
+                depthStyle={depthIndicatorStyle}
               />
             );
           })

@@ -21,12 +21,13 @@ const DEFAULTS: Record<PreferenceKey, boolean> = {
 };
 
 // String preference keys
-export type StringPreferenceKey = 'voiceInputHost' | 'voiceInputPort';
+export type StringPreferenceKey = 'voiceInputHost' | 'voiceInputPort' | 'depthIndicatorStyle';
 
 // Default values for string preferences
 const STRING_DEFAULTS: Record<StringPreferenceKey, string> = {
   voiceInputHost: '192.168.0.120',
   voiceInputPort: '8012',
+  depthIndicatorStyle: 'chevrons', // 'chevrons' | 'fractal'
 };
 
 export interface PreferencesContextValue {
@@ -38,6 +39,9 @@ export interface PreferencesContextValue {
   // Voice input settings (string)
   voiceInputHost: string;
   voiceInputPort: string;
+
+  // Depth indicator style
+  depthIndicatorStyle: 'chevrons' | 'fractal';
 
   // Generic getter/setter (boolean)
   getPreference: (key: PreferenceKey) => boolean;
@@ -88,6 +92,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
   // String preference states
   const [voiceInputHost, setVoiceInputHost] = useState(() => loadStringPreference('voiceInputHost'));
   const [voiceInputPort, setVoiceInputPort] = useState(() => loadStringPreference('voiceInputPort'));
+  const [depthIndicatorStyle, setDepthIndicatorStyle] = useState(() => loadStringPreference('depthIndicatorStyle') as 'chevrons' | 'fractal');
 
   // Generic boolean getter
   const getPreference = useCallback((key: PreferenceKey): boolean => {
@@ -128,9 +133,10 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     switch (key) {
       case 'voiceInputHost': return voiceInputHost;
       case 'voiceInputPort': return voiceInputPort;
+      case 'depthIndicatorStyle': return depthIndicatorStyle;
       default: return STRING_DEFAULTS[key];
     }
-  }, [voiceInputHost, voiceInputPort]);
+  }, [voiceInputHost, voiceInputPort, depthIndicatorStyle]);
 
   // String preference setter with persistence
   const setStringPreference = useCallback((key: StringPreferenceKey, value: string) => {
@@ -143,6 +149,9 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
         case 'voiceInputPort':
           setVoiceInputPort(value);
           break;
+        case 'depthIndicatorStyle':
+          setDepthIndicatorStyle(value as 'chevrons' | 'fractal');
+          break;
       }
     });
   }, []);
@@ -153,12 +162,13 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     voiceInputEnabled,
     voiceInputHost,
     voiceInputPort,
+    depthIndicatorStyle,
     getPreference,
     setPreference,
     togglePreference,
     getStringPreference,
     setStringPreference,
-  }), [expandToolCards, showTokenCounts, voiceInputEnabled, voiceInputHost, voiceInputPort, getPreference, setPreference, togglePreference, getStringPreference, setStringPreference]);
+  }), [expandToolCards, showTokenCounts, voiceInputEnabled, voiceInputHost, voiceInputPort, depthIndicatorStyle, getPreference, setPreference, togglePreference, getStringPreference, setStringPreference]);
 
   return (
     <PreferencesContext.Provider value={value}>
