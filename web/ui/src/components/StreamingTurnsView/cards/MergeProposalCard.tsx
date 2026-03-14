@@ -1,25 +1,27 @@
 /**
  * MergeProposalCard - Interactive card for propose_merge tool calls
  *
- * Renders the propose_merge tool_use as an interactive UI with:
+ * Renders the propose_merge tool_result as an interactive UI with:
  * - Merge summary (editable)
  * - Files changed
  * - Key accomplishments
- * - Single "Merge" button
+ * - "Merge" button (hidden after merge is complete)
+ *
+ * The tool_result JSON is the source of truth for proposal state.
+ * When the user accepts the merge, the result is updated with _status and _merge_id.
  *
  * Uses BaseToolCard for consistent formatting/raw mode switching.
- * The tool input is the source of truth - no synthetic blocks needed.
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
-import type { ToolUseBlock } from '../../../../../generated/types';
+import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
 import { useClient } from './ClientContext';
 import { BaseToolCard, calculateToolPhase, type ToolPhase } from './BaseToolCard';
 import './cards.css';
 
 // Status for the merge action
-type MergeStatus = 'ready' | 'merging' | 'merged' | 'error';
+type MergeStatus = 'pending' | 'merging' | 'accepted' | 'rejected' | 'error';
 
 interface MergeProposalCardProps {
   turn: SessionDataTurn;
@@ -32,19 +34,53 @@ function isStreamingInput(input: Record<string, unknown>): boolean {
   return typeof input._streaming === 'string';
 }
 
-// Extract proposal data from tool input
-// Handles both camelCase (wire format) and snake_case (legacy) keys
-function extractProposalData(input: Record<string, unknown>) {
+// Parse proposal data from tool_result JSON content
+function parseResultProposal(resultContent: string): {
+  summary: string;
+  reason: string;
+  filesChanged: string[];
+  keyAccomplishments: string[];
+  status: MergeStatus;
+  mergeId: string | null;
+  parentSessionId: string | null;
+} | null {
+  if (!resultContent) return null;
+
+  try {
+    const data = JSON.parse(resultContent);
+    if (data._type !== 'merge_proposal') return null;
+
+    return {
+      summary: data.summary || '',
+      reason: data.reason || '',
+      filesChanged: Array.isArray(data.files_changed) ? data.files_changed : [],
+      keyAccomplishments: Array.isArray(data.key_accomplishments) ? data.key_accomplishments : [],
+      status: (data._status as MergeStatus) || 'pending',
+      mergeId: data._merge_id || null,
+      parentSessionId: data._parent_session_id || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Legacy: Extract proposal data from tool_use input (fallback for old proposals)
+function extractProposalFromInput(input: Record<string, unknown>) {
   return {
     summary: (input.summary as string) || '',
     reason: (input.reason as string) || '',
     filesChanged: (input.filesChanged as string[]) || (input.files_changed as string[]) || [],
     keyAccomplishments: (input.keyAccomplishments as string[]) || (input.key_accomplishments as string[]) || [],
+    status: 'pending' as MergeStatus,
+    mergeId: null,
+    parentSessionId: null,
   };
 }
 
 /**
- * MergeProposalCard - Renders propose_merge tool_use with interactive UI
+ * MergeProposalCard - Renders propose_merge with interactive UI
+ *
+ * State is sourced from tool_result (preferred) or tool_use input (legacy fallback).
  */
 export const MergeProposalCard = React.memo(function MergeProposalCard({
   turn,
@@ -54,29 +90,58 @@ export const MergeProposalCard = React.memo(function MergeProposalCard({
   const client = useClient();
   const { contentBlock, streaming, tokens } = turn;
 
-  // Extract tool info
+  // Extract tool_use info
   const toolUseBlock = contentBlock?.type === 'tool_use'
     ? (contentBlock as ToolUseBlock)
     : null;
-
   const toolInput = (toolUseBlock?.input || {}) as Record<string, unknown>;
   const inputIsStreaming = isStreamingInput(toolInput);
   const toolUseId = toolUseBlock?.id || '';
 
-  // Extract proposal data from input
-  const proposalData = extractProposalData(toolInput);
+  // Extract tool_result info
+  const resultBlock = result?.contentBlock?.type === 'tool_result'
+    ? (result.contentBlock as ToolResultBlock)
+    : null;
+  const resultContent = typeof resultBlock?.content === 'string' ? resultBlock.content : '';
+
+  // Parse proposal data from result (preferred) or input (legacy fallback)
+  // Note: Unlike fork, merge doesn't persist status in tool_use input (yet),
+  // but we check for it in case that's added later
+  const proposalData = useMemo(() => {
+    const fromResult = parseResultProposal(resultContent);
+    if (fromResult) {
+      // Check for server-set status in tool_use input
+      const serverStatus = toolInput._status as string | undefined;
+      if (serverStatus === 'accepted') {
+        return {
+          ...fromResult,
+          status: 'accepted' as MergeStatus,
+        };
+      }
+      return fromResult;
+    }
+    return extractProposalFromInput(toolInput);
+  }, [resultContent, toolInput]);
 
   // Local state for modifications
   const [summary, setSummary] = useState(proposalData.summary);
   const [isEditing, setIsEditing] = useState(false);
-  const [status, setStatus] = useState<MergeStatus>('ready');
+  const [status, setStatus] = useState<MergeStatus>(proposalData.status);
   const [error, setError] = useState<string | null>(null);
+
+  // Update local state when proposal data changes
+  useEffect(() => {
+    if (!inputIsStreaming) {
+      setSummary(proposalData.summary);
+      setStatus(proposalData.status);
+    }
+  }, [inputIsStreaming, proposalData]);
 
   // Calculate phase for BaseToolCard
   const hasInput = !inputIsStreaming && proposalData.summary.length > 0;
   const hasResult = !!result;
   const isError = status === 'error';
-  const phase: ToolPhase = status === 'merged' ? 'completed'
+  const phase: ToolPhase = status === 'accepted' ? 'completed'
     : status === 'merging' ? 'executing'
     : calculateToolPhase(streaming || false, hasInput, inputIsStreaming, hasResult, isError);
 
@@ -88,7 +153,7 @@ export const MergeProposalCard = React.memo(function MergeProposalCard({
     setError(null);
 
     try {
-      const result = await client.sessions.respondToMergeProposal(
+      const mergeResult = await client.sessions.respondToMergeProposal(
         sessionId,
         toolUseId, // Use tool_use ID as proposal ID
         true, // accepted
@@ -98,12 +163,12 @@ export const MergeProposalCard = React.memo(function MergeProposalCard({
         proposalData.reason || null,
       );
 
-      if (result.success && result.accepted) {
-        setStatus('merged');
+      if (mergeResult.success && mergeResult.accepted) {
+        setStatus('accepted');
         // The parent session should auto-refresh with the merge marker
       } else {
         setStatus('error');
-        setError(result.error || 'Failed to merge');
+        setError(mergeResult.error || 'Failed to merge');
       }
     } catch (err) {
       setStatus('error');
@@ -114,8 +179,9 @@ export const MergeProposalCard = React.memo(function MergeProposalCard({
   // Raw data for debugging mode
   const rawData = { turn, result, proposalData };
 
-  const isReady = status === 'ready';
+  const isPending = status === 'pending';
   const isMerging = status === 'merging';
+  const isAccepted = status === 'accepted';
 
   return (
     <BaseToolCard
@@ -148,7 +214,7 @@ export const MergeProposalCard = React.memo(function MergeProposalCard({
           <div className="merge-proposal-section">
             <div className="section-header">
               <span className="section-title">Summary</span>
-              {isReady && !isEditing && (
+              {isPending && !isEditing && (
                 <button
                   className="edit-btn"
                   onClick={() => setIsEditing(true)}
@@ -158,7 +224,7 @@ export const MergeProposalCard = React.memo(function MergeProposalCard({
                 </button>
               )}
             </div>
-            {isReady && isEditing ? (
+            {isPending && isEditing ? (
               <div className="summary-editor">
                 <textarea
                   className="merge-summary-input"
@@ -229,7 +295,7 @@ export const MergeProposalCard = React.memo(function MergeProposalCard({
           )}
 
           {/* Action button */}
-          {isReady && (
+          {isPending && (
             <div className="merge-proposal-actions">
               <button
                 className="btn btn-primary merge-btn"
@@ -249,9 +315,9 @@ export const MergeProposalCard = React.memo(function MergeProposalCard({
           )}
 
           {/* Completion state */}
-          {status === 'merged' && (
-            <div className="merge-proposal-resolution status-merged">
-              Merge completed successfully
+          {isAccepted && (
+            <div className="merge-proposal-resolution status-accepted">
+              ✓ Merge completed successfully
             </div>
           )}
         </div>

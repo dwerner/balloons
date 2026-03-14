@@ -1,0 +1,310 @@
+/* LinkStashArea - Styles for the link stash display area */
+
+.link-stash-area {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(59, 130, 246, 0.05);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+.link-stash-area--collapsed {
+  padding: 6px 12px;
+}
+
+/* Header row */
+.link-stash-area__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.link-stash-area__toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  padding: 4px 0;
+  cursor: pointer;
+  color: var(--text-color, #e5e7eb);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.link-stash-area__toggle:hover {
+  color: var(--accent-color, #3b82f6);
+}
+
+.link-stash-area__toggle-icon {
+  font-size: 10px;
+  transition: transform 0.15s;
+}
+
+.link-stash-area__title {
+  color: var(--text-color, #e5e7eb);
+}
+
+.link-stash-area__selected {
+  color: var(--accent-color, #3b82f6);
+  font-weight: 600;
+}
+
+.link-stash-area__hint {
+  color: var(--text-muted, #6b7280);
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* Batch action buttons */
+.link-stash-area__batch-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.link-stash-area__clear-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+  background: transparent;
+  border-color: var(--border-color, #374151);
+  color: var(--text-muted, #9ca3af);
+}
+
+.link-stash-area__clear-btn:hover {
+  border-color: var(--error-color, #ef4444);
+  color: var(--error-color, #ef4444);
+}
+
+/* Items container */
+.link-stash-area__items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Individual stash item card */
+.link-stash-item {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--surface-bg, #1f2937);
+  border: 1px solid var(--border-color, #374151);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s, background-color 0.15s;
+  max-width: 280px;
+  min-width: 200px;
+}
+
+.link-stash-item:hover {
+  border-color: var(--accent-color, #3b82f6);
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.link-stash-item--checked {
+  border-color: var(--accent-color, #3b82f6);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+/* Checkbox button */
+.link-stash-item__checkbox {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-muted, #9ca3af);
+  font-size: 16px;
+  transition: color 0.15s;
+}
+
+.link-stash-item__checkbox:hover:not(:disabled) {
+  color: var(--accent-color, #3b82f6);
+}
+
+.link-stash-item--checked .link-stash-item__checkbox {
+  color: var(--accent-color, #3b82f6);
+}
+
+.link-stash-item__checkbox--disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Content section */
+.link-stash-item__content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.link-stash-item__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.link-stash-item__icon {
+  flex-shrink: 0;
+}
+
+.link-stash-item__session {
+  font-weight: 600;
+  color: var(--text-color, #e5e7eb);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link-stash-item__range {
+  flex-shrink: 0;
+  color: var(--text-muted, #9ca3af);
+  font-size: 11px;
+}
+
+.link-stash-item__excerpt {
+  font-size: 11px;
+  color: var(--text-muted, #9ca3af);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+
+/* Action buttons */
+.link-stash-item__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.link-stash-item:hover .link-stash-item__actions {
+  opacity: 1;
+}
+
+.link-stash-item__apply,
+.link-stash-item__remove {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.3);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-muted, #9ca3af);
+  font-size: 14px;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.link-stash-item__apply:hover {
+  background: var(--accent-color, #3b82f6);
+  color: white;
+}
+
+.link-stash-item__remove:hover {
+  background: var(--error-color, #ef4444);
+  color: white;
+}
+
+/* Preview popover */
+.link-stash-item__preview {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  padding: 10px;
+  background: var(--surface-bg, #1f2937);
+  border: 1px solid var(--border-color, #374151);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+  max-width: 320px;
+}
+
+.link-stash-item__preview-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-color, #3b82f6);
+  margin-bottom: 6px;
+}
+
+.link-stash-item__preview-content {
+  font-size: 12px;
+  color: var(--text-color, #e5e7eb);
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+/* Mobile: always show action buttons */
+@media (max-width: 768px) {
+  .link-stash-item__actions {
+    opacity: 1;
+  }
+
+  .link-stash-item {
+    min-width: 160px;
+    max-width: none;
+    flex: 1;
+  }
+
+  .link-stash-area__items {
+    flex-direction: column;
+  }
+}
+
+/* Light mode adjustments */
+@media (prefers-color-scheme: light) {
+  .link-stash-area {
+    background: rgba(59, 130, 246, 0.05);
+    border-color: rgba(59, 130, 246, 0.2);
+  }
+
+  .link-stash-item {
+    background: #ffffff;
+    border-color: #e5e7eb;
+  }
+
+  .link-stash-item:hover {
+    background: rgba(59, 130, 246, 0.05);
+  }
+
+  .link-stash-item--checked {
+    background: rgba(59, 130, 246, 0.08);
+  }
+
+  .link-stash-item__preview {
+    background: #ffffff;
+    border-color: #e5e7eb;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+
+  .link-stash-item__apply,
+  .link-stash-item__remove {
+    background: rgba(0, 0, 0, 0.08);
+  }
+}

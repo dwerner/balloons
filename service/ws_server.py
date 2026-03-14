@@ -672,6 +672,11 @@ class WsServer:
         method = request.get("method")
         params = request.get("params", {})
 
+        # Handle built-in ping method for client heartbeat
+        if method == "ping":
+            import time
+            return self._success_response(request_id, {"pong": True, "timestamp": time.time()})
+
         if not method:
             return self._error_response(request_id, INVALID_REQUEST, "Missing 'method'")
 

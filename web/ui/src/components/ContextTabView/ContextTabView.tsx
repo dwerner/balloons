@@ -354,6 +354,7 @@ interface ContextMenuProps {
   onArchive?: () => void;
   onRestore?: () => void;  // Called for rehydrating archive blocks
   onDelete: () => void;
+  onAddToLinkStash?: () => void;  // Add exchange/turn to link stash
   onClose: () => void;
 }
 
@@ -364,6 +365,7 @@ function ContextMenu({
   onArchive,
   onRestore,
   onDelete,
+  onAddToLinkStash,
   onClose,
 }: ContextMenuProps) {
   const menuRef = React.useRef<HTMLDivElement>(null);
@@ -382,6 +384,11 @@ function ContextMenu({
     debugLog('Delete action triggered');
     onDelete();
   }, [onDelete]);
+
+  const handleAddToLinkStash = useCallback(() => {
+    debugLog('Add to link stash triggered');
+    onAddToLinkStash?.();
+  }, [onAddToLinkStash]);
 
   // Debug log when menu mounts
   useEffect(() => {
@@ -434,6 +441,15 @@ function ContextMenu({
       }}
     >
       <div className="ctx-exchange-menu__section">
+        {onAddToLinkStash && (
+          <button
+            className="ctx-exchange-menu__item"
+            onClick={() => { handleAddToLinkStash(); onClose(); }}
+          >
+            <span className="ctx-exchange-menu__icon">🔗</span>
+            Add to Link Stash
+          </button>
+        )}
         {isArchiveBlock ? (
           <button
             className="ctx-exchange-menu__item"
@@ -677,6 +693,7 @@ interface ExchangeNodeProps {
   onRestore?: () => void;  // For rehydrating archive blocks
   onDelete?: () => void;
   onDeleteTurn?: (turnIdx: number) => void;  // For deleting individual turns
+  onAddToLinkStash?: () => void;  // Add exchange to link stash
   onTurnClick?: (turnIdx: number) => void;
   /** Currently selected turn index for preview highlight */
   selectedTurnIdx?: number | null;
@@ -694,6 +711,7 @@ const ExchangeNode = memo(function ExchangeNode({
   onRestore,
   onDelete,
   onDeleteTurn,
+  onAddToLinkStash,
   onTurnClick,
   selectedTurnIdx,
   rawTurnByIdx,
@@ -902,6 +920,7 @@ const ExchangeNode = memo(function ExchangeNode({
           onArchive={onArchive}
           onRestore={onRestore}
           onDelete={() => onDelete?.()}
+          onAddToLinkStash={onAddToLinkStash}
           onClose={() => setMenuPosition(null)}
         />
       )}
@@ -923,6 +942,8 @@ interface ContextTabViewProps {
   onExchangeAction?: (turnIndices: number[], action: ExchangeAction) => void;
   /** Called when a single turn should be deleted */
   onDeleteTurn?: (turnIdx: number) => void;
+  /** Called when user wants to add exchange to link stash */
+  onAddToLinkStash?: (turnIndices: number[], excerpt: string) => void;
   isLoading?: boolean;
   /** Turn indices currently being archived (show spinner) */
   archivingTurnIndices?: Set<number>;
@@ -941,6 +962,7 @@ export const ContextTabView = memo(function ContextTabView({
   onSelectTurn,
   onExchangeAction,
   onDeleteTurn,
+  onAddToLinkStash,
   isLoading = false,
   archivingTurnIndices,
 }: ContextTabViewProps) {
@@ -1137,6 +1159,13 @@ export const ContextTabView = memo(function ContextTabView({
               // Check if any turns in this exchange are being archived
               const isArchiving = archivingTurnIndices && turnIndices.some(idx => archivingTurnIndices.has(idx));
 
+              // Build excerpt from user turn or first content
+              const excerptSource = exchange.userTurn?.content
+                || exchange.assistantTurns[0]?.content
+                || exchange.systemTurns[0]?.content
+                || '';
+              const excerpt = excerptSource.slice(0, 100).replace(/\n/g, ' ');
+
               return (
                 <ExchangeNode
                   key={exchange.id}
@@ -1154,6 +1183,9 @@ export const ContextTabView = memo(function ContextTabView({
                     ? () => onExchangeAction(turnIndices, 'delete')
                     : undefined}
                   onDeleteTurn={onDeleteTurn}
+                  onAddToLinkStash={onAddToLinkStash
+                    ? () => onAddToLinkStash(turnIndices, excerpt)
+                    : undefined}
                   onTurnClick={handleTurnSelect}
                   selectedTurnIdx={selectedTurnIdx}
                   rawTurnByIdx={rawTurnByIdx}

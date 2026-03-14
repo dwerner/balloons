@@ -1,19 +1,22 @@
 /**
  * ForkProposalCard - Interactive card for propose_fork tool calls
  *
- * Renders the propose_fork tool_use as an interactive UI with:
+ * Renders the propose_fork tool_result as an interactive UI with:
  * - Fork name and description
  * - Interactive context tree (click to toggle modes)
  * - Editable initial prompt
- * - Single "Begin Fork" button
+ * - "Begin Fork" button (hidden after fork is created)
+ * - "Go to fork" button (shown after fork is created)
+ *
+ * The tool_result JSON is the source of truth for proposal state.
+ * When the user accepts the fork, the result is updated with _status and _child_session_id.
  *
  * Uses BaseToolCard for consistent formatting/raw mode switching.
- * The tool input is the source of truth - no synthetic blocks needed.
  */
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
-import type { ToolUseBlock, ExchangeSummary } from '../../../../../generated/types';
+import type { ToolUseBlock, ToolResultBlock, ExchangeSummary } from '../../../../../generated/types';
 import { useClient, useSelectSession } from './ClientContext';
 import { ContextPlanTree, type ContextAssignment } from './ContextPlanTree';
 import { BaseToolCard, calculateToolPhase, type ToolPhase } from './BaseToolCard';
@@ -23,7 +26,7 @@ import './cards.css';
 type ContextMode = 'copy' | 'compress' | 'drop';
 
 // Status for the fork action
-type ForkStatus = 'ready' | 'creating' | 'created' | 'error';
+type ForkStatus = 'pending' | 'creating' | 'accepted' | 'rejected' | 'error';
 
 interface ForkProposalCardProps {
   turn: SessionDataTurn;
@@ -36,15 +39,54 @@ function isStreamingInput(input: Record<string, unknown>): boolean {
   return typeof input._streaming === 'string';
 }
 
-// Extract proposal data from tool input
-// Handles both camelCase (wire format) and snake_case (legacy) keys
-function extractProposalData(input: Record<string, unknown>) {
-  // Get context plan from either camelCase or snake_case key
-  // Must validate it's actually an array before using .map()
+// Parse proposal data from tool_result JSON content
+// Returns null if not valid JSON or not a fork_proposal
+function parseResultProposal(resultContent: string): {
+  name: string;
+  description: string;
+  contextPlan: ContextAssignment[];
+  initialPrompt: string;
+  bindTo: { entityType: string; entityId: string; role: string } | null;
+  bindToInherit: boolean;
+  status: ForkStatus;
+  childSessionId: string | null;
+} | null {
+  if (!resultContent) return null;
+
+  try {
+    const data = JSON.parse(resultContent);
+    if (data._type !== 'fork_proposal') return null;
+
+    const rawContextPlan = Array.isArray(data.context_plan) ? data.context_plan : [];
+    const bindToRaw = data.bind_to;
+
+    return {
+      name: data.name || '',
+      description: data.description || '',
+      contextPlan: rawContextPlan.map((cp: Record<string, unknown>) => ({
+        exchangeRange: (cp.exchange_range as string) || '',
+        mode: ((cp.mode as string) || 'compress').toLowerCase() as ContextMode,
+        reason: (cp.reason as string) || '',
+      })),
+      initialPrompt: data.initial_prompt || '',
+      bindTo: bindToRaw && typeof bindToRaw === 'object' ? {
+        entityType: bindToRaw.entity_type || '',
+        entityId: bindToRaw.entity_id || '',
+        role: bindToRaw.role || '',
+      } : null,
+      bindToInherit: bindToRaw === 'inherit',
+      status: (data._status as ForkStatus) || 'pending',
+      childSessionId: data._child_session_id || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Legacy: Extract proposal data from tool_use input (fallback for old proposals)
+function extractProposalFromInput(input: Record<string, unknown>) {
   const rawContextPlanValue = input.contextPlan ?? input.context_plan;
   const rawContextPlan = Array.isArray(rawContextPlanValue) ? rawContextPlanValue : [];
-
-  // Get bind_to from either format
   const bindToRaw = input.bindTo ?? input.bind_to;
 
   return {
@@ -53,7 +95,6 @@ function extractProposalData(input: Record<string, unknown>) {
     contextPlan: rawContextPlan.map((cp: unknown) => {
       const item = cp as Record<string, unknown>;
       return {
-        // Handle both camelCase and snake_case keys within each item
         exchangeRange: (item.exchangeRange as string) || (item.exchange_range as string) || '',
         mode: ((item.mode as string) || 'compress').toLowerCase() as ContextMode,
         reason: (item.reason as string) || '',
@@ -66,14 +107,16 @@ function extractProposalData(input: Record<string, unknown>) {
       role: ((bindToRaw as Record<string, unknown>).role as string) || '',
     } : null,
     bindToInherit: bindToRaw === 'inherit',
-    // These fields are set by the server when a fork is accepted
-    childSessionId: (input._child_session_id as string) || '',
-    persistedStatus: (input._status as string) || '',
+    // Legacy: check if status was persisted in tool_use input (old behavior)
+    status: ((input._status as string) === 'accepted' ? 'accepted' : 'pending') as ForkStatus,
+    childSessionId: (input._child_session_id as string) || null,
   };
 }
 
 /**
- * ForkProposalCard - Renders propose_fork tool_use with interactive UI
+ * ForkProposalCard - Renders propose_fork with interactive UI
+ *
+ * State is sourced from tool_result (preferred) or tool_use input (legacy fallback).
  */
 export const ForkProposalCard = React.memo(function ForkProposalCard({
   turn,
@@ -84,48 +127,67 @@ export const ForkProposalCard = React.memo(function ForkProposalCard({
   const selectSession = useSelectSession();
   const { contentBlock, streaming, tokens } = turn;
 
-  // Extract tool info
+  // Extract tool_use info
   const toolUseBlock = contentBlock?.type === 'tool_use'
     ? (contentBlock as ToolUseBlock)
     : null;
-
   const toolInput = (toolUseBlock?.input || {}) as Record<string, unknown>;
   const inputIsStreaming = isStreamingInput(toolInput);
   const toolUseId = toolUseBlock?.id || '';
 
-  // Extract proposal data from input
-  const proposalData = extractProposalData(toolInput);
+  // Extract tool_result info
+  const resultBlock = result?.contentBlock?.type === 'tool_result'
+    ? (result.contentBlock as ToolResultBlock)
+    : null;
+  const resultContent = typeof resultBlock?.content === 'string' ? resultBlock.content : '';
+
+  // Parse proposal data from result (preferred) or input (legacy fallback)
+  // Note: _status and _child_session_id are set in tool_use input by the server
+  // when the fork is accepted, so we need to check both places
+  const proposalData = useMemo(() => {
+    // Try parsing from tool_result first (new behavior)
+    const fromResult = parseResultProposal(resultContent);
+    if (fromResult) {
+      // Override status/childSessionId from tool_use input if the server set them
+      // (server updates tool_use.input, not tool_result content)
+      const serverStatus = toolInput._status as string | undefined;
+      const serverChildId = toolInput._child_session_id as string | undefined;
+      if (serverStatus === 'accepted' && serverChildId) {
+        return {
+          ...fromResult,
+          status: 'accepted' as ForkStatus,
+          childSessionId: serverChildId,
+        };
+      }
+      return fromResult;
+    }
+
+    // Fallback to tool_use input (legacy behavior)
+    return extractProposalFromInput(toolInput);
+  }, [resultContent, toolInput]);
 
   // Local state for modifications
-  // Initialize status and childSessionId from persisted data (if fork was already accepted)
   const [contextPlan, setContextPlan] = useState<ContextAssignment[]>(proposalData.contextPlan);
   const [initialPrompt, setInitialPrompt] = useState(proposalData.initialPrompt);
   const [isEditingPrompt, setIsEditingPrompt] = useState(false);
-  const [status, setStatus] = useState<ForkStatus>(
-    proposalData.persistedStatus === 'accepted' ? 'created' : 'ready'
-  );
+  const [status, setStatus] = useState<ForkStatus>(proposalData.status);
   const [error, setError] = useState<string | null>(null);
-  const [childSessionId, setChildSessionId] = useState<string | null>(
-    proposalData.childSessionId || null
-  );
+  const [childSessionId, setChildSessionId] = useState<string | null>(proposalData.childSessionId);
   const [exchanges, setExchanges] = useState<ExchangeSummary[]>([]);
 
-  // Update local state when proposal data changes (during streaming or after fork accepted)
+  // Update local state when proposal data changes (e.g., after fork accepted and result updated)
   useEffect(() => {
     if (!inputIsStreaming) {
       setContextPlan(proposalData.contextPlan);
       setInitialPrompt(proposalData.initialPrompt);
-      // Update status and childSessionId if the server set them (e.g., after fork accepted)
-      if (proposalData.persistedStatus === 'accepted' && proposalData.childSessionId) {
-        setStatus('created');
-        setChildSessionId(proposalData.childSessionId);
-      }
+      setStatus(proposalData.status);
+      setChildSessionId(proposalData.childSessionId);
     }
-  }, [inputIsStreaming, proposalData.contextPlan.length, proposalData.initialPrompt, proposalData.persistedStatus, proposalData.childSessionId]);
+  }, [inputIsStreaming, proposalData]);
 
-  // Fetch exchange summaries on mount when ready
+  // Fetch exchange summaries on mount when pending
   useEffect(() => {
-    if (status === 'ready' && client && sessionId && !inputIsStreaming) {
+    if (status === 'pending' && client && sessionId && !inputIsStreaming) {
       client.sessions.getExchangeSummaries(sessionId, true)
         .then(setExchanges)
         .catch((err) => console.warn('Failed to fetch exchanges:', err));
@@ -136,7 +198,7 @@ export const ForkProposalCard = React.memo(function ForkProposalCard({
   const hasInput = !inputIsStreaming && proposalData.name.length > 0;
   const hasResult = !!result;
   const isError = status === 'error';
-  const phase: ToolPhase = status === 'created' ? 'completed'
+  const phase: ToolPhase = status === 'accepted' ? 'completed'
     : status === 'creating' ? 'executing'
     : calculateToolPhase(streaming || false, hasInput, inputIsStreaming, hasResult, isError);
 
@@ -155,7 +217,7 @@ export const ForkProposalCard = React.memo(function ForkProposalCard({
         reason: cp.reason,
       }));
 
-      const result = await client.sessions.respondToForkProposal(
+      const forkResult = await client.sessions.respondToForkProposal(
         sessionId,
         toolUseId, // Use tool_use ID as proposal ID
         true, // accepted
@@ -166,19 +228,19 @@ export const ForkProposalCard = React.memo(function ForkProposalCard({
         true, // start streaming
       );
 
-      if (result.success && result.accepted) {
-        setStatus('created');
-        setChildSessionId(result.childSessionId || null);
+      if (forkResult.success && forkResult.accepted) {
+        setStatus('accepted');
+        setChildSessionId(forkResult.childSessionId || null);
         // Navigate to the new fork session
-        if (result.childSessionId && selectSession) {
-          if (result.needsCompression) {
+        if (forkResult.childSessionId && selectSession) {
+          if (forkResult.needsCompression) {
             console.warn('[ForkProposalCard] Fork needs compression - context may not be ready yet');
           }
-          selectSession(result.childSessionId);
+          selectSession(forkResult.childSessionId);
         }
       } else {
         setStatus('error');
-        setError(result.error || 'Failed to create fork');
+        setError(forkResult.error || 'Failed to create fork');
       }
     } catch (err) {
       setStatus('error');
@@ -200,8 +262,9 @@ export const ForkProposalCard = React.memo(function ForkProposalCard({
   // Raw data for debugging mode
   const rawData = { turn, result, proposalData };
 
-  const isReady = status === 'ready';
+  const isPending = status === 'pending';
   const isCreating = status === 'creating';
+  const isAccepted = status === 'accepted';
 
   return (
     <BaseToolCard
@@ -237,7 +300,7 @@ export const ForkProposalCard = React.memo(function ForkProposalCard({
             </div>
 
             {/* Action buttons inline with description */}
-            {isReady && (
+            {isPending && (
               <button
                 className="btn btn-primary begin-fork-btn"
                 onClick={handleBeginFork}
@@ -252,7 +315,7 @@ export const ForkProposalCard = React.memo(function ForkProposalCard({
               <span className="loading-indicator">Creating fork...</span>
             )}
 
-            {status === 'created' && childSessionId && selectSession && (
+            {isAccepted && childSessionId && selectSession && (
               <button
                 className="btn btn-primary btn-small go-to-fork-btn"
                 onClick={handleGoToFork}
@@ -264,8 +327,8 @@ export const ForkProposalCard = React.memo(function ForkProposalCard({
           </div>
 
           {/* Completion state message */}
-          {status === 'created' && (
-            <div className="fork-proposal-resolution status-created">
+          {isAccepted && (
+            <div className="fork-proposal-resolution status-accepted">
               <span>✓ Fork created successfully</span>
             </div>
           )}
@@ -303,7 +366,7 @@ export const ForkProposalCard = React.memo(function ForkProposalCard({
               contextPlan={contextPlan}
               allExchanges={exchanges.length > 0 ? exchanges : undefined}
               onPlanChange={handlePlanChange}
-              disabled={!isReady || isCreating}
+              disabled={!isPending || isCreating}
             />
           </div>
 
@@ -311,7 +374,7 @@ export const ForkProposalCard = React.memo(function ForkProposalCard({
           <div className="fork-proposal-section">
             <div className="section-header">
               <span className="section-title">Initial Prompt</span>
-              {isReady && !isEditingPrompt && (
+              {isPending && !isEditingPrompt && (
                 <button
                   className="edit-prompt-btn"
                   onClick={() => setIsEditingPrompt(true)}
@@ -321,7 +384,7 @@ export const ForkProposalCard = React.memo(function ForkProposalCard({
                 </button>
               )}
             </div>
-            {isReady && isEditingPrompt ? (
+            {isPending && isEditingPrompt ? (
               <div className="prompt-editor">
                 <textarea
                   className="initial-prompt-input"

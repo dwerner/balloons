@@ -39,3 +39,9 @@ export type {
   UseUnreadSessionsOptions,
   UseUnreadSessionsReturn,
 } from './useUnreadSessions';
+
+export { useLinkStash } from './useLinkStash';
+export type {
+  LinkStashItem,
+  UseLinkStashReturn,
+} from './useLinkStash';

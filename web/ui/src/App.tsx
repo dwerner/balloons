@@ -26,9 +26,10 @@ import { PropertiesTab } from './components/PropertiesTab';
 import { StreamingTurnsView, type StreamingProgress } from './components/StreamingTurnsView';
 import { ContextTabView, type ExchangeAction as ContextTabExchangeAction } from './components/ContextTabView';
 import { DialogProvider, useDialog } from './components/Dialog';
-import { useWakeLock, useSoundNotifications, useLongPress, useVisualViewport, useUnreadSessions } from './hooks';
+import { useWakeLock, useSoundNotifications, useLongPress, useVisualViewport, useUnreadSessions, useLinkStash, type LinkStashItem } from './hooks';
+import { LinkStashArea } from './components/LinkStashArea';
 import { RenameSessionModal } from './components/RenameSessionModal';
-import { LinkSessionModal } from './components/LinkSessionModal';
+// LinkSessionModal removed - link stash workflow replaces session picker
 import { VoiceInput } from './components/VoiceInput';
 import { SendActionButton, type SendAction } from './components/SendActionButton';
 import { setDebugClient, createLogger, isDebugEnabled, setDebugEnabled } from './utils/debugLog';
@@ -1214,6 +1215,10 @@ function AppContent() {
     selectedSessionId,
   });
 
+  // Link stash for collecting references to link
+  const linkStash = useLinkStash();
+  const [linkStashCollapsed, setLinkStashCollapsed] = useState(false);
+
   const [turns, setTurns] = useState<TurnInfo[]>([]);
   // Raw SessionDataTurns for components that need rich contentBlock data (e.g., ContextTabView)
   const [rawTurns, setRawTurns] = useState<SessionDataTurn[]>([]);
@@ -1263,12 +1268,6 @@ function AppContent() {
   const [reviewStreamingText, setReviewStreamingText] = useState<string>('');
   const reviewHelperIdRef = useRef<string | null>(null);
   const reviewAccumulatedTextRef = useRef<string>('');
-
-  // Modal state for LinkSessionModal
-  const [linkModalState, setLinkModalState] = useState<{
-    isOpen: boolean;
-    initialSummary: string;
-  }>({ isOpen: false, initialSummary: '' });
 
   const clientRef = useRef<BalloonsClient | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -2467,19 +2466,40 @@ function AppContent() {
     }
   }, [connectionState, selectedSessionId]);
 
-  // Handle link action - link to another session
+  // Handle link action - link to sessions in the stash
   const handleLinkAction = useCallback(async (description?: string) => {
     const client = clientRef.current;
     if (!client || connectionState !== 'connected' || !selectedSessionId) {
       return;
     }
 
-    // Open the link session modal with the optional description as initial summary
-    setLinkModalState({
-      isOpen: true,
-      initialSummary: description || '',
-    });
-  }, [connectionState, selectedSessionId]);
+    // Require at least one checked item in the stash
+    const checkedItems = linkStash.getCheckedItems();
+    if (checkedItems.length === 0) {
+      setError('Add items to link stash first (right-click exchanges in Context tab)');
+      return;
+    }
+
+    // Create links for all checked items
+    const summary = description || 'Linked reference';
+    for (const item of checkedItems) {
+      try {
+        const result = await client.sessions.linkSessions(
+          selectedSessionId,
+          item.sourceSessionId,
+          `${summary} (${item.sourceSessionName}: turns ${item.turnIndices.join(', ')})`
+        );
+        if (!result.linkId) {
+          console.error('Failed to link session:', result.error);
+        }
+      } catch (err) {
+        console.error('Failed to link session:', err);
+      }
+    }
+
+    // Pop the checked items from stash
+    linkStash.popChecked();
+  }, [connectionState, selectedSessionId, linkStash]);
 
   // Handle merge action - request LLM to propose a merge
   const handleMergeAction = useCallback(async (seedPrompt?: string) => {
@@ -3174,6 +3194,17 @@ function AppContent() {
                       console.error(`Failed to ${action} turns:`, err);
                     }
                   }}
+                  onAddToLinkStash={(turnIndices, excerpt) => {
+                    if (!selectedSessionId || !selectedSession) return;
+                    const sessionName = selectedSession.forkName || selectedSession.title || selectedSessionId.slice(0, 8);
+                    linkStash.addItem({
+                      sourceSessionId: selectedSessionId,
+                      sourceSessionName: sessionName,
+                      turnIndices,
+                      excerpt,
+                    });
+                    debugLog('Added to link stash', { sessionId: selectedSessionId, turnIndices, excerpt });
+                  }}
                 />
               )}
               {mainContentTab === 'properties' && (
@@ -3536,6 +3567,37 @@ function AppContent() {
                     ))}
                   </div>
                 )}
+                {/* Link stash area */}
+                <LinkStashArea
+                  items={linkStash.items}
+                  checkedCount={linkStash.checkedCount}
+                  isLinkMode={sendAction === 'link'}
+                  onToggleItem={linkStash.toggleItem}
+                  onRemoveItem={linkStash.removeItem}
+                  onNavigate={(sessionId, turnIndex) => {
+                    // Navigate to the session and turn
+                    handleSelectSession(sessionId);
+                    // TODO: scroll to turn after session loads
+                  }}
+                  onApplySingle={async (item) => {
+                    const client = clientRef.current;
+                    if (!client || connectionState !== 'connected' || !selectedSessionId) return;
+                    try {
+                      await client.sessions.linkSessions(
+                        selectedSessionId,
+                        item.sourceSessionId,
+                        `Linked: ${item.sourceSessionName} turns ${item.turnIndices.join(', ')}`
+                      );
+                      linkStash.removeItem(item.id);
+                    } catch (err) {
+                      console.error('Failed to apply link:', err);
+                      setError(`Failed to apply link: ${err}`);
+                    }
+                  }}
+                  onClearAll={linkStash.clearAll}
+                  collapsed={linkStashCollapsed}
+                  onCollapseChange={setLinkStashCollapsed}
+                />
                 <form className="input-form" onSubmit={(e) => { e.preventDefault(); handleExecuteAction(); }}>
                   <input
                     ref={fileInputRef}
@@ -3908,22 +3970,6 @@ function AppContent() {
           }
         }}
       />
-
-      {/* LinkSessionModal - rendered at App level for portal */}
-      {connectionState === 'connected' && selectedSessionId && clientRef.current && (
-        <LinkSessionModal
-          isOpen={linkModalState.isOpen}
-          onClose={() => setLinkModalState({ isOpen: false, initialSummary: '' })}
-          currentSessionId={selectedSessionId}
-          initialSummary={linkModalState.initialSummary}
-          sessionClient={clientRef.current.sessions}
-          sessionDataClient={clientRef.current.sessionData}
-          onLinked={(targetSessionId, linkId) => {
-            debugLog('Sessions linked', { targetSessionId, linkId });
-            // Link turn will appear via session data subscription
-          }}
-        />
-      )}
     </AppLayout>
   );
 }

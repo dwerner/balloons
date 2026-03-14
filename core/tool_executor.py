@@ -595,15 +595,18 @@ async def execute_list(args: dict, working_dir: str) -> tuple[str, bool]:
 def execute_propose_fork(args: dict) -> tuple[str, bool]:
     """Handle a propose_fork tool call.
 
-    This validates the proposal arguments and returns a structured result.
-    The actual UI display and fork creation is handled by the app layer,
-    which intercepts this tool and shows the ForkProposalModal.
+    This validates the proposal arguments and returns a structured JSON result
+    containing the full proposal state. The UI renders this as an interactive
+    card where the user can modify context modes and accept/reject.
+
+    The tool_result becomes the source of truth for proposal state - when the
+    user modifies context modes or accepts the fork, the result is updated.
 
     Args:
         args: Tool arguments containing name, description, context_plan, etc.
 
     Returns:
-        Tuple of (result_string, is_error)
+        Tuple of (result_string, is_error) - result is JSON with proposal state
     """
     name = args.get("name")
     if not name:
@@ -630,9 +633,20 @@ def execute_propose_fork(args: dict) -> tuple[str, bool]:
         if mode not in valid_modes:
             return f"Error: context_plan[{i}] has invalid mode '{mode}' (must be copy/compress/drop)", True
 
-    # Build the proposal object for the UI layer to use
-    # The actual result is intercepted by the app - this is just acknowledgment
-    return "FORK_PROPOSAL_PENDING", False
+    # Return structured JSON with the full proposal state
+    # This becomes the source of truth - UI reads from and updates this
+    result = {
+        "_type": "fork_proposal",
+        "_status": "pending",  # pending | accepted | rejected
+        "name": name,
+        "description": description,
+        "context_plan": context_plan,
+        "initial_prompt": args.get("initial_prompt", ""),
+        "bind_to": args.get("bind_to"),
+        # These are set when fork is accepted:
+        "_child_session_id": None,
+    }
+    return json.dumps(result), False
 
 
 def parse_fork_proposal(args: dict) -> ForkProposal | None:
@@ -691,15 +705,17 @@ def parse_fork_proposal(args: dict) -> ForkProposal | None:
 def execute_propose_merge(args: dict) -> tuple[str, bool]:
     """Handle a propose_merge tool call.
 
-    This validates the proposal arguments and returns a structured result.
-    The actual UI display and merge execution is handled by the app layer,
-    which intercepts this tool and shows the MergeProposalModal.
+    This validates the proposal arguments and returns a structured JSON result
+    containing the full proposal state. The UI renders this as an interactive
+    card where the user can modify the summary and accept/reject.
+
+    The tool_result becomes the source of truth for proposal state.
 
     Args:
         args: Tool arguments containing summary, reason, files_changed, etc.
 
     Returns:
-        Tuple of (result_string, is_error)
+        Tuple of (result_string, is_error) - result is JSON with proposal state
     """
     summary = args.get("summary")
     if not summary:
@@ -714,8 +730,19 @@ def execute_propose_merge(args: dict) -> tuple[str, bool]:
     if not isinstance(key_accomplishments, list):
         return "Error: key_accomplishments must be a list", True
 
-    # The actual result is intercepted by the app - this is just acknowledgment
-    return "MERGE_PROPOSAL_PENDING", False
+    # Return structured JSON with the full proposal state
+    result = {
+        "_type": "merge_proposal",
+        "_status": "pending",  # pending | accepted | rejected
+        "summary": summary,
+        "reason": args.get("reason", ""),
+        "files_changed": files_changed,
+        "key_accomplishments": key_accomplishments,
+        # Set when merge is accepted:
+        "_merge_id": None,
+        "_parent_session_id": None,
+    }
+    return json.dumps(result), False
 
 
 def parse_merge_proposal(args: dict) -> MergeProposal | None:

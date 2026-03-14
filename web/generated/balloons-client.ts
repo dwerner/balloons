@@ -65,6 +65,12 @@ export class BalloonsClient {
   // Server-assigned client ID (received on connection)
   private _clientId: string | null = null;
 
+  // Heartbeat timer and state
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private heartbeatPending = false;
+  private readonly HEARTBEAT_INTERVAL = 15000; // 15 seconds
+  private readonly HEARTBEAT_TIMEOUT = 10000; // 10 seconds to respond
+
   // Service clients (lazily initialized)
   private _queue: QueueStateServiceClient | null = null;
   private _sessions: SessionManagerServiceClient | null = null;
@@ -269,6 +275,7 @@ export class BalloonsClient {
       this.ws.onopen = () => {
         this.reconnectAttempts = 0;
         this.initializeClients();
+        this.startHeartbeat();
         wsOpened = true;
         maybeResolve();
       };
@@ -279,6 +286,7 @@ export class BalloonsClient {
       };
 
       this.ws.onclose = (event) => {
+        this.stopHeartbeat();
         this.clearClients();
         this.setState('disconnected');
 
@@ -299,6 +307,8 @@ export class BalloonsClient {
    * Disconnect from the backend.
    */
   disconnect(): void {
+    this.stopHeartbeat();
+
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -381,6 +391,111 @@ export class BalloonsClient {
         console.error('Reconnection failed:', err);
       });
     }, delay) as unknown as number;
+  }
+
+  /**
+   * Start heartbeat timer to detect dead connections.
+   * Sends a ping every HEARTBEAT_INTERVAL and expects a response within HEARTBEAT_TIMEOUT.
+   */
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeatTimer = setInterval(() => {
+      this.sendHeartbeat();
+    }, this.HEARTBEAT_INTERVAL);
+  }
+
+  /**
+   * Stop the heartbeat timer.
+   */
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer !== null) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+    this.heartbeatPending = false;
+  }
+
+  /**
+   * Send a heartbeat ping and wait for pong response.
+   */
+  private sendHeartbeat(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn('Heartbeat: WebSocket not open, marking disconnected');
+      this.handleHeartbeatFailure();
+      return;
+    }
+
+    if (this.heartbeatPending) {
+      // Previous heartbeat didn't get a response - connection is dead
+      console.warn('Heartbeat: No response to previous ping, marking disconnected');
+      this.handleHeartbeatFailure();
+      return;
+    }
+
+    this.heartbeatPending = true;
+    const pingId = `ping-${Date.now()}`;
+
+    // Set up timeout for pong response
+    const timeoutId = setTimeout(() => {
+      if (this.heartbeatPending) {
+        console.warn('Heartbeat: Timeout waiting for pong');
+        this.handleHeartbeatFailure();
+      }
+    }, this.HEARTBEAT_TIMEOUT);
+
+    // Send ping
+    const pingMessage = JSON.stringify({
+      id: pingId,
+      method: 'ping',
+      params: {}
+    });
+
+    try {
+      this.ws.send(pingMessage);
+    } catch (err) {
+      console.error('Heartbeat: Failed to send ping', err);
+      clearTimeout(timeoutId);
+      this.handleHeartbeatFailure();
+      return;
+    }
+
+    // Listen for pong response
+    const handleMessage = (event: MessageEvent) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.id === pingId && msg.result?.pong) {
+          this.heartbeatPending = false;
+          clearTimeout(timeoutId);
+          this.ws?.removeEventListener('message', handleMessage);
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    };
+
+    this.ws.addEventListener('message', handleMessage);
+  }
+
+  /**
+   * Handle heartbeat failure - close connection and trigger reconnect.
+   */
+  private handleHeartbeatFailure(): void {
+    this.stopHeartbeat();
+    this.heartbeatPending = false;
+
+    // Force close the websocket
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
+
+    this.clearClients();
+    this.setState('disconnected');
+
+    // Trigger reconnect if enabled
+    if (this.options.autoReconnect && this.reconnectAttempts < this.options.maxReconnectAttempts) {
+      this.scheduleReconnect();
+    }
   }
 }
 
