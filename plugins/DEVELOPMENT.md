@@ -26,7 +26,92 @@ plugins/
     └── README.md       # User documentation
 ```
 
-### Minimal Domain
+### Minimal Domain (Decorator-Based)
+
+The recommended approach uses `@llm_callable` decorators for automatic tool generation:
+
+```python
+# plugins/my_domain/domain.py
+from plugins import DecoratedDomain, ToolResult, llm_callable, Param
+
+class MyDomain(DecoratedDomain):
+    @property
+    def id(self) -> str:
+        return "my_domain"
+
+    @property
+    def name(self) -> str:
+        return "My Domain"
+
+    @llm_callable
+    async def my_domain_hello(self, name: str, session=None) -> ToolResult:
+        """Say hello to someone."""
+        return ToolResult(f"Hello, {name}!")
+
+    @llm_callable(
+        description="Create something with options",
+        params={
+            "type": Param(str, "Type to create", enum=["a", "b", "c"]),
+            "count": Param(int, "How many to create", required=False),
+        }
+    )
+    async def my_domain_create(self, type: str, count: int = 1, session=None) -> ToolResult:
+        """Create items of a specific type."""
+        return ToolResult(f"Created {count} items of type {type}")
+```
+
+The `@llm_callable` decorator:
+- Extracts parameter types from the function signature
+- Uses the docstring as the tool description
+- Generates JSON Schema for the LLM automatically
+- Handles dispatching in `handle_tool()` automatically
+
+### Exposing Methods to the UI (WebSocket RPC)
+
+To make a method callable from the UI as well as the LLM, add `@ws_expose`:
+
+```python
+from codegen.ws_expose import ws_expose
+
+class MyDomain(DecoratedDomain):
+    @ws_expose  # Makes method available as WebSocket RPC
+    @llm_callable  # Makes method available to LLM
+    async def my_domain_delete(self, item_id: str, session=None) -> ToolResult:
+        """Delete an item. Callable by both LLM and UI."""
+        # ... implementation
+        return ToolResult(f"Deleted {item_id}")
+```
+
+The UI can then call this directly:
+```typescript
+// Generated client provides typed method
+await client.domains.callDomainMethod({
+  methodName: "myDomainDelete",  // camelCase wire name
+  sessionId: "...",
+  params: { itemId: "abc123" }
+});
+```
+
+This is the recommended pattern for UI actions like delete buttons, configuration updates,
+etc. - it avoids the overhead of going through the LLM.
+
+For rich parameter schemas (enums, descriptions, nested objects), use `Param()`:
+
+```python
+@llm_callable(params={
+    "choice": Param(str, "Pick one", enum=["a", "b", "c"]),
+    "config": Param(dict, "Configuration", properties={
+        "enabled": Param(bool, "Is enabled"),
+        "count": Param(int, "Count", required=False),
+    }),
+})
+async def my_tool(self, choice: str, config: dict, session=None) -> ToolResult:
+    ...
+```
+
+### Minimal Domain (Manual)
+
+For full control, you can manually define tools:
 
 ```python
 # plugins/my_domain/domain.py
@@ -248,11 +333,71 @@ class MyStatefulDomain(StatefulDomain):
         if state:
             self._cache[session.id] = state
 
+    async def get_state(self, session) -> dict | None:
+        """Return current state (called by requestDomainState)."""
+        # Auto-load from storage if not in memory
+        if session.id not in self._cache:
+            state = await self.storage.load(session.id)
+            if state:
+                self._cache[session.id] = state
+        return self._cache.get(session.id)
+
     async def clear_state(self, session) -> None:
         """Called when session is reset."""
         self._cache.pop(session.id, None)
         await self.storage.delete(session.id)
 ```
+
+### Auto-Save Pattern
+
+For domains where state should persist immediately after each mutation (not just on session save),
+add an auto-save helper:
+
+```python
+class MyStatefulDomain(StatefulDomain):
+    async def _auto_save(self, session) -> None:
+        """Auto-save state to persistent storage after mutations."""
+        await self.save_state(session)
+
+    async def handle_tool(self, tool_name, params, session) -> ToolResult:
+        # Ensure state is loaded first
+        await self._ensure_loaded(session)
+
+        if tool_name == "my_domain_create":
+            # Perform mutation
+            self._cache[session.id]["items"].append(params["item"])
+
+            # Auto-save after mutation
+            await self._auto_save(session)
+
+            return ToolResult("Item created")
+        ...
+
+    async def _ensure_loaded(self, session) -> None:
+        """Ensure state is loaded from storage."""
+        if session.id not in self._cache:
+            state = await self.storage.load(session.id)
+            self._cache[session.id] = state or {"items": []}
+```
+
+### Auto-Load Pattern
+
+The `get_state()` method should auto-load from storage to support `requestDomainState`:
+
+```python
+async def get_state(self, session) -> dict | None:
+    """Return current state, auto-loading from storage if needed."""
+    if session.id not in self._cache:
+        state = await self.storage.load(session.id)
+        if state:
+            self._cache[session.id] = state
+    return self._cache.get(session.id)
+```
+
+This ensures:
+1. State survives domain unload/reload cycles
+2. State survives server restarts
+3. UI can request current state on tab switch/page reload
 
 ## Storage Backends
 
@@ -293,26 +438,209 @@ class MyCustomStorage:
 
 ## UI Components
 
-Domains can register React components:
+Domains can register React components that appear in the Balloons sidebar.
+
+### Directory Structure
+
+```
+plugins/
+└── my_domain/
+    ├── __init__.py
+    ├── domain.py
+    ├── prompt.md
+    └── ui/
+        ├── src/
+        │   ├── index.tsx        # Entry point (required)
+        │   ├── MyDomainTab.tsx  # Main component
+        │   └── MyDomainTab.css  # Styles
+        ├── package.json         # Dependencies
+        └── node_modules -> ../../../web/ui/node_modules  # Symlink to shared deps
+```
+
+### Domain UI Config
+
+Register your UI in the domain's `get_ui_config()`:
 
 ```python
 def get_ui_config(self) -> dict | None:
     return {
         "components": [
             {
-                "name": "ChessBoard",
-                "file": "plugins/chess/ui/ChessBoard.tsx",
-                "props": {"size": 400},
+                "name": "MyDomainPanel",
+                "path": "plugins/my_domain/ui/MyDomainPanel.tsx",
+                "description": "Main domain panel",
             }
         ],
         "tabs": [
             {
-                "id": "chess",
-                "label": "Chess",
-                "component": "ChessBoard",
+                "id": "my_domain",
+                "label": "My Domain",
+                "icon": "🔧",
+                "component": "MyDomainPanel",
             }
         ],
     }
+```
+
+### Entry Point (index.tsx)
+
+Your `ui/src/index.tsx` must export a manifest and self-register:
+
+```tsx
+import React from 'react';
+import { MyDomainTab, type PluginContext } from './MyDomainTab';
+
+export const pluginId = 'my_domain';
+export const pluginName = 'My Domain';
+export const pluginVersion = '0.1.0';
+
+export const manifest = {
+  id: pluginId,
+  name: pluginName,
+  version: pluginVersion,
+  tab: {
+    id: 'my_domain',
+    label: 'My Domain',
+    icon: '🔧',
+  },
+  component: MyDomainTab,
+};
+
+// Self-register when loaded as a script
+if (typeof window !== 'undefined') {
+  const plugins = (window as any).__BALLOONS_PLUGINS__;
+  if (plugins && typeof plugins.register === 'function') {
+    plugins.register('my_domain', manifest);
+  }
+}
+```
+
+### Plugin Context
+
+Your main component receives a `PluginContext` with these props:
+
+```tsx
+interface PluginContext {
+  /** Send a message to the LLM */
+  sendMessage?: (message: string) => void;
+  /** Current session ID */
+  sessionId?: string;
+  /** Subscribe to domain events */
+  subscribeToDomainEvents?: (
+    domainId: string,
+    callback: (event: DomainEventData) => void
+  ) => () => void;
+  /** Request current domain state (triggers state sync) */
+  requestDomainState?: (domainId: string) => Promise<boolean>;
+  /** Whether the LLM is currently streaming */
+  isLLMResponding?: boolean;
+}
+```
+
+### Building Plugin UI
+
+Plugins are built with **Bun** into self-contained bundles:
+
+```bash
+# Build a specific plugin
+cd plugins && bun run build-plugin-ui.ts my_domain
+
+# Build all plugins
+cd plugins && bun run build-plugin-ui.ts
+
+# Watch mode for development
+cd plugins && bun run build-plugin-ui.ts my_domain --watch
+```
+
+This produces:
+```
+plugins/dist/my_domain/
+├── bundle.js       # Bundled React component
+├── bundle.css      # Bundled styles
+└── manifest.json   # Plugin metadata
+```
+
+### package.json
+
+Minimal package.json for a plugin with dependencies:
+
+```json
+{
+  "name": "@balloons-plugins/my-domain-ui",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "some-library": "^1.0.0"
+  }
+}
+```
+
+**Note:** React is provided by the host app - don't include it as a dependency.
+
+### Symlink node_modules
+
+To share dependencies with the main UI and enable proper resolution:
+
+```bash
+cd plugins/my_domain/ui
+ln -s ../../../web/ui/node_modules node_modules
+```
+
+### Domain Events
+
+Subscribe to domain events in your component:
+
+```tsx
+useEffect(() => {
+  if (!subscribeToDomainEvents || !sessionId) return;
+
+  return subscribeToDomainEvents('my_domain', (event) => {
+    if (event.sessionId !== sessionId) return;
+
+    switch (event.eventType) {
+      case 'my_domain_state_sync':
+        // Handle full state sync
+        setState(event.data);
+        break;
+      case 'my_domain_item_created':
+        // Handle incremental update
+        addItem(event.data.item);
+        break;
+    }
+  });
+}, [subscribeToDomainEvents, sessionId]);
+```
+
+### Requesting State on Mount
+
+Request current state when the tab is opened:
+
+```tsx
+useEffect(() => {
+  if (!requestDomainState || !sessionId) return;
+
+  // This triggers a state sync event from the backend
+  requestDomainState('my_domain').catch(console.error);
+}, [requestDomainState, sessionId]);
+```
+
+**Important:** Your domain's `get_state()` method should return data, and you should handle
+the `{domain_id}_state_sync` event (e.g., `my_domain_state_sync`) in your component.
+
+### Event Type Naming
+
+Domain events use two naming conventions:
+
+1. **Domain-emitted events**: `{action}` (e.g., `chart_created`, `game_over`)
+2. **State sync from requestDomainState**: `{domain_id}_state_sync` (e.g., `charts_state_sync`)
+
+Handle both in your component if needed:
+
+```tsx
+case 'my_domain_state_sync':  // From requestDomainState
+case 'state_sync':            // From domain tool calls
+  handleStateSync(event.data);
+  break;
 ```
 
 ## Testing
@@ -392,3 +720,43 @@ result = await registry.execute_tool("chess_move", {"move": "e4"}, session)
 # Events
 events = await registry.emit_event(event, session)
 ```
+
+## Future Work
+
+### Plugin Scaffolding Generator
+
+A CLI tool to generate new plugin scaffolds:
+
+```bash
+# Proposed command
+balloons create-plugin my_domain --with-ui
+```
+
+Would generate:
+
+```
+plugins/my_domain/
+├── __init__.py         # Entry point with create_domain()
+├── domain.py           # Domain class skeleton
+├── models.py           # Data classes for state
+├── events.py           # Event payload definitions
+├── prompt.md           # LLM documentation template
+├── test_domain.py      # Test skeleton
+├── README.md           # User documentation template
+├── .gitignore          # Build artifacts, node_modules, etc.
+└── ui/                 # (if --with-ui)
+    ├── package.json    # Dependencies (react, recharts, etc.)
+    ├── tsconfig.json   # TypeScript config
+    ├── src/
+    │   ├── index.tsx   # Plugin entry point
+    │   └── MyDomainTab.tsx  # Main component
+    └── .gitignore
+```
+
+Features to include:
+- Interactive prompts for plugin name, description, tools
+- Template for StatefulDomain with storage integration
+- Template for event emission patterns
+- Build script integration (`bun run build`)
+- Test fixtures and mocks
+- Example tool implementations

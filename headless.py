@@ -242,6 +242,9 @@ async def run_server(
     # Wire up event pumping for streaming
     session_service.set_task_state_service(task_service)
     session_service.set_session_data_service(session_data_service)
+    # Bidirectional: SessionDataService needs to call back to SessionManagerService
+    # for session lookup and domain event emission (used by requestDomainState)
+    session_data_service.set_manager(session_service)
 
     # Register session service globally for plugin event emission
     from service import set_session_manager_service
@@ -309,6 +312,15 @@ async def run_server(
     # LSP service for language server management
     lsp_service = LSPService()
     ws_server.register_service(lsp_service)
+
+    # Domain RPC service - exposes domain @ws_expose methods for direct WebSocket calls
+    from plugins.rpc_service import DomainRpcService
+    from plugins import get_registry
+    domain_rpc_service = DomainRpcService()
+    domain_rpc_service.set_manager(session_service)
+    ws_server.register_service(domain_rpc_service)
+    # Wire up registry to register domains with RPC service when loaded
+    get_registry().set_rpc_service(domain_rpc_service)
 
     # Register output callback for real-time process output streaming
     register_output_callback()

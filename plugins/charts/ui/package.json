@@ -1,0 +1,8 @@
+{
+  "name": "@balloons-plugins/charts-ui",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "recharts": "^2.15.3"
+  }
+}

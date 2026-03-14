@@ -12,8 +12,9 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { usePlugins, pluginRegistry, type PluginInfo, type PluginContext } from '../../plugins';
-import type { SessionDataServiceClient } from '../../../../generated/balloons-client';
+import { usePlugins, pluginRegistry, type PluginInfo, type PluginContext, type ConfirmOptions } from '../../plugins';
+import type { SessionDataServiceClient, DomainRpcServiceClient } from '../../../../generated/balloons-client';
+import { useDialog } from '../Dialog/DialogContext';
 import './DomainsTab.css';
 
 interface DomainsTabProps {
@@ -23,6 +24,8 @@ interface DomainsTabProps {
   sessionId?: string;
   /** Session data service client for domain event subscriptions */
   sessionDataClient?: SessionDataServiceClient;
+  /** Domain RPC service client for calling @ws_expose methods */
+  domainRpcClient?: DomainRpcServiceClient;
   /** Whether the LLM is currently responding (streaming) */
   isLLMResponding?: boolean;
 }
@@ -31,14 +34,18 @@ export function DomainsTab({
   sendMessage,
   sessionId,
   sessionDataClient,
+  domainRpcClient,
   isLLMResponding = false,
 }: DomainsTabProps) {
   const { loaded, load, unload, isLoaded } = usePlugins();
+  const { confirm: appConfirm } = useDialog();
   const [available, setAvailable] = useState<PluginInfo[]>([]);
   const [loading, setLoading] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [activePlugin, setActivePlugin] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // Track which loaded plugins have newer builds available
+  const [pluginsWithUpdates, setPluginsWithUpdates] = useState<Set<string>>(new Set());
 
   // Handle escape key to exit fullscreen
   useEffect(() => {
@@ -56,6 +63,25 @@ export function DomainsTab({
     const plugins = await pluginRegistry.listAvailable();
     setAvailable(plugins);
   }, []);
+
+  // Check for updates to loaded plugins
+  const checkForUpdates = useCallback(async () => {
+    const updates = new Set<string>();
+    for (const plugin of loaded) {
+      const hasUpdate = await pluginRegistry.hasUpdate(plugin.id);
+      if (hasUpdate) {
+        updates.add(plugin.id);
+      }
+    }
+    setPluginsWithUpdates(updates);
+  }, [loaded]);
+
+  // Check for updates periodically (every 5 seconds in dev mode)
+  useEffect(() => {
+    checkForUpdates();
+    const interval = setInterval(checkForUpdates, 5000);
+    return () => clearInterval(interval);
+  }, [checkForUpdates]);
 
   // Fetch on mount
   useEffect(() => {
@@ -85,12 +111,21 @@ export function DomainsTab({
     }
   };
 
+  // Wrapper for confirm that adapts to plugin interface
+  const pluginConfirm = useCallback(async (options: ConfirmOptions): Promise<boolean> => {
+    return appConfirm({
+      ...options,
+      message: options.message,
+    });
+  }, [appConfirm]);
+
   // Create context for plugin components
   const createPluginContext = useCallback((): PluginContext => {
     return {
       sendMessage,
       sessionId,
       isLLMResponding,
+      confirm: pluginConfirm,
       // Wrap sessionDataClient to filter by domain
       subscribeToDomainEvents: sessionDataClient
         ? (domainId, callback) => {
@@ -107,8 +142,15 @@ export function DomainsTab({
             return sessionDataClient.requestDomainState(sessionId, domainId);
           }
         : undefined,
+      // Call @ws_expose methods on domains (preferred for UI-specific methods)
+      callDomainMethod: domainRpcClient
+        ? async (methodName, params) => {
+            if (!sessionId) return { error: 'No session' };
+            return domainRpcClient.callDomainMethod(methodName, sessionId, params);
+          }
+        : undefined,
     };
-  }, [sendMessage, sessionId, sessionDataClient, isLLMResponding]);
+  }, [sendMessage, sessionId, sessionDataClient, domainRpcClient, isLLMResponding, pluginConfirm]);
 
   // Handle loading a plugin
   const handleLoad = async (pluginId: string) => {
@@ -154,16 +196,25 @@ export function DomainsTab({
           {loaded.map(plugin => (
             <button
               key={plugin.id}
-              className={`domains-plugin-button ${activePlugin === plugin.id ? 'active' : ''}`}
+              className={`domains-plugin-button ${activePlugin === plugin.id ? 'active' : ''} ${pluginsWithUpdates.has(plugin.id) ? 'has-update' : ''}`}
               onClick={() => setActivePlugin(plugin.id)}
             >
               {plugin.tab?.icon && <span className="plugin-icon">{plugin.tab.icon}</span>}
               {plugin.tab?.label || plugin.name}
+              {pluginsWithUpdates.has(plugin.id) && (
+                <span className="plugin-update-dot" title="New build available - click ↻ to reload">●</span>
+              )}
               <span
                 className="plugin-reload"
                 onClick={(e) => {
                   e.stopPropagation();
                   handleReload(plugin.id);
+                  // Clear update indicator
+                  setPluginsWithUpdates(prev => {
+                    const next = new Set(prev);
+                    next.delete(plugin.id);
+                    return next;
+                  });
                 }}
                 title="Reload plugin (get latest version)"
               >

@@ -33,6 +33,7 @@ import {
   SupervisorStateServiceClient,
   LSPServiceClient,
   KanbanWebSocketServiceClient,
+  DomainRpcServiceClient,
 } from './client';
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -84,6 +85,7 @@ export class BalloonsClient {
   private _supervisor: SupervisorStateServiceClient | null = null;
   private _lsp: LSPServiceClient | null = null;
   private _kanban: KanbanWebSocketServiceClient | null = null;
+  private _domainRpc: DomainRpcServiceClient | null = null;
 
   constructor(url: string, options: BalloonsClientOptions = {}) {
     this.url = url;
@@ -218,6 +220,14 @@ export class BalloonsClient {
       throw new Error('Not connected. Call connect() first.');
     }
     return this._kanban;
+  }
+
+  /** Domain RPC service (call @ws_expose methods on domain plugins) */
+  get domainRpc(): DomainRpcServiceClient {
+    if (!this._domainRpc) {
+      throw new Error('Not connected. Call connect() first.');
+    }
+    return this._domainRpc;
   }
 
   // --- Connection Management ---
@@ -362,6 +372,7 @@ export class BalloonsClient {
     this._supervisor = new SupervisorStateServiceClient(this.ws);
     this._lsp = new LSPServiceClient(this.ws);
     this._kanban = new KanbanWebSocketServiceClient(this.ws);
+    this._domainRpc = new DomainRpcServiceClient(this.ws);
   }
 
   private clearClients(): void {
@@ -377,6 +388,7 @@ export class BalloonsClient {
     this._supervisor = null;
     this._lsp = null;
     this._kanban = null;
+    this._domainRpc = null;
     this._clientId = null;
   }
 
@@ -514,5 +526,6 @@ export {
   SupervisorStateServiceClient,
   LSPServiceClient,
   KanbanWebSocketServiceClient,
+  DomainRpcServiceClient,
 } from './client';
 export type { Unsubscribe } from './client';

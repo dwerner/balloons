@@ -1,0 +1,29 @@
+# Dependencies
+ui/node_modules/
+
+# Build outputs
+ui/dist/
+
+# Lock files (optional - some prefer to commit these)
+ui/bun.lock
+
+# IDE/Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime data
+*.log
+*.pid

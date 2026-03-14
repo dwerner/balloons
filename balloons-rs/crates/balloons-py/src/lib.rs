@@ -3373,6 +3373,26 @@ impl Browser {
     }
 }
 
+impl Drop for Browser {
+    fn drop(&mut self) {
+        // Try to clean up the browser when dropped
+        // We block on the async disconnect to ensure cleanup completes
+        let inner = Arc::clone(&self.inner);
+
+        // Block on the cleanup - this ensures the chromedriver is killed
+        // before the Python object is released
+        smol::block_on(async {
+            let mut guard = inner.lock().await;
+            if let Some(browser) = guard.as_mut() {
+                if browser.is_connected() {
+                    // Best effort cleanup - ignore errors
+                    let _ = browser.disconnect().await;
+                }
+            }
+        });
+    }
+}
+
 // =========================================================================
 // Git/File Browser
 // =========================================================================

@@ -5,8 +5,9 @@ Provides chess playing capabilities to Balloons sessions.
 
 from typing import Any, TYPE_CHECKING
 
-from ..base import Domain, DomainEvent, StatefulDomain, ToolDef, ToolResult
-from ..storage import JsonFileStorage, InMemoryStorage, CompositeStorage
+from ..base import DomainEvent, DecoratedStatefulDomain, ToolResult
+from ..decorators import llm_callable, Param
+from ..storage import JsonFileStorage
 from .engine import ChessEngine, Color
 from .events import (
     ChessGameStartedPayload,
@@ -34,7 +35,7 @@ def _get_storage() -> JsonFileStorage:
     return _storage
 
 
-class ChessDomain(StatefulDomain):
+class ChessDomain(DecoratedStatefulDomain):
     """Chess domain providing a complete chess playing experience.
 
     Tools:
@@ -62,85 +63,6 @@ class ChessDomain(StatefulDomain):
     @property
     def version(self) -> str:
         return "0.1.0"
-
-    def get_tools(self) -> list[ToolDef]:
-        return [
-            ToolDef(
-                name="chess_new_game",
-                description="Start a new chess game. Resets the board to the starting position.",
-                parameters={
-                    "type": "object",
-                    "properties": {},
-                    "required": [],
-                },
-            ),
-            ToolDef(
-                name="chess_move",
-                description="""Make a chess move. Use UCI notation (e.g., 'e2e4', 'g1f3', 'e7e8q' for promotion).
-
-Examples:
-- 'e2e4' - Move pawn from e2 to e4
-- 'g1f3' - Move knight from g1 to f3
-- 'e1g1' - Castle kingside (move king from e1 to g1)
-- 'e7e8q' - Promote pawn to queen""",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "move": {
-                            "type": "string",
-                            "description": "Move in UCI notation (e.g., 'e2e4', 'e7e8q')",
-                        },
-                    },
-                    "required": ["move"],
-                },
-            ),
-            ToolDef(
-                name="chess_show",
-                description="Show the current chess board position and game status.",
-                parameters={
-                    "type": "object",
-                    "properties": {},
-                    "required": [],
-                },
-            ),
-            ToolDef(
-                name="chess_legal_moves",
-                description="List all legal moves in the current position.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "from_square": {
-                            "type": "string",
-                            "description": "Optional: Only show moves from this square (e.g., 'e2')",
-                        },
-                    },
-                    "required": [],
-                },
-            ),
-            ToolDef(
-                name="chess_resign",
-                description="Resign the current game. The opponent wins.",
-                parameters={
-                    "type": "object",
-                    "properties": {},
-                    "required": [],
-                },
-            ),
-            ToolDef(
-                name="chess_set_position",
-                description="Set the board to a specific position using FEN notation.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "fen": {
-                            "type": "string",
-                            "description": "Position in FEN notation",
-                        },
-                    },
-                    "required": ["fen"],
-                },
-            ),
-        ]
 
     def get_prompt(self) -> str:
         """Load prompt from prompt.md file."""
@@ -185,30 +107,10 @@ Use chess_new_game to start, chess_move to play, chess_show to see the board."""
             ],
         }
 
-    async def handle_tool(
-        self,
-        tool_name: str,
-        params: dict[str, Any],
-        session: "Session",
-    ) -> ToolResult:
-        """Execute a chess tool."""
+    # --- LLM-callable tools ---
 
-        if tool_name == "chess_new_game":
-            return await self._handle_new_game(session)
-        elif tool_name == "chess_move":
-            return await self._handle_move(params, session)
-        elif tool_name == "chess_show":
-            return await self._handle_show(session)
-        elif tool_name == "chess_legal_moves":
-            return await self._handle_legal_moves(params, session)
-        elif tool_name == "chess_resign":
-            return await self._handle_resign(session)
-        elif tool_name == "chess_set_position":
-            return await self._handle_set_position(params, session)
-        else:
-            return ToolResult(f"Unknown chess tool: {tool_name}", is_error=True)
-
-    async def _handle_new_game(self, session: "Session") -> ToolResult:
+    @llm_callable(description="Start a new chess game. Resets the board to the starting position.")
+    async def chess_new_game(self, session: "Session" = None) -> ToolResult:
         """Start a new chess game."""
         engine = ChessEngine()
         _session_games[session.id] = engine
@@ -231,7 +133,19 @@ Use chess_new_game to start, chess_move to play, chess_show to see the board."""
 
         return ToolResult(result, events=[event])
 
-    async def _handle_move(self, params: dict[str, Any], session: "Session") -> ToolResult:
+    @llm_callable(
+        description="""Make a chess move. Use UCI notation (e.g., 'e2e4', 'g1f3', 'e7e8q' for promotion).
+
+Examples:
+- 'e2e4' - Move pawn from e2 to e4
+- 'g1f3' - Move knight from g1 to f3
+- 'e1g1' - Castle kingside (move king from e1 to g1)
+- 'e7e8q' - Promote pawn to queen""",
+        params={
+            "move": Param(str, "Move in UCI notation (e.g., 'e2e4', 'e7e8q')"),
+        }
+    )
+    async def chess_move(self, move: str, session: "Session" = None) -> ToolResult:
         """Make a chess move."""
         engine = _session_games.get(session.id)
         if engine is None:
@@ -240,7 +154,7 @@ Use chess_new_game to start, chess_move to play, chess_show to see the board."""
                 is_error=True,
             )
 
-        move_str = params.get("move", "").strip()
+        move_str = move.strip()
         if not move_str:
             return ToolResult("Move is required", is_error=True)
 
@@ -317,7 +231,8 @@ Use chess_new_game to start, chess_move to play, chess_show to see the board."""
             events=events,
         )
 
-    async def _handle_show(self, session: "Session") -> ToolResult:
+    @llm_callable(description="Show the current chess board position and game status.")
+    async def chess_show(self, session: "Session" = None) -> ToolResult:
         """Show the current board."""
         engine = _session_games.get(session.id)
         if engine is None:
@@ -353,7 +268,13 @@ Use chess_new_game to start, chess_move to play, chess_show to see the board."""
 
         return ToolResult(f"{board}\n\nFEN: {fen}\n{status}", events=[event])
 
-    async def _handle_legal_moves(self, params: dict[str, Any], session: "Session") -> ToolResult:
+    @llm_callable(
+        description="List all legal moves in the current position.",
+        params={
+            "from_square": Param(str, "Optional: Only show moves from this square (e.g., 'e2')", required=False),
+        }
+    )
+    async def chess_legal_moves(self, from_square: str | None = None, session: "Session" = None) -> ToolResult:
         """List legal moves."""
         engine = _session_games.get(session.id)
         if engine is None:
@@ -362,7 +283,7 @@ Use chess_new_game to start, chess_move to play, chess_show to see the board."""
                 is_error=True,
             )
 
-        from_square_str = params.get("from_square", "").strip()
+        from_square_str = (from_square or "").strip()
         from_sq = None
 
         if from_square_str:
@@ -386,7 +307,8 @@ Use chess_new_game to start, chess_move to play, chess_show to see the board."""
         else:
             return ToolResult(f"Legal moves ({len(moves)}): {', '.join(move_strs)}")
 
-    async def _handle_resign(self, session: "Session") -> ToolResult:
+    @llm_callable(description="Resign the current game. The opponent wins.")
+    async def chess_resign(self, session: "Session" = None) -> ToolResult:
         """Resign the current game."""
         engine = _session_games.get(session.id)
         if engine is None:
@@ -422,9 +344,15 @@ Use chess_new_game to start, chess_move to play, chess_show to see the board."""
             events=[event],
         )
 
-    async def _handle_set_position(self, params: dict[str, Any], session: "Session") -> ToolResult:
+    @llm_callable(
+        description="Set the board to a specific position using FEN notation.",
+        params={
+            "fen": Param(str, "Position in FEN notation"),
+        }
+    )
+    async def chess_set_position(self, fen: str, session: "Session" = None) -> ToolResult:
         """Set position from FEN."""
-        fen = params.get("fen", "").strip()
+        fen = fen.strip()
         if not fen:
             return ToolResult("FEN is required", is_error=True)
 
@@ -443,7 +371,7 @@ Use chess_new_game to start, chess_move to play, chess_show to see the board."""
         except ValueError as e:
             return ToolResult(f"Invalid FEN: {e}", is_error=True)
 
-    # StatefulDomain methods
+    # --- StatefulDomain methods ---
 
     async def get_state(self, session: "Session") -> dict[str, Any] | None:
         """Return current chess game state.

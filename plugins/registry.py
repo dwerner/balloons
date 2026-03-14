@@ -65,6 +65,21 @@ class DomainRegistry:
         self._domains: dict[str, Domain] = {}
         self._tool_to_domain: dict[str, str] = {}  # tool_name -> domain_id
         self._event_emitter = event_emitter
+        self._rpc_service: Any = None  # DomainRpcService for @ws_expose methods
+
+    def set_rpc_service(self, rpc_service: Any) -> None:
+        """Set the RPC service for domain method exposure.
+
+        When set, domains with @ws_expose methods will have them registered
+        for direct WebSocket RPC access.
+
+        Args:
+            rpc_service: DomainRpcService instance
+        """
+        self._rpc_service = rpc_service
+        # Register any already-loaded domains
+        for domain in self._domains.values():
+            rpc_service.register_domain(domain)
 
     def set_event_emitter(self, emitter: EventEmitter | None) -> None:
         """Set the event emitter callback.
@@ -207,6 +222,10 @@ class DomainRegistry:
         # Register domain
         self._domains[domain_id] = domain
 
+        # Register @ws_expose methods with RPC service
+        if self._rpc_service is not None:
+            self._rpc_service.register_domain(domain)
+
         # Call lifecycle hook
         domain.on_load(runtime)
 
@@ -235,6 +254,10 @@ class DomainRegistry:
                 )
 
         domain = self._domains[domain_id]
+
+        # Unregister @ws_expose methods from RPC service
+        if self._rpc_service is not None:
+            self._rpc_service.unregister_domain(domain_id)
 
         # Unregister tools
         for tool in domain.get_tools():

@@ -9,4 +9,5 @@ export {
   type PluginManifest,
   type PluginInfo,
   type DomainEventData,
+  type ConfirmOptions,
 } from './pluginRegistry';

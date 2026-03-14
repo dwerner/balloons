@@ -1,15 +1,11 @@
 /* SettingsTab styles */
 
 .settings-tab {
-  padding: 12px;
-  padding-bottom: 48px;  /* Extra padding at bottom for scroll */
   display: flex;
   flex-direction: column;
   gap: 16px;
-  flex: 1;
-  min-height: 0;  /* Allow flex shrinking */
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;  /* Smooth scroll on iOS */
+  padding: 12px;
+  padding-bottom: 48px;  /* Extra padding at bottom for scroll */
 }
 
 .settings-tab__disconnected {

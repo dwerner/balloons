@@ -154,13 +154,18 @@ def _extract_params(fn: Callable) -> list[ParamSpec]:
     """Extract parameter specifications from a function."""
     import inspect
 
-    hints = get_type_hints(fn)
+    # Use try/except because forward references may not resolve
+    try:
+        hints = get_type_hints(fn)
+    except NameError:
+        hints = getattr(fn, "__annotations__", {})
+
     sig = inspect.signature(fn)
     params = []
 
     for param_name, param in sig.parameters.items():
-        # Skip 'self' parameter
-        if param_name == "self":
+        # Skip 'self' and 'session' parameters
+        if param_name in ("self", "session"):
             continue
 
         type_hint = hints.get(param_name, Any)
@@ -196,7 +201,12 @@ def ws_expose(method: Callable = None, *, name: str = None):
     """
 
     def decorator(fn: Callable) -> Callable:
-        hints = get_type_hints(fn)
+        # Use try/except because forward references (like "Session") may not resolve
+        try:
+            hints = get_type_hints(fn)
+        except NameError:
+            # Forward references couldn't be resolved - use annotations directly
+            hints = getattr(fn, "__annotations__", {})
         params = _extract_params(fn)
 
         spec = MethodSpec(

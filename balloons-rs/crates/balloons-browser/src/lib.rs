@@ -235,8 +235,10 @@ impl Browser {
     /// Connect to the browser (starts webdriver and browser)
     pub async fn connect(&mut self) -> Result<(), BrowserError> {
         let surfer_config = self.config.to_surfer_config();
-        // Start the WebDriver process first (geckodriver/chromedriver)
-        start_driver(&surfer_config).await?;
+        // Only start the WebDriver process if we're not connecting to a remote one
+        if self.config.webdriver_url.is_none() {
+            start_driver(&surfer_config).await?;
+        }
         // Then connect to it
         let surfer = WebDriverSurfer::connect(&surfer_config).await?;
         self.surfer = Some(surfer);
@@ -248,8 +250,10 @@ impl Browser {
         if let Some(surfer) = self.surfer.take() {
             surfer.close().await?;
         }
-        // Stop the WebDriver process
-        stop_driver().await?;
+        // Only stop the WebDriver process if we started it locally
+        if self.config.webdriver_url.is_none() {
+            stop_driver().await?;
+        }
         Ok(())
     }
 

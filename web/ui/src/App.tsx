@@ -3769,6 +3769,7 @@ function AppContent() {
             <DomainsTab
               sessionId={selectedSessionId || undefined}
               sessionDataClient={connectionState === 'connected' ? clientRef.current?.sessionData : undefined}
+              domainRpcClient={connectionState === 'connected' ? clientRef.current?.domainRpc : undefined}
               isLLMResponding={selectedSession?.isStreaming ?? false}
               sendMessage={(msg) => {
                 if (selectedSessionId && clientRef.current) {

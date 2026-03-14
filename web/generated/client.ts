@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-03-13T12:59:14.842917
+// Generated: 2026-03-14T15:32:21.485547
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -5396,6 +5396,83 @@ export class KanbanWebSocketServiceClient implements KanbanWebSocketService {
 
   tasksReordered(callback: (data: Types.TasksReorderedEvent) => void): Unsubscribe {
     return this.subscribe('tasksReordered', callback);
+  }
+
+}
+
+/**
+ * WebSocket RPC service for domain plugin methods.
+ * 
+ * This service dynamically exposes domain methods marked with @ws_expose.
+ * Methods are registered when domains are loaded and unregistered when unloaded.
+ */
+export interface DomainRpcService {
+  /**
+   * Call a domain method by wire name.
+   * 
+   * This is the generic dispatch endpoint. The generated client will also
+   * create typed methods for each registered domain method.
+   * 
+   * Args:
+   * method_name: The camelCase wire name of the method
+   * session_id: The session ID for context
+   * params: Method parameters
+   * 
+   * Returns:
+   * {result: str} on success, {error: str} on failure
+   */
+  callDomainMethod(methodName: string, sessionId: string, params?: Record<string, unknown> | null): Promise<Record<string, unknown>>;
+
+}
+
+export class DomainRpcServiceClient implements DomainRpcService {
+  private ws: WebSocket;
+  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
+  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
+
+  constructor(ws: WebSocket) {
+    this.ws = ws;
+    this.ws.addEventListener('message', this.handleMessage.bind(this));
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    const msg = JSON.parse(event.data);
+    if (msg.id && this.pending.has(msg.id)) {
+      const { resolve, reject } = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      if (msg.error) {
+        reject(new Error(msg.error.message));
+      } else {
+        resolve(msg.result);
+      }
+    } else if (msg.event) {
+      const handlers = this.eventHandlers.get(msg.event);
+      if (handlers) {
+        handlers.forEach(h => h(msg.data));
+      }
+    }
+  }
+
+  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const id = generateRequestId();
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, new Set());
+    }
+    this.eventHandlers.get(event)!.add(callback);
+    return () => {
+      this.eventHandlers.get(event)?.delete(callback);
+    };
+  }
+
+  async callDomainMethod(methodName: string, sessionId: string, params?: Record<string, unknown> | null): Promise<Record<string, unknown>> {
+    return this.call('callDomainMethod', { methodName: methodName, sessionId: sessionId, params: params });
   }
 
 }

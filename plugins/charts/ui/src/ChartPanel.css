@@ -1,0 +1,411 @@
+/**
+ * ChartPanel Styles
+ */
+
+.chart-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background-color: #1a1a1a;
+  color: #e0e0e0;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+/* Empty state */
+.chart-panel--empty {
+  justify-content: center;
+  align-items: center;
+}
+
+.chart-panel__empty-state {
+  text-align: center;
+  color: #666;
+}
+
+.chart-panel__empty-icon {
+  font-size: 48px;
+  display: block;
+  margin-bottom: 16px;
+}
+
+.chart-panel__empty-hint {
+  font-size: 12px;
+  color: #555;
+}
+
+.chart-panel__empty-hint code {
+  background-color: #2a2a2a;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'SF Mono', Consolas, monospace;
+}
+
+.chart-panel__create-button {
+  margin-top: 16px;
+  padding: 8px 16px;
+  background-color: #4a7c9c;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.15s ease;
+}
+
+.chart-panel__create-button:hover:not(:disabled) {
+  background-color: #5a8cac;
+}
+
+.chart-panel__create-button:disabled {
+  background-color: #3a3a3a;
+  color: #666;
+  cursor: not-allowed;
+}
+
+/* Mode tabs (Browse / View) */
+.chart-panel__mode-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px;
+  background-color: #252525;
+  border-bottom: 1px solid #333;
+  flex-shrink: 0;
+}
+
+.chart-panel__mode-tab {
+  padding: 8px 16px;
+  background-color: #2a2a2a;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #999;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.chart-panel__mode-tab:hover:not(:disabled) {
+  background-color: #333;
+  color: #ccc;
+}
+
+.chart-panel__mode-tab--active {
+  background-color: #3a5a7a;
+  border-color: #4a7c9c;
+  color: #fff;
+}
+
+.chart-panel__mode-tab:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.chart-panel__mode-spacer {
+  flex: 1;
+}
+
+.chart-panel__sync-button {
+  padding: 8px 12px;
+  background-color: #2a2a2a;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #999;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.chart-panel__sync-button:hover {
+  background-color: #333;
+  color: #ccc;
+}
+
+/* Browse mode - grid of cards */
+.chart-panel__browse {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+}
+
+.chart-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.chart-panel__card {
+  position: relative;
+  background-color: #252525;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.chart-panel__card:hover {
+  background-color: #2a2a2a;
+  border-color: #444;
+  transform: translateY(-2px);
+}
+
+.chart-panel__card--active {
+  border-color: #4a7c9c;
+  box-shadow: 0 0 0 1px #4a7c9c;
+}
+
+.chart-panel__card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.chart-panel__card-icon {
+  font-size: 20px;
+}
+
+.chart-panel__card-type {
+  font-size: 11px;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.chart-panel__card-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: #e0e0e0;
+  margin-bottom: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chart-panel__card-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #666;
+  margin-bottom: 12px;
+}
+
+.chart-panel__card-id {
+  font-family: 'SF Mono', Consolas, monospace;
+  color: #555;
+}
+
+/* Delete button on card */
+.chart-panel__card-delete {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 4px 8px;
+  background-color: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: #666;
+  font-size: 14px;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.15s ease;
+}
+
+.chart-panel__card:hover .chart-panel__card-delete {
+  opacity: 1;
+}
+
+.chart-panel__card-delete:hover {
+  background-color: #4a2a2a;
+  border-color: #7a3a3a;
+  color: #ff6666;
+}
+
+/* Delete button in view mode */
+.chart-panel__delete-button {
+  margin-left: 12px;
+  padding: 8px 16px;
+  background-color: #3a2a2a;
+  border: 1px solid #5a3a3a;
+  border-radius: 4px;
+  color: #cc6666;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.chart-panel__delete-button:hover {
+  background-color: #4a3a3a;
+  border-color: #7a4a4a;
+  color: #ff6666;
+}
+
+/* View mode */
+.chart-panel__view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.chart-panel__selector {
+  padding: 8px 16px;
+  background-color: #252525;
+  border-bottom: 1px solid #333;
+  flex-shrink: 0;
+}
+
+.chart-panel__select {
+  width: 100%;
+  max-width: 400px;
+  padding: 8px 12px;
+  background-color: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.chart-panel__select:hover {
+  border-color: #555;
+}
+
+.chart-panel__select:focus {
+  outline: none;
+  border-color: #4a7c9c;
+}
+
+/* Chart content area */
+.chart-panel__content {
+  flex: 1;
+  padding: 16px;
+  overflow: auto;
+  min-height: 0;
+}
+
+.chart-panel__no-selection {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100%;
+  color: #555;
+  font-style: italic;
+}
+
+/* Chart info bar */
+.chart-panel__info {
+  display: flex;
+  gap: 16px;
+  padding: 8px 12px;
+  background-color: #252525;
+  border-top: 1px solid #333;
+  font-size: 11px;
+  color: #666;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.chart-panel__info span {
+  display: flex;
+  align-items: center;
+}
+
+/* Legacy tab bar styles (kept for compatibility) */
+.chart-panel__tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px;
+  background-color: #252525;
+  border-bottom: 1px solid #333;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.chart-panel__tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background-color: #2a2a2a;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #999;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.chart-panel__tab:hover {
+  background-color: #333;
+  color: #ccc;
+}
+
+.chart-panel__tab--active {
+  background-color: #3a3a3a;
+  border-color: #555;
+  color: #fff;
+}
+
+.chart-panel__tab-icon {
+  font-size: 14px;
+}
+
+.chart-panel__tab-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chart-panel__tab-count {
+  font-size: 11px;
+  color: #666;
+  background-color: #222;
+  padding: 1px 5px;
+  border-radius: 8px;
+}
+
+.chart-panel__tab--active .chart-panel__tab-count {
+  background-color: #444;
+  color: #aaa;
+}
+
+/* Chart view styles */
+.chart-view {
+  background-color: #1e1e1e;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.chart-view--mini {
+  padding: 4px;
+}
+
+/* Recharts tooltip customization */
+.recharts-tooltip-wrapper {
+  z-index: 1000;
+}
+
+.recharts-default-tooltip {
+  background-color: #1a1a1a !important;
+  border: 1px solid #333 !important;
+  border-radius: 4px;
+}
+
+.recharts-tooltip-label {
+  color: #fff;
+  font-weight: 500;
+}
+
+.recharts-tooltip-item {
+  color: #ccc;
+}
+
+/* Legend styling */
+.recharts-legend-wrapper {
+  padding-top: 8px;
+}
+
+.recharts-legend-item-text {
+  color: #ccc !important;
+}

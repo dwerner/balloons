@@ -24,18 +24,25 @@ The registry implements the ToolProvider and PromptProvider protocols,
 allowing it to integrate with the main Balloons tool/prompt system.
 """
 
-from .base import Domain, ToolDef, DomainEvent, ToolResult, StatefulDomain
+from .base import Domain, ToolDef, DomainEvent, ToolResult, StatefulDomain, DecoratedDomain, DecoratedStatefulDomain
 from .registry import DomainRegistry, get_registry, set_registry
 from .providers import ToolProvider, PromptProvider, ToolAndPromptProvider
 from .storage import DomainStorage, JsonFileStorage, InMemoryStorage, CompositeStorage
+from .decorators import llm_callable, Param, collect_llm_tools
 
 __all__ = [
     # Core types
     "Domain",
     "StatefulDomain",
+    "DecoratedDomain",
+    "DecoratedStatefulDomain",
     "ToolDef",
     "DomainEvent",
     "ToolResult",
+    # Decorators
+    "llm_callable",
+    "Param",
+    "collect_llm_tools",
     # Registry
     "DomainRegistry",
     "get_registry",

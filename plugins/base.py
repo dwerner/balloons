@@ -244,3 +244,132 @@ class StatefulDomain(Domain):
             State dict, or None if no state available
         """
         return None
+
+
+def _dispatch_llm_tool(domain: Any, tool_name: str, params: dict[str, Any], session: "Session") -> "ToolResult":
+    """Shared dispatch logic for decorated domains.
+
+    Returns the coroutine to await, or raises ValueError if tool not found.
+    """
+    # Look for a method with matching _llm_callable_spec
+    for attr_name in dir(domain.__class__):
+        if attr_name.startswith("_"):
+            continue
+
+        attr = getattr(domain.__class__, attr_name, None)
+        if attr is None:
+            continue
+
+        if hasattr(attr, "_llm_callable_spec"):
+            spec = attr._llm_callable_spec
+            if spec.name == tool_name:
+                # Get the bound method
+                method = getattr(domain, attr_name)
+                return method, params
+
+    raise ValueError(f"Unknown tool: {tool_name}")
+
+
+class DecoratedDomain(Domain):
+    """Domain that uses @llm_callable decorators for tools.
+
+    Subclass this instead of Domain to use decorator-based tool definitions.
+    Tools are automatically collected from @llm_callable methods, and
+    handle_tool() dispatches to the appropriate method.
+
+    Example:
+        from plugins.base import DecoratedDomain, ToolResult
+        from plugins.decorators import llm_callable, Param
+
+        class MyDomain(DecoratedDomain):
+            @property
+            def id(self) -> str:
+                return "my_domain"
+
+            @property
+            def name(self) -> str:
+                return "My Domain"
+
+            @llm_callable
+            async def my_tool(self, value: str, session: "Session") -> ToolResult:
+                '''Do something with value.'''
+                return ToolResult(f"Got: {value}")
+
+    No need to override get_tools() or handle_tool() - they're automatic!
+    """
+
+    def get_tools(self) -> list[ToolDef]:
+        """Automatically collect tools from @llm_callable methods."""
+        from .decorators import collect_llm_tools
+        return collect_llm_tools(self.__class__)
+
+    async def handle_tool(
+        self,
+        tool_name: str,
+        params: dict[str, Any],
+        session: "Session",
+    ) -> ToolResult:
+        """Automatically dispatch to @llm_callable handler."""
+        try:
+            method, params = _dispatch_llm_tool(self, tool_name, params, session)
+        except ValueError as e:
+            return ToolResult(str(e), is_error=True)
+
+        try:
+            return await method(session=session, **params)
+        except TypeError as e:
+            # Handle missing required arguments gracefully
+            error_msg = str(e)
+            if "missing" in error_msg and "argument" in error_msg:
+                return ToolResult(f"Missing required parameter: {error_msg}", is_error=True)
+            raise  # Re-raise other TypeErrors
+
+
+class DecoratedStatefulDomain(StatefulDomain):
+    """StatefulDomain that uses @llm_callable decorators for tools.
+
+    Same as DecoratedDomain but extends StatefulDomain for domains
+    that need state persistence.
+
+    Example:
+        class ChartsDomain(DecoratedStatefulDomain):
+            @llm_callable
+            async def chart_create(self, name: str, session: "Session") -> ToolResult:
+                '''Create a chart.'''
+                ...
+
+            async def get_state(self, session: "Session") -> dict | None:
+                ...
+
+            async def save_state(self, session: "Session") -> dict:
+                ...
+
+            async def load_state(self, session: "Session", state: dict) -> None:
+                ...
+    """
+
+    def get_tools(self) -> list[ToolDef]:
+        """Automatically collect tools from @llm_callable methods."""
+        from .decorators import collect_llm_tools
+        return collect_llm_tools(self.__class__)
+
+    async def handle_tool(
+        self,
+        tool_name: str,
+        params: dict[str, Any],
+        session: "Session",
+    ) -> ToolResult:
+        """Automatically dispatch to @llm_callable handler."""
+        try:
+            method, params = _dispatch_llm_tool(self, tool_name, params, session)
+        except ValueError as e:
+            return ToolResult(str(e), is_error=True)
+
+        try:
+            return await method(session=session, **params)
+        except TypeError as e:
+            # Handle missing required arguments gracefully
+            error_msg = str(e)
+            if "missing" in error_msg and "argument" in error_msg:
+                return ToolResult(f"Missing required parameter: {error_msg}", is_error=True)
+            raise  # Re-raise other TypeErrors

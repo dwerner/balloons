@@ -84,6 +84,10 @@ class Session:
     message_queue: MessageQueue = field(default_factory=MessageQueue)
     # Session-specific prompt files (absolute paths to files included in system prompt)
     prompt_files: list[str] = field(default_factory=list)
+    # Loaded domain plugins for this session
+    # Domains listed here are auto-loaded when the session is activated
+    # Forks inherit the parent's loaded domains
+    loaded_domains: list[str] = field(default_factory=list)
     # Note: Links are stored as LinkBlock content blocks in messages (turn-based).
     # The legacy `links` field has been removed - old sessions with links data
     # will have those links ignored (they were never actively used).

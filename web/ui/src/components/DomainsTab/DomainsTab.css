@@ -74,6 +74,24 @@
   color: #fff;
 }
 
+/* Update indicator (red dot) */
+.plugin-update-dot {
+  color: #ff4444;
+  font-size: 0.6rem;
+  margin-left: -2px;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.domains-plugin-button.has-update .plugin-reload {
+  background: rgba(255, 100, 100, 0.3);
+  color: #ff8;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
 .plugin-close:hover {
   background: rgba(255, 0, 0, 0.3);
   color: #fff;

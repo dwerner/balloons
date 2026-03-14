@@ -40,7 +40,11 @@ def get_domain_tools() -> list[dict]:
         List of tool definitions in OpenAI function calling format
     """
     registry = get_registry()
-    return registry.get_all_tools()
+    tools = registry.get_all_tools()
+    print(f"[get_domain_tools] Loaded domains: {registry.loaded_domains}, returning {len(tools)} tools")
+    if tools:
+        print(f"[get_domain_tools] Tool names: {[t['function']['name'] for t in tools]}")
+    return tools
 
 
 def get_domain_tool_names() -> set[str]:

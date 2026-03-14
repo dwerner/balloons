@@ -371,6 +371,7 @@ def main():
         import service.task_state_service  # TaskStateService
         import service.session_data_service  # SessionDataService
         import service.image_service  # ImageService
+        import plugins.rpc_service  # DomainRpcService - for plugin @ws_expose methods
     except ImportError as e:
         print(f"Warning: Could not import service modules: {e}")
 

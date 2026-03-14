@@ -9,6 +9,15 @@ import React from 'react';
 import ReactDOM from 'react-dom';
 import * as jsxDevRuntime from 'react/jsx-dev-runtime';
 
+// Confirm dialog options (matches app-level DialogContext)
+export interface ConfirmOptions {
+  title?: string;
+  message: string;
+  confirmText?: string;
+  cancelText?: string;
+  variant?: 'default' | 'danger' | 'warning' | 'success';
+}
+
 // Plugin context passed to plugin components
 export interface PluginContext {
   sendMessage?: (message: string) => void;
@@ -19,6 +28,17 @@ export interface PluginContext {
   ) => () => void;
   requestDomainState?: (domainId: string) => Promise<boolean>;
   isLLMResponding?: boolean;
+  /** Show a confirmation dialog, returns true if confirmed */
+  confirm?: (options: ConfirmOptions) => Promise<boolean>;
+  /**
+   * Call a @ws_expose method on a domain plugin.
+   * Use this for methods that return structured data for the UI.
+   * The methodName is the camelCase wire name (e.g., "getBrowserHosts" for get_browser_hosts).
+   */
+  callDomainMethod?: (
+    methodName: string,
+    params?: Record<string, unknown> | null
+  ) => Promise<Record<string, unknown>>;
 }
 
 export interface DomainEventData {
@@ -231,6 +251,37 @@ class PluginRegistryImpl {
    */
   isLoaded(pluginId: string): boolean {
     return this.plugins.has(pluginId);
+  }
+
+  /**
+   * Get the builtAt timestamp for a loaded plugin
+   */
+  getLoadedBuiltAt(pluginId: string): string | undefined {
+    return this.plugins.get(pluginId)?.info.manifest.builtAt;
+  }
+
+  /**
+   * Check if a newer build is available for a loaded plugin
+   */
+  async hasUpdate(pluginId: string): Promise<boolean> {
+    const loaded = this.plugins.get(pluginId);
+    if (!loaded) return false;
+
+    try {
+      const response = await fetch(`/api/plugins/${pluginId}/manifest.json`);
+      if (!response.ok) return false;
+      const manifest = await response.json();
+
+      const loadedAt = loaded.info.manifest.builtAt;
+      const availableAt = manifest.builtAt;
+
+      if (loadedAt && availableAt) {
+        return new Date(availableAt) > new Date(loadedAt);
+      }
+    } catch {
+      return false;
+    }
+    return false;
   }
 
   /**

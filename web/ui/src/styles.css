@@ -1190,11 +1190,29 @@ html.keyboard-visible .turns-container {
  * scrolling via useAutoScroll hook. Having two nested scrollable containers
  * broke the "pause autoscroll when user scrolls up" behavior (Bug #12). */
 .turns-container {
+  position: relative;
+  display: flex;
+  flex-direction: column;
   flex: 1;
   overflow: hidden; /* Child container handles scroll */
   padding: 6px;
   padding-bottom: 6px; /* Small padding at bottom */
   min-height: 0;
+}
+
+/* Direct children of turns-container should fill and scroll.
+ * Children with their own scroll handling (streaming-turns-view-wrapper)
+ * override overflow via their own CSS. */
+.turns-container > * {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* StreamingTurnsView has its own internal scroll container, so it needs
+ * overflow:hidden on the wrapper to prevent double scrollbars */
+.turns-container > .streaming-turns-view-wrapper {
+  overflow: hidden;
 }
 
 .turn {

@@ -617,6 +617,24 @@ class SessionDataService:
         self._stream_state: "StreamState | None" = stream_state
         # Track background history loading tasks: session_id -> task
         self._history_tasks: dict[str, asyncio.Task] = {}
+        # Reference to SessionManagerService for getting sessions and emitting events
+        # This creates a bidirectional relationship: SessionManagerService calls us via
+        # observer pattern, and we call it back for session lookup and event emission.
+        self._manager: Any = None  # SessionManagerService - set via set_manager()
+        self._session_manager: Any = None  # Alias for _manager, used for event emission
+
+    def set_manager(self, manager: Any) -> None:
+        """Set the SessionManagerService reference.
+
+        This creates a bidirectional relationship:
+        - SessionManagerService calls SessionDataService via observer pattern
+        - SessionDataService calls back for session lookup and event emission
+
+        Args:
+            manager: The SessionManagerService instance
+        """
+        self._manager = manager
+        self._session_manager = manager  # Alias for event emission
 
     def set_session_loader(self, loader: SessionLoaderCallback) -> None:
         """Set the session loader callback.
@@ -2156,28 +2174,58 @@ class SessionDataService:
         from plugins.registry import get_registry
         from plugins.events import _convert_keys_to_camel
 
+        debug_log.info(
+            f"request_domain_state: domain={domain_id}, session={session_id[:8]}",
+            category=Category.API,
+        )
+
         # Get the session (needed for the registry call)
         if self._manager is None:
+            debug_log.warning("request_domain_state: no manager", category=Category.API)
             return False
 
-        session = await self._manager.get(session_id)
+        # Use _manager's internal session manager to get the session
+        session = self._manager._manager.get_session(session_id)
         if session is None:
+            debug_log.warning(f"request_domain_state: session not found: {session_id[:8]}", category=Category.API)
             return False
 
         # Get raw state from the registry
         registry = get_registry()
+
+        # Auto-load the domain if not loaded
+        if domain_id not in registry.loaded_domains:
+            debug_log.info(f"request_domain_state: auto-loading domain {domain_id}", category=Category.API)
+            try:
+                registry.load_domain(domain_id)
+            except Exception as e:
+                debug_log.error(f"request_domain_state: failed to load domain {domain_id}: {e}", category=Category.API)
+                return False  # Domain doesn't exist or failed to load
+
         state = await registry.get_state(domain_id, session)
+        debug_log.info(
+            f"request_domain_state: got state for {domain_id}, has_state={state is not None}",
+            category=Category.API,
+            details={"state_keys": list(state.keys()) if state else None},
+        )
 
         if state is None:
             return False
 
         # Emit via session manager, wrapping state in a state_sync event
         if self._session_manager:
+            event_type = f"{domain_id}_state_sync"
+            camel_state = _convert_keys_to_camel(state)
+            debug_log.info(
+                f"request_domain_state: emitting {event_type}",
+                category=Category.API,
+                details={"data_keys": list(camel_state.keys()) if camel_state else None},
+            )
             await self._session_manager.emit_domain_event(
                 domain_id=domain_id,
-                event_type=f"{domain_id}_state_sync",
+                event_type=event_type,
                 session_id=session_id,
-                data=_convert_keys_to_camel(state),
+                data=camel_state,
             )
             return True
 
@@ -2938,11 +2986,20 @@ class SessionDataService:
         Emits domainEvent WebSocket event to DELTA layer subscribers.
         This bridges domain plugins (like chess) to the frontend.
         """
-        print(f"[SessionDataService] on_domain_event: {event.domain_id}/{event.event_type} for session {event.session_id}")
         session_id = event.session_id
         subscribers = self._subscription_manager.get_clients_for_layer(session_id, Layer.DELTA)
-        print(f"[SessionDataService] Found {len(subscribers)} subscribers for DELTA layer")
+
+        debug_log.info(
+            f"on_domain_event: {event.domain_id}/{event.event_type} for session {session_id[:8]}, subscribers={len(subscribers)}",
+            category=Category.API,
+            details={"data_keys": list(event.data.keys()) if event.data else None},
+        )
+
         if not subscribers:
+            debug_log.warning(
+                f"on_domain_event: no DELTA subscribers for session {session_id[:8]}",
+                category=Category.API,
+            )
             return
 
         event_data = {
