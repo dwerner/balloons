@@ -8,7 +8,7 @@
  * - Browser automation status
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import './GroceryTab.css';
 
 // Plugin context from host
@@ -87,24 +87,30 @@ export function GroceryTab({
   const [browserStatus, setBrowserStatus] = useState<'stopped' | 'running' | 'starting'>('stopped');
   const [browserHosts, setBrowserHosts] = useState<BrowserHost[]>([]);
   const [selectedHost, setSelectedHost] = useState('local');
+  const initializedRef = useRef(false);
 
-  // Request initial state on mount
+  // Request initial state AND load browser hosts on mount
+  // The domain must be loaded (via requestDomainState) before calling domain methods
   useEffect(() => {
-    if (requestDomainState && sessionId) {
-      requestDomainState('grocery').catch(console.error);
-    }
-  }, [requestDomainState, sessionId]);
+    // Only run once
+    if (initializedRef.current) return;
+    if (!sessionId || !callDomainMethod) return;
 
-  // Load browser hosts on mount using @ws_expose method
-  useEffect(() => {
-    const loadHosts = async () => {
-      console.log('[GroceryTab] loadHosts called, callDomainMethod:', !!callDomainMethod);
-      if (!callDomainMethod) return;
+    initializedRef.current = true;
+
+    const initDomain = async () => {
+      // First, trigger domain loading via state request
+      if (requestDomainState) {
+        console.log('[GroceryTab] Requesting domain state to trigger domain loading...');
+        await requestDomainState('grocery');
+      }
+
+      // Then load browser hosts via @ws_expose method
       try {
-        // Call the @ws_expose method which returns JSON directly
         console.log('[GroceryTab] Calling getBrowserHosts...');
         const result = await callDomainMethod('getBrowserHosts', {});
         console.log('[GroceryTab] getBrowserHosts result:', result);
+
         if (result && Array.isArray(result)) {
           const hosts: BrowserHost[] = result.map((h: any) => ({
             name: h.name,
@@ -120,15 +126,17 @@ export function GroceryTab({
           if (current) {
             setSelectedHost(current.name);
           }
+        } else if (result && typeof result === 'object' && 'error' in result) {
+          console.error('[GroceryTab] getBrowserHosts error:', result.error);
         } else {
-          console.log('[GroceryTab] Result is not an array:', typeof result);
+          console.log('[GroceryTab] Result is not an array:', typeof result, result);
         }
       } catch (e) {
         console.error('[GroceryTab] Failed to load hosts:', e);
       }
     };
-    loadHosts();
-  }, [callDomainMethod]);
+    initDomain();
+  }, [requestDomainState, sessionId, callDomainMethod]);
 
   // Subscribe to domain events
   useEffect(() => {
@@ -154,16 +162,36 @@ export function GroceryTab({
     });
   }, [subscribeToDomainEvents, sessionId]);
 
-  // Set store - ask LLM to call the tool
-  const handleSetStore = () => {
-    if (!sendMessage) return;
-    sendMessage(`grocery_set_store(store_id="${storeId}", banner="${banner}")`);
+  // Set store - call directly via @ws_expose
+  const handleSetStore = async () => {
+    if (!callDomainMethod) {
+      setError('Domain method not available');
+      return;
+    }
+
+    try {
+      const result = await callDomainMethod('grocerySetStore', {
+        store_id: storeId,
+        banner: banner,
+      });
+      console.log('[GroceryTab] grocerySetStore result:', result);
+      // Refresh state after setting store
+      if (requestDomainState) {
+        await requestDomainState('grocery');
+      }
+    } catch (e) {
+      console.error('[GroceryTab] Failed to set store:', e);
+      setError(`Failed to set store: ${e}`);
+    }
   };
 
-  // Search products - ask LLM to use browser search
-  const handleSearch = () => {
+  // Search products - call directly via @ws_expose
+  const handleSearch = async () => {
     if (!searchQuery.trim()) return;
-    if (!sendMessage) return;
+    if (!callDomainMethod) {
+      setError('Domain method not available');
+      return;
+    }
 
     if (browserStatus !== 'running') {
       setError('Start the browser first to search products');
@@ -172,9 +200,19 @@ export function GroceryTab({
 
     setIsSearching(true);
     setError(null);
-    sendMessage(`grocery_browser_search(query="${searchQuery}")`);
-    // Note: isSearching will be cleared when we get a response
-    setTimeout(() => setIsSearching(false), 5000);
+
+    try {
+      const result = await callDomainMethod('groceryBrowserSearch', {
+        query: searchQuery,
+      });
+      console.log('[GroceryTab] groceryBrowserSearch result:', result);
+      // Result contains URL and title after search
+    } catch (e) {
+      console.error('[GroceryTab] Failed to search:', e);
+      setError(`Failed to search: ${e}`);
+    } finally {
+      setIsSearching(false);
+    }
   };
 
   // Set browser host via @ws_expose method
@@ -192,25 +230,50 @@ export function GroceryTab({
     }
   };
 
-  // Start browser - ask LLM to call the tool
-  const handleStartBrowser = () => {
-    if (!sendMessage) return;
+  // Start browser - call @ws_expose method directly
+  const handleStartBrowser = async () => {
+    if (!callDomainMethod) {
+      setError('Domain method not available');
+      return;
+    }
+
     setBrowserStatus('starting');
     setError(null);
-    sendMessage('grocery_browser_start()');
-    // Status will be updated via domain events or we timeout
-    setTimeout(() => {
-      if (browserStatus === 'starting') {
-        setBrowserStatus('running');
+
+    try {
+      const result = await callDomainMethod('groceryBrowserStart', {});
+      console.log('[GroceryTab] groceryBrowserStart result:', result);
+
+      // Check for ToolResult format (has 'result' key) or error
+      if (result && typeof result === 'object') {
+        if ('error' in result) {
+          setError(result.error as string);
+          setBrowserStatus('stopped');
+        } else {
+          // Success
+          setBrowserStatus('running');
+        }
       }
-    }, 10000);
+    } catch (e) {
+      console.error('[GroceryTab] Failed to start browser:', e);
+      setError(`Failed to start browser: ${e}`);
+      setBrowserStatus('stopped');
+    }
   };
 
-  // Stop browser - ask LLM to call the tool
-  const handleStopBrowser = () => {
-    if (!sendMessage) return;
-    sendMessage('grocery_browser_stop()');
-    setBrowserStatus('stopped');
+  // Stop browser - call @ws_expose method directly
+  const handleStopBrowser = async () => {
+    if (!callDomainMethod) return;
+
+    try {
+      const result = await callDomainMethod('groceryBrowserStop', {});
+      console.log('[GroceryTab] groceryBrowserStop result:', result);
+      setBrowserStatus('stopped');
+    } catch (e) {
+      console.error('[GroceryTab] Failed to stop browser:', e);
+      // Still mark as stopped even on error
+      setBrowserStatus('stopped');
+    }
   };
 
   return (
@@ -354,20 +417,47 @@ export function GroceryTab({
         <h3>Quick Actions</h3>
         <div className="grocery-quick-actions">
           <button
-            onClick={() => sendMessage?.('grocery_cart_show')}
-            disabled={isLLMResponding}
+            onClick={async () => {
+              if (!callDomainMethod) return;
+              try {
+                const result = await callDomainMethod('groceryCartShow', {});
+                console.log('[GroceryTab] Cart:', result);
+                // TODO: Display cart in UI rather than console
+              } catch (e) {
+                setError(`Failed to show cart: ${e}`);
+              }
+            }}
+            disabled={!callDomainMethod}
           >
             Show Cart
           </button>
           <button
-            onClick={() => sendMessage?.('grocery_cart_export')}
-            disabled={isLLMResponding}
+            onClick={async () => {
+              if (!callDomainMethod) return;
+              try {
+                const result = await callDomainMethod('groceryCartExport', {});
+                console.log('[GroceryTab] Export:', result);
+                // TODO: Display export in a modal
+              } catch (e) {
+                setError(`Failed to export cart: ${e}`);
+              }
+            }}
+            disabled={!callDomainMethod}
           >
             Export Cart
           </button>
           <button
-            onClick={() => sendMessage?.('grocery_browser_screenshot')}
-            disabled={isLLMResponding || browserStatus !== 'running'}
+            onClick={async () => {
+              if (!callDomainMethod) return;
+              try {
+                const result = await callDomainMethod('groceryBrowserScreenshot', {});
+                console.log('[GroceryTab] Screenshot:', result);
+                // Result contains path to screenshot file
+              } catch (e) {
+                setError(`Failed to take screenshot: ${e}`);
+              }
+            }}
+            disabled={!callDomainMethod || browserStatus !== 'running'}
           >
             Screenshot
           </button>

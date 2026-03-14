@@ -2231,6 +2231,37 @@ class SessionDataService:
 
         return False
 
+    @ws_expose
+    async def reload_domain(self, domain_id: str) -> dict:
+        """Reload a domain plugin, picking up code changes.
+
+        This is useful for development - when you modify domain code (like adding
+        @ws_expose decorators), call this to reload without restarting the server.
+
+        Args:
+            domain_id: The domain ID (e.g., "grocery")
+
+        Returns:
+            {"success": True, "methods": [...]} on success, {"error": "..."} on failure
+        """
+        from plugins.registry import get_registry
+
+        debug_log.info(
+            f"reload_domain: {domain_id}",
+            category=Category.API,
+        )
+
+        registry = get_registry()
+
+        try:
+            domain = registry.reload_domain(domain_id)
+            # Return list of registered methods
+            methods = [m.wire_name for m in type(domain)._ws_service_spec.methods] if hasattr(type(domain), '_ws_service_spec') else []
+            return {"success": True, "domain": domain_id, "methods": methods}
+        except Exception as e:
+            debug_log.error(f"reload_domain failed: {domain_id}: {e}", category=Category.API)
+            return {"error": str(e)}
+
     # --- Client Lifecycle ---
 
     def client_disconnected(self, client_id: str) -> None:

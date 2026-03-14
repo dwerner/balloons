@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-03-14T15:32:21.485547
+// Generated: 2026-03-14T15:41:17.213468
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -2828,6 +2828,20 @@ export interface SessionDataService {
   pinSession(sessionId: string): Promise<boolean>;
 
   /**
+   * Reload a domain plugin, picking up code changes.
+   * 
+   * This is useful for development - when you modify domain code (like adding
+   * @ws_expose decorators), call this to reload without restarting the server.
+   * 
+   * Args:
+   * domain_id: The domain ID (e.g., "grocery")
+   * 
+   * Returns:
+   * {"success": True, "methods": [...]} on success, {"error": "..."} on failure
+   */
+  reloadDomain(domainId: string): Promise<Record<string, unknown>>;
+
+  /**
    * Request a domain to emit its current state.
    * 
    * This triggers the domain to emit a state sync event for the specified session.
@@ -3150,6 +3164,10 @@ export class SessionDataServiceClient implements SessionDataService {
 
   async pinSession(sessionId: string): Promise<boolean> {
     return this.call('pinSession', { sessionId: sessionId });
+  }
+
+  async reloadDomain(domainId: string): Promise<Record<string, unknown>> {
+    return this.call('reloadDomain', { domainId: domainId });
   }
 
   async requestDomainState(sessionId: string, domainId: string): Promise<boolean> {

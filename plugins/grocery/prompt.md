@@ -81,8 +81,18 @@ that exports to a browser bookmarklet.
 
 **grocery_browser_goto** - Navigate to a URL
 
-**grocery_browser_search** - Use the site's search box
+**grocery_browser_search** - Search via direct URL navigation (more reliable than search box)
 - `grocery_browser_search(query="2% milk")`
+
+**grocery_browser_get_products** - Extract structured product data from search results
+- Returns: code, name, size, price, unit price, image URL, button index
+- Data is parsed from product cards on the page
+
+**grocery_browser_get_product_detail** - Get detailed product info including nutrition facts
+- Navigate to a product page first (click a product link or use goto)
+- Extracts: name, brand, price, description, nutrition facts, ingredients
+
+**grocery_browser_dismiss_popups** - Dismiss annoying popups (surveys, chat widgets, banners)
 
 **grocery_browser_screenshot** - Take a screenshot (returns file path)
 

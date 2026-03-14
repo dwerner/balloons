@@ -681,6 +681,73 @@ python -m pytest plugins/my_domain/ -v
 5. **Persist state** - games/conversations should survive restarts
 6. **Write tests** - at least for tool execution
 7. **Document everything** - README.md for users, prompt.md for LLM
+8. **Automation First** - see below for the pattern
+
+## Automation First Pattern
+
+While plugins provide `@llm_callable` tools for exploratory and conversational use, the goal
+is **scripted automation**. When the LLM discovers how to accomplish a task (e.g., searching
+a grocery site), encode that knowledge into reproducible UI-triggered operations. Users should
+be able to click a button and get consistent results without LLM involvement.
+
+### Development Workflow
+
+1. **Explore with LLM tools**: Use `@llm_callable` tools to figure out how something works
+   (e.g., finding the right selectors, understanding API responses)
+
+2. **Script the solution**: Once you know the steps, create a dedicated method that performs
+   them reliably
+
+3. **Expose to UI**: Add `@ws_expose` to make it callable from the plugin's React component
+
+4. **Keep LLM fallback**: Keep `@llm_callable` for conversational flexibility, but the UI
+   should call `@ws_expose` methods directly
+
+### Example: Browser Automation
+
+```python
+# Both decorators - LLM can use it conversationally, UI can call it directly
+@ws_expose
+@llm_callable(description="Search for products on the grocery site")
+async def grocery_browser_search(self, query: str, session=None) -> ToolResult:
+    # Scripted browser automation - no LLM reasoning needed
+    await self._browser.fill_search_box(query)
+    await self._browser.submit_search()
+    await self._browser.wait_for_results()
+    return ToolResult("Search complete")
+```
+
+```tsx
+// UI calls the method directly - no LLM round-trip
+const handleSearch = async () => {
+  const result = await callDomainMethod('groceryBrowserSearch', { query });
+  // Handle result...
+};
+```
+
+### Why This Matters
+
+- **Reliability**: Scripted actions are deterministic; LLM responses vary
+- **Speed**: Direct method calls are instant; LLM calls take seconds
+- **Cost**: No token usage for routine operations
+- **Offline**: Works without API access once scripted
+
+### Lifecycle Cleanup
+
+When a plugin manages external resources (browsers, connections, processes), implement
+`on_unload()` to clean them up:
+
+```python
+def on_unload(self) -> None:
+    """Clean up resources when domain is unloaded."""
+    for session_id, state in list(_session_states.items()):
+        if state._browser is not None:
+            try:
+                asyncio.run(state._browser.disconnect())
+            except Exception:
+                pass
+            state._browser = None
+```
 
 ## Example Domains
 

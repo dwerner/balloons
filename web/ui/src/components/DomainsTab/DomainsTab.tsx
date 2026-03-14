@@ -65,23 +65,33 @@ export function DomainsTab({
   }, []);
 
   // Check for updates to loaded plugins
+  // Using a ref to avoid recreating the callback when `loaded` changes
+  const loadedRef = React.useRef(loaded);
+  loadedRef.current = loaded;
+
   const checkForUpdates = useCallback(async () => {
+    const currentLoaded = loadedRef.current;
+    if (currentLoaded.length === 0) return;
+
     const updates = new Set<string>();
-    for (const plugin of loaded) {
+    for (const plugin of currentLoaded) {
       const hasUpdate = await pluginRegistry.hasUpdate(plugin.id);
       if (hasUpdate) {
         updates.add(plugin.id);
       }
     }
     setPluginsWithUpdates(updates);
-  }, [loaded]);
+  }, []); // No dependencies - uses ref
 
   // Check for updates periodically (every 5 seconds in dev mode)
   useEffect(() => {
+    // Only check if plugins are loaded
+    if (loaded.length === 0) return;
+
     checkForUpdates();
     const interval = setInterval(checkForUpdates, 5000);
     return () => clearInterval(interval);
-  }, [checkForUpdates]);
+  }, [checkForUpdates, loaded.length]); // Only re-run when plugin count changes
 
   // Fetch on mount
   useEffect(() => {
@@ -89,6 +99,7 @@ export function DomainsTab({
   }, [refreshAvailable]);
 
   // Reload a plugin (unload then load to get new version)
+  // Also reloads the server-side domain to pick up Python code changes
   const handleReload = async (pluginId: string) => {
     if (loading.has(pluginId)) return;
 
@@ -96,6 +107,14 @@ export function DomainsTab({
     setError(null);
 
     try {
+      // First, reload the server-side domain (picks up Python code changes)
+      if (sessionDataClient) {
+        console.log(`[DomainsTab] Reloading server-side domain: ${pluginId}`);
+        const result = await sessionDataClient.reloadDomain(pluginId);
+        console.log(`[DomainsTab] Server reload result:`, result);
+      }
+
+      // Then reload the UI
       unload(pluginId);
       // Refresh available to get updated manifest with new builtAt
       await refreshAvailable();
@@ -119,6 +138,49 @@ export function DomainsTab({
     });
   }, [appConfirm]);
 
+  // Use refs to keep callback functions stable while still having access to latest values
+  const sessionIdRef = React.useRef(sessionId);
+  const sessionDataClientRef = React.useRef(sessionDataClient);
+  const domainRpcClientRef = React.useRef(domainRpcClient);
+  sessionIdRef.current = sessionId;
+  sessionDataClientRef.current = sessionDataClient;
+  domainRpcClientRef.current = domainRpcClient;
+
+  // Stable callback functions that use refs
+  const subscribeToDomainEvents = React.useCallback(
+    (domainId: string, callback: (event: any) => void) => {
+      const client = sessionDataClientRef.current;
+      if (!client) return () => {};
+      return client.sessionDataDomainEvent((event) => {
+        if (event.domainId === domainId) {
+          callback(event);
+        }
+      });
+    },
+    []
+  );
+
+  const requestDomainState = React.useCallback(
+    async (domainId: string) => {
+      const client = sessionDataClientRef.current;
+      const sid = sessionIdRef.current;
+      if (!client || !sid) return false;
+      return client.requestDomainState(sid, domainId);
+    },
+    []
+  );
+
+  const callDomainMethod = React.useCallback(
+    async (methodName: string, params?: Record<string, unknown> | null) => {
+      const client = domainRpcClientRef.current;
+      const sid = sessionIdRef.current;
+      if (!client) return { error: 'No RPC client' };
+      if (!sid) return { error: 'No session' };
+      return client.callDomainMethod(methodName, sid, params);
+    },
+    []
+  );
+
   // Create context for plugin components
   const createPluginContext = useCallback((): PluginContext => {
     return {
@@ -126,31 +188,11 @@ export function DomainsTab({
       sessionId,
       isLLMResponding,
       confirm: pluginConfirm,
-      // Wrap sessionDataClient to filter by domain
-      subscribeToDomainEvents: sessionDataClient
-        ? (domainId, callback) => {
-            return sessionDataClient.sessionDataDomainEvent((event) => {
-              if (event.domainId === domainId) {
-                callback(event);
-              }
-            });
-          }
-        : undefined,
-      requestDomainState: sessionDataClient
-        ? async (domainId) => {
-            if (!sessionId) return false;
-            return sessionDataClient.requestDomainState(sessionId, domainId);
-          }
-        : undefined,
-      // Call @ws_expose methods on domains (preferred for UI-specific methods)
-      callDomainMethod: domainRpcClient
-        ? async (methodName, params) => {
-            if (!sessionId) return { error: 'No session' };
-            return domainRpcClient.callDomainMethod(methodName, sessionId, params);
-          }
-        : undefined,
+      subscribeToDomainEvents: sessionDataClient ? subscribeToDomainEvents : undefined,
+      requestDomainState: sessionDataClient ? requestDomainState : undefined,
+      callDomainMethod: domainRpcClient ? callDomainMethod : undefined,
     };
-  }, [sendMessage, sessionId, sessionDataClient, domainRpcClient, isLLMResponding, pluginConfirm]);
+  }, [sendMessage, sessionId, sessionDataClient, domainRpcClient, isLLMResponding, pluginConfirm, subscribeToDomainEvents, requestDomainState, callDomainMethod]);
 
   // Handle loading a plugin
   const handleLoad = async (pluginId: string) => {

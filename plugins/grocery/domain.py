@@ -201,6 +201,26 @@ class GroceryDomain(DecoratedStatefulDomain):
     def version(self) -> str:
         return "0.1.0"
 
+    def on_unload(self) -> None:
+        """Close all browser instances when domain is unloaded."""
+        import asyncio
+
+        # Close any active browser sessions
+        for session_id, state in list(_session_states.items()):
+            if state._browser is not None:
+                try:
+                    # Get or create an event loop
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(state._browser.disconnect())
+                    except RuntimeError:
+                        # No running loop, create one
+                        asyncio.run(state._browser.disconnect())
+                except Exception:
+                    pass  # Best effort cleanup
+                finally:
+                    state._browser = None
+
     def get_prompt(self) -> str:
         """Load prompt from prompt.md file."""
         import os
@@ -213,6 +233,7 @@ class GroceryDomain(DecoratedStatefulDomain):
 
     # --- Store Setup ---
 
+    @ws_expose
     @llm_callable(
         description="""Set the store to shop at. Required before searching for products.
 
@@ -600,6 +621,7 @@ For SaveOn Foods: Use banner='saveon'""",
             f"Cart total: ${total:.2f} ({len(state.cart)} items)"
         )
 
+    @ws_expose
     @llm_callable(description="Show the current contents of your cart.")
     async def grocery_cart_show(self, session: "Session" = None) -> ToolResult:
         """Show cart contents."""
@@ -640,6 +662,7 @@ For SaveOn Foods: Use banner='saveon'""",
         state.cart.clear()
         return ToolResult(f"Cart cleared ({count} items removed)")
 
+    @ws_expose
     @llm_callable(
         description="""Export your cart for transfer to the grocery website.
 Returns JavaScript bookmarklets you can paste into the browser console,
@@ -938,6 +961,55 @@ Use 'local' for headless on this machine, or a supervisor host name for a remote
             pass
         return False
 
+    async def _dismiss_medallia_survey(self, browser) -> bool:
+        """Dismiss Medallia survey popups (PC Express uses these)."""
+        try:
+            result = await browser.execute_js(
+                '(function() { '
+                'var iframes = document.querySelectorAll("iframe[id*=kampyleForm]"); '
+                'if (iframes.length > 0) { '
+                '  iframes.forEach(function(f) { '
+                '    if (f.parentElement) f.parentElement.remove(); '
+                '  }); '
+                '  return true; '
+                '} '
+                'return false; '
+                '})()'
+            )
+            return result == "true" or result is True
+        except Exception:
+            pass
+        return False
+
+    async def _dismiss_pc_overlays(self, browser) -> bool:
+        """Dismiss PC Express overlays: smartbanners, mealplanner chat, etc."""
+        try:
+            result = await browser.execute_js(
+                '(function() { '
+                'let removed = 0; '
+                # Smartbanners (mobile app promo)
+                'document.querySelectorAll(".smartbanner-wrapper, .smartbanner-container, .smartbanner").forEach(function(el) { el.remove(); removed++; }); '
+                # PC Mealplanner AI chat widget (island block)
+                'document.querySelectorAll("[class*=\\"mealPlannerChatBot\\"], [class*=\\"Mealplanner\\"], [data-testid*=\\"meal-planner\\"]").forEach(function(el) { el.remove(); removed++; }); '
+                # Generic modals/overlays that might block
+                'document.querySelectorAll("[class*=\\"overlay\\"][class*=\\"modal\\"], [class*=\\"popup\\"][class*=\\"chat\\"]").forEach(function(el) { el.remove(); removed++; }); '
+                'return removed > 0; '
+                '})()'
+            )
+            return result == "true" or result is True or (isinstance(result, bool) and result)
+        except Exception:
+            pass
+        return False
+
+    async def _dismiss_popups(self, browser) -> dict:
+        """Dismiss all known popups. Returns dict of what was dismissed."""
+        dismissed = {}
+        dismissed["cookie"] = await self._dismiss_cookie_popup(browser)
+        dismissed["survey"] = await self._dismiss_medallia_survey(browser)
+        dismissed["overlays"] = await self._dismiss_pc_overlays(browser)
+        return dismissed
+
+    @ws_expose
     @llm_callable(
         description="""Launch a browser and navigate to a grocery site.
 Use this to start an interactive shopping session where you can see and interact with the page.
@@ -1214,8 +1286,9 @@ Uses the host selected via grocery_browser_set_host (defaults to local).""",
         except Exception as e:
             return ToolResult(f"Failed to navigate: {e}", is_error=True)
 
+    @ws_expose
     @llm_callable(
-        description="Search on the grocery site using the search box.",
+        description="Search on the grocery site. Uses direct URL navigation for reliability.",
         params={
             "query": Param(str, "Search query"),
         }
@@ -1225,22 +1298,48 @@ Uses the host selected via grocery_browser_set_host (defaults to local).""",
         query: str,
         session: "Session" = None
     ) -> ToolResult:
-        """Use the site's search functionality."""
+        """Use the site's search functionality via URL navigation."""
+        import urllib.parse
+        import asyncio
+
         state = _get_state(session.id)
 
         if state._browser is None:
             return ToolResult("No browser running. Use grocery_browser_start first.", is_error=True)
 
         try:
-            await state._browser.search(query)
-            import asyncio
-            await asyncio.sleep(1.5)  # Wait for search results
+            # Build search URL based on chain/banner
+            encoded_query = urllib.parse.quote(query)
+
+            if state.chain == GroceryChain.SAVEON:
+                search_url = f"https://www.saveonfoods.com/sm/planning/rsid/1001/results?q={encoded_query}"
+            else:
+                # PC Express chains use this URL pattern
+                banner_domains = {
+                    "superstore": "www.realcanadiansuperstore.ca",
+                    "nofrills": "www.nofrills.ca",
+                    "loblaws": "www.loblaws.ca",
+                    "zehrs": "www.zehrs.ca",
+                    "fortinos": "www.fortinos.ca",
+                    "provigo": "www.provigo.ca",
+                    "maxi": "www.maxi.ca",
+                }
+                domain = banner_domains.get(state.banner, "www.realcanadiansuperstore.ca")
+                search_url = f"https://{domain}/search?search-bar={encoded_query}"
+
+            await state._browser.goto(search_url)
+            await asyncio.sleep(2)  # Wait for search results to load
+
+            # Dismiss any popups that appeared
+            await self._dismiss_popups(state._browser)
+
             url = await state._browser.url()
             title = await state._browser.title()
             return ToolResult(f"Searched for: {query}\nCurrent URL: {url}\nTitle: {title}")
         except Exception as e:
             return ToolResult(f"Failed to search: {e}", is_error=True)
 
+    @ws_expose
     @llm_callable(
         description="Take a screenshot of the current page. Returns PNG image data.",
     )
@@ -1442,6 +1541,30 @@ Use the store ID with grocery_set_store to select your store.""",
             return ToolResult(f"Failed to execute JS: {e}", is_error=True)
 
     @llm_callable(
+        description="Dismiss popups (cookie consent, surveys, etc.) that might block interaction.",
+    )
+    async def grocery_browser_dismiss_popups(self, session: "Session" = None) -> ToolResult:
+        """Dismiss blocking popups."""
+        state = _get_state(session.id)
+
+        if state._browser is None:
+            return ToolResult("No browser running. Use grocery_browser_start first.", is_error=True)
+
+        try:
+            dismissed = await self._dismiss_popups(state._browser)
+            parts = []
+            if dismissed.get("cookie"):
+                parts.append("cookie consent")
+            if dismissed.get("survey"):
+                parts.append("Medallia survey")
+            if parts:
+                return ToolResult(f"Dismissed: {', '.join(parts)}")
+            else:
+                return ToolResult("No popups found to dismiss.")
+        except Exception as e:
+            return ToolResult(f"Failed to dismiss popups: {e}", is_error=True)
+
+    @llm_callable(
         description="Get the current cart item count.",
     )
     async def grocery_browser_cart_count(self, session: "Session" = None) -> ToolResult:
@@ -1466,6 +1589,143 @@ Use the store ID with grocery_set_store to select your store.""",
             return ToolResult(f"Cart contains {count} item(s)")
         except Exception as e:
             return ToolResult(f"Failed to get cart count: {e}", is_error=True)
+
+    @ws_expose
+    @llm_callable(
+        description="Get structured product data from the current search results page.",
+    )
+    async def grocery_browser_get_products(
+        self,
+        limit: int = 20,
+        session: "Session" = None
+    ) -> ToolResult:
+        """Extract structured product data from search results.
+
+        Returns product code, name, brand, size, price, unit price, image URL, and href.
+        """
+        state = _get_state(session.id)
+
+        if state._browser is None:
+            return ToolResult("No browser running. Use grocery_browser_start first.", is_error=True)
+
+        try:
+            # PC Express product extraction
+            js_code = f'''(function() {{
+                let cards = document.querySelectorAll('.chakra-linkbox');
+                let results = [];
+                for (let i = 0; i < Math.min(cards.length, {limit}); i++) {{
+                    let card = cards[i];
+                    let img = card.querySelector('img[src*="digital.loblaws"]');
+                    if (!img) continue;
+                    let link = card.querySelector('a[href*="/p/"]');
+                    let priceEl = card.querySelector('[data-testid*="price"]');
+                    let codeMatch = img.src.match(/PCX\\/([0-9_A-Z]+)/);
+
+                    // Find the add-to-cart button for this product
+                    let addBtn = card.querySelector('button[aria-label*="Add"]');
+                    let btnIndex = addBtn ? parseInt(addBtn.getAttribute('data-index') || '-1') : -1;
+
+                    // Get all buttons and find index
+                    if (btnIndex === -1 && addBtn) {{
+                        let allBtns = Array.from(document.querySelectorAll('button'));
+                        btnIndex = allBtns.indexOf(addBtn);
+                    }}
+
+                    results.push({{
+                        code: codeMatch ? codeMatch[1] : null,
+                        href: link?.getAttribute('href'),
+                        imgSrc: img.src,
+                        alt: img.alt,
+                        price: priceEl?.textContent,
+                        buttonIndex: btnIndex
+                    }});
+                }}
+                return results;
+            }})()'''
+
+            raw_products = await state._browser.execute_js(js_code)
+
+            if not raw_products:
+                return ToolResult("No products found. Are you on a search results page?")
+
+            # Parse the alt text to extract brand, name, size, unit price
+            import re
+            products = []
+            for p in raw_products:
+                alt = p.get('alt', '')
+                # Alt format: "Brand Name Size, $X.XX/unit"
+                # Example: "Dairyland 2% Regular Milk 4 l, $0.15/100ml"
+
+                unit_price_match = re.search(r',\s*(\$[\d.]+/\w+)$', alt)
+                unit_price = unit_price_match.group(1) if unit_price_match else None
+
+                # Remove unit price from name
+                name_part = re.sub(r',\s*\$[\d.]+/\w+$', '', alt)
+
+                # Try to extract size (e.g., "4 l", "400 g", "1.5 l")
+                size_match = re.search(r'\s+([\d.]+\s*(?:l|L|ml|mL|g|kg|oz|lb))\s*$', name_part)
+                size = size_match.group(1) if size_match else None
+
+                # Remove size from name
+                if size:
+                    name_part = name_part[:name_part.rfind(size)].strip()
+
+                # Parse price - handle sale prices
+                price_text = p.get('price', '')
+                price = None
+                was_price = None
+                on_sale = False
+
+                if 'sale' in price_text.lower():
+                    on_sale = True
+                    sale_match = re.search(r'sale[:\s]*(\$[\d.]+)', price_text, re.I)
+                    was_match = re.search(r'(?:was|formerly)[:\s]*(\$[\d.]+)', price_text, re.I)
+                    if sale_match:
+                        price = sale_match.group(1)
+                    if was_match:
+                        was_price = was_match.group(1)
+                else:
+                    price_match = re.search(r'(\$[\d.]+)', price_text)
+                    if price_match:
+                        price = price_match.group(1)
+
+                products.append({
+                    'code': p.get('code'),
+                    'name': name_part,
+                    'size': size,
+                    'price': price,
+                    'was_price': was_price,
+                    'on_sale': on_sale,
+                    'unit_price': unit_price,
+                    'image_url': p.get('imgSrc'),
+                    'href': p.get('href'),
+                    'button_index': p.get('buttonIndex', -1),
+                })
+
+            # Store for UI access
+            state.last_search_results = products
+
+            # Format for LLM
+            lines = [f"Found {len(products)} products:\n"]
+            for i, p in enumerate(products):
+                price_str = p['price'] or 'N/A'
+                if p['on_sale'] and p['was_price']:
+                    price_str = f"**{p['price']}** (was {p['was_price']})"
+
+                lines.append(f"{i+1}. **{p['name']}**")
+                if p['size']:
+                    lines.append(f"   Size: {p['size']}")
+                lines.append(f"   Price: {price_str}")
+                if p['unit_price']:
+                    lines.append(f"   Unit: {p['unit_price']}")
+                lines.append(f"   Code: {p['code']}")
+                if p['button_index'] >= 0:
+                    lines.append(f"   Add button: [{p['button_index']}]")
+                lines.append("")
+
+            return ToolResult("\n".join(lines))
+        except Exception as e:
+            return ToolResult(f"Failed to get products: {e}", is_error=True)
 
     @llm_callable(
         description="Find 'Add to cart' buttons on the current page and list products.",
@@ -1507,6 +1767,115 @@ Use the store ID with grocery_set_store to select your store.""",
             return ToolResult(f"Failed to list products: {e}", is_error=True)
 
     @llm_callable(
+        description="""Get detailed product info including nutrition facts.
+Navigate to a product page first, then call this to extract full details.""",
+    )
+    async def grocery_browser_get_product_detail(self, session: "Session" = None) -> ToolResult:
+        """Extract detailed product info from current product page."""
+        state = _get_state(session.id)
+
+        if state._browser is None:
+            return ToolResult("No browser running. Use grocery_browser_start first.", is_error=True)
+
+        try:
+            import asyncio
+
+            # Dismiss overlays first
+            await self._dismiss_popups(state._browser)
+
+            # Extract product info via JS
+            js_code = '''(function() {
+                let result = {};
+
+                // Basic product info from page
+                let title = document.querySelector('h1, [data-testid*="product-title"]');
+                result.name = title?.textContent?.trim() || '';
+
+                // Brand
+                let brand = document.querySelector('[data-testid*="brand"], [class*="brand"]');
+                result.brand = brand?.textContent?.trim() || '';
+
+                // Price
+                let price = document.querySelector('[data-testid*="price"], [class*="price"]');
+                result.price = price?.textContent?.trim() || '';
+
+                // Product code from URL
+                let urlMatch = window.location.pathname.match(/\\/p\\/([A-Z0-9_]+)/);
+                result.code = urlMatch ? urlMatch[1] : '';
+
+                // Description
+                let desc = document.querySelector('[class*="product-description"], [class*="ProductDescription"]');
+                result.description = desc?.textContent?.trim()?.substring(0, 500) || '';
+
+                // Expand nutrition section if needed
+                let nutritionBody = document.querySelector('.product-details-page-nutrition-info__body');
+                if (nutritionBody && window.getComputedStyle(nutritionBody).display === 'none') {
+                    nutritionBody.style.display = 'block';
+                }
+
+                // Nutrition facts
+                if (nutritionBody) {
+                    result.nutrition_raw = nutritionBody.innerText?.substring(0, 1500) || '';
+
+                    // Try to parse structured nutrition
+                    let servingSize = nutritionBody.innerText.match(/Serving Size[:\\s]+([^\\n]+)/i);
+                    result.serving_size = servingSize ? servingSize[1].trim() : '';
+
+                    let calories = nutritionBody.innerText.match(/Calories[:\\s]+(\\d+)/i);
+                    result.calories = calories ? parseInt(calories[1]) : null;
+
+                    // Ingredients
+                    let ingredients = nutritionBody.innerText.match(/Ingredients[:\\s]+([^*]+)/i);
+                    result.ingredients = ingredients ? ingredients[1].trim() : '';
+                }
+
+                // Main product image
+                let img = document.querySelector('[data-testid*="product-image"] img, [class*="product-image"] img');
+                result.image_url = img?.src || '';
+
+                return result;
+            })()''';
+
+            product = await state._browser.execute_js(js_code)
+
+            if not product or not product.get('name'):
+                return ToolResult(
+                    "Could not extract product details. Make sure you're on a product page (URL contains /p/).",
+                    is_error=True
+                )
+
+            # Format output
+            lines = [f"# {product.get('name', 'Unknown Product')}\n"]
+
+            if product.get('brand'):
+                lines.append(f"**Brand:** {product['brand']}")
+            if product.get('code'):
+                lines.append(f"**Code:** {product['code']}")
+            if product.get('price'):
+                lines.append(f"**Price:** {product['price']}")
+
+            if product.get('description'):
+                lines.append(f"\n## Description\n{product['description']}")
+
+            if product.get('serving_size') or product.get('calories'):
+                lines.append("\n## Nutrition Facts")
+                if product.get('serving_size'):
+                    lines.append(f"**Serving Size:** {product['serving_size']}")
+                if product.get('calories'):
+                    lines.append(f"**Calories:** {product['calories']}")
+
+            if product.get('nutrition_raw'):
+                # Clean up the raw nutrition text
+                lines.append(f"\n```\n{product['nutrition_raw'][:800]}\n```")
+
+            if product.get('ingredients'):
+                lines.append(f"\n## Ingredients\n{product['ingredients'][:500]}")
+
+            return ToolResult("\n".join(lines))
+        except Exception as e:
+            return ToolResult(f"Failed to get product details: {e}", is_error=True)
+
+    @llm_callable(
         description="Add a product to cart by clicking its 'Add to cart' button.",
         params={
             "index": Param(int, "Button index from grocery_browser_list_products"),
@@ -1537,8 +1906,8 @@ Use the store ID with grocery_set_store to select your store.""",
                 if match:
                     before_count = int(match.group(1))
 
-            # Dismiss any popup that might have appeared
-            await self._dismiss_cookie_popup(state._browser)
+            # Dismiss any popups that might block interaction
+            await self._dismiss_popups(state._browser)
 
             # Click the button
             await state._browser.click_button(index)
@@ -1561,6 +1930,7 @@ Use the store ID with grocery_set_store to select your store.""",
         except Exception as e:
             return ToolResult(f"Failed to add product: {e}", is_error=True)
 
+    @ws_expose
     @llm_callable(description="Close the browser.")
     async def grocery_browser_stop(self, session: "Session" = None) -> ToolResult:
         """Stop the browser."""
