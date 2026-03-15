@@ -1,4 +1,12 @@
-"""Tests for core/kanban_service.py."""
+"""Tests for core/kanban_service.py.
+
+DEPRECATED: These tests are for the old core/kanban_service.py implementation.
+The kanban functionality has been migrated to plugins/kanban/domain.py.
+See plugins/kanban/test_domain.py for the new tests.
+"""
+
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 import tempfile
 from pathlib import Path

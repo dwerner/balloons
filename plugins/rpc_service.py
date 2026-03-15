@@ -27,6 +27,7 @@ import asyncio
 
 from codegen.ws_expose import ws_service, ws_expose, MethodSpec
 from core.debug_log import debug_log, Category
+from .events import payload_to_dict
 
 if TYPE_CHECKING:
     from session import Session
@@ -150,6 +151,10 @@ class DomainRpcService:
 
             # Handle ToolResult
             if hasattr(result, "result") and hasattr(result, "is_error"):
+                # Emit any events from the ToolResult
+                if hasattr(result, "events") and result.events:
+                    await self._emit_events(result.events, session)
+
                 if result.is_error:
                     return {"error": result.result}
                 return {"result": result.result}
@@ -167,6 +172,43 @@ class DomainRpcService:
                 category=Category.API,
             )
             return {"error": str(e)}
+
+    async def _emit_events(self, events: list, session: "Session") -> None:
+        """Emit domain events to WebSocket clients.
+
+        This ensures events from @ws_expose methods are propagated to the UI,
+        just like events from LLM-called tools.
+        """
+        if self._manager is None:
+            return
+
+        try:
+            from service import get_session_manager_service
+            session_manager = get_session_manager_service()
+            if session_manager is None:
+                return
+
+            for event in events:
+                session_id = event.target_session or session.id
+                payload_dict = payload_to_dict(event.payload)
+
+                await session_manager.emit_domain_event(
+                    domain_id=event.source_domain,
+                    event_type=event.type,
+                    session_id=session_id,
+                    data=payload_dict,
+                )
+
+                debug_log.info(
+                    f"Emitted domain event from RPC: {event.type}",
+                    category=Category.API,
+                    details={"session": session_id[:8], "domain": event.source_domain},
+                )
+        except Exception as e:
+            debug_log.error(
+                f"Failed to emit domain event from RPC: {e}",
+                category=Category.API,
+            )
 
     def get_registered_methods(self) -> list[dict[str, str]]:
         """Get list of registered domain methods for introspection."""

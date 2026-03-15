@@ -23,10 +23,12 @@ from .goal_tools import GOAL_TOOL_NAMES, execute_goal_tool
 from .debug_tools import DEBUG_TOOL_NAMES, execute_debug_tool
 from .watcher_tools import WATCHER_TOOL_NAMES, execute_watcher_tool
 from .lsp_tools import LSP_TOOL_NAMES, execute_lsp_tool
-from .kanban_tools import KANBAN_TOOL_NAMES, execute_kanban_tool
 from .domain_tools import DOMAIN_TOOL_NAMES, execute_domain_management_tool
 from .fork import ForkProposal, ContextAssignment, MergeProposal
 from .tts import get_tts_runner, TTSConfig
+
+# Note: Kanban tools have been migrated to plugins/kanban/domain.py
+# They are now handled by the domain plugin system (is_domain_tool check above)
 
 if TYPE_CHECKING:
     from session import Session
@@ -155,11 +157,8 @@ async def execute_tool(
                 return "Error: LSP tools require a session context", True
             return await execute_lsp_tool(name, args, session, working_dir)
 
-        # Kanban board tools
-        if name in KANBAN_TOOL_NAMES:
-            if session is None:
-                return "Error: Kanban tools require a session context", True
-            return await execute_kanban_tool(name, args, session)
+        # Note: Kanban tools are now handled by the domain plugin system
+        # (is_domain_tool check at the top of this function)
 
         # Domain management tools (load_domain, unload_domain, list_domains)
         if name in DOMAIN_TOOL_NAMES:

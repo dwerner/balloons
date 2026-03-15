@@ -1,5 +1,12 @@
 """Kanban service layer with high-level board operations.
 
+DEPRECATED: This module has been migrated to plugins/kanban/domain.py
+The kanban functionality is now provided by the kanban domain plugin,
+which uses a simpler JSON file storage instead of the Rust backend.
+This file is kept for backward compatibility and will be removed in a future version.
+
+See plugins/kanban/domain.py and plugins/kanban/models.py for the new implementation.
+
 This module provides a higher-level API for kanban operations, wrapping the
 low-level storage methods with business logic like:
 - Creating boards with default columns
@@ -29,8 +36,14 @@ Usage:
     # Get full board state
     board_state = await kanban.get_board_state(board_id)
 """
-
 from __future__ import annotations
+
+import warnings
+warnings.warn(
+    "core.kanban_service is deprecated. Use plugins/kanban/domain.py instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import json
 import uuid

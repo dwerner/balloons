@@ -1,5 +1,12 @@
 """WebSocket-exposed service for kanban board operations.
 
+DEPRECATED: Kanban functionality has been migrated to plugins/kanban/domain.py
+The kanban tools are now provided by the kanban domain plugin.
+This file is kept for backward compatibility with existing UI components
+and will be removed in a future version.
+
+See plugins/kanban/domain.py for the new implementation.
+
 This service wraps KanbanService and exposes it via WebSocket RPC.
 The @ws_expose decorators mark methods for client generation.
 

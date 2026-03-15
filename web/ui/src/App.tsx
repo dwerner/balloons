@@ -11,8 +11,9 @@ import { SupervisorTab } from './components/SupervisorTab';
 import { DomainsTab } from './components/DomainsTab';
 import { OptionsTab } from './components/OptionsTab';
 import { SettingsTab } from './components/SettingsTab';
-import { KanbanTab } from './components/KanbanTab';
-import { SessionKanbanTab } from './components/SessionKanbanTab';
+// DEPRECATED: KanbanTab and SessionKanbanTab removed - kanban now uses domain plugin system
+// import { KanbanTab } from './components/KanbanTab';
+// import { SessionKanbanTab } from './components/SessionKanbanTab';
 import { LogsTab } from './components/LogsTab';
 import { SurveysTab } from './components/SurveysTab';
 import { LLMTab } from './components/LLMTab';
@@ -3472,29 +3473,7 @@ function AppContent() {
                   }}
                 />
               )}
-              {mainContentTab === 'session-kanban' && (
-                <SessionKanbanTab
-                  sessionId={selectedSessionId}
-                  kanbanClient={connectionState === 'connected' ? clientRef.current?.kanban : undefined}
-                  clientId={connectionState === 'connected' && clientRef.current?.hasClientId ? clientRef.current.clientId : undefined}
-                  isConnected={connectionState === 'connected'}
-                  onSendTaskToSession={async (taskTitle, taskDescription, targetSessionId) => {
-                    const client = clientRef.current;
-                    if (!client?.isConnected) return;
-
-                    // Construct a message asking the LLM to work on the task
-                    const message = taskDescription
-                      ? `Please work on this task:\n\n**${taskTitle}**\n\n${taskDescription}`
-                      : `Please work on this task: **${taskTitle}**`;
-
-                    // Submit the message to the target session
-                    await client.sessions.submitMessage(targetSessionId, message);
-
-                    // Switch to the target session so user can see the response
-                    setSelectedSessionId(targetSessionId);
-                  }}
-                />
-              )}
+              {/* DEPRECATED: session-kanban tab removed - kanban now uses domain plugin system */}
               {mainContentTab === 'slides' && (
                 <div className="empty-state">
                   <h2>Slides</h2>
@@ -3682,13 +3661,7 @@ function AppContent() {
                   error={soundNotifications.error}
                 />
               )}
-              {mainContentTab === 'kanban' && (
-                <KanbanTab
-                  kanbanClient={connectionState === 'connected' ? clientRef.current?.kanban : undefined}
-                  clientId={connectionState === 'connected' && clientRef.current?.hasClientId ? clientRef.current.clientId : undefined}
-                  isConnected={connectionState === 'connected'}
-                />
-              )}
+              {/* DEPRECATED: kanban tab removed - kanban now uses domain plugin system */}
               {mainContentTab === 'surveys' && (
                 <SurveysTab />
               )}
@@ -4213,13 +4186,14 @@ function MobileHeader({ connectionState, selectedSession }: MobileHeaderProps) {
 // - docs/url-routing.md (add route to URL scheme)
 // - routes.ts (add route constant when created)
 // - useRouter hook (add route handler when created)
-type MainContentTab = 'streaming' | 'context' | 'session-kanban' | 'properties' | 'slides' | 'code' | 'logs' | 'llm' | 'settings' | 'kanban' | 'surveys';
+// DEPRECATED: 'session-kanban' and 'kanban' tabs removed - kanban now uses domain plugin system
+type MainContentTab = 'streaming' | 'context' | 'properties' | 'slides' | 'code' | 'logs' | 'llm' | 'settings' | 'surveys';
 type OuterTab = 'session' | 'global';
 
 // Helper to determine which outer tab a content tab belongs to
 // URL ROUTING: Add new session tabs to SESSION_TABS, global tabs to GLOBAL_TABS
-const SESSION_TABS: MainContentTab[] = ['streaming', 'context', 'session-kanban', 'properties', 'slides'];
-const GLOBAL_TABS: MainContentTab[] = ['code', 'logs', 'llm', 'settings', 'kanban', 'surveys'];
+const SESSION_TABS: MainContentTab[] = ['streaming', 'context', 'properties', 'slides'];
+const GLOBAL_TABS: MainContentTab[] = ['code', 'logs', 'llm', 'settings', 'surveys'];
 
 function getOuterTab(tab: MainContentTab): OuterTab {
   return SESSION_TABS.includes(tab) ? 'session' : 'global';
@@ -4361,12 +4335,7 @@ function MainContentHeader({
             >
               Context
             </button>
-            <button
-              className={`view-toggle-btn ${activeTab === 'session-kanban' ? 'active' : ''}`}
-              onClick={() => onTabChange('session-kanban')}
-            >
-              Kanban
-            </button>
+            {/* DEPRECATED: session-kanban tab button removed - kanban now uses domain plugin system */}
             <button
               className={`view-toggle-btn ${activeTab === 'properties' ? 'active' : ''}`}
               onClick={() => onTabChange('properties')}
@@ -4410,12 +4379,7 @@ function MainContentHeader({
             >
               Settings
             </button>
-            <button
-              className={`view-toggle-btn ${activeTab === 'kanban' ? 'active' : ''}`}
-              onClick={() => onTabChange('kanban')}
-            >
-              Kanban
-            </button>
+            {/* DEPRECATED: kanban tab button removed - kanban now uses domain plugin system */}
             <button
               className={`view-toggle-btn ${activeTab === 'surveys' ? 'active' : ''}`}
               onClick={() => onTabChange('surveys')}

@@ -562,6 +562,56 @@ class DebugLog:
         stats["_default"] = {"count": len(self._default_buffer), "maxsize": self._default_buffer.maxsize}
         return stats
 
+    def register_category(self, category: str, buffer_size: int | None = None) -> bool:
+        """Register a custom category (for plugins).
+
+        Plugins can register their own log categories. Each category gets its own
+        ring buffer. If the category already exists, this is a no-op.
+
+        Args:
+            category: Category name (e.g., "plugin:kanban", "plugin:charts")
+            buffer_size: Optional buffer size (defaults to DEFAULT_BUFFER_SIZE)
+
+        Returns:
+            True if category was registered, False if it already exists
+
+        Example:
+            debug_log.register_category("plugin:kanban")
+            debug_log.info("Board created", category="plugin:kanban", details={...})
+        """
+        if category in self._buffers:
+            return False
+        size = buffer_size if buffer_size is not None else self.DEFAULT_BUFFER_SIZE
+        self._buffers[category] = RingBuffer(size)
+        return True
+
+    def unregister_category(self, category: str) -> bool:
+        """Unregister a custom category.
+
+        Only removes custom categories, not core Category enum values.
+
+        Args:
+            category: Category name to unregister
+
+        Returns:
+            True if removed, False if not found or is a core category
+        """
+        # Don't allow removing core categories
+        if category in Category.all():
+            return False
+        if category in self._buffers:
+            del self._buffers[category]
+            return True
+        return False
+
+    def list_categories(self) -> list[str]:
+        """List all registered categories (core + custom).
+
+        Returns:
+            List of category names
+        """
+        return list(self._buffers.keys())
+
     def set_buffer_size(self, category: str, size: int) -> bool:
         """Set the buffer size for a category.
 
@@ -601,6 +651,106 @@ class DebugLog:
 
 # Module-level singleton instance
 debug_log = DebugLog()
+
+
+class PluginLogger:
+    """Convenience logger for plugins with automatic category prefixing.
+
+    Usage in a plugin:
+        from core.debug_log import PluginLogger
+
+        log = PluginLogger("kanban")
+
+        log.info("Board created", details={"board_id": "..."})
+        log.error("Failed to save", details={"error": str(e)})
+
+    The category is automatically prefixed with "plugin:" so logs appear as
+    "plugin:kanban" in the debug UI, making them easy to filter.
+    """
+
+    def __init__(self, plugin_id: str, buffer_size: int | None = None):
+        """Create a logger for a plugin.
+
+        Args:
+            plugin_id: The plugin's ID (e.g., "kanban", "charts")
+            buffer_size: Optional custom buffer size (default: 500)
+        """
+        self.plugin_id = plugin_id
+        self.category = f"plugin:{plugin_id}"
+        # Register the category with the debug log
+        debug_log.register_category(self.category, buffer_size)
+
+    def error(
+        self,
+        message: str,
+        session_id: str = "",
+        details: dict | None = None,
+        run_id: str = "",
+    ) -> None:
+        """Log an error."""
+        debug_log.error(message, session_id, self.category, details, run_id)
+
+    def warning(
+        self,
+        message: str,
+        session_id: str = "",
+        details: dict | None = None,
+        run_id: str = "",
+    ) -> None:
+        """Log a warning."""
+        debug_log.warning(message, session_id, self.category, details, run_id)
+
+    def info(
+        self,
+        message: str,
+        session_id: str = "",
+        details: dict | None = None,
+        run_id: str = "",
+    ) -> None:
+        """Log an info message."""
+        debug_log.info(message, session_id, self.category, details, run_id)
+
+    def debug(
+        self,
+        message: str,
+        session_id: str = "",
+        details: dict | None = None,
+        run_id: str = "",
+    ) -> None:
+        """Log a debug message."""
+        debug_log.debug(message, session_id, self.category, details, run_id)
+
+    def trace(
+        self,
+        message: str,
+        session_id: str = "",
+        details: dict | None = None,
+        run_id: str = "",
+    ) -> None:
+        """Log a trace message."""
+        debug_log.trace(message, session_id, self.category, details, run_id)
+
+    def perf(
+        self,
+        message: str,
+        session_id: str = "",
+        details: dict | None = None,
+        run_id: str = "",
+    ) -> None:
+        """Log a performance marker."""
+        debug_log.perf(message, session_id, self.category, details, run_id)
+
+    def query(self, limit: int = 100, level: LogLevel | None = None) -> list[LogEntry]:
+        """Query log entries for this plugin.
+
+        Args:
+            limit: Maximum entries to return
+            level: Optional level filter
+
+        Returns:
+            List of log entries
+        """
+        return debug_log.query(self.category, limit=limit, level=level)
 
 
 def dump_failed_json(content: str, context: str = "json_error") -> Path | None:

@@ -9,6 +9,7 @@ from codegen.ws_expose import ws_expose
 from ..base import DomainEvent, DecoratedStatefulDomain, ToolResult
 from ..decorators import llm_callable, Param
 from ..storage import JsonFileStorage
+from .. import PluginLogger
 from .models import Chart, ChartStyle
 from .events import (
     ChartCreatedPayload,
@@ -20,6 +21,9 @@ from .events import (
 
 if TYPE_CHECKING:
     from session import Session
+
+# Plugin logger
+log = PluginLogger("charts")
 
 
 # Global in-memory cache for charts (shared across all sessions)
@@ -242,6 +246,7 @@ Chart types:
 
         # Auto-save the new chart
         await self._auto_save_chart(chart)
+        log.info(f"Created chart: {name}", session_id=session.id, details={"chart_id": chart.id, "type": chart_type})
 
         return ToolResult(
             f"Created {chart_type} chart '{name}' with ID: {chart.id}\n\nUse chart_add_data to add data points.",

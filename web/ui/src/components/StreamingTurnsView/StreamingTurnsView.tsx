@@ -37,6 +37,31 @@ const debugLog = createLogger('StreamingTurnsView');
 // Re-export StreamingProgress for consumers
 export type { StreamingProgress } from '../../hooks';
 
+// Default autoscroll speed in pixels per second
+const DEFAULT_AUTOSCROLL_SPEED = 125;
+// localStorage key for autoscroll speed
+const AUTOSCROLL_SPEED_KEY = 'balloons:autoscroll-speed';
+
+/**
+ * Get autoscroll speed from localStorage
+ */
+function getAutoscrollSpeed(): number {
+  if (typeof window === 'undefined') return DEFAULT_AUTOSCROLL_SPEED;
+  const stored = localStorage.getItem(AUTOSCROLL_SPEED_KEY);
+  if (stored) {
+    const parsed = parseInt(stored, 10);
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+  }
+  return DEFAULT_AUTOSCROLL_SPEED;
+}
+
+/**
+ * Ease-out cubic function for natural deceleration
+ */
+function easeOutCubic(t: number): number {
+  return 1 - Math.pow(1 - t, 3);
+}
+
 /**
  * Represents either a single turn or a group of parallel turns
  */
@@ -82,7 +107,7 @@ const AT_BOTTOM_THRESHOLD = 150;
 export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrollStateChange, onStreamingProgressChange, onTurnsChange, onLoadingChange, archivingTurnIndices, refreshKey }: StreamingTurnsViewProps) {
   // useSessionData now gets the clientId directly from client.clientId when connected
   // refreshKey forces re-subscription when incremented (e.g., after archive)
-  const { turns, isLoading, isStreaming, streamError, error, streamingProgress } = useSessionData(client, sessionId, refreshKey);
+  const { turns, isLoading, isLoadingHistory, isStreaming, streamError, error, streamingProgress } = useSessionData(client, sessionId, refreshKey);
 
   // Debug: log turns on every change
   useEffect(() => {
@@ -146,10 +171,34 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
   // Last scroll position for direction detection
   const lastScrollTopRef = useRef(0);
 
+  // Animated scroll state
+  const scrollAnimationRef = useRef<number | null>(null);
+  const scrollAnimationStartRef = useRef<{ startTime: number; startPos: number; targetPos: number; duration: number } | null>(null);
+
+  // Cancel any ongoing scroll animation
+  const cancelScrollAnimation = useCallback(() => {
+    if (scrollAnimationRef.current !== null) {
+      cancelAnimationFrame(scrollAnimationRef.current);
+      scrollAnimationRef.current = null;
+    }
+    scrollAnimationStartRef.current = null;
+  }, []);
+
   // Keep ref in sync with state
   useEffect(() => {
     isFollowingRef.current = isFollowing;
   }, [isFollowing]);
+
+  // Track isLoadingHistory in a ref so ResizeObserver can access current value
+  const isLoadingHistoryRef = useRef(isLoadingHistory);
+  useEffect(() => {
+    isLoadingHistoryRef.current = isLoadingHistory;
+  }, [isLoadingHistory]);
+
+  // Track when history loading completes - use this to know when initial load is done
+  // Defined here (before ResizeObserver effect) so the ref can be captured
+  const wasLoadingHistoryRef = useRef(isLoadingHistory);
+  const hasCompletedInitialLoadRef = useRef(false);
 
   // Memoize context value to prevent unnecessary re-renders
   // Include scrollContainerRef for IntersectionObserver-based lazy loading
@@ -494,33 +543,119 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     return distanceFromBottom <= AT_BOTTOM_THRESHOLD;
   }, []);
 
+  /**
+   * Animate scroll to a target position with easing.
+   * Animation can be interrupted by user input (wheel/touch/manual scroll).
+   */
+  const animateScrollTo = useCallback((targetPos: number, options?: { instant?: boolean }) => {
+    const element = scrollContainerRef.current;
+    if (!element) return;
+
+    // Cancel any existing animation
+    cancelScrollAnimation();
+
+    const currentPos = element.scrollTop;
+    const distance = targetPos - currentPos;
+
+    // If instant requested or distance is small, just jump
+    if (options?.instant || Math.abs(distance) < 10) {
+      programmaticScrollCountRef.current++;
+      element.scrollTop = targetPos;
+      setTimeout(() => {
+        programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
+      }, 50);
+      return;
+    }
+
+    // Calculate duration based on distance and speed (px/s)
+    const speed = getAutoscrollSpeed();
+    // Minimum 50ms, maximum 3000ms (allows slow scrolling for large distances)
+    const duration = Math.min(3000, Math.max(50, (Math.abs(distance) / speed) * 1000));
+
+    programmaticScrollCountRef.current++;
+
+    const startTime = performance.now();
+    scrollAnimationStartRef.current = {
+      startTime,
+      startPos: currentPos,
+      targetPos,
+      duration,
+    };
+
+    const animate = (now: number) => {
+      const animState = scrollAnimationStartRef.current;
+      if (!animState || !scrollContainerRef.current) {
+        programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
+        return;
+      }
+
+      // Check if user is scrolling - cancel animation
+      if (userScrollingRef.current) {
+        cancelScrollAnimation();
+        programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
+        return;
+      }
+
+      const elapsed = now - animState.startTime;
+      const progress = Math.min(1, elapsed / animState.duration);
+      const easedProgress = easeOutCubic(progress);
+
+      const newPos = animState.startPos + (animState.targetPos - animState.startPos) * easedProgress;
+      scrollContainerRef.current.scrollTop = newPos;
+
+      // Update scroll metrics for minimap during animation
+      setScrollMetrics({
+        scrollTop: scrollContainerRef.current.scrollTop,
+        scrollHeight: scrollContainerRef.current.scrollHeight,
+        clientHeight: scrollContainerRef.current.clientHeight,
+      });
+
+      if (progress < 1) {
+        scrollAnimationRef.current = requestAnimationFrame(animate);
+      } else {
+        // Animation complete - check if we should continue
+        const element = scrollContainerRef.current;
+        const currentBottom = element.scrollHeight - element.clientHeight;
+
+        // If we're still following and there's more content below, keep going
+        if (isFollowingRef.current && !userScrollingRef.current && currentBottom > element.scrollTop + 5) {
+          // Restart animation to new target
+          const remainingDistance = Math.abs(currentBottom - element.scrollTop);
+          scrollAnimationStartRef.current = {
+            startTime: performance.now(),
+            startPos: element.scrollTop,
+            targetPos: currentBottom,
+            duration: Math.min(3000, Math.max(50, (remainingDistance / getAutoscrollSpeed()) * 1000)),
+          };
+          scrollAnimationRef.current = requestAnimationFrame(animate);
+        } else {
+          // Actually done - at bottom or not following
+          scrollAnimationRef.current = null;
+          scrollAnimationStartRef.current = null;
+          // Ensure we're exactly at target
+          element.scrollTop = animState.targetPos;
+          setTimeout(() => {
+            programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
+          }, 50);
+        }
+      }
+    };
+
+    scrollAnimationRef.current = requestAnimationFrame(animate);
+  }, [cancelScrollAnimation]);
+
   // Scroll to bottom and resume following
   const scrollToBottom = useCallback(() => {
     if (!scrollContainerRef.current) return;
 
-    programmaticScrollCountRef.current++;
     setIsFollowing(true);
     isFollowingRef.current = true;
     setIsAtBottom(true);
 
     const element = scrollContainerRef.current;
-
-    // Use scrollTo with behavior smooth for better UX, then force to exact bottom
-    element.scrollTo({
-      top: element.scrollHeight,
-      behavior: 'instant'
-    });
-
-    // Double-check we're at the bottom after a short delay (DOM might update)
-    requestAnimationFrame(() => {
-      if (scrollContainerRef.current) {
-        scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
-      }
-      setTimeout(() => {
-        programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
-      }, 50);
-    });
-  }, []);
+    // Animate to bottom with easing
+    animateScrollTo(element.scrollHeight - element.clientHeight);
+  }, [animateScrollTo]);
 
   // Handle minimap navigation - scroll to position and pause following
   const handleMinimapNavigate = useCallback((scrollPosition: number) => {
@@ -554,19 +689,24 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
 
   // Handle wheel events - direct user input, should always take priority
   const handleWheel = useCallback((e: WheelEvent) => {
+    // Any wheel movement immediately cancels scroll animation
+    cancelScrollAnimation();
+
     // Any upward wheel movement (negative deltaY = scrolling up) immediately stops following
     if (e.deltaY < 0) {
       setIsFollowing(false);
       isFollowingRef.current = false;
     }
     markUserScrolling();
-  }, [markUserScrolling]);
+  }, [markUserScrolling, cancelScrollAnimation]);
 
   // Handle touch events - for mobile scroll support
   const handleTouchStart = useCallback(() => {
+    // User touching the screen = immediately cancel any scroll animation
+    cancelScrollAnimation();
     // User touching the screen = they might scroll, prepare to respect their intent
     markUserScrolling();
-  }, [markUserScrolling]);
+  }, [markUserScrolling, cancelScrollAnimation]);
 
   // Handle scroll events (fires for both user and programmatic scrolls)
   const handleScroll = useCallback(() => {
@@ -580,12 +720,14 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
 
     setIsAtBottom(atBottom);
 
-    // Update scroll metrics for minimap
-    setScrollMetrics({
-      scrollTop: element.scrollTop,
-      scrollHeight: element.scrollHeight,
-      clientHeight: element.clientHeight,
-    });
+    // Update scroll metrics for minimap (unless animation is handling it)
+    if (!scrollAnimationRef.current) {
+      setScrollMetrics({
+        scrollTop: element.scrollTop,
+        scrollHeight: element.scrollHeight,
+        clientHeight: element.clientHeight,
+      });
+    }
 
     // Skip following-state changes if this is a programmatic scroll
     // Check this FIRST to avoid fighting with scrollToBottom/auto-scroll
@@ -593,8 +735,9 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
       return;
     }
 
-    // User scrolled UP - pause following (only if not programmatic)
+    // User scrolled UP - pause following and cancel animation (only if not programmatic)
     if (scrollDirection < -5) {
+      cancelScrollAnimation();
       setIsFollowing(false);
       isFollowingRef.current = false;
       return;
@@ -605,7 +748,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
       setIsFollowing(true);
       isFollowingRef.current = true;
     }
-  }, [checkAtBottom]);
+  }, [checkAtBottom, cancelScrollAnimation]);
 
   // Attach scroll, wheel, and touch listeners
   useEffect(() => {
@@ -631,22 +774,39 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
 
     // Use ResizeObserver to detect content size changes
     // When content grows (e.g., large tool result loads) and we're following,
-    // we need to scroll to bottom and protect against scroll-up detection
+    // we need to scroll to bottom with animation
     let lastScrollHeight = element.scrollHeight;
     const resizeObserver = new ResizeObserver(() => {
-      updateScrollMetrics();
+      // ResizeObserver fires after layout, but use RAF to batch updates
+      // and ensure we're reading final values
+      requestAnimationFrame(() => {
+        if (!scrollContainerRef.current) return;
+        const el = scrollContainerRef.current;
 
-      // Check if scrollHeight increased (content grew)
-      const newScrollHeight = element.scrollHeight;
-      if (newScrollHeight > lastScrollHeight && isFollowingRef.current && !userScrollingRef.current) {
-        // Content grew while following - auto-scroll to bottom
-        programmaticScrollCountRef.current++;
-        element.scrollTop = newScrollHeight;
-        setTimeout(() => {
-          programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
-        }, 100);
-      }
-      lastScrollHeight = newScrollHeight;
+        updateScrollMetrics();
+
+        // Check if scrollHeight increased (content grew)
+        const newScrollHeight = el.scrollHeight;
+
+        // Skip animation during initial history loading - we'll jump to bottom when complete
+        if (isLoadingHistoryRef.current || !hasCompletedInitialLoadRef.current) {
+          lastScrollHeight = newScrollHeight;
+          return;
+        }
+
+        if (newScrollHeight > lastScrollHeight && isFollowingRef.current && !userScrollingRef.current) {
+          // Content grew while following - if there's already an animation running,
+          // update its target, otherwise start a new animation
+          if (scrollAnimationStartRef.current && scrollAnimationRef.current) {
+            // Update the target of the ongoing animation
+            scrollAnimationStartRef.current.targetPos = newScrollHeight - el.clientHeight;
+          } else {
+            // Start new animated scroll to bottom
+            animateScrollTo(newScrollHeight - el.clientHeight);
+          }
+        }
+        lastScrollHeight = newScrollHeight;
+      });
     });
     resizeObserver.observe(element);
 
@@ -658,8 +818,66 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
       if (userScrollTimeoutRef.current) {
         clearTimeout(userScrollTimeoutRef.current);
       }
+      // Cancel any ongoing scroll animation
+      cancelScrollAnimation();
     };
-  }, [handleScroll, handleWheel, handleTouchStart, scrollContainerElement]);
+  }, [handleScroll, handleWheel, handleTouchStart, scrollContainerElement, animateScrollTo, cancelScrollAnimation]);
+
+  // Detect when history loading completes and jump to bottom
+  useEffect(() => {
+    const wasLoading = wasLoadingHistoryRef.current;
+    wasLoadingHistoryRef.current = isLoadingHistory;
+
+    debugLog(`[scroll] isLoadingHistory changed: was=${wasLoading}, now=${isLoadingHistory}, hasCompleted=${hasCompletedInitialLoadRef.current}`);
+
+    // History just finished loading (was loading, now not loading)
+    if (wasLoading && !isLoadingHistory && !hasCompletedInitialLoadRef.current) {
+      hasCompletedInitialLoadRef.current = true;
+      debugLog('[scroll] History loading complete, jumping to bottom');
+
+      if (isFollowingRef.current && scrollContainerRef.current) {
+        // Use double RAF to ensure DOM is fully laid out after history load
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            if (scrollContainerRef.current && isFollowingRef.current) {
+              const element = scrollContainerRef.current;
+              programmaticScrollCountRef.current++;
+              element.scrollTop = element.scrollHeight - element.clientHeight;
+              debugLog(`[scroll] Jumped to bottom: scrollTop=${element.scrollTop}`);
+              setTimeout(() => {
+                programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
+              }, 50);
+            }
+          });
+        });
+      }
+    }
+  }, [isLoadingHistory]);
+
+  // Fallback: if we have turns but haven't completed initial load and not loading,
+  // jump to bottom. This handles cases where isLoadingHistory was never true.
+  useEffect(() => {
+    if (turnsOrGroups.length > 0 && !isLoadingHistory && !hasCompletedInitialLoadRef.current) {
+      hasCompletedInitialLoadRef.current = true;
+      debugLog('[scroll] Fallback: turns arrived without history loading, jumping to bottom');
+
+      if (isFollowingRef.current && scrollContainerRef.current) {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            if (scrollContainerRef.current && isFollowingRef.current) {
+              const element = scrollContainerRef.current;
+              programmaticScrollCountRef.current++;
+              element.scrollTop = element.scrollHeight - element.clientHeight;
+              debugLog(`[scroll] Fallback jumped to bottom: scrollTop=${element.scrollTop}`);
+              setTimeout(() => {
+                programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
+              }, 50);
+            }
+          });
+        });
+      }
+    }
+  }, [turnsOrGroups.length, isLoadingHistory]);
 
   // Auto-scroll when NEW content arrives and we're following
   // Use ref to check following state to avoid race conditions with setState
@@ -669,7 +887,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     const currentLength = turnsOrGroups.length;
     prevTurnsLengthRef.current = currentLength;
 
-    // Only scroll if content was ADDED (not on initial load or removals)
+    // Only scroll if content was ADDED (not removals)
     // and user is following (check ref to avoid race conditions)
     if (currentLength <= prevLength || currentLength === 0) return;
     if (!isFollowingRef.current) return;
@@ -677,33 +895,32 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     // Don't fight with user - if they're actively scrolling, skip this update
     if (userScrollingRef.current) return;
 
-    programmaticScrollCountRef.current++;
+    // During initial history loading, don't animate - we'll jump at the end
+    if (isLoadingHistory || !hasCompletedInitialLoadRef.current) return;
 
-    // Use requestAnimationFrame to ensure DOM has updated
+    // Use double requestAnimationFrame to ensure DOM has fully laid out
+    // First RAF: browser schedules layout
+    // Second RAF: layout is complete, scrollHeight is accurate
     requestAnimationFrame(() => {
-      // Double-check we're still following and user isn't scrolling
-      if (!isFollowingRef.current || userScrollingRef.current || !scrollContainerRef.current) {
-        programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
-        return;
-      }
+      requestAnimationFrame(() => {
+        // Double-check we're still following and user isn't scrolling
+        if (!isFollowingRef.current || userScrollingRef.current || !scrollContainerRef.current) {
+          return;
+        }
 
-      const element = scrollContainerRef.current;
+        const element = scrollContainerRef.current;
+        const targetPos = element.scrollHeight - element.clientHeight;
 
-      // Native scroll to bottom
-      element.scrollTop = element.scrollHeight;
-
-      // Update scroll metrics for minimap
-      setScrollMetrics({
-        scrollTop: element.scrollTop,
-        scrollHeight: element.scrollHeight,
-        clientHeight: element.clientHeight,
+        if (scrollAnimationStartRef.current && scrollAnimationRef.current) {
+          // Ongoing animation: update its target
+          scrollAnimationStartRef.current.targetPos = targetPos;
+        } else {
+          // Start new animated scroll to bottom
+          animateScrollTo(targetPos);
+        }
       });
-
-      setTimeout(() => {
-        programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
-      }, 50);
     });
-  }, [turnsOrGroups.length]);
+  }, [turnsOrGroups.length, animateScrollTo, isLoadingHistory]);
 
   // Early returns AFTER all hooks have been called
   if (!sessionId) {

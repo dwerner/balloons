@@ -101,16 +101,14 @@ from .tools import (
     REVIEW_TOOL_NAMES,
     GOAL_TOOLS,
     GOAL_TOOL_NAMES,
-    KANBAN_TOOLS,
-    KANBAN_TOOL_NAMES,
     get_tools_for_request,
 )
 
 # Goal tools
 from .goal_tools import execute_goal_tool
 
-# Kanban tools
-from .kanban_tools import execute_kanban_tool
+# Note: Kanban tools have been migrated to plugins/kanban/domain.py
+# They are now loaded as a domain plugin
 
 # LSP tools
 from .lsp_tools import execute_lsp_tool, LSP_TOOL_NAMES, LSP_TOOLS
@@ -379,13 +377,10 @@ __all__ = [
     "REVIEW_TOOL_NAMES",
     "GOAL_TOOLS",
     "GOAL_TOOL_NAMES",
-    "KANBAN_TOOLS",
-    "KANBAN_TOOL_NAMES",
     "get_tools_for_request",
     # Goal tools
     "execute_goal_tool",
-    # Kanban tools
-    "execute_kanban_tool",
+    # Note: Kanban tools migrated to plugins/kanban
     # LSP tools
     "execute_lsp_tool",
     "LSP_TOOL_NAMES",

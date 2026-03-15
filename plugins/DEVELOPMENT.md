@@ -672,6 +672,76 @@ Run tests:
 python -m pytest plugins/my_domain/ -v
 ```
 
+## Logging
+
+Plugins have access to a dedicated logging system with their own category buffer.
+
+### PluginLogger
+
+Use `PluginLogger` for structured, filterable logs:
+
+```python
+from plugins import PluginLogger
+
+class MyDomain(DecoratedDomain):
+    def __init__(self):
+        self.log = PluginLogger("my_domain")
+
+    @llm_callable
+    async def my_domain_create(self, name: str, session=None) -> ToolResult:
+        self.log.info("Creating item", session_id=session.id, details={"name": name})
+        try:
+            # ... implementation
+            self.log.debug("Item created successfully", details={"item_id": item.id})
+            return ToolResult(f"Created: {item.id}")
+        except Exception as e:
+            self.log.error("Failed to create item", details={"error": str(e)})
+            return ToolResult(f"Error: {e}", is_error=True)
+```
+
+### Log Levels
+
+- `log.error(...)` - Errors that need attention
+- `log.warning(...)` - Warning conditions
+- `log.info(...)` - General informational messages
+- `log.debug(...)` - Debug details (hidden by default)
+- `log.trace(...)` - Very verbose (scroll events, etc.)
+- `log.perf(...)` - Performance timing markers
+
+### Plugin Category
+
+Logs are automatically prefixed with `plugin:` so they appear as `plugin:my_domain` in the
+debug UI and log files. This makes them easy to filter:
+
+```bash
+# Tail plugin logs
+tail -f ~/.balloons/logs/plugin:my_domain.log
+
+# Enable file logging for your plugin
+debug_log.enable_category("plugin:my_domain")
+```
+
+### Querying Plugin Logs
+
+```python
+# Get recent entries for this plugin
+entries = self.log.query(limit=50, level=LogLevel.ERROR)
+```
+
+### Direct debug_log Access
+
+For advanced use cases, access the underlying debug_log singleton:
+
+```python
+from core.debug_log import debug_log, Category
+
+# Use core categories (API, RUNNER, etc.)
+debug_log.info("Message", category=Category.API)
+
+# Register a custom category (automatically done by PluginLogger)
+debug_log.register_category("plugin:my_domain")
+```
+
 ## Best Practices
 
 1. **Prefix tool names** with your domain ID (`chess_move`, not `move`)
@@ -681,7 +751,8 @@ python -m pytest plugins/my_domain/ -v
 5. **Persist state** - games/conversations should survive restarts
 6. **Write tests** - at least for tool execution
 7. **Document everything** - README.md for users, prompt.md for LLM
-8. **Automation First** - see below for the pattern
+8. **Use PluginLogger** - structured logs with automatic category filtering
+9. **Automation First** - see below for the pattern
 
 ## Automation First Pattern
 

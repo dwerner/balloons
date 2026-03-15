@@ -1,4 +1,12 @@
-"""Tests for kanban/graph storage (tasks, boards, columns, edges)."""
+"""Tests for kanban/graph storage (tasks, boards, columns, edges).
+
+DEPRECATED: These tests are for the old core storage implementation.
+The kanban functionality has been migrated to plugins/kanban/domain.py.
+See plugins/kanban/test_domain.py for the new tests.
+"""
+
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 import json
 import tempfile

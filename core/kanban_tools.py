@@ -1,7 +1,10 @@
 """LLM-invocable tools for kanban board management.
 
-These tools allow Claude to create and manage kanban tasks directly
-during conversation, with automatic board selection based on the session.
+DEPRECATED: This module has been migrated to plugins/kanban/domain.py
+The kanban tools are now provided by the kanban domain plugin.
+This file is kept for backward compatibility and will be removed in a future version.
+
+See plugins/kanban/domain.py for the new implementation.
 
 Tool Names:
 - kanban_get_boards: Get boards associated with the current session
@@ -12,6 +15,12 @@ Tool Names:
 - kanban_list_tasks: List tasks with optional filtering
 - kanban_get_board_state: Get full state of a board (columns and tasks)
 """
+import warnings
+warnings.warn(
+    "core.kanban_tools is deprecated. Kanban tools are now provided by plugins/kanban/domain.py",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import json
 from typing import TYPE_CHECKING

@@ -1043,11 +1043,11 @@ from .goal_tools import GOAL_TOOLS, GOAL_TOOL_NAMES
 # Import LSP tools
 from .lsp_tools import LSP_TOOLS, LSP_TOOL_NAMES
 
-# Import kanban tools
-from .kanban_tools import KANBAN_TOOLS, KANBAN_TOOL_NAMES
-
 # Import domain management tools
 from .domain_tools import DOMAIN_TOOLS, DOMAIN_TOOL_NAMES
+
+# Note: Kanban tools have been migrated to plugins/kanban/domain.py
+# They are now loaded via the domain plugin system (get_domain_tools)
 
 
 def get_tools_for_request(
@@ -1061,7 +1061,6 @@ def get_tools_for_request(
     include_debug_tools: bool = True,
     include_watcher_tools: bool = False,
     include_lsp_tools: bool = True,
-    include_kanban_tools: bool = True,
     include_domain_tools: bool = True,
 ) -> list[dict] | None:
     """Get the list of tools to include in an API request.
@@ -1069,7 +1068,10 @@ def get_tools_for_request(
     Includes standard file/shell tools and optionally Balloons-specific tools
     (workflow, UI, session/link navigation), supervisor tools, review tools,
     goal management tools, MIDI tools, debug tools, watcher tools, LSP tools,
-    kanban tools, and server management tools.
+    and domain plugin tools.
+
+    Note: Kanban tools are now part of the domain plugin system and included
+    when include_domain_tools=True and the kanban domain is loaded.
 
     Args:
         allowed_tools: List of tool names to allow, or None for all
@@ -1082,7 +1084,6 @@ def get_tools_for_request(
         include_debug_tools: If True, include debug logging tools (debug_log_query, etc.)
         include_watcher_tools: If True, include watcher mode tools (send_to_target)
         include_lsp_tools: If True, include LSP semantic code tools (lsp_hover, etc.)
-        include_kanban_tools: If True, include kanban board tools (kanban_create_task, etc.)
         include_domain_tools: If True, include tools from loaded domain plugins
 
     Returns:
@@ -1109,12 +1110,10 @@ def get_tools_for_request(
         all_tools = all_tools + WATCHER_TOOLS
     if include_lsp_tools:
         all_tools = all_tools + LSP_TOOLS
-    if include_kanban_tools:
-        all_tools = all_tools + KANBAN_TOOLS
     if include_domain_tools:
         # Add domain management tools (load_domain, unload_domain, list_domains)
         all_tools = all_tools + DOMAIN_TOOLS
-        # Add tools from currently loaded domains
+        # Add tools from currently loaded domains (includes kanban if loaded)
         try:
             from plugins.integration import get_domain_tools
             all_tools = all_tools + get_domain_tools()
