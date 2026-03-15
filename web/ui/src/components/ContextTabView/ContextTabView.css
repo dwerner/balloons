@@ -315,6 +315,31 @@
   font-size: 10px;
 }
 
+.ctx-tree-node__time {
+  font-size: 10px;
+  color: #666;
+  flex-shrink: 0;
+  font-family: ui-monospace, 'SF Mono', Monaco, monospace;
+}
+
+/* Token weight classes - visual indicator of token usage */
+.ctx-tree-node--tokens-light > .ctx-tree-node__content {
+  border-left: 2px solid rgba(74, 222, 128, 0.3);  /* Subtle green */
+}
+
+.ctx-tree-node--tokens-medium > .ctx-tree-node__content {
+  border-left: 2px solid rgba(250, 204, 21, 0.5);  /* Yellow */
+}
+
+.ctx-tree-node--tokens-large > .ctx-tree-node__content {
+  border-left: 2px solid rgba(251, 146, 60, 0.6);  /* Orange */
+}
+
+.ctx-tree-node--tokens-heavy > .ctx-tree-node__content {
+  border-left: 2px solid rgba(248, 113, 113, 0.7); /* Red */
+  background: rgba(248, 113, 113, 0.05);
+}
+
 /* Parallel group node */
 .ctx-tree-node--parallel-group {
   /* Slightly different styling to distinguish from regular nodes */

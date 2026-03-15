@@ -105,11 +105,10 @@ class Session:
         return self.total_input_tokens + self.total_output_tokens
 
     def calculate_context_tokens(self) -> int:
-        """Calculate context tokens by counting tokens in turn content.
+        """Calculate context tokens by summing turn token counts.
 
-        Uses tiktoken to count actual tokens in each turn's content block.
-        This provides an on-demand calculation when cached_context_tokens is 0
-        or needs to be recalculated.
+        Prefers using pre-calculated turn.tokens values (set during streaming).
+        Falls back to on-demand counting for turns without token counts (legacy data).
 
         Returns:
             Total token count across all turns
@@ -118,7 +117,12 @@ class Session:
 
         total = 0
         for turn in self.turns:
-            # Extract text from content block based on its type
+            # Use pre-calculated tokens if available (from streaming events)
+            if turn.tokens > 0:
+                total += turn.tokens
+                continue
+
+            # Fallback: calculate on-demand for legacy turns without token counts
             block = turn.content_block
             text = ""
             if hasattr(block, 'text'):

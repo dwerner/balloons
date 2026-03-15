@@ -1243,6 +1243,13 @@ function AppContent() {
     }
     return allIndices;
   }, [archivingByHelper]);
+
+  // Live context token count computed from turn data
+  // Updated as turns complete, more accurate than session.cachedContextTokens
+  const liveContextTokens = useMemo(() =>
+    rawTurns.reduce((sum, turn) => sum + (turn.tokens ?? 0), 0),
+    [rawTurns]
+  );
   const [creatingSessionFor, setCreatingSessionFor] = useState<string | null>(null); // "entityType:entityId" when creating bound session
   const [mainContentTab, setMainContentTab] = useState<MainContentTab>('streaming');
   const [sendAction, setSendAction] = useState<SendAction>('send'); // Current action for send button dropdown
@@ -1281,6 +1288,10 @@ function AppContent() {
 
   // Track the session we're currently loading to handle race conditions
   const loadingSessionRef = useRef<string | null>(null);
+
+  // Track whether we should scroll to the latest turn when turns arrive
+  // Set to true when switching sessions, cleared after first scroll
+  const scrollToLatestOnLoadRef = useRef<boolean>(false);
 
   // NOTE: Auto-scroll is handled by useAutoScroll hook in StreamingTurnsView.
   // The unconditional scroll-to-bottom effect was removed because it conflicted
@@ -1983,6 +1994,9 @@ function AppContent() {
     // Track which session we're loading (for race condition detection)
     loadingSessionRef.current = sessionId;
 
+    // Mark that we should scroll to the latest turn when turns arrive
+    scrollToLatestOnLoadRef.current = true;
+
     // Clear state immediately to prevent stale data display
     // Note: turns will be populated via onTurnsChange from StreamingTurnsView
     const t1 = performance.now();
@@ -2063,6 +2077,19 @@ function AppContent() {
     // Clear loading state when we have turns (or confirmed empty session)
     if (isLoadingTurns && (turnInfos.length > 0 || loadingSessionRef.current !== null)) {
       setIsLoadingTurns(false);
+    }
+
+    // Scroll to the latest turn when first loading a session
+    // Use requestAnimationFrame to ensure DOM has updated with the new turns
+    if (scrollToLatestOnLoadRef.current && turnInfos.length > 0) {
+      scrollToLatestOnLoadRef.current = false;
+      requestAnimationFrame(() => {
+        // Find the scroll container and scroll to bottom (same approach as StreamingTurnsView.scrollToBottom)
+        const scrollContainer = document.querySelector('.streaming-turns-view-container');
+        if (scrollContainer) {
+          scrollContainer.scrollTop = scrollContainer.scrollHeight;
+        }
+      });
     }
   }, [isLoadingTurns]);
 
@@ -2593,6 +2620,88 @@ function AppContent() {
     }
   }, [connectionState, selectedSessionId]);
 
+  // Handle delete session
+  const handleDeleteSession = useCallback(async (sessionId: string): Promise<boolean> => {
+    const client = clientRef.current;
+    if (!client || connectionState !== 'connected') {
+      return false;
+    }
+
+    try {
+      const success = await client.sessions.deleteSession(sessionId);
+      if (success) {
+        // Refresh session list
+        const sessionList = await client.sessionData.getAllSessions();
+        setSessions(sessionList);
+        // If deleted the selected session, clear selection
+        if (sessionId === selectedSessionId) {
+          setSelectedSessionId(null);
+        }
+      }
+      return success;
+    } catch (err) {
+      console.error('Failed to delete session:', err);
+      setError(`Failed to delete session: ${err}`);
+      return false;
+    }
+  }, [connectionState, selectedSessionId]);
+
+  // Handle conclude for a specific session (from context menu)
+  const handleConcludeSessionFromMenu = useCallback(async (sessionId: string) => {
+    // First switch to the session
+    setSelectedSessionId(sessionId);
+    // Then perform conclude (using empty prompt for quick conclude)
+    const client = clientRef.current;
+    if (!client || connectionState !== 'connected') return;
+
+    try {
+      const result = await client.sessions.concludeSession(sessionId, '');
+      if (!result.success) {
+        setError(result.error || 'Failed to conclude session');
+        return;
+      }
+      // Refresh session list
+      const sessionList = await client.sessionData.getAllSessions();
+      setSessions(sessionList);
+    } catch (err) {
+      console.error('Failed to conclude session:', err);
+      setError(`Failed to conclude session: ${err}`);
+    }
+  }, [connectionState]);
+
+  // Handle fork for a specific session (from context menu)
+  const handleForkSessionFromMenu = useCallback(async (sessionId: string) => {
+    // First switch to the session
+    setSelectedSessionId(sessionId);
+    // Then perform fork
+    const client = clientRef.current;
+    if (!client || connectionState !== 'connected') return;
+
+    try {
+      const result = await client.sessions.forkSession(
+        sessionId,
+        '', // empty prompt - auto-generate
+        undefined, // name - auto-generate
+        false, // background
+        null, // contextModes - auto
+        null, // allowedTools
+        true, // startStreaming
+        true // autoCompleteCompression
+      );
+
+      if (result.childSessionId) {
+        // Switch to the new forked session
+        setSelectedSessionId(result.childSessionId);
+        // Refresh session list
+        const sessionList = await client.sessionData.getAllSessions();
+        setSessions(sessionList);
+      }
+    } catch (err) {
+      console.error('Failed to fork session:', err);
+      setError(`Failed to fork session: ${err}`);
+    }
+  }, [connectionState]);
+
   // Execute the selected send action
   const handleExecuteAction = useCallback(async () => {
     const content = (messageInputRef.current?.getValue() || '').trim();
@@ -2897,6 +3006,9 @@ function AppContent() {
               console.error('Failed to create watcher session:', err);
             }
           }}
+          onDeleteSession={handleDeleteSession}
+          onConcludeSession={handleConcludeSessionFromMenu}
+          onForkSession={handleForkSessionFromMenu}
           serverSlot={serverSlot}
           onSlotChange={setServerSlot}
           onLogout={() => {
@@ -3103,7 +3215,7 @@ function AppContent() {
                 queuedMessageCount={queuedMessageCount}
                 onStop={handleStopStreaming}
                 stopDisabled={connectionState !== 'connected'}
-                sessionContextTokens={selectedSession.cachedContextTokens}
+                sessionContextTokens={liveContextTokens > 0 ? liveContextTokens : selectedSession.cachedContextTokens}
                 isPinned={selectedSession.isPinned ?? false}
                 onTogglePin={() => handleTogglePin(selectedSession.id)}
                 onSelectSession={setSelectedSessionId}
@@ -3122,6 +3234,7 @@ function AppContent() {
               <SessionStatusBar
                 session={selectedSession}
                 isStreaming={selectedSession.isStreaming}
+                liveContextTokens={liveContextTokens}
                 client={clientRef.current}
                 onTogglePin={() => handleTogglePin(selectedSession.id)}
                 onSelectSession={setSelectedSessionId}
@@ -4443,6 +4556,12 @@ interface SidebarContentProps {
   onLinkSession?: (sessionId: string) => void;
   // Watch session callback (create watcher session)
   onWatchSession?: (sessionId: string) => void;
+  // Delete session callback
+  onDeleteSession?: (sessionId: string) => Promise<boolean>;
+  // Conclude session callback
+  onConcludeSession?: (sessionId: string) => void;
+  // Fork session callback
+  onForkSession?: (sessionId: string) => void;
   // Server slot props
   serverSlot: ServerSlot;
   onSlotChange: (slot: ServerSlot) => void;
@@ -4477,6 +4596,9 @@ function SidebarContent({
   onReviewSession,
   onLinkSession,
   onWatchSession,
+  onDeleteSession,
+  onConcludeSession,
+  onForkSession,
   serverSlot,
   onSlotChange,
   onLogout,
@@ -4716,6 +4838,10 @@ function SidebarContent({
           sessions={sessions}
           selectedSessionId={selectedSessionId}
           onSelectSession={handleSelectSession}
+          onDeleteSession={onDeleteSession}
+          onLinkSession={onLinkSession}
+          onConcludeSession={onConcludeSession}
+          onForkSession={onForkSession}
           isLoading={connectionState !== 'connected'}
           unreadSessionIds={unreadSessionIds}
         />

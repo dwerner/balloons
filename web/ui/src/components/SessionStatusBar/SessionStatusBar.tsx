@@ -11,6 +11,8 @@ export interface SessionStatusBarProps {
   session: SessionInfo;
   /** Whether the session is actively streaming (from useSessionData) */
   isStreaming?: boolean;
+  /** Live context token count from turn data - more accurate than session.cachedContextTokens */
+  liveContextTokens?: number;
   /** Balloons client for backend operations */
   client?: BalloonsClient | null;
   /** Callback when backend is changed */
@@ -158,6 +160,7 @@ function formatCwd(cwd: string | undefined, homePath?: string): string {
 export const SessionStatusBar = memo(function SessionStatusBar({
   session,
   isStreaming = false,
+  liveContextTokens,
   client,
   onBackendChange,
   onTogglePin,
@@ -170,7 +173,10 @@ export const SessionStatusBar = memo(function SessionStatusBar({
 }: SessionStatusBarProps) {
   const { expandDetail } = useLayout();
   const { expandToolCards, togglePreference } = usePreferences();
-  const contextTokens = session.cachedContextTokens ?? 0;
+  // Prefer live token count from turns when available, fall back to cached session value
+  const contextTokens = (liveContextTokens !== undefined && liveContextTokens > 0)
+    ? liveContextTokens
+    : (session.cachedContextTokens ?? 0);
   const contextWindow = session.contextWindow ?? 150000;
 
   const contextUsage = contextWindow > 0

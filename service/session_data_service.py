@@ -895,13 +895,14 @@ class SessionDataService:
                     # It's already a string
                     context_mode_str = str(raw_mode).lower()
 
+                turn_tokens = getattr(turn, 'tokens', 0)
                 snapshot = TurnSnapshot(
                     turn_id=turn.id,
                     order=idx,
                     role=turn.role,
                     streaming=False,
                     viewed=getattr(turn, 'viewed', False),
-                    tokens=getattr(turn, 'tokens', 0),
+                    tokens=turn_tokens,
                     context_mode=context_mode_str,
                     content_block=turn.content_block if hasattr(turn, 'content_block') else None,
                     exchange_id=getattr(turn, 'exchange_id', None),
@@ -1003,12 +1004,14 @@ class SessionDataService:
                 content = getattr(turn, 'content', '') or ""
                 content_block = TextBlock(type="text", text=content)
 
+            turn_tokens = getattr(turn, 'tokens', 0)
+
             turn_snapshot = TurnSnapshot(
                 turn_id=turn.id if hasattr(turn, 'id') else "",
                 role=turn.role,
                 streaming=False,  # Not streaming when loading from storage
                 viewed=True,
-                tokens=getattr(turn, 'tokens', 0),
+                tokens=turn_tokens,
                 context_mode="copy",  # Default to copy
                 content_block=content_block,
                 exchange_id=getattr(turn, 'exchange_id', None),

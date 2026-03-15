@@ -125,6 +125,38 @@ function formatKt(tokens: number): string {
   return `${kt.toFixed(1)}kt`;
 }
 
+// Format time for display - includes date if not today, year if not this year
+function formatTime(timestamp: string | undefined): string {
+  if (!timestamp) return '';
+  const date = new Date(timestamp);
+  if (isNaN(date.getTime())) return '';
+
+  const now = new Date();
+  const isToday = date.toDateString() === now.toDateString();
+
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const isYesterday = date.toDateString() === yesterday.toDateString();
+
+  const isThisYear = date.getFullYear() === now.getFullYear();
+
+  const time = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+
+  if (isToday) {
+    return time;
+  } else if (isYesterday) {
+    return `Yesterday ${time}`;
+  } else if (isThisYear) {
+    // Show month/day for this year
+    const dateStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    return `${dateStr} ${time}`;
+  } else {
+    // Show full date with year for older dates
+    const dateStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    return `${dateStr} ${time}`;
+  }
+}
+
 // Arrow icon component
 function Arrow({ open }: { open: boolean }) {
   return (
@@ -300,8 +332,8 @@ function TurnNode({
       }
     }
 
-    // Default: use content preview
-    return (turn.content || '').slice(0, 60).replace(/\n/g, ' ');
+    // Default: use content preview (longer for better context)
+    return (turn.content || '').slice(0, 100).replace(/\n/g, ' ');
   };
 
   const preview = getPreview();
@@ -749,11 +781,11 @@ const ExchangeNode = memo(function ExchangeNode({
   };
   const exchangeIcon = getExchangeIcon();
 
-  // Get preview text
+  // Get preview text (longer for better context)
   const userPreview = exchange.userTurn
-    ? (exchange.userTurn.content || '').slice(0, 50).replace(/\n/g, ' ')
+    ? (exchange.userTurn.content || '').slice(0, 80).replace(/\n/g, ' ')
     : isSystemOnly
-      ? (firstSystemTurn?.content || '').slice(0, 50).replace(/\n/g, ' ')
+      ? (firstSystemTurn?.content || '').slice(0, 80).replace(/\n/g, ' ')
       : null;
 
   const totalTokens = (exchange.userTurn?.tokens || 0) +
@@ -761,6 +793,25 @@ const ExchangeNode = memo(function ExchangeNode({
     exchange.systemTurns.reduce((sum, t) => sum + (t.tokens || 0), 0);
 
   const tokenStr = formatKt(totalTokens);
+
+  // Token weight class for visual intensity (based on token usage)
+  const getTokenWeightClass = () => {
+    if (totalTokens >= 10000) return 'ctx-tree-node--tokens-heavy';
+    if (totalTokens >= 5000) return 'ctx-tree-node--tokens-large';
+    if (totalTokens >= 2000) return 'ctx-tree-node--tokens-medium';
+    if (totalTokens >= 500) return 'ctx-tree-node--tokens-light';
+    return '';
+  };
+  const tokenWeightClass = getTokenWeightClass();
+
+  // Get timestamp from first turn in exchange (via rawTurnByIdx)
+  const getExchangeTimestamp = (): string => {
+    const firstTurnIdx = exchange.userTurn?.idx ?? exchange.systemTurns[0]?.idx ?? exchange.assistantTurns[0]?.idx;
+    if (firstTurnIdx === undefined || !rawTurnByIdx) return '';
+    const rawTurn = rawTurnByIdx.get(firstTurnIdx);
+    return formatTime(rawTurn?.timestamp);
+  };
+  const exchangeTime = getExchangeTimestamp();
 
   // Build set of tool_use IDs to filter out tool_result turns from display
   // (they're rendered merged with their tool_use in TurnCard)
@@ -836,7 +887,7 @@ const ExchangeNode = memo(function ExchangeNode({
 
   return (
     <li
-      className="ctx-tree-node ctx-tree-node--exchange"
+      className={`ctx-tree-node ctx-tree-node--exchange ${tokenWeightClass}`}
       data-ctx-turn-idx={firstTurnIdx}
     >
       <div
@@ -853,14 +904,19 @@ const ExchangeNode = memo(function ExchangeNode({
         </span>
         <span className="ctx-tree-node__label ctx-tree-node__label--muted">
           {userPreview || (isSystemOnly ? (systemBlockType || 'System') : 'System')}
-          {userPreview && userPreview.length >= 50 ? '...' : ''}
-        </span>
-        <span className="ctx-tree-node__meta">
-          {turnCount > 1 && `${turnCount} turns`}
+          {userPreview && userPreview.length >= 80 ? '...' : ''}
         </span>
         {tokenStr && (
           <span className="ctx-tree-node__meta ctx-tree-node__meta--green">
             {tokenStr}
+          </span>
+        )}
+        <span className="ctx-tree-node__meta">
+          ({turnCount})
+        </span>
+        {exchangeTime && (
+          <span className="ctx-tree-node__time">
+            {exchangeTime}
           </span>
         )}
       </div>

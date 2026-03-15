@@ -15,6 +15,7 @@ import useResizeObserver from 'use-resize-observer';
 import type { SessionInfo } from '../../../../generated/balloons-client';
 import { createLogger } from '../../utils/debugLog';
 import { usePreferences } from '../layout/PreferencesContext';
+import { useDialog } from '../Dialog';
 import './HierarchyView.css';
 
 const debugLog = createLogger('HierarchyView');
@@ -348,18 +349,22 @@ interface SessionNodeRendererProps {
   nodeProps: NodeRendererProps<TreeNodeData>;
   onSelectSession: (sessionId: string) => void;
   selectedSessionId: string | null;
+  contextMenuSessionId: string | null;
   mode: HierarchyMode;
   unreadSessionIds: Set<string>;
   depthStyle: 'chevrons' | 'fractal';
+  onContextMenu: (e: React.MouseEvent, session: SessionInfo) => void;
 }
 
 const SessionNodeRenderer = memo(function SessionNodeRenderer({
   nodeProps,
   onSelectSession,
   selectedSessionId,
+  contextMenuSessionId,
   mode,
   unreadSessionIds,
   depthStyle,
+  onContextMenu,
 }: SessionNodeRendererProps) {
   const { node, style } = nodeProps;
   const { session, colorIndex, treeDepth, maxTreeDepth, siblingCount } = node.data;
@@ -367,6 +372,7 @@ const SessionNodeRenderer = memo(function SessionNodeRenderer({
   const sessionName = session.forkName || session.title || `Session ${session.id.slice(0, 8)}`;
   const hasChildren = !node.isLeaf;
   const isSelected = session.id === selectedSessionId;
+  const isContextTarget = session.id === contextMenuSessionId;
   const isUnread = unreadSessionIds.has(session.id);
 
   // react-arborist provides indentation via node.level - we use treeDepth for tinting
@@ -377,16 +383,37 @@ const SessionNodeRenderer = memo(function SessionNodeRenderer({
     onSelectSession(session.id);
   }, [onSelectSession, session.id]);
 
+  // Toggle expands/collapses entire subtree
   const handleToggle = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    node.toggle();
+    if (node.isOpen) {
+      node.close();
+    } else {
+      node.openParents();
+      node.open();
+      // Open all descendants recursively
+      const openDescendants = (n: typeof node) => {
+        for (const child of n.children || []) {
+          child.open();
+          openDescendants(child);
+        }
+      };
+      openDescendants(node);
+    }
   }, [node]);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onContextMenu(e, session);
+  }, [onContextMenu, session]);
 
   return (
     <div
       style={style}
-      className={`hierarchy-node__row ${isSelected ? 'hierarchy-node__row--selected' : ''} ${session.forkStatus === 'merged' ? 'hierarchy-node__row--merged' : ''} ${isUnread ? 'hierarchy-node__row--unread' : ''}`}
+      className={`hierarchy-node__row ${isSelected ? 'hierarchy-node__row--selected' : ''} ${isContextTarget ? 'hierarchy-node__row--context-target' : ''} ${session.forkStatus === 'merged' ? 'hierarchy-node__row--merged' : ''} ${isUnread ? 'hierarchy-node__row--unread' : ''}`}
       onClick={handleClick}
+      onContextMenu={handleContextMenu}
     >
       <div
         className="hierarchy-node__content"
@@ -497,6 +524,10 @@ export interface HierarchyViewProps {
   sessions: SessionInfo[];
   selectedSessionId: string | null;
   onSelectSession: (sessionId: string) => void;
+  onDeleteSession?: (sessionId: string) => Promise<boolean>;
+  onLinkSession?: (targetSessionId: string) => void;
+  onConcludeSession?: (sessionId: string) => void;
+  onForkSession?: (sessionId: string) => void;
   isLoading?: boolean;
   unreadSessionIds?: Set<string>;
 }
@@ -510,12 +541,24 @@ export const HierarchyView = memo(function HierarchyView({
   sessions,
   selectedSessionId,
   onSelectSession,
+  onDeleteSession,
+  onLinkSession,
+  onConcludeSession,
+  onForkSession,
   isLoading = false,
   unreadSessionIds = EMPTY_SET,
 }: HierarchyViewProps) {
   const treeRef = useRef<TreeApi<TreeNodeData>>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const { depthIndicatorStyle } = usePreferences();
+  const { confirm } = useDialog();
+
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    session: SessionInfo;
+  } | null>(null);
 
   // View mode persisted in localStorage
   const [mode, setMode] = useState<HierarchyMode>(() => {
@@ -530,6 +573,44 @@ export const HierarchyView = memo(function HierarchyView({
     setMode(newMode);
     localStorage.setItem(HIERARCHY_MODE_KEY, newMode);
   }, []);
+
+  // Context menu handlers
+  const handleContextMenu = useCallback((e: React.MouseEvent, session: SessionInfo) => {
+    setContextMenu({ x: e.clientX, y: e.clientY, session });
+  }, []);
+
+  const closeContextMenu = useCallback(() => {
+    setContextMenu(null);
+  }, []);
+
+  // Delete session handler with optional confirmation
+  const handleDeleteSession = useCallback(async (session: SessionInfo, skipConfirm: boolean) => {
+    if (!onDeleteSession) return;
+
+    const sessionName = session.forkName || session.title || `Session ${session.id.slice(0, 8)}`;
+
+    if (!skipConfirm) {
+      const confirmed = await confirm({
+        title: 'Delete Session?',
+        message: `Delete "${sessionName}"? This will permanently delete the session and all its data.`,
+        confirmText: 'Delete',
+        cancelText: 'Cancel',
+        variant: 'danger',
+      });
+      if (!confirmed) return;
+    }
+
+    await onDeleteSession(session.id);
+    closeContextMenu();
+  }, [onDeleteSession, closeContextMenu, confirm]);
+
+  // Close context menu on click outside
+  useEffect(() => {
+    if (!contextMenu) return;
+    const handleClick = () => setContextMenu(null);
+    document.addEventListener('click', handleClick);
+    return () => document.removeEventListener('click', handleClick);
+  }, [contextMenu]);
 
   // Use useResizeObserver to track container dimensions
   const { ref: treeWrapperRef, width: containerWidth, height: containerHeight } = useResizeObserver<HTMLDivElement>();
@@ -698,20 +779,22 @@ export const HierarchyView = memo(function HierarchyView({
 
   const treeData = mode === 'roots' ? rootsTreeData : leavesTreeData;
 
-  // Initial open state
+  // Initial open state - collapse parents by default in leaves mode since we show depth
   const initialOpenState = useMemo(() => {
     const openMap: Record<string, boolean> = {};
     const collectIds = (nodes: TreeNodeData[]) => {
       for (const node of nodes) {
         if (node.children?.length) {
-          openMap[node.id] = true;
+          // In leaves mode, collapse by default (depth indicator shows ancestry)
+          // In roots mode, expand by default to show tree structure
+          openMap[node.id] = mode === 'roots';
           collectIds(node.children);
         }
       }
     };
     collectIds(treeData);
     return openMap;
-  }, [treeData]);
+  }, [treeData, mode]);
 
   // Scroll to selected session
   useEffect(() => {
@@ -728,11 +811,13 @@ export const HierarchyView = memo(function HierarchyView({
       nodeProps={props}
       onSelectSession={onSelectSession}
       selectedSessionId={selectedSessionId}
+      contextMenuSessionId={contextMenu?.session.id || null}
       mode={mode}
       unreadSessionIds={unreadSessionIds}
       depthStyle={depthIndicatorStyle}
+      onContextMenu={handleContextMenu}
     />
-  ), [onSelectSession, selectedSessionId, mode, unreadSessionIds, depthIndicatorStyle]);
+  ), [onSelectSession, selectedSessionId, contextMenu, mode, unreadSessionIds, depthIndicatorStyle, handleContextMenu]);
 
   useEffect(() => {
     debugLog('HierarchyView mounted with react-arborist', { sessionCount: sessions.length, mode });
@@ -768,13 +853,14 @@ export const HierarchyView = memo(function HierarchyView({
       <div className="hierarchy-tree-wrapper" ref={treeWrapperRef}>
         {containerHeight && containerHeight > 0 && (
           <Tree<TreeNodeData>
+            key={`tree-${sessions.length}-${mode}`}
             ref={treeRef}
             data={treeData}
             width={containerWidth || '100%'}
             height={containerHeight}
             rowHeight={36}
             indent={16}
-            openByDefault={true}
+            openByDefault={mode === 'roots'}
             initialOpenState={initialOpenState}
             selection={selectedSessionId || undefined}
             disableDrag={true}
@@ -786,6 +872,96 @@ export const HierarchyView = memo(function HierarchyView({
           </Tree>
         )}
       </div>
+
+      {/* Context menu */}
+      {contextMenu && (
+        <div
+          className="hierarchy-context-menu"
+          style={{
+            position: 'fixed',
+            left: contextMenu.x,
+            top: contextMenu.y,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            className="hierarchy-context-menu__item"
+            onClick={() => {
+              onSelectSession(contextMenu.session.id);
+              closeContextMenu();
+            }}
+          >
+            Open Session
+          </button>
+          <button
+            className="hierarchy-context-menu__item"
+            onClick={() => {
+              navigator.clipboard.writeText(contextMenu.session.id);
+              closeContextMenu();
+            }}
+          >
+            Copy Session ID
+          </button>
+          {onLinkSession && selectedSessionId && selectedSessionId !== contextMenu.session.id && (
+            <button
+              className="hierarchy-context-menu__item"
+              onClick={() => {
+                onLinkSession(contextMenu.session.id);
+                closeContextMenu();
+              }}
+            >
+              Link to this session
+            </button>
+          )}
+          {onConcludeSession && !contextMenu.session.concluded && (
+            <button
+              className="hierarchy-context-menu__item"
+              onClick={() => {
+                onConcludeSession(contextMenu.session.id);
+                closeContextMenu();
+              }}
+            >
+              Conclude
+            </button>
+          )}
+          <div className="hierarchy-context-menu__divider" />
+          <button
+            className="hierarchy-context-menu__item hierarchy-context-menu__item--info"
+            disabled
+          >
+            {contextMenu.session.messageCount} messages
+          </button>
+          {contextMenu.session.cachedContextTokens !== undefined && (
+            <button
+              className="hierarchy-context-menu__item hierarchy-context-menu__item--info"
+              disabled
+            >
+              {contextMenu.session.cachedContextTokens.toLocaleString()} tokens
+            </button>
+          )}
+          {onDeleteSession && (() => {
+            const hasChildren = contextMenu.session.children && contextMenu.session.children.length > 0;
+            const canDelete = !hasChildren;
+            return (
+              <>
+                <div className="hierarchy-context-menu__divider" />
+                <button
+                  className={`hierarchy-context-menu__item ${canDelete ? 'hierarchy-context-menu__item--danger' : ''}`}
+                  onClick={(e) => canDelete && handleDeleteSession(contextMenu.session, e.shiftKey)}
+                  disabled={!canDelete}
+                  title={
+                    hasChildren
+                      ? 'Cannot delete: session has forks (delete children first)'
+                      : 'Hold Shift to skip confirmation'
+                  }
+                >
+                  Delete Session
+                </button>
+              </>
+            );
+          })()}
+        </div>
+      )}
     </div>
   );
 });

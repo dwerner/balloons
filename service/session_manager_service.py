@@ -1909,6 +1909,29 @@ class SessionManagerService:
             # Count tokens accurately using tiktoken
             text_tokens = count_tokens(text) if text else 0
 
+            # Update the turn's tokens in the session for persistence
+            session = self._manager.get_session(session_id)
+            if session and turn_id:
+                found_turn = False
+                for turn in session.turns:
+                    if turn.id == turn_id:
+                        turn.tokens = text_tokens
+                        turn.mark_dirty()  # Ensure token update gets saved
+                        found_turn = True
+                        debug_log.info(
+                            f"Updated turn {turn_id[:8]} tokens={text_tokens}",
+                            category=Category.RUNNER,
+                        )
+                        break
+                if not found_turn:
+                    debug_log.warning(
+                        f"Could not find turn {turn_id[:8]} to update tokens",
+                        category=Category.RUNNER,
+                    )
+                # Schedule save to persist the token update
+                # Use asyncio.create_task to avoid blocking the event handler
+                asyncio.create_task(session.save())
+
             # Notify observers with typed event
             await self._notify_observers(
                 "on_turn_finished",
@@ -2173,6 +2196,23 @@ class SessionManagerService:
             context_tokens = stream.input_tokens if stream else 0
             output_tokens_total = stream.output_tokens if stream else 0
 
+            # Count tokens for the full tool_use block (name, id, input)
+            import json
+            from dataclasses import asdict
+            tool_use_dict = asdict(tool_use_block)
+            tool_use_str = json.dumps(tool_use_dict)
+            tool_use_tokens = count_tokens(tool_use_str)
+
+            # Update the turn's tokens in the session for persistence
+            session = self._manager.get_session(session_id)
+            if session and turn_id:
+                for turn in session.turns:
+                    if turn.id == turn_id:
+                        turn.tokens = tool_use_tokens
+                        turn.mark_dirty()
+                        break
+                asyncio.create_task(session.save())
+
             # Also emit turn_finished for the tool_use turn
             await self._notify_observers(
                 "on_turn_finished",
@@ -2182,7 +2222,7 @@ class SessionManagerService:
                     turn_index=turn_idx,
                     role="assistant",
                     content="",  # Tool use turns have content_block instead
-                    tokens=0,
+                    tokens=tool_use_tokens,
                     content_block=tool_use_block,
                     context_tokens=context_tokens,
                     output_tokens_total=output_tokens_total,
@@ -2301,6 +2341,23 @@ class SessionManagerService:
             context_tokens = stream.input_tokens if stream else 0
             output_tokens_total = stream.output_tokens if stream else 0
 
+            # Count tokens for the full tool_result block (tool_use_id, content, is_error)
+            import json
+            from dataclasses import asdict
+            tool_result_dict = asdict(tool_result_block)
+            tool_result_str = json.dumps(tool_result_dict)
+            result_tokens = count_tokens(tool_result_str)
+
+            # Update the turn's tokens in the session for persistence
+            session = self._manager.get_session(session_id)
+            if session and turn_id:
+                for turn in session.turns:
+                    if turn.id == turn_id:
+                        turn.tokens = result_tokens
+                        turn.mark_dirty()
+                        break
+                asyncio.create_task(session.save())
+
             # Also emit turn_finished for the tool_result turn
             await self._notify_observers(
                 "on_turn_finished",
@@ -2310,7 +2367,7 @@ class SessionManagerService:
                     turn_index=turn_idx,
                     role="tool",
                     content="",  # Tool result turns have content_block instead
-                    tokens=0,
+                    tokens=result_tokens,
                     content_block=tool_result_block,
                     context_tokens=context_tokens,
                     output_tokens_total=output_tokens_total,
@@ -2360,6 +2417,9 @@ class SessionManagerService:
             turn_id = data.get("turn_id", "")
             injected_at_tool_id = data.get("injected_at_tool_id", "")
 
+            # Count tokens for the steering content
+            steering_tokens = count_tokens(content)
+
             debug_log.info(
                 f"Steering injected into conversation",
                 category=Category.RUNNER,
@@ -2368,8 +2428,19 @@ class SessionManagerService:
                     "content_len": len(content),
                     "turn_idx": turn_idx,
                     "injected_at_tool_id": injected_at_tool_id[:12] if injected_at_tool_id else "",
+                    "tokens": steering_tokens,
                 },
             )
+
+            # Update the turn's tokens in the session for persistence
+            session = self._manager.get_session(session_id)
+            if session and turn_id:
+                for turn in session.turns:
+                    if turn.id == turn_id:
+                        turn.tokens = steering_tokens
+                        turn.mark_dirty()
+                        break
+                asyncio.create_task(session.save())
 
             # Notify observers with typed event so UI can display the injected user turn
             await self._notify_observers(
@@ -2405,7 +2476,7 @@ class SessionManagerService:
                     turn_index=turn_idx,
                     role="user",
                     content=content,
-                    tokens=0,
+                    tokens=steering_tokens,
                     content_block=None,
                     context_tokens=0,
                     output_tokens_total=0,
@@ -2464,6 +2535,17 @@ class SessionManagerService:
             if ctx.content:
                 # Count tokens accurately using tiktoken
                 content_tokens = count_tokens(ctx.content)
+
+                # Update the turn's tokens in the session for persistence
+                session = self._manager.get_session(session_id)
+                if session and ctx.assistant_turn_id:
+                    for turn in session.turns:
+                        if turn.id == ctx.assistant_turn_id:
+                            turn.tokens = content_tokens
+                            turn.mark_dirty()  # Ensure token update gets saved
+                            break
+                    # Schedule save to persist the token update
+                    asyncio.create_task(session.save())
 
                 await self._notify_observers(
                     "on_turn_finished",
@@ -2642,6 +2724,17 @@ class SessionManagerService:
             if ctx.content:
                 # Count tokens accurately using tiktoken
                 content_tokens = count_tokens(ctx.content)
+
+                # Update the turn's tokens in the session for persistence
+                session = self._manager.get_session(session_id)
+                if session and ctx.assistant_turn_id:
+                    for turn in session.turns:
+                        if turn.id == ctx.assistant_turn_id:
+                            turn.tokens = content_tokens
+                            turn.mark_dirty()  # Ensure token update gets saved
+                            break
+                    # Schedule save to persist the token update
+                    asyncio.create_task(session.save())
 
                 await self._notify_observers(
                     "on_turn_finished",
@@ -6001,6 +6094,11 @@ Summary:""")
         user_turn = session.add_message(
             "user", content, content_blocks=user_blocks, exchange_id=exchange_id
         )
+
+        # Count tokens for user turn and persist
+        user_tokens = count_tokens(content)
+        user_turn.tokens = user_tokens
+        user_turn.mark_dirty()
         await session.save()
 
         # Emit session updated so React frontend knows we're streaming
@@ -6026,7 +6124,7 @@ Summary:""")
                 turn_index=turn_index,
                 role="user",
                 content=content,
-                tokens=0,  # User turns don't have token counts
+                tokens=user_tokens,
                 content_block=TextBlock(type="text", text=content),
             ),
         )
@@ -6195,6 +6293,12 @@ Summary:""")
         user_turn = session.add_message(
             "user", display_content, content_blocks=user_blocks, exchange_id=exchange_id
         )
+
+        # Count tokens for user turn (text content + image tokens estimated)
+        # Note: Images add ~85 tokens per tile (varies by size), but we count the text portion
+        user_tokens = count_tokens(display_content)
+        user_turn.tokens = user_tokens
+        user_turn.mark_dirty()
         await session.save()
 
         # Emit session updated so React frontend knows we're streaming
@@ -6220,7 +6324,7 @@ Summary:""")
                 turn_index=turn_index,
                 role="user",
                 content=display_content,
-                tokens=0,  # User turns don't have token counts
+                tokens=user_tokens,
                 content_block=TextBlock(type="text", text=display_content),
             ),
         )
@@ -6371,6 +6475,11 @@ Summary:""")
         user_turn = session.add_message(
             "user", content, content_blocks=user_blocks, exchange_id=exchange_id
         )
+
+        # Count tokens for user turn and persist
+        user_tokens = count_tokens(content)
+        user_turn.tokens = user_tokens
+        user_turn.mark_dirty()
         await session.save()
 
         # Emit session updated so React frontend knows we're streaming
@@ -6396,7 +6505,7 @@ Summary:""")
                 turn_index=turn_index,
                 role="user",
                 content=content,
-                tokens=0,  # User turns don't have token counts
+                tokens=user_tokens,
                 content_block=MarkdownBlock(type="markdown", text=content),  # Key difference
             ),
         )

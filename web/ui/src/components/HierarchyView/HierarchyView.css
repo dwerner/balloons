@@ -593,3 +593,83 @@
   border-radius: 3px;
   background: rgba(245, 158, 11, 0.15);
 }
+
+/* ===== Context Menu ===== */
+.hierarchy-context-menu {
+  z-index: 1000;
+  min-width: 160px;
+  background: var(--color-surface-elevated, #2a2a2a);
+  border: 1px solid var(--color-border-primary, #444);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  padding: 4px 0;
+  font-size: 13px;
+}
+
+.hierarchy-context-menu__item {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  color: var(--color-text-primary, #e0e0e0);
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.hierarchy-context-menu__item:hover:not(:disabled) {
+  background: var(--color-surface-hover, #3a3a3a);
+}
+
+.hierarchy-context-menu__item:disabled {
+  color: var(--color-text-muted, #888);
+  cursor: default;
+}
+
+.hierarchy-context-menu__item--info {
+  font-size: 11px;
+  padding: 4px 12px;
+}
+
+.hierarchy-context-menu__divider {
+  height: 1px;
+  background: var(--color-border-secondary, #333);
+  margin: 4px 0;
+}
+
+/* Danger item (delete) */
+.hierarchy-context-menu__item--danger {
+  color: var(--color-error, #ef4444);
+}
+
+.hierarchy-context-menu__item--danger:hover {
+  background: rgba(239, 68, 68, 0.15);
+}
+
+/* Light theme context menu */
+[data-theme="light"] .hierarchy-context-menu {
+  background: #fff;
+  border-color: #ddd;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+[data-theme="light"] .hierarchy-context-menu__item:hover:not(:disabled) {
+  background: #f5f5f5;
+}
+
+[data-theme="light"] .hierarchy-context-menu__item--danger:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+/* Context menu target highlight (green) */
+.hierarchy-node__row--context-target .hierarchy-node__content {
+  background: rgba(74, 222, 128, 0.15) !important;
+  box-shadow: inset 0 0 0 1px rgba(74, 222, 128, 0.3);
+}
+
+[data-theme="light"] .hierarchy-node__row--context-target .hierarchy-node__content {
+  background: rgba(34, 197, 94, 0.12) !important;
+  box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.25);
+}
