@@ -32,7 +32,7 @@ import { RenameSessionModal } from './components/RenameSessionModal';
 // LinkSessionModal removed - link stash workflow replaces session picker
 import { VoiceInput } from './components/VoiceInput';
 import { SendActionButton, type SendAction } from './components/SendActionButton';
-import { setDebugClient, createLogger, isDebugEnabled, setDebugEnabled } from './utils/debugLog';
+import { setDebugClient, createLogger, isDebugEnabled, setDebugEnabled, debugLog as rawDebugLog } from './utils/debugLog';
 import { logout, isAuthenticated, getToken } from './utils/auth';
 import { Login } from './components/Login';
 
@@ -1412,33 +1412,44 @@ function AppContent() {
           // Add the new session directly from the event data
           // This avoids the race condition where selectedSessionId is set
           // but sessions[] doesn't contain it yet (causing status bar to not render)
-          console.log('[App] sessionDataSessionAdded:', data.sessionId?.slice(0, 8));
+          const t0 = performance.now();
+          rawDebugLog('perf', '[sessionAdded event] received', { sessionId: data.sessionId?.slice(0, 8) });
           if (data.session) {
             setSessions(prev => {
               // Don't add duplicates (in case of reconnection/replay)
               if (prev.some(s => s.id === data.sessionId)) {
+                rawDebugLog('perf', '[sessionAdded event] skipped - duplicate', {});
                 return prev;
               }
-              // Add at beginning (most recent)
+              rawDebugLog('perf', `[sessionAdded event] adding to list, prevLength=${prev.length}`, {});
               return [data.session, ...prev];
             });
+            const t1 = performance.now();
+            rawDebugLog('perf', `[sessionAdded event] setSessions: ${(t1-t0).toFixed(1)}ms`, {});
           }
         })
       );
 
       unsubscribers.push(
         client.sessionData.sessionDataSessionUpdated((data) => {
+          const tStart = performance.now();
           // Update session in place using the event data - no refetch needed
           // The event includes the full SessionInfo with updated fields like
           // cachedContextTokens, isStreaming, etc.
           // NOTE: Preserve local isPinned state - server events don't include pin status
-          console.log('[App] sessionDataSessionUpdated:', data.sessionId?.slice(0,8), 'tokens:', data.session?.cachedContextTokens);
           if (data.session) {
-            setSessions(prev => prev.map(s =>
-              s.id === data.sessionId
-                ? { ...data.session, isPinned: s.isPinned }  // Preserve local pin state
-                : s
-            ));
+            setSessions(prev => {
+              const result = prev.map(s =>
+                s.id === data.sessionId
+                  ? { ...data.session, isPinned: s.isPinned }  // Preserve local pin state
+                  : s
+              );
+              const elapsed = performance.now() - tStart;
+              if (elapsed > 1) {
+                rawDebugLog('perf', `[sessionUpdated event] ${elapsed.toFixed(1)}ms, len=${prev.length}`, {});
+              }
+              return result;
+            });
           }
         })
       );
@@ -1954,17 +1965,18 @@ function AppContent() {
   // This prevents duplicate subscription conflicts where both this function and useSessionData
   // would try to subscribe to HISTORY layer.
   const handleSelectSession = useCallback(async (sessionId: string) => {
-    debugLog('handleSelectSession called', { sessionId, connectionState, currentSelectedSessionId: selectedSessionId });
+    const t0 = performance.now();
+    rawDebugLog('perf', '[handleSelectSession] START', { sessionId: sessionId?.slice(0, 8) });
 
     const client = clientRef.current;
     if (!client || connectionState !== 'connected') {
-      debugLog('handleSelectSession: early return - not connected', { hasClient: !!client, connectionState });
+      rawDebugLog('perf', '[handleSelectSession] early return - not connected', {});
       return;
     }
 
     // Skip if already selected (prevents unnecessary refetches)
     if (sessionId === selectedSessionId) {
-      debugLog('handleSelectSession: early return - already selected', { sessionId });
+      rawDebugLog('perf', '[handleSelectSession] early return - already selected', {});
       return;
     }
 
@@ -1973,6 +1985,7 @@ function AppContent() {
 
     // Clear state immediately to prevent stale data display
     // Note: turns will be populated via onTurnsChange from StreamingTurnsView
+    const t1 = performance.now();
     setIsLoadingTurns(true);
     setTurns([]);
     setToolUses([]);
@@ -1981,18 +1994,42 @@ function AppContent() {
     setError(null);
     // Clear archiving state - it's session-specific and shouldn't persist across session switches
     setArchivingByHelper(new Map());
+    const t2 = performance.now();
+    rawDebugLog('perf', `[handleSelectSession] state clears: ${(t2-t1).toFixed(1)}ms`, {});
 
     // Now set the new session ID - this triggers StreamingTurnsView to subscribe
     // and report turns via onTurnsChange callback
-    debugLog('handleSelectSession: setting selectedSessionId', { sessionId });
     setSelectedSessionId(sessionId);
+    const t3 = performance.now();
+    rawDebugLog('perf', `[handleSelectSession] setSelectedSessionId: ${(t3-t2).toFixed(1)}ms`, {});
 
     try {
       // Fetch queue and task info (but NOT turns - those come from StreamingTurnsView)
-      const [queueInfo, task] = await Promise.all([
-        client.queue.getQueue(sessionId),
-        client.tasks.getSessionTask(sessionId),
-      ]);
+      const t4 = performance.now();
+      rawDebugLog('perf', `[handleSelectSession] starting queue+task fetch`, {});
+
+      // Wrap each call to track individual timing
+      const queuePromise = (async () => {
+        const start = performance.now();
+        rawDebugLog('perf', `[handleSelectSession] getQueue SENT`, {});
+        const result = await client.queue.getQueue(sessionId);
+        const elapsed = performance.now() - start;
+        rawDebugLog('perf', `[handleSelectSession] getQueue RECEIVED: ${elapsed.toFixed(1)}ms`, {});
+        return result;
+      })();
+
+      const taskPromise = (async () => {
+        const start = performance.now();
+        rawDebugLog('perf', `[handleSelectSession] getSessionTask SENT`, {});
+        const result = await client.tasks.getSessionTask(sessionId);
+        const elapsed = performance.now() - start;
+        rawDebugLog('perf', `[handleSelectSession] getSessionTask RECEIVED: ${elapsed.toFixed(1)}ms`, {});
+        return result;
+      })();
+
+      const [queueInfo, task] = await Promise.all([queuePromise, taskPromise]);
+      const t5 = performance.now();
+      rawDebugLog('perf', `[handleSelectSession] queue+task fetch TOTAL: ${(t5-t4).toFixed(1)}ms`, {});
 
       // Verify this is still the session we're supposed to load
       // (user might have switched again during the async fetch)
@@ -2001,9 +2038,10 @@ function AppContent() {
       }
 
       // Apply the loaded data (turns are set via onTurnsChange callback)
-      debugLog('handleSelectSession: data loaded successfully', { queueCount: queueInfo.messageCount, hasTask: !!task });
       setQueuedMessageCount(queueInfo.messageCount);
       setStreamingTask(task);
+      const t6 = performance.now();
+      rawDebugLog('perf', `[handleSelectSession] TOTAL: ${(t6-t0).toFixed(1)}ms`, {});
       // Note: setIsLoadingTurns(false) is now done in handleTurnsChange when turns arrive
     } catch (err) {
       console.error('Failed to load session info:', err);
@@ -2869,9 +2907,13 @@ function AppContent() {
             const sessionsClient = clientRef.current?.sessions;
             if (!sessionsClient || connectionState !== 'connected') return;
             try {
-              debugLog('Creating new session', { currentSelectedSessionId: selectedSessionId });
+              const t0 = performance.now();
+              rawDebugLog('perf', '[session_create] START', { currentSelectedSessionId: selectedSessionId?.slice(0, 8) });
+
               const newSession = await sessionsClient.createSession();
-              debugLog('New session created', { newSessionId: newSession?.id, oldSessionId: selectedSessionId });
+              const t1 = performance.now();
+              rawDebugLog('perf', `[session_create] API call: ${(t1-t0).toFixed(1)}ms`, { newSessionId: newSession?.id?.slice(0, 8) });
+
               if (newSession) {
                 // Convert ManagedSessionInfo to SessionInfo and add immediately
                 // This prevents the race condition where selectedSessionId is set
@@ -2890,17 +2932,23 @@ function AppContent() {
                   parentId: newSession.parentId,
                   workingDirectory: newSession.workingDirectory,
                 };
+                const t2 = performance.now();
                 setSessions(prev => {
                   // Don't add if already present (event might have arrived first)
                   if (prev.some(s => s.id === newSession.id)) {
-                    debugLog('Session already in list (event arrived first)', { newSessionId: newSession.id });
+                    rawDebugLog('perf', '[session_create] Session already in list', { newSessionId: newSession.id?.slice(0, 8) });
                     return prev;
                   }
-                  debugLog('Adding session to list immediately', { newSessionId: newSession.id });
+                  rawDebugLog('perf', `[session_create] setSessions: prevLength=${prev.length}`, {});
                   return [sessionInfo, ...prev];
                 });
-                debugLog('Switching to new session', { newSessionId: newSession.id });
+                const t3 = performance.now();
+                rawDebugLog('perf', `[session_create] setSessions call: ${(t3-t2).toFixed(1)}ms`, {});
+
                 handleSelectSession(newSession.id);
+                const t4 = performance.now();
+                rawDebugLog('perf', `[session_create] handleSelectSession: ${(t4-t3).toFixed(1)}ms`, {});
+                rawDebugLog('perf', `[session_create] TOTAL: ${(t4-t0).toFixed(1)}ms`, {});
               }
             } catch (error) {
               debugLog('Failed to create new session', { error: String(error) });
@@ -4295,11 +4343,10 @@ interface SessionListItemProps {
   isPinned: boolean;
   showStreamingDetails: boolean;
   streamingTask: TaskInfo | null;
-  client?: BalloonsClient | null;
   onSelect: () => void;
   onTogglePin?: () => void;
-  onRenamed?: (newTitle: string) => void;
-  onSelectSession?: (sessionId: string) => void;
+  /** Called when user wants to rename this session (long press on title) */
+  onRequestRename?: () => void;
   itemRef?: (el: HTMLDivElement | null) => void;
 }
 
@@ -4309,89 +4356,62 @@ function SessionListItem({
   isPinned,
   showStreamingDetails,
   streamingTask,
-  client,
   onSelect,
   onTogglePin,
-  onRenamed,
-  onSelectSession,
+  onRequestRename,
   itemRef,
 }: SessionListItemProps) {
-  const [showRenameModal, setShowRenameModal] = useState(false);
-
   const titleLongPress = useLongPress({
     onLongPress: () => {
-      if (client?.isConnected) {
-        setShowRenameModal(true);
-      }
+      onRequestRename?.();
     },
     delay: 500,
   });
 
-  const handleRenamed = useCallback((newTitle: string) => {
-    setShowRenameModal(false);
-    onRenamed?.(newTitle);
-  }, [onRenamed]);
-
   return (
-    <>
-      <div
-        ref={itemRef}
-        className={`session-item ${isSelected ? 'selected' : ''} ${session.isStreaming ? 'streaming' : ''} ${isPinned ? 'pinned' : ''}`}
-        onClick={onSelect}
-      >
-        <div className="session-header">
-          {onTogglePin && (
-            <span
-              className={`session-pin ${isPinned ? 'session-pin--active' : ''}`}
-              onClick={(e) => { e.stopPropagation(); onTogglePin(); }}
-              title={isPinned ? 'Unpin session' : 'Pin session'}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill={isPinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 17v5" />
-                <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1z" />
-              </svg>
-            </span>
-          )}
-          <div
-            className="session-title"
-            title="Long press to rename"
-            {...titleLongPress}
+    <div
+      ref={itemRef}
+      className={`session-item ${isSelected ? 'selected' : ''} ${session.isStreaming ? 'streaming' : ''} ${isPinned ? 'pinned' : ''}`}
+      onClick={onSelect}
+    >
+      <div className="session-header">
+        {onTogglePin && (
+          <span
+            className={`session-pin ${isPinned ? 'session-pin--active' : ''}`}
+            onClick={(e) => { e.stopPropagation(); onTogglePin(); }}
+            title={isPinned ? 'Unpin session' : 'Pin session'}
           >
-            {session.title || session.forkName || `Session ${session.id.slice(0, 8)}`}
-          </div>
-        </div>
-        <div className="session-meta">
-          {session.messageCount} messages
-          {session.isStreaming && !showStreamingDetails && ' • streaming'}
-        </div>
-        {showStreamingDetails && streamingTask && (
-          <div className="session-streaming-info">
-            <span className="streaming-badge">
-              <span className="streaming-dot" />
-              {streamingTask.toolName ? (
-                <span>{streamingTask.toolName}</span>
-              ) : (
-                <span>{formatTokens(streamingTask.tokensStreamed)} tokens</span>
-              )}
-            </span>
-          </div>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill={isPinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 17v5" />
+              <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1z" />
+            </svg>
+          </span>
         )}
+        <div
+          className="session-title"
+          title="Long press to rename"
+          {...titleLongPress}
+        >
+          {session.title || session.forkName || `Session ${session.id.slice(0, 8)}`}
+        </div>
       </div>
-
-      {/* Rename modal */}
-      {client?.isConnected && (
-        <RenameSessionModal
-          isOpen={showRenameModal}
-          onClose={() => setShowRenameModal(false)}
-          sessionId={session.id}
-          currentTitle={session.title || session.forkName || ''}
-          client={client.sessions}
-          sessionDataClient={client.sessionData}
-          onRenamed={handleRenamed}
-          onNavigateToSession={onSelectSession}
-        />
+      <div className="session-meta">
+        {session.messageCount} messages
+        {session.isStreaming && !showStreamingDetails && ' • streaming'}
+      </div>
+      {showStreamingDetails && streamingTask && (
+        <div className="session-streaming-info">
+          <span className="streaming-badge">
+            <span className="streaming-dot" />
+            {streamingTask.toolName ? (
+              <span>{streamingTask.toolName}</span>
+            ) : (
+              <span>{formatTokens(streamingTask.tokensStreamed)} tokens</span>
+            )}
+          </span>
+        </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -4464,6 +4484,9 @@ function SidebarContent({
   unreadSessionIds,
 }: SidebarContentProps) {
   const { closeSidebar, layoutMode } = useLayout();
+
+  // State for the shared rename modal (one modal, not one per session)
+  const [renameModalSession, setRenameModalSession] = useState<SessionInfo | null>(null);
 
   // View mode state (persisted in localStorage)
   const [viewMode, setViewMode] = useState<SidebarView>(() => {
@@ -4716,10 +4739,9 @@ function SidebarContent({
                 isPinned={isPinned}
                 showStreamingDetails={!!showStreamingDetails}
                 streamingTask={streamingTask}
-                client={client}
                 onSelect={() => handleSelectSession(session.id)}
                 onTogglePin={onTogglePin ? () => onTogglePin(session.id) : undefined}
-                onSelectSession={onSelectSession}
+                onRequestRename={client?.isConnected ? () => setRenameModalSession(session) : undefined}
                 itemRef={(el) => {
                   if (el) sessionItemRefs.current.set(session.id, el);
                   else sessionItemRefs.current.delete(session.id);
@@ -4728,6 +4750,20 @@ function SidebarContent({
             );
           })}
         </div>
+      )}
+
+      {/* Single shared rename modal for all sessions in the list */}
+      {client?.isConnected && renameModalSession && (
+        <RenameSessionModal
+          isOpen={!!renameModalSession}
+          onClose={() => setRenameModalSession(null)}
+          sessionId={renameModalSession.id}
+          currentTitle={renameModalSession.title || renameModalSession.forkName || ''}
+          client={client.sessions}
+          sessionDataClient={client.sessionData}
+          onRenamed={() => setRenameModalSession(null)}
+          onNavigateToSession={onSelectSession}
+        />
       )}
     </>
   );

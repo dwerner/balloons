@@ -213,7 +213,6 @@ export const RenameSessionModal = memo(function RenameSessionModal({
 
   // Load fork tree when modal opens
   useEffect(() => {
-    debugLog('Fork tree effect triggered', { isOpen, sessionId, hasClient: !!sessionDataClient });
     if (isOpen && sessionDataClient) {
       setIsLoadingTree(true);
       debugLog('Fetching fork tree', { sessionId });

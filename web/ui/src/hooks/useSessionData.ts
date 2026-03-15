@@ -70,7 +70,7 @@ export type ContentBlock =
   | MergeProposalBlock;
 
 // Create a debug logger that respects the global debug toggle
-import { createLogger } from '../utils/debugLog';
+import { createLogger, debugLog as rawDebugLog } from '../utils/debugLog';
 const debugLog = createLogger('useSessionData');
 
 /**
@@ -386,23 +386,19 @@ export function useSessionData(
   // Subscribe to a session
   const subscribe = useCallback(
     async (newSessionId: string) => {
+      const t0 = performance.now();
+      rawDebugLog('perf', `[useSessionData.subscribe] START`, { sessionId: newSessionId?.slice(0, 8) });
+
       const clientId = getClientId();
-      debugLog('[useSessionData] subscribe called', {
-        newSessionId,
-        hasClient: !!client,
-        currentSession: currentSessionRef.current,
-        isSubscribed,
-        clientId,
-      });
 
       if (!client) {
-        debugLog('[useSessionData] subscribe: no client');
+        rawDebugLog('perf', '[useSessionData.subscribe] no client', {});
         setError('Client not connected');
         return;
       }
 
       if (!clientId) {
-        debugLog('[useSessionData] subscribe: no clientId (not connected yet)');
+        rawDebugLog('perf', '[useSessionData.subscribe] no clientId', {});
         setError('Client not ready - no clientId');
         return;
       }
@@ -412,20 +408,19 @@ export function useSessionData(
 
       // Unsubscribe from previous session if any
       if (currentSessionRef.current && currentSessionRef.current !== newSessionId) {
-        debugLog('[useSessionData] subscribe: unsubscribing from previous session', {
-          previousSession: currentSessionRef.current,
-        });
+        const t1 = performance.now();
         await unsubscribe();
+        const t2 = performance.now();
+        rawDebugLog('perf', `[useSessionData.subscribe] unsubscribe prev: ${(t2-t1).toFixed(1)}ms`, {});
       }
 
       // Skip if already subscribed to this session
       if (currentSessionRef.current === newSessionId && isSubscribed) {
-        debugLog('[useSessionData] subscribe: already subscribed, skipping');
+        rawDebugLog('perf', '[useSessionData.subscribe] already subscribed, skipping', {});
         setIsLoading(false);  // Restore loading state since we didn't actually subscribe
         return;
       }
 
-      debugLog('[useSessionData] subscribe: proceeding with subscription');
       setError(null);
       setSessionId(newSessionId);
       currentSessionRef.current = newSessionId;
@@ -437,19 +432,11 @@ export function useSessionData(
         const handlers: Unsubscribe[] = [];
 
         // Turn created - add new turn
-        debugLog('Setting up sessionDataTurnCreated handler');
         handlers.push(
           client.sessionData.sessionDataTurnCreated((event: SessionTurnCreatedEvent) => {
-            debugLog('[TURN_ORDER] turnCreated received', {
-              order: event.order,
-              turnId: event.turnId?.substring(0, 8),
-              role: event.role,
-              contentBlockType: event.contentBlockType,
-              parallelGroupId: event.parallelGroupId?.substring(0, 8),
-            });
+            const tStart = performance.now();
 
             if (!event || typeof event !== 'object') {
-              debugLog('[useSessionData] turnCreated received invalid event:', event);
               return;
             }
 
@@ -459,27 +446,17 @@ export function useSessionData(
 
             const turnId = event.turnId ?? '';
             if (!turnId) {
-              debugLog('[useSessionData] turnCreated missing turnId:', event);
               return;
             }
 
             setTurnsById((prev) => {
               if (prev.has(turnId)) {
-                debugLog('[TURN_ORDER] turnCreated: turn already exists, skipping', { turnId: turnId.substring(0, 8) });
                 return prev;
               }
 
               const next = new Map(prev);
               const serverOrder = event.order ?? 0;
               const contentBlockType = event.contentBlockType ?? 'text';
-
-              debugLog('[TURN_ORDER] turnCreated: adding new turn', {
-                turnId: turnId.substring(0, 8),
-                order: serverOrder,
-                contentBlockType,
-                parallelGroupId: event.parallelGroupId?.substring(0, 8),
-                existingTurns: Array.from(prev.values()).map(t => ({ order: t.order, type: t.contentBlock?.type })),
-              });
 
               next.set(turnId, {
                 turnId,
@@ -495,6 +472,10 @@ export function useSessionData(
                 timestamp: new Date().toISOString(),
               });
 
+              const elapsed = performance.now() - tStart;
+              if (elapsed > 1) {
+                rawDebugLog('perf', `[ws:turnCreated] ${elapsed.toFixed(1)}ms, prevSize=${prev.size}`, {});
+              }
               return next;
             });
           })
@@ -531,15 +512,9 @@ export function useSessionData(
         // Turn finished - finalize turn with complete content block
         handlers.push(
           client.sessionData.sessionDataTurnFinished((event: SessionTurnFinishedEvent) => {
-            debugLog('[TURN_ORDER] turnFinished received', {
-              order: event.order,
-              turnId: event.turnId?.substring(0, 8),
-              role: event.role,
-              contentBlockType: event.contentBlock?.type,
-            });
+            const tStart = performance.now();
 
             if (!event || typeof event !== 'object') {
-              debugLog('[useSessionData] turnFinished received invalid event:', event);
               return;
             }
 
@@ -547,7 +522,6 @@ export function useSessionData(
 
             const turnId = event.turnId || '';
             if (!turnId) {
-              debugLog('[useSessionData] turnFinished missing turnId:', event);
               return;
             }
 
@@ -568,11 +542,6 @@ export function useSessionData(
               }
 
               if (!existing) {
-                debugLog('[TURN_ORDER] turnFinished for unknown turn, creating', {
-                  turnId: turnId.substring(0, 8),
-                  order: event.order,
-                  existingTurns: Array.from(prev.values()).map(t => ({ order: t.order, type: t.contentBlock?.type })),
-                });
                 // Use order from event if available, otherwise fall back to maxOrder + 1
                 const serverOrder = event.order;
                 const effectiveOrder = serverOrder !== undefined && serverOrder !== null
@@ -591,6 +560,10 @@ export function useSessionData(
                   contextMode: 'copy',
                   timestamp: new Date().toISOString(),
                 });
+                const elapsed = performance.now() - tStart;
+                if (elapsed > 1) {
+                  rawDebugLog('perf', `[ws:turnFinished] new turn ${elapsed.toFixed(1)}ms, mapSize=${next.size}`, {});
+                }
                 return next;
               }
 
@@ -598,13 +571,6 @@ export function useSessionData(
               const effectiveOrder = event.order !== undefined && event.order !== null
                 ? event.order
                 : existing.order;
-
-              debugLog('[TURN_ORDER] turnFinished updating existing turn', {
-                turnId: turnId.substring(0, 8),
-                existingOrder: existing.order,
-                eventOrder: event.order,
-                effectiveOrder,
-              });
 
               const next = new Map(prev);
               next.set(turnId, {
@@ -614,6 +580,10 @@ export function useSessionData(
                 tokens: event.tokens ?? 0,
                 streaming: false,
               });
+              const elapsed = performance.now() - tStart;
+              if (elapsed > 1) {
+                rawDebugLog('perf', `[ws:turnFinished] update ${elapsed.toFixed(1)}ms, mapSize=${next.size}`, {});
+              }
               return next;
             });
           })
@@ -778,12 +748,10 @@ export function useSessionData(
         // History chunk - merge historical turns (Phase 4: chunked history loading)
         handlers.push(
           client.sessionData.sessionDataHistoryChunk((event: SessionHistoryChunkEvent) => {
+            const tStart = performance.now();
             if (event.sessionId !== newSessionId) return;
-            debugLog('sessionDataHistoryChunk', {
-              chunkIndex: event.chunkIndex,
-              totalChunks: event.totalChunks,
-              turnsCount: event.turns?.length ?? 0,
-            });
+
+            const turnCount = event.turns?.length ?? 0;
 
             // Mark that we're loading history
             setIsLoadingHistory(true);
@@ -827,6 +795,8 @@ export function useSessionData(
                 setHistoryWatermark((prev) => Math.max(prev, maxWatermark));
               }
 
+              const elapsed = performance.now() - tStart;
+              rawDebugLog('perf', `[ws:historyChunk] ${elapsed.toFixed(1)}ms, chunk=${event.chunkIndex}/${event.totalChunks}, turns=${turnCount}, mapSize=${next.size}`, {});
               return next;
             });
           })
@@ -909,14 +879,19 @@ export function useSessionData(
 
         // Save handlers immediately so events can be processed
         unsubscribersRef.current = handlers;
+        const tHandlers = performance.now();
+        rawDebugLog('perf', `[useSessionData.subscribe] handlers setup: ${(tHandlers-t0).toFixed(1)}ms`, {});
 
         // NOW subscribe using layer-based API - full subscription for active viewing
         // clientId is already validated at the start of subscribe()
+        const tSubStart = performance.now();
         const result = await client.sessionData.subscribeAdd(
           newSessionId,
           clientId!,
           ['header', 'body', 'delta', 'history']
         );
+        const tSubEnd = performance.now();
+        rawDebugLog('perf', `[useSessionData.subscribe] subscribeAdd API: ${(tSubEnd-tSubStart).toFixed(1)}ms`, {});
 
         if (!result.subscribed) {
           // Cleanup handlers on failure
@@ -926,10 +901,6 @@ export function useSessionData(
         }
 
         // Layer-based subscription doesn't return a snapshot - history arrives via events
-        debugLog('[useSessionData] subscription result', {
-          subscribed: result.subscribed,
-          sessionId: result.sessionId,
-        });
 
         // NOTE: Don't clear turns here! History chunks arrive DURING the await subscribeAdd()
         // call and are already processed by the handlers we set up above.
@@ -940,6 +911,8 @@ export function useSessionData(
         // History loading state is set by historyChunk handler, completed by historyComplete
         // Streaming state will be set when streamStarted/streamDone events arrive
         setIsStreaming(false);
+        const tEnd = performance.now();
+        rawDebugLog('perf', `[useSessionData.subscribe] TOTAL: ${(tEnd-t0).toFixed(1)}ms`, {});
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         setError(`Subscription failed: ${message}`);

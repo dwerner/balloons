@@ -9,14 +9,23 @@
 .hierarchy-view {
   flex: 1 1 0;
   min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
+  min-width: 0;
+  overflow: hidden;  /* react-arborist handles scrolling */
   font-size: 13px;
   line-height: 1.4;
   color: var(--color-text-primary, #e0e0e0);
+  display: flex;
+  flex-direction: column;
+}
+
+/* react-arborist tree internal scroll container */
+.hierarchy-view [style*="overflow"] {
+  overflow-x: hidden !important;
 }
 
 .hierarchy-view--empty {
+  flex: 1 1 0;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -29,10 +38,7 @@
   display: flex;
   gap: 4px;
   padding: 8px;
-  margin-bottom: 4px;
-  position: sticky;
-  top: 0;
-  z-index: 10;
+  flex-shrink: 0;
   background: var(--color-bg-primary, #1e1e1e);
 }
 
@@ -94,6 +100,69 @@
   padding: 0;
 }
 
+/* ===== react-arborist row wrapper ===== */
+.hierarchy-node__row {
+  height: 100%;
+  cursor: pointer;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.hierarchy-node__row--selected .hierarchy-node__content {
+  background: rgba(96, 165, 250, 0.2) !important;
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.3);
+}
+
+.hierarchy-node__row--selected:hover .hierarchy-node__content {
+  background: rgba(96, 165, 250, 0.25) !important;
+}
+
+.hierarchy-node__row--merged .hierarchy-node__content {
+  opacity: 0.75;
+}
+
+.hierarchy-node__row--merged .hierarchy-node__label {
+  font-style: italic;
+}
+
+.hierarchy-node__row--unread .hierarchy-node__content {
+  background: rgba(250, 204, 21, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(250, 204, 21, 0.2);
+}
+
+.hierarchy-node__row--unread:hover .hierarchy-node__content {
+  background: rgba(250, 204, 21, 0.15);
+}
+
+/* ===== Toggle button ===== */
+.hierarchy-node__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.hierarchy-node__toggle:hover {
+  opacity: 0.8;
+}
+
+.hierarchy-node__toggle-placeholder {
+  width: 16px;
+  flex-shrink: 0;
+}
+
+/* ===== Arrow icon ===== */
+.hierarchy-arrow {
+  transition: transform 0.15s ease;
+}
+
+.hierarchy-arrow--open {
+  transform: rotate(180deg);
+}
+
 /* ===== Node content row ===== */
 .hierarchy-node__content {
   --depth-tint-color: 139, 92, 246;
@@ -112,6 +181,9 @@
   transition: background 0.1s ease;
   /* Dark theme: depth-based tint that cycles colors every 10 levels */
   background: rgba(var(--depth-tint-color), var(--depth-tint-opacity));
+  /* Prevent horizontal overflow */
+  min-width: 0;
+  overflow: hidden;
 }
 
 .hierarchy-node__content:hover {
@@ -471,4 +543,53 @@
   z-index: 1;
   /* Above background, but content text has higher z-index */
   opacity: 0.6;
+}
+
+/* ===== react-arborist styling ===== */
+/* Tree wrapper - fills remaining space */
+.hierarchy-tree-wrapper {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Tree container */
+[role="tree"] {
+  outline: none;
+  height: 100% !important;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden !important;
+}
+
+/* react-arborist internal list - prevent horizontal scrolling */
+.hierarchy-view [role="tree"] > div {
+  overflow-x: hidden !important;
+}
+
+/* Individual row styling */
+[role="treeitem"] {
+  outline: none;
+  overflow: hidden;
+}
+
+/* Light theme for row states */
+[data-theme="light"] .hierarchy-node__row--selected .hierarchy-node__content {
+  background: rgba(96, 165, 250, 0.2) !important;
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.3);
+}
+
+[data-theme="light"] .hierarchy-node__row--unread .hierarchy-node__content {
+  background: rgba(202, 138, 4, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(202, 138, 4, 0.2);
+}
+
+/* Siblings badge */
+.hierarchy-node__badge--siblings {
+  color: #f59e0b;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 3px;
+  border-radius: 3px;
+  background: rgba(245, 158, 11, 0.15);
 }
