@@ -1,6 +1,6 @@
 # Canadian Grocery Domain
 
-Shop for groceries at Canadian stores without dealing with their broken websites.
+Shop for groceries at Canadian stores with automatic price tracking and product data harvesting.
 
 ## Supported Chains
 
@@ -18,134 +18,163 @@ Shop for groceries at Canadian stores without dealing with their broken websites
 **Other chains:**
 - SaveOn Foods
 
-## Two Approaches
+## Quick Start
 
-### 1. Browser Automation (Recommended)
+**IMPORTANT: Set a store first!** Prices vary by store.
 
-Use an automated browser to interact with the grocery site directly. This handles authentication,
-searches, and cart management through the actual website.
+```
+1. grocery_store_info               # Check current store
+2. grocery_browser_start            # Launch browser
+3. grocery_browser_find_stores("V5K 0A1")  # Find stores by postal code
+4. grocery_store_select("1527")     # Set your store
+5. grocery_search_query("milk")     # Search - prices are now harvested!
+6. grocery_product_goto(code="...")  # View details - nutrition is harvested!
+7. grocery_data_products            # See what's been collected
+8. grocery_data_prices("20962518")  # Price history for a product
+```
 
-**Quick Shopping Workflow:**
-1. `grocery_browser_start` - Launch browser (auto-dismisses cookie popup)
-2. Navigate to search: `grocery_browser_goto(url="https://www.realcanadiansuperstore.ca/search?search-bar=bread")`
-3. `grocery_browser_list_products` - See available products with indices
-4. `grocery_browser_add_product(index=N)` - Add item to cart
-5. `grocery_browser_cart_count` - Verify cart updated
-6. `grocery_browser_stop` - Close when done
+## Tool Organization by View
 
-**Exploration Workflow:**
-1. `grocery_browser_start` - Launch browser
-2. `grocery_browser_see` / `grocery_browser_inputs` / `grocery_browser_buttons` - Explore the page
-3. `grocery_browser_fill` / `grocery_browser_click_button` - Interact with forms
-4. `grocery_browser_screenshot` - See what the page looks like
-5. `grocery_browser_stop` - Close when done
+| Prefix | View | Purpose |
+|--------|------|---------|
+| `grocery_store_*` | Store Selection | Find and select stores (required first!) |
+| `grocery_browser_*` | Browser/Global | Browser lifecycle, navigation, screenshots |
+| `grocery_search_*` | Search Results | Product search and listing |
+| `grocery_product_*` | Product Detail | Detailed info, nutrition, add to cart |
+| `grocery_cart_*` | Cart | Cart management and quantities |
+| `grocery_data_*` | Data Layer | Price tracking, product database |
 
-### 2. API + Local Cart (Limited)
+---
 
-Use reverse-engineered APIs for search (may require authentication) and maintain a local cart
-that exports to a browser bookmarklet.
+## Store Tools (`grocery_store_*`)
 
-**Workflow:**
-1. Set your store with `grocery_set_store`
-2. Search for products with `grocery_search`
-3. Add items to local cart with `grocery_cart_add`
-4. Export with `grocery_cart_export`
+**Setting a store is required before shopping.** Prices are store-specific.
 
-## Browser Tools
+**grocery_store_info** - Show current store and price data stats
 
-**grocery_browser_hosts** - List available hosts where the browser can run (local + supervisor hosts)
+**grocery_store_select** - Set the active store
+- `grocery_store_select(store_id="1527", banner="superstore")`
 
-**grocery_browser_set_host** - Select which host runs the browser
-- `grocery_browser_set_host(host="local")` - Run headless on this machine
-- `grocery_browser_set_host(host="living-room")` - Run on a remote display (requires chromedriver running there)
+**grocery_set_store** - Same as grocery_store_select
 
-**grocery_browser_start** - Launch browser and navigate to grocery site
-- `grocery_browser_start()` - Opens default site based on your banner
-- `grocery_browser_start(url="...", headless=True)` - Custom URL, no visible window
-- `grocery_browser_start(webdriver_url="http://192.168.1.100:4444")` - Connect to remote chromedriver over LAN
+**grocery_list_banners** - List available chains/banners
 
-**grocery_browser_see** - Get structured view of page (content sections, forms, navigation)
+**grocery_browser_find_stores** - Search for stores by location (requires browser)
+- `grocery_browser_find_stores(location="V5K 0A1")`
 
-**grocery_browser_inputs** - List all input fields with their indices
+---
 
-**grocery_browser_buttons** - List all buttons with their indices
+## Browser Tools (`grocery_browser_*`)
 
-**grocery_browser_fill** - Fill an input field
-- `grocery_browser_fill(index=0, value="milk")`
+### Lifecycle
 
-**grocery_browser_click_button** - Click a button by index
-- `grocery_browser_click_button(index=2)`
+**grocery_browser_start** - Launch browser
+- Automatically sets the saved store on startup
 
-**grocery_browser_click** - Click element by CSS selector
-- `grocery_browser_click(selector="#sign-in-btn")`
+**grocery_browser_stop** - Close browser
 
-**grocery_browser_goto** - Navigate to a URL
+**grocery_browser_hosts** - List available hosts (local + remote)
 
-**grocery_browser_search** - Search via direct URL navigation (more reliable than search box)
-- `grocery_browser_search(query="2% milk")`
+**grocery_browser_set_host** - Select browser host
+- `grocery_browser_set_host(host="living-room")` for remote display
 
-**grocery_browser_get_products** - Extract structured product data from search results
-- Returns: code, name, size, price, unit price, image URL, button index
-- Data is parsed from product cards on the page
+### Navigation
 
-**grocery_browser_get_product_detail** - Get detailed product info including nutrition facts
-- Navigate to a product page first (click a product link or use goto)
-- Extracts: name, brand, price, description, nutrition facts, ingredients
+**grocery_browser_goto** - Navigate to URL
 
-**grocery_browser_dismiss_popups** - Dismiss annoying popups (surveys, chat widgets, banners)
+**grocery_browser_screenshot** - Take screenshot
 
-**grocery_browser_screenshot** - Take a screenshot (returns file path)
+**grocery_browser_dismiss_popups** - Dismiss overlays
 
-**grocery_browser_find_stores** - Find stores near a location
-- `grocery_browser_find_stores(location="V5K 0A1")` - Search by postal code
-- `grocery_browser_find_stores(location="Vancouver BC")` - Search by city
-- Returns store IDs you can use with `grocery_set_store`
+### Low-Level
 
-**grocery_browser_js** - Execute JavaScript on the page
+**grocery_browser_see** - Structured page view
 
-**grocery_browser_list_products** - Find all "Add to cart" buttons and list products with indices
+**grocery_browser_inputs/buttons** - List interactive elements
 
-**grocery_browser_add_product** - Add a product to cart by button index
-- `grocery_browser_add_product(index=30)`
+**grocery_browser_fill/click_button** - Interact with elements
 
-**grocery_browser_cart_count** - Get the current cart item count
+**grocery_browser_js** - Execute JavaScript
 
-**grocery_browser_stop** - Close the browser
+---
 
-## API/Cart Tools
+## Search View Tools (`grocery_search_*`)
 
-### Store Setup
+**grocery_search_query** - Search for products
+- `grocery_search_query(query="2% milk")`
+- **Automatically harvests prices** for products shown
 
-**grocery_set_store** - Set your preferred store
-- For PC Express: `grocery_set_store(store_id="1511", banner="superstore")`
-- For SaveOn: `grocery_set_store(store_id="2001", banner="saveon")`
+**grocery_search_products** - Get structured product list
+- Shows: name, price, cart quantity, URL, button indices
+- Cart items show with: `🛒 2 in cart`
 
-**grocery_list_banners** - List all available store banners/chains
+**grocery_search_add_to_cart** - Add by button index
+- `grocery_search_add_to_cart(index=34)`
 
-### Product Search (API)
+---
 
-**grocery_search** - Search for products via API
-- May require authentication for PC Express
-- Returns: name, price, unit price, product code
+## Product Detail Tools (`grocery_product_*`)
 
-### Cart Management
+**grocery_product_goto** - Navigate to product page
+- `grocery_product_goto(url="/en/p/product/20962518_EA")`
+- `grocery_product_goto(code="20962518")`
 
-**grocery_cart_add** - Add a product to your local cart
+**grocery_product_info** - Get full details
+- **Automatically harvests nutrition facts and ingredients**
+- Includes: name, brand, price, description, nutrition, ingredients
 
-**grocery_cart_remove** - Remove a product from cart
+**grocery_product_add_to_cart** - Add to cart
+- `grocery_product_add_to_cart(quantity=2)`
 
-**grocery_cart_update** - Update quantity of a cart item
+---
 
-**grocery_cart_show** - Show current cart with totals
+## Cart Tools (`grocery_cart_*`)
 
-**grocery_cart_clear** - Empty the cart
+**grocery_cart_count** - Current cart item count
 
-**grocery_cart_export** - Export cart as browser bookmarklets
+**grocery_cart_items** - Show locally tracked cart
+
+**grocery_cart_view** - Navigate to cart review page
+
+**grocery_cart_increase/decrease** - Modify quantities
+- `grocery_cart_increase(product_name="Milk")`
+
+**grocery_cart_sync** - Sync local tracking with page
+
+**grocery_cart_clear_local** - Clear local tracking
+
+---
+
+## Data Tools (`grocery_data_*`)
+
+The plugin automatically harvests product and price data as you browse.
+
+**grocery_data_products** - List harvested products
+- `grocery_data_products()` - Show all
+- `grocery_data_products(query="milk")` - Search
+
+**grocery_data_prices** - Price history for a product
+- `grocery_data_prices(code="20962518")`
+- Shows price over time, per store
+
+**grocery_data_product_detail** - Full product info from database
+- `grocery_data_product_detail(code="20962518")`
+- Includes nutrition facts if harvested
+
+**grocery_data_export** - Export stats and file paths
+
+### Data Storage
+
+Data is stored in `~/.balloons/plugins/grocery/data/`:
+- `products.jsonl` - Product info (name, brand, size, nutrition, ingredients)
+- `prices.jsonl` - Price records (store, date, price, sale status)
+
+---
 
 ## Tips
 
-- The browser tools let you interactively explore and figure out how to accomplish tasks
-- Use `grocery_browser_see` to understand page structure
-- Use `grocery_browser_screenshot` to visually verify state
-- Login flows: use `grocery_browser_inputs` and `grocery_browser_fill` for credentials
-- 2FA: watch for SMS/email codes, use `grocery_browser_fill` to enter them
+- **Set store first!** Use `grocery_store_info` to check, `grocery_store_select` to set
+- **Data is harvested automatically** - just browse products normally
+- **Price history builds over time** - check back after shopping trips
+- **Nutrition requires detail page** - use `grocery_product_goto` then `grocery_product_info`
+- **Screenshot for debugging** - `grocery_browser_screenshot`
