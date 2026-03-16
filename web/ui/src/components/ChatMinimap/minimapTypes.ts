@@ -25,6 +25,8 @@ export interface ExchangeDOMRect {
   top: number;      // Relative to scroll container's scrollTop=0
   height: number;   // Rendered height in pixels
   turnRange?: string;  // e.g., "#0-5" or "#12"
+  tokenCount?: number; // Total tokens in this exchange
+  turnIndices?: number[]; // Turn indices for archive action
 }
 
 // Calculated layout positions
@@ -42,6 +44,7 @@ export interface MinimapExchangeLayout {
   height: number;
   turns: MinimapTurnLayout[];
   turnRange?: string;  // e.g., "#0-5" for labeling in the minimap
+  tokenCount?: number; // Total tokens in this exchange
 }
 
 export interface MinimapLayout {
@@ -68,4 +71,17 @@ export interface MinimapRenderOptions {
   colors: MinimapColors;
   showViewport: boolean;
   newContentFromY?: number; // Y position where new content starts
+  hoveredExchangeId?: string; // Exchange to highlight on hover
+  selectedExchangeId?: string; // Exchange that's currently selected/active
+  archivingExchangeIds?: Set<string>; // Exchanges currently being archived
+}
+
+/**
+ * Context menu action for an exchange
+ */
+export interface ExchangeContextMenuAction {
+  type: 'archive' | 'jump';
+  exchangeId: string;
+  turnRange?: string;  // e.g., "#0-5"
+  tokenCount?: number;
 }

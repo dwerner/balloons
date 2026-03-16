@@ -1166,8 +1166,8 @@ function AppContent() {
   // Dialog hook for confirm/alert dialogs
   const { confirm } = useDialog();
 
-  // Voice input preferences
-  const { voiceInputEnabled, voiceInputHost, voiceInputPort } = usePreferences();
+  // Voice input and history loading preferences
+  const { voiceInputEnabled, voiceInputHost, voiceInputPort, historyLoadMode } = usePreferences();
 
   // Input area height - resizable by dragging top edge
   // On mobile, cap the height to a reasonable max to prevent huge text areas
@@ -1229,6 +1229,12 @@ function AppContent() {
   const [toolUses, setToolUses] = useState<ToolUseState[]>([]);
   const [imageAttachments, setImageAttachments] = useState<ImageAttachment[]>([]);
   const [isLoadingTurns, setIsLoadingTurns] = useState(false);
+  // History state for ContextTab incomplete history detection
+  const [historyState, setHistoryState] = useState<{ totalHistoryTurns: number; isLoadingHistory: boolean; loadFullHistory: () => void }>({
+    totalHistoryTurns: -1,
+    isLoadingHistory: false,
+    loadFullHistory: () => {},
+  });
   // Track turn indices being archived (for showing spinners)
   // Track archiving state: Map from helperId to Set of turn indices being archived
   const [archivingByHelper, setArchivingByHelper] = useState<Map<string, Set<number>>>(new Map());
@@ -3263,6 +3269,28 @@ function AppContent() {
                       onLoadingChange={handleSessionLoadingChange}
                       archivingTurnIndices={archivingTurnIndices}
                       refreshKey={sessionRefreshKey}
+                      historyLoadMode={historyLoadMode}
+                      onHistoryStateChange={setHistoryState}
+                      onArchiveTurns={async (turnIndices) => {
+                        const client = clientRef.current;
+                        if (!client || connectionState !== 'connected' || !selectedSessionId) return;
+                        try {
+                          const result = await client.sessions.startArchive(selectedSessionId, turnIndices, true);
+                          if (result.success && result.helperId) {
+                            const helperId = result.helperId;
+                            debugLog('Archive started from minimap', { sessionId: selectedSessionId, turnIndices, helperId });
+                            setArchivingByHelper(prev => {
+                              const next = new Map(prev);
+                              next.set(helperId, new Set(turnIndices));
+                              return next;
+                            });
+                          } else {
+                            console.warn('Archive request failed:', result.error);
+                          }
+                        } catch (err) {
+                          console.error('Failed to archive turns:', err);
+                        }
+                      }}
                     />
                   </div>
                 ) : (
@@ -3283,6 +3311,9 @@ function AppContent() {
                   client={clientRef.current}
                   isLoading={connectionState !== 'connected'}
                   archivingTurnIndices={archivingTurnIndices}
+                  totalHistoryTurns={historyState.totalHistoryTurns}
+                  isLoadingHistory={historyState.isLoadingHistory}
+                  onLoadFullHistory={historyState.loadFullHistory}
                   // No onSelectTurn - clicking nodes just expands/collapses in context view
                   onDeleteTurn={async (turnIdx) => {
                     const client = clientRef.current;

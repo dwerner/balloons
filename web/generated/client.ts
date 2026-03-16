@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-03-14T15:41:17.213468
+// Generated: 2026-03-15T17:25:39.907852
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -2817,6 +2817,23 @@ export interface SessionDataService {
   isSessionStreaming(sessionId: string): Promise<boolean>;
 
   /**
+   * Load a specific range of historical turns.
+   * 
+   * Used with lazy loading to request history on-demand, typically
+   * when the user scrolls up to view older content.
+   * 
+   * Args:
+   * session_id: The session to load from
+   * client_id: The requesting client
+   * start_order: First turn order to load (inclusive)
+   * end_order: Last turn order to load (exclusive)
+   * 
+   * Returns:
+   * SubscriptionResult indicating success/failure
+   */
+  loadHistoryRange(sessionId: string, clientId: string, startOrder: number, endOrder: number): Promise<Types.SubscriptionResult>;
+
+  /**
    * Pin a session to appear at top of lists.
    * 
    * Args:
@@ -2878,7 +2895,9 @@ export interface SessionDataService {
    * - "header": Turn lifecycle events (created, completed, deleted) + stream status
    * - "body": Full turn content blocks on completion
    * - "delta": Live streaming events (text deltas, tool input deltas)
-   * - "history": One-time historical turn loading (triggers historyChunk events)
+   * - "history": One-time historical turn loading (oldest-first, triggers historyChunk events)
+   * - "history_reverse": One-time historical turn loading (newest-first for fast time-to-bottom)
+   * - "history_lazy": Register for history but don't auto-load (use load_history_range on-demand)
    * 
    * Args:
    * session_id: The session to subscribe to
@@ -3160,6 +3179,10 @@ export class SessionDataServiceClient implements SessionDataService {
 
   async isSessionStreaming(sessionId: string): Promise<boolean> {
     return this.call('isSessionStreaming', { sessionId: sessionId });
+  }
+
+  async loadHistoryRange(sessionId: string, clientId: string, startOrder: number, endOrder: number): Promise<Types.SubscriptionResult> {
+    return this.call('loadHistoryRange', { sessionId: sessionId, clientId: clientId, startOrder: startOrder, endOrder: endOrder });
   }
 
   async pinSession(sessionId: string): Promise<boolean> {

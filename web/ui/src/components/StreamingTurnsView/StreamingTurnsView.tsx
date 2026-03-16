@@ -24,7 +24,7 @@
 
 import React, { useMemo, useEffect, useRef, useCallback, useState } from 'react';
 import type { BalloonsClient } from '../../../../generated/balloons-client';
-import { useSessionData, type SessionDataTurn, type StreamingProgress } from '../../hooks';
+import { useSessionData, type SessionDataTurn, type StreamingProgress, type HistoryLoadMode } from '../../hooks';
 import type { ToolResultBlock } from '../../../../generated/types';
 import { TurnCard, ClientContext } from './cards';
 import { ScrollToBottom } from '../ScrollToBottom';
@@ -56,10 +56,10 @@ function getAutoscrollSpeed(): number {
 }
 
 /**
- * Ease-out cubic function for natural deceleration
+ * Linear easing - constant speed scroll
  */
-function easeOutCubic(t: number): number {
-  return 1 - Math.pow(1 - t, 3);
+function linearEasing(t: number): number {
+  return t;
 }
 
 /**
@@ -99,17 +99,30 @@ interface StreamingTurnsViewProps {
   archivingTurnIndices?: Set<number>;
   /** Increment to force re-subscription (e.g., after archive) */
   refreshKey?: number;
+  /** How to load history: 'forward' (oldest first), 'reverse' (newest first), 'lazy' (on-demand) */
+  historyLoadMode?: HistoryLoadMode;
+  /** Callback when history state changes (for ContextTab incomplete history detection) */
+  onHistoryStateChange?: (state: { totalHistoryTurns: number; isLoadingHistory: boolean; loadFullHistory: () => void }) => void;
+  /** Callback when user requests to archive turns from minimap context menu */
+  onArchiveTurns?: (turnIndices: number[]) => void;
 }
 
 // Threshold in pixels to consider "at bottom"
 const AT_BOTTOM_THRESHOLD = 150;
 
-export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrollStateChange, onStreamingProgressChange, onTurnsChange, onLoadingChange, archivingTurnIndices, refreshKey }: StreamingTurnsViewProps) {
+// Threshold in pixels to trigger lazy loading when near top
+const LAZY_LOAD_TOP_THRESHOLD = 500;
+
+// Number of turns to load per lazy load chunk
+const LAZY_LOAD_CHUNK_SIZE = 50;
+
+export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrollStateChange, onStreamingProgressChange, onTurnsChange, onLoadingChange, archivingTurnIndices, refreshKey, historyLoadMode = 'reverse', onHistoryStateChange, onArchiveTurns }: StreamingTurnsViewProps) {
   // useSessionData now gets the clientId directly from client.clientId when connected
   // refreshKey forces re-subscription when incremented (e.g., after archive)
-  const { turns, isLoading, isLoadingHistory, isStreaming, streamError, error, streamingProgress } = useSessionData(client, sessionId, refreshKey);
+  // historyLoadMode determines which history layer to use: 'history', 'history_reverse', or 'history_lazy'
+  const { turns, isLoading, isLoadingHistory, isStreaming, streamError, error, streamingProgress, totalHistoryTurns, loadHistoryRange } = useSessionData(client, sessionId, refreshKey, historyLoadMode);
 
-  // Debug: log turns on every change
+  // Debug: log turns on every change and update lowest loaded order for lazy loading
   useEffect(() => {
     if (turns.length > 0) {
       const orders = turns.map(t => t.order);
@@ -118,6 +131,10 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
       debugLog(`turns changed: count=${turns.length}, orders=${minOrder}-${maxOrder}`, {
         firstFive: turns.slice(0, 5).map(t => ({ order: t.order, type: t.contentBlock?.type, role: t.role }))
       });
+      // Track lowest loaded order for lazy loading
+      lowestLoadedOrderRef.current = minOrder;
+      // Reset lazy loading flag when new data arrives
+      isLazyLoadingRef.current = false;
     }
   }, [turns]);
 
@@ -139,6 +156,10 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
   // Also track the element in state so we can re-run effects when it changes
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [scrollContainerElement, setScrollContainerElement] = useState<HTMLDivElement | null>(null);
+
+  // Ref for the content wrapper inside the scroll container
+  // ResizeObserver watches this to detect content height changes
+  const contentWrapperRef = useRef<HTMLDivElement>(null);
 
   // Callback ref to track when the DOM element actually changes
   const scrollContainerCallbackRef = useCallback((node: HTMLDivElement | null) => {
@@ -171,6 +192,10 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
   // Last scroll position for direction detection
   const lastScrollTopRef = useRef(0);
 
+  // Lazy loading state - prevent multiple simultaneous requests
+  const isLazyLoadingRef = useRef(false);
+  const lowestLoadedOrderRef = useRef<number | null>(null);
+
   // Animated scroll state
   const scrollAnimationRef = useRef<number | null>(null);
   const scrollAnimationStartRef = useRef<{ startTime: number; startPos: number; targetPos: number; duration: number } | null>(null);
@@ -199,6 +224,25 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
   // Defined here (before ResizeObserver effect) so the ref can be captured
   const wasLoadingHistoryRef = useRef(isLoadingHistory);
   const hasCompletedInitialLoadRef = useRef(false);
+  // Extra ref to block animated scrolls briefly after initial load completes
+  const allowAnimatedScrollRef = useRef(false);
+
+  // State to control visibility - hide content until initial scroll is done
+  const [isInitialLoadComplete, setIsInitialLoadComplete] = useState(false);
+
+  // Reset initial load state when session changes
+  const prevSessionIdRef = useRef(sessionId);
+  useEffect(() => {
+    if (prevSessionIdRef.current !== sessionId) {
+      debugLog(`[scroll] Session changed from ${prevSessionIdRef.current} to ${sessionId}, resetting state`);
+      prevSessionIdRef.current = sessionId;
+      hasCompletedInitialLoadRef.current = false;
+      allowAnimatedScrollRef.current = false;
+      setIsInitialLoadComplete(false);
+      // Reset prevTurnsLength so we don't trigger animated scroll on session switch
+      // This will be set properly in the auto-scroll effect
+    }
+  }, [sessionId]);
 
   // Memoize context value to prevent unnecessary re-renders
   // Include scrollContainerRef for IntersectionObserver-based lazy loading
@@ -391,6 +435,24 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     }));
   }, [exchangeGroups]);
 
+  // Compute which exchange IDs are currently being archived
+  const archivingExchangeIds = useMemo(() => {
+    if (!archivingTurnIndices || archivingTurnIndices.size === 0) {
+      return undefined;
+    }
+    const ids = new Set<string>();
+    for (const group of exchangeGroups) {
+      const allTurnsInExchange = group.items.flatMap(item => item.turns);
+      const isArchiving = allTurnsInExchange.some(
+        t => archivingTurnIndices.has(t.order ?? -1)
+      );
+      if (isArchiving && group.exchangeId) {
+        ids.add(group.exchangeId);
+      }
+    }
+    return ids.size > 0 ? ids : undefined;
+  }, [exchangeGroups, archivingTurnIndices]);
+
   // Minimap visibility state (persisted to localStorage)
   const [showMinimap, setShowMinimap] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -434,11 +496,14 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
       // Calculate position relative to scroll container's scroll origin
       const top = rect.top - containerTop + scrollOffset;
 
-      // Find the exchange group to get color index and turn range
+      // Find the exchange group to get color index, turn range, tokens, and indices
       const group = exchangeGroups.find(g => g.exchangeId === id);
 
-      // Calculate turn range from the exchange group
+      // Calculate turn range, token count, and turn indices from the exchange group
       let turnRange: string | undefined;
+      let tokenCount = 0;
+      let turnIndices: number[] = [];
+
       if (group) {
         const allTurns = group.items.flatMap(item => item.turns);
         const firstOrder = allTurns[0]?.order;
@@ -446,6 +511,10 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         if (firstOrder !== undefined) {
           turnRange = firstOrder === lastOrder ? `#${firstOrder}` : `#${firstOrder}-${lastOrder}`;
         }
+        // Sum up tokens from all turns in the exchange
+        tokenCount = allTurns.reduce((sum, t) => sum + (t.tokens || 0), 0);
+        // Collect turn indices for archive action
+        turnIndices = allTurns.map(t => t.order).filter((o): o is number => o !== undefined);
       }
 
       rects.push({
@@ -454,6 +523,8 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         top,
         height: rect.height,
         turnRange,
+        tokenCount,
+        turnIndices,
       });
     });
 
@@ -528,6 +599,24 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     }
   }, [streamingProgress, onStreamingProgressChange]);
 
+  // Create a stable loadFullHistory callback for the parent
+  const loadFullHistory = useCallback(() => {
+    if (lowestLoadedOrderRef.current !== null && lowestLoadedOrderRef.current > 0) {
+      loadHistoryRange(0, lowestLoadedOrderRef.current - 1);
+    }
+  }, [loadHistoryRange]);
+
+  // Report history state changes to parent (for ContextTab incomplete history banner)
+  useEffect(() => {
+    if (onHistoryStateChange) {
+      onHistoryStateChange({
+        totalHistoryTurns,
+        isLoadingHistory,
+        loadFullHistory,
+      });
+    }
+  }, [totalHistoryTurns, isLoadingHistory, loadFullHistory, onHistoryStateChange]);
+
   // Persist isFollowing to localStorage
   useEffect(() => {
     localStorage.setItem('balloons:autoscroll-following', String(isFollowing));
@@ -567,10 +656,10 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
       return;
     }
 
-    // Calculate duration based on distance and speed (px/s)
+    // Calculate duration based on distance and configured speed (px/s)
+    // Duration = distance / speed - configured speed is the MAX speed
     const speed = getAutoscrollSpeed();
-    // Minimum 50ms, maximum 3000ms (allows slow scrolling for large distances)
-    const duration = Math.min(3000, Math.max(50, (Math.abs(distance) / speed) * 1000));
+    const duration = Math.max(50, (Math.abs(distance) / speed) * 1000);
 
     programmaticScrollCountRef.current++;
 
@@ -598,9 +687,8 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
 
       const elapsed = now - animState.startTime;
       const progress = Math.min(1, elapsed / animState.duration);
-      const easedProgress = easeOutCubic(progress);
 
-      const newPos = animState.startPos + (animState.targetPos - animState.startPos) * easedProgress;
+      const newPos = animState.startPos + (animState.targetPos - animState.startPos) * linearEasing(progress);
       scrollContainerRef.current.scrollTop = newPos;
 
       // Update scroll metrics for minimap during animation
@@ -625,7 +713,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
             startTime: performance.now(),
             startPos: element.scrollTop,
             targetPos: currentBottom,
-            duration: Math.min(3000, Math.max(50, (remainingDistance / getAutoscrollSpeed()) * 1000)),
+            duration: Math.max(50, (remainingDistance / getAutoscrollSpeed()) * 1000),
           };
           scrollAnimationRef.current = requestAnimationFrame(animate);
         } else {
@@ -644,18 +732,25 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     scrollAnimationRef.current = requestAnimationFrame(animate);
   }, [cancelScrollAnimation]);
 
-  // Scroll to bottom and resume following
+  // Scroll to bottom and resume following (instant, not animated)
   const scrollToBottom = useCallback(() => {
     if (!scrollContainerRef.current) return;
+
+    // Cancel any ongoing animation
+    cancelScrollAnimation();
 
     setIsFollowing(true);
     isFollowingRef.current = true;
     setIsAtBottom(true);
 
     const element = scrollContainerRef.current;
-    // Animate to bottom with easing
-    animateScrollTo(element.scrollHeight - element.clientHeight);
-  }, [animateScrollTo]);
+    // Instant scroll - user wants to jump to bottom NOW
+    programmaticScrollCountRef.current++;
+    element.scrollTop = element.scrollHeight - element.clientHeight;
+    setTimeout(() => {
+      programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
+    }, 50);
+  }, [cancelScrollAnimation]);
 
   // Handle minimap navigation - scroll to position and pause following
   const handleMinimapNavigate = useCallback((scrollPosition: number) => {
@@ -735,6 +830,11 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
       return;
     }
 
+    // Skip following-state changes during initial load - we haven't jumped to bottom yet
+    if (!hasCompletedInitialLoadRef.current) {
+      return;
+    }
+
     // User scrolled UP - pause following and cancel animation (only if not programmatic)
     if (scrollDirection < -5) {
       cancelScrollAnimation();
@@ -748,7 +848,23 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
       setIsFollowing(true);
       isFollowingRef.current = true;
     }
-  }, [checkAtBottom, cancelScrollAnimation]);
+
+    // Lazy loading: when near top and we have incomplete history, load more
+    if (
+      historyLoadMode === 'lazy' &&
+      element.scrollTop < LAZY_LOAD_TOP_THRESHOLD &&
+      !isLazyLoadingRef.current &&
+      !isLoadingHistory &&
+      lowestLoadedOrderRef.current !== null &&
+      lowestLoadedOrderRef.current > 0  // There's older history to load
+    ) {
+      isLazyLoadingRef.current = true;
+      const endOrder = lowestLoadedOrderRef.current - 1;
+      const startOrder = Math.max(0, endOrder - LAZY_LOAD_CHUNK_SIZE + 1);
+      debugLog('lazy loading triggered', { scrollTop: element.scrollTop, startOrder, endOrder });
+      loadHistoryRange(startOrder, endOrder);
+    }
+  }, [checkAtBottom, cancelScrollAnimation, historyLoadMode, isLoadingHistory, loadHistoryRange]);
 
   // Attach scroll, wheel, and touch listeners
   useEffect(() => {
@@ -772,10 +888,12 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     element.addEventListener('wheel', handleWheel, { passive: true });
     element.addEventListener('touchstart', handleTouchStart, { passive: true });
 
-    // Use ResizeObserver to detect content size changes
-    // When content grows (e.g., large tool result loads) and we're following,
-    // we need to scroll to bottom with animation
+    // Use ResizeObserver on the CONTENT WRAPPER to detect content size changes
+    // The scroll container itself has fixed dimensions - only the content inside changes.
+    // When content grows (e.g., tool results load, parallel calls complete) and we're
+    // following, we need to scroll to bottom with animation.
     let lastScrollHeight = element.scrollHeight;
+    const contentWrapper = contentWrapperRef.current;
     const resizeObserver = new ResizeObserver(() => {
       // ResizeObserver fires after layout, but use RAF to batch updates
       // and ensure we're reading final values
@@ -788,8 +906,9 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         // Check if scrollHeight increased (content grew)
         const newScrollHeight = el.scrollHeight;
 
-        // Skip animation during initial history loading - we'll jump to bottom when complete
-        if (isLoadingHistoryRef.current || !hasCompletedInitialLoadRef.current) {
+        // Skip animation during initial load - we handle that separately
+        // Also skip if animated scrolls aren't allowed yet (brief settling period)
+        if (!hasCompletedInitialLoadRef.current || !allowAnimatedScrollRef.current) {
           lastScrollHeight = newScrollHeight;
           return;
         }
@@ -808,7 +927,11 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         lastScrollHeight = newScrollHeight;
       });
     });
-    resizeObserver.observe(element);
+    // Observe the content wrapper, not the scroll container
+    // This fires when content height changes (new turns, tool results, etc.)
+    if (contentWrapper) {
+      resizeObserver.observe(contentWrapper);
+    }
 
     return () => {
       element.removeEventListener('scroll', handleScroll);
@@ -823,66 +946,96 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     };
   }, [handleScroll, handleWheel, handleTouchStart, scrollContainerElement, animateScrollTo, cancelScrollAnimation]);
 
-  // Detect when history loading completes and jump to bottom
+  // Initial load: continuously scroll to bottom every frame until layout stabilizes
+  // Content is hidden during this, then revealed once stable
   useEffect(() => {
-    const wasLoading = wasLoadingHistoryRef.current;
-    wasLoadingHistoryRef.current = isLoadingHistory;
+    debugLog(`[initial-scroll] Effect triggered: isInitialLoadComplete=${isInitialLoadComplete}, isLoading=${isLoading}, scrollContainer=${!!scrollContainerElement}, turns=${turnsOrGroups.length}`);
 
-    debugLog(`[scroll] isLoadingHistory changed: was=${wasLoading}, now=${isLoadingHistory}, hasCompleted=${hasCompletedInitialLoadRef.current}`);
-
-    // History just finished loading (was loading, now not loading)
-    if (wasLoading && !isLoadingHistory && !hasCompletedInitialLoadRef.current) {
-      hasCompletedInitialLoadRef.current = true;
-      debugLog('[scroll] History loading complete, jumping to bottom');
-
-      if (isFollowingRef.current && scrollContainerRef.current) {
-        // Use double RAF to ensure DOM is fully laid out after history load
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            if (scrollContainerRef.current && isFollowingRef.current) {
-              const element = scrollContainerRef.current;
-              programmaticScrollCountRef.current++;
-              element.scrollTop = element.scrollHeight - element.clientHeight;
-              debugLog(`[scroll] Jumped to bottom: scrollTop=${element.scrollTop}`);
-              setTimeout(() => {
-                programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
-              }, 50);
-            }
-          });
-        });
-      }
+    // Skip if already completed initial load
+    if (isInitialLoadComplete) {
+      debugLog('[initial-scroll] Skipping: already complete');
+      return;
     }
-  }, [isLoadingHistory]);
 
-  // Fallback: if we have turns but haven't completed initial load and not loading,
-  // jump to bottom. This handles cases where isLoadingHistory was never true.
-  useEffect(() => {
-    if (turnsOrGroups.length > 0 && !isLoadingHistory && !hasCompletedInitialLoadRef.current) {
-      hasCompletedInitialLoadRef.current = true;
-      debugLog('[scroll] Fallback: turns arrived without history loading, jumping to bottom');
-
-      if (isFollowingRef.current && scrollContainerRef.current) {
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            if (scrollContainerRef.current && isFollowingRef.current) {
-              const element = scrollContainerRef.current;
-              programmaticScrollCountRef.current++;
-              element.scrollTop = element.scrollHeight - element.clientHeight;
-              debugLog(`[scroll] Fallback jumped to bottom: scrollTop=${element.scrollTop}`);
-              setTimeout(() => {
-                programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
-              }, 50);
-            }
-          });
-        });
-      }
+    // Wait for initial loading to finish
+    if (isLoading) {
+      debugLog('[initial-scroll] Skipping: isLoading=true');
+      return;
     }
-  }, [turnsOrGroups.length, isLoadingHistory]);
 
-  // Auto-scroll when NEW content arrives and we're following
+    // Need scroll container
+    if (!scrollContainerElement) {
+      debugLog('[initial-scroll] Skipping: no scroll container');
+      return;
+    }
+
+    // No turns yet - wait for history chunks to arrive
+    // This handles the race where subscription completes before chunks are processed
+    if (turnsOrGroups.length === 0) {
+      debugLog('[initial-scroll] No turns yet, waiting for history chunks...');
+      return;
+    }
+
+    // For reverse/lazy loading: proceed as soon as we have ANY turns
+    // For forward loading: also proceed - we'll keep scrolling as more arrive
+    // The key insight: as long as we have turns and isLoading is false, start scrolling
+
+    debugLog(`[initial-scroll] Starting scroll loop: turns=${turnsOrGroups.length}, isLoadingHistory=${isLoadingHistory}, historyLoadMode=${historyLoadMode}`);
+
+    let cancelled = false;
+    let lastHeight = 0;
+    let stableFrames = 0;
+    const requiredStableFrames = isLoadingHistory ? 5 : 10; // Less frames needed if still loading
+
+    // Every frame: scroll to bottom, check if stable
+    const frame = () => {
+      if (cancelled || !scrollContainerRef.current) return;
+
+      const el = scrollContainerRef.current;
+      const height = el.scrollHeight;
+
+      // Always scroll to bottom instantly
+      el.scrollTop = height - el.clientHeight;
+
+      // Check stability - but for reverse loading with ongoing history,
+      // we want to complete initial load faster since we're at the bottom
+      if (height === lastHeight && height > 0) {
+        stableFrames++;
+        if (stableFrames >= requiredStableFrames) {
+          debugLog(`[initial-scroll] Complete: height=${height}, scrollTop=${el.scrollTop}`);
+          hasCompletedInitialLoadRef.current = true;
+          setIsInitialLoadComplete(true);
+          // Allow animated scrolls after a brief settling period
+          setTimeout(() => {
+            allowAnimatedScrollRef.current = true;
+          }, 200);
+          return;
+        }
+      } else {
+        stableFrames = 0;
+        lastHeight = height;
+      }
+
+      requestAnimationFrame(frame);
+    };
+
+    requestAnimationFrame(frame);
+
+    return () => { cancelled = true; };
+  }, [isLoading, isLoadingHistory, scrollContainerElement, turnsOrGroups.length, isInitialLoadComplete, historyLoadMode]);
+
+  // Auto-scroll when NEW content arrives and we're following (after initial load)
   // Use ref to check following state to avoid race conditions with setState
   const prevTurnsLengthRef = useRef(turnsOrGroups.length);
+  const prevSessionIdForScrollRef = useRef(sessionId);
   useEffect(() => {
+    // Reset prevTurnsLength when session changes
+    if (prevSessionIdForScrollRef.current !== sessionId) {
+      prevSessionIdForScrollRef.current = sessionId;
+      prevTurnsLengthRef.current = 0;
+      return; // Skip scroll on session change
+    }
+
     const prevLength = prevTurnsLengthRef.current;
     const currentLength = turnsOrGroups.length;
     prevTurnsLengthRef.current = currentLength;
@@ -895,8 +1048,8 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     // Don't fight with user - if they're actively scrolling, skip this update
     if (userScrollingRef.current) return;
 
-    // During initial history loading, don't animate - we'll jump at the end
-    if (isLoadingHistory || !hasCompletedInitialLoadRef.current) return;
+    // Skip during initial load or settling period
+    if (!isInitialLoadComplete || !allowAnimatedScrollRef.current) return;
 
     // Use double requestAnimationFrame to ensure DOM has fully laid out
     // First RAF: browser schedules layout
@@ -904,7 +1057,8 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         // Double-check we're still following and user isn't scrolling
-        if (!isFollowingRef.current || userScrollingRef.current || !scrollContainerRef.current) {
+        // Also check that animated scroll is allowed (not in settling period)
+        if (!isFollowingRef.current || userScrollingRef.current || !scrollContainerRef.current || !allowAnimatedScrollRef.current) {
           return;
         }
 
@@ -920,13 +1074,17 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         }
       });
     });
-  }, [turnsOrGroups.length, animateScrollTo, isLoadingHistory]);
+  }, [turnsOrGroups.length, animateScrollTo, isInitialLoadComplete, sessionId]);
 
   // Early returns AFTER all hooks have been called
   if (!sessionId) {
     return <div className="streaming-turns-view empty">No session selected</div>;
   }
 
+  // Show full-screen spinner while subscription is loading
+  // Note: We DON'T show spinner for isLoadingHistory because with reverse/lazy loading,
+  // we want to show content as soon as the first chunk arrives. The user sees the newest
+  // messages immediately while older history loads in background.
   if (isLoading) {
     return (
       <div className="streaming-turns-view loading">
@@ -945,9 +1103,20 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
   // Show scroll-to-bottom button when user has scrolled away
   const showScrollIndicator = !isFollowing;
 
+  // During initial load, we render the content hidden (for layout/scroll calculation)
+  // but show a spinner overlay. Once scroll position is set, we reveal.
+  const isInitializing = !isInitialLoadComplete && turnsOrGroups.length > 0;
+
   return (
     <ClientContext.Provider value={contextValue}>
-      <div className="streaming-turns-view-wrapper">
+      <div className={`streaming-turns-view-wrapper ${isInitializing ? 'streaming-turns-view-wrapper--initializing' : ''}`}>
+        {/* Loading overlay during initial scroll positioning */}
+        {isInitializing && (
+          <div className="streaming-turns-view-initializing-overlay">
+            <span className="loading-spinner" />
+          </div>
+        )}
+
         {/* Minimap toggle button - outside scroll container so it stays fixed */}
         <button
           className={`chat-minimap-toggle ${showMinimap ? 'chat-minimap-toggle--active chat-minimap-toggle--with-minimap' : ''}`}
@@ -983,7 +1152,9 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
           isFollowing={isFollowing}
           lastSeenTurnIndex={lastSeenTurnIndexRef.current}
           onNavigate={handleMinimapNavigate}
-          visible={showMinimap && exchangeRects.length > 0}
+          onArchiveExchange={onArchiveTurns}
+          archivingExchangeIds={archivingExchangeIds}
+          visible={showMinimap && exchangeRects.length > 0 && !isInitializing}
           width={60}
         />
 
@@ -991,7 +1162,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
           className={`streaming-turns-view-container ${showMinimap ? 'streaming-turns-view-container--with-minimap' : ''}`}
           ref={scrollContainerCallbackRef}
         >
-        <div className="streaming-turns-view">
+        <div className="streaming-turns-view" ref={contentWrapperRef}>
           {/* Direct rendering of all turns grouped by exchange */}
           <div className="streaming-turns-list">
             {exchangeGroups.map((exchangeGroup, groupIndex) => {

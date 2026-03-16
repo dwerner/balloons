@@ -24,6 +24,44 @@
   /* Both sections will flex to fill available space */
 }
 
+/* ===== Incomplete History Banner ===== */
+.ctx-tab-view__incomplete-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem;
+  background: rgba(255, 180, 0, 0.1);
+  border-bottom: 1px solid rgba(255, 180, 0, 0.2);
+  color: var(--color-warning, #ffb400);
+  font-size: 0.85rem;
+}
+
+.ctx-tab-view__incomplete-loading {
+  font-style: italic;
+  opacity: 0.8;
+}
+
+.ctx-tab-view__incomplete-text {
+  opacity: 0.9;
+}
+
+.ctx-tab-view__load-all-btn {
+  padding: 0.25rem 0.75rem;
+  border: 1px solid rgba(255, 180, 0, 0.4);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-warning, #ffb400);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.ctx-tab-view__load-all-btn:hover {
+  background: rgba(255, 180, 0, 0.15);
+  border-color: rgba(255, 180, 0, 0.6);
+}
+
 /* ===== Tree Section (top area) ===== */
 .ctx-tab-view__tree-section {
   flex: 1 1 auto;

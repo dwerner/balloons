@@ -1003,6 +1003,12 @@ interface ContextTabViewProps {
   isLoading?: boolean;
   /** Turn indices currently being archived (show spinner) */
   archivingTurnIndices?: Set<number>;
+  /** Total turns in session (for detecting incomplete history) */
+  totalHistoryTurns?: number;
+  /** Whether history is still loading */
+  isLoadingHistory?: boolean;
+  /** Callback to load remaining history */
+  onLoadFullHistory?: () => void;
 }
 
 // Sub-tab type for context view
@@ -1021,6 +1027,9 @@ export const ContextTabView = memo(function ContextTabView({
   onAddToLinkStash,
   isLoading = false,
   archivingTurnIndices,
+  totalHistoryTurns,
+  isLoadingHistory = false,
+  onLoadFullHistory,
 }: ContextTabViewProps) {
   // Log on mount
   useEffect(() => {
@@ -1055,6 +1064,22 @@ export const ContextTabView = memo(function ContextTabView({
     }
     return map;
   }, [rawTurns]);
+
+  // Detect incomplete history: lowest turn order > 0 means there are older turns not loaded
+  // Note: We only check lowestOrder, not turns.length vs totalHistoryTurns, because
+  // archived turns legitimately reduce turns.length without meaning history is incomplete
+  const hasIncompleteHistory = useMemo(() => {
+    if (turns.length === 0) return false;  // Can't know without turns
+    const lowestOrder = Math.min(...turns.map(t => t.idx));
+    return lowestOrder > 0;
+  }, [turns]);
+
+  const missingTurnsCount = useMemo(() => {
+    if (!hasIncompleteHistory) return 0;
+    // lowestOrder is the count of missing turns at the beginning
+    const lowestOrder = Math.min(...turns.map(t => t.idx));
+    return lowestOrder;
+  }, [hasIncompleteHistory, turns]);
 
   // Build tool result map for pairing tool_use with tool_result
   const toolResultMap = useMemo(() => {
@@ -1197,6 +1222,31 @@ export const ContextTabView = memo(function ContextTabView({
           client={client}
           isLoading={isLoading}
         />
+      )}
+
+      {/* Incomplete history banner */}
+      {activeSubTab === 'exchanges' && hasIncompleteHistory && (
+        <div className="ctx-tab-view__incomplete-banner">
+          {isLoadingHistory ? (
+            <span className="ctx-tab-view__incomplete-loading">
+              Loading older exchanges...
+            </span>
+          ) : (
+            <>
+              <span className="ctx-tab-view__incomplete-text">
+                {missingTurnsCount > 0 ? `${missingTurnsCount} older turns not loaded` : 'Older turns not loaded'}
+              </span>
+              {onLoadFullHistory && (
+                <button
+                  className="ctx-tab-view__load-all-btn"
+                  onClick={onLoadFullHistory}
+                >
+                  Load All
+                </button>
+              )}
+            </>
+          )}
+        </div>
       )}
 
       {/* Exchanges view - Tree section (top half when preview is open) */}

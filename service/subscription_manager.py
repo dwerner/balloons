@@ -36,12 +36,16 @@ class Layer(Enum):
     - HEADER: Low bandwidth, suitable for many sessions
     - BODY: Medium bandwidth, turn content on completion
     - DELTA: High bandwidth, only for actively viewed session
-    - HISTORY: One-time load, removed after history completes
+    - HISTORY: One-time load, oldest-first (chronological order)
+    - HISTORY_REVERSE: One-time load, newest-first (fast time-to-bottom)
+    - HISTORY_LAZY: On-demand loading via load_history_range() calls
     """
     HEADER = "header"
     BODY = "body"
     DELTA = "delta"
     HISTORY = "history"
+    HISTORY_REVERSE = "history_reverse"
+    HISTORY_LAZY = "history_lazy"
 
 
 @dataclass

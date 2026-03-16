@@ -138,6 +138,8 @@ export interface UseSessionDataState {
   isLoadingHistory: boolean;
   /** Highest turn order received from history chunks (for gap detection) */
   historyWatermark: number;
+  /** Total turns in the session (from historyComplete event) */
+  totalHistoryTurns: number;
   /** Stream error message if any */
   streamError: string | null;
   /** Error message if any */
@@ -157,6 +159,8 @@ export interface UseSessionDataReturn extends UseSessionDataState {
   getTurn: (turnId: string) => SessionDataTurn | undefined;
   /** Clear all state */
   clear: () => void;
+  /** Load a range of history turns (for lazy loading) */
+  loadHistoryRange: (startOrder: number, endOrder: number) => Promise<void>;
 }
 
 /**
@@ -235,17 +239,22 @@ function appendTextDelta(block: ContentBlock, delta: string): ContentBlock {
   return block;
 }
 
+// History loading mode - determines which layer to use for history subscription
+export type HistoryLoadMode = 'forward' | 'reverse' | 'lazy';
+
 /**
  * Hook for subscribing to session data via SessionDataService
  *
  * @param client - BalloonsClient instance
  * @param autoSubscribe - Session ID to automatically subscribe to (optional)
  * @param refreshKey - Increment to force re-subscription (useful after archive/delete)
+ * @param historyLoadMode - How to load history: 'forward' (oldest first), 'reverse' (newest first), 'lazy' (on-demand)
  */
 export function useSessionData(
   client: BalloonsClient | null,
   autoSubscribe?: string | null,
-  refreshKey?: number
+  refreshKey?: number,
+  historyLoadMode: HistoryLoadMode = 'reverse'
 ): UseSessionDataReturn {
   // Get the server-assigned clientId directly from the client when needed
   // This is set when the websocket connects and receives the 'connected' event
@@ -261,6 +270,7 @@ export function useSessionData(
   const [isStreaming, setIsStreaming] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [historyWatermark, setHistoryWatermark] = useState(-1);
+  const [totalHistoryTurns, setTotalHistoryTurns] = useState(-1);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -350,12 +360,39 @@ export function useSessionData(
     setIsStreaming(false);
     setIsLoadingHistory(false);
     setHistoryWatermark(-1);
+    setTotalHistoryTurns(-1);
     setStreamError(null);
     setError(null);
     setSessionId(null);
     setStreamingProgress(null);
     currentSessionRef.current = null;
   }, []);
+
+  // Load a range of history turns (for lazy loading)
+  const loadHistoryRange = useCallback(async (startOrder: number, endOrder: number) => {
+    const clientId = getClientId();
+    if (!client || !clientId || !currentSessionRef.current) {
+      debugLog('[useSessionData.loadHistoryRange] skipped - not ready', { hasClient: !!client, clientId, session: currentSessionRef.current });
+      return;
+    }
+
+    debugLog('[useSessionData.loadHistoryRange] loading range', { startOrder, endOrder, session: currentSessionRef.current });
+    setIsLoadingHistory(true);
+
+    try {
+      await client.sessionData.loadHistoryRange(
+        currentSessionRef.current,
+        clientId,
+        startOrder,
+        endOrder
+      );
+      // History chunks will arrive via existing event handlers
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      debugLog('[useSessionData.loadHistoryRange] failed', { error: message });
+      setError(`Failed to load history: ${message}`);
+    }
+  }, [client]);
 
   // Unsubscribe from current session
   const unsubscribe = useCallback(async () => {
@@ -803,6 +840,7 @@ export function useSessionData(
         );
 
         // History complete - all historical turns have been sent
+        // Use requestAnimationFrame to ensure chunk handlers have processed first
         handlers.push(
           client.sessionData.sessionDataHistoryComplete((event: SessionHistoryCompleteEvent) => {
             if (event.sessionId !== newSessionId) return;
@@ -811,8 +849,13 @@ export function useSessionData(
               finalWatermark: event.finalWatermark,
             });
 
-            setIsLoadingHistory(false);
-            setHistoryWatermark(event.finalWatermark);
+            // Delay state update to let chunk events process first
+            // This handles the case where historyComplete arrives before/with chunks
+            requestAnimationFrame(() => {
+              setIsLoadingHistory(false);
+              setHistoryWatermark(event.finalWatermark);
+              setTotalHistoryTurns(event.totalTurns);
+            });
           })
         );
 
@@ -882,16 +925,21 @@ export function useSessionData(
         const tHandlers = performance.now();
         rawDebugLog('perf', `[useSessionData.subscribe] handlers setup: ${(tHandlers-t0).toFixed(1)}ms`, {});
 
+        // Determine which history layer to use based on load mode
+        const historyLayer = historyLoadMode === 'reverse' ? 'history_reverse'
+                           : historyLoadMode === 'lazy' ? 'history_lazy'
+                           : 'history';
+
         // NOW subscribe using layer-based API - full subscription for active viewing
         // clientId is already validated at the start of subscribe()
         const tSubStart = performance.now();
         const result = await client.sessionData.subscribeAdd(
           newSessionId,
           clientId!,
-          ['header', 'body', 'delta', 'history']
+          ['header', 'body', 'delta', historyLayer]
         );
         const tSubEnd = performance.now();
-        rawDebugLog('perf', `[useSessionData.subscribe] subscribeAdd API: ${(tSubEnd-tSubStart).toFixed(1)}ms`, {});
+        rawDebugLog('perf', `[useSessionData.subscribe] subscribeAdd API (${historyLayer}): ${(tSubEnd-tSubStart).toFixed(1)}ms`, {});
 
         if (!result.subscribed) {
           // Cleanup handlers on failure
@@ -921,7 +969,7 @@ export function useSessionData(
         currentSessionRef.current = null;
       }
     },
-    [client, isSubscribed, unsubscribe]
+    [client, isSubscribed, unsubscribe, historyLoadMode]
   );
 
   // Auto-subscribe when autoSubscribe changes and client is ready
@@ -1080,6 +1128,7 @@ export function useSessionData(
     isStreaming,
     isLoadingHistory,
     historyWatermark,
+    totalHistoryTurns,
     streamError,
     error,
     sessionId,
@@ -1088,6 +1137,7 @@ export function useSessionData(
     unsubscribe,
     getTurn,
     clear,
+    loadHistoryRange,
   };
 }
 

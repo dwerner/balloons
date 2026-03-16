@@ -98,7 +98,7 @@ export function renderMinimap(
   height: number,
   options: MinimapRenderOptions
 ): void {
-  const { colors, showViewport, newContentFromY } = options;
+  const { colors, showViewport, newContentFromY, hoveredExchangeId, selectedExchangeId, archivingExchangeIds } = options;
 
   // Clear canvas
   ctx.fillStyle = colors.background;
@@ -114,16 +114,53 @@ export function renderMinimap(
   // Draw each exchange
   for (const exLayout of layout.exchanges) {
     const { exchange, y, height: exHeight, turns } = exLayout;
+    const isHovered = exchange.id === hoveredExchangeId;
+    const isSelected = exchange.id === selectedExchangeId;
+    const isArchiving = archivingExchangeIds?.has(exchange.id) ?? false;
 
-    // Exchange background (subtle tint based on color index)
-    const bgColor = getExchangeColor(exchange.colorIndex, 0.08);
+    // Exchange background (subtle tint based on color index, brighter if hovered/selected)
+    // Archiving exchanges get a pulsing amber tint
+    const bgAlpha = isArchiving ? 0.25 : isHovered ? 0.2 : isSelected ? 0.15 : 0.08;
+    const bgColor = isArchiving
+      ? 'rgba(245, 158, 11, 0.3)'  // Amber for archiving
+      : getExchangeColor(exchange.colorIndex, bgAlpha);
     ctx.fillStyle = bgColor;
     ctx.fillRect(CONTENT_PADDING_X, y, width - CONTENT_PADDING_X * 2, exHeight);
 
-    // Exchange left border (stronger color)
-    const borderColor = EXCHANGE_COLORS[exchange.colorIndex % EXCHANGE_COLORS.length] ?? EXCHANGE_COLORS[0]!;
+    // Hover/selection outline
+    if (isHovered || isSelected) {
+      ctx.strokeStyle = isHovered
+        ? 'rgba(255, 255, 255, 0.4)'
+        : 'rgba(59, 130, 246, 0.5)';
+      ctx.lineWidth = isHovered ? 2 : 1;
+      ctx.strokeRect(
+        CONTENT_PADDING_X + 0.5,
+        y + 0.5,
+        width - CONTENT_PADDING_X * 2 - 1,
+        exHeight - 1
+      );
+    }
+
+    // Exchange left border (stronger color, even stronger if hovered, amber if archiving)
+    const borderColor = isArchiving
+      ? 'rgb(245, 158, 11)'  // Amber for archiving
+      : EXCHANGE_COLORS[exchange.colorIndex % EXCHANGE_COLORS.length] ?? EXCHANGE_COLORS[0]!;
     ctx.fillStyle = borderColor;
-    ctx.fillRect(CONTENT_PADDING_X, y, EXCHANGE_BORDER_WIDTH, exHeight);
+    ctx.fillRect(CONTENT_PADDING_X, y, isHovered ? EXCHANGE_BORDER_WIDTH + 1 : EXCHANGE_BORDER_WIDTH, exHeight);
+
+    // Archiving indicator: pulsing outline
+    if (isArchiving) {
+      ctx.strokeStyle = 'rgba(245, 158, 11, 0.8)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 2]);  // Dashed line for "in progress" feel
+      ctx.strokeRect(
+        CONTENT_PADDING_X + 0.5,
+        y + 0.5,
+        width - CONTENT_PADDING_X * 2 - 1,
+        exHeight - 1
+      );
+      ctx.setLineDash([]);  // Reset
+    }
 
     // Check if we have individual turn layouts or just a solid exchange block
     if (turns && turns.length > 0) {
@@ -156,26 +193,32 @@ export function renderMinimap(
       ctx.fillRect(contentX, fillY, contentWidth, fillH);
       ctx.globalAlpha = 1.0;
 
-      // Draw turn range label if exchange is tall enough (at least 10px)
-      if (exLayout.turnRange && exHeight >= 10) {
+      // Draw token count centered in the exchange if tall enough
+      if (exLayout.tokenCount !== undefined && exLayout.tokenCount > 0 && exHeight >= 12) {
         ctx.save();
         ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-        ctx.font = '7px monospace';
+
+        // Use larger font, scale with exchange height
+        const fontSize = exHeight >= 24 ? 11 : exHeight >= 16 ? 9 : 8;
+        ctx.font = `bold ${fontSize}px monospace`;
         ctx.textBaseline = 'middle';
         ctx.textAlign = 'center';
 
-        // Draw label centered in the exchange
+        // Format token count (compact: 1.2k, 15k, etc.)
+        let tokenLabel: string;
+        if (exLayout.tokenCount >= 10000) {
+          tokenLabel = `${Math.round(exLayout.tokenCount / 1000)}k`;
+        } else if (exLayout.tokenCount >= 1000) {
+          tokenLabel = `${(exLayout.tokenCount / 1000).toFixed(1)}k`;
+        } else {
+          tokenLabel = String(exLayout.tokenCount);
+        }
+
+        // Draw centered in the exchange
         const labelX = CONTENT_PADDING_X + (width - CONTENT_PADDING_X * 2) / 2;
         const labelY = y + exHeight / 2;
 
-        // Shorten label if needed (use just the first number for very small spaces)
-        let label = exLayout.turnRange;
-        if (exHeight < 14 && label.includes('-')) {
-          // Just show first number for very small blocks
-          label = label.split('-')[0] || label;
-        }
-
-        ctx.fillText(label, labelX, labelY);
+        ctx.fillText(tokenLabel, labelX, labelY);
         ctx.restore();
       }
     }

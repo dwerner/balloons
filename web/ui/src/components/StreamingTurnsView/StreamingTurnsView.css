@@ -85,6 +85,24 @@
   to { transform: rotate(0deg); }
 }
 
+/* Initializing state - content is rendered for layout but hidden visually */
+.streaming-turns-view-wrapper--initializing .streaming-turns-view-container {
+  visibility: hidden;
+}
+
+.streaming-turns-view-initializing-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-primary, #ffffff);
+  z-index: 10;
+}
+
 /* Exchange groups - visual grouping of related turns */
 .exchange-group {
   margin-bottom: 12px;

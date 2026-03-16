@@ -14,11 +14,20 @@
  */
 
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
-import type { MinimapExchange, ExchangeDOMRect } from './minimapTypes';
+import type { MinimapExchange, ExchangeDOMRect, MinimapExchangeLayout } from './minimapTypes';
 import { calculateMinimapLayout, calculateMinimapLayoutFromDOM, minimapYToScrollPosition, findExchangeAtPosition } from './minimapLayout';
 import { renderMinimap } from './minimapRender';
 import { getMinimapColors } from './minimapColors';
 import './ChatMinimap.css';
+
+/** Info for context menu */
+interface ContextMenuInfo {
+  x: number;
+  y: number;
+  exchangeLayout: MinimapExchangeLayout;
+  tokenCount?: number;
+  turnIndices?: number[];
+}
 
 export interface ChatMinimapProps {
   /** Exchange data to render (legacy, used if exchangeRects not provided) */
@@ -39,6 +48,12 @@ export interface ChatMinimapProps {
   onNavigate: (scrollPosition: number) => void;
   /** Callback when user clicks on a specific exchange */
   onExchangeClick?: (exchangeId: string) => void;
+  /** Callback when user requests to archive an exchange's turns */
+  onArchiveExchange?: (turnIndices: number[]) => void;
+  /** Currently selected/active exchange ID */
+  selectedExchangeId?: string;
+  /** Exchange IDs currently being archived */
+  archivingExchangeIds?: Set<string>;
   /** Whether the minimap is visible */
   visible?: boolean;
   /** Additional CSS class */
@@ -57,14 +72,22 @@ export function ChatMinimap({
   lastSeenTurnIndex,
   onNavigate,
   onExchangeClick,
+  onArchiveExchange,
+  selectedExchangeId,
+  archivingExchangeIds,
   visible = true,
   className = '',
   width = 60,
 }: ChatMinimapProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [canvasHeight, setCanvasHeight] = useState(0);
+  const [hoveredExchangeId, setHoveredExchangeId] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuInfo | null>(null);
+  const [contextMenuPosition, setContextMenuPosition] = useState<{ left: number; top: number } | null>(null);
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
 
   // Detect theme (check for data-theme attribute or prefers-color-scheme)
   // Possible values: 'dark', 'light', 'dark-flat'
@@ -206,8 +229,11 @@ export function ChatMinimap({
       colors,
       showViewport: true,
       newContentFromY,
+      hoveredExchangeId: hoveredExchangeId ?? undefined,
+      selectedExchangeId,
+      archivingExchangeIds,
     });
-  }, [layout, colors, newContentFromY]);
+  }, [layout, colors, newContentFromY, hoveredExchangeId, selectedExchangeId, archivingExchangeIds]);
 
   // Navigation handlers
   const handleNavigateToY = useCallback((clientY: number) => {
@@ -257,24 +283,221 @@ export function ChatMinimap({
     setIsDragging(false);
   }, []);
 
+  // Handle hover to show exchange highlight and tooltip
+  const handlePointerMoveHover = useCallback((e: React.PointerEvent) => {
+    if (isDragging) return; // Don't update hover during drag
+
+    const canvas = canvasRef.current;
+    if (!canvas || !layout) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const exLayout = findExchangeAtPosition(layout, y);
+
+    setHoveredExchangeId(exLayout?.exchange.id ?? null);
+
+    // Show tooltip with turn range (token count is rendered in the minimap itself)
+    if (exLayout) {
+      const exchangeRect = exchangeRects?.find(r => r.id === exLayout.exchange.id);
+      const turnRange = exLayout.turnRange || exchangeRect?.turnRange;
+
+      if (turnRange) {
+        setTooltip({
+          x: e.clientX,
+          y: e.clientY,
+          text: turnRange,
+        });
+      } else {
+        setTooltip(null);
+      }
+    } else {
+      setTooltip(null);
+    }
+  }, [isDragging, layout, exchangeRects]);
+
+  // Clear hover when leaving
+  const handlePointerLeaveHover = useCallback(() => {
+    if (!isDragging) {
+      setHoveredExchangeId(null);
+      setTooltip(null);
+    }
+  }, [isDragging]);
+
+  // Context menu handler
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const canvas = canvasRef.current;
+    if (!canvas || !layout) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const exLayout = findExchangeAtPosition(layout, y);
+
+    if (!exLayout) {
+      setContextMenu(null);
+      return;
+    }
+
+    // Find the exchange rect to get token count and turn indices
+    const exchangeRect = exchangeRects?.find(r => r.id === exLayout.exchange.id);
+
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      exchangeLayout: exLayout,
+      tokenCount: exchangeRect?.tokenCount,
+      turnIndices: exchangeRect?.turnIndices,
+    });
+  }, [layout, exchangeRects]);
+
+  // Close context menu
+  const closeContextMenu = useCallback(() => {
+    setContextMenu(null);
+  }, []);
+
+  // Handle archive action from context menu
+  const handleArchive = useCallback(() => {
+    if (!contextMenu?.turnIndices || !onArchiveExchange) return;
+    onArchiveExchange(contextMenu.turnIndices);
+    closeContextMenu();
+  }, [contextMenu, onArchiveExchange, closeContextMenu]);
+
+  // Close context menu when clicking elsewhere
+  useEffect(() => {
+    if (!contextMenu) return;
+
+    const handleClick = () => closeContextMenu();
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeContextMenu();
+    };
+
+    window.addEventListener('click', handleClick);
+    window.addEventListener('keydown', handleEscape);
+
+    return () => {
+      window.removeEventListener('click', handleClick);
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [contextMenu, closeContextMenu]);
+
+  // Adjust context menu position to stay within viewport
+  useEffect(() => {
+    if (!contextMenu) {
+      setContextMenuPosition(null);
+      return;
+    }
+
+    const menu = contextMenuRef.current;
+    if (!menu) return;
+
+    // Measure the menu
+    const menuRect = menu.getBoundingClientRect();
+    const padding = 8; // Padding from viewport edges
+
+    let left = contextMenu.x;
+    let top = contextMenu.y;
+
+    // Adjust if going off right edge
+    if (left + menuRect.width > window.innerWidth - padding) {
+      left = contextMenu.x - menuRect.width;
+    }
+
+    // Adjust if going off bottom edge
+    if (top + menuRect.height > window.innerHeight - padding) {
+      top = contextMenu.y - menuRect.height;
+    }
+
+    // Ensure not going off left/top edges
+    left = Math.max(padding, left);
+    top = Math.max(padding, top);
+
+    setContextMenuPosition({ left, top });
+  }, [contextMenu]);
+
   // Always render the container but hide it with CSS
   // This ensures ResizeObserver stays connected
   return (
-    <div
-      ref={containerRef}
-      className={`chat-minimap ${className} ${isDragging ? 'chat-minimap--dragging' : ''} ${!visible ? 'chat-minimap--hidden' : ''}`}
-      style={{ width }}
-    >
-      <canvas
-        ref={canvasRef}
-        className="chat-minimap__canvas"
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
-        onPointerLeave={handlePointerUp}
-      />
-    </div>
+    <>
+      <div
+        ref={containerRef}
+        className={`chat-minimap ${className} ${isDragging ? 'chat-minimap--dragging' : ''} ${!visible ? 'chat-minimap--hidden' : ''}`}
+        style={{ width }}
+      >
+        <canvas
+          ref={canvasRef}
+          className="chat-minimap__canvas"
+          onPointerDown={handlePointerDown}
+          onPointerMove={(e) => {
+            handlePointerMove(e);
+            handlePointerMoveHover(e);
+          }}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+          onPointerLeave={(e) => {
+            handlePointerUp();
+            handlePointerLeaveHover();
+          }}
+          onContextMenu={handleContextMenu}
+        />
+      </div>
+
+      {/* Hover Tooltip */}
+      {tooltip && !contextMenu && (
+        <div
+          className="chat-minimap-tooltip"
+          style={{
+            position: 'fixed',
+            left: tooltip.x + 12,
+            top: tooltip.y - 8,
+            zIndex: 999,
+          }}
+        >
+          {tooltip.text}
+        </div>
+      )}
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <div
+          ref={contextMenuRef}
+          className="chat-minimap-context-menu"
+          style={{
+            position: 'fixed',
+            // Initially position off-screen for measurement, then use calculated position
+            left: contextMenuPosition?.left ?? -9999,
+            top: contextMenuPosition?.top ?? -9999,
+            visibility: contextMenuPosition ? 'visible' : 'hidden',
+            zIndex: 1000,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Exchange info header */}
+          <div className="chat-minimap-context-menu__header">
+            <span className="chat-minimap-context-menu__range">
+              {contextMenu.exchangeLayout.turnRange || 'Exchange'}
+            </span>
+            {contextMenu.tokenCount !== undefined && (
+              <span className="chat-minimap-context-menu__tokens">
+                {contextMenu.tokenCount.toLocaleString()} tokens
+              </span>
+            )}
+          </div>
+
+          {/* Archive action */}
+          {onArchiveExchange && contextMenu.turnIndices && contextMenu.turnIndices.length > 0 && (
+            <button
+              className="chat-minimap-context-menu__action"
+              onClick={handleArchive}
+            >
+              <span className="chat-minimap-context-menu__icon">📦</span>
+              Archive
+            </button>
+          )}
+        </div>
+      )}
+    </>
   );
 }
 

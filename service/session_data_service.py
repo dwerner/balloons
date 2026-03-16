@@ -138,11 +138,18 @@ class SessionSnapshot:
 @ws_type
 @dataclass
 class SubscriptionResult:
-    """Result of a subscribe/unsubscribe operation."""
+    """Result of a subscribe/unsubscribe operation.
+
+    When subscribing with history_lazy layer, includes metadata about
+    available turns so the client knows what range to request.
+    """
 
     session_id: str
     subscribed: bool
     error: str | None = None
+    # Metadata for lazy loading - tells client what's available
+    total_turns: int | None = None  # Total turns in session (for lazy loading)
+    is_streaming: bool | None = None  # Whether session is currently streaming
 
 
 @ws_type
@@ -365,14 +372,19 @@ class SessionHistoryChunkEvent:
 
     The watermark indicates the highest turn order in this chunk, useful
     for tracking loading progress and detecting gaps.
+
+    When reversed=True, chunks arrive newest-first (highest orders first).
+    This allows clients to show the bottom of conversation immediately
+    while older history loads progressively.
     """
 
     session_id: str
     chunk_id: str  # Unique ID for this chunk (for deduplication)
     turns: list[TurnSnapshot]  # Historical turns in this chunk
-    chunk_index: int  # 0-based index of this chunk
+    chunk_index: int  # 0-based index of this chunk (0 = first chunk sent, even if it's the last chronologically)
     total_chunks: int  # Total number of chunks expected
     watermark: int  # Highest turn order in this chunk
+    reversed: bool = False  # True if chunks sent newest-first
 
 
 @ws_type
@@ -718,7 +730,9 @@ class SessionDataService:
         - "header": Turn lifecycle events (created, completed, deleted) + stream status
         - "body": Full turn content blocks on completion
         - "delta": Live streaming events (text deltas, tool input deltas)
-        - "history": One-time historical turn loading (triggers historyChunk events)
+        - "history": One-time historical turn loading (oldest-first, triggers historyChunk events)
+        - "history_reverse": One-time historical turn loading (newest-first for fast time-to-bottom)
+        - "history_lazy": Register for history but don't auto-load (use load_history_range on-demand)
 
         Args:
             session_id: The session to subscribe to
@@ -763,23 +777,63 @@ class SessionDataService:
             category=Category.API,
         )
 
-        # If HISTORY layer was added, trigger history loading
-        if Layer.HISTORY in layer_set and added:
-            debug_log.info(
-                f"subscribe_add: triggering history load for session={session_id[:8]}, client={client_id}",
-                category=Category.API,
-            )
-            # Load session and emit history chunks
-            await self._load_and_emit_history(session_id, client_id)
-        elif Layer.HISTORY in layer_set and not added:
-            debug_log.info(
-                f"subscribe_add: HISTORY layer already existed, skipping history load for session={session_id[:8]}",
-                category=Category.API,
-            )
+        # Metadata for lazy loading response
+        total_turns: int | None = None
+        is_streaming: bool | None = None
+
+        # Trigger history loading based on which history layer was added
+        if added:
+            if Layer.HISTORY in layer_set:
+                debug_log.info(
+                    f"subscribe_add: triggering history load (forward) for session={session_id[:8]}, client={client_id}",
+                    category=Category.API,
+                )
+                await self._load_and_emit_history(session_id, client_id, reverse=False)
+            elif Layer.HISTORY_REVERSE in layer_set:
+                debug_log.info(
+                    f"subscribe_add: triggering history load (reverse) for session={session_id[:8]}, client={client_id}",
+                    category=Category.API,
+                )
+                await self._load_and_emit_history(session_id, client_id, reverse=True)
+            elif Layer.HISTORY_LAZY in layer_set:
+                debug_log.info(
+                    f"subscribe_add: lazy history mode for session={session_id[:8]}, client={client_id}",
+                    category=Category.API,
+                )
+                # For lazy loading, load the newest chunk first so user has something to see,
+                # then they scroll up to load more
+                if self._session_loader:
+                    session = await self._session_loader(session_id)
+                    if session:
+                        total_turns = len(session.turns)
+                        # Check if session is streaming
+                        if self._stream_state:
+                            stream = self._stream_state.get_session_stream(session_id)
+                            is_streaming = stream is not None and stream.is_active
+                        debug_log.info(
+                            f"subscribe_add: lazy mode - loading newest chunk, total_turns={total_turns}, is_streaming={is_streaming}",
+                            category=Category.API,
+                        )
+                        # Load the newest chunk to give user something to start with
+                        if total_turns > 0:
+                            chunk_size = self.HISTORY_CHUNK_SIZE
+                            start_order = max(0, total_turns - chunk_size)
+                            # Use load_history_range to emit the newest chunk
+                            await self.load_history_range(session_id, client_id, start_order, total_turns)
+        else:
+            # Check if any history layer was requested but already existed
+            history_layers = {Layer.HISTORY, Layer.HISTORY_REVERSE, Layer.HISTORY_LAZY}
+            if layer_set & history_layers:
+                debug_log.info(
+                    f"subscribe_add: history layer already existed, skipping load for session={session_id[:8]}",
+                    category=Category.API,
+                )
 
         return SubscriptionResult(
             session_id=session_id,
             subscribed=True,
+            total_turns=total_turns,
+            is_streaming=is_streaming,
         )
 
     @ws_expose
@@ -839,7 +893,127 @@ class SessionDataService:
             subscribed=bool(remaining),
         )
 
-    async def _load_and_emit_history(self, session_id: str, client_id: str) -> None:
+    @ws_expose
+    async def load_history_range(
+        self,
+        session_id: str,
+        client_id: str,
+        start_order: int,
+        end_order: int,
+    ) -> SubscriptionResult:
+        """Load a specific range of historical turns.
+
+        Used with lazy loading to request history on-demand, typically
+        when the user scrolls up to view older content.
+
+        Args:
+            session_id: The session to load from
+            client_id: The requesting client
+            start_order: First turn order to load (inclusive)
+            end_order: Last turn order to load (exclusive)
+
+        Returns:
+            SubscriptionResult indicating success/failure
+        """
+        from core.debug_log import debug_log
+        import uuid
+
+        debug_log.info(
+            f"load_history_range: session={session_id[:8]}, client={client_id}, "
+            f"range=[{start_order}, {end_order})",
+            category=Category.API,
+        )
+
+        if not self._session_loader:
+            return SubscriptionResult(
+                session_id=session_id,
+                subscribed=False,
+                error="session_loader not configured",
+            )
+
+        # Load session
+        session = await self._session_loader(session_id)
+        if not session:
+            return SubscriptionResult(
+                session_id=session_id,
+                subscribed=False,
+                error="session not found",
+            )
+
+        # Extract the requested range
+        turns = session.turns
+        total_turns = len(turns)
+
+        # Clamp range to valid bounds
+        start = max(0, start_order)
+        end = min(total_turns, end_order)
+
+        if start >= end:
+            # Empty range
+            return SubscriptionResult(
+                session_id=session_id,
+                subscribed=True,
+            )
+
+        # Build snapshots for the range
+        turn_snapshots = []
+        for idx in range(start, end):
+            turn = turns[idx]
+            raw_mode = getattr(turn, 'context_mode', 'copy')
+            if hasattr(raw_mode, 'value'):
+                context_mode_str = raw_mode.value
+            else:
+                context_mode_str = str(raw_mode).lower()
+
+            turn_tokens = getattr(turn, 'tokens', 0)
+            snapshot = TurnSnapshot(
+                turn_id=turn.id,
+                order=idx,
+                role=turn.role,
+                streaming=False,
+                viewed=getattr(turn, 'viewed', False),
+                tokens=turn_tokens,
+                context_mode=context_mode_str,
+                content_block=turn.content_block if hasattr(turn, 'content_block') else None,
+                exchange_id=getattr(turn, 'exchange_id', None),
+                timestamp=getattr(turn, 'timestamp', None),
+                parallel_group_id=getattr(turn, 'parallel_group_id', None),
+            )
+            turn_snapshots.append(snapshot)
+
+        # Emit as a single chunk
+        chunk_id = str(uuid.uuid4())
+        event_data = SessionHistoryChunkEvent(
+            session_id=session_id,
+            chunk_id=chunk_id,
+            turns=turn_snapshots,
+            chunk_index=0,  # Single chunk
+            total_chunks=1,
+            watermark=end - 1,
+            reversed=False,  # Range loads are always in order
+        )
+        self._emit_event(
+            "sessionDataHistoryChunk",
+            asdict(event_data),
+            target_clients={client_id},
+        )
+
+        debug_log.info(
+            f"load_history_range: emitted {len(turn_snapshots)} turns for range [{start}, {end})",
+            category=Category.API,
+        )
+
+        return SubscriptionResult(
+            session_id=session_id,
+            subscribed=True,
+        )
+
+    async def _load_and_emit_history(
+        self,
+        session_id: str,
+        client_id: str,
+        reverse: bool = False,
+    ) -> None:
         """Load session history and emit chunks to a specific client.
 
         Called when HISTORY layer is added to a subscription.
@@ -848,11 +1022,14 @@ class SessionDataService:
         Args:
             session_id: The session to load history for
             client_id: The client to send history to
+            reverse: If True, send newest chunks first (for faster time-to-bottom).
+                     If False (default), send oldest chunks first (chronological).
         """
         from core.debug_log import debug_log
+        import uuid
 
         debug_log.info(
-            f"_load_and_emit_history: STARTING for session={session_id[:8]}, client={client_id}",
+            f"_load_and_emit_history: STARTING for session={session_id[:8]}, client={client_id}, reverse={reverse}",
             category=Category.API,
         )
 
@@ -877,6 +1054,9 @@ class SessionDataService:
         total_turns = len(turns)
         chunk_size = self.HISTORY_CHUNK_SIZE
         total_chunks = (total_turns + chunk_size - 1) // chunk_size if total_turns > 0 else 1
+
+        # Build all chunks
+        all_chunks: list[tuple[list[TurnSnapshot], int]] = []  # (snapshots, watermark)
 
         for chunk_idx in range(total_chunks):
             start = chunk_idx * chunk_size
@@ -911,20 +1091,33 @@ class SessionDataService:
                 )
                 turn_snapshots.append(snapshot)
 
-            # Emit chunk event to this specific client
-            import uuid
+            all_chunks.append((turn_snapshots, end - 1 if chunk_turns else 0))
+
+        # Determine emit order based on reverse flag
+        if reverse:
+            # Emit newest chunks first - clients can show bottom immediately
+            emit_order = list(reversed(range(total_chunks)))
+        else:
+            # Emit oldest chunks first (chronological order)
+            emit_order = list(range(total_chunks))
+
+        for emit_idx, chunk_idx_original in enumerate(emit_order):
+            turn_snapshots, watermark = all_chunks[chunk_idx_original]
             chunk_id = str(uuid.uuid4())
+
             debug_log.info(
-                f"_load_and_emit_history: emitting chunk {chunk_idx}/{total_chunks} with {len(turn_snapshots)} turns to client={client_id}",
+                f"_load_and_emit_history: emitting chunk {emit_idx}/{total_chunks} "
+                f"(original {chunk_idx_original}) with {len(turn_snapshots)} turns to client={client_id}",
                 category=Category.API,
             )
             event_data = SessionHistoryChunkEvent(
                 session_id=session_id,
                 chunk_id=chunk_id,
                 turns=turn_snapshots,
-                chunk_index=chunk_idx,
+                chunk_index=emit_idx,  # Emit order (0 = first sent)
                 total_chunks=total_chunks,
-                watermark=end - 1 if chunk_turns else 0,
+                watermark=watermark,
+                reversed=reverse,  # Signal which order chunks arrive
             )
             self._emit_event(
                 "sessionDataHistoryChunk",
@@ -946,7 +1139,7 @@ class SessionDataService:
 
         debug_log.info(
             f"_load_and_emit_history: session={session_id[:8]}, client={client_id}, "
-            f"turns={total_turns}, chunks={total_chunks}",
+            f"turns={total_turns}, chunks={total_chunks}, reverse={reverse}",
             category=Category.API,
         )
 

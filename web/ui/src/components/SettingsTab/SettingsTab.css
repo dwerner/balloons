@@ -6,6 +6,8 @@
   gap: 16px;
   padding: 12px;
   padding-bottom: 48px;  /* Extra padding at bottom for scroll */
+  overflow-y: auto;
+  height: 100%;
 }
 
 .settings-tab__disconnected {
@@ -19,7 +21,7 @@
   background: var(--color-bg-secondary);
   border: 1px solid var(--color-border);
   border-radius: 8px;
-  overflow: hidden;
+  flex-shrink: 0;  /* Don't shrink cards - let them grow naturally */
 }
 
 .settings-card__header {

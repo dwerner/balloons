@@ -66,6 +66,7 @@ export const SettingsTab = memo(function SettingsTab({
     voiceInputHost,
     voiceInputPort,
     depthIndicatorStyle,
+    historyLoadMode,
     setPreference,
     setStringPreference,
   } = usePreferences();
@@ -189,6 +190,27 @@ export const SettingsTab = memo(function SettingsTab({
                 >
                   <option value="chevrons">Chevrons (stacked notches)</option>
                   <option value="fractal">Dragon Curve (video wall)</option>
+                </select>
+              </div>
+            </div>
+
+            {/* History loading mode */}
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">History Loading</span>
+                <span className="appearance-settings__label-description">
+                  How to load conversation history on session open
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <select
+                  className="appearance-settings__select"
+                  value={historyLoadMode}
+                  onChange={(e) => setStringPreference('historyLoadMode', e.target.value)}
+                >
+                  <option value="reverse">Newest first (fast startup)</option>
+                  <option value="forward">Oldest first (chronological)</option>
+                  <option value="lazy">On-demand (scroll to load)</option>
                 </select>
               </div>
             </div>

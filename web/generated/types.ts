@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-03-14T15:41:17.207911
+// Generated: 2026-03-15T17:25:39.902720
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -791,6 +791,8 @@ export interface SubscriptionResult {
   sessionId: string;
   subscribed: boolean;
   error?: string | null;
+  totalTurns?: number | null;
+  isStreaming?: boolean | null;
 }
 
 export interface SubscribeSessionResult {
@@ -927,6 +929,7 @@ export interface SessionHistoryChunkEvent {
   chunkIndex: number;
   totalChunks: number;
   watermark: number;
+  reversed?: boolean;
 }
 
 export interface SessionHistoryCompleteEvent {

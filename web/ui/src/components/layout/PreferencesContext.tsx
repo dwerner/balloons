@@ -21,13 +21,17 @@ const DEFAULTS: Record<PreferenceKey, boolean> = {
 };
 
 // String preference keys
-export type StringPreferenceKey = 'voiceInputHost' | 'voiceInputPort' | 'depthIndicatorStyle';
+export type StringPreferenceKey = 'voiceInputHost' | 'voiceInputPort' | 'depthIndicatorStyle' | 'historyLoadMode';
+
+// History loading modes
+export type HistoryLoadMode = 'forward' | 'reverse' | 'lazy';
 
 // Default values for string preferences
 const STRING_DEFAULTS: Record<StringPreferenceKey, string> = {
   voiceInputHost: '192.168.0.120',
   voiceInputPort: '8012',
   depthIndicatorStyle: 'chevrons', // 'chevrons' | 'fractal'
+  historyLoadMode: 'reverse', // 'forward' | 'reverse' | 'lazy' - reverse shows bottom faster
 };
 
 export interface PreferencesContextValue {
@@ -42,6 +46,9 @@ export interface PreferencesContextValue {
 
   // Depth indicator style
   depthIndicatorStyle: 'chevrons' | 'fractal';
+
+  // History loading mode
+  historyLoadMode: HistoryLoadMode;
 
   // Generic getter/setter (boolean)
   getPreference: (key: PreferenceKey) => boolean;
@@ -93,6 +100,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
   const [voiceInputHost, setVoiceInputHost] = useState(() => loadStringPreference('voiceInputHost'));
   const [voiceInputPort, setVoiceInputPort] = useState(() => loadStringPreference('voiceInputPort'));
   const [depthIndicatorStyle, setDepthIndicatorStyle] = useState(() => loadStringPreference('depthIndicatorStyle') as 'chevrons' | 'fractal');
+  const [historyLoadMode, setHistoryLoadMode] = useState(() => loadStringPreference('historyLoadMode') as HistoryLoadMode);
 
   // Generic boolean getter
   const getPreference = useCallback((key: PreferenceKey): boolean => {
@@ -134,9 +142,10 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
       case 'voiceInputHost': return voiceInputHost;
       case 'voiceInputPort': return voiceInputPort;
       case 'depthIndicatorStyle': return depthIndicatorStyle;
+      case 'historyLoadMode': return historyLoadMode;
       default: return STRING_DEFAULTS[key];
     }
-  }, [voiceInputHost, voiceInputPort, depthIndicatorStyle]);
+  }, [voiceInputHost, voiceInputPort, depthIndicatorStyle, historyLoadMode]);
 
   // String preference setter with persistence
   const setStringPreference = useCallback((key: StringPreferenceKey, value: string) => {
@@ -152,6 +161,9 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
         case 'depthIndicatorStyle':
           setDepthIndicatorStyle(value as 'chevrons' | 'fractal');
           break;
+        case 'historyLoadMode':
+          setHistoryLoadMode(value as HistoryLoadMode);
+          break;
       }
     });
   }, []);
@@ -163,12 +175,13 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     voiceInputHost,
     voiceInputPort,
     depthIndicatorStyle,
+    historyLoadMode,
     getPreference,
     setPreference,
     togglePreference,
     getStringPreference,
     setStringPreference,
-  }), [expandToolCards, showTokenCounts, voiceInputEnabled, voiceInputHost, voiceInputPort, depthIndicatorStyle, getPreference, setPreference, togglePreference, getStringPreference, setStringPreference]);
+  }), [expandToolCards, showTokenCounts, voiceInputEnabled, voiceInputHost, voiceInputPort, depthIndicatorStyle, historyLoadMode, getPreference, setPreference, togglePreference, getStringPreference, setStringPreference]);
 
   return (
     <PreferencesContext.Provider value={value}>
