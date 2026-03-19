@@ -1,0 +1,67 @@
+/* Background Pattern Overlay */
+
+/* Container for both pattern layers */
+.bg-pattern-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.bg-pattern-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* Base pattern layer - sits behind everything */
+.bg-pattern-overlay--base {
+  z-index: 0;
+}
+
+/* Glow pattern layer - uses screen blend to glow through card backgrounds */
+.bg-pattern-overlay--glow {
+  z-index: 2;
+  mix-blend-mode: screen;
+}
+
+/* Custom full backgrounds - renders SVG as background-image */
+.bg-pattern-overlay--custom-full {
+  z-index: 0;
+  /* Background properties set via inline styles for fit mode control */
+}
+
+/* Custom images - renders image as background-image */
+.bg-pattern-overlay--custom-image {
+  z-index: 0;
+  /* Background properties set via inline styles for fit mode control */
+}
+
+/* Ensure content appears above the pattern container */
+.bg-pattern-container ~ * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Dark theme: screen blend mode works well */
+:root[data-theme="dark"] .bg-pattern-overlay--glow,
+[data-theme="dark"] .bg-pattern-overlay--glow,
+:root[data-theme="dark-flat"] .bg-pattern-overlay--glow,
+[data-theme="dark-flat"] .bg-pattern-overlay--glow {
+  mix-blend-mode: screen;
+}
+
+/* Light theme: use multiply or overlay for better effect */
+:root[data-theme="light"] .bg-pattern-overlay--glow,
+[data-theme="light"] .bg-pattern-overlay--glow {
+  mix-blend-mode: multiply;
+  opacity: 0.15 !important;
+}

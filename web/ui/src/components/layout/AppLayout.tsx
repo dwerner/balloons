@@ -1,7 +1,9 @@
 import React, { useEffect, useCallback, useRef, useState } from 'react';
 import { useLayout, LayoutProvider } from './LayoutContext';
 import { ThemeProvider } from './ThemeContext';
-import { PreferencesProvider } from './PreferencesContext';
+import { PreferencesProvider, usePreferences } from './PreferencesContext';
+import { BackgroundPatternDefs } from './BackgroundPatterns';
+import { BackgroundPatternOverlay } from './BackgroundPatternOverlay';
 import './AppLayout.css';
 
 export interface AppLayoutProps {
@@ -93,6 +95,7 @@ export function AppLayout({ children }: AppLayoutProps) {
     <ThemeProvider>
       <PreferencesProvider>
         <LayoutProvider>
+          <BackgroundPatternDefs />
           <AppLayoutInner>{children}</AppLayoutInner>
         </LayoutProvider>
       </PreferencesProvider>
@@ -260,8 +263,10 @@ function ResizeHandle({ panel, position }: ResizeHandleProps) {
  */
 function Sidebar({ children, className = '' }: SidebarProps) {
   const { layoutMode, isSidebarOpen, isSidebarCollapsed, closeSidebar } = useLayout();
+  const { bgPatternSidebar, bgOpacitySidebar, bgScaleSidebar, getCustomBackground } = usePreferences();
 
   const isVisible = layoutMode === 'desktop' || isSidebarOpen;
+  const customBg = bgPatternSidebar.startsWith('custom-') ? getCustomBackground(bgPatternSidebar) : undefined;
 
   return (
     <>
@@ -278,6 +283,7 @@ function Sidebar({ children, className = '' }: SidebarProps) {
         className={`app-layout__sidebar ${className} ${isVisible ? 'app-layout__sidebar--visible' : ''} ${isSidebarCollapsed ? 'app-layout__sidebar--collapsed' : ''}`}
         aria-hidden={!isVisible}
       >
+        <BackgroundPatternOverlay patternId={bgPatternSidebar} opacity={bgOpacitySidebar} scale={bgScaleSidebar} customBackground={customBg} />
         {children}
         {/* Desktop: right edge resize handle */}
         <ResizeHandle panel="sidebar" position="right" />
@@ -297,8 +303,12 @@ interface MainProps {
  * Main content panel - takes remaining space after sidebar
  */
 function Main({ children, className = '' }: MainProps) {
+  const { bgPatternMain, bgOpacityMain, bgScaleMain, getCustomBackground } = usePreferences();
+  const customBg = bgPatternMain.startsWith('custom-') ? getCustomBackground(bgPatternMain) : undefined;
+
   return (
     <main className={`app-layout__main ${className}`}>
+      <BackgroundPatternOverlay patternId={bgPatternMain} opacity={bgOpacityMain} scale={bgScaleMain} customBackground={customBg} />
       {children}
     </main>
   );
@@ -314,8 +324,10 @@ interface DetailProps {
  */
 function Detail({ children, className = '' }: DetailProps) {
   const { layoutMode, isDetailOpen, isDetailCollapsed, closeDetail } = useLayout();
+  const { bgPatternDetail, bgOpacityDetail, bgScaleDetail, getCustomBackground } = usePreferences();
 
   const isVisible = layoutMode === 'desktop' ? !isDetailCollapsed : isDetailOpen;
+  const customBg = bgPatternDetail.startsWith('custom-') ? getCustomBackground(bgPatternDetail) : undefined;
 
   return (
     <>
@@ -332,6 +344,7 @@ function Detail({ children, className = '' }: DetailProps) {
         className={`app-layout__detail ${className} ${isVisible ? 'app-layout__detail--visible' : ''} ${isDetailCollapsed ? 'app-layout__detail--collapsed' : ''}`}
         aria-hidden={!isVisible}
       >
+        <BackgroundPatternOverlay patternId={bgPatternDetail} opacity={bgOpacityDetail} scale={bgScaleDetail} customBackground={customBg} />
         {/* Desktop: left edge resize handle */}
         <ResizeHandle panel="detail" position="left" />
         {/* Mobile: bottom resize handle */}

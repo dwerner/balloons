@@ -15,8 +15,182 @@ import type { SoundInfo } from '../../../../generated/types';
 import type { SoundConfig } from '../../hooks/useSoundNotifications';
 import { useTheme } from '../layout/ThemeContext';
 import { useWakeLock } from '../../hooks/useWakeLock';
-import { usePreferences } from '../layout/PreferencesContext';
+import { usePreferences, SYNTAX_THEMES_DARK, SYNTAX_THEMES_LIGHT, MD_THEMES, FONT_FAMILIES, FONT_FAMILIES_MONO } from '../layout/PreferencesContext';
+import { SyntaxHighlightedCode } from '../StreamingTurnsView/cards/SyntaxHighlighter';
+import { MarkdownContent } from '../../MarkdownContent';
+import '../layout/MarkdownThemes.css';
 import './SettingsTab.css';
+
+// Sample code snippets for different languages
+const CODE_SAMPLES = {
+  typescript: `interface User {
+  id: string;
+  name: string;
+  email?: string;
+}
+
+async function fetchUser(id: string): Promise<User> {
+  const response = await fetch(\`/api/users/\${id}\`);
+  if (!response.ok) {
+    throw new Error('User not found');
+  }
+  return response.json();
+}`,
+  python: `from dataclasses import dataclass
+from typing import Optional
+
+@dataclass
+class User:
+    id: str
+    name: str
+    email: Optional[str] = None
+
+async def fetch_user(user_id: str) -> User:
+    """Fetch a user by ID."""
+    async with session.get(f"/api/users/{user_id}") as resp:
+        data = await resp.json()
+        return User(**data)`,
+  rust: `#[derive(Debug, Clone)]
+struct User {
+    id: String,
+    name: String,
+    email: Option<String>,
+}
+
+impl User {
+    async fn fetch(id: &str) -> Result<Self, Error> {
+        let url = format!("/api/users/{}", id);
+        let resp = reqwest::get(&url).await?;
+        let user: User = resp.json().await?;
+        Ok(user)
+    }
+}`,
+  go: `type User struct {
+    ID    string \`json:"id"\`
+    Name  string \`json:"name"\`
+    Email string \`json:"email,omitempty"\`
+}
+
+func FetchUser(ctx context.Context, id string) (*User, error) {
+    url := fmt.Sprintf("/api/users/%s", id)
+    resp, err := http.Get(url)
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+
+    var user User
+    json.NewDecoder(resp.Body).Decode(&user)
+    return &user, nil
+}`,
+  css: `.user-card {
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  background: var(--bg-primary);
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.user-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}`,
+};
+
+type CodeLanguage = keyof typeof CODE_SAMPLES;
+
+/**
+ * Preview component showing code samples in different languages
+ */
+const SyntaxThemePreview = memo(function SyntaxThemePreview() {
+  const [selectedLang, setSelectedLang] = useState<CodeLanguage>('typescript');
+
+  const languages: { id: CodeLanguage; name: string }[] = [
+    { id: 'typescript', name: 'TypeScript' },
+    { id: 'python', name: 'Python' },
+    { id: 'rust', name: 'Rust' },
+    { id: 'go', name: 'Go' },
+    { id: 'css', name: 'CSS' },
+  ];
+
+  return (
+    <div className="syntax-theme-preview">
+      <div className="syntax-theme-preview__header">
+        <span className="syntax-theme-preview__label">Preview</span>
+        <div className="syntax-theme-preview__tabs">
+          {languages.map(lang => (
+            <button
+              key={lang.id}
+              className={`syntax-theme-preview__tab ${selectedLang === lang.id ? 'syntax-theme-preview__tab--active' : ''}`}
+              onClick={() => setSelectedLang(lang.id)}
+            >
+              {lang.name}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="syntax-theme-preview__code">
+        <SyntaxHighlightedCode
+          code={CODE_SAMPLES[selectedLang]}
+          language={selectedLang}
+        />
+      </div>
+    </div>
+  );
+});
+
+// Sample markdown content for preview
+const MARKDOWN_SAMPLE = `# Heading 1
+
+## Heading 2
+
+### Heading 3
+
+This is a paragraph with **bold text**, *italic text*, and \`inline code\`.
+
+> This is a blockquote. It can contain multiple lines
+> and is commonly used for callouts or quotes.
+
+Here's a [link to documentation](https://example.com).
+
+- First bullet point
+- Second bullet point
+- Third bullet point
+
+1. First numbered item
+2. Second numbered item
+`;
+
+/**
+ * Preview component showing markdown with the selected theme
+ * Theme variables are applied globally by MarkdownThemeApplicator
+ */
+const MarkdownThemePreview = memo(function MarkdownThemePreview() {
+  const { mdThemeDark, mdThemeLight } = usePreferences();
+  const { resolvedTheme } = useTheme();
+
+  // Force re-render when theme changes by including theme in component
+  const currentTheme = resolvedTheme === 'light' ? mdThemeLight : mdThemeDark;
+
+  return (
+    <div className="md-theme-preview" key={currentTheme}>
+      <div className="md-theme-preview__header">
+        <span className="md-theme-preview__label">Preview ({currentTheme})</span>
+      </div>
+      <div
+        className="md-theme-preview__content"
+        style={{
+          // Debug: show CSS variable inline
+          // @ts-ignore
+          '--debug-test': 'var(--md-heading-color)',
+        }}
+      >
+        <MarkdownContent content={MARKDOWN_SAMPLE} />
+      </div>
+    </div>
+  );
+});
 
 interface SettingsTabProps {
   /** Whether connected to the server */
@@ -67,13 +241,143 @@ export const SettingsTab = memo(function SettingsTab({
     voiceInputPort,
     depthIndicatorStyle,
     historyLoadMode,
+    autoscrollSpeed,
+    bgPatternSidebar,
+    bgPatternMain,
+    bgPatternDetail,
+    bgOpacitySidebar,
+    bgOpacityMain,
+    bgOpacityDetail,
+    bgScaleSidebar,
+    bgScaleMain,
+    bgScaleDetail,
+    diffColorAdded,
+    diffColorRemoved,
+    syntaxThemeDark,
+    syntaxThemeLight,
+    mdThemeDark,
+    mdThemeLight,
+    fontFamily,
+    fontFamilyMono,
+    fontSize,
+    fontSizeMono,
+    allBackgroundPatterns,
+    customBackgrounds,
+    addCustomBackground,
+    updateCustomBackground,
+    removeCustomBackground,
     setPreference,
     setStringPreference,
+    setNumericPreference,
   } = usePreferences();
 
   // Local state for voice input form inputs (to avoid constant saves while typing)
   const [localHost, setLocalHost] = useState(voiceInputHost);
   const [localPort, setLocalPort] = useState(voiceInputPort);
+
+  // Local state for adding/editing custom backgrounds
+  const [showAddCustomBg, setShowAddCustomBg] = useState(false);
+  const [editingBgId, setEditingBgId] = useState<string | null>(null);
+  const [customBgName, setCustomBgName] = useState('');
+  const [customBgSvg, setCustomBgSvg] = useState('');
+  const [customBgType, setCustomBgType] = useState<'custom-pattern' | 'custom-full' | 'custom-image'>('custom-pattern');
+  const [customBgFitMode, setCustomBgFitMode] = useState<'cover' | 'contain' | 'fill' | 'none'>('cover');
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+
+  // Handle adding a custom background
+  const handleAddCustomBg = useCallback(() => {
+    if (customBgName.trim() && customBgSvg.trim()) {
+      const fitMode = (customBgType === 'custom-full' || customBgType === 'custom-image') ? customBgFitMode : undefined;
+      if (editingBgId) {
+        updateCustomBackground(editingBgId, customBgName.trim(), customBgSvg.trim(), customBgType, fitMode);
+        setEditingBgId(null);
+      } else {
+        addCustomBackground(customBgName.trim(), customBgSvg.trim(), customBgType, fitMode);
+      }
+      setCustomBgName('');
+      setCustomBgSvg('');
+      setCustomBgFitMode('cover');
+      setImagePreview(null);
+      setShowAddCustomBg(false);
+    }
+  }, [customBgName, customBgSvg, customBgType, customBgFitMode, editingBgId, addCustomBackground, updateCustomBackground]);
+
+  // Handle image file selection
+  const handleImageFile = useCallback((file: File) => {
+    if (!file.type.startsWith('image/')) {
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const dataUrl = e.target?.result as string;
+      setCustomBgSvg(dataUrl);
+      setImagePreview(dataUrl);
+      setCustomBgType('custom-image');
+      if (!customBgName.trim()) {
+        setCustomBgName(file.name.replace(/\.[^/.]+$/, ''));
+      }
+    };
+    reader.readAsDataURL(file);
+  }, [customBgName]);
+
+  // Handle paste event for images
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) {
+          e.preventDefault();
+          handleImageFile(file);
+          return;
+        }
+      }
+    }
+  }, [handleImageFile]);
+
+  // Handle drop event for images
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) {
+      const file = files[0];
+      if (file && file.type.startsWith('image/')) {
+        handleImageFile(file);
+      }
+    }
+  }, [handleImageFile]);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+  }, []);
+
+  // Start editing a custom background
+  const handleEditCustomBg = useCallback((bg: { id: string; name: string; svg: string; type: 'custom-pattern' | 'custom-full' | 'custom-image'; fitMode?: 'cover' | 'contain' | 'fill' | 'none' }) => {
+    setEditingBgId(bg.id);
+    setCustomBgName(bg.name);
+    setCustomBgSvg(bg.svg);
+    setCustomBgType(bg.type);
+    setCustomBgFitMode(bg.fitMode || 'cover');
+    // For images, set up preview
+    if (bg.type === 'custom-image') {
+      setImagePreview(bg.svg);
+    } else {
+      setImagePreview(null);
+    }
+    setShowAddCustomBg(true);
+  }, []);
+
+  // Cancel editing
+  const handleCancelEdit = useCallback(() => {
+    setEditingBgId(null);
+    setCustomBgName('');
+    setCustomBgSvg('');
+    setCustomBgFitMode('cover');
+    setImagePreview(null);
+    setShowAddCustomBg(false);
+  }, []);
 
   // Save voice input settings when blurred
   const handleVoiceHostBlur = useCallback(() => {
@@ -213,6 +517,666 @@ export const SettingsTab = memo(function SettingsTab({
                   <option value="lazy">On-demand (scroll to load)</option>
                 </select>
               </div>
+            </div>
+
+            {/* Auto-scroll speed slider */}
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Auto-scroll Speed</span>
+                <span className="appearance-settings__label-description">
+                  Speed when following new content ({autoscrollSpeed} px/s)
+                </span>
+              </div>
+              <div className="appearance-settings__control appearance-settings__control--slider">
+                <input
+                  type="range"
+                  className="appearance-settings__slider"
+                  min={100}
+                  max={400}
+                  step={25}
+                  value={autoscrollSpeed}
+                  onChange={(e) => setNumericPreference('autoscrollSpeed', parseInt(e.target.value, 10))}
+                />
+              </div>
+            </div>
+
+            {/* Diff colors */}
+            <div className="appearance-settings__section-divider" />
+
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Diff Color: Additions</span>
+                <span className="appearance-settings__label-description">
+                  Color for added lines in diffs
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <input
+                  type="color"
+                  className="appearance-settings__color-picker"
+                  value={diffColorAdded}
+                  onChange={(e) => setStringPreference('diffColorAdded', e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Diff Color: Removals</span>
+                <span className="appearance-settings__label-description">
+                  Color for removed lines in diffs
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <input
+                  type="color"
+                  className="appearance-settings__color-picker"
+                  value={diffColorRemoved}
+                  onChange={(e) => setStringPreference('diffColorRemoved', e.target.value)}
+                />
+              </div>
+            </div>
+
+            {/* Syntax highlighting themes */}
+            <div className="appearance-settings__section-divider" />
+
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Syntax Theme (Dark)</span>
+                <span className="appearance-settings__label-description">
+                  Code highlighting theme for dark mode
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <select
+                  className="appearance-settings__select"
+                  value={syntaxThemeDark}
+                  onChange={(e) => setStringPreference('syntaxThemeDark', e.target.value)}
+                >
+                  {SYNTAX_THEMES_DARK.map((theme) => (
+                    <option key={theme.id} value={theme.id}>
+                      {theme.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Syntax Theme (Light)</span>
+                <span className="appearance-settings__label-description">
+                  Code highlighting theme for light mode
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <select
+                  className="appearance-settings__select"
+                  value={syntaxThemeLight}
+                  onChange={(e) => setStringPreference('syntaxThemeLight', e.target.value)}
+                >
+                  {SYNTAX_THEMES_LIGHT.map((theme) => (
+                    <option key={theme.id} value={theme.id}>
+                      {theme.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Code preview */}
+            <SyntaxThemePreview />
+
+            {/* Markdown themes */}
+            <div className="appearance-settings__section-divider" />
+
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Markdown Theme (Dark)</span>
+                <span className="appearance-settings__label-description">
+                  Styling for headings, links, blockquotes in dark mode
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <select
+                  className="appearance-settings__select"
+                  value={mdThemeDark}
+                  onChange={(e) => setStringPreference('mdThemeDark', e.target.value)}
+                >
+                  {MD_THEMES.map((theme) => (
+                    <option key={theme.id} value={theme.id}>
+                      {theme.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Markdown Theme (Light)</span>
+                <span className="appearance-settings__label-description">
+                  Styling for headings, links, blockquotes in light mode
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <select
+                  className="appearance-settings__select"
+                  value={mdThemeLight}
+                  onChange={(e) => setStringPreference('mdThemeLight', e.target.value)}
+                >
+                  {MD_THEMES.map((theme) => (
+                    <option key={theme.id} value={theme.id}>
+                      {theme.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Markdown preview */}
+            <MarkdownThemePreview />
+
+            {/* Font settings */}
+            <div className="appearance-settings__section-divider" />
+
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">UI Font</span>
+                <span className="appearance-settings__label-description">
+                  Font for text throughout the interface
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <select
+                  className="appearance-settings__select"
+                  value={fontFamily}
+                  onChange={(e) => setStringPreference('fontFamily', e.target.value)}
+                >
+                  {FONT_FAMILIES.map((font) => (
+                    <option key={font.id} value={font.id}>
+                      {font.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">UI Font Size</span>
+                <span className="appearance-settings__label-description">
+                  Base font size: {fontSize}px
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <input
+                  type="range"
+                  className="appearance-settings__slider"
+                  min="10"
+                  max="20"
+                  step="1"
+                  value={fontSize}
+                  onChange={(e) => setNumericPreference('fontSize', Number(e.target.value))}
+                />
+              </div>
+            </div>
+
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Code Font</span>
+                <span className="appearance-settings__label-description">
+                  Monospace font for code and editors
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <select
+                  className="appearance-settings__select"
+                  value={fontFamilyMono}
+                  onChange={(e) => setStringPreference('fontFamilyMono', e.target.value)}
+                >
+                  {FONT_FAMILIES_MONO.map((font) => (
+                    <option key={font.id} value={font.id}>
+                      {font.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Code Font Size</span>
+                <span className="appearance-settings__label-description">
+                  Monospace font size: {fontSizeMono}px
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <input
+                  type="range"
+                  className="appearance-settings__slider"
+                  min="10"
+                  max="20"
+                  step="1"
+                  value={fontSizeMono}
+                  onChange={(e) => setNumericPreference('fontSizeMono', Number(e.target.value))}
+                />
+              </div>
+            </div>
+
+            {/* Font preview */}
+            <div className="font-preview">
+              <div className="font-preview__header">
+                <span className="font-preview__label">Preview</span>
+              </div>
+              <div className="font-preview__content">
+                <div className="font-preview__section">
+                  <span className="font-preview__section-label">
+                    UI Font: {FONT_FAMILIES.find(f => f.id === fontFamily)?.name || 'System'}
+                  </span>
+                  <p className="font-preview__ui-text">
+                    The quick brown fox jumps over the lazy dog. 0123456789
+                  </p>
+                </div>
+                <div className="font-preview__section">
+                  <span className="font-preview__section-label">
+                    Code Font: {FONT_FAMILIES_MONO.find(f => f.id === fontFamilyMono)?.name || 'System Mono'}
+                  </span>
+                  <div className="font-preview__code-wrapper">
+                    <SyntaxHighlightedCode
+                      code={`const greeting = "Hello, World!";\nfunction fibonacci(n: number): number {\n  return n <= 1 ? n : fibonacci(n-1) + fibonacci(n-2);\n}`}
+                      language="typescript"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Background Patterns Settings Card */}
+      <div className="settings-card">
+        <div className="settings-card__header">
+          <h3 className="settings-card__title">Background Patterns</h3>
+        </div>
+
+        <div className="settings-card__content">
+          <div className="appearance-settings">
+            {/* Sidebar pattern */}
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Left Pane (Sidebar)</span>
+                <span className="appearance-settings__label-description">
+                  Background pattern for the session list
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <select
+                  className="appearance-settings__select"
+                  value={bgPatternSidebar}
+                  onChange={(e) => setStringPreference('bgPatternSidebar', e.target.value)}
+                >
+                  {allBackgroundPatterns.map((pattern) => (
+                    <option key={pattern.id} value={pattern.id}>
+                      {pattern.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Sidebar opacity */}
+            <div className={`appearance-settings__row appearance-settings__row--indent ${bgPatternSidebar === 'none' ? 'appearance-settings__row--disabled' : ''}`}>
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Opacity</span>
+                <span className="appearance-settings__label-description">
+                  {Math.round(bgOpacitySidebar * 100)}%
+                </span>
+              </div>
+              <div className="appearance-settings__control appearance-settings__control--slider">
+                <input
+                  type="range"
+                  className="appearance-settings__slider"
+                  min={0}
+                  max={0.5}
+                  step={0.02}
+                  value={bgOpacitySidebar}
+                  onChange={(e) => setNumericPreference('bgOpacitySidebar', parseFloat(e.target.value))}
+                  disabled={bgPatternSidebar === 'none'}
+                />
+              </div>
+            </div>
+
+            {/* Sidebar scale */}
+            <div className={`appearance-settings__row appearance-settings__row--indent ${bgPatternSidebar === 'none' ? 'appearance-settings__row--disabled' : ''}`}>
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Scale</span>
+                <span className="appearance-settings__label-description">
+                  {bgScaleSidebar.toFixed(1)}x
+                </span>
+              </div>
+              <div className="appearance-settings__control appearance-settings__control--slider">
+                <input
+                  type="range"
+                  className="appearance-settings__slider"
+                  min={0.5}
+                  max={3}
+                  step={0.1}
+                  value={bgScaleSidebar}
+                  onChange={(e) => setNumericPreference('bgScaleSidebar', parseFloat(e.target.value))}
+                  disabled={bgPatternSidebar === 'none'}
+                />
+              </div>
+            </div>
+
+            {/* Main pane pattern */}
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Center Pane (Chat)</span>
+                <span className="appearance-settings__label-description">
+                  Background pattern for the conversation
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <select
+                  className="appearance-settings__select"
+                  value={bgPatternMain}
+                  onChange={(e) => setStringPreference('bgPatternMain', e.target.value)}
+                >
+                  {allBackgroundPatterns.map((pattern) => (
+                    <option key={pattern.id} value={pattern.id}>
+                      {pattern.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Main opacity */}
+            <div className={`appearance-settings__row appearance-settings__row--indent ${bgPatternMain === 'none' ? 'appearance-settings__row--disabled' : ''}`}>
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Opacity</span>
+                <span className="appearance-settings__label-description">
+                  {Math.round(bgOpacityMain * 100)}%
+                </span>
+              </div>
+              <div className="appearance-settings__control appearance-settings__control--slider">
+                <input
+                  type="range"
+                  className="appearance-settings__slider"
+                  min={0}
+                  max={0.5}
+                  step={0.02}
+                  value={bgOpacityMain}
+                  onChange={(e) => setNumericPreference('bgOpacityMain', parseFloat(e.target.value))}
+                  disabled={bgPatternMain === 'none'}
+                />
+              </div>
+            </div>
+
+            {/* Main scale */}
+            <div className={`appearance-settings__row appearance-settings__row--indent ${bgPatternMain === 'none' ? 'appearance-settings__row--disabled' : ''}`}>
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Scale</span>
+                <span className="appearance-settings__label-description">
+                  {bgScaleMain.toFixed(1)}x
+                </span>
+              </div>
+              <div className="appearance-settings__control appearance-settings__control--slider">
+                <input
+                  type="range"
+                  className="appearance-settings__slider"
+                  min={0.5}
+                  max={3}
+                  step={0.1}
+                  value={bgScaleMain}
+                  onChange={(e) => setNumericPreference('bgScaleMain', parseFloat(e.target.value))}
+                  disabled={bgPatternMain === 'none'}
+                />
+              </div>
+            </div>
+
+            {/* Detail pane pattern */}
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Right Pane (Detail)</span>
+                <span className="appearance-settings__label-description">
+                  Background pattern for the detail panel
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <select
+                  className="appearance-settings__select"
+                  value={bgPatternDetail}
+                  onChange={(e) => setStringPreference('bgPatternDetail', e.target.value)}
+                >
+                  {allBackgroundPatterns.map((pattern) => (
+                    <option key={pattern.id} value={pattern.id}>
+                      {pattern.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Detail opacity */}
+            <div className={`appearance-settings__row appearance-settings__row--indent ${bgPatternDetail === 'none' ? 'appearance-settings__row--disabled' : ''}`}>
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Opacity</span>
+                <span className="appearance-settings__label-description">
+                  {Math.round(bgOpacityDetail * 100)}%
+                </span>
+              </div>
+              <div className="appearance-settings__control appearance-settings__control--slider">
+                <input
+                  type="range"
+                  className="appearance-settings__slider"
+                  min={0}
+                  max={0.5}
+                  step={0.02}
+                  value={bgOpacityDetail}
+                  onChange={(e) => setNumericPreference('bgOpacityDetail', parseFloat(e.target.value))}
+                  disabled={bgPatternDetail === 'none'}
+                />
+              </div>
+            </div>
+
+            {/* Detail scale */}
+            <div className={`appearance-settings__row appearance-settings__row--indent ${bgPatternDetail === 'none' ? 'appearance-settings__row--disabled' : ''}`}>
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Scale</span>
+                <span className="appearance-settings__label-description">
+                  {bgScaleDetail.toFixed(1)}x
+                </span>
+              </div>
+              <div className="appearance-settings__control appearance-settings__control--slider">
+                <input
+                  type="range"
+                  className="appearance-settings__slider"
+                  min={0.5}
+                  max={3}
+                  step={0.1}
+                  value={bgScaleDetail}
+                  onChange={(e) => setNumericPreference('bgScaleDetail', parseFloat(e.target.value))}
+                  disabled={bgPatternDetail === 'none'}
+                />
+              </div>
+            </div>
+
+            {/* Custom backgrounds section */}
+            <div className="appearance-settings__section-divider" />
+
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Custom Backgrounds</span>
+                <span className="appearance-settings__label-description">
+                  Add your own SVG patterns, images, or full backgrounds
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <button
+                  className="settings-btn"
+                  onClick={() => showAddCustomBg ? handleCancelEdit() : setShowAddCustomBg(true)}
+                >
+                  {showAddCustomBg ? 'Cancel' : 'Add New'}
+                </button>
+              </div>
+            </div>
+
+            {/* Add/Edit custom background form */}
+            {showAddCustomBg && (
+              <div
+                className="custom-bg-form"
+                onPaste={handlePaste}
+                onDrop={handleDrop}
+                onDragOver={handleDragOver}
+              >
+                <div className="custom-bg-form__header">
+                  {editingBgId ? 'Edit Background' : 'Add Background'}
+                </div>
+                <div className="custom-bg-form__row">
+                  <input
+                    type="text"
+                    className="custom-bg-form__input"
+                    placeholder="Name (e.g., My Pattern)"
+                    value={customBgName}
+                    onChange={(e) => setCustomBgName(e.target.value)}
+                  />
+                </div>
+                <div className="custom-bg-form__row">
+                  <select
+                    className="custom-bg-form__select"
+                    value={customBgType}
+                    onChange={(e) => {
+                      const newType = e.target.value as 'custom-pattern' | 'custom-full' | 'custom-image';
+                      setCustomBgType(newType);
+                      // Clear image preview if switching away from image type
+                      if (newType !== 'custom-image') {
+                        setImagePreview(null);
+                      }
+                    }}
+                  >
+                    <option value="custom-pattern">Repeating SVG Pattern</option>
+                    <option value="custom-full">Full SVG Background</option>
+                    <option value="custom-image">Image Background</option>
+                  </select>
+                </div>
+                {/* Fit mode selector - for full backgrounds and images */}
+                {(customBgType === 'custom-full' || customBgType === 'custom-image') && (
+                  <div className="custom-bg-form__row">
+                    <select
+                      className="custom-bg-form__select"
+                      value={customBgFitMode}
+                      onChange={(e) => setCustomBgFitMode(e.target.value as 'cover' | 'contain' | 'fill' | 'none')}
+                    >
+                      <option value="cover">Cover (crop to fill)</option>
+                      <option value="contain">Contain (fit inside)</option>
+                      <option value="fill">Fill (stretch)</option>
+                      <option value="none">None (original size)</option>
+                    </select>
+                  </div>
+                )}
+                {/* Image upload/paste area */}
+                {customBgType === 'custom-image' && (
+                  <div className="custom-bg-form__row">
+                    <div className="custom-bg-form__image-drop-zone">
+                      {imagePreview ? (
+                        <div className="custom-bg-form__image-preview">
+                          <img src={imagePreview} alt="Preview" />
+                          <button
+                            className="custom-bg-form__image-clear"
+                            onClick={() => {
+                              setImagePreview(null);
+                              setCustomBgSvg('');
+                            }}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="custom-bg-form__image-placeholder">
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="custom-bg-form__file-input"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) handleImageFile(file);
+                            }}
+                          />
+                          <span>Drop image here, paste, or click to upload</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {/* SVG textarea - for pattern and full SVG types */}
+                {customBgType !== 'custom-image' && (
+                  <div className="custom-bg-form__row">
+                    <textarea
+                      className="custom-bg-form__textarea"
+                      placeholder="Paste SVG code here..."
+                      value={customBgSvg}
+                      onChange={(e) => setCustomBgSvg(e.target.value)}
+                      rows={4}
+                    />
+                  </div>
+                )}
+                <div className="custom-bg-form__row custom-bg-form__actions">
+                  <button
+                    className="settings-btn"
+                    onClick={handleCancelEdit}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="settings-btn settings-btn--primary"
+                    onClick={handleAddCustomBg}
+                    disabled={!customBgName.trim() || !customBgSvg.trim()}
+                  >
+                    {editingBgId ? 'Save Changes' : 'Add Background'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* List of custom backgrounds */}
+            {customBackgrounds.length > 0 && (
+              <div className="custom-bg-list">
+                {customBackgrounds.map((bg) => (
+                  <div key={bg.id} className="custom-bg-item">
+                    <span className="custom-bg-item__name">{bg.name}</span>
+                    <span className="custom-bg-item__type">
+                      {bg.type === 'custom-pattern' ? 'Pattern' :
+                       bg.type === 'custom-image' ? `Image (${bg.fitMode || 'cover'})` :
+                       `Full (${bg.fitMode || 'cover'})`}
+                    </span>
+                    <button
+                      className="custom-bg-item__edit"
+                      onClick={() => handleEditCustomBg(bg)}
+                      title="Edit"
+                    >
+                      ✎
+                    </button>
+                    <button
+                      className="custom-bg-item__delete"
+                      onClick={() => removeCustomBackground(bg.id)}
+                      title="Delete"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Info about patterns */}
+            <div className="appearance-settings__info">
+              <span className="appearance-settings__info-text">
+                SVG patterns inspired by <a href="https://www.svgbackgrounds.com/set/free-svg-backgrounds-and-patterns/" target="_blank" rel="noopener noreferrer">SVG Backgrounds</a>.
+                Paste SVG code from there or create your own!
+              </span>
             </div>
           </div>
         </div>

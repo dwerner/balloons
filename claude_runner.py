@@ -22,6 +22,7 @@ from core.exceptions import RateLimitError, StreamTimeoutError
 # When waiting for tool execution, we use a soft timeout (warning only).
 STREAM_READLINE_TIMEOUT = 180.0
 from core.tool_executor import execute_tool
+from core.tool_result import ToolExecutionResult
 from core.link_tools import LINK_TOOL_NAMES
 from core.tools import REVIEW_TOOL_NAMES
 from core.watcher_tools import WATCHER_TOOL_NAMES
@@ -296,13 +297,21 @@ class ClaudeRunner(BaseRunner):
                 continue
 
             # Execute the tool
-            result, is_error = await execute_tool(
+            tool_result = await execute_tool(
                 tool_name,
                 tool_args,
                 working_dir,
                 self._run_id,
                 session=self._current_session,
             )
+
+            # Handle both legacy tuple and new ToolExecutionResult
+            if isinstance(tool_result, ToolExecutionResult):
+                result = tool_result.result
+                # Note: domains_changed is a no-op for Claude runner since it
+                # uses balloons-tool blocks (no tool list sent to API)
+            else:
+                result, is_error = tool_result
 
             # Yield result event
             yield ToolResultEvent(tool_use_id=tool_id, result=result)
@@ -877,13 +886,20 @@ class ClaudeRunner(BaseRunner):
                     accumulated_steering: list[str] = []
 
                     for tc in custom_tool_calls:
-                        result, is_error = await execute_tool(
+                        tool_exec_result = await execute_tool(
                             tc["name"],
                             tc["input"],
                             working_dir,
                             self._run_id,
                             session=self._current_session,
                         )
+
+                        # Handle both legacy tuple and new ToolExecutionResult
+                        if isinstance(tool_exec_result, ToolExecutionResult):
+                            result = tool_exec_result.result
+                            is_error = tool_exec_result.is_error
+                        else:
+                            result, is_error = tool_exec_result
 
                         yield ToolResultEvent(
                             tool_use_id=tc["id"],

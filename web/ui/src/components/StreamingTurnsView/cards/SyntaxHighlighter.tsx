@@ -8,10 +8,70 @@
 
 import React, { useMemo, useDeferredValue, useState, useEffect, useRef } from 'react';
 import { Prism as PrismHighlighter } from 'react-syntax-highlighter';
+// Import all supported themes
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { dracula } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { nightOwl } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { nord } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { atomDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { materialDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { materialLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { materialOceanic } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { gruvboxDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { gruvboxLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { synthwave84 } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { shadesOfPurple } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { duotoneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { duotoneSpace } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { duotoneSea } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { duotoneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { hopscotch } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { okaidia } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { coldarkDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { coldarkCold } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { a11yDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { ghcolors } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { solarizedlight } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { coy } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { prism } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { useTheme } from '../../layout';
+import { usePreferences, type SyntaxThemeDark, type SyntaxThemeLight } from '../../layout/PreferencesContext';
 import { useScrollContainer } from './ClientContext';
+
+// Map theme IDs to actual theme objects
+const DARK_THEMES: Record<SyntaxThemeDark, typeof oneDark> = {
+  oneDark,
+  dracula,
+  nightOwl,
+  nord,
+  atomDark,
+  materialDark,
+  materialOceanic,
+  gruvboxDark,
+  synthwave84,
+  shadesOfPurple,
+  duotoneDark,
+  duotoneSpace,
+  duotoneSea,
+  hopscotch,
+  okaidia,
+  coldarkDark,
+  a11yDark,
+};
+
+const LIGHT_THEMES: Record<SyntaxThemeLight, typeof oneLight> = {
+  oneLight,
+  ghcolors,
+  materialLight,
+  gruvboxLight,
+  solarizedlight,
+  duotoneLight,
+  coy,
+  prism,
+  coldarkCold,
+  a11yLight: oneLight, // a11y-one-light is just oneLight variant
+};
 
 // Polyfill for requestIdleCallback (Safari doesn't support it)
 // Use a wrapper that handles both browser and Node.js environments
@@ -167,27 +227,30 @@ export function getLanguageFromPath(filePath: string): string {
   return extensionToLanguage[ext] || 'text';
 }
 
-// Custom dark theme based on oneDark, adjusted for our green-tinted UI
-const customDarkCodeTheme = {
-  ...oneDark,
-  'pre[class*="language-"]': {
-    ...oneDark['pre[class*="language-"]'],
-    background: 'var(--bg-code, #081210)',
-    margin: 0,
-    padding: '8px',
-    borderRadius: '4px',
-    fontSize: '11px',
-    lineHeight: '1.4',
-  },
-  'code[class*="language-"]': {
-    ...oneDark['code[class*="language-"]'],
-    background: 'transparent',
-    fontSize: '11px',
-    lineHeight: '1.4',
-  },
-};
+// Create custom theme by extending a base theme with our styles
+function createCustomTheme(baseTheme: typeof oneDark, isDark: boolean) {
+  return {
+    ...baseTheme,
+    'pre[class*="language-"]': {
+      ...baseTheme['pre[class*="language-"]'],
+      background: isDark ? 'var(--bg-code, #081210)' : 'var(--bg-code, #f8f8f8)',
+      margin: 0,
+      padding: '8px',
+      borderRadius: '4px',
+      fontSize: '11px',
+      lineHeight: '1.4',
+    },
+    'code[class*="language-"]': {
+      ...baseTheme['code[class*="language-"]'],
+      background: 'transparent',
+      fontSize: '11px',
+      lineHeight: '1.4',
+    },
+  };
+}
 
-// Custom light theme based on oneLight
+// Legacy static themes for backward compatibility
+const customDarkCodeTheme = createCustomTheme(oneDark, true);
 const customLightCodeTheme = {
   ...oneLight,
   'pre[class*="language-"]': {
@@ -242,9 +305,17 @@ export function SyntaxHighlightedCode({
 }: SyntaxHighlightedCodeProps) {
   // Get current theme - use deferred value to make theme changes non-blocking
   const { resolvedTheme: currentTheme } = useTheme();
+  const { syntaxThemeDark, syntaxThemeLight } = usePreferences();
   const resolvedTheme = useDeferredValue(currentTheme);
   const isLightTheme = resolvedTheme === 'light';
-  const theme = isLightTheme ? customLightCodeTheme : customDarkCodeTheme;
+
+  // Get the selected theme and create custom version
+  const theme = useMemo(() => {
+    const baseTheme = isLightTheme
+      ? (LIGHT_THEMES[syntaxThemeLight] || oneLight)
+      : (DARK_THEMES[syntaxThemeDark] || oneDark);
+    return createCustomTheme(baseTheme, !isLightTheme);
+  }, [isLightTheme, syntaxThemeDark, syntaxThemeLight]);
 
   // Determine language from prop or file path
   const lang = useMemo(() => {
@@ -306,15 +377,14 @@ function DiffLine({
   prefix,
   content,
   language,
-  isLightTheme,
+  theme,
 }: {
   type: 'header' | 'add' | 'remove' | 'context';
   prefix: string;
   content: string;
   language: string;
-  isLightTheme: boolean;
+  theme: typeof oneDark;
 }) {
-  const theme = isLightTheme ? customLightDiffTheme : customDarkDiffTheme;
 
   let className = 'diff-line diff-context';
   if (type === 'header') className = 'diff-line diff-header';
@@ -352,8 +422,25 @@ function DiffLine({
 
 export function DiffHighlightedCode({ diffLines, language, filePath }: DiffHighlightedCodeProps) {
   const { resolvedTheme: currentTheme } = useTheme();
+  const { syntaxThemeDark, syntaxThemeLight } = usePreferences();
   const resolvedTheme = useDeferredValue(currentTheme);
   const isLightTheme = resolvedTheme === 'light';
+
+  // Get the selected theme and create custom diff version
+  const theme = useMemo(() => {
+    const baseTheme = isLightTheme
+      ? (LIGHT_THEMES[syntaxThemeLight] || oneLight)
+      : (DARK_THEMES[syntaxThemeDark] || oneDark);
+    // Create diff version (no padding on pre)
+    const customTheme = createCustomTheme(baseTheme, !isLightTheme);
+    return {
+      ...customTheme,
+      'pre[class*="language-"]': {
+        ...customTheme['pre[class*="language-"]'],
+        padding: 0,
+      },
+    };
+  }, [isLightTheme, syntaxThemeDark, syntaxThemeLight]);
 
   // Determine language from props or try to extract from diff header
   const lang = useMemo(() => {
@@ -396,7 +483,7 @@ export function DiffHighlightedCode({ diffLines, language, filePath }: DiffHighl
           prefix={line.prefix}
           content={line.content}
           language={lang}
-          isLightTheme={isLightTheme}
+          theme={theme}
         />
       ))}
     </div>
@@ -456,10 +543,26 @@ export function LazyDiffHighlightedCode({
   const [isHighlighted, setIsHighlighted] = useState(eager);
   const containerRef = useRef<HTMLDivElement>(null);
   const { resolvedTheme: currentTheme } = useTheme();
+  const { syntaxThemeDark, syntaxThemeLight } = usePreferences();
   const isLightTheme = currentTheme === 'light';
 
   // Get scroll container for proper IntersectionObserver root
   const scrollContainerRef = useScrollContainer();
+
+  // Get the selected theme and create custom diff version
+  const theme = useMemo(() => {
+    const baseTheme = isLightTheme
+      ? (LIGHT_THEMES[syntaxThemeLight] || oneLight)
+      : (DARK_THEMES[syntaxThemeDark] || oneDark);
+    const customTheme = createCustomTheme(baseTheme, !isLightTheme);
+    return {
+      ...customTheme,
+      'pre[class*="language-"]': {
+        ...customTheme['pre[class*="language-"]'],
+        padding: 0,
+      },
+    };
+  }, [isLightTheme, syntaxThemeDark, syntaxThemeLight]);
 
   // Determine language from props or try to extract from diff header
   const lang = useMemo(() => {
@@ -567,7 +670,7 @@ export function LazyDiffHighlightedCode({
           prefix={line.prefix}
           content={line.content}
           language={lang}
-          isLightTheme={isLightTheme}
+          theme={theme}
         />
       ))}
     </div>

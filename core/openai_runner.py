@@ -19,6 +19,7 @@ from .base_runner import BaseRunner, RunnerEvent, SteeringCapability
 from .debug_log import debug_log, dump_failed_json, perf_marker, Category
 from .tools import get_tools_for_request
 from .tool_executor import execute_tool
+from .tool_result import ToolExecutionResult
 
 if TYPE_CHECKING:
     from session import Session
@@ -491,13 +492,29 @@ class OpenAICompatibleRunner(BaseRunner):
                         # Don't add to openai_messages - no result for LLM
                         continue
 
-                    result, is_error = await execute_tool(
+                    tool_result = await execute_tool(
                         tool_name,
                         tc["arguments"],
                         working_dir or ".",
                         self._run_id,
                         session=self._session,
                     )
+
+                    # Handle both legacy tuple and new ToolExecutionResult
+                    if isinstance(tool_result, ToolExecutionResult):
+                        result = tool_result.result
+                        is_error = tool_result.is_error
+                        # Check if domain tools changed (load_domain/unload_domain)
+                        if tool_result.domains_changed:
+                            tools = get_tools_for_request(allowed_tools, disable_tools)
+                            debug_log.info(
+                                f"Domain tools changed, refreshed tool list",
+                                category=Category.RUNNER,
+                                details={"tool_count": len(tools) if tools else 0},
+                                run_id=self._run_id,
+                            )
+                    else:
+                        result, is_error = tool_result
 
                     # Yield tool result event
                     yield ToolResultEvent(

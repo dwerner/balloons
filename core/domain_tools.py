@@ -7,6 +7,8 @@ when needed (e.g., load chess when user wants to play).
 from typing import Any, TYPE_CHECKING
 from pathlib import Path
 
+from .tool_result import ToolExecutionResult
+
 if TYPE_CHECKING:
     from session import Session
 
@@ -95,7 +97,7 @@ async def execute_domain_management_tool(
     name: str,
     args: dict[str, Any],
     session: "Session",
-) -> tuple[str, bool]:
+) -> ToolExecutionResult:
     """Execute a domain management tool.
 
     Args:
@@ -104,48 +106,75 @@ async def execute_domain_management_tool(
         session: Current session
 
     Returns:
-        Tuple of (result_string, is_error)
+        ToolExecutionResult with domains_changed=True for load/unload operations
     """
     try:
         from plugins.integration import load_domain, unload_domain, list_loaded_domains
     except ImportError:
-        return "Plugin system not available", True
+        return ToolExecutionResult("Plugin system not available", is_error=True)
 
     if name == "load_domain":
         domain_id = args.get("domain_id", "").strip()
         if not domain_id:
-            return "Error: domain_id is required", True
+            return ToolExecutionResult("Error: domain_id is required", is_error=True)
 
         # Check if available
         available = _discover_available_domains()
         if domain_id not in available:
-            return f"Error: Domain '{domain_id}' not found. Available: {', '.join(available)}", True
+            return ToolExecutionResult(
+                f"Error: Domain '{domain_id}' not found. Available: {', '.join(available)}",
+                is_error=True
+            )
 
         # Check if already loaded
         loaded = list_loaded_domains()
         if domain_id in loaded:
-            return f"Domain '{domain_id}' is already loaded.", False
+            return ToolExecutionResult(f"Domain '{domain_id}' is already loaded.", is_error=False)
 
         try:
             load_domain(domain_id)
-            return f"Loaded domain '{domain_id}'. Its tools are now available.", False
+
+            # Get the domain's prompt so the LLM can use the tools immediately
+            # (since the system prompt was built before this domain was loaded)
+            try:
+                from plugins.integration import get_domain_prompt
+                from plugins.registry import get_registry
+                registry = get_registry()
+                domain = registry.get_domain(domain_id)
+                domain_prompt = domain.get_prompt() if domain else ""
+            except Exception:
+                domain_prompt = ""
+
+            result_msg = f"Loaded domain '{domain_id}'. Its tools are now available."
+            if domain_prompt:
+                result_msg += f"\n\n--- Domain Documentation ---\n{domain_prompt}"
+
+            return ToolExecutionResult(
+                result_msg,
+                is_error=False,
+                domains_changed=True,  # Signal that tools need refreshing
+            )
         except Exception as e:
-            return f"Error loading domain: {e}", True
+            return ToolExecutionResult(f"Error loading domain: {e}", is_error=True)
 
     elif name == "unload_domain":
         domain_id = args.get("domain_id", "").strip()
         if not domain_id:
-            return "Error: domain_id is required", True
+            return ToolExecutionResult("Error: domain_id is required", is_error=True)
 
         loaded = list_loaded_domains()
         if domain_id not in loaded:
-            return f"Domain '{domain_id}' is not loaded.", True
+            return ToolExecutionResult(f"Domain '{domain_id}' is not loaded.", is_error=True)
 
         try:
             unload_domain(domain_id)
-            return f"Unloaded domain '{domain_id}'.", False
+            return ToolExecutionResult(
+                f"Unloaded domain '{domain_id}'.",
+                is_error=False,
+                domains_changed=True,  # Signal that tools need refreshing
+            )
         except Exception as e:
-            return f"Error unloading domain: {e}", True
+            return ToolExecutionResult(f"Error unloading domain: {e}", is_error=True)
 
     elif name == "list_domains":
         available = _discover_available_domains()
@@ -159,7 +188,7 @@ async def execute_domain_management_tool(
         if not available:
             lines.append("  (none)")
 
-        return "\n".join(lines), False
+        return ToolExecutionResult("\n".join(lines), is_error=False)
 
     else:
-        return f"Unknown domain tool: {name}", True
+        return ToolExecutionResult(f"Unknown domain tool: {name}", is_error=True)

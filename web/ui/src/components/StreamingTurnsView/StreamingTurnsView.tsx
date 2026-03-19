@@ -29,6 +29,7 @@ import type { ToolResultBlock } from '../../../../generated/types';
 import { TurnCard, ClientContext } from './cards';
 import { ScrollToBottom } from '../ScrollToBottom';
 import { ChatMinimap, type MinimapExchange, type ExchangeDOMRect } from '../ChatMinimap';
+import { usePreferences } from '../layout/PreferencesContext';
 import { createLogger } from '../../utils/debugLog';
 import './StreamingTurnsView.css';
 
@@ -37,23 +38,8 @@ const debugLog = createLogger('StreamingTurnsView');
 // Re-export StreamingProgress for consumers
 export type { StreamingProgress } from '../../hooks';
 
-// Default autoscroll speed in pixels per second
+// Default autoscroll speed in pixels per second (fallback if preferences not available)
 const DEFAULT_AUTOSCROLL_SPEED = 125;
-// localStorage key for autoscroll speed
-const AUTOSCROLL_SPEED_KEY = 'balloons:autoscroll-speed';
-
-/**
- * Get autoscroll speed from localStorage
- */
-function getAutoscrollSpeed(): number {
-  if (typeof window === 'undefined') return DEFAULT_AUTOSCROLL_SPEED;
-  const stored = localStorage.getItem(AUTOSCROLL_SPEED_KEY);
-  if (stored) {
-    const parsed = parseInt(stored, 10);
-    if (!isNaN(parsed) && parsed > 0) return parsed;
-  }
-  return DEFAULT_AUTOSCROLL_SPEED;
-}
 
 /**
  * Linear easing - constant speed scroll
@@ -121,6 +107,13 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
   // refreshKey forces re-subscription when incremented (e.g., after archive)
   // historyLoadMode determines which history layer to use: 'history', 'history_reverse', or 'history_lazy'
   const { turns, isLoading, isLoadingHistory, isStreaming, streamError, error, streamingProgress, totalHistoryTurns, loadHistoryRange } = useSessionData(client, sessionId, refreshKey, historyLoadMode);
+
+  // Get autoscroll speed from preferences, keep in ref for access in callbacks
+  const { autoscrollSpeed } = usePreferences();
+  const autoscrollSpeedRef = useRef(autoscrollSpeed);
+  useEffect(() => {
+    autoscrollSpeedRef.current = autoscrollSpeed;
+  }, [autoscrollSpeed]);
 
   // Debug: log turns on every change and update lowest loaded order for lazy loading
   useEffect(() => {
@@ -658,7 +651,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
 
     // Calculate duration based on distance and configured speed (px/s)
     // Duration = distance / speed - configured speed is the MAX speed
-    const speed = getAutoscrollSpeed();
+    const speed = autoscrollSpeedRef.current;
     const duration = Math.max(50, (Math.abs(distance) / speed) * 1000);
 
     programmaticScrollCountRef.current++;
@@ -713,7 +706,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
             startTime: performance.now(),
             startPos: element.scrollTop,
             targetPos: currentBottom,
-            duration: Math.max(50, (remainingDistance / getAutoscrollSpeed()) * 1000),
+            duration: Math.max(50, (remainingDistance / autoscrollSpeedRef.current) * 1000),
           };
           scrollAnimationRef.current = requestAnimationFrame(animate);
         } else {
@@ -915,13 +908,22 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
 
         if (newScrollHeight > lastScrollHeight && isFollowingRef.current && !userScrollingRef.current) {
           // Content grew while following - if there's already an animation running,
-          // update its target, otherwise start a new animation
+          // restart it with new target and recalculated duration to maintain constant speed.
+          // Otherwise start a new animation.
+          const newTarget = newScrollHeight - el.clientHeight;
           if (scrollAnimationStartRef.current && scrollAnimationRef.current) {
-            // Update the target of the ongoing animation
-            scrollAnimationStartRef.current.targetPos = newScrollHeight - el.clientHeight;
+            // Recalculate from current position to new target at configured speed
+            const currentPos = el.scrollTop;
+            const remainingDistance = Math.abs(newTarget - currentPos);
+            scrollAnimationStartRef.current = {
+              startTime: performance.now(),
+              startPos: currentPos,
+              targetPos: newTarget,
+              duration: Math.max(50, (remainingDistance / autoscrollSpeedRef.current) * 1000),
+            };
           } else {
             // Start new animated scroll to bottom
-            animateScrollTo(newScrollHeight - el.clientHeight);
+            animateScrollTo(newTarget);
           }
         }
         lastScrollHeight = newScrollHeight;

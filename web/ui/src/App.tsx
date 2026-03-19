@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, memo, useMemo, forward
 import { BalloonsClient } from '../../generated/balloons-client';
 import type { ConnectionState, SessionInfo, TurnInfo, TaskInfo, Unsubscribe, ToolUseStartedEvent, ToolInputDeltaEvent, ToolResultEvent, GoalTreeStateServiceClient, TurnSnapshot, SessionHistoryChunkEvent, SessionHistoryCompleteEvent } from '../../generated/balloons-client';
 import { MarkdownContent } from './MarkdownContent';
-import { AppLayout, useLayout, useTheme, usePreferences, PreferencesProvider } from './components/layout';
+import { AppLayout, useLayout, useTheme, ThemeProvider, usePreferences, PreferencesProvider, MarkdownThemeApplicator } from './components/layout';
 import { SessionTreeView } from './components/SessionTreeView';
 import { HierarchyView } from './components/HierarchyView';
 import { GoalTreeView } from './components/GoalTreeView';
@@ -1150,11 +1150,14 @@ export function App() {
   }
 
   return (
-    <PreferencesProvider>
-      <DialogProvider>
-        <AppContent />
-      </DialogProvider>
-    </PreferencesProvider>
+    <ThemeProvider>
+      <PreferencesProvider>
+        <DialogProvider>
+          <MarkdownThemeApplicator />
+          <AppContent />
+        </DialogProvider>
+      </PreferencesProvider>
+    </ThemeProvider>
   );
 }
 

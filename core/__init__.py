@@ -116,6 +116,7 @@ from .lsp_client import get_lsp_client, LSPClient
 
 # Tool executor
 from .tool_executor import execute_tool, parse_fork_proposal, parse_create_slide, SlideData, parse_merge_proposal
+from .tool_result import ToolExecutionResult
 
 # Summarizer
 from .summarizer import Summarizer

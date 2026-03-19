@@ -67,13 +67,16 @@ def resolve_path(file_path: str, working_dir: str) -> Path:
     return path.resolve()
 
 
+from .tool_result import ToolExecutionResult
+
+
 async def execute_tool(
     name: str,
     args: dict,
     working_dir: str,
     run_id: str = "",
     session: "Session | None" = None,
-) -> tuple[str, bool]:
+) -> tuple[str, bool] | ToolExecutionResult:
     """Execute a tool and return the result.
 
     Args:
@@ -84,7 +87,11 @@ async def execute_tool(
         session: Session for link/supervisor tools
 
     Returns:
-        Tuple of (result_string, is_error)
+        Tuple of (result_string, is_error) for backwards compatibility, or
+        ToolExecutionResult for richer return values (e.g., domains_changed).
+
+        Domain management tools (load_domain, unload_domain) return ToolExecutionResult
+        with domains_changed=True to signal that the tool list needs refreshing.
     """
     debug_log.info(
         f"Executing tool: {name}",

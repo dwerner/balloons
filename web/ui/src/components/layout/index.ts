@@ -23,6 +23,9 @@ export {
   usePreference,
 } from './PreferencesContext';
 
+// Markdown theme applicator (side-effect component)
+export { MarkdownThemeApplicator } from './MarkdownThemeApplicator';
+
 // Types
 export type {
   LayoutContextValue,

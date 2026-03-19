@@ -1,0 +1,27 @@
+/**
+ * Markdown Themes
+ *
+ * CSS variables that control markdown rendering appearance.
+ * Variables are applied to :root by JavaScript based on theme selection.
+ *
+ * Themes provide consistent styling for:
+ * - Headings (colors, sizes, weight)
+ * - Links
+ * - Blockquotes
+ * - Inline code
+ */
+
+/* Default fallback values - used when no theme is explicitly set */
+:root {
+  --md-heading-color: var(--text-primary);
+  --md-heading-weight: 600;
+  --md-h1-size: 1.5em;
+  --md-h2-size: 1.3em;
+  --md-h3-size: 1.15em;
+  --md-link-color: var(--accent);
+  --md-link-hover-decoration: underline;
+  --md-blockquote-border: var(--accent-assistant, #f87171);
+  --md-blockquote-bg: rgba(248, 113, 113, 0.1);
+  --md-inline-code-bg: var(--bg-code, #1a1a1a);
+  --md-inline-code-color: var(--text-primary);
+}
