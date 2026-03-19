@@ -209,3 +209,28 @@ export function applyMarkdownTheme(themeId: string, isDark: boolean): void {
   root.style.setProperty('--md-inline-code-bg', theme.inlineCodeBg);
   root.style.setProperty('--md-inline-code-color', theme.inlineCodeColor);
 }
+
+/**
+ * Get markdown theme CSS variables as an inline style object.
+ * Useful for preview components that need to apply theme styles
+ * directly without waiting for global CSS variable updates.
+ */
+export function getMarkdownThemeStyle(themeId: string, isDark: boolean): React.CSSProperties {
+  const themes = isDark ? DARK_MD_THEMES : LIGHT_MD_THEMES;
+  // Fall back to default theme - using non-null assertion since 'default' always exists
+  const theme = themes[themeId] ?? themes['default']!;
+
+  return {
+    '--md-heading-color': theme.headingColor,
+    '--md-heading-weight': theme.headingWeight,
+    '--md-h1-size': theme.h1Size,
+    '--md-h2-size': theme.h2Size,
+    '--md-h3-size': theme.h3Size,
+    '--md-link-color': theme.linkColor,
+    '--md-link-hover-decoration': theme.linkHoverDecoration,
+    '--md-blockquote-border': theme.blockquoteBorder,
+    '--md-blockquote-bg': theme.blockquoteBg,
+    '--md-inline-code-bg': theme.inlineCodeBg,
+    '--md-inline-code-color': theme.inlineCodeColor,
+  } as React.CSSProperties;
+}

@@ -18,6 +18,7 @@ import { useWakeLock } from '../../hooks/useWakeLock';
 import { usePreferences, SYNTAX_THEMES_DARK, SYNTAX_THEMES_LIGHT, MD_THEMES, FONT_FAMILIES, FONT_FAMILIES_MONO } from '../layout/PreferencesContext';
 import { SyntaxHighlightedCode } from '../StreamingTurnsView/cards/SyntaxHighlighter';
 import { MarkdownContent } from '../../MarkdownContent';
+import { getMarkdownThemeStyle } from '../layout/markdownThemeStyles';
 import '../layout/MarkdownThemes.css';
 import './SettingsTab.css';
 
@@ -163,29 +164,32 @@ Here's a [link to documentation](https://example.com).
 `;
 
 /**
- * Preview component showing markdown with the selected theme
- * Theme variables are applied globally by MarkdownThemeApplicator
+ * Preview component showing markdown with the selected theme.
+ *
+ * Uses inline CSS variables on the preview container for immediate live preview.
+ * The global MarkdownThemeApplicator applies the same theme to :root for the
+ * main content area, but inline styles here ensure the preview updates immediately
+ * without waiting for the next render cycle.
  */
 const MarkdownThemePreview = memo(function MarkdownThemePreview() {
   const { mdThemeDark, mdThemeLight } = usePreferences();
   const { resolvedTheme } = useTheme();
 
-  // Force re-render when theme changes by including theme in component
-  const currentTheme = resolvedTheme === 'light' ? mdThemeLight : mdThemeDark;
+  const isDark = resolvedTheme !== 'light';
+  const currentTheme = isDark ? mdThemeDark : mdThemeLight;
+
+  // Get inline CSS variables for the current theme
+  // This ensures the preview updates immediately when the user changes themes
+  const themeStyle = getMarkdownThemeStyle(currentTheme, isDark);
 
   return (
-    <div className="md-theme-preview" key={currentTheme}>
+    <div className="md-theme-preview" style={themeStyle}>
       <div className="md-theme-preview__header">
-        <span className="md-theme-preview__label">Preview ({currentTheme})</span>
+        <span className="md-theme-preview__label">Preview</span>
+        {/* Color indicator using the inline CSS var to show current theme color */}
+        <span style={{ color: 'var(--md-heading-color)', marginLeft: 8, fontWeight: 'bold' }}>●</span>
       </div>
-      <div
-        className="md-theme-preview__content"
-        style={{
-          // Debug: show CSS variable inline
-          // @ts-ignore
-          '--debug-test': 'var(--md-heading-color)',
-        }}
-      >
+      <div className="md-theme-preview__content">
         <MarkdownContent content={MARKDOWN_SAMPLE} />
       </div>
     </div>
@@ -261,6 +265,10 @@ export const SettingsTab = memo(function SettingsTab({
     fontFamilyMono,
     fontSize,
     fontSizeMono,
+    cardBgOpacity,
+    cardBgPattern,
+    cardBgPatternOpacity,
+    cardBgPatternScale,
     allBackgroundPatterns,
     customBackgrounds,
     addCustomBackground,
@@ -268,6 +276,7 @@ export const SettingsTab = memo(function SettingsTab({
     removeCustomBackground,
     setPreference,
     setStringPreference,
+    getNumericPreference,
     setNumericPreference,
   } = usePreferences();
 
@@ -1000,6 +1009,116 @@ export const SettingsTab = memo(function SettingsTab({
                   value={bgScaleDetail}
                   onChange={(e) => setNumericPreference('bgScaleDetail', parseFloat(e.target.value))}
                   disabled={bgPatternDetail === 'none'}
+                />
+              </div>
+            </div>
+
+            {/* Card backgrounds section */}
+            <div className="appearance-settings__section-divider" />
+
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Chat Card Transparency</span>
+                <span className="appearance-settings__label-description">
+                  Opacity of turn card backgrounds: {Math.round(cardBgOpacity * 100)}%
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <input
+                  type="range"
+                  className="appearance-settings__slider"
+                  min="0.5"
+                  max="1"
+                  step="0.05"
+                  value={cardBgOpacity}
+                  onChange={(e) => setNumericPreference('cardBgOpacity', Number(e.target.value))}
+                />
+              </div>
+            </div>
+
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Card Background Pattern</span>
+                <span className="appearance-settings__label-description">
+                  Background pattern for chat cards
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <select
+                  className="appearance-settings__select"
+                  value={cardBgPattern}
+                  onChange={(e) => setStringPreference('cardBgPattern', e.target.value)}
+                >
+                  {allBackgroundPatterns.map((pattern) => (
+                    <option key={pattern.id} value={pattern.id}>
+                      {pattern.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {cardBgPattern !== 'none' && (
+              <>
+                <div className="appearance-settings__row appearance-settings__row--indent">
+                  <div className="appearance-settings__label">
+                    <span className="appearance-settings__label-text">Pattern Opacity</span>
+                    <span className="appearance-settings__label-description">
+                      {Math.round(cardBgPatternOpacity * 100)}%
+                    </span>
+                  </div>
+                  <div className="appearance-settings__control">
+                    <input
+                      type="range"
+                      className="appearance-settings__slider"
+                      min="0"
+                      max="0.5"
+                      step="0.02"
+                      value={cardBgPatternOpacity}
+                      onChange={(e) => setNumericPreference('cardBgPatternOpacity', Number(e.target.value))}
+                    />
+                  </div>
+                </div>
+
+                <div className="appearance-settings__row appearance-settings__row--indent">
+                  <div className="appearance-settings__label">
+                    <span className="appearance-settings__label-text">Pattern Scale</span>
+                    <span className="appearance-settings__label-description">
+                      {cardBgPatternScale.toFixed(1)}x
+                    </span>
+                  </div>
+                  <div className="appearance-settings__control">
+                    <input
+                      type="range"
+                      className="appearance-settings__slider"
+                      min="0.5"
+                      max="3"
+                      step="0.1"
+                      value={cardBgPatternScale}
+                      onChange={(e) => setNumericPreference('cardBgPatternScale', Number(e.target.value))}
+                    />
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Code block transparency */}
+            <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Code Block Transparency</span>
+                <span className="appearance-settings__label-description">
+                  Opacity of code blocks and diffs: {Math.round(getNumericPreference('codeBlockBgOpacity') * 100)}%
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <input
+                  type="range"
+                  className="appearance-settings__slider"
+                  min="0.5"
+                  max="1"
+                  step="0.05"
+                  value={getNumericPreference('codeBlockBgOpacity')}
+                  onChange={(e) => setNumericPreference('codeBlockBgOpacity', Number(e.target.value))}
                 />
               </div>
             </div>

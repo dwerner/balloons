@@ -14,6 +14,7 @@
 import React, { useState } from 'react';
 import { MarkdownContent } from '../../../MarkdownContent';
 import { SyntaxHighlightedCode } from './SyntaxHighlighter';
+import { CardBackgroundPattern } from './CardBackgroundPattern';
 import { formatTimestamp } from '../../../utils';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
 import type { TextBlock, MarkdownBlock } from '../../../../../generated/types';
@@ -144,6 +145,7 @@ export const TextCard = React.memo(function TextCard({ turn }: TextCardProps) {
 
   return (
     <div className={`turn-card text-card ${roleConfig.className} ${streaming ? 'streaming' : ''} ${showDoneIndicator ? 'done' : ''} ${displayMode === 'raw' ? 'raw-mode' : ''}`}>
+      <CardBackgroundPattern />
       <div className="turn-card-header">
         <span className="turn-order">{order}</span>
         <span className="turn-icon">{roleConfig.icon}</span>

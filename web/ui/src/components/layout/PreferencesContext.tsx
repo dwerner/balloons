@@ -26,7 +26,8 @@ export type StringPreferenceKey = 'voiceInputHost' | 'voiceInputPort' | 'depthIn
   | 'diffColorAdded' | 'diffColorRemoved'
   | 'syntaxThemeDark' | 'syntaxThemeLight'
   | 'mdThemeDark' | 'mdThemeLight'
-  | 'fontFamily' | 'fontFamilyMono';
+  | 'fontFamily' | 'fontFamilyMono'
+  | 'cardBgPattern';
 
 // Available syntax highlighting themes
 export const SYNTAX_THEMES_DARK = [
@@ -114,7 +115,9 @@ export type FontFamilyMonoId = typeof FONT_FAMILIES_MONO[number]['id'];
 // Numeric preference keys
 export type NumericPreferenceKey = 'autoscrollSpeed' | 'bgOpacitySidebar' | 'bgOpacityMain' | 'bgOpacityDetail'
   | 'bgScaleSidebar' | 'bgScaleMain' | 'bgScaleDetail'
-  | 'fontSize' | 'fontSizeMono';
+  | 'fontSize' | 'fontSizeMono'
+  | 'cardBgOpacity' | 'cardBgPatternOpacity' | 'cardBgPatternScale'
+  | 'codeBlockBgOpacity';
 
 // History loading modes
 export type HistoryLoadMode = 'forward' | 'reverse' | 'lazy';
@@ -136,6 +139,7 @@ const STRING_DEFAULTS: Record<StringPreferenceKey, string> = {
   mdThemeLight: 'default', // Markdown theme for light mode
   fontFamily: 'system', // Global UI font family
   fontFamilyMono: 'system-mono', // Global monospace/code font family
+  cardBgPattern: 'none', // Background pattern for turn cards
 };
 
 // Default values for numeric preferences
@@ -149,6 +153,10 @@ const NUMERIC_DEFAULTS: Record<NumericPreferenceKey, number> = {
   bgScaleDetail: 1,
   fontSize: 14, // Base font size in px
   fontSizeMono: 13, // Monospace font size in px
+  cardBgOpacity: 1, // 0.5-1, opacity of turn card backgrounds
+  cardBgPatternOpacity: 0.1, // 0-0.5, opacity of card background pattern
+  cardBgPatternScale: 1, // 0.5-3, scale of card background pattern
+  codeBlockBgOpacity: 1, // 0.5-1, opacity of code block backgrounds
 };
 
 // Built-in background patterns
@@ -203,7 +211,7 @@ function saveCustomBackgrounds(backgrounds: CustomBackground[]): void {
 export type BgPatternOption = {
   id: string;
   name: string;
-  type: 'none' | 'pattern' | 'custom-pattern' | 'custom-full';
+  type: 'none' | 'pattern' | 'custom-pattern' | 'custom-full' | 'custom-image';
 };
 
 // For backward compatibility, export BG_PATTERNS as a function that includes custom ones
@@ -270,6 +278,13 @@ export interface PreferencesContextValue {
   fontFamilyMono: FontFamilyMonoId;
   fontSize: number;
   fontSizeMono: number;
+
+  // Card backgrounds
+  cardBgOpacity: number;
+  cardBgPattern: BgPatternId;
+  cardBgPatternOpacity: number;
+  cardBgPatternScale: number;
+  codeBlockBgOpacity: number;
 
   // Custom backgrounds
   customBackgrounds: CustomBackground[];
@@ -384,6 +399,13 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
   const [fontSize, setFontSize] = useState(() => loadNumericPreference('fontSize'));
   const [fontSizeMono, setFontSizeMono] = useState(() => loadNumericPreference('fontSizeMono'));
 
+  // Card background states
+  const [cardBgOpacity, setCardBgOpacity] = useState(() => loadNumericPreference('cardBgOpacity'));
+  const [cardBgPattern, setCardBgPattern] = useState(() => loadStringPreference('cardBgPattern') as BgPatternId);
+  const [cardBgPatternOpacity, setCardBgPatternOpacity] = useState(() => loadNumericPreference('cardBgPatternOpacity'));
+  const [cardBgPatternScale, setCardBgPatternScale] = useState(() => loadNumericPreference('cardBgPatternScale'));
+  const [codeBlockBgOpacity, setCodeBlockBgOpacity] = useState(() => loadNumericPreference('codeBlockBgOpacity'));
+
   // Custom backgrounds state
   const [customBackgrounds, setCustomBackgrounds] = useState<CustomBackground[]>(() => loadCustomBackgrounds());
 
@@ -414,6 +436,15 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     root.style.setProperty('--font-size-base', `${fontSize}px`);
     root.style.setProperty('--font-size-mono', `${fontSizeMono}px`);
   }, [fontFamily, fontFamilyMono, fontSize, fontSizeMono]);
+
+  // Apply card background CSS variables
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty('--card-bg-opacity', String(cardBgOpacity));
+    root.style.setProperty('--card-bg-pattern-opacity', String(cardBgPatternOpacity));
+    root.style.setProperty('--card-bg-pattern-scale', String(cardBgPatternScale));
+    root.style.setProperty('--code-block-bg-opacity', String(codeBlockBgOpacity));
+  }, [cardBgOpacity, cardBgPatternOpacity, cardBgPatternScale, codeBlockBgOpacity]);
 
   // Add a custom background
   const addCustomBackground = useCallback((name: string, svg: string, type: 'custom-pattern' | 'custom-full' | 'custom-image', fitMode?: CustomBgFitMode): string => {
@@ -502,9 +533,10 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
       case 'mdThemeLight': return mdThemeLight;
       case 'fontFamily': return fontFamily;
       case 'fontFamilyMono': return fontFamilyMono;
+      case 'cardBgPattern': return cardBgPattern;
       default: return STRING_DEFAULTS[key];
     }
-  }, [voiceInputHost, voiceInputPort, depthIndicatorStyle, historyLoadMode, bgPatternSidebar, bgPatternMain, bgPatternDetail, diffColorAdded, diffColorRemoved, syntaxThemeDark, syntaxThemeLight, mdThemeDark, mdThemeLight, fontFamily, fontFamilyMono]);
+  }, [voiceInputHost, voiceInputPort, depthIndicatorStyle, historyLoadMode, bgPatternSidebar, bgPatternMain, bgPatternDetail, diffColorAdded, diffColorRemoved, syntaxThemeDark, syntaxThemeLight, mdThemeDark, mdThemeLight, fontFamily, fontFamilyMono, cardBgPattern]);
 
   // String preference setter with persistence
   const setStringPreference = useCallback((key: StringPreferenceKey, value: string) => {
@@ -556,6 +588,9 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
         case 'fontFamilyMono':
           setFontFamilyMono(value as FontFamilyMonoId);
           break;
+        case 'cardBgPattern':
+          setCardBgPattern(value as BgPatternId);
+          break;
       }
     });
   }, []);
@@ -572,9 +607,13 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
       case 'bgScaleDetail': return bgScaleDetail;
       case 'fontSize': return fontSize;
       case 'fontSizeMono': return fontSizeMono;
+      case 'cardBgOpacity': return cardBgOpacity;
+      case 'cardBgPatternOpacity': return cardBgPatternOpacity;
+      case 'cardBgPatternScale': return cardBgPatternScale;
+      case 'codeBlockBgOpacity': return codeBlockBgOpacity;
       default: return NUMERIC_DEFAULTS[key];
     }
-  }, [autoscrollSpeed, bgOpacitySidebar, bgOpacityMain, bgOpacityDetail, bgScaleSidebar, bgScaleMain, bgScaleDetail, fontSize, fontSizeMono]);
+  }, [autoscrollSpeed, bgOpacitySidebar, bgOpacityMain, bgOpacityDetail, bgScaleSidebar, bgScaleMain, bgScaleDetail, fontSize, fontSizeMono, cardBgOpacity, cardBgPatternOpacity, cardBgPatternScale, codeBlockBgOpacity]);
 
   // Numeric preference setter with persistence
   const setNumericPreference = useCallback((key: NumericPreferenceKey, value: number) => {
@@ -608,6 +647,18 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
         case 'fontSizeMono':
           setFontSizeMono(value);
           break;
+        case 'cardBgOpacity':
+          setCardBgOpacity(value);
+          break;
+        case 'cardBgPatternOpacity':
+          setCardBgPatternOpacity(value);
+          break;
+        case 'cardBgPatternScale':
+          setCardBgPatternScale(value);
+          break;
+        case 'codeBlockBgOpacity':
+          setCodeBlockBgOpacity(value);
+          break;
       }
     });
   }, []);
@@ -640,6 +691,11 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     fontFamilyMono,
     fontSize,
     fontSizeMono,
+    cardBgOpacity,
+    cardBgPattern,
+    cardBgPatternOpacity,
+    cardBgPatternScale,
+    codeBlockBgOpacity,
     customBackgrounds,
     allBackgroundPatterns,
     addCustomBackground,
@@ -653,7 +709,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     setStringPreference,
     getNumericPreference,
     setNumericPreference,
-  }), [expandToolCards, showTokenCounts, voiceInputEnabled, voiceInputHost, voiceInputPort, depthIndicatorStyle, historyLoadMode, autoscrollSpeed, bgPatternSidebar, bgPatternMain, bgPatternDetail, bgOpacitySidebar, bgOpacityMain, bgOpacityDetail, bgScaleSidebar, bgScaleMain, bgScaleDetail, diffColorAdded, diffColorRemoved, syntaxThemeDark, syntaxThemeLight, mdThemeDark, mdThemeLight, fontFamily, fontFamilyMono, fontSize, fontSizeMono, customBackgrounds, allBackgroundPatterns, addCustomBackground, updateCustomBackground, removeCustomBackground, getCustomBackground, getPreference, setPreference, togglePreference, getStringPreference, setStringPreference, getNumericPreference, setNumericPreference]);
+  }), [expandToolCards, showTokenCounts, voiceInputEnabled, voiceInputHost, voiceInputPort, depthIndicatorStyle, historyLoadMode, autoscrollSpeed, bgPatternSidebar, bgPatternMain, bgPatternDetail, bgOpacitySidebar, bgOpacityMain, bgOpacityDetail, bgScaleSidebar, bgScaleMain, bgScaleDetail, diffColorAdded, diffColorRemoved, syntaxThemeDark, syntaxThemeLight, mdThemeDark, mdThemeLight, fontFamily, fontFamilyMono, fontSize, fontSizeMono, cardBgOpacity, cardBgPattern, cardBgPatternOpacity, cardBgPatternScale, codeBlockBgOpacity, customBackgrounds, allBackgroundPatterns, addCustomBackground, updateCustomBackground, removeCustomBackground, getCustomBackground, getPreference, setPreference, togglePreference, getStringPreference, setStringPreference, getNumericPreference, setNumericPreference]);
 
   return (
     <PreferencesContext.Provider value={value}>

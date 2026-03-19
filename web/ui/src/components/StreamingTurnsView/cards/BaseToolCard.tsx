@@ -11,6 +11,7 @@
 
 import React, { useState, useRef, useEffect, useDeferredValue } from 'react';
 import { SyntaxHighlightedCode } from './SyntaxHighlighter';
+import { CardBackgroundPattern } from './CardBackgroundPattern';
 import { usePreferences } from '../../layout';
 import { formatTimestamp } from '../../../utils';
 import './cards.css';
@@ -228,6 +229,7 @@ export const BaseToolCard = React.memo(function BaseToolCard({
 
   return (
     <div className={`turn-card tool-card ${statusClass} ${isActive ? 'streaming' : ''} ${displayMode === 'raw' ? 'raw-mode' : ''} ${className}`}>
+      <CardBackgroundPattern />
       <div
         className={`tool-card-header ${isCollapsible ? 'collapsible-header-clickable' : ''}`}
         onClick={toggleExpanded}

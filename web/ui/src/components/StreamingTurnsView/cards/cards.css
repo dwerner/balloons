@@ -10,7 +10,36 @@
   border-radius: 8px;
   overflow: hidden;
   border: 1px solid var(--border-color, #333);
-  background: var(--bg-primary, #1e1e1e);
+  background: color-mix(in srgb, var(--bg-primary, #1e1e1e) calc(var(--code-block-bg-opacity, 1) * 100%), transparent);
+  position: relative;
+}
+
+/* Card background pattern overlay */
+.card-pattern-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+.card-pattern-svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* Ensure card content is above the pattern */
+.turn-card-header,
+.turn-card-body {
+  position: relative;
+  z-index: 1;
 }
 
 .turn-card.streaming {
@@ -115,7 +144,7 @@
 .turn-raw-data {
   margin: 0;
   padding: 0;
-  background: var(--bg-code, #1a1a1a);
+  background: color-mix(in srgb, var(--bg-code, #1a1a1a) calc(var(--code-block-bg-opacity, 1) * 100%), transparent);
   border-radius: 4px;
   font-family: var(--font-mono, monospace);
   font-size: 10px;
@@ -701,7 +730,7 @@
 .tool-code-block {
   margin: 0;
   padding: 8px;
-  background: var(--bg-code, #1a1a1a);
+  background: color-mix(in srgb, var(--bg-code, #1a1a1a) calc(var(--code-block-bg-opacity, 1) * 100%), transparent);
   border-radius: 4px;
   font-size: 12px;
   font-family: var(--font-mono, monospace);
@@ -713,7 +742,7 @@
 .tool-use-json {
   margin: 0;
   padding: 8px;
-  background: var(--bg-code, #1a1a1a);
+  background: color-mix(in srgb, var(--bg-code, #1a1a1a) calc(var(--code-block-bg-opacity, 1) * 100%), transparent);
   border-radius: 4px;
   font-size: 12px;
   font-family: var(--font-mono, monospace);
@@ -729,7 +758,7 @@
 .diff-view {
   font-family: var(--font-mono, monospace);
   font-size: 12px;
-  background: var(--bg-code, #1a1a1a);
+  background: color-mix(in srgb, var(--bg-code, #1a1a1a) calc(var(--code-block-bg-opacity, 1) * 100%), transparent);
   border-radius: 4px;
   overflow-x: auto;
 }
@@ -957,7 +986,7 @@
 /* Inline code - use theme variables */
 .text-card.assistant .turn-card-body .inline-code,
 .turn-card.assistant .turn-card-body .inline-code {
-  background: var(--md-inline-code-bg, var(--bg-code, #1a1a1a));
+  background: color-mix(in srgb, var(--md-inline-code-bg, var(--bg-code, #1a1a1a)) calc(var(--code-block-bg-opacity, 1) * 100%), transparent);
   color: var(--md-inline-code-color, var(--text-primary, #e0e0e0));
   padding: 2px 6px;
   border-radius: 4px;
@@ -971,7 +1000,7 @@
   margin: 12px 0;
   border-radius: 8px;
   overflow: hidden;
-  background: var(--bg-code, #0d1117);
+  background: color-mix(in srgb, var(--bg-code, #0d1117) calc(var(--code-block-bg-opacity, 1) * 100%), transparent);
   border: 1px solid var(--border-color, #333);
 }
 
@@ -1135,6 +1164,8 @@
   border-bottom: 1px solid var(--border-color, #333);
   font-size: 12px;
   flex-wrap: wrap;
+  position: relative;
+  z-index: 1;
 }
 
 .tool-card.executing .tool-card-header {
@@ -1196,6 +1227,7 @@
   padding: 6px 6px;
   font-size: 12px;
   position: relative;
+  z-index: 1;
   overflow: hidden;
 }
 

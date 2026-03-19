@@ -13,6 +13,9 @@
   border: 1px solid var(--color-border-secondary);
   border-radius: 6px;
   font-size: 12px;
+  /* Ensure dropdown floats above sibling containers like .turns-container */
+  position: relative;
+  z-index: 10;
 }
 
 /* ----- Generic Row ----- */
