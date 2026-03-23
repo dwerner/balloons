@@ -99,6 +99,25 @@ class ToolResultBlock:
 
 @ws_type
 @dataclass
+class RepairedToolBlock:
+    """Marker indicating a tool call was repaired due to malformed JSON.
+
+    This is created when Claude generates a tool_use with invalid JSON in
+    the input field (e.g., unescaped quotes in shell commands). The repair
+    is attempted and if successful, the tool is executed with the repaired
+    input. This block records the repair for debugging and transparency.
+    """
+    type: str = "repaired_tool"
+    tool_use_id: str = ""  # ID of the tool_use that was repaired
+    tool_name: str = ""  # Name of the tool
+    original_input: str = ""  # The malformed JSON input
+    repaired_input: str = ""  # The repaired JSON input
+    repair_description: str = ""  # What was repaired (e.g., "escaped 2 nested quotes")
+    repair_successful: bool = True  # Whether repair succeeded and tool was executed
+
+
+@ws_type
+@dataclass
 class InterruptionBlock:
     """Marker indicating the response was interrupted by the user."""
     type: str = "interruption"
@@ -445,7 +464,7 @@ class WatchSummaryBlock:
 
 
 # Union type for all content block types
-ContentBlock = Union[TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ForkedFromBlock, ArchiveBlock, SessionSummaryBlock, SlideBlock, ReviewBlock, ForkProposalBlock, MergeProposalBlock, WatchStartBlock, WatchStopBlock, WatchSummaryBlock]
+ContentBlock = Union[TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock, RepairedToolBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ForkedFromBlock, ArchiveBlock, SessionSummaryBlock, SlideBlock, ReviewBlock, ForkProposalBlock, MergeProposalBlock, WatchStartBlock, WatchStopBlock, WatchSummaryBlock]
 
 
 @dataclass
@@ -534,6 +553,39 @@ class SteeringInjectedEvent:
     """
     content: str
     injected_at_tool_id: str = ""  # The tool result after which this was injected
+
+
+@dataclass
+class RepairedToolEvent:
+    """A malformed tool call was repaired and executed.
+
+    This event is yielded when we detect a <tool_use> block in the input
+    with malformed JSON, successfully repair it, and execute the tool.
+    This allows the UI to show a special indicator that repair happened.
+    """
+    tool_use_id: str
+    tool_name: str
+    original_input: str  # The malformed JSON
+    repaired_input: dict  # The parsed and repaired input
+    repair_description: str  # What was fixed (e.g., "escaped 2 nested quotes")
+
+
+@dataclass
+class HallucinatedUserEvent:
+    """Claude hallucinated a user response with <user> tags.
+
+    This event is yielded when we detect Claude trying to simulate a user
+    response by including <user>...</user> blocks in its output. This is
+    a problematic pattern where the model tries to continue the conversation
+    on behalf of the user.
+
+    When detected, we:
+    1. Yield this event so the UI can display a warning
+    2. Strip the hallucinated content
+    3. Stop the response (don't continue the agentic loop)
+    """
+    content: str  # The hallucinated user content
+    context: str = ""  # Surrounding text for context
 
 
 # =============================================================================

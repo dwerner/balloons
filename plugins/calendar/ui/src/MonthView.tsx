@@ -18,10 +18,18 @@ interface MonthViewProps {
   selectedEventId: string | null;
   onEventClick: (eventId: string) => void;
   onDateClick: (date: Date) => void;
+  /** Date to show preview indicator on (when form is open) */
+  previewDate?: Date;
 }
 
 // Days of the week headers
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+// Check if two dates are the same day
+const isSameDay = (a: Date, b: Date): boolean =>
+  a.getDate() === b.getDate() &&
+  a.getMonth() === b.getMonth() &&
+  a.getFullYear() === b.getFullYear();
 
 export function MonthView({
   events,
@@ -29,6 +37,7 @@ export function MonthView({
   selectedEventId,
   onEventClick,
   onDateClick,
+  previewDate,
 }: MonthViewProps) {
   // Calculate the days to display in the month grid
   const { weeks, monthStart, monthEnd } = useMemo(() => {
@@ -130,12 +139,20 @@ export function MonthView({
                   key={dayIndex}
                   className={`month-view__day ${
                     !isCurrentMonth(day) ? 'month-view__day--other-month' : ''
-                  } ${isToday(day) ? 'month-view__day--today' : ''}`}
+                  } ${isToday(day) ? 'month-view__day--today' : ''} ${
+                    previewDate && isSameDay(day, previewDate) ? 'month-view__day--preview' : ''
+                  }`}
                   onClick={() => onDateClick(day)}
                 >
                   <div className="month-view__day-number">
                     {day.getDate()}
                   </div>
+                  {/* Preview indicator */}
+                  {previewDate && isSameDay(day, previewDate) && (
+                    <div className="month-view__preview">
+                      <span>New event...</span>
+                    </div>
+                  )}
                   <div className="month-view__day-events">
                     {dayEvents.slice(0, maxVisibleEvents).map(event => (
                       <div

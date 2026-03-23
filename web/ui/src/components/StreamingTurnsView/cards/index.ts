@@ -40,6 +40,8 @@ export { GrepCard } from './GrepCard';
 export { GlobCard } from './GlobCard';
 export { GenericToolCard } from './GenericToolCard';
 export { MidiPlayerCard } from './MidiPlayerCard';
+export { RepairedToolCard } from './RepairedToolCard';
+export { HallucinatedUserCard } from './HallucinatedUserCard';
 
 // Syntax highlighting utilities
 export {

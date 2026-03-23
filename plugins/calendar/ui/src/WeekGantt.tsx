@@ -3,9 +3,10 @@
  *
  * Shows events as horizontal bars spanning their duration across days.
  * Great for visualizing multi-day events and scheduling conflicts.
+ * Supports drag-to-create for quick event creation.
  */
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useCallback, useRef } from 'react';
 import { CalendarEvent } from './types';
 
 interface EventWithCalendar extends CalendarEvent {
@@ -13,11 +14,27 @@ interface EventWithCalendar extends CalendarEvent {
   calendarColor: string;
 }
 
+interface DragState {
+  dayIndex: number;
+  startHour: number;
+  endHour: number;
+}
+
+interface PreviewEvent {
+  dayIndex: number;
+  startTime: string;
+  endTime: string;
+}
+
 interface WeekGanttProps {
   events: EventWithCalendar[];
   currentDate: Date;
   selectedEventId: string | null;
   onEventClick: (eventId: string) => void;
+  /** Called when user drags to create an event. Passes date, start time, end time, and day index. */
+  onCreateEvent?: (date: Date, startTime: string, endTime: string, dayIndex: number) => void;
+  /** Persistent preview to show while modal is open */
+  previewEvent?: PreviewEvent;
 }
 
 // Hours to display (6 AM to 10 PM)
@@ -30,7 +47,14 @@ export function WeekGantt({
   currentDate,
   selectedEventId,
   onEventClick,
+  onCreateEvent,
+  previewEvent,
 }: WeekGanttProps) {
+  // Drag state for creating events
+  const [dragState, setDragState] = useState<DragState | null>(null);
+  const isDragging = useRef(false);
+  const dragStartY = useRef(0);
+  const dragDayIndex = useRef(0);
   // Calculate the week's days
   const weekDays = useMemo(() => {
     const days: Date[] = [];
@@ -161,6 +185,90 @@ export function WeekGantt({
     return `${hour} AM`;
   };
 
+  // Format time as HH:MM
+  const formatTimeStr = (hour: number): string => {
+    const h = Math.floor(hour);
+    const m = Math.round((hour - h) * 60);
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  };
+
+  // Get hour from Y position within the time grid
+  const getHourFromY = useCallback((y: number, element: HTMLElement): number => {
+    const rect = element.getBoundingClientRect();
+    const relativeY = y - rect.top;
+    // The column has HOURS.length slots, each representing one hour starting at that hour
+    // So total height represents HOURS.length hours
+    const percentage = relativeY / rect.height;
+    const hour = START_HOUR + (percentage * HOURS.length);
+    // Snap to 15-minute increments and clamp to valid range
+    const snapped = Math.round(hour * 4) / 4;
+    return Math.max(START_HOUR, Math.min(END_HOUR, snapped));
+  }, []);
+
+  // Handle mouse down on day column
+  const handleMouseDown = useCallback((e: React.MouseEvent, dayIndex: number) => {
+    if (!onCreateEvent) return;
+    if ((e.target as HTMLElement).closest('.week-gantt__event')) return; // Don't start drag on events
+
+    const column = e.currentTarget as HTMLElement;
+    const hour = getHourFromY(e.clientY, column);
+
+    isDragging.current = true;
+    dragStartY.current = hour;
+    dragDayIndex.current = dayIndex;
+
+    setDragState({
+      dayIndex,
+      startHour: hour,
+      endHour: hour + 0.5, // Default 30 min
+    });
+  }, [onCreateEvent, getHourFromY]);
+
+  // Handle mouse move
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!isDragging.current || !dragState) return;
+
+    const column = e.currentTarget as HTMLElement;
+    const hour = getHourFromY(e.clientY, column);
+
+    // Update drag state based on direction
+    const startHour = Math.min(dragStartY.current, hour);
+    const endHour = Math.max(dragStartY.current, hour);
+
+    setDragState({
+      ...dragState,
+      startHour: Math.max(START_HOUR, startHour),
+      endHour: Math.min(END_HOUR, Math.max(endHour, startHour + 0.25)),
+    });
+  }, [dragState, getHourFromY]);
+
+  // Handle mouse up
+  const handleMouseUp = useCallback(() => {
+    if (!isDragging.current || !dragState || !onCreateEvent) {
+      isDragging.current = false;
+      setDragState(null);
+      return;
+    }
+
+    const date = weekDays[dragState.dayIndex];
+    const startTime = formatTimeStr(dragState.startHour);
+    const endTime = formatTimeStr(dragState.endHour);
+
+    const dayIndex = dragState.dayIndex;
+    isDragging.current = false;
+    setDragState(null);
+
+    onCreateEvent(date, startTime, endTime, dayIndex);
+  }, [dragState, weekDays, onCreateEvent]);
+
+  // Handle mouse leave (cancel drag)
+  const handleMouseLeave = useCallback(() => {
+    if (isDragging.current) {
+      isDragging.current = false;
+      setDragState(null);
+    }
+  }, []);
+
   return (
     <div className="week-gantt">
       {/* Header with day names */}
@@ -228,12 +336,50 @@ export function WeekGantt({
           {weekDays.map((day, dayIndex) => (
             <div
               key={dayIndex}
-              className={`week-gantt__day-column ${isToday(day) ? 'week-gantt__day-column--today' : ''}`}
+              className={`week-gantt__day-column ${isToday(day) ? 'week-gantt__day-column--today' : ''} ${onCreateEvent ? 'week-gantt__day-column--draggable' : ''}`}
+              onMouseDown={(e) => handleMouseDown(e, dayIndex)}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseLeave}
             >
               {/* Hour grid lines */}
               {HOURS.map(hour => (
                 <div key={hour} className="week-gantt__hour-slot" />
               ))}
+
+              {/* Drag preview (during drag) */}
+              {dragState && dragState.dayIndex === dayIndex && (
+                <div
+                  className="week-gantt__drag-preview"
+                  style={{
+                    top: `${((dragState.startHour - START_HOUR) / (END_HOUR - START_HOUR)) * 100}%`,
+                    height: `${((dragState.endHour - dragState.startHour) / (END_HOUR - START_HOUR)) * 100}%`,
+                  }}
+                >
+                  <span className="week-gantt__drag-time">
+                    {formatHour(Math.floor(dragState.startHour))} - {formatHour(Math.floor(dragState.endHour))}
+                  </span>
+                </div>
+              )}
+
+              {/* Persistent preview (while modal is open) */}
+              {!dragState && previewEvent && previewEvent.dayIndex === dayIndex && (() => {
+                const [sh, sm] = previewEvent.startTime.split(':').map(Number);
+                const [eh, em] = previewEvent.endTime.split(':').map(Number);
+                const startHour = sh + sm / 60;
+                const endHour = eh + em / 60;
+                return (
+                  <div
+                    className="week-gantt__drag-preview week-gantt__drag-preview--persistent"
+                    style={{
+                      top: `${((startHour - START_HOUR) / (END_HOUR - START_HOUR)) * 100}%`,
+                      height: `${((endHour - startHour) / (END_HOUR - START_HOUR)) * 100}%`,
+                    }}
+                  >
+                    <span className="week-gantt__drag-time">New event...</span>
+                  </div>
+                );
+              })()}
 
               {/* Events for this day */}
               {positionedEvents.timedEvents

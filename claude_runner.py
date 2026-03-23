@@ -11,6 +11,7 @@ import base64
 from models import (
     Message, TextDelta, ResultEvent, InitEvent, RawEvent, ContextTokensEvent,
     ToolUseStartEvent, ToolUseEvent, ToolResultEvent, SteeringInjectedEvent,
+    RepairedToolEvent, HallucinatedUserEvent,
     TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock, ContextMode,
 )
 from core.debug_log import debug_log, dump_failed_json, Category
@@ -26,12 +27,20 @@ from core.tool_result import ToolExecutionResult
 from core.link_tools import LINK_TOOL_NAMES
 from core.tools import REVIEW_TOOL_NAMES
 from core.watcher_tools import WATCHER_TOOL_NAMES
+from core.json_repair import find_malformed_tool_uses, ParsedToolUse
 
 # Regex to match <balloons-tool>...</balloons-tool> blocks
 # Use non-greedy .*? to allow matching multiple blocks, but consume up to the matching closing tag
 # We use a regex that stops at the first </balloons-tool> after each opening tag
 BALLOONS_TOOL_RE = re.compile(
     r'<balloons-tool>\s*(\{[^<]*(?:<(?!/balloons-tool>)[^<]*)*\})\s*</balloons-tool>',
+    re.DOTALL
+)
+
+# Regex to detect hallucinated <user>...</user> blocks
+# This pattern catches when Claude tries to simulate a user response
+HALLUCINATED_USER_RE = re.compile(
+    r'<user>\s*(.*?)\s*</user>',
     re.DOTALL
 )
 
@@ -340,6 +349,174 @@ class ClaudeRunner(BaseRunner):
         }
         await self._send_message(continuation_msg)
 
+    async def _handle_text_tool_uses(
+        self, text: str, working_dir: str
+    ) -> AsyncIterator[RunnerEvent]:
+        """Handle <tool_use> blocks that appear in assistant text output.
+
+        When Claude outputs tool calls as XML text instead of using the native
+        tool_use API, we parse them, execute them, and send results back.
+
+        Args:
+            text: Text containing <tool_use> blocks
+            working_dir: Working directory for tool execution
+
+        Yields:
+            RepairedToolEvent, ToolUseEvent, ToolResultEvent for each tool
+        """
+        from core.json_repair import parse_tool_use_blocks
+
+        parsed_tools = parse_tool_use_blocks(text)
+        if not parsed_tools:
+            return
+
+        debug_log.info(
+            f"Found {len(parsed_tools)} <tool_use> block(s) in assistant text - executing",
+            category=Category.RUNNER,
+            details={"tools": [t.name for t in parsed_tools]},
+            run_id=self._run_id,
+        )
+
+        # Execute all tools and collect results
+        all_results = []
+        for tool in parsed_tools:
+            if not tool.is_valid:
+                debug_log.warning(
+                    f"Could not parse tool_use block: {tool.name}",
+                    category=Category.RUNNER,
+                    details={"raw_input": tool.raw_input[:200]},
+                    run_id=self._run_id,
+                )
+                continue
+
+            # Emit repair event if needed
+            if tool.was_repaired:
+                yield RepairedToolEvent(
+                    tool_use_id=tool.id,
+                    tool_name=tool.name,
+                    original_input=tool.raw_input,
+                    repaired_input=tool.input,
+                    repair_description=tool.repair_result.repair_description if tool.repair_result else "",
+                )
+
+            # Yield tool use events
+            yield ToolUseStartEvent(tool_use_id=tool.id, tool_name=tool.name)
+            yield ToolUseEvent(
+                tool_use_id=tool.id,
+                tool_name=tool.name,
+                tool_input=tool.input,
+            )
+
+            # Execute the tool
+            tool_result = await execute_tool(
+                tool.name,
+                tool.input,
+                working_dir,
+                self._run_id,
+                session=self._current_session,
+            )
+
+            # Handle result
+            if isinstance(tool_result, ToolExecutionResult):
+                result = tool_result.result
+            else:
+                result, _ = tool_result
+
+            yield ToolResultEvent(tool_use_id=tool.id, result=result)
+            all_results.append((tool.name, tool.id, result))
+
+        # Send all results back to Claude as a continuation message
+        if all_results:
+            result_blocks = []
+            for tool_name, tool_id, result in all_results:
+                result_blocks.append(f"<tool_result tool=\"{tool_name}\" id=\"{tool_id}\">\n{result}\n</tool_result>")
+
+            continuation_text = "\n\n".join(result_blocks)
+            continuation_msg = {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": continuation_text}],
+                }
+            }
+            await self._send_message(continuation_msg)
+            self._sent_continuation = True
+
+    async def _handle_malformed_tool_uses(
+        self, prompt: str, working_dir: str
+    ) -> AsyncIterator[RunnerEvent]:
+        """Detect and handle malformed <tool_use> blocks in user input.
+
+        When users paste or when context contains <tool_use> blocks with
+        malformed JSON (e.g., unescaped quotes in shell commands), this
+        method attempts to repair the JSON and execute the tools.
+
+        Args:
+            prompt: The user's prompt that may contain malformed tool_use blocks
+            working_dir: Working directory for tool execution
+
+        Yields:
+            RepairedToolEvent, ToolUseEvent, ToolResultEvent for each repaired tool
+        """
+        # Find malformed tool_use blocks that need repair
+        malformed_tools = find_malformed_tool_uses(prompt)
+
+        if not malformed_tools:
+            return
+
+        debug_log.info(
+            f"Found {len(malformed_tools)} malformed tool_use block(s) in prompt",
+            category=Category.RUNNER,
+            details={"tools": [t.name for t in malformed_tools]},
+            run_id=self._run_id,
+        )
+
+        for tool in malformed_tools:
+            if not tool.is_valid:
+                # Repair failed - log and skip
+                debug_log.warning(
+                    f"Could not repair malformed tool_use: {tool.name}",
+                    category=Category.RUNNER,
+                    details={"raw_input": tool.raw_input[:200]},
+                    run_id=self._run_id,
+                )
+                continue
+
+            # Yield repair event so UI can show what happened
+            yield RepairedToolEvent(
+                tool_use_id=tool.id,
+                tool_name=tool.name,
+                original_input=tool.raw_input,
+                repaired_input=tool.input,  # type: ignore (we checked is_valid)
+                repair_description=tool.repair_result.repair_description if tool.repair_result else "",
+            )
+
+            # Yield tool use events for UI display
+            yield ToolUseStartEvent(tool_use_id=tool.id, tool_name=tool.name)
+            yield ToolUseEvent(
+                tool_use_id=tool.id,
+                tool_name=tool.name,
+                tool_input=tool.input,  # type: ignore
+            )
+
+            # Execute the repaired tool
+            tool_result = await execute_tool(
+                tool.name,
+                tool.input,  # type: ignore
+                working_dir,
+                self._run_id,
+                session=self._current_session,
+            )
+
+            # Handle both legacy tuple and new ToolExecutionResult
+            if isinstance(tool_result, ToolExecutionResult):
+                result = tool_result.result
+            else:
+                result, _ = tool_result
+
+            # Yield result event
+            yield ToolResultEvent(tool_use_id=tool.id, result=result)
+
     def _load_image_as_base64(self, file_path: str) -> tuple[str, str] | None:
         """Load an image file and return base64-encoded data with media type.
 
@@ -528,6 +705,12 @@ class ClaudeRunner(BaseRunner):
         )
 
         try:
+            # Check for malformed <tool_use> blocks in the prompt that need repair
+            # This handles cases where Claude emitted tool calls with broken JSON
+            # (e.g., unescaped quotes in shell commands)
+            async for event in self._handle_malformed_tool_uses(prompt, working_dir or "."):
+                yield event
+
             # Build and send initial message with conversation history and any pending images
             images = self._pending_images if self._pending_images else None
             self._pending_images = []  # Clear pending images after use
@@ -784,6 +967,38 @@ class ClaudeRunner(BaseRunner):
                                             category=Category.RUNNER,
                                             run_id=self._run_id,
                                         )
+                                    self._text_buffer = ""
+
+                            # Check for <tool_use> blocks in text output
+                            # This catches when Claude outputs tool calls as text instead of using native API
+                            if "<tool_use" in self._text_buffer and "</tool_use>" in self._text_buffer:
+                                async for event in self._handle_text_tool_uses(self._text_buffer, working_dir):
+                                    yield event
+                                self._text_buffer = ""
+                                # Continue waiting for Claude's response after tool execution
+                                awaiting_balloons_tool_response = True
+
+                            # Check for hallucinated <user> blocks
+                            # This catches when Claude tries to simulate a user response
+                            if "<user>" in self._text_buffer and "</user>" in self._text_buffer:
+                                matches = HALLUCINATED_USER_RE.findall(self._text_buffer)
+                                if matches:
+                                    for hallucinated_content in matches:
+                                        debug_log.warning(
+                                            "Detected hallucinated <user> block - Claude tried to simulate user response",
+                                            category=Category.RUNNER,
+                                            details={
+                                                "content_preview": hallucinated_content[:200],
+                                                "content_len": len(hallucinated_content),
+                                            },
+                                            run_id=self._run_id,
+                                        )
+                                        yield HallucinatedUserEvent(
+                                            content=hallucinated_content,
+                                            context=self._text_buffer[-500:] if len(self._text_buffer) > 500 else self._text_buffer,
+                                        )
+                                    # Clear buffer after detecting hallucination
+                                    # We'll let the response continue but the UI will show a warning
                                     self._text_buffer = ""
 
                     elif block_type == "tool_use":

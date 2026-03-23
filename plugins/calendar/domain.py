@@ -7,6 +7,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, TYPE_CHECKING
 import os
 
+from codegen.ws_expose import ws_expose
 from ..base import DomainEvent, DecoratedStatefulDomain, ToolResult
 from ..decorators import llm_callable, Param
 from ..storage import JsonFileStorage
@@ -213,6 +214,7 @@ Supports local calendars and iCal feed imports."""
 
         return ToolResult("\n".join(lines), events=[event])
 
+    @ws_expose
     @llm_callable(
         description="Create a new local calendar.",
         params={
@@ -475,6 +477,7 @@ Supports:
 
         return ToolResult(f"Unsupported provider: {calendar.provider}", is_error=True)
 
+    @ws_expose
     @llm_callable(
         description="""Create a new event on a calendar.
 
@@ -573,6 +576,7 @@ For all-day events, set all_day=true and use date-only format (e.g., '2024-03-15
             events=[domain_event],
         )
 
+    @ws_expose
     @llm_callable(
         description="Update an existing event. Only provided fields are updated.",
         params={
