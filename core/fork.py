@@ -425,6 +425,9 @@ class ForkManager:
         # Inherit working directory from parent
         if current_session.working_directories:
             child_session.working_directories = current_session.working_directories.copy()
+        # Inherit loaded domains from parent
+        if current_session.loaded_domains:
+            child_session.loaded_domains = current_session.loaded_domains.copy()
 
         # Generate fork_id to share between parent and child
         fork_id = str(uuid.uuid4())

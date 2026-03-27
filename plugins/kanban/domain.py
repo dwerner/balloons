@@ -10,6 +10,7 @@ from ..base import DomainEvent, DecoratedStatefulDomain, ToolResult
 from ..decorators import llm_callable, Param
 from ..storage import JsonFileStorage
 from .. import PluginLogger
+from codegen.ws_expose import ws_expose
 from .models import Board, Task, Column, SessionBoardAssociation
 from .events import (
     BoardCreatedPayload,
@@ -165,8 +166,8 @@ Boards are session-scoped and persist across turns."""
         return {
             "components": [
                 {
-                    "name": "KanbanBoard",
-                    "path": "plugins/kanban/ui/KanbanBoard.tsx",
+                    "name": "KanbanTab",
+                    "path": "plugins/kanban/ui/src/KanbanTab.tsx",
                     "description": "Interactive kanban board",
                 },
             ],
@@ -175,7 +176,7 @@ Boards are session-scoped and persist across turns."""
                     "id": "kanban",
                     "label": "Kanban",
                     "icon": "📋",
-                    "component": "KanbanBoard",
+                    "component": "KanbanTab",
                 },
             ],
         }
@@ -248,6 +249,7 @@ Boards are session-scoped and persist across turns."""
 
     # --- LLM-callable tools ---
 
+    @ws_expose
     @llm_callable(
         description="""Get kanban boards associated with the current session.
 
@@ -289,6 +291,241 @@ If no boards exist, you can create one with kanban_create_board."""
 
         return ToolResult("\n".join(result_lines), events=[event])
 
+    @ws_expose
+    @llm_callable(
+        description="""List ALL kanban boards in the system, regardless of session associations.
+
+Use this to discover existing boards that can be linked to this session.
+After finding a board, use kanban_link_board to associate it with this session."""
+    )
+    async def kanban_list_all_boards(self, session: "Session" = None) -> ToolResult:
+        """List all boards in the system."""
+        await _load_all_data()
+
+        if not _boards:
+            return ToolResult("No boards exist. Use kanban_create_board to create one.")
+
+        # Sort boards by creation date (newest first)
+        sorted_boards = sorted(_boards.values(), key=lambda b: b.created_at, reverse=True)
+
+        result_lines = [f"Found {len(_boards)} board(s) in the system:\n"]
+        board_summaries = []
+        for board in sorted_boards:
+            # Count sessions using this board
+            session_count = sum(1 for a in _associations.values() if a.board_id == board.id)
+            task_count = len(board.tasks)
+            result_lines.append(f"- {board.name}")
+            result_lines.append(f"  ID: {board.id}")
+            result_lines.append(f"  Tasks: {task_count}")
+            result_lines.append(f"  Linked sessions: {session_count}")
+            result_lines.append(f"  Created: {board.created_at[:10]}")
+            result_lines.append("")
+            # Build summary for UI
+            board_summaries.append({
+                "id": board.id,
+                "name": board.name,
+                "taskCount": task_count,
+                "sessionCount": session_count,
+                "createdAt": board.created_at,
+            })
+
+        # Emit event for UI with board data
+        event = DomainEvent(
+            type="all_boards_list",
+            source_domain=self.id,
+            payload={"boards": board_summaries},
+            target_session=session.id,
+        )
+
+        return ToolResult("\n".join(result_lines), events=[event])
+
+    @ws_expose
+    @llm_callable(
+        description="""Find a board by name (case-insensitive partial match).
+
+Returns boards matching the search term. Use this when you know the board name
+but not its ID. After finding the board, use kanban_link_board to associate it.""",
+        params={
+            "name": Param(str, "Board name to search for (partial match, case-insensitive)"),
+        }
+    )
+    async def kanban_find_board(self, name: str, session: "Session" = None) -> ToolResult:
+        """Find a board by name."""
+        await _load_all_data()
+
+        name_lower = name.lower().strip()
+        if not name_lower:
+            return ToolResult("Error: name is required", is_error=True)
+
+        matches = []
+        for board in _boards.values():
+            if name_lower in board.name.lower():
+                matches.append(board)
+
+        if not matches:
+            return ToolResult(f"No boards found matching '{name}'")
+
+        result_lines = [f"Found {len(matches)} board(s) matching '{name}':\n"]
+        for board in matches:
+            session_count = sum(1 for a in _associations.values() if a.board_id == board.id)
+            task_count = len(board.tasks)
+            result_lines.append(f"- {board.name}")
+            result_lines.append(f"  ID: {board.id}")
+            result_lines.append(f"  Tasks: {task_count}")
+            result_lines.append(f"  Linked sessions: {session_count}")
+            result_lines.append("")
+
+        return ToolResult("\n".join(result_lines))
+
+    @ws_expose
+    @llm_callable(
+        description="""Link an existing board to the current session.
+
+This allows multiple sessions to share the same board. Use kanban_list_all_boards
+or kanban_find_board to discover available boards first.
+
+Use this when:
+- You want to work on an existing board from a different session
+- Multiple sessions need to share the same task list""",
+        params={
+            "board_id": Param(str, "ID of the board to link (can be prefix)"),
+            "role": Param(str, "Role for this association: 'primary' (default), 'reference', or 'archive'", required=False),
+        }
+    )
+    async def kanban_link_board(
+        self,
+        board_id: str,
+        role: str = "primary",
+        session: "Session" = None,
+    ) -> ToolResult:
+        """Link an existing board to this session."""
+        await _load_all_data()
+
+        board_id = board_id.strip()
+        if not board_id:
+            return ToolResult("Error: board_id is required", is_error=True)
+
+        # Find the board (support prefix matching)
+        board = _boards.get(board_id)
+        if not board:
+            for bid, b in _boards.items():
+                if bid.startswith(board_id):
+                    board = b
+                    board_id = bid
+                    break
+
+        if not board:
+            return ToolResult(f"Error: Board {board_id} not found", is_error=True)
+
+        # Check if already linked
+        for assoc in _associations.values():
+            if assoc.session_id == session.id and assoc.board_id == board.id:
+                return ToolResult(f"Board '{board.name}' is already linked to this session")
+
+        # Create association
+        assoc = SessionBoardAssociation.create(
+            session_id=session.id,
+            board_id=board.id,
+            role=role or "primary",
+            created_by="llm",
+        )
+        _associations[assoc.id] = assoc
+        await _save_association(assoc)
+
+        log.info(f"Linked board: {board.name}", session_id=session.id, details={"board_id": board.id})
+
+        event = DomainEvent(
+            type="board_associated",
+            source_domain=self.id,
+            payload=BoardAssociatedPayload(
+                association=assoc.to_dict(),
+                board=board.to_dict(),
+            ),
+            target_session=session.id,
+        )
+
+        return ToolResult(
+            f"Linked board '{board.name}' to this session\n"
+            f"Board ID: {board.id}\n"
+            f"Role: {role or 'primary'}",
+            events=[event],
+        )
+
+    @ws_expose
+    @llm_callable(
+        description="""Unlink a board from the current session.
+
+This removes the association between the board and this session, but does NOT
+delete the board or its tasks. The board can still be accessed from other
+sessions that have it linked.
+
+Use this when:
+- You no longer need this board in the current session
+- You want to clean up the session's board list""",
+        params={
+            "board_id": Param(str, "ID of the board to unlink (can be prefix or name)"),
+        }
+    )
+    async def kanban_unlink_board(
+        self,
+        board_id: str,
+        session: "Session" = None,
+    ) -> ToolResult:
+        """Unlink a board from this session."""
+        await _load_all_data()
+
+        board_id = board_id.strip()
+        if not board_id:
+            return ToolResult("Error: board_id is required", is_error=True)
+
+        # Find the board (support prefix matching and name matching)
+        board = _boards.get(board_id)
+        if not board:
+            # Try prefix match
+            for bid, b in _boards.items():
+                if bid.startswith(board_id):
+                    board = b
+                    board_id = bid
+                    break
+            # Try name match
+            if not board:
+                for bid, b in _boards.items():
+                    if b.name.lower() == board_id.lower():
+                        board = b
+                        board_id = bid
+                        break
+
+        if not board:
+            return ToolResult(f"Error: Board '{board_id}' not found", is_error=True)
+
+        # Find and remove the association
+        assoc_to_remove = None
+        for assoc_id, assoc in _associations.items():
+            if assoc.session_id == session.id and assoc.board_id == board.id:
+                assoc_to_remove = assoc_id
+                break
+
+        if not assoc_to_remove:
+            return ToolResult(f"Board '{board.name}' is not linked to this session")
+
+        del _associations[assoc_to_remove]
+        await _delete_association_file(assoc_to_remove)
+
+        log.info(f"Unlinked board: {board.name}", session_id=session.id, details={"board_id": board.id})
+
+        event = DomainEvent(
+            type="board_unlinked",
+            source_domain=self.id,
+            payload={"board_id": board.id, "board_name": board.name},
+            target_session=session.id,
+        )
+
+        return ToolResult(
+            f"Unlinked board '{board.name}' from this session",
+            events=[event],
+        )
+
+    @ws_expose
     @llm_callable(
         description="""Create a new kanban board and associate it with the current session.
 
@@ -348,6 +585,7 @@ Use this when:
             events=[event],
         )
 
+    @ws_expose
     @llm_callable(
         description="""Create a new task on a kanban board.
 
@@ -440,6 +678,7 @@ Use this when:
             events=[event],
         )
 
+    @ws_expose
     @llm_callable(
         description="""Update an existing task's title, description, or resolution.
 
@@ -514,6 +753,7 @@ Use this when:
 
         return ToolResult(result, events=[event])
 
+    @ws_expose
     @llm_callable(
         description="""Move a task to a different column.
 
@@ -591,6 +831,7 @@ Use this when:
             events=[event],
         )
 
+    @ws_expose
     @llm_callable(
         description="""Delete a task from a board.
 
@@ -700,6 +941,7 @@ If no board_id is specified, uses the primary board for this session.""",
 
         return ToolResult("\n".join(result_lines))
 
+    @ws_expose
     @llm_callable(
         description="""Get the full state of a kanban board.
 

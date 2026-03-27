@@ -145,6 +145,7 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
             backend_env=env if env else None,
             user_prompt=user_prompt,
             context_window=backend.context_window,
+            model=backend.model,
         )
 
     else:

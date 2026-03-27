@@ -749,6 +749,10 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
   const handleMinimapNavigate = useCallback((scrollPosition: number) => {
     if (!scrollContainerRef.current) return;
 
+    // Cancel any ongoing scroll animation FIRST - this is critical to stop
+    // autoscroll from fighting with the user's minimap navigation
+    cancelScrollAnimation();
+
     programmaticScrollCountRef.current++;
 
     // Pause following when using minimap to navigate
@@ -761,7 +765,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     setTimeout(() => {
       programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
     }, 100);
-  }, []);
+  }, [cancelScrollAnimation]);
 
   // Mark user as actively scrolling - used by wheel and touch handlers
   const markUserScrolling = useCallback(() => {

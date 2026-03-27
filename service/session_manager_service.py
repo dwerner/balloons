@@ -3298,13 +3298,13 @@ class SessionManagerService:
         session.concluded_reason = reason
 
         # Add a conclude turn to the conversation
-        from session import SystemBlock, Turn
-        conclude_block = SystemBlock(
-            content=f"Session concluded: {reason}" if reason else "Session concluded"
+        from models import TextBlock, Turn
+        conclude_block = TextBlock(
+            text=f"Session concluded: {reason}" if reason else "Session concluded"
         )
         turn = Turn(
             role="system",
-            content_blocks=[conclude_block],
+            content_block=conclude_block,
         )
         turn_index = len(session.turns)
         session.turns.append(turn)
@@ -3367,13 +3367,13 @@ class SessionManagerService:
         session.concluded_reason = ""
 
         # Add a reopen turn to the conversation
-        from session import SystemBlock, Turn
-        reopen_block = SystemBlock(
-            content=f"Session reopened: {reason}" if reason else "Session reopened"
+        from models import TextBlock, Turn
+        reopen_block = TextBlock(
+            text=f"Session reopened: {reason}" if reason else "Session reopened"
         )
         turn = Turn(
             role="system",
-            content_blocks=[reopen_block],
+            content_block=reopen_block,
         )
         turn_index = len(session.turns)
         session.turns.append(turn)
@@ -5812,9 +5812,54 @@ Summary:""")
             session = self._manager.get_session(session_id)
             if session:
                 await self._rebuild_watcher_for_session(session)
+                # Auto-load domains that this session uses
+                await self._ensure_session_domains_loaded(session)
             self._emit_event(SessionManagerEvent.SESSION_SWITCHED, session_id)
 
         return success
+
+    async def _ensure_session_domains_loaded(self, session: "Session") -> None:
+        """Ensure all domains used by a session are loaded.
+
+        When switching to a session, we need to load any domains that:
+        1. Are listed in session.loaded_domains
+        2. Are not already loaded globally
+
+        Domains accumulate - switching away does not unload them.
+        """
+        if not session.loaded_domains:
+            return
+
+        try:
+            from plugins.integration import load_domain, list_loaded_domains
+            from plugins.registry import get_registry
+
+            currently_loaded = list_loaded_domains()
+            registry = get_registry()
+
+            for domain_id in session.loaded_domains:
+                if domain_id not in currently_loaded:
+                    # Check if domain is available before loading
+                    if domain_id in registry.available_domains:
+                        try:
+                            load_domain(domain_id)
+                            debug_log.info(
+                                f"Auto-loaded domain '{domain_id}' for session {session.id[:8]}",
+                                category=Category.SESSION,
+                            )
+                        except Exception as e:
+                            debug_log.warning(
+                                f"Failed to auto-load domain '{domain_id}': {e}",
+                                category=Category.SESSION,
+                            )
+                    else:
+                        debug_log.warning(
+                            f"Domain '{domain_id}' listed in session {session.id[:8]} but not available",
+                            category=Category.SESSION,
+                        )
+        except ImportError:
+            # Plugin system not available
+            pass
 
     @ws_expose
     async def get_session(self, session_id: str) -> ManagedSessionInfo | None:

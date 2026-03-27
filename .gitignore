@@ -103,3 +103,8 @@ cython_debug/
 test/data.mdb
 test/lock.mdb
 **/nohup.out
+
+# Node.js
+node_modules/
+**/node_modules
+**/node_modules/

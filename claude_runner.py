@@ -125,6 +125,7 @@ class ClaudeRunner(BaseRunner):
         backend_env: dict[str, str] | None = None,
         user_prompt: str | None = None,
         context_window: int = 150000,
+        model: str | None = None,
     ):
         self.process: asyncio.subprocess.Process | None = None
         self._terminated = False
@@ -133,6 +134,7 @@ class ClaudeRunner(BaseRunner):
         self._backend_env = backend_env or {}  # Environment overrides for LLM backend
         self._user_prompt = user_prompt  # Base prompt from backend config
         self.context_window = context_window  # Max context tokens
+        self._model = model  # Model to use (e.g., "opus", "sonnet", "claude-opus-4-5-20250929")
         self._json_errors: list[tuple[str, str | None]] = []  # Track (error_detail, dump_path) tuples
         self._current_session: "Session | None" = None  # Session for tool execution
         self._text_buffer: str = ""  # Buffer for detecting balloons-tool blocks
@@ -662,6 +664,10 @@ class ClaudeRunner(BaseRunner):
             "--dangerously-skip-permissions",
             "--disallowedTools", "Task,TodoWrite,NotebookEdit,AskUserQuestion,EnterPlanMode,ExitPlanMode",
         ]
+
+        # Add model if specified (e.g., "opus", "sonnet", or full model name)
+        if self._model:
+            cmd.extend(["--model", self._model])
 
         if system_prompt:
             cmd.extend(["--system-prompt", system_prompt])

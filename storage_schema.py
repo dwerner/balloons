@@ -101,6 +101,10 @@ class SessionData:
     # Message queue (stored as dict for flexibility)
     message_queue: dict = field(default_factory=dict)
 
+    # Loaded domain plugins for this session
+    # Domains listed here are auto-loaded when the session is activated
+    loaded_domains: list[str] = field(default_factory=list)
+
 
 @rust_schema
 @dataclass
@@ -134,6 +138,8 @@ class SessionMetadata:
     fork_name: str = ""
     fork_status: str = "active"  # "active", "merged", "abandoned"
     children: list[ForkChildData] = field(default_factory=list)
+    # Loaded domain plugins for this session
+    loaded_domains: list[str] = field(default_factory=list)
 
 
 @rust_schema

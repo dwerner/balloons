@@ -607,6 +607,7 @@ class AsyncStorage:
             "backend_name": session.backend_name,
             "cached_context_tokens": session.cached_context_tokens,
             "message_queue": session.message_queue.to_dict() if session.message_queue else {},
+            "loaded_domains": session.loaded_domains,
         }
 
     def _turn_to_wire(self, turn: Turn) -> dict:
@@ -834,6 +835,7 @@ class AsyncStorage:
             backend_name=data.get("backend_name", ""),
             cached_context_tokens=data.get("cached_context_tokens", 0),
             message_queue=MessageQueue.from_dict(data.get("message_queue", {})),
+            loaded_domains=data.get("loaded_domains", []),
         )
 
         # NOTE: turns are loaded separately via load_turns() and appended by the caller

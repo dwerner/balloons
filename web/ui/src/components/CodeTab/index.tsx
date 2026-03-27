@@ -22,7 +22,7 @@ import { FileList } from './FileList';
 import { DiffView } from './DiffView';
 import { OpenFilesList, type OpenFile } from './OpenFilesList';
 import { FileContentView } from './FileContentView';
-import { EditorView } from './EditorView';
+import { EditorView, SplitHandle } from './EditorView';
 import { CommitModal } from '../CommitModal';
 import { useDialog } from '../Dialog';
 import { createLogger } from '../../utils/debugLog';
@@ -37,6 +37,7 @@ const LARGE_FILE_THRESHOLD = 500 * 1024;
 const COMMENTS_STORAGE_KEY = 'balloons:code-comments';
 const OLD_REVIEW_STORAGE_KEY = 'balloons:code-review';
 const OPEN_FILES_STORAGE_KEY = 'balloons:code-open-files';
+const SIDEBAR_SPLIT_KEY = 'balloons:code-sidebar-split';
 
 /** Git status info for parent components */
 export interface GitStatusInfo {
@@ -145,6 +146,31 @@ function saveOpenFiles(files: OpenFile[]): void {
   }
 }
 
+// Helper to load sidebar split ratio from localStorage
+function loadSidebarSplit(): number {
+  try {
+    const saved = localStorage.getItem(SIDEBAR_SPLIT_KEY);
+    if (saved) {
+      const ratio = parseFloat(saved);
+      if (!isNaN(ratio) && ratio >= 0.1 && ratio <= 0.5) {
+        return ratio;
+      }
+    }
+  } catch {
+    // Ignore
+  }
+  return 0.2; // Default: 20% sidebar (250px on a 1250px container)
+}
+
+// Helper to save sidebar split ratio to localStorage
+function saveSidebarSplit(ratio: number): void {
+  try {
+    localStorage.setItem(SIDEBAR_SPLIT_KEY, ratio.toString());
+  } catch {
+    // Ignore
+  }
+}
+
 // Check if content appears to be binary
 function isBinaryContent(content: string): boolean {
   // Check for null bytes or high concentration of non-printable characters
@@ -204,6 +230,9 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
   // Commit modal state
   const [isCommitModalOpen, setIsCommitModalOpen] = useState(false);
 
+  // Sidebar split ratio (for resizable sidebar)
+  const [sidebarSplit, setSidebarSplit] = useState(loadSidebarSplit);
+
   // Save comments to localStorage whenever they change
   useEffect(() => {
     saveComments(comments);
@@ -213,6 +242,16 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
   useEffect(() => {
     saveOpenFiles(openFiles);
   }, [openFiles]);
+
+  // Save sidebar split ratio to localStorage whenever it changes
+  useEffect(() => {
+    saveSidebarSplit(sidebarSplit);
+  }, [sidebarSplit]);
+
+  // Handle sidebar split ratio change
+  const handleSidebarSplitChange = useCallback((ratio: number) => {
+    setSidebarSplit(ratio);
+  }, []);
 
   // Load working tree status when cwd changes or refresh is triggered
   const loadWorkingTreeStatus = useCallback(async () => {
@@ -755,7 +794,7 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
         {activeSubTab === 'changes' ? (
           <>
             {/* File list sidebar */}
-            <div className="code-tab__sidebar">
+            <div className="code-tab__sidebar" style={{ width: `${sidebarSplit * 100}%` }}>
               <FileList
                 stagedFiles={workingTreeStatus?.stagedFiles || []}
                 unstagedFiles={workingTreeStatus?.unstagedFiles || []}
@@ -768,8 +807,16 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
               />
             </div>
 
+            {/* Resize handle */}
+            <SplitHandle
+              splitRatio={sidebarSplit}
+              onRatioChange={handleSidebarSplitChange}
+              orientation="horizontal"
+              minSize={0.1}
+            />
+
             {/* Diff view */}
-            <div className="code-tab__main">
+            <div className="code-tab__main" style={{ width: `${(1 - sidebarSplit) * 100}%` }}>
               {selectedDiffFile ? (
                 <DiffView
                   file={selectedDiffFile}
@@ -808,7 +855,7 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
         ) : activeSubTab === 'files' ? (
           <>
             {/* Open files sidebar */}
-            <div className="code-tab__sidebar">
+            <div className="code-tab__sidebar" style={{ width: `${sidebarSplit * 100}%` }}>
               <OpenFilesList
                 files={openFiles}
                 selectedPath={selectedFilePath}
@@ -817,8 +864,16 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
               />
             </div>
 
+            {/* Resize handle */}
+            <SplitHandle
+              splitRatio={sidebarSplit}
+              onRatioChange={handleSidebarSplitChange}
+              orientation="horizontal"
+              minSize={0.1}
+            />
+
             {/* File content view */}
-            <div className="code-tab__main">
+            <div className="code-tab__main" style={{ width: `${(1 - sidebarSplit) * 100}%` }}>
               {loadingFile ? (
                 <div className="code-tab__loading-file">
                   <div className="code-tab__spinner" />

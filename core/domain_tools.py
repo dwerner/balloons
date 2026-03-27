@@ -126,13 +126,20 @@ async def execute_domain_management_tool(
                 is_error=True
             )
 
-        # Check if already loaded
+        # Check if already loaded globally
         loaded = list_loaded_domains()
         if domain_id in loaded:
+            # Domain already loaded globally - just track on session
+            if domain_id not in session.loaded_domains:
+                session.loaded_domains.append(domain_id)
             return ToolExecutionResult(f"Domain '{domain_id}' is already loaded.", is_error=False)
 
         try:
             load_domain(domain_id)
+
+            # Track this domain as used by this session
+            if domain_id not in session.loaded_domains:
+                session.loaded_domains.append(domain_id)
 
             # Get the domain's prompt so the LLM can use the tools immediately
             # (since the system prompt was built before this domain was loaded)
@@ -168,6 +175,11 @@ async def execute_domain_management_tool(
 
         try:
             unload_domain(domain_id)
+
+            # Remove from session's loaded domains
+            if domain_id in session.loaded_domains:
+                session.loaded_domains.remove(domain_id)
+
             return ToolExecutionResult(
                 f"Unloaded domain '{domain_id}'.",
                 is_error=False,

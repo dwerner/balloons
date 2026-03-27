@@ -826,6 +826,8 @@ impl StorageEngine for LmdbEngine {
                 fork_name: data.fork_name.clone(),
                 fork_status: data.fork_status.clone(),
                 children: data.children.clone(),
+                // Domain plugins used by this session
+                loaded_domains: data.loaded_domains.clone(),
             });
         }
 

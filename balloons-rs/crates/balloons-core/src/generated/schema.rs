@@ -2,7 +2,7 @@
 //!
 //! Generated from Python domain entities marked with @rust_schema.
 //! Source: models.py and other domain modules
-//! Generated: 2026-03-10T09:50:11.332947
+//! Generated: 2026-03-23T11:00:22.378034
 //!
 //! To regenerate:
 //!     python -m codegen.generate_rust
@@ -87,6 +87,8 @@ pub struct SessionData {
     pub cached_context_tokens: i64,
     #[serde(default)]
     pub message_queue: serde_json::Value,
+    #[serde(default)]
+    pub loaded_domains: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,6 +119,8 @@ pub struct SessionMetadata {
     pub fork_status: String,
     #[serde(default)]
     pub children: Vec<ForkChildData>,
+    #[serde(default)]
+    pub loaded_domains: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
