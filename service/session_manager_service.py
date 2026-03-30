@@ -631,6 +631,10 @@ class SessionManagerService:
         # Map: watcher_session_id -> list of (target_session_id, target_name)
         self._watcher_watching: dict[str, list[tuple[str, str]]] = {}
 
+        # Per-session locks for operations that modify turn order (archive, rehydrate, delete)
+        # This prevents race conditions when multiple operations try to modify the same session
+        self._session_turn_locks: dict[str, asyncio.Lock] = {}
+
         # Register SessionDataService as observer if provided
         if session_data_service is not None:
             self.add_observer(session_data_service)
@@ -682,6 +686,17 @@ class SessionManagerService:
                 f"Failed to load watcher relationships: {e}",
                 category=Category.SESSION,
             )
+
+    def _get_session_turn_lock(self, session_id: str) -> asyncio.Lock:
+        """Get or create a lock for turn-modifying operations on a session.
+
+        This lock serializes operations that modify turn order (archive, rehydrate, delete)
+        to prevent race conditions where multiple operations compute results based on
+        stale session state.
+        """
+        if session_id not in self._session_turn_locks:
+            self._session_turn_locks[session_id] = asyncio.Lock()
+        return self._session_turn_locks[session_id]
 
     def add_event_handler(self, handler: Callable[[str, dict], None]) -> None:
         """Register a handler for WebSocket events.
@@ -5534,76 +5549,80 @@ Summary:""")
             category=Category.SESSION,
         )
 
-        # Load session
-        session = self._manager.get_session(session_id)
-        if not session:
-            session = await self._manager.load_session(session_id)
+        # Acquire lock to prevent concurrent modifications to this session's turns
+        # This serializes archive, rehydrate, and delete operations on the same session
+        session_lock = self._get_session_turn_lock(session_id)
+        async with session_lock:
+            # Load session (inside lock to ensure we get latest state)
+            session = self._manager.get_session(session_id)
             if not session:
-                return CompleteArchiveResult(success=False, error=f"Session {session_id} not found")
+                session = await self._manager.load_session(session_id)
+                if not session:
+                    return CompleteArchiveResult(success=False, error=f"Session {session_id} not found")
 
-        # Use command executor to perform archive
-        executor = CommandExecutor()
-        result = executor.prepare_archive(
-            session=session,
-            turn_indices=turn_indices,
-            summary=archive_summary,
-        )
+            # Use command executor to perform archive
+            executor = CommandExecutor()
+            result = executor.prepare_archive(
+                session=session,
+                turn_indices=turn_indices,
+                summary=archive_summary,
+            )
 
-        if not result.success:
-            return CompleteArchiveResult(success=False, error=result.error or "Archive failed")
+            if not result.success:
+                return CompleteArchiveResult(success=False, error=result.error or "Archive failed")
 
-        # Update session with new turns
-        session.turns = result.new_turns
-        await session.save()
+            # Update session with new turns
+            session.turns = result.new_turns
+            await session.save()
 
-        # Emit turn-level events so clients can update incrementally
-        # 1. Emit turns deleted event for the archived turns
-        if result.deleted_turn_ids:
+            # Emit turn-level events so clients can update incrementally
+            # 1. Emit turns deleted event for the archived turns
+            if result.deleted_turn_ids:
+                await self._notify_session_data_service(
+                    "emit_turns_deleted",
+                    session_id=session_id,
+                    turn_indices=result.deleted_turn_indices,
+                    turn_ids=result.deleted_turn_ids,
+                )
+
+            # 2. Emit turn created + finished events for the new archive turn
+            if result.archive_turn:
+                from service.session_events import TurnCreatedEvent, TurnFinishedEvent
+                await self._notify_observers(
+                    "on_turn_created",
+                    TurnCreatedEvent(
+                        session_id=session_id,
+                        turn_id=result.archive_turn.id,
+                        turn_index=turn_start,
+                        role="system",
+                        exchange_id=result.archive_turn.exchange_id or "",
+                        content_block_type="archive",
+                    ),
+                )
+                # Also emit turn finished with the full content block
+                # This ensures the client gets the archive data (message_count, summary, etc.)
+                await self._notify_observers(
+                    "on_turn_finished",
+                    TurnFinishedEvent(
+                        session_id=session_id,
+                        turn_id=result.archive_turn.id,
+                        turn_index=turn_start,
+                        role="system",
+                        content=result.archive_turn.content_block.summary if hasattr(result.archive_turn.content_block, 'summary') else "",
+                        tokens=result.archive_turn.tokens,
+                        content_block=result.archive_turn.content_block,
+                    ),
+                )
+
+            # 3. Emit turns reordered event with new order for all turns
+            # After archive, turns have gaps in their order (e.g., 0,1,2,archive,13,14,15)
+            # Recompute sequential orders: 0,1,2,3,4,5,6
+            order_mappings = [(turn.id, idx) for idx, turn in enumerate(session.turns)]
             await self._notify_session_data_service(
-                "emit_turns_deleted",
+                "emit_turns_reordered",
                 session_id=session_id,
-                turn_indices=result.deleted_turn_indices,
-                turn_ids=result.deleted_turn_ids,
+                mappings=order_mappings,
             )
-
-        # 2. Emit turn created + finished events for the new archive turn
-        if result.archive_turn:
-            from service.session_events import TurnCreatedEvent, TurnFinishedEvent
-            await self._notify_observers(
-                "on_turn_created",
-                TurnCreatedEvent(
-                    session_id=session_id,
-                    turn_id=result.archive_turn.id,
-                    turn_index=turn_start,
-                    role="system",
-                    exchange_id=result.archive_turn.exchange_id or "",
-                    content_block_type="archive",
-                ),
-            )
-            # Also emit turn finished with the full content block
-            # This ensures the client gets the archive data (message_count, summary, etc.)
-            await self._notify_observers(
-                "on_turn_finished",
-                TurnFinishedEvent(
-                    session_id=session_id,
-                    turn_id=result.archive_turn.id,
-                    turn_index=turn_start,
-                    role="system",
-                    content=result.archive_turn.content_block.summary if hasattr(result.archive_turn.content_block, 'summary') else "",
-                    tokens=result.archive_turn.tokens,
-                    content_block=result.archive_turn.content_block,
-                ),
-            )
-
-        # 3. Emit turns reordered event with new order for all turns
-        # After archive, turns have gaps in their order (e.g., 0,1,2,archive,13,14,15)
-        # Recompute sequential orders: 0,1,2,3,4,5,6
-        order_mappings = [(turn.id, idx) for idx, turn in enumerate(session.turns)]
-        await self._notify_session_data_service(
-            "emit_turns_reordered",
-            session_id=session_id,
-            mappings=order_mappings,
-        )
 
         # Emit session updated event for React UI
         self._emit_session_updated(session, is_streaming=False)
@@ -5662,81 +5681,84 @@ Summary:""")
         """
         from core.command_executor import CommandExecutor
 
-        # Load the session
-        session = self._manager.get_session(session_id)
-        if not session:
-            session = await self._manager.load_session(session_id)
+        # Acquire lock to prevent concurrent modifications to this session's turns
+        session_lock = self._get_session_turn_lock(session_id)
+        async with session_lock:
+            # Load the session (inside lock to ensure we get latest state)
+            session = self._manager.get_session(session_id)
             if not session:
-                return RehydrateResult(success=False, error=f"Session {session_id} not found")
+                session = await self._manager.load_session(session_id)
+                if not session:
+                    return RehydrateResult(success=False, error=f"Session {session_id} not found")
 
-        # Use command executor to perform rehydration
-        executor = CommandExecutor()
-        result = executor.prepare_rehydrate(
-            session=session,
-            turn_index=turn_index,
-        )
+            # Use command executor to perform rehydration
+            executor = CommandExecutor()
+            result = executor.prepare_rehydrate(
+                session=session,
+                turn_index=turn_index,
+            )
 
-        if not result.success:
-            return RehydrateResult(success=False, error=result.error or "Rehydrate failed")
+            if not result.success:
+                return RehydrateResult(success=False, error=result.error or "Rehydrate failed")
 
-        # Emit turn-level events so clients can update incrementally
-        # 1. Emit turn deleted event for the archive turn
-        if result.deleted_turn_id:
+            # Update session with new turns FIRST (before emitting events)
+            session.turns = result.new_turns
+            await session.save()
+
+            # Emit turn-level events so clients can update incrementally
+            # 1. Emit turn deleted event for the archive turn
+            if result.deleted_turn_id:
+                await self._notify_session_data_service(
+                    "emit_turns_deleted",
+                    session_id=session_id,
+                    turn_indices=[result.deleted_turn_index],
+                    turn_ids=[result.deleted_turn_id],
+                )
+
+            # 2. Emit turn created + finished events for each restored turn
+            from service.session_events import TurnCreatedEvent, TurnFinishedEvent
+            for i, turn in enumerate(result.restored_turns):
+                await self._notify_observers(
+                    "on_turn_created",
+                    TurnCreatedEvent(
+                        session_id=session_id,
+                        turn_id=turn.id,
+                        turn_index=turn_index + i,
+                        role=turn.role,
+                        exchange_id=turn.exchange_id or "",
+                        content_block_type=turn.content_block.type if hasattr(turn.content_block, 'type') else "text",
+                    ),
+                )
+                # Also emit turn finished with the full content block
+                # This ensures the client gets the actual content for each restored turn
+                content_text = ""
+                if hasattr(turn.content_block, 'text'):
+                    content_text = turn.content_block.text
+                elif hasattr(turn.content_block, 'content'):
+                    content_text = turn.content_block.content
+                await self._notify_observers(
+                    "on_turn_finished",
+                    TurnFinishedEvent(
+                        session_id=session_id,
+                        turn_id=turn.id,
+                        turn_index=turn_index + i,
+                        role=turn.role,
+                        content=content_text,
+                        tokens=turn.tokens,
+                        content_block=turn.content_block,
+                    ),
+                )
+
+            # 3. Emit turns reordered event with new order for all turns
+            # After rehydrate, turns need sequential ordering
+            order_mappings = [(turn.id, idx) for idx, turn in enumerate(session.turns)]
             await self._notify_session_data_service(
-                "emit_turns_deleted",
+                "emit_turns_reordered",
                 session_id=session_id,
-                turn_indices=[result.deleted_turn_index],
-                turn_ids=[result.deleted_turn_id],
+                mappings=order_mappings,
             )
 
-        # 2. Emit turn created + finished events for each restored turn
-        from service.session_events import TurnCreatedEvent, TurnFinishedEvent
-        for i, turn in enumerate(result.restored_turns):
-            await self._notify_observers(
-                "on_turn_created",
-                TurnCreatedEvent(
-                    session_id=session_id,
-                    turn_id=turn.id,
-                    turn_index=turn_index + i,
-                    role=turn.role,
-                    exchange_id=turn.exchange_id or "",
-                    content_block_type=turn.content_block.type if hasattr(turn.content_block, 'type') else "text",
-                ),
-            )
-            # Also emit turn finished with the full content block
-            # This ensures the client gets the actual content for each restored turn
-            content_text = ""
-            if hasattr(turn.content_block, 'text'):
-                content_text = turn.content_block.text
-            elif hasattr(turn.content_block, 'content'):
-                content_text = turn.content_block.content
-            await self._notify_observers(
-                "on_turn_finished",
-                TurnFinishedEvent(
-                    session_id=session_id,
-                    turn_id=turn.id,
-                    turn_index=turn_index + i,
-                    role=turn.role,
-                    content=content_text,
-                    tokens=turn.tokens,
-                    content_block=turn.content_block,
-                ),
-            )
-
-        # Update session with new turns
-        session.turns = result.new_turns
-        await session.save()
-
-        # 3. Emit turns reordered event with new order for all turns
-        # After rehydrate, turns need sequential ordering
-        order_mappings = [(turn.id, idx) for idx, turn in enumerate(session.turns)]
-        await self._notify_session_data_service(
-            "emit_turns_reordered",
-            session_id=session_id,
-            mappings=order_mappings,
-        )
-
-        # Emit session updated event for React UI
+        # Emit session updated event for React UI (outside lock)
         self._emit_session_updated(session, is_streaming=False)
 
         # Emit session updated event

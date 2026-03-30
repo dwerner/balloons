@@ -286,6 +286,10 @@ export function useSessionData(
   const flushIntervalRef = useRef<number | null>(null);
   const DELTA_FLUSH_INTERVAL_MS = 50; // Flush every 50ms
 
+  // Pending order updates - stores orders for turns that haven't been created yet
+  // This handles the race condition where reorder events arrive before turn creation
+  const pendingOrdersRef = useRef<Map<string, number>>(new Map());
+
   // Derive sorted turns array from map (sorted by insertion order)
   const turns = useMemo(() => {
     return Array.from(turnsById.values()).sort((a, b) => a.order - b.order);
@@ -349,6 +353,7 @@ export function useSessionData(
   const clear = useCallback(() => {
     // Clear pending deltas and stop flush interval
     pendingDeltasRef.current.clear();
+    pendingOrdersRef.current.clear();
     if (flushIntervalRef.current !== null) {
       window.clearInterval(flushIntervalRef.current);
       flushIntervalRef.current = null;
@@ -492,7 +497,17 @@ export function useSessionData(
               }
 
               const next = new Map(prev);
-              const serverOrder = event.order ?? 0;
+              // Check if we have a pending order from a reorder event that arrived first
+              const pendingOrder = pendingOrdersRef.current.get(turnId);
+              const serverOrder = pendingOrder ?? event.order ?? 0;
+              if (pendingOrder !== undefined) {
+                pendingOrdersRef.current.delete(turnId);
+                debugLog('[TURN_ORDER] Applied pending order to new turn', {
+                  turnId: turnId.substring(0, 8),
+                  pendingOrder,
+                  eventOrder: event.order,
+                });
+              }
               const contentBlockType = event.contentBlockType ?? 'text';
 
               next.set(turnId, {
@@ -579,8 +594,18 @@ export function useSessionData(
               }
 
               if (!existing) {
-                // Use order from event if available, otherwise fall back to maxOrder + 1
-                const serverOrder = event.order;
+                // Check for pending order from reorder event that arrived first
+                const pendingOrder = pendingOrdersRef.current.get(turnId);
+                if (pendingOrder !== undefined) {
+                  pendingOrdersRef.current.delete(turnId);
+                  debugLog('[TURN_ORDER] Applied pending order to new turn (via turnFinished)', {
+                    turnId: turnId.substring(0, 8),
+                    pendingOrder,
+                    eventOrder: event.order,
+                  });
+                }
+                // Use pending order, then event order, then fall back to maxOrder + 1
+                const serverOrder = pendingOrder ?? event.order;
                 const effectiveOrder = serverOrder !== undefined && serverOrder !== null
                   ? serverOrder
                   : Math.max(-1, ...Array.from(prev.values()).map((t) => t.order)) + 1;
@@ -892,13 +917,23 @@ export function useSessionData(
             });
 
             // Update the order field for each turn in the mapping
+            // For turns not yet created, store in pendingOrdersRef to apply when created
             setTurnsById((prev) => {
               const next = new Map(prev);
-              let hasChanges = false;
+              let updatedCount = 0;
+              let missingCount = 0;
+              let unchangedCount = 0;
 
               for (const mapping of event.mappings ?? []) {
                 const existing = next.get(mapping.turnId);
-                if (existing && existing.order !== mapping.newOrder) {
+                if (!existing) {
+                  // Turn not in our state yet - store for when it's created
+                  // This handles the race where reorder arrives before turn_created
+                  pendingOrdersRef.current.set(mapping.turnId, mapping.newOrder);
+                  missingCount++;
+                  continue;
+                }
+                if (existing.order !== mapping.newOrder) {
                   debugLog('[TURN_ORDER] Updating turn order', {
                     turnId: mapping.turnId.substring(0, 8),
                     oldOrder: existing.order,
@@ -908,14 +943,22 @@ export function useSessionData(
                     ...existing,
                     order: mapping.newOrder,
                   });
-                  hasChanges = true;
+                  updatedCount++;
+                } else {
+                  unchangedCount++;
                 }
               }
 
-              if (hasChanges) {
-                debugLog('[TURN_ORDER] Order update complete', { updatedCount: event.mappings?.length ?? 0 });
-              }
-              return hasChanges ? next : prev;
+              debugLog('[TURN_ORDER] Order update complete', {
+                updated: updatedCount,
+                unchanged: unchangedCount,
+                missing: missingCount,
+                pendingOrders: pendingOrdersRef.current.size,
+                localTurns: prev.size,
+                serverTurns: event.mappings?.length ?? 0,
+              });
+
+              return updatedCount > 0 ? next : prev;
             });
           })
         );

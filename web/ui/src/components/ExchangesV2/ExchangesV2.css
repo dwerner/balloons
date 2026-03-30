@@ -1,0 +1,534 @@
+/**
+ * ExchangesV2 CSS
+ *
+ * Styles for the redesigned exchange tree view.
+ * Uses exv2- prefix to avoid conflicts with existing ContextTabView styles.
+ */
+
+/* ============================================================================
+   Main Container
+   ============================================================================ */
+
+.exv2 {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--color-bg-primary, #121212);
+}
+
+.exv2--empty {
+  align-items: center;
+  justify-content: center;
+}
+
+.exv2--with-preview {
+  /* Split view handled by flex children */
+}
+
+.exv2__empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: #888;
+}
+
+.exv2__empty-state h2 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 500;
+  color: #aaa;
+}
+
+.exv2__empty-state p {
+  margin: 0;
+  font-size: 14px;
+}
+
+/* ============================================================================
+   Header
+   ============================================================================ */
+
+.exv2__header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+  gap: 12px;
+}
+
+.exv2__stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.exv2__stat {
+  font-size: 12px;
+  color: #888;
+}
+
+.exv2__stat--tokens {
+  color: #4ade80;
+  font-weight: 500;
+}
+
+/* ============================================================================
+   Incomplete History Banner
+   ============================================================================ */
+
+.exv2__banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem;
+  background: rgba(255, 180, 0, 0.1);
+  border-bottom: 1px solid rgba(255, 180, 0, 0.2);
+  color: var(--color-warning, #ffb400);
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.exv2__banner-loading {
+  font-style: italic;
+  opacity: 0.8;
+}
+
+.exv2__banner-text {
+  opacity: 0.9;
+}
+
+.exv2__banner-btn {
+  padding: 0.25rem 0.75rem;
+  border: 1px solid rgba(255, 180, 0, 0.4);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-warning, #ffb400);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.exv2__banner-btn:hover {
+  background: rgba(255, 180, 0, 0.15);
+  border-color: rgba(255, 180, 0, 0.6);
+}
+
+/* ============================================================================
+   Tree Section
+   ============================================================================ */
+
+.exv2__tree-section {
+  flex: 1 1 auto;
+  min-height: 100px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.exv2--with-preview .exv2__tree-section {
+  flex-shrink: 1;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.exv2__tree {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  margin: 0;
+  padding: 8px;
+  list-style: none;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--color-text-primary, #e0e0e0);
+}
+
+/* ============================================================================
+   Preview Section
+   ============================================================================ */
+
+.exv2__preview {
+  flex: 0 1 auto;
+  max-height: 60%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.exv2__preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.exv2__preview-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: #888;
+}
+
+.exv2__preview-close {
+  background: transparent;
+  border: none;
+  color: #666;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.exv2__preview-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #aaa;
+}
+
+.exv2__preview-content {
+  flex: 1;
+  overflow: auto;
+  padding: 8px;
+}
+
+.exv2__preview-content .turn-wrapper {
+  margin: 0;
+}
+
+/* ============================================================================
+   Node Base
+   ============================================================================ */
+
+.exv2-node {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.exv2-node__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  margin: 1px 0;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.exv2-node__row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.exv2-node__row--selected {
+  background: rgba(96, 165, 250, 0.15);
+}
+
+.exv2-node__row--selected:hover {
+  background: rgba(96, 165, 250, 0.2);
+}
+
+/* ============================================================================
+   Node Parts
+   ============================================================================ */
+
+.exv2-node__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.exv2-node__toggle:hover {
+  opacity: 0.8;
+}
+
+.exv2-node__spacer {
+  display: inline-block;
+  width: 12px;
+  flex-shrink: 0;
+}
+
+.exv2-node__idx {
+  font-family: ui-monospace, 'SF Mono', Monaco, monospace;
+  font-size: 10px;
+  color: #666;
+  flex-shrink: 0;
+  min-width: 24px;
+  text-align: right;
+  margin-right: 4px;
+}
+
+.exv2-node__icon {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.exv2-node__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #aaa;
+  font-size: 12px;
+}
+
+.exv2-node__tokens {
+  font-size: 10px;
+  color: #4ade80;
+  flex-shrink: 0;
+}
+
+.exv2-node__meta {
+  font-size: 11px;
+  color: #888;
+  flex-shrink: 0;
+}
+
+.exv2-node__time {
+  font-size: 10px;
+  color: #666;
+  flex-shrink: 0;
+  font-family: ui-monospace, 'SF Mono', Monaco, monospace;
+}
+
+/* ============================================================================
+   Arrow Icon
+   ============================================================================ */
+
+.exv2-arrow {
+  transition: transform 0.15s ease;
+}
+
+.exv2-arrow--open {
+  transform: rotate(-90deg);
+}
+
+/* ============================================================================
+   Children (nested list)
+   ============================================================================ */
+
+.exv2-children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  padding-left: 20px;
+}
+
+/* ============================================================================
+   Node Variants
+   ============================================================================ */
+
+/* Exchange node */
+.exv2-node--exchange > .exv2-node__row {
+  padding: 6px 8px;
+}
+
+/* Turn node */
+.exv2-node--turn > .exv2-node__row {
+  padding: 4px 8px;
+}
+
+/* Parallel group */
+.exv2-node--parallel > .exv2-node__row {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* Empty state */
+.exv2-node--empty > .exv2-node__row {
+  color: #666;
+  font-style: italic;
+  justify-content: center;
+  padding: 20px;
+}
+
+/* ============================================================================
+   Token Weight Indicators
+   ============================================================================ */
+
+.exv2-node--tokens-light > .exv2-node__row {
+  border-left: 2px solid rgba(74, 222, 128, 0.3);
+}
+
+.exv2-node--tokens-medium > .exv2-node__row {
+  border-left: 2px solid rgba(250, 204, 21, 0.5);
+}
+
+.exv2-node--tokens-large > .exv2-node__row {
+  border-left: 2px solid rgba(251, 146, 60, 0.6);
+}
+
+.exv2-node--tokens-heavy > .exv2-node__row {
+  border-left: 2px solid rgba(248, 113, 113, 0.7);
+  background: rgba(248, 113, 113, 0.05);
+}
+
+/* ============================================================================
+   Spinner (archiving)
+   ============================================================================ */
+
+.exv2-spinner {
+  display: inline-block;
+  animation: exv2-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes exv2-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ============================================================================
+   Context Menu
+   ============================================================================ */
+
+.exv2-menu {
+  position: fixed;
+  z-index: 9999;
+  min-width: 180px;
+  padding: 4px 0;
+  background: #1e1e1e;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  font-size: 13px;
+}
+
+.exv2-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: #e0e0e0;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+
+.exv2-menu__item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.exv2-menu__item--danger {
+  color: #f87171;
+}
+
+.exv2-menu__item--danger:hover {
+  background: rgba(248, 113, 113, 0.15);
+}
+
+.exv2-menu__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  flex-shrink: 0;
+}
+
+/* ============================================================================
+   Light Theme
+   ============================================================================ */
+
+[data-theme="light"] .exv2 {
+  background: var(--color-bg-primary, #fff);
+}
+
+[data-theme="light"] .exv2__header {
+  border-bottom-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .exv2-node__row:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="light"] .exv2-node__row--selected {
+  background: rgba(96, 165, 250, 0.1);
+}
+
+[data-theme="light"] .exv2-node__row--selected:hover {
+  background: rgba(96, 165, 250, 0.15);
+}
+
+[data-theme="light"] .exv2-menu {
+  background: #fff;
+  border-color: rgba(0, 0, 0, 0.1);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+}
+
+[data-theme="light"] .exv2-menu__item {
+  color: #333;
+}
+
+[data-theme="light"] .exv2-menu__item:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="light"] .exv2__preview {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="light"] .exv2__preview-header {
+  background: rgba(0, 0, 0, 0.05);
+  border-bottom-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .exv2--with-preview .exv2__tree-section {
+  border-bottom-color: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme="light"] .exv2__banner {
+  background: rgba(255, 180, 0, 0.08);
+  border-bottom-color: rgba(255, 180, 0, 0.15);
+}
+
+/* ============================================================================
+   Mobile
+   ============================================================================ */
+
+@media (max-width: 767px) {
+  .exv2__tree {
+    padding: 6px;
+    font-size: 14px;
+  }
+
+  .exv2-node__row {
+    padding: 10px 8px;
+  }
+
+  .exv2-children {
+    padding-left: 16px;
+  }
+
+  .exv2__header {
+    padding: 10px 12px;
+  }
+}
+
+/* ============================================================================
+   Reduced Motion
+   ============================================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  .exv2-arrow {
+    transition: none;
+  }
+
+  .exv2-spinner {
+    animation: none;
+  }
+}

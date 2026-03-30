@@ -17,6 +17,7 @@ import type { SessionDataTurn } from '../../hooks/useSessionData';
 import { TurnCard } from '../StreamingTurnsView/cards';
 import { ClientContext } from '../StreamingTurnsView/cards/ClientContext';
 import { SystemPromptView } from './SystemPromptView';
+import { ExchangesV2 } from '../ExchangesV2';
 import { createLogger } from '../../utils/debugLog';
 import './ContextTabView.css';
 
@@ -895,7 +896,14 @@ const ExchangeNode = memo(function ExchangeNode({
         {...longPressHandlers}
         onContextMenu={handleContextMenu}
       >
-        <span className="ctx-tree-node__toggle" onClick={(e) => { e.stopPropagation(); onToggle(); }}>
+        <span
+          className="ctx-tree-node__toggle"
+          onClick={(e) => { e.stopPropagation(); onToggle(); }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onMouseUp={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+          onTouchEnd={(e) => e.stopPropagation()}
+        >
           {hasChildren ? <Arrow open={isExpanded} /> : <span className="ctx-tree-node__spacer" />}
         </span>
         <span className="ctx-tree-node__turn-num">{firstTurnIdx}</span>
@@ -1012,7 +1020,7 @@ interface ContextTabViewProps {
 }
 
 // Sub-tab type for context view
-type ContextSubTab = 'exchanges' | 'system';
+type ContextSubTab = 'exchanges' | 'exchangesv2' | 'system';
 
 export const ContextTabView = memo(function ContextTabView({
   sessionId,
@@ -1195,6 +1203,12 @@ export const ContextTabView = memo(function ContextTabView({
             Exchanges
           </button>
           <button
+            className={`ctx-tab-view__subtab ${activeSubTab === 'exchangesv2' ? 'ctx-tab-view__subtab--active' : ''}`}
+            onClick={() => setActiveSubTab('exchangesv2')}
+          >
+            v2
+          </button>
+          <button
             className={`ctx-tab-view__subtab ${activeSubTab === 'system' ? 'ctx-tab-view__subtab--active' : ''}`}
             onClick={() => setActiveSubTab('system')}
           >
@@ -1221,6 +1235,25 @@ export const ContextTabView = memo(function ContextTabView({
           sessionId={sessionId}
           client={client}
           isLoading={isLoading}
+        />
+      )}
+
+      {/* ExchangesV2 view */}
+      {activeSubTab === 'exchangesv2' && (
+        <ExchangesV2
+          sessionId={sessionId}
+          turns={turns}
+          rawTurns={rawTurns}
+          client={client}
+          totalTokens={totalTokens}
+          onSelectTurn={onSelectTurn}
+          onExchangeAction={onExchangeAction}
+          onDeleteTurn={onDeleteTurn}
+          onAddToLinkStash={onAddToLinkStash}
+          onLoadFullHistory={onLoadFullHistory}
+          isLoading={isLoading}
+          archivingTurnIds={archivingTurnIds}
+          isLoadingHistory={isLoadingHistory}
         />
       )}
 
