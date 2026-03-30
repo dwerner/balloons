@@ -428,6 +428,9 @@ class ForkManager:
         # Inherit loaded domains from parent
         if current_session.loaded_domains:
             child_session.loaded_domains = current_session.loaded_domains.copy()
+        # Inherit backend/model configuration from parent
+        if current_session.backend_name:
+            child_session.backend_name = current_session.backend_name
 
         # Generate fork_id to share between parent and child
         fork_id = str(uuid.uuid4())

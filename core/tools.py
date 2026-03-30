@@ -184,22 +184,44 @@ BALLOON_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "balloon",
-            "description": "Send a message or notification to the user through the Balloons UI. Use this to provide status updates, ask questions, or display information that should be highlighted in the chat interface.",
+            "name": "ask_user",
+            "description": """Ask the user a question and wait for their response. Use this when you need clarification, confirmation, or input before proceeding.
+
+IMPORTANT: When you call this tool, the agentic loop will STOP and wait for the user to respond. The user's response will be returned as the tool result.
+
+Use this tool when:
+- You need clarification about requirements or preferences
+- You want confirmation before taking a significant action
+- You're unsure which approach the user prefers
+- You need additional information to proceed
+
+Do NOT use this tool for:
+- Rhetorical questions in your response text
+- Status updates (just write them in your response)
+- Questions you can answer yourself
+
+Example: "Which database would you prefer - PostgreSQL or SQLite?"
+Example: "Should I proceed with deleting these 50 files?"
+Example: "What authentication method would you like to use?"
+""",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "message": {
+                    "question": {
                         "type": "string",
-                        "description": "The message to display to the user"
+                        "description": "The question to ask the user. Be clear and specific."
                     },
-                    "type": {
+                    "context": {
                         "type": "string",
-                        "enum": ["info", "warning", "error", "success", "question"],
-                        "description": "The type of message (affects styling). Defaults to 'info'."
+                        "description": "Optional additional context to help the user answer (e.g., tradeoffs, implications)"
+                    },
+                    "options": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional list of suggested options for the user to choose from"
                     }
                 },
-                "required": ["message"]
+                "required": ["question"]
             }
         }
     },
@@ -493,7 +515,7 @@ The speech will be queued and played sequentially. The user can stop speech at a
 
 # Names of balloon tools for easy checking (includes all non-standard tools)
 BALLOON_TOOL_NAMES = {
-    "balloon", "propose_fork", "propose_merge", "create_slide",
+    "ask_user", "propose_fork", "propose_merge", "create_slide",
     "list_links", "follow_link", "search_linked_session", "session_info",
     "speak", "play_midi",
     # Watcher mode tools

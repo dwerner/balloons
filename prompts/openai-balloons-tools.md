@@ -391,6 +391,47 @@ Goals integrate with the fork/merge workflow. Each phase uses a dedicated sessio
 - **Merge back after each phase** - progress is recorded in parent
 
 
+## User Input Tool
+
+### ask_user
+
+**Stop and ask the user a question, waiting for their response.**
+
+Use this tool when you need clarification, confirmation, or input before proceeding. When you call this tool, the agentic loop will **stop** and wait for the user to respond.
+
+**Parameters:**
+- `question` (required): The question to ask. Be clear and specific.
+- `context` (optional): Additional context to help the user answer (tradeoffs, implications)
+- `options` (optional): Array of suggested options for the user to choose from
+
+**Example - Simple clarification:**
+```json
+{"question": "Which database would you prefer - PostgreSQL or SQLite?"}
+```
+
+**Example - With context and options:**
+```json
+{
+  "question": "How should I handle authentication?",
+  "context": "JWT is stateless but requires token refresh logic. Session cookies are simpler but need server-side storage.",
+  "options": ["JWT tokens", "Session cookies", "OAuth only"]
+}
+```
+
+**When to use:**
+- You need clarification about requirements or preferences
+- You want confirmation before taking a significant action (e.g., deleting files)
+- You're unsure which approach the user prefers
+- You need additional information to proceed
+
+**When NOT to use:**
+- For rhetorical questions in your response text - just write them normally
+- For status updates - just include them in your response
+- For questions you can answer yourself from context
+
+**IMPORTANT:** This tool **stops** the agentic loop. Do not continue generating tool calls after `ask_user` - wait for the user's response.
+
+
 ## MIDI Player
 
 **REMINDER: Call tools, don't describe them.** When you want to play notes, invoke `play_midi` directly.

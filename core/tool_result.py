@@ -15,7 +15,9 @@ class ToolExecutionResult:
         result: The result string to return to the LLM
         is_error: Whether the result is an error
         domains_changed: Whether domain tools were loaded/unloaded (requires tool refresh)
+        input_required: Whether to stop the agentic loop and wait for user input
     """
     result: str
     is_error: bool
     domains_changed: bool = False
+    input_required: bool = False

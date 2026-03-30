@@ -125,7 +125,7 @@ class StreamEvent:
         - "error": Error occurred, data is error message
         - "rate_limit": Rate limit hit, data is error message with reset time
         - "cancelled": Stream was cancelled
-        - "input_required": Claude is asking a question (non-interactive mode), data is message
+        - "input_required": Model used ask_user tool and is waiting for user response
     """
     event_type: str
     data: Any = None
@@ -388,7 +388,7 @@ class SessionRunner:
             self._status = RunnerStatus.IDLE  # Not an error - just needs input
             debug_log.info(f"Input required: {e}", session_id=self.session.id, category=Category.RUNNER)
             await self._finalize_stream()
-            self._result.error = "Claude is asking a question"
+            self._result.error = "Model requested user input"
             yield self._make_event("input_required", str(e))
         except StreamTimeoutError as e:
             self._status = RunnerStatus.ERROR
@@ -544,7 +544,7 @@ class SessionRunner:
             self._status = RunnerStatus.IDLE  # Not an error - just needs input
             debug_log.info(f"Input required: {e}", session_id=self.session.id, category=Category.RUNNER)
             await self._finalize_stream()
-            self._result.error = "Claude is asking a question"
+            self._result.error = "Model requested user input"
             await self._event_queue.put(self._make_event("input_required", str(e)))
         except StreamTimeoutError as e:
             self._status = RunnerStatus.ERROR

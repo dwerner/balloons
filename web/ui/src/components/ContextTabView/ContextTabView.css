@@ -638,3 +638,355 @@
 [data-theme="light"] .ctx-tab-view--with-preview .ctx-tab-view__tree-section {
   border-bottom-color: rgba(0, 0, 0, 0.1);
 }
+
+/* ===== Analysis Tab Styles ===== */
+.analysis-tab {
+  padding: 16px;
+  overflow-y: auto;
+}
+
+/* Summary cards */
+.analysis-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.analysis-summary__card {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.analysis-summary__card--tokens {
+  border-left: 3px solid #3b82f6;
+}
+
+.analysis-summary__card--turns {
+  border-left: 3px solid #10b981;
+}
+
+.analysis-summary__card--exchanges {
+  border-left: 3px solid #8b5cf6;
+}
+
+.analysis-summary__label {
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 8px;
+}
+
+.analysis-summary__value {
+  font-size: 24px;
+  font-weight: 600;
+  color: #fff;
+}
+
+/* Token usage bars */
+.analysis-token-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.analysis-token-bar__label {
+  width: 80px;
+  font-size: 13px;
+  color: #ccc;
+}
+
+.analysis-token-bar__track {
+  flex: 1;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.analysis-token-bar__fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.analysis-token-bar__value {
+  width: 60px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #888;
+  text-align: right;
+}
+
+/* Turn type breakdown section */
+.analysis-turn-types {
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 24px;
+}
+
+.analysis-turn-types__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ccc;
+  margin: 0 0 16px;
+}
+
+/* Charts */
+.analysis-chart {
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 24px;
+}
+
+.analysis-chart__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ccc;
+  margin: 0 0 16px;
+}
+
+.analysis-chart__empty {
+  color: #666;
+  font-style: italic;
+  padding: 20px;
+  text-align: center;
+}
+
+.analysis-chart--exchange .analysis-chart__bars {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.analysis-chart__bar-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.analysis-chart__bar-label {
+  width: 80px;
+  font-size: 12px;
+  color: #888;
+}
+
+.analysis-chart__bar-track {
+  flex: 1;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.analysis-chart__bar-fill {
+  height: 100%;
+  background: #3b82f6;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.analysis-chart__bar-value {
+  width: 60px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #888;
+  text-align: right;
+}
+
+/* Pie chart */
+.analysis-pie-chart {
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 24px;
+}
+
+.analysis-pie-chart__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ccc;
+  margin: 0 0 16px;
+}
+
+.analysis-pie-chart__empty {
+  color: #666;
+  font-style: italic;
+  padding: 20px;
+  text-align: center;
+}
+
+.analysis-pie-chart__legend {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.analysis-pie-legend__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.analysis-pie-legend__color {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.analysis-pie-legend__color--user {
+  background: #3b82f6;
+}
+
+.analysis-pie-legend__color--assistant {
+  background: #10b981;
+}
+
+.analysis-pie-legend__color--system {
+  background: #f59e0b;
+}
+
+.analysis-pie-legend__color--tool {
+  background: #8b5cf6;
+}
+
+.analysis-pie-legend__label {
+  font-size: 13px;
+  color: #ccc;
+}
+
+/* Suggestions */
+.analysis-suggestions {
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.analysis-suggestions__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #ccc;
+  margin: 0 0 16px;
+}
+
+.analysis-suggestions__empty {
+  color: #888;
+  font-style: italic;
+  text-align: center;
+  padding: 20px;
+}
+
+.analysis-suggestions__list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.analysis-suggestion {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.analysis-suggestion--high {
+  border-left: 3px solid #f87171;
+}
+
+.analysis-suggestion--medium {
+  border-left: 3px solid #f59e0b;
+}
+
+.analysis-suggestion--low {
+  border-left: 3px solid #10b981;
+}
+
+.analysis-suggestion__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.analysis-suggestion__type {
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.analysis-suggestion__priority {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.analysis-suggestion--high .analysis-suggestion__priority {
+  color: #f87171;
+}
+
+.analysis-suggestion--medium .analysis-suggestion__priority {
+  color: #f59e0b;
+}
+
+.analysis-suggestion--low .analysis-suggestion__priority {
+  color: #10b981;
+}
+
+.analysis-suggestion__description {
+  font-size: 12px;
+  color: #aaa;
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Light theme support for analysis */
+[data-theme="light"] .analysis-tab {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="light"] .analysis-summary__card {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .analysis-summary__label {
+  color: #666;
+}
+
+[data-theme="light"] .analysis-summary__value {
+  color: #333;
+}
+
+[data-theme="light"] .analysis-token-bar__label,
+[data-theme="light"] .analysis-token-bar__value,
+[data-theme="light"] .analysis-chart__bar-label,
+[data-theme="light"] .analysis-chart__bar-value,
+[data-theme="light"] .analysis-pie-legend__label {
+  color: #666;
+}
+
+[data-theme="light"] .analysis-suggestions,
+[data-theme="light"] .analysis-chart,
+[data-theme="light"] .analysis-pie-chart {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="light"] .analysis-suggestion {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="light"] .analysis-suggestion__type {
+  color: #333;
+}
+
+[data-theme="light"] .analysis-suggestion__description {
+  color: #555;
+}

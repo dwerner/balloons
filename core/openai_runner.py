@@ -17,6 +17,7 @@ from models import (
 )
 from .base_runner import BaseRunner, RunnerEvent, SteeringCapability
 from .debug_log import debug_log, dump_failed_json, perf_marker, Category
+from .exceptions import InputRequiredError
 from .tools import get_tools_for_request
 from .tool_executor import execute_tool
 from .tool_result import ToolExecutionResult
@@ -501,9 +502,11 @@ class OpenAICompatibleRunner(BaseRunner):
                     )
 
                     # Handle both legacy tuple and new ToolExecutionResult
+                    input_required = False
                     if isinstance(tool_result, ToolExecutionResult):
                         result = tool_result.result
                         is_error = tool_result.is_error
+                        input_required = tool_result.input_required
                         # Check if domain tools changed (load_domain/unload_domain)
                         if tool_result.domains_changed:
                             tools = get_tools_for_request(allowed_tools, disable_tools)
@@ -528,6 +531,15 @@ class OpenAICompatibleRunner(BaseRunner):
                         "tool_call_id": tc["id"],
                         "content": result,
                     })
+
+                    # Check if the tool requested user input (ask_user tool)
+                    if input_required:
+                        debug_log.info(
+                            f"Tool {tool_name} requested user input, stopping agentic loop",
+                            category=Category.RUNNER,
+                            run_id=self._run_id,
+                        )
+                        raise InputRequiredError(result)
 
                     # Check for steering after EACH tool result
                     # This enables boundary-aware injection (like Claude Code's h2A queue)

@@ -188,8 +188,8 @@ async def execute_tool(
             return await execute_grep(args, working_dir)
         elif name == "List":
             return await execute_list(args, working_dir)
-        elif name == "balloon":
-            return execute_balloon(args)
+        elif name == "ask_user":
+            return execute_ask_user(args)
         elif name == "propose_fork":
             return execute_propose_fork(args)
         elif name == "propose_merge":
@@ -534,31 +534,47 @@ async def _grep_fallback(
         return f"Error: {e}", True
 
 
-def execute_balloon(args: dict) -> tuple[str, bool]:
-    """Handle a balloon tool call.
+def execute_ask_user(args: dict) -> ToolExecutionResult:
+    """Handle an ask_user tool call.
 
-    The balloon tool is used by the model to send messages through the UI.
-    The actual display is handled by the UI layer - this just validates
-    the arguments and returns an acknowledgment.
+    This tool signals that the model wants to ask the user a question
+    and wait for a response. The UI layer handles displaying the question
+    and collecting the user's response.
+
+    The key mechanism is setting input_required=True in the result, which
+    tells the runner to stop the agentic loop and wait for user input.
 
     Args:
-        args: Tool arguments containing 'message' and optional 'type'
+        args: Tool arguments containing 'question' and optional 'context', 'options'
 
     Returns:
-        Tuple of (result_string, is_error)
+        ToolExecutionResult with input_required=True to stop the loop
     """
-    message = args.get("message")
-    if not message:
-        return "Error: message is required", True
+    question = args.get("question")
+    if not question:
+        return ToolExecutionResult("Error: question is required", True)
 
-    msg_type = args.get("type", "info")
-    valid_types = {"info", "warning", "error", "success", "question"}
-    if msg_type not in valid_types:
-        msg_type = "info"
+    context = args.get("context", "")
+    options = args.get("options", [])
 
-    # The actual display happens in the UI layer via the tool events
-    # We just acknowledge that the balloon was received
-    return f"Balloon displayed: [{msg_type}] {message}", False
+    # Build a formatted question for display
+    parts = [f"**Question:** {question}"]
+    if context:
+        parts.append(f"\n**Context:** {context}")
+    if options:
+        parts.append("\n**Options:**")
+        for i, opt in enumerate(options, 1):
+            parts.append(f"  {i}. {opt}")
+
+    formatted_question = "\n".join(parts)
+
+    # Return with input_required=True to stop the agentic loop
+    # The runner will emit this as the tool result, then raise InputRequiredError
+    return ToolExecutionResult(
+        result=formatted_question,
+        is_error=False,
+        input_required=True,
+    )
 
 
 async def execute_list(args: dict, working_dir: str) -> tuple[str, bool]:

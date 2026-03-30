@@ -239,7 +239,7 @@ class CancelledAction(StreamingAction):
 
 @dataclass
 class InputRequiredAction(StreamingAction):
-    """Claude is asking a question (non-interactive mode)."""
+    """Model is asking for user input via ask_user tool."""
     message: str
 
 

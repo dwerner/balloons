@@ -2727,8 +2727,8 @@ class SessionManagerService:
             await self._process_queued_messages(session_id)
 
         elif event_type == "input_required":
-            # Claude is asking for input - this shouldn't happen for non-interactive frontends
-            # Mark as completed since we can't respond
+            # Model is asking for user input via ask_user tool
+            # Complete the stream normally - user will respond with next message
 
             # Get cumulative token counts from stream state
             stream = self._stream_state.get_stream(ctx.exchange_id)
