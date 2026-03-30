@@ -4,7 +4,7 @@
 
 **Primary Use Case**: You've kicked off a coding task with Claude, stepped away from your desk, and want to check what it's done so far. Pull out your phone, see the diff, understand the changes.
 
-**Why mobile-only?** The TUI already has access to desktop git tools (vim, lazygit, etc.). This view is specifically for the web UI where you're likely on a phone reviewing agent work remotely.
+**Why mobile-first?** This view is specifically for the web UI where you're likely on a phone reviewing agent work remotely. The goal is fast read-only inspection of agent-generated changes away from your desk.
 
 ## User Story
 

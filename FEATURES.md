@@ -4,7 +4,9 @@
 
 ## Overview
 
-Balloons is a TUI (Terminal User Interface) chat client for Claude, built with Textual. It provides session management, context control, and parallel conversation workflows.
+Balloons is a headless server and web-based conversation platform for LLM-powered coding agents. It provides session management, context control, tool use, and parallel conversation workflows over a WebSocket API.
+
+**Status note:** The Textual TUI is dead and unsupported, and `:commands` are dead and unsupported.
 
 ---
 
@@ -29,7 +31,7 @@ Sessions are the primary unit of conversation state.
 | `title` | string | User-set or LLM-generated title |
 | `summary` | string | Session summary |
 
-**Storage**: Sessions persist to `~/.balloons/sessions/{id}.json`
+**Storage**: Sessions are stored through the current Rust-backed persistence layer, with legacy JSON paths retained only for migration and cleanup compatibility.
 
 ### Message Model
 
@@ -56,59 +58,23 @@ Each turn can be marked with a context mode that controls how it's included when
 | **COMPRESS** | LLM summarizes turn before fork starts |
 | **DROP** | Exclude from fork context |
 
-### Context Tree Widget
+### Context Selection and Curation
 
-The left panel provides a tree view of all sessions and their turns:
+Supported clients expose session and turn context controls so users can:
 
-- **Session nodes**: Show title/ID, message count, token count
-- **Turn nodes**: Show role, preview, token count
-- **Tool use nodes**: Expandable under assistant turns
-- **Visual indicators**: Streaming spinners, context mode colors
-
-**Keyboard shortcuts in tree**:
-| Key | Action |
-|-----|--------|
-| Space | Cycle context mode (COPY → COMPRESS → DROP) |
-| Enter | Activate/navigate to session |
-| `a` | Select all turns in current session |
-| `n` | Deselect all turns in current session |
-| `/` | Search |
-| `d` / Delete | Delete turn (with confirmation) |
-
-**Sorting options**:
-- Recently used (modified_desc) - default
-- Least recently used (modified_asc)
-- Newest created (date_desc)
-- Oldest created (date_asc)
-- Title A-Z / Z-A
-- Most/fewest messages
-- Most tokens
-- Highest cost
-
-Sort preference persists in config.
+- inspect sessions and their turns
+- review tool-use history alongside assistant turns
+- adjust per-turn context modes (COPY / COMPRESS / DROP)
+- navigate between related sessions and derived conversations
+- sort or filter session history according to the active client experience
 
 ---
 
 ## Session Forking & Merging
 
-### Fork Command
+### Forking and Merging
 
-Create a child session that inherits selected context.
-
-```
-:fork[=name] <prompt> [--bg]
-```
-
-| Parameter | Description |
-|-----------|-------------|
-| `=name` | Optional fork name (e.g., `:fork=auth-bug`) |
-| `prompt` | Initial prompt for the fork |
-| `--bg` | Run in background (stay in parent) |
-
-**Context inheritance**:
-1. COPY turns included verbatim
-2. COMPRESS turns summarized by LLM before fork starts
-3. DROP turns excluded
+Sessions support fork/merge workflows with explicit tracking:
 
 **Fork tracking**:
 - `parent_id`: Link to parent session
@@ -116,175 +82,52 @@ Create a child session that inherits selected context.
 - `fork_status`: "active", "merged", "abandoned"
 - `fork_point_turn`: Turn index in parent where forked
 
-### Merge Command
+**Merge behavior**:
+- Forks can be merged back to their parent with summary information
+- Merge markers are preserved in session history
+- Forks become concluded/read-only after merge depending on workflow
 
-Merge a fork back to its parent.
+### Derive Sessions
 
-```
-:merge [prompt]
-```
+The system also supports creating independent sessions from selected context without a parent/child relationship.
 
-- Optional prompt guides LLM summary generation
-- Fork becomes read-only after merge
-- Merge marker added to parent's chat log
+### Session Navigation
 
-### Derive Command
-
-Create an independent session with selected context (no parent relationship).
-
-```
-:derive <prompt>
-```
-
-### Switch Command
-
-Navigate between sessions/forks.
-
-```
-:switch [name]
-```
-
-Without name: shows picker. With name: switches to that fork.
-
----
-
-## Commands Reference
-
-| Command | Description |
-|---------|-------------|
-| `:new [prompt]` | Create new session, optionally with initial prompt |
-| `:fork[=name] <prompt> [--bg]` | Fork with selected context |
-| `:merge [prompt]` | Merge fork back to parent |
-| `:derive <prompt>` | New independent session with context |
-| `:switch [name]` | Switch to session/fork |
-| `:copy-turns` | Copy selected turns to new session |
-| `:query-with <prompt>` | Query with selected context, response to new session |
-| `:title <title>` | Set session title |
-| `:pwd` | Show working directory |
-| `:cd <path>` | Change working directory |
-| `:suspend <cmd>` | Suspend TUI, run interactive shell command |
-| `:!<cmd>` | Run shell command, send output to Claude |
-| `:reload` | Hot reload the app |
-| `:sup-start <cmd>` | Start supervised background process |
-| `:sup-start=name <cmd>` | Start with friendly name |
-| `:sup-list` | List processes (current session) |
-| `:sup-list --all` | List all processes |
-| `:sup-logs <id> [limit]` | Get process output |
-| `:sup-stop <id>` | Stop a process |
-
-### Legacy Commands (Backwards Compatible)
-
-| Command | Maps To |
-|---------|---------|
-| `:with <prompt>` | `:fork` with COMPRESS context |
-| `:with-copy <prompt>` | `:fork` with COPY context |
-| `:return [prompt]` | `:merge` |
-
----
-
-## UI Components
-
-### Main Layout
-
-```
-┌─────────────────────────────────────────────────────┐
-│ Breadcrumb (hidden unless in fork)                  │
-├──────────────┬──────────────────────────────────────┤
-│ Context Tree │ Chat Log                             │
-│              │                                      │
-│ - Sessions   │ - User messages                      │
-│   - Turns    │ - Assistant messages                 │
-│     - Tools  │ - Tool use/result widgets            │
-│              │ - Fork/merge markers                 │
-│              │                                      │
-├──────────────┴──────────────────────────────────────┤
-│ Tool Bar (enabled tools: Bash, Read, Edit, etc.)   │
-├─────────────────────────────────────────────────────┤
-│ Debug Pane (collapsed, toggle with Ctrl+G)         │
-├─────────────────────────────────────────────────────┤
-│ Status Bar (model, tokens, cost, working dir)      │
-├─────────────────────────────────────────────────────┤
-│ Input Box                                           │
-└─────────────────────────────────────────────────────┘
-```
-
-### Status Bar
-
-Displays:
-- Model name (abbreviated)
-- Token usage: current / context_window (percentage)
-- Cost in USD
-- Working directory (abbreviated path)
-- Follow indicator (when not auto-scrolling)
-- Background streaming count
-- Streaming spinner
-
-### Breadcrumb
-
-Shows navigation path when in a fork:
-```
-Main Session > auth-bug > deep-dive [merged]
-```
-
-Clickable to navigate up the hierarchy.
-
-### Tool Widgets
-
-Tool use and results display as collapsible widgets with:
-- Syntax highlighting for code
-- Diff view for edits
-- Truncation with expand on click
-- Context mode visual indicators
-
-### Fork/Merge Markers
-
-Visual markers in chat log showing:
-- Fork points (with link to child session)
-- Merge points (with summary)
-
----
-
-## Keyboard Shortcuts
-
-### Global
-
-| Key | Action |
-|-----|--------|
-| Ctrl+C / Ctrl+Q | Quit |
-| Escape | Cancel streaming / focus input |
-| Ctrl+T | Toggle context tree |
-| Ctrl+R | Toggle request pane |
-| Ctrl+G | Toggle debug pane |
-| Ctrl+Left/Right | Resize tree |
-| Ctrl+End | Scroll to bottom (follow) |
+Users can navigate between sessions, forks, and linked conversations in the supported UI surfaces.
 
 ---
 
 ## Backend Configuration
 
-Configure multiple LLM backends in `~/.balloons/config.yaml`:
+Configure backends in `~/.balloons/config.yaml`:
 
 ```yaml
 default_backend: claude
 
 backends:
   claude:
-    # Native Claude API (no base_url needed)
+    type: claude
+    context_window: 150000
 
-  llama70b:
-    base_url: "http://localhost:8080/v1"
-    api_key: "optional-key"
-    model: "llama-70b"
+  openrouter:
+    type: openai
+    base_url: https://openrouter.ai/api/v1
+    api_key: ${OPENROUTER_API_KEY}
+    model: anthropic/claude-sonnet-4
+    system_prompt: ~/.balloons/prompts/coding-assistant.md
 
-debug_log_file: /tmp/balloons_debug.log  # optional
+  ollama:
+    type: openai
+    base_url: http://localhost:11434/v1
+    api_key: ollama
+    model: llama3.2
+    system_prompt: ~/.balloons/prompts/minimal.md
+
+# Optional debug log persistence
+debug_log_file: /tmp/balloons_debug.log
 ```
 
-**CLI options**:
-- `--backend NAME` / `-b NAME`: Use specific backend
-- `--list-backends`: List available backends
-- `--resume ID` / `-r ID`: Resume session
-- `--new` / `-n`: Start new session
-- `--list` / `-l`: List sessions
+See `config/config.sample.yaml` for the full configuration surface, including optional WebSocket, auth, voice-input, sound, and report settings.
 
 ---
 
@@ -292,133 +135,141 @@ debug_log_file: /tmp/balloons_debug.log  # optional
 
 ### Event-Driven Model
 
-All sessions stream in background mode. A poll timer checks for events from all active sessions and dispatches to UI components.
+All sessions stream through an event-driven model. Backend services publish task-state and session-data events, and supported clients subscribe and react to those updates.
 
-**Event types**:
+### Task-state streaming events
+
+`TaskStateService` exposes fine-grained streaming events for rendering active exchanges and tool execution:
+
 | Event | Description |
 |-------|-------------|
-| `turn_started` | Stream began |
-| `text` | Text delta |
-| `tool_use` | Tool invocation |
-| `tool_result` | Tool completed |
-| `init` | Model/context info |
-| `result` | Usage statistics |
-| `done` | Stream complete |
-| `error` | Error occurred |
-| `rate_limit` | Rate limit hit |
-| `cancelled` | Stream cancelled |
-| `input_required` | Claude asking question |
+| `onContentDelta` | Text chunks streaming from the LLM |
+| `onTurnStarted` | A new user, assistant, or tool turn began |
+| `onTurnFinished` | A turn completed |
+| `onToolUseStarted` | A tool call began and its input may still be streaming |
+| `onToolInputDelta` | Partial tool input JSON streamed |
+| `onToolUse` | Full tool input is complete and execution begins |
+| `onToolResult` | Tool execution completed |
+| `onTaskStarted` | A task started |
+| `onTaskUpdated` | Task status or progress changed |
+| `onTaskCompleted` | A task completed successfully |
+| `onTaskError` | A task failed |
+| `onTaskCancelled` | A task was cancelled |
+
+### Session-data streaming events
+
+`SessionDataService` exposes session-oriented subscription events so clients can hydrate and update conversation state incrementally:
+
+| Event | Description |
+|-------|-------------|
+| `sessionDataTurnCreated` | A turn was created in a subscribed session |
+| `sessionDataTurnDelta` | Streaming turn content was updated |
+| `sessionDataTurnFinished` | A turn finished streaming |
+| `sessionDataStreamStarted` | A session stream started |
+| `sessionDataStreamDone` | A session stream completed successfully |
+| `sessionDataStreamProgress` | Session stream progress updated |
+| `sessionDataStreamError` | Streaming failed, was rate-limited, or was cancelled |
+| `sessionDataToolUseStarted` | A tool-use turn began |
+| `sessionDataToolInputDelta` | Tool input JSON streamed |
+| `sessionDataToolUse` | Tool input completed |
+| `sessionDataToolResult` | Tool execution completed |
+| `sessionDataHistoryChunk` | A chunk of historical turns arrived |
+| `sessionDataHistoryComplete` | Historical backfill completed |
+| `sessionDataTurnsDeleted` | Turns were deleted |
+| `sessionDataTurnsReordered` | Turn ordering was recomputed |
 
 ### Background Streaming
 
-Forks with `--bg` flag run in background:
-- Stay in parent session
-- WithWidget shows streaming progress
-- Status bar shows background count
-- Events polled and UI updated asynchronously
+Fork and task workflows can continue asynchronously while the user remains focused on other sessions or views:
+- work can continue outside the currently viewed session
+- clients can show background activity and progress indicators
+- events are delivered asynchronously through the service layer
 
 ---
 
 ## Process Supervisor
 
-The Process Supervisor manages long-running background processes (dev servers, watchers, builds) with streaming output capture. It allows the LLM to start processes and check on them later without blocking.
+The process supervisor manages long-running background processes such as dev servers, watchers, builds, and other session-associated commands.
 
-### Architecture
+### Supported surfaces
 
-The supervisor is implemented in Rust (`balloons-supervisor` crate) using:
-- **procstream** for async process execution with event streaming
-- **async-lock** and **async-channel** for concurrency primitives
-- **core-executor** for CPU-affine async execution
-- **PyO3** bindings exposed to Python
+The current architecture exposes supervisor functionality through both tool and service interfaces:
 
-### LLM Tools
+- LLM/tool access via:
+  - `supervisor_start`
+  - `supervisor_list`
+  - `supervisor_output`
+  - `supervisor_stop`
+- WebSocket/service access via `SupervisorStateService`
 
-The following tools are available for the LLM to manage processes:
+### Supervisor capabilities
 
-| Tool | Description |
-|------|-------------|
-| `supervisor_start` | Start a background process |
-| `supervisor_list` | List processes (current session by default) |
-| `supervisor_output` | Get captured output from a process |
-| `supervisor_stop` | Stop a running process |
+Supported capabilities include:
 
-**supervisor_start** parameters:
-- `command` (required): Shell command to execute
-- `name`: Optional friendly name (e.g., "dev-server")
-- `working_dir`: Working directory (defaults to session's)
-- `env`: Additional environment variables
+- starting a supervised process
+- listing processes for the current session or across sessions
+- retrieving captured process output and history
+- stopping a running process
+- sending input to interactive processes
+- inspecting configured execution hosts and their status
+- mapping backends to execution hosts where applicable
 
-**supervisor_output** parameters:
-- `process_id` (required): UUID of the process
-- `limit`: Max log entries to return (default 50)
+### Process model
 
-### CLI Commands
+Processes are represented with structured metadata including:
+- `process_id`
+- command
+- optional friendly name
+- host
+- session association
+- status
+- exit code (when finished)
+- start time and runtime
+- process type
 
-Users can manage processes directly via commands:
+### Output and history
 
-| Command | Description |
-|---------|-------------|
-| `:sup-start <cmd>` | Start a supervised process |
-| `:sup-start=name <cmd>` | Start with a friendly name |
-| `:sup-list` | List processes for current session |
-| `:sup-list --all` | List processes from all sessions |
-| `:sup-logs <id> [limit]` | Get output from a process |
-| `:sup-stop <id>` | Stop a process |
+Supervisor output is tracked as structured entries that include:
+- timestamp
+- source (`stdout`, `stderr`, `system`, or input history where applicable)
+- content
 
-### Process Lifecycle
+The service layer supports both real-time output streaming and paginated history retrieval.
 
-1. **Start**: Process is spawned via shell, assigned a UUID
-2. **Running**: stdout/stderr captured as `LogEntry` objects
-3. **Tracking**: Up to 10,000 log entries kept per process
-4. **Completion**: Exit code/signal captured, status updated
-5. **Session cleanup**: All session processes can be stopped on close
+### Event model
 
-### Process Status
-
-Processes have one of three states:
-
-```json
-{"state": "running", "pid": 12345}
-{"state": "exited", "code": 0, "signal": null}
-{"state": "failed", "error": "message"}
-```
-
-### Log Entries
-
-Each log entry contains:
-- `timestamp`: ISO datetime
-- `source`: "stdout", "stderr", or "system"
-- `content`: The log line text
+Supervisor state changes are exposed as events, including:
+- process started
+- process output
+- process stopped
+- host status changes
 
 ### Use Cases
 
-- **Dev servers**: Start `npm run dev` and check its output later
-- **Watchers**: Run `cargo watch -x test` in background
-- **Builds**: Start long builds and monitor progress
-- **Databases**: Start `docker-compose up` and verify it's running
+- running dev servers while continuing other work
+- monitoring build or test output asynchronously
+- checking background process status from the web client
+- managing remote or host-specific process execution
 
 ---
 
 ## Debug & Observability
 
-### Debug Pane
+### Debug Logging
 
-Collapsible panel showing:
-- Log entries grouped by Claude process run
-- Color-coded by level (ERROR, WARNING, INFO, DEBUG)
-- Auto-expands on errors
-- Toggle with Ctrl+G
+The current system exposes debug logging through `DebugLogService` and optional persisted log output.
+Supported observability capabilities include:
+- structured log entries for runtime and tool activity
+- severity/category-based inspection
+- log retrieval through service surfaces
+- optional file persistence via `debug_log_file`
 
-### Debug Log Persistence
+### Request and Session Inspection
 
-Set `debug_log_file` in config to persist logs to file.
-
-### Request Pane
-
-Toggle with Ctrl+R to see:
-- Raw request/response data
-- Session info
-- Message context
+Supported debugging surfaces may expose operational state needed to inspect active work, including:
+- session metadata
+- conversation/message context
+- runtime events and related diagnostics
 
 ---
 
@@ -426,64 +277,44 @@ Toggle with Ctrl+R to see:
 
 ### Prompt Submission
 
-1. User enters text in InputBox
-2. CommandParser checks for `:` prefix
-3. If command: execute handler
-4. If prompt: start streaming via SessionRunner
+1. A supported client submits a message or action through the WebSocket/RPC service layer.
+2. `SessionManagerService` routes the request into session orchestration and streaming execution.
+3. Task/session services emit incremental events as turns, tool calls, and results progress.
+4. Connected clients update their views from those emitted events and on-demand state reads.
 
 ### Context Building
 
-1. ContextTree tracks selected turns and their modes
-2. On fork/prompt: ContextBuilder assembles context string
-3. COPY messages included verbatim
-4. COMPRESS messages summarized by LLM
-5. DROP messages excluded
+1. Session state and selected turn history are loaded through the session data/context pipeline.
+2. Context modes determine how prior turns are included.
+3. COPY turns are included verbatim.
+4. COMPRESS turns are summarized before inclusion.
+5. DROP turns are excluded from derived context.
 
 ### Session Persistence
 
-Sessions auto-save on:
-- Message added
-- Usage updated
-- Title/settings changed
-- Fork/merge operations
+Session state is persisted incrementally through the current storage layer as conversation and metadata change, including events such as:
+- turn/message additions
+- usage/statistics updates
+- title or settings changes
+- fork/merge and related session-relationship updates
 
 ---
 
 ## File Structure
 
-```
+```text
 balloons/
-├── app.py              # Main application, event handling
-├── main.py             # CLI entry point
-├── session.py          # Session data model
-├── models.py           # Message, content blocks, events
-├── config.py           # Configuration management
-├── tokenizer.py        # Token counting
-├── claude_runner.py    # Claude API streaming
-├── core/
-│   ├── commands.py     # Command parsing
-│   ├── context.py      # Context building
-│   ├── runner.py       # SessionRunner (async streaming)
-│   ├── manager.py      # SessionManager (multi-session)
-│   ├── formatter.py    # Output formatting
-│   ├── debug_log.py    # Debug logging
-│   └── supervisor_tools.py  # Process supervisor tools
-├── balloons-rs/            # Rust backend (LMDB storage + process supervisor)
-│   └── crates/
-│       ├── balloons-core/      # Storage engine
-│       ├── balloons-supervisor/ # Process management
-│       └── balloons-py/        # PyO3 bindings
-└── widgets/
-    ├── chat_log.py     # Chat display
-    ├── context_tree.py # Session/turn tree
-    ├── input_box.py    # Text input
-    ├── status_bar.py   # Status display
-    ├── breadcrumb.py   # Fork navigation
-    ├── debug_pane.py   # Debug display
-    ├── tool_bar.py     # Tool toggles
-    ├── request_pane.py # Request inspector
-    ├── fork_marker.py  # Fork indicator
-    ├── merge_marker.py # Merge indicator
-    ├── with_widget.py  # Background session display
-    └── splitter.py     # Pane resizing
+├── headless.py               # Supported headless server entry point
+├── session.py                # Session model and persistence-heavy logic
+├── models.py                 # Shared message/content/event types
+├── config.py                 # Configuration loading
+├── claude_runner.py          # Claude streaming backend integration
+├── core/                     # Context building, runners, tools, debug helpers
+├── service/                  # WebSocket/RPC-facing service layer
+├── plugins/                  # Plugin integrations and domain extensions
+├── web/ui/                   # React web frontend
+├── config/                   # Sample and auxiliary configuration files
+└── balloons-rs/              # Rust-backed storage/process components
 ```
+
+This structure is intentionally high-level. Prefer the architecture and module docs over this section for detailed responsibilities, since the exact file layout is still evolving.

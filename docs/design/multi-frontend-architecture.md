@@ -1,7 +1,16 @@
-# Multi-Frontend Architecture
+# Multi-Frontend Architecture (Historical)
 
-This document describes the service-oriented architecture that enables Balloons to support
-multiple frontends (Textual TUI, future web UI, etc.) sharing a common backend.
+This document is retained as historical design context for the service-oriented split between backend services and clients.
+It does not describe the current supported product surface directly.
+
+## Still-useful ideas
+
+The enduring value here is the architectural direction:
+- services as the API boundary
+- transport/client separation from orchestration logic
+- generated types/clients from Python definitions
+
+The old Textual-TUI-specific material below should be treated as superseded implementation history.
 
 ## Overview
 

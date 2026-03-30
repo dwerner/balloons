@@ -252,6 +252,19 @@ class OpenAICompatibleRunner(BaseRunner):
                     })
                 continue
 
+            # Handle tool results specially - they use role="tool" in OpenAI format
+            # Tool results are stored with msg.role="tool" or msg.role="user" (legacy)
+            if msg.role == "tool":
+                # Extract tool result blocks and convert to OpenAI tool messages
+                for block in msg.content_blocks or []:
+                    if isinstance(block, ToolResultBlock):
+                        openai_messages.append({
+                            "role": "tool",
+                            "tool_call_id": block.tool_use_id,
+                            "content": block.content or "",
+                        })
+                continue
+
             role = "user" if msg.role == "user" else "assistant"
 
             # Use summary if in SUMMARIZE mode and summary exists
@@ -296,8 +309,13 @@ class OpenAICompatibleRunner(BaseRunner):
 
                 # Handle assistant messages with tool calls (proper OpenAI format)
                 if role == "assistant" and tool_use_blocks:
+                    # Client-only tools that don't have stored tool results
+                    # These are handled by the UI and don't execute on the backend
+                    CLIENT_ONLY_TOOLS = {"play_midi", "propose_fork", "propose_merge"}
+
                     # Build tool_calls array
                     tool_calls = []
+                    client_only_tool_ids = []  # Track which need synthetic results
                     for block in tool_use_blocks:
                         tool_calls.append({
                             "id": block.id,
@@ -307,6 +325,8 @@ class OpenAICompatibleRunner(BaseRunner):
                                 "arguments": json.dumps(block.input),
                             }
                         })
+                        if block.name in CLIENT_ONLY_TOOLS:
+                            client_only_tool_ids.append((block.id, block.name))
 
                     # Build assistant message with tool_calls
                     assistant_msg: dict = {
@@ -321,7 +341,17 @@ class OpenAICompatibleRunner(BaseRunner):
 
                     openai_messages.append(assistant_msg)
 
-                # Handle tool results (as separate "tool" role messages)
+                    # Add synthetic tool results for client-only tools
+                    # These tools don't have stored ToolResultBlocks because they're
+                    # handled entirely by the UI (fork/merge proposals, MIDI playback)
+                    for tool_id, tool_name in client_only_tool_ids:
+                        openai_messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_id,
+                            "content": f"[{tool_name}] Handled by UI",
+                        })
+
+                # Handle tool results from user messages (legacy format)
                 elif role == "user" and tool_result_blocks:
                     # Each tool result becomes a separate message
                     for block in tool_result_blocks:
@@ -376,7 +406,116 @@ class OpenAICompatibleRunner(BaseRunner):
             "content": new_prompt,
         })
 
+        # Post-process: Merge consecutive assistant tool_calls and reorder tool results
+        # OpenAI requires that all tool results immediately follow the assistant message
+        # that made the tool calls. When models make parallel calls, they may be stored
+        # as separate assistant messages. We need to merge these and collect their results.
+        openai_messages = self._reorder_tool_messages(openai_messages)
+
         return openai_messages
+
+    def _reorder_tool_messages(self, messages: list[dict]) -> list[dict]:
+        """Reorder messages to ensure tool results immediately follow their tool calls.
+
+        OpenAI requires that an assistant message with tool_calls must be immediately
+        followed by tool role messages for ALL those tool_call_ids before any other
+        message type.
+
+        This method uses a two-pass approach:
+        1. First pass: Build a map of tool_call_id -> tool result message
+        2. Second pass: When encountering assistant messages with tool_calls,
+           merge consecutive ones and pull in their results immediately after
+
+        Args:
+            messages: List of OpenAI message dicts
+
+        Returns:
+            Reordered message list with proper tool call/result ordering
+        """
+        if not messages:
+            return messages
+
+        # First pass: collect all tool results by their tool_call_id
+        tool_results_by_id: dict[str, dict] = {}
+        for msg in messages:
+            if msg.get("role") == "tool":
+                tool_call_id = msg.get("tool_call_id")
+                if tool_call_id:
+                    tool_results_by_id[tool_call_id] = msg
+
+        # Track which tool_call_ids have been consumed
+        consumed_tool_ids: set[str] = set()
+
+        # Second pass: build output with proper ordering
+        result = []
+        i = 0
+
+        while i < len(messages):
+            msg = messages[i]
+
+            # Skip tool messages - they'll be pulled in by their assistant message
+            if msg.get("role") == "tool":
+                i += 1
+                continue
+
+            # Check if this is an assistant message with tool_calls
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                # Collect all consecutive assistant tool_calls messages
+                merged_tool_calls = list(msg.get("tool_calls", []))
+                merged_content_parts = []
+                if msg.get("content"):
+                    merged_content_parts.append(msg["content"])
+
+                # Look ahead for more consecutive assistant tool_calls messages
+                j = i + 1
+                while j < len(messages):
+                    next_msg = messages[j]
+                    # Skip tool messages when looking for consecutive assistant tool_calls
+                    if next_msg.get("role") == "tool":
+                        j += 1
+                        continue
+                    if next_msg.get("role") == "assistant" and next_msg.get("tool_calls"):
+                        # Merge this into the current assistant message
+                        merged_tool_calls.extend(next_msg.get("tool_calls", []))
+                        if next_msg.get("content"):
+                            merged_content_parts.append(next_msg["content"])
+                        j += 1
+                    else:
+                        break
+
+                # Create the merged assistant message
+                merged_assistant: dict = {
+                    "role": "assistant",
+                    "tool_calls": merged_tool_calls,
+                }
+                if merged_content_parts:
+                    merged_assistant["content"] = "\n\n".join(merged_content_parts)
+                else:
+                    merged_assistant["content"] = None
+
+                result.append(merged_assistant)
+
+                # Collect tool results for all tool_call_ids in this merged message
+                for tc in merged_tool_calls:
+                    tc_id = tc["id"]
+                    if tc_id in tool_results_by_id and tc_id not in consumed_tool_ids:
+                        result.append(tool_results_by_id[tc_id])
+                        consumed_tool_ids.add(tc_id)
+                    elif tc_id not in consumed_tool_ids:
+                        # No tool result found - add synthetic one
+                        result.append({
+                            "role": "tool",
+                            "tool_call_id": tc_id,
+                            "content": "[Tool result not available]",
+                        })
+                        consumed_tool_ids.add(tc_id)
+
+                i = j
+            else:
+                result.append(msg)
+                i += 1
+
+        return result
 
     async def stream_response(
         self,

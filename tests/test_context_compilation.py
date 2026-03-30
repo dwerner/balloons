@@ -151,7 +151,10 @@ def conversation_with_tool_error():
 
 @pytest.fixture
 def conversation_with_multiple_tools():
-    """Conversation with multiple tool uses in sequence."""
+    """Conversation with multiple tool uses in sequence.
+
+    Note: Tool results use role="tool" (the production format) not role="assistant".
+    """
     return [
         Message(role="user", content="Find and read test files"),
         Message(
@@ -166,7 +169,7 @@ def conversation_with_multiple_tools():
             ],
         ),
         Message(
-            role="assistant",
+            role="tool",  # Tool results come from "tool" role
             content="",
             content_blocks=[
                 ToolResultBlock(
@@ -187,7 +190,7 @@ def conversation_with_multiple_tools():
             ],
         ),
         Message(
-            role="assistant",
+            role="tool",  # Tool results come from "tool" role
             content="",
             content_blocks=[
                 ToolResultBlock(
@@ -586,6 +589,289 @@ class TestOpenAIContextFormat:
         assert result[2]["role"] == "assistant"
         assert result[3]["role"] == "user"    # New prompt
 
+    def test_tool_role_message_converts_to_openai_tool(self, runner):
+        """Messages with role='tool' are properly converted to OpenAI tool format.
+
+        This tests the fix for the bug where msg.role='tool' was being mapped
+        to role='assistant', causing OpenAI API errors about missing tool responses.
+        """
+        messages = [
+            Message(role="user", content="Read the config file"),
+            Message(
+                role="assistant",
+                content="",
+                content_blocks=[
+                    TextBlock(text="I'll read that file for you."),
+                    ToolUseBlock(
+                        id="tool-abc123",
+                        name="Read",
+                        input={"file_path": "/etc/config.yaml"},
+                    ),
+                ],
+            ),
+            # This is how tool results are stored in production (role="tool")
+            Message(
+                role="tool",
+                content="",
+                content_blocks=[
+                    ToolResultBlock(
+                        tool_use_id="tool-abc123",
+                        content="key: value\nport: 8080",
+                    ),
+                ],
+            ),
+        ]
+
+        result = runner.build_messages(messages, "next")
+
+        # Find the tool role message
+        tool_msgs = [m for m in result if m.get("role") == "tool"]
+        assert len(tool_msgs) == 1, f"Expected 1 tool message, got {len(tool_msgs)}"
+        assert tool_msgs[0]["tool_call_id"] == "tool-abc123"
+        assert "key: value" in tool_msgs[0]["content"]
+
+        # Verify assistant message has tool_calls
+        assistant_msgs = [m for m in result if m.get("tool_calls")]
+        assert len(assistant_msgs) == 1
+        assert assistant_msgs[0]["tool_calls"][0]["id"] == "tool-abc123"
+
+    def test_client_only_tools_get_synthetic_results(self, runner):
+        """Client-only tools (propose_fork, propose_merge, play_midi) get synthetic tool results.
+
+        These tools are handled by the UI and don't have stored ToolResultBlocks.
+        The OpenAI API requires every tool_call to have a corresponding tool response,
+        so we inject synthetic results when building messages from history.
+        """
+        messages = [
+            Message(role="user", content="Let's create a fork"),
+            Message(
+                role="assistant",
+                content="",
+                content_blocks=[
+                    TextBlock(text="I'll propose a fork for you."),
+                    ToolUseBlock(
+                        id="balloons-abc123",
+                        name="propose_fork",
+                        input={
+                            "name": "feature-branch",
+                            "description": "Work on feature",
+                            "context_plan": [],
+                        },
+                    ),
+                ],
+            ),
+            # Note: No ToolResultBlock for propose_fork - it's handled by UI
+            Message(role="user", content="Thanks, fork accepted"),
+        ]
+
+        result = runner.build_messages(messages, "next")
+
+        # Find the tool messages
+        tool_msgs = [m for m in result if m.get("role") == "tool"]
+        assert len(tool_msgs) == 1, f"Expected 1 synthetic tool result, got {len(tool_msgs)}"
+        assert tool_msgs[0]["tool_call_id"] == "balloons-abc123"
+        assert "propose_fork" in tool_msgs[0]["content"]
+        assert "Handled by UI" in tool_msgs[0]["content"]
+
+        # Verify assistant message has tool_calls
+        assistant_msgs = [m for m in result if m.get("tool_calls")]
+        assert len(assistant_msgs) == 1
+        assert assistant_msgs[0]["tool_calls"][0]["id"] == "balloons-abc123"
+        assert assistant_msgs[0]["tool_calls"][0]["function"]["name"] == "propose_fork"
+
+    def test_multiple_client_only_tools_all_get_results(self, runner):
+        """Multiple client-only tools in one message all get synthetic results."""
+        messages = [
+            Message(role="user", content="Fork and play music"),
+            Message(
+                role="assistant",
+                content="",
+                content_blocks=[
+                    ToolUseBlock(
+                        id="balloons-fork1",
+                        name="propose_fork",
+                        input={"name": "branch1", "description": "First", "context_plan": []},
+                    ),
+                    ToolUseBlock(
+                        id="balloons-midi1",
+                        name="play_midi",
+                        input={"notes": "C4 D4 E4", "bpm": 120},
+                    ),
+                ],
+            ),
+        ]
+
+        result = runner.build_messages(messages, "next")
+
+        # Find the tool messages - should have 2 synthetic results
+        tool_msgs = [m for m in result if m.get("role") == "tool"]
+        assert len(tool_msgs) == 2, f"Expected 2 synthetic tool results, got {len(tool_msgs)}"
+
+        tool_call_ids = {m["tool_call_id"] for m in tool_msgs}
+        assert "balloons-fork1" in tool_call_ids
+        assert "balloons-midi1" in tool_call_ids
+
+    def test_consecutive_assistant_tool_calls_are_merged(self, runner):
+        """Consecutive assistant messages with tool_calls are merged.
+
+        When models make parallel tool calls, they may be stored as separate
+        assistant messages. OpenAI requires these to be merged into one message
+        with all tool_calls, followed immediately by all tool results.
+        """
+        messages = [
+            Message(role="user", content="Do analysis"),
+            # First assistant message with one tool call
+            Message(
+                role="assistant",
+                content="",
+                content_blocks=[
+                    ToolUseBlock(
+                        id="call_1",
+                        name="Bash",
+                        input={"command": "ls"},
+                    ),
+                ],
+            ),
+            # Second assistant message with another tool call (parallel)
+            Message(
+                role="assistant",
+                content="",
+                content_blocks=[
+                    ToolUseBlock(
+                        id="call_2",
+                        name="Read",
+                        input={"file_path": "README.md"},
+                    ),
+                ],
+            ),
+            # Tool results come later
+            Message(
+                role="tool",
+                content="",
+                content_blocks=[
+                    ToolResultBlock(tool_use_id="call_1", content="file1.txt"),
+                ],
+            ),
+            Message(
+                role="tool",
+                content="",
+                content_blocks=[
+                    ToolResultBlock(tool_use_id="call_2", content="# README"),
+                ],
+            ),
+        ]
+
+        result = runner.build_messages(messages, "next")
+
+        # Find assistant messages with tool_calls
+        assistant_with_tools = [m for m in result if m.get("tool_calls")]
+        # Should be merged into ONE assistant message
+        assert len(assistant_with_tools) == 1, f"Expected 1 merged assistant msg, got {len(assistant_with_tools)}"
+
+        # The merged message should have both tool calls
+        tool_calls = assistant_with_tools[0]["tool_calls"]
+        assert len(tool_calls) == 2
+        tool_ids = {tc["id"] for tc in tool_calls}
+        assert "call_1" in tool_ids
+        assert "call_2" in tool_ids
+
+        # Tool results should immediately follow the assistant message
+        assistant_idx = result.index(assistant_with_tools[0])
+        # Next two messages should be the tool results
+        assert result[assistant_idx + 1].get("role") == "tool"
+        assert result[assistant_idx + 2].get("role") == "tool"
+        tool_result_ids = {result[assistant_idx + 1].get("tool_call_id"), result[assistant_idx + 2].get("tool_call_id")}
+        assert tool_result_ids == {"call_1", "call_2"}
+
+    def test_tool_results_reordered_to_follow_tool_calls(self, runner):
+        """Tool results are reordered to immediately follow their tool calls.
+
+        Even if tool results are stored after other messages, they must be
+        placed right after the assistant message that made the calls.
+        """
+        messages = [
+            Message(role="user", content="Read file"),
+            Message(
+                role="assistant",
+                content="",
+                content_blocks=[
+                    ToolUseBlock(id="read_1", name="Read", input={"file_path": "test.py"}),
+                ],
+            ),
+            # Some other assistant message in between (text only)
+            Message(
+                role="assistant",
+                content="Let me analyze...",
+                content_blocks=[TextBlock(text="Let me analyze...")],
+            ),
+            # Tool result comes later
+            Message(
+                role="tool",
+                content="",
+                content_blocks=[
+                    ToolResultBlock(tool_use_id="read_1", content="print('hello')"),
+                ],
+            ),
+        ]
+
+        result = runner.build_messages(messages, "next")
+
+        # Find the assistant message with tool_calls
+        tool_call_msgs = [m for m in result if m.get("tool_calls")]
+        assert len(tool_call_msgs) == 1
+
+        # The tool result should immediately follow
+        tc_idx = result.index(tool_call_msgs[0])
+        assert result[tc_idx + 1].get("role") == "tool"
+        assert result[tc_idx + 1].get("tool_call_id") == "read_1"
+
+    def test_tool_results_after_user_message_are_reordered(self, runner):
+        """Tool results that appear after user messages are properly reordered.
+
+        This tests the scenario where archived turns or user messages appear
+        between tool_calls and their results. The reordering must place tool
+        results immediately after their corresponding tool_calls.
+        """
+        messages = [
+            Message(role="user", content="Do something"),
+            Message(
+                role="assistant",
+                content="",
+                content_blocks=[
+                    ToolUseBlock(id="edit_1", name="Edit", input={"file_path": "test.py"}),
+                ],
+            ),
+            # User message appears in between (e.g., from archive summary)
+            Message(role="user", content="[Archived turns...]"),
+            # Tool result comes after the user message
+            Message(
+                role="tool",
+                content="",
+                content_blocks=[
+                    ToolResultBlock(tool_use_id="edit_1", content="Successfully edited"),
+                ],
+            ),
+            Message(role="user", content="Continue"),
+        ]
+
+        result = runner.build_messages(messages, "next")
+
+        # Find the assistant message with tool_calls
+        tool_call_msgs = [m for m in result if m.get("tool_calls")]
+        assert len(tool_call_msgs) == 1
+
+        # The tool result must immediately follow the tool_calls message
+        tc_idx = result.index(tool_call_msgs[0])
+        assert result[tc_idx + 1].get("role") == "tool"
+        assert result[tc_idx + 1].get("tool_call_id") == "edit_1"
+
+        # User messages should not appear between tool_calls and tool result
+        # Check that no user message exists between tc_idx and tc_idx+1
+        for i in range(tc_idx + 1, len(result)):
+            if result[i].get("role") == "tool" and result[i].get("tool_call_id") == "edit_1":
+                break
+            assert result[i].get("role") != "user", "User message should not appear before tool result"
+
 
 # =============================================================================
 # Cross-Backend Consistency
@@ -731,8 +1017,16 @@ class TestEdgeCases:
         """Long tool results are included fully (truncation is display concern)."""
         long_content = "x" * 50000
         messages = [
+            # Need a tool call first for OpenAI format compliance
             Message(
-                role="user",  # Tool results come from user role
+                role="assistant",
+                content="",
+                content_blocks=[
+                    ToolUseBlock(id="t1", name="Read", input={"file_path": "big.txt"}),
+                ],
+            ),
+            Message(
+                role="tool",  # Tool results use role="tool"
                 content="",
                 content_blocks=[
                     ToolResultBlock(tool_use_id="t1", content=long_content),
@@ -797,8 +1091,16 @@ class TestEdgeCases:
     def test_newlines_in_tool_result(self, builder, openai_runner):
         """Newlines in tool results are preserved."""
         messages = [
+            # Need a tool call first for OpenAI format compliance
             Message(
-                role="user",  # Tool results come from user role
+                role="assistant",
+                content="",
+                content_blocks=[
+                    ToolUseBlock(id="t1", name="Read", input={"file_path": "test.txt"}),
+                ],
+            ),
+            Message(
+                role="tool",  # Tool results use role="tool"
                 content="",
                 content_blocks=[
                     ToolResultBlock(

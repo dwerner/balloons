@@ -1,5 +1,15 @@
 # @ws_expose Annotation Design
 
+This document is retained because the underlying codegen/exposure ideas are still useful, but many examples reflect older service names and architecture stages.
+
+## Still-useful ideas
+
+- Python-defined API contracts feeding generated clients/types
+- decorator-based exposure of RPC methods and events
+- shared codegen patterns across WebSocket and Rust/TypeScript consumers
+
+Examples that mention older tree-state or TUI-oriented services should be treated as implementation history rather than current API documentation.
+
 ## Overview
 
 The `@ws_expose` annotation system marks Python methods and types for WebSocket exposure,

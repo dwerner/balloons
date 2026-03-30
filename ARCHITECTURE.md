@@ -1,148 +1,125 @@
 # Balloons Architecture
 
-## Architectural Decisions
+## Current State
 
-### Confirmed Decisions
+Balloons is a **headless server + web UI** system for LLM-powered coding agents.
 
-1. **Python TUI with Textual** - Main application is Python using the Textual framework for terminal UI.
+### Supported runtime
+- **Headless server** (`headless.py`) is the supported backend runtime
+- **React web UI** (`web/ui/`) is the supported frontend
+- **WebSocket JSON-RPC API** is the primary integration surface between frontend and backend
 
-2. **Session-based conversation model** - Conversations are organized as sessions with turns, supporting forking and merging.
+### Unsupported / removed surfaces
+- The **Textual TUI is dead and unsupported**
+- **`:commands` are dead and unsupported**
+- References to `app.py`, `main.py`, `widgets/`, and command-mode workflows in older docs should be treated as historical only unless explicitly marked otherwise
 
-3. **Context management** - Per-turn COPY/COMPRESS/DROP modes for context window management.
+## Core Architectural Decisions
 
-4. **Multi-Frontend Architecture** - Service-oriented architecture enabling multiple frontends (TUI, web, CLI) sharing a common backend. See [Multi-Frontend Architecture](docs/design/multi-frontend-architecture.md).
+1. **Session-based conversation model**
+   - Conversations are organized as sessions with turns
+   - Sessions support forking, merging, linking, and derived conversations
 
-   - **Service layer**: Services wrap core state managers (`SessionManagerService`, `SessionDataService`, etc.)
-   - **WebSocket server**: JSON-RPC dispatch with JWT auth and TLS support
-   - **TypeScript codegen**: Auto-generated clients from `@ws_expose` decorated Python services
-   - **Wire protocol**: JSON-RPC 2.0 with events for real-time updates
+2. **Context management as a first-class concept**
+   - Per-turn COPY/COMPRESS/DROP modes control prompt context construction
 
-### Tentative Decisions (Under Development)
+3. **Service-oriented backend**
+   - Core state and orchestration are exposed through WebSocket services
+   - Services are the source of truth for generated client types
 
-1. **Rust storage layer (balloons-rs)** - Investigating a Rust-based ACID storage backend to replace JSON file storage. Status: scaffolded, not yet integrated.
+4. **Headless-first frontend architecture**
+   - The backend is designed to support multiple clients over WebSocket
+   - The currently supported client is the React web UI
+   - Historical TUI-oriented design docs remain in the repo but do not describe the supported product surface
 
-   - **Problem**: JSON file writes are non-atomic, causing session corruption when interrupted mid-write (0-byte files).
-   - **Solution**: redb (embedded key-value database) + PyO3 bindings
-   - **Integration**: Not yet connected to Python session.py
-   - **Approach**: Progressive migration - start with storage, iterate towards more Rust over time
+## Runtime Architecture
 
-2. **Python-to-Rust schema generation** - Python dataclasses as source of truth, with codegen to Rust structs.
+```text
+┌─────────────────┐     WebSocket      ┌─────────────────────────────────┐
+│   React Web UI  │◄──────────────────►│       Headless Server           │
+│   (web/ui/)     │                    │                                 │
+└─────────────────┘                    │  ┌─────────────────────────┐   │
+                                       │  │   Service Layer          │   │
+                                       │  │   - SessionManagerService│   │
+                                       │  │   - SessionDataService   │   │
+                                       │  │   - GoalTreeStateService │   │
+                                       │  │   - TaskStateService     │   │
+                                       │  │   - QueueStateService    │   │
+                                       │  │   - etc.                 │   │
+                                       │  └─────────────────────────┘   │
+                                       │              │                  │
+                                       │  ┌───────────▼─────────────┐   │
+                                       │  │   Core Layer             │   │
+                                       │  │   - SessionManager       │   │
+                                       │  │   - SessionRunner (LLM)  │   │
+                                       │  │   - AsyncStorage         │   │
+                                       │  │   - GoalTreeState        │   │
+                                       │  │   - Queue/Stream State   │   │
+                                       │  └─────────────────────────┘   │
+                                       └─────────────────────────────────┘
+```
 
-   - **Rationale**: Avoids schema drift between Python and Rust
-   - **Location**: `codegen/` module, `storage_schema.py` for DTOs
+## Storage Status
 
-## Progressive Rust Migration Strategy
+Rust-backed storage is part of the **current architecture**, not just an aspirational plan.
 
-The Rust implementation is designed for **incremental adoption**:
+- Sessions and goals are stored through a Rust backend exposed to Python
+- The active Python integration uses `core/async_storage.py`
+- Legacy JSON paths remain in parts of the codebase for migration/cleanup compatibility
+- Some documentation still describes the old JSON/TUI world; those references are stale unless explicitly archived
 
-1. **Phase 1 (current)**: Storage layer only
-   - Python remains the primary language
-   - Rust provides ACID storage as a library
-   - Fallback to JSON if Rust unavailable
-
-2. **Phase 2 (future)**: Performance-critical paths
-   - Token counting, context compilation
-   - Large text processing
-
-3. **Phase 3 (future)**: Core domain logic
-   - Session/Turn management
-   - Fork/merge operations
-
-This approach allows us to:
-- Ship improvements incrementally
-- Maintain working Python fallbacks
-- Learn what works before committing
+This means the repo is in a **transitional cleanup state**, not an early storage prototype state.
 
 ## Module Overview
 
-```
+```text
 balloons/
-├── app.py              # Main Textual application
-├── main.py             # Entry point, CLI argument parsing
-├── session.py          # Session management (current JSON backend)
-├── models.py           # Domain entities (Turn, Message, ContentBlock types)
-├── storage_schema.py   # Storage DTOs for Rust codegen
-├── core/               # Core state managers (no network concerns)
-│   ├── goal_tree_state.py  # Goal/plan/todo state
-│   ├── queue_state.py  # Message queue state
-│   ├── stream_state.py # LLM task state
-│   └── manager.py      # Session lifecycle manager
-├── service/            # WebSocket-exposed services
-│   ├── session_manager_service.py  # Session operations and LLM orchestration
-│   ├── session_data_service.py    # Session data events for frontends
-│   ├── goal_tree_state_service.py  # Wraps GoalTreeState
-│   ├── task_state_service.py    # Wraps StreamState
-│   ├── queue_state_service.py   # Wraps QueueState
-│   └── ws_server.py    # WebSocket server with JSON-RPC dispatch
-├── codegen/            # Code generation
-│   ├── rust_schema.py  # @rust_schema decorator and type mapping
-│   ├── ws_expose.py    # @ws_expose, @ws_event, @ws_type decorators
-│   ├── generate_rust.py # Rust struct generator
-│   └── generate_typescript.py  # TypeScript client generator
-├── web/                # Web frontend support
-│   └── generated/      # Auto-generated TypeScript clients
-│       ├── types.ts    # Wire types as TypeScript interfaces
-│       ├── client.ts   # Service client classes
-│       └── balloons-client.ts  # Unified client entry point
-├── widgets/            # Textual TUI widgets
-└── balloons-rs/        # Rust workspace (tentative)
-    └── crates/
-        ├── balloons-core/  # Storage engine, generated schema
-        └── balloons-py/    # PyO3 bindings
+├── headless.py              # Supported server entry point
+├── balloons-server.py       # Headless server manager
+├── session.py               # Session model + persistence-heavy logic (needs decomposition)
+├── models.py                # Domain entities and content block types
+├── storage_schema.py        # Storage DTOs for Rust/codegen
+│
+├── core/                    # Core logic and state management
+│   ├── manager.py           # Session lifecycle manager
+│   ├── runner.py            # LLM execution
+│   ├── async_storage.py     # Rust-backed async persistence wrapper
+│   ├── goal_tree_state.py   # Goal/plan/todo state
+│   ├── queue_state.py       # Queue state
+│   ├── stream_state.py      # Stream/task state
+│   └── ...
+│
+├── service/                 # WebSocket-exposed services
+│   ├── session_manager_service.py
+│   ├── session_data_service.py
+│   ├── goal_tree_state_service.py
+│   ├── task_state_service.py
+│   ├── queue_state_service.py
+│   └── ws_server.py
+│
+├── web/
+│   ├── generated/           # Generated TypeScript clients/types
+│   └── ui/                  # Supported React frontend
+│
+├── plugins/                 # Domain plugins
+├── codegen/                 # Wire/schema generation
+└── balloons-rs/             # Rust storage/supervisor workspace
 ```
 
-## Rust Storage Layer (balloons-rs)
+## Transitional Debt
 
-### Status: TENTATIVE
+The repo still contains documentation and comments that drift from the supported headless/web product, including:
+- old plan documents
+- pre-removal design docs
+- comments/docstrings that still describe deleted UI ownership or outdated workflows
+- command-mode references that no longer reflect supported behavior
 
-The Rust storage layer is scaffolded but not integrated. Current Python code still uses JSON files directly.
+These are cleanup debt, not part of the supported architecture.
 
-### Architecture
+## Near-Term Architectural Priorities
 
-```
-Python asyncio
-    │
-    │  JSON string (via run_in_executor)
-    ▼
-┌─────────────────────────────────┐
-│  balloons-py (PyO3 sync bridge) │
-│  - py.allow_threads()           │
-│  - core-executor for async      │
-│  - JSON <-> Rust struct         │
-└─────────────────────────────────┘
-    │
-    │  Storage DTOs
-    ▼
-┌─────────────────────────────────┐
-│  balloons-core (async Rust)     │
-│  - StorageEngine trait          │
-│  - RedbEngine implementation    │
-│  - JSON serialization to redb   │
-└─────────────────────────────────┘
-    │
-    │  JSON bytes
-    ▼
-┌─────────────────────────────────┐
-│           redb                  │
-│  (ACID key-value database)      │
-└─────────────────────────────────┘
-```
-
-### Key Design Choices
-
-| Choice | Decision | Rationale |
-|--------|----------|-----------|
-| Database | redb | Pure Rust, ACID, single-writer MVCC, 1.0 stable |
-| Serialization | JSON (not postcard) | Schema uses `serde_json::Value` for flexible content blocks |
-| Async executor | core-executor | CPU-affine threads, consistent with other Rust projects |
-| Schema source | Python | `@rust_schema` decorator generates Rust structs |
-| PyO3 API | Sync | Python calls sync Rust which internally blocks on async |
-
-### Integration Path (TODO)
-
-1. Build PyO3 wheel with maturin
-2. Create Python wrapper in session.py that uses Rust storage
-3. Add migration for existing JSON session files
-4. Feature flag to switch between JSON and Rust backends
-5. Gradual rollout: Rust for new sessions, JSON for existing
-6. Eventually: Rust as default, JSON as fallback
+1. Reconcile docs with current headless/web-only reality
+2. Reduce import-time coupling in `service/`
+3. Remove global runtime coupling from plugin integrations
+4. Decompose oversized modules like `session.py` and `service/session_manager_service.py`
+5. Document and harden persistence invariants

@@ -1,15 +1,21 @@
 # Balloons Web UI
 
-React/TypeScript web interface for Balloons that connects via WebSocket to a running TUI instance.
+React/TypeScript web interface for Balloons that connects via WebSocket to a running **headless server**.
 
 ## Requirements
 
 - [Bun](https://bun.sh/) >= 1.0
-- Balloons TUI with WebSocket server enabled
+- A running Balloons headless server
+
+## Important status notes
+
+- The **Textual TUI is dead and unsupported**
+- **`:commands` are dead and unsupported**
+- Older docs that describe deleted runtime wiring are historical only
 
 ## Quick Start
 
-1. **Enable WebSocket server** in `~/.balloons/config.yaml`:
+1. **Configure WebSocket server** in `~/.balloons/config.yaml`:
    ```yaml
    websocket:
      enabled: true
@@ -17,12 +23,12 @@ React/TypeScript web interface for Balloons that connects via WebSocket to a run
      port: 8765
    ```
 
-2. **Start the TUI** (in one terminal):
+2. **Start the headless server**:
    ```bash
-   python main.py
+   python headless.py
    ```
 
-3. **Start the web UI** (in another terminal):
+3. **Start the web UI**:
    ```bash
    cd web/ui
    bun install
@@ -42,7 +48,7 @@ React/TypeScript web interface for Balloons that connects via WebSocket to a run
 
 ## Architecture
 
-```
+```text
 src/
   main.tsx    - Entry point, renders App
   App.tsx     - Main component with all functionality

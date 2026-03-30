@@ -2,7 +2,7 @@
 
 A conversation platform for LLM-powered coding agents with session forking, context curation, and a WebSocket API for multiple frontends.
 
-**Current state:** Headless server + React web UI. The original TUI has been deprecated in favor of a service-based architecture.
+**Current state:** Headless server + React web UI. The Textual TUI is dead and unsupported, and `:commands` are dead and unsupported.
 
 ## What Balloons Does
 
@@ -243,7 +243,8 @@ This project is in active development. The service layer and storage backend are
 
 **Recent changes:**
 - Migrated from JSON file storage to LMDB (via Rust)
-- Deprecated TUI in favor of headless server + web UI
+- Supported product surface is the headless server + web UI
+- `:commands` are removed and unsupported
 - Added plugin system for domain-specific tools and UI
 
 ## License

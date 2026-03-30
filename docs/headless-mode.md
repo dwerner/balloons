@@ -1,9 +1,17 @@
 # Headless Mode
 
-Balloons can run without the TUI as a pure WebSocket server. This enables:
+Balloons runs as a **headless WebSocket server**. This is the supported backend runtime.
+
+This enables:
 - Server deployments (Docker, systemd)
 - React/web frontend connections
 - A/B testing of code changes (stable vs experimental instances)
+
+## Important status notes
+
+- The **Textual TUI is dead and unsupported**
+- **`:commands` are dead and unsupported**
+- Older docs that describe other runtime models no longer describe the supported product
 
 ## Quick Start
 
@@ -75,7 +83,7 @@ The React UI has a slot toggle in the sidebar:
 
 ## Services Exposed
 
-Both TUI and headless mode expose identical WebSocket APIs:
+The headless server exposes the following WebSocket APIs:
 
 | Service | Purpose |
 |---------|---------|
@@ -94,7 +102,7 @@ WebSocket settings in `~/.balloons/config.yaml`:
 
 ```yaml
 websocket:
-  enabled: true      # TUI only starts WS server if true
+  enabled: true
   host: "0.0.0.0"    # Bind address
   port: 8765         # Default port
   tls:
@@ -106,10 +114,10 @@ websocket:
     secret: ""
 ```
 
-Note: `headless.py` ignores `websocket.enabled` and always starts the server.
+Note: `headless.py` is the supported runtime and always starts the server when invoked.
 
 ## Files
 
-- `headless.py` - Headless server entry point
+- `headless.py` - Supported server entry point
 - `balloons-server.py` - Server management script
 - `~/.balloons/run/headless-{port}.pid` - PID files for running instances
