@@ -88,6 +88,11 @@ class Session:
     # Domains listed here are auto-loaded when the session is activated
     # Forks inherit the parent's loaded domains
     loaded_domains: list[str] = field(default_factory=list)
+    # Enabled tools for this session (controls which tools are available and documented)
+    # Empty list uses defaults from tool_prompts. Explicit list restricts to those tools.
+    # Copied from config.default_enabled_tools when session is created.
+    # Forks inherit the parent's enabled_tools.
+    enabled_tools: list[str] = field(default_factory=list)
     # Note: Links are stored as LinkBlock content blocks in messages (turn-based).
     # The legacy `links` field has been removed - old sessions with links data
     # will have those links ignored (they were never actively used).
@@ -103,6 +108,18 @@ class Session:
     @property
     def total_tokens(self) -> int:
         return self.total_input_tokens + self.total_output_tokens
+
+    def get_enabled_tools_set(self) -> set:
+        """Get enabled tools as a set (for prompt building).
+
+        Returns:
+            Set of tool names. If session has no explicit tools, returns defaults.
+        """
+        if not self.enabled_tools:
+            # Empty list - use defaults
+            from core.tool_prompts import DEFAULT_ENABLED_TOOLS
+            return DEFAULT_ENABLED_TOOLS.copy()
+        return set(self.enabled_tools)
 
     def calculate_context_tokens(self) -> int:
         """Calculate context tokens by summing turn token counts.

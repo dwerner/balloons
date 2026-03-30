@@ -17,9 +17,11 @@ import type { SessionDataTurn } from '../../hooks/useSessionData';
 import { TurnCard } from '../StreamingTurnsView/cards';
 import { ClientContext } from '../StreamingTurnsView/cards/ClientContext';
 import { SystemPromptView } from './SystemPromptView';
+import { EnabledToolsView } from './EnabledToolsView';
 import { ExchangesV2 } from '../ExchangesV2';
 import { createLogger } from '../../utils/debugLog';
 import './ContextTabView.css';
+import './EnabledToolsView.css';
 
 // createPortal is still used for ExchangeContextMenu
 
@@ -1020,7 +1022,7 @@ interface ContextTabViewProps {
 }
 
 // Sub-tab type for context view
-type ContextSubTab = 'exchanges' | 'exchangesv2' | 'system';
+type ContextSubTab = 'exchanges' | 'exchangesv2' | 'system' | 'tools';
 
 export const ContextTabView = memo(function ContextTabView({
   sessionId,
@@ -1214,6 +1216,12 @@ export const ContextTabView = memo(function ContextTabView({
           >
             System
           </button>
+          <button
+            className={`ctx-tab-view__subtab ${activeSubTab === 'tools' ? 'ctx-tab-view__subtab--active' : ''}`}
+            onClick={() => setActiveSubTab('tools')}
+          >
+            Tools
+          </button>
         </div>
 
         {/* Stats - only show on exchanges tab */}
@@ -1235,6 +1243,14 @@ export const ContextTabView = memo(function ContextTabView({
           sessionId={sessionId}
           client={client}
           isLoading={isLoading}
+        />
+      )}
+
+      {/* Enabled Tools view */}
+      {activeSubTab === 'tools' && (
+        <EnabledToolsView
+          sessionId={sessionId}
+          client={client ?? null}
         />
       )}
 

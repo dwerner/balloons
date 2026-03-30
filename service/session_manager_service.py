@@ -6768,6 +6768,107 @@ Summary:""")
             return False
 
     @ws_expose
+    async def get_session_enabled_tools(self, session_id: str) -> list[str]:
+        """Get the enabled tools for a session.
+
+        Args:
+            session_id: ID of the session
+
+        Returns:
+            List of enabled tool names (or defaults if not explicitly set)
+        """
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                return []
+
+        # Return session's enabled tools, or defaults
+        return list(session.get_enabled_tools_set())
+
+    @ws_expose
+    async def set_session_enabled_tools(
+        self, session_id: str, tools: list[str]
+    ) -> bool:
+        """Set the enabled tools for a session.
+
+        Args:
+            session_id: ID of the session to update
+            tools: List of tool names to enable
+
+        Returns:
+            True if successful, False if session not found
+        """
+        session = self._manager.get_session(session_id)
+        if not session:
+            session = await self._manager.load_session(session_id)
+            if not session:
+                return False
+
+        # Update the enabled tools
+        session.enabled_tools = list(tools)
+        await session.save()
+
+        # Emit session updated event
+        self._emit_session_updated(session)
+
+        debug_log.info(
+            f"Enabled tools updated",
+            category=Category.SESSION,
+            details={"session_id": session_id[:8], "tool_count": len(tools)},
+        )
+        return True
+
+    @ws_expose
+    async def get_available_tools(self) -> dict:
+        """Get all available tools grouped by category.
+
+        Returns:
+            Dict with categories mapping to tool lists, plus 'core' and 'all'
+        """
+        from core.tool_prompts import TOOL_CATEGORIES, CORE_TOOLS, ALL_TOOLS
+
+        return {
+            "core": CORE_TOOLS,
+            "categories": TOOL_CATEGORIES,
+            "all": sorted(ALL_TOOLS),
+        }
+
+    @ws_expose
+    async def get_default_enabled_tools(self) -> list[str]:
+        """Get the default enabled tools from config.
+
+        Returns:
+            List of default enabled tool names
+        """
+        from config import get_config
+        config = get_config()
+        return list(config.default_enabled_tools)
+
+    @ws_expose
+    async def set_default_enabled_tools(self, tools: list[str]) -> bool:
+        """Set the default enabled tools in config.
+
+        This affects new sessions. Existing sessions keep their own enabled_tools.
+
+        Args:
+            tools: List of tool names to set as defaults
+
+        Returns:
+            True if successful
+        """
+        from config import save_default_enabled_tools_async
+
+        await save_default_enabled_tools_async(tools)
+
+        debug_log.info(
+            f"Default enabled tools updated",
+            category=Category.LIFECYCLE,
+            details={"tool_count": len(tools)},
+        )
+        return True
+
+    @ws_expose
     async def set_session_title(
         self, session_id: str, title: str
     ) -> bool:

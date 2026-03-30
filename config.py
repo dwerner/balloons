@@ -296,6 +296,9 @@ class Config:
     websocket: WebSocketConfig = field(default_factory=WebSocketConfig)  # WebSocket server config
     auth: AuthConfig = field(default_factory=AuthConfig)  # Authentication configuration
     review_backend: Optional[str] = None  # Backend for session quality reviews (defaults to default_backend)
+    # Default enabled tools for new sessions
+    # List of tool names to enable. Uses sensible defaults if not configured.
+    default_enabled_tools: list[str] = field(default_factory=list)
     _config_path: Optional[Path] = field(default=None, repr=False)  # Where config was loaded from
 
     def get_editor(self) -> str:
@@ -429,6 +432,18 @@ class Config:
         )
         auth_config = AuthConfig(admin=admin_config)
 
+        # Load default enabled tools
+        # If not specified in config, use the defaults from tool_prompts
+        default_enabled_tools = data.get("default_enabled_tools")
+        if default_enabled_tools is None:
+            # Use sensible defaults from tool_prompts module
+            from core.tool_prompts import get_default_enabled_tools
+            default_enabled_tools = get_default_enabled_tools()
+        elif not isinstance(default_enabled_tools, list):
+            # Invalid type - use defaults
+            from core.tool_prompts import get_default_enabled_tools
+            default_enabled_tools = get_default_enabled_tools()
+
         return cls(
             default_backend=data.get("default_backend", "claude"),
             backends=backends,
@@ -442,6 +457,7 @@ class Config:
             websocket=websocket_config,
             auth=auth_config,
             review_backend=data.get("review_backend"),
+            default_enabled_tools=default_enabled_tools,
             _config_path=path,
         )
 
@@ -503,6 +519,11 @@ class Config:
             }
         elif "last_view" in data:
             del data["last_view"]
+
+        # Save default_enabled_tools
+        if self.default_enabled_tools:
+            data["default_enabled_tools"] = list(self.default_enabled_tools)
+
         return data
 
     def save(self) -> None:
@@ -586,4 +607,15 @@ async def save_last_view_async(session_id: str, turn_index: Optional[int] = None
     config = await get_config_async()
     config.last_view_session_id = session_id
     config.last_view_turn_index = turn_index
+    await config.save_async()
+
+
+async def save_default_enabled_tools_async(tools: list[str]) -> None:
+    """Save the default enabled tools to config.
+
+    Args:
+        tools: List of tool names to set as defaults
+    """
+    config = await get_config_async()
+    config.default_enabled_tools = list(tools)
     await config.save_async()

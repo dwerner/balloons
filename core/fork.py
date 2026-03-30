@@ -428,6 +428,9 @@ class ForkManager:
         # Inherit loaded domains from parent
         if current_session.loaded_domains:
             child_session.loaded_domains = current_session.loaded_domains.copy()
+        # Inherit enabled tools from parent
+        if current_session.enabled_tools:
+            child_session.enabled_tools = current_session.enabled_tools.copy()
         # Inherit backend/model configuration from parent
         if current_session.backend_name:
             child_session.backend_name = current_session.backend_name

@@ -1,87 +1,119 @@
 # Balloons
 
-A TUI (Terminal User Interface) chat client for Claude with session management, context control, and parallel conversation workflows.
+A conversation platform for LLM-powered coding agents with session forking, context curation, and a WebSocket API for multiple frontends.
 
-Built with [Textual](https://github.com/Textualize/textual).
+**Current state:** Headless server + React web UI. The original TUI has been deprecated in favor of a service-based architecture.
 
-## Features
+## What Balloons Does
 
-- **Session Management** - Persistent conversations stored as JSON, with full history and token tracking
-- **Context Control** - Per-turn COPY/COMPRESS/DROP modes to curate what context goes into prompts
-- **Fork & Merge** - Git-like branching for parallel exploration without losing context
-- **Multi-Backend** - Support for Claude API and OpenAI-compatible endpoints (OpenRouter, llama.cpp)
-- **Background Streaming** - Multiple sessions can stream simultaneously
-- **Process Supervisor** - Manage long-running background processes (dev servers, builds) with streaming output capture
+- **Session forking & merging** — Branch conversations like git branches. Fork to explore, merge results back.
+- **Context curation** — Per-turn COPY/COMPRESS/DROP modes control what context goes into prompts.
+- **Multi-backend support** — Claude API, OpenRouter, Ollama, or any OpenAI-compatible endpoint.
+- **Process supervision** — Start dev servers, builds, or long-running commands with log capture.
+- **Goal/plan/todo tracking** — Persistent task hierarchies with session bindings.
+- **Plugin system** — Domain plugins (chess, kanban, charts) with custom UI components.
+
+## Architecture
+
+```
+┌─────────────────┐     WebSocket      ┌─────────────────────────────────┐
+│   React Web UI  │◄──────────────────►│       Headless Server           │
+│   (web/ui/)     │                    │                                 │
+└─────────────────┘                    │  ┌─────────────────────────┐   │
+                                       │  │   Service Layer          │   │
+                                       │  │   - SessionManagerService │   │
+                                       │  │   - SessionDataService   │   │
+                                       │  │   - GoalTreeStateService │   │
+                                       │  │   - TaskStateService     │   │
+                                       │  │   - etc.                 │   │
+                                       │  └─────────────────────────┘   │
+                                       │              │                  │
+                                       │  ┌───────────▼─────────────┐   │
+                                       │  │   Core Layer             │   │
+                                       │  │   - SessionManager       │   │
+                                       │  │   - SessionRunner (LLM)  │   │
+                                       │  │   - AsyncStorage (LMDB)  │   │
+                                       │  │   - GoalTreeState        │   │
+                                       │  └─────────────────────────┘   │
+                                       └─────────────────────────────────┘
+```
+
+**Storage:** Sessions and goals are stored in LMDB via a Rust backend (`balloons-rs`), exposed through PyO3. Legacy JSON file paths are kept for migration only.
 
 ## Quick Start
 
 ### Prerequisites
 
 - Python 3.11+
-- [Claude CLI](https://github.com/anthropics/anthropic-tools/tree/main/claude-cli) installed and configured (for Claude backend)
+- Node.js / Bun (for web UI)
+- `ANTHROPIC_API_KEY` environment variable (for Claude backend)
+- **Optional:** The Rust storage backend (`balloons-rs`) for ACID-compliant persistence
 
 ### Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/your-org/balloons.git
 cd balloons
 
-# Create virtual environment
+# Python environment
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Install dependencies
+source .venv/bin/activate
 pip install -r requirements.txt
+
+# Optional: Build Rust storage backend
+cd balloons-rs
+maturin develop --release
+cd ..
+
+# Web UI dependencies
+cd web/ui
+bun install
+cd ../..
 ```
 
 ### Running
 
+**Start the headless server:**
+
 ```bash
-python main.py              # Start new session
-python main.py -r <id>      # Resume session by ID
-python main.py -l           # List sessions
-python main.py -b llama     # Use specific backend
+# Direct invocation
+python headless.py --port 8700
+
+# Or use the server manager (supports multiple instances)
+python balloons-server.py start --port 8700
+python balloons-server.py list
+python balloons-server.py stop --port 8700
 ```
 
-## Basic Usage
+**Start the web UI:**
 
-### Chat Interface
+```bash
+cd web/ui
+bun run dev
+```
 
-Type your message and press Enter to send. The assistant's response streams in real-time.
+Open http://localhost:3030 to use the web interface.
 
-### Commands
+## Server Management
 
-Commands start with `:` and provide control over sessions and context:
+The `balloons-server.py` script manages headless instances:
 
-| Command | Description |
-|---------|-------------|
-| `:new [prompt]` | Create new session |
-| `:fork[=name] <prompt>` | Fork with selected context |
-| `:merge [summary]` | Merge fork back to parent |
-| `:switch [name]` | Switch between sessions/forks |
-| `:title <title>` | Set session title |
-| `:sup-start <cmd>` | Start a supervised background process |
-| `:sup-list` | List running processes |
-| `:sup-logs <id>` | Get process output |
-| `:sup-stop <id>` | Stop a process |
+```bash
+python balloons-server.py start              # Start on default port 8700
+python balloons-server.py start --port 8710  # Start on alternate port
+python balloons-server.py list               # Show running instances
+python balloons-server.py stop --port 8700   # Stop instance
+python balloons-server.py restart            # Restart instance
 
-### Keyboard Shortcuts
+# UI server management
+python balloons-server.py ui start           # Start bun dev server
+python balloons-server.py ui stop            # Stop bun dev server
+```
 
-| Key | Action |
-|-----|--------|
-| `Ctrl+T` | Toggle context tree sidebar |
-| `Ctrl+G` | Toggle debug pane |
-| `Escape` | Cancel streaming / focus input |
-| `Space` (in tree) | Cycle context mode (COPY/COMPRESS/DROP) |
-
-### Context Modes
-
-Control how each turn is included when forking:
-
-- **COPY** - Include verbatim (default)
-- **COMPRESS** - LLM summarizes before fork
-- **DROP** - Exclude from context
+Default ports:
+- **8700** — Primary backend (slot A)
+- **8710** — Secondary backend (slot B)
+- **3030** — Web UI dev server
 
 ## Configuration
 
@@ -92,78 +124,128 @@ default_backend: claude
 
 backends:
   claude:
-    # Uses claude CLI (default)
+    type: claude
+    context_window: 200000
 
   openrouter:
     type: openai
     base_url: https://openrouter.ai/api/v1
     api_key: ${OPENROUTER_API_KEY}
     model: anthropic/claude-sonnet-4
-    context_window: 200000
+    system_prompt: ~/.balloons/prompts/coding-assistant.md
 
-  local-llama:
+  ollama:
     type: openai
-    base_url: http://localhost:8080/v1
-    model: llama-3-70b
-    context_window: 8192
-```
+    base_url: http://localhost:11434/v1
+    api_key: ollama
+    model: llama3.2
+    system_prompt: ~/.balloons/prompts/minimal.md
 
-See `config/config.sample.yaml` for more options.
-
-## Data Storage
-
-Sessions are stored in `~/.balloons/sessions/` as JSON files.
-
-## Documentation
-
-- [FEATURES.md](FEATURES.md) - Complete feature specification
-- [CONTEXT-MANAGEMENT.md](CONTEXT-MANAGEMENT.md) - Context system details
-- [prompt-samples/](prompt-samples/) - Example system prompts
-
-## Web UI (Experimental)
-
-Balloons includes an experimental React web interface that connects to the TUI via WebSocket.
-
-### Enabling the WebSocket Server
-
-Add to `~/.balloons/config.yaml`:
-
-```yaml
 websocket:
   enabled: true
-  host: localhost  # Use 0.0.0.0 for LAN access
-  port: 8765
+  host: localhost
+  port: 8700
+  jwt:
+    enabled: true
 ```
 
-### Running the Web UI
+See `config/config.sample.yaml` for full options including TLS, auth, sounds, and TTS.
 
-```bash
-# Terminal 1: Start the TUI (with WebSocket server)
-python main.py
+## Project Structure
 
-# Terminal 2: Start the web dev server
-cd web/ui
-bun install
-bun run dev
+```
+balloons/
+├── headless.py              # Main server entrypoint
+├── balloons-server.py       # Server instance manager
+├── session.py               # Session model and persistence
+├── config.py                # Configuration management
+├── models.py                # Domain models (Turn, Message, ContentBlock types)
+│
+├── core/                    # Core logic (no network concerns)
+│   ├── manager.py           # SessionManager
+│   ├── runner.py            # LLM execution (SessionRunner)
+│   ├── async_storage.py     # LMDB storage via Rust
+│   ├── goal_tree_state.py   # Goal/plan/todo state
+│   ├── fork.py              # Fork/merge operations
+│   └── ...
+│
+├── service/                 # WebSocket-exposed services
+│   ├── ws_server.py         # WebSocket server with JSON-RPC dispatch
+│   ├── session_manager_service.py  # Session lifecycle, streaming
+│   ├── session_data_service.py     # Session subscriptions
+│   ├── goal_tree_state_service.py  # Goal management
+│   ├── task_state_service.py       # Streaming events
+│   └── ...
+│
+├── web/
+│   ├── generated/           # Auto-generated TypeScript clients
+│   └── ui/                  # React web frontend
+│
+├── plugins/                 # Domain plugins (chess, kanban, charts, etc.)
+│
+├── balloons-rs/             # Rust workspace
+│   └── crates/
+│       ├── balloons-core/   # LMDB storage engine
+│       ├── balloons-py/     # PyO3 bindings
+│       └── balloons-supervisor/  # Process supervisor
+│
+└── codegen/                 # Code generation
+    ├── generate_typescript.py  # TypeScript client from Python services
+    └── generate_rust.py        # Rust structs from Python schemas
 ```
 
-Open http://localhost:3000 in your browser. The UI auto-detects the WebSocket server.
+## WebSocket API
 
-See [web/ui/README.md](web/ui/README.md) for more details.
+The server exposes a JSON-RPC API over WebSocket. Methods are organized by service:
+
+**SessionManagerService:**
+- `submitMessage(sessionId, content)` — Submit prompt and start streaming
+- `createSession(workingDirectory?)` — Create new session
+- `forkSession(parentId, ...)` — Fork a session
+- `switchSession(sessionId)` — Switch active session
+
+**TaskStateService events:**
+- `onContentDelta` — Text chunks during streaming
+- `onTurnStarted` — New turn began
+- `onToolUse` / `onToolResult` — Tool execution
+- `onTurnFinished` — Turn completed
+
+**SessionDataService:**
+- `subscribeSession(sessionId)` — Subscribe to session updates
+- `getSessionTurns(sessionId, ...)` — Paginated turn history
+
+See `web/generated/types.ts` and `web/generated/client.ts` for the full TypeScript API.
 
 ## Development
 
 ```bash
 # Run tests
+pip install pytest
 pytest
-
-# Hot reload during development
-python main.py --reload
 
 # Regenerate TypeScript client from Python services
 python -m codegen.generate_typescript
+
+# Type check
+mypy .
 ```
+
+## Documentation
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — System architecture and design decisions
+- [FEATURES.md](FEATURES.md) — Feature specification
+- [CONTEXT-MANAGEMENT.md](CONTEXT-MANAGEMENT.md) — Context curation system
+- [docs/](docs/) — Additional design docs and plans
+
+## Status
+
+This project is in active development. The service layer and storage backend are stable. The web UI is functional but evolving.
+
+**Recent changes:**
+- Migrated from JSON file storage to LMDB (via Rust)
+- Deprecated TUI in favor of headless server + web UI
+- Added plugin system for domain-specific tools and UI
 
 ## License
 
-MIT
+See [PROPRIETARY-LICENSE](PROPRIETARY-LICENSE)

@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-03-15T17:25:39.907852
+// Generated: 2026-03-30T13:28:13.613787
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -631,6 +631,22 @@ export interface SessionManagerService {
   getAllStreamingInfo(): Promise<Types.StreamingInfo[]>;
 
   /**
+   * Get all available tools grouped by category.
+   * 
+   * Returns:
+   * Dict with categories mapping to tool lists, plus 'core' and 'all'
+   */
+  getAvailableTools(): Promise<Record<string, unknown>>;
+
+  /**
+   * Get the default enabled tools from config.
+   * 
+   * Returns:
+   * List of default enabled tool names
+   */
+  getDefaultEnabledTools(): Promise<string[]>;
+
+  /**
    * Get summaries of each exchange in a session for proposal UIs.
    * 
    * Returns short descriptions of each exchange for display in fork/merge
@@ -669,6 +685,17 @@ export interface SessionManagerService {
    * Effective backend name (explicit or default), or None if session not found
    */
   getSessionBackend(sessionId: string): Promise<string | null>;
+
+  /**
+   * Get the enabled tools for a session.
+   * 
+   * Args:
+   * session_id: ID of the session
+   * 
+   * Returns:
+   * List of enabled tool names (or defaults if not explicitly set)
+   */
+  getSessionEnabledTools(sessionId: string): Promise<string[]>;
 
   /**
    * Get the list of prompt files for a session.
@@ -895,6 +922,19 @@ export interface SessionManagerService {
   respondToMergeProposal(sessionId: string, proposalId: string, accepted: boolean, summary?: string | null, filesChanged?: string[] | null, keyAccomplishments?: string[] | null, reason?: string | null): Promise<Types.RespondToMergeProposalResult>;
 
   /**
+   * Set the default enabled tools in config.
+   * 
+   * This affects new sessions. Existing sessions keep their own enabled_tools.
+   * 
+   * Args:
+   * tools: List of tool names to set as defaults
+   * 
+   * Returns:
+   * True if successful
+   */
+  setDefaultEnabledTools(tools: string[]): Promise<boolean>;
+
+  /**
    * Set the backend for a session.
    * 
    * The new backend will be used for the next streaming request.
@@ -908,6 +948,18 @@ export interface SessionManagerService {
    * True if successful, False if session not found or invalid backend
    */
   setSessionBackend(sessionId: string, backendName: string): Promise<boolean>;
+
+  /**
+   * Set the enabled tools for a session.
+   * 
+   * Args:
+   * session_id: ID of the session to update
+   * tools: List of tool names to enable
+   * 
+   * Returns:
+   * True if successful, False if session not found
+   */
+  setSessionEnabledTools(sessionId: string, tools: string[]): Promise<boolean>;
 
   /**
    * Set the title for a session.
@@ -1286,6 +1338,14 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.call('getAllStreamingInfo', {  });
   }
 
+  async getAvailableTools(): Promise<Record<string, unknown>> {
+    return this.call('getAvailableTools', {  });
+  }
+
+  async getDefaultEnabledTools(): Promise<string[]> {
+    return this.call('getDefaultEnabledTools', {  });
+  }
+
   async getExchangeSummaries(sessionId: string, excludeCurrent?: boolean): Promise<Types.ExchangeSummary[]> {
     return this.call('getExchangeSummaries', { sessionId: sessionId, excludeCurrent: excludeCurrent });
   }
@@ -1296,6 +1356,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   async getSessionBackend(sessionId: string): Promise<string | null> {
     return this.call('getSessionBackend', { sessionId: sessionId });
+  }
+
+  async getSessionEnabledTools(sessionId: string): Promise<string[]> {
+    return this.call('getSessionEnabledTools', { sessionId: sessionId });
   }
 
   async getSessionPromptFiles(sessionId: string): Promise<Record<string, unknown>> {
@@ -1362,8 +1426,16 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.call('respondToMergeProposal', { sessionId: sessionId, proposalId: proposalId, accepted: accepted, summary: summary, filesChanged: filesChanged, keyAccomplishments: keyAccomplishments, reason: reason });
   }
 
+  async setDefaultEnabledTools(tools: string[]): Promise<boolean> {
+    return this.call('setDefaultEnabledTools', { tools: tools });
+  }
+
   async setSessionBackend(sessionId: string, backendName: string): Promise<boolean> {
     return this.call('setSessionBackend', { sessionId: sessionId, backendName: backendName });
+  }
+
+  async setSessionEnabledTools(sessionId: string, tools: string[]): Promise<boolean> {
+    return this.call('setSessionEnabledTools', { sessionId: sessionId, tools: tools });
   }
 
   async setSessionTitle(sessionId: string, title: string): Promise<boolean> {

@@ -192,10 +192,15 @@ class OpenAICompatibleRunner(BaseRunner):
             Complete system prompt, or None if no content
         """
         from .prompt_builder import build_system_prompt
+        # Get enabled tools from session (or None for defaults)
+        enabled_tools = None
+        if self._session:
+            enabled_tools = self._session.get_enabled_tools_set()
         return build_system_prompt(
             backend_type="openai",
             user_prompt=self._user_prompt,
             session=self._session,
+            enabled_tools=enabled_tools,
         )
 
     def build_messages(self, messages: list[Message], new_prompt: str) -> list[dict]:
@@ -400,8 +405,15 @@ class OpenAICompatibleRunner(BaseRunner):
         # Convert messages to OpenAI format
         openai_messages = self.build_messages(messages, prompt)
 
+        # Get enabled tools from session if available, otherwise use allowed_tools param
+        effective_allowed_tools = allowed_tools
+        if effective_allowed_tools is None and self._session:
+            enabled = self._session.get_enabled_tools_set()
+            if enabled:
+                effective_allowed_tools = list(enabled)
+
         # Get tools for this request
-        tools = get_tools_for_request(allowed_tools, disable_tools)
+        tools = get_tools_for_request(effective_allowed_tools, disable_tools)
 
         debug_log.info(
             f"OpenAI request to {self.model}",
@@ -483,14 +495,25 @@ class OpenAICompatibleRunner(BaseRunner):
 
                     tool_name = tc["name"]
 
-                    # Skip client-only tools - UI handles them from the tool_use event
+                    # Client-only tools - UI handles them from the tool_use event
+                    # We still need to add a tool result message for OpenAI's format
                     if tool_name in CLIENT_ONLY_TOOLS:
                         debug_log.info(
-                            f"Skipping client-only tool: {tool_name}",
+                            f"Client-only tool: {tool_name}",
                             category=Category.RUNNER,
                             run_id=self._run_id,
                         )
-                        # Don't add to openai_messages - no result for LLM
+                        # Yield a tool result event for UI
+                        yield ToolResultEvent(
+                            tool_use_id=tc["id"],
+                            result=f"[{tool_name}] Handled by UI",
+                        )
+                        # Add placeholder result to messages (OpenAI requires this)
+                        openai_messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": f"[{tool_name}] Handled by UI",
+                        })
                         continue
 
                     tool_result = await execute_tool(

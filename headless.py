@@ -205,7 +205,10 @@ async def run_server(
 
     # Create core components
     runner_factory = _create_session_runner_factory()
-    session_manager = SessionManager(runner_factory=runner_factory)
+    session_manager = SessionManager(
+        runner_factory=runner_factory,
+        default_enabled_tools=config.default_enabled_tools,
+    )
     goal_tree_state = GoalTreeState()
     queue_state = get_queue_state()
     stream_state = get_stream_state()

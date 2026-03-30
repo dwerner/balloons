@@ -52,6 +52,7 @@ class SessionManager:
         self,
         backend_config: BackendConfig | None = None,
         runner_factory: Callable[[Session], SessionRunner] | None = None,
+        default_enabled_tools: List[str] | None = None,
     ):
         """Initialize the session manager.
 
@@ -61,12 +62,15 @@ class SessionManager:
                            If provided, this is used instead of the default
                            which uses backend_config for all sessions.
                            The callback should respect session.backend_name.
+            default_enabled_tools: Default enabled tools for new sessions.
+                                   None means all tools enabled.
         """
         self._sessions: Dict[str, Session] = {}
         self._runners: Dict[str, SessionRunner] = {}
         self._active_session_id: Optional[str] = None
         self._backend_config = backend_config or BackendConfig(name="claude")
         self._runner_factory = runner_factory
+        self._default_enabled_tools = default_enabled_tools
 
     @property
     def active_session_id(self) -> Optional[str]:
@@ -99,6 +103,9 @@ class SessionManager:
         session = Session()
         # Default to current working directory if not specified
         session.set_working_directory(working_directory or os.getcwd())
+        # Copy default enabled tools from config
+        if self._default_enabled_tools:
+            session.enabled_tools = list(self._default_enabled_tools)
         await session.save()
 
         self._sessions[session.id] = session
@@ -257,6 +264,9 @@ class SessionManager:
         child.parent_id = parent_id
         child.return_condition = return_condition
         child.working_directories = parent.working_directories.copy()
+        # Inherit enabled_tools from parent
+        if parent.enabled_tools:
+            child.enabled_tools = list(parent.enabled_tools)
 
         # Copy messages to child
         for msg in messages:

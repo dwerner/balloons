@@ -5,21 +5,31 @@ allowing domain prompts, goal bindings, and other context to be fresh.
 
 The system prompt is composed of multiple parts:
 1. User's custom system prompt (from backend config)
-2. Balloons tools documentation (Claude or OpenAI style)
+2. Balloons tools documentation (per-tool or legacy monolithic)
 3. Domain plugin prompts (from loaded domains)
 4. Session-specific prompt files
 5. Future: Goal binding context
 
+Tool prompts can be built in two modes:
+- Legacy: Load monolithic claude-balloons-tools.md or openai-balloons-tools.md
+- Per-tool: Build from individual files in prompts/tools/ based on enabled_tools
+
 Usage:
     from core.prompt_builder import build_system_prompt
 
-    # In runner.stream_response():
-    system_prompt = build_system_prompt(backend_type="claude")
+    # Legacy mode (all tools):
+    system_prompt = build_system_prompt(backend_type="openai")
+
+    # Per-tool mode (selective):
+    system_prompt = build_system_prompt(
+        backend_type="openai",
+        enabled_tools={"ask_user", "supervisor_start", "play_midi"},
+    )
 """
 
 import re
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, Set, TYPE_CHECKING
 
 from config import BackendConfig
 
@@ -123,15 +133,25 @@ def _load_prompt_file(filename: str) -> str:
     return ""
 
 
-def _load_balloons_tools_prompt(backend_type: str) -> str:
+def _load_balloons_tools_prompt(
+    backend_type: str,
+    enabled_tools: Optional[Set[str]] = None,
+) -> str:
     """Load the backend-appropriate balloons tools prompt.
 
     Args:
         backend_type: "claude" or "openai"
+        enabled_tools: Set of tool names to include. None means all tools (legacy mode).
 
     Returns:
         The balloons tools documentation prompt
     """
+    # Per-tool mode: build from individual tool files
+    if enabled_tools is not None:
+        from .tool_prompts import build_tool_prompts
+        return build_tool_prompts(enabled_tools)
+
+    # Legacy mode: load monolithic file
     if backend_type == "openai":
         return _load_prompt_file(_OPENAI_BALLOONS_TOOLS_FILENAME)
     else:
@@ -182,6 +202,7 @@ def build_system_prompt(
     backend_type: str = "claude",
     user_prompt: Optional[str] = None,
     session: "Session | None" = None,
+    enabled_tools: Optional[Set[str]] = None,
 ) -> Optional[str]:
     """Build the complete system prompt for a turn.
 
@@ -193,6 +214,8 @@ def build_system_prompt(
                       documentation to include
         user_prompt: Optional user-provided system prompt (from backend config)
         session: Optional session for session-specific prompts
+        enabled_tools: Set of tool names to include documentation for.
+                       None means use legacy mode (all tools from monolithic file).
 
     Returns:
         Complete system prompt string, or None if no content
@@ -204,7 +227,7 @@ def build_system_prompt(
         parts.append(user_prompt)
 
     # 2. Balloons tools documentation
-    balloons_prompt = _load_balloons_tools_prompt(backend_type)
+    balloons_prompt = _load_balloons_tools_prompt(backend_type, enabled_tools)
     if balloons_prompt:
         parts.append(balloons_prompt)
 

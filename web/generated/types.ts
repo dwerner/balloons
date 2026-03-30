@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-03-15T17:25:39.902720
+// Generated: 2026-03-30T13:28:13.608163
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -39,6 +39,16 @@ export interface ToolResultBlock {
   toolUseId?: string;
   content?: string;
   isError?: boolean;
+}
+
+export interface RepairedToolBlock {
+  type?: string;
+  toolUseId?: string;
+  toolName?: string;
+  originalInput?: string;
+  repairedInput?: string;
+  repairDescription?: string;
+  repairSuccessful?: boolean;
 }
 
 export interface InterruptionBlock {

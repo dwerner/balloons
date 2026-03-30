@@ -180,6 +180,8 @@ def start_ui_server() -> bool:
 
     Returns True if started, False if already running.
     """
+    import time
+
     existing_pid = read_ui_pid()
     if existing_pid:
         print(f"UI server already running (PID {existing_pid})")
@@ -196,6 +198,7 @@ def start_ui_server() -> bool:
     # Start bun with the dev:tls script
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_handle = open(UI_LOG_FILE, "a")
+    log_start_pos = log_handle.tell()
 
     # Find bun executable
     bun_path = subprocess.run(
@@ -218,6 +221,27 @@ def start_ui_server() -> bool:
 
     write_ui_pid(process.pid)
     print(f"Started UI server on port {UI_PORT} (PID {process.pid})")
+
+    # Wait briefly and check if process crashed during startup
+    time.sleep(1.5)
+    exit_code = process.poll()
+    if exit_code is not None:
+        print(f"\nError: UI server exited immediately with code {exit_code}")
+        # Read and display log output from this startup attempt
+        log_handle.flush()
+        try:
+            with open(UI_LOG_FILE, "r") as f:
+                f.seek(log_start_pos)
+                log_output = f.read().strip()
+                if log_output:
+                    print("\n--- Log output ---")
+                    print(log_output)
+                    print("--- End log ---")
+        except Exception as e:
+            print(f"Could not read log: {e}")
+        remove_ui_pid()
+        return False
+
     return True
 
 
