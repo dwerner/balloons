@@ -899,18 +899,20 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
             </div>
           </>
         ) : (
-          /* Editor view with Monaco + Code Map */
-          <EditorView
-            client={client}
-            lspClient={lspClient}
-            isDarkMode={true}
-            isMobile={false}
-            initialFiles={openFiles.map(f => ({
-              path: f.path,
-              content: fileContents.get(f.path),
-            }))}
-            onOpenFile={openFile}
-          />
+          /* Editor view with Monaco + Code Map - needs full container */
+          <div className="code-tab__editor-container">
+            <EditorView
+              client={client}
+              lspClient={lspClient}
+              isDarkMode={true}
+              isMobile={false}
+              initialFiles={openFiles.map(f => ({
+                path: f.path,
+                content: fileContents.get(f.path),
+              }))}
+              onOpenFile={openFile}
+            />
+          </div>
         )}
       </div>
 

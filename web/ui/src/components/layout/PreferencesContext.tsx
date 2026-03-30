@@ -11,13 +11,14 @@ import React, { createContext, useContext, useState, useCallback, useMemo, useEf
 const STORAGE_PREFIX = 'balloons:prefs:';
 
 // Preference keys (boolean)
-export type PreferenceKey = 'expandToolCards' | 'showTokenCounts' | 'voiceInputEnabled';
+export type PreferenceKey = 'expandToolCards' | 'showTokenCounts' | 'voiceInputEnabled' | 'autoscrollInstant';
 
 // Default values for each boolean preference
 const DEFAULTS: Record<PreferenceKey, boolean> = {
   expandToolCards: false, // Default: collapse tool cards (diffs, reads)
   showTokenCounts: true,  // Default: show token counts in headers
   voiceInputEnabled: false, // Default: voice input disabled
+  autoscrollInstant: false, // Default: animated scroll, not instant
 };
 
 // String preference keys
@@ -236,6 +237,7 @@ export interface PreferencesContextValue {
   expandToolCards: boolean;
   showTokenCounts: boolean;
   voiceInputEnabled: boolean;
+  autoscrollInstant: boolean;
 
   // Voice input settings (string)
   voiceInputHost: string;
@@ -360,6 +362,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
   const [expandToolCards, setExpandToolCards] = useState(() => loadPreference('expandToolCards'));
   const [showTokenCounts, setShowTokenCounts] = useState(() => loadPreference('showTokenCounts'));
   const [voiceInputEnabled, setVoiceInputEnabled] = useState(() => loadPreference('voiceInputEnabled'));
+  const [autoscrollInstant, setAutoscrollInstant] = useState(() => loadPreference('autoscrollInstant'));
 
   // String preference states
   const [voiceInputHost, setVoiceInputHost] = useState(() => loadStringPreference('voiceInputHost'));
@@ -487,9 +490,10 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
       case 'expandToolCards': return expandToolCards;
       case 'showTokenCounts': return showTokenCounts;
       case 'voiceInputEnabled': return voiceInputEnabled;
+      case 'autoscrollInstant': return autoscrollInstant;
       default: return DEFAULTS[key];
     }
-  }, [expandToolCards, showTokenCounts, voiceInputEnabled]);
+  }, [expandToolCards, showTokenCounts, voiceInputEnabled, autoscrollInstant]);
 
   // Generic boolean setter with persistence - use startTransition to mark as non-urgent
   const setPreference = useCallback((key: PreferenceKey, value: boolean) => {
@@ -504,6 +508,9 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
           break;
         case 'voiceInputEnabled':
           setVoiceInputEnabled(value);
+          break;
+        case 'autoscrollInstant':
+          setAutoscrollInstant(value);
           break;
       }
     });
@@ -667,6 +674,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     expandToolCards,
     showTokenCounts,
     voiceInputEnabled,
+    autoscrollInstant,
     voiceInputHost,
     voiceInputPort,
     depthIndicatorStyle,
@@ -709,7 +717,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     setStringPreference,
     getNumericPreference,
     setNumericPreference,
-  }), [expandToolCards, showTokenCounts, voiceInputEnabled, voiceInputHost, voiceInputPort, depthIndicatorStyle, historyLoadMode, autoscrollSpeed, bgPatternSidebar, bgPatternMain, bgPatternDetail, bgOpacitySidebar, bgOpacityMain, bgOpacityDetail, bgScaleSidebar, bgScaleMain, bgScaleDetail, diffColorAdded, diffColorRemoved, syntaxThemeDark, syntaxThemeLight, mdThemeDark, mdThemeLight, fontFamily, fontFamilyMono, fontSize, fontSizeMono, cardBgOpacity, cardBgPattern, cardBgPatternOpacity, cardBgPatternScale, codeBlockBgOpacity, customBackgrounds, allBackgroundPatterns, addCustomBackground, updateCustomBackground, removeCustomBackground, getCustomBackground, getPreference, setPreference, togglePreference, getStringPreference, setStringPreference, getNumericPreference, setNumericPreference]);
+  }), [expandToolCards, showTokenCounts, voiceInputEnabled, autoscrollInstant, voiceInputHost, voiceInputPort, depthIndicatorStyle, historyLoadMode, autoscrollSpeed, bgPatternSidebar, bgPatternMain, bgPatternDetail, bgOpacitySidebar, bgOpacityMain, bgOpacityDetail, bgScaleSidebar, bgScaleMain, bgScaleDetail, diffColorAdded, diffColorRemoved, syntaxThemeDark, syntaxThemeLight, mdThemeDark, mdThemeLight, fontFamily, fontFamilyMono, fontSize, fontSizeMono, cardBgOpacity, cardBgPattern, cardBgPatternOpacity, cardBgPatternScale, codeBlockBgOpacity, customBackgrounds, allBackgroundPatterns, addCustomBackground, updateCustomBackground, removeCustomBackground, getCustomBackground, getPreference, setPreference, togglePreference, getStringPreference, setStringPreference, getNumericPreference, setNumericPreference]);
 
   return (
     <PreferencesContext.Provider value={value}>

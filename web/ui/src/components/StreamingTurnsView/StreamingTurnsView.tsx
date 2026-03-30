@@ -108,12 +108,14 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
   // historyLoadMode determines which history layer to use: 'history', 'history_reverse', or 'history_lazy'
   const { turns, isLoading, isLoadingHistory, isStreaming, streamError, error, streamingProgress, totalHistoryTurns, loadHistoryRange } = useSessionData(client, sessionId, refreshKey, historyLoadMode);
 
-  // Get autoscroll speed from preferences, keep in ref for access in callbacks
-  const { autoscrollSpeed } = usePreferences();
+  // Get autoscroll settings from preferences, keep in refs for access in callbacks
+  const { autoscrollSpeed, autoscrollInstant } = usePreferences();
   const autoscrollSpeedRef = useRef(autoscrollSpeed);
+  const autoscrollInstantRef = useRef(autoscrollInstant);
   useEffect(() => {
     autoscrollSpeedRef.current = autoscrollSpeed;
-  }, [autoscrollSpeed]);
+    autoscrollInstantRef.current = autoscrollInstant;
+  }, [autoscrollSpeed, autoscrollInstant]);
 
   // Debug: log turns on every change and update lowest loaded order for lazy loading
   useEffect(() => {
@@ -643,8 +645,11 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     const currentPos = element.scrollTop;
     const distance = targetPos - currentPos;
 
-    // If instant requested or distance is small, just jump
-    if (options?.instant || Math.abs(distance) < 10) {
+    // Check if instant mode is enabled
+    const isInstant = autoscrollInstantRef.current;
+
+    // If instant requested, instant setting enabled, or distance is small, just jump
+    if (options?.instant || isInstant || Math.abs(distance) < 10) {
       programmaticScrollCountRef.current++;
       element.scrollTop = targetPos;
       setTimeout(() => {
@@ -704,15 +709,26 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
 
         // If we're still following and there's more content below, keep going
         if (isFollowingRef.current && !userScrollingRef.current && currentBottom > element.scrollTop + 5) {
-          // Restart animation to new target
-          const remainingDistance = Math.abs(currentBottom - element.scrollTop);
-          scrollAnimationStartRef.current = {
-            startTime: performance.now(),
-            startPos: element.scrollTop,
-            targetPos: currentBottom,
-            duration: Math.max(50, (remainingDistance / autoscrollSpeedRef.current) * 1000),
-          };
-          scrollAnimationRef.current = requestAnimationFrame(animate);
+          // If instant mode is now enabled, jump directly
+          if (autoscrollInstantRef.current) {
+            element.scrollTop = currentBottom;
+            scrollAnimationRef.current = null;
+            scrollAnimationStartRef.current = null;
+            setTimeout(() => {
+              programmaticScrollCountRef.current = Math.max(0, programmaticScrollCountRef.current - 1);
+            }, 50);
+          } else {
+            // Restart animation to new target
+            const currentSpeed = autoscrollSpeedRef.current;
+            const remainingDistance = Math.abs(currentBottom - element.scrollTop);
+            scrollAnimationStartRef.current = {
+              startTime: performance.now(),
+              startPos: element.scrollTop,
+              targetPos: currentBottom,
+              duration: Math.max(50, (remainingDistance / currentSpeed) * 1000),
+            };
+            scrollAnimationRef.current = requestAnimationFrame(animate);
+          }
         } else {
           // Actually done - at bottom or not following
           scrollAnimationRef.current = null;
@@ -919,15 +935,21 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
           // restart it with new target and recalculated duration to maintain constant speed.
           // Otherwise start a new animation.
           const newTarget = newScrollHeight - el.clientHeight;
-          if (scrollAnimationStartRef.current && scrollAnimationRef.current) {
+
+          // If instant mode, just jump to bottom
+          if (autoscrollInstantRef.current) {
+            cancelScrollAnimation();
+            el.scrollTop = newTarget;
+          } else if (scrollAnimationStartRef.current && scrollAnimationRef.current) {
             // Recalculate from current position to new target at configured speed
+            const currentSpeed = autoscrollSpeedRef.current;
             const currentPos = el.scrollTop;
             const remainingDistance = Math.abs(newTarget - currentPos);
             scrollAnimationStartRef.current = {
               startTime: performance.now(),
               startPos: currentPos,
               targetPos: newTarget,
-              duration: Math.max(50, (remainingDistance / autoscrollSpeedRef.current) * 1000),
+              duration: Math.max(50, (remainingDistance / currentSpeed) * 1000),
             };
           } else {
             // Start new animated scroll to bottom

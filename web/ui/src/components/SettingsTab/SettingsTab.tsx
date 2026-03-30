@@ -246,6 +246,7 @@ export const SettingsTab = memo(function SettingsTab({
     depthIndicatorStyle,
     historyLoadMode,
     autoscrollSpeed,
+    autoscrollInstant,
     bgPatternSidebar,
     bgPatternMain,
     bgPatternDetail,
@@ -528,8 +529,28 @@ export const SettingsTab = memo(function SettingsTab({
               </div>
             </div>
 
-            {/* Auto-scroll speed slider */}
+            {/* Auto-scroll instant toggle */}
             <div className="appearance-settings__row">
+              <div className="appearance-settings__label">
+                <span className="appearance-settings__label-text">Instant Auto-scroll</span>
+                <span className="appearance-settings__label-description">
+                  Jump to bottom immediately instead of animating
+                </span>
+              </div>
+              <div className="appearance-settings__control">
+                <label className="appearance-settings__toggle">
+                  <input
+                    type="checkbox"
+                    checked={autoscrollInstant}
+                    onChange={() => setPreference('autoscrollInstant', !autoscrollInstant)}
+                  />
+                  <span className="appearance-settings__toggle-slider" />
+                </label>
+              </div>
+            </div>
+
+            {/* Auto-scroll speed slider */}
+            <div className={`appearance-settings__row ${autoscrollInstant ? 'appearance-settings__row--disabled' : ''}`}>
               <div className="appearance-settings__label">
                 <span className="appearance-settings__label-text">Auto-scroll Speed</span>
                 <span className="appearance-settings__label-description">
@@ -545,6 +566,7 @@ export const SettingsTab = memo(function SettingsTab({
                   step={25}
                   value={autoscrollSpeed}
                   onChange={(e) => setNumericPreference('autoscrollSpeed', parseInt(e.target.value, 10))}
+                  disabled={autoscrollInstant}
                 />
               </div>
             </div>
