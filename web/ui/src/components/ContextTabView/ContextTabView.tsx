@@ -995,14 +995,14 @@ interface ContextTabViewProps {
   client?: BalloonsClient | null;
   totalTokens?: number;
   onSelectTurn?: (turnIdx: number) => void;
-  onExchangeAction?: (turnIndices: number[], action: ExchangeAction) => void;
+  onExchangeAction?: (turnIndices: number[], turnIds: string[], action: ExchangeAction) => void;
   /** Called when a single turn should be deleted */
   onDeleteTurn?: (turnIdx: number) => void;
   /** Called when user wants to add exchange to link stash */
   onAddToLinkStash?: (turnIndices: number[], excerpt: string) => void;
   isLoading?: boolean;
-  /** Turn indices currently being archived (show spinner) */
-  archivingTurnIndices?: Set<number>;
+  /** Turn IDs currently being archived (show spinner) - uses stable IDs not indices */
+  archivingTurnIds?: Set<string>;
   /** Total turns in session (for detecting incomplete history) */
   totalHistoryTurns?: number;
   /** Whether history is still loading */
@@ -1026,7 +1026,7 @@ export const ContextTabView = memo(function ContextTabView({
   onDeleteTurn,
   onAddToLinkStash,
   isLoading = false,
-  archivingTurnIndices,
+  archivingTurnIds,
   totalHistoryTurns,
   isLoadingHistory = false,
   onLoadFullHistory,
@@ -1262,8 +1262,13 @@ export const ContextTabView = memo(function ContextTabView({
                 ...exchange.assistantTurns.map(t => t.idx),
               ];
 
-              // Check if any turns in this exchange are being archived
-              const isArchiving = archivingTurnIndices && turnIndices.some(idx => archivingTurnIndices.has(idx));
+              // Get turn IDs from rawTurnByIdx for stable tracking
+              const turnIds: string[] = turnIndices
+                .map(idx => rawTurnByIdx?.get(idx)?.turnId)
+                .filter((id): id is string => !!id);
+
+              // Check if any turns in this exchange are being archived (by stable turn ID)
+              const isArchiving = archivingTurnIds && turnIds.some(id => archivingTurnIds.has(id));
 
               // Build excerpt from user turn or first content
               const excerptSource = exchange.userTurn?.content
@@ -1280,13 +1285,13 @@ export const ContextTabView = memo(function ContextTabView({
                   isArchiving={isArchiving}
                   onToggle={() => toggleExchange(exchange.id)}
                   onArchive={onExchangeAction
-                    ? () => onExchangeAction(turnIndices, 'archive')
+                    ? () => onExchangeAction(turnIndices, turnIds, 'archive')
                     : undefined}
                   onRestore={onExchangeAction
-                    ? () => onExchangeAction(turnIndices, 'restore')
+                    ? () => onExchangeAction(turnIndices, turnIds, 'restore')
                     : undefined}
                   onDelete={onExchangeAction
-                    ? () => onExchangeAction(turnIndices, 'delete')
+                    ? () => onExchangeAction(turnIndices, turnIds, 'delete')
                     : undefined}
                   onDeleteTurn={onDeleteTurn}
                   onAddToLinkStash={onAddToLinkStash

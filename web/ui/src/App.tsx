@@ -1238,20 +1238,21 @@ function AppContent() {
     isLoadingHistory: false,
     loadFullHistory: () => {},
   });
-  // Track turn indices being archived (for showing spinners)
-  // Track archiving state: Map from helperId to Set of turn indices being archived
-  const [archivingByHelper, setArchivingByHelper] = useState<Map<string, Set<number>>>(new Map());
+  // Track turn IDs being archived (for showing spinners)
+  // Track archiving state: Map from helperId to Set of turn IDs being archived
+  // Using turn IDs (stable UUIDs) instead of indices because indices change during reordering
+  const [archivingByHelper, setArchivingByHelper] = useState<Map<string, Set<string>>>(new Map());
   // Refresh key: increment to force session data re-subscription (e.g., after archive)
   const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
-  // Derived: all turn indices currently being archived
-  const archivingTurnIndices = useMemo(() => {
-    const allIndices = new Set<number>();
-    for (const indices of archivingByHelper.values()) {
-      for (const idx of indices) {
-        allIndices.add(idx);
+  // Derived: all turn IDs currently being archived
+  const archivingTurnIds = useMemo(() => {
+    const allIds = new Set<string>();
+    for (const ids of archivingByHelper.values()) {
+      for (const id of ids) {
+        allIds.add(id);
       }
     }
-    return allIndices;
+    return allIds;
   }, [archivingByHelper]);
 
   // Live context token count computed from turn data
@@ -2877,7 +2878,7 @@ function AppContent() {
               console.error('Failed to delete turn:', err);
             }
           }}
-          onExchangeAction={async (sessionId, turnIndices, action) => {
+          onExchangeAction={async (sessionId, turnIndices, turnIds, action) => {
             const client = clientRef.current;
             if (!client || connectionState !== 'connected') return;
 
@@ -2902,11 +2903,11 @@ function AppContent() {
                 const result = await client.sessions.startArchive(sessionId, turnIndices, true);
                 if (result.success && result.helperId) {
                   const helperId = result.helperId; // Capture for closure
-                  debugLog('Archive started', { sessionId, turnIndices, helperId });
-                  // Track archiving turns by helper ID for concurrent archive support
+                  debugLog('Archive started', { sessionId, turnIndices, turnIds, helperId });
+                  // Track archiving turns by stable turn IDs (not indices which can shift during reorder)
                   setArchivingByHelper(prev => {
                     const next = new Map(prev);
-                    next.set(helperId, new Set(turnIndices));
+                    next.set(helperId, new Set(turnIds));
                     return next;
                   });
                   // archivingByHelper cleared on completion via onArchiveCompleted event
@@ -3191,7 +3192,7 @@ function AppContent() {
               setCreatingSessionFor(null);
             }
           }}
-          archivingTurnIndices={archivingTurnIndices}
+          archivingTurnIds={archivingTurnIds}
           unreadSessionIds={unreadSessionIds}
         />
       </AppLayout.Sidebar>
@@ -3270,21 +3271,22 @@ function AppContent() {
                       onStreamingProgressChange={handleStreamingProgressChange}
                       onTurnsChange={handleTurnsChange}
                       onLoadingChange={handleSessionLoadingChange}
-                      archivingTurnIndices={archivingTurnIndices}
+                      archivingTurnIds={archivingTurnIds}
                       refreshKey={sessionRefreshKey}
                       historyLoadMode={historyLoadMode}
                       onHistoryStateChange={setHistoryState}
-                      onArchiveTurns={async (turnIndices) => {
+                      onArchiveTurns={async (turnIndices, turnIds) => {
                         const client = clientRef.current;
                         if (!client || connectionState !== 'connected' || !selectedSessionId) return;
                         try {
                           const result = await client.sessions.startArchive(selectedSessionId, turnIndices, true);
                           if (result.success && result.helperId) {
                             const helperId = result.helperId;
-                            debugLog('Archive started from minimap', { sessionId: selectedSessionId, turnIndices, helperId });
+                            debugLog('Archive started from minimap', { sessionId: selectedSessionId, turnIndices, turnIds, helperId });
+                            // Track archiving turns by stable turn IDs (not indices which can shift during reorder)
                             setArchivingByHelper(prev => {
                               const next = new Map(prev);
-                              next.set(helperId, new Set(turnIndices));
+                              next.set(helperId, new Set(turnIds));
                               return next;
                             });
                           } else {
@@ -3313,7 +3315,7 @@ function AppContent() {
                   rawTurns={rawTurns}
                   client={clientRef.current}
                   isLoading={connectionState !== 'connected'}
-                  archivingTurnIndices={archivingTurnIndices}
+                  archivingTurnIds={archivingTurnIds}
                   totalHistoryTurns={historyState.totalHistoryTurns}
                   isLoadingHistory={historyState.isLoadingHistory}
                   onLoadFullHistory={historyState.loadFullHistory}
@@ -3339,7 +3341,7 @@ function AppContent() {
                       console.error('Failed to delete turn:', err);
                     }
                   }}
-                  onExchangeAction={async (turnIndices, action) => {
+                  onExchangeAction={async (turnIndices, turnIds, action) => {
                     const client = clientRef.current;
                     if (!client || connectionState !== 'connected' || !selectedSessionId) return;
 
@@ -3363,11 +3365,11 @@ function AppContent() {
                         const result = await client.sessions.startArchive(selectedSessionId, turnIndices, true);
                         if (result.success && result.helperId) {
                           const helperId = result.helperId; // Capture for closure
-                          debugLog('Archive started', { sessionId: selectedSessionId, turnIndices, helperId });
-                          // Track archiving turns by helper ID for concurrent archive support
+                          debugLog('Archive started', { sessionId: selectedSessionId, turnIndices, turnIds, helperId });
+                          // Track archiving turns by stable turn IDs (not indices which can shift during reorder)
                           setArchivingByHelper(prev => {
                             const next = new Map(prev);
-                            next.set(helperId, new Set(turnIndices));
+                            next.set(helperId, new Set(turnIds));
                             return next;
                           });
                         } else {
@@ -4546,7 +4548,7 @@ interface SidebarContentProps {
   onNewBoundSession?: (entityType: string, entityId: string) => Promise<void>;
   creatingSessionFor?: string | null; // "entityType:entityId" when creating bound session
   // Exchange context menu callbacks
-  onExchangeAction?: (sessionId: string, turnIndices: number[], action: ExchangeAction) => void;
+  onExchangeAction?: (sessionId: string, turnIndices: number[], turnIds: string[], action: ExchangeAction) => void;
   onDeleteTurn?: (sessionId: string, turnIdx: number) => void;
   // Session review callback
   onReviewSession?: (sessionId: string) => void;
@@ -4566,7 +4568,7 @@ interface SidebarContentProps {
   // Auth
   onLogout?: () => void;
   // Archiving state
-  archivingTurnIndices?: Set<number>;
+  archivingTurnIds?: Set<string>;
   // Unread sessions (finished streaming but not viewed)
   unreadSessionIds?: Set<string>;
 }
@@ -4600,7 +4602,7 @@ function SidebarContent({
   serverSlot,
   onSlotChange,
   onLogout,
-  archivingTurnIndices,
+  archivingTurnIds,
   unreadSessionIds,
 }: SidebarContentProps) {
   const { closeSidebar, layoutMode } = useLayout();

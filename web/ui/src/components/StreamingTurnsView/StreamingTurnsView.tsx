@@ -81,8 +81,8 @@ interface StreamingTurnsViewProps {
   onTurnsChange?: (turns: SessionDataTurn[]) => void;
   /** Callback when session data loading state changes (for clearing parent loading indicators) */
   onLoadingChange?: (isLoading: boolean, error: string | null) => void;
-  /** Turn indices currently being archived (show spinner overlay) */
-  archivingTurnIndices?: Set<number>;
+  /** Turn IDs currently being archived (show spinner overlay) - uses stable IDs not indices */
+  archivingTurnIds?: Set<string>;
   /** Increment to force re-subscription (e.g., after archive) */
   refreshKey?: number;
   /** How to load history: 'forward' (oldest first), 'reverse' (newest first), 'lazy' (on-demand) */
@@ -90,7 +90,7 @@ interface StreamingTurnsViewProps {
   /** Callback when history state changes (for ContextTab incomplete history detection) */
   onHistoryStateChange?: (state: { totalHistoryTurns: number; isLoadingHistory: boolean; loadFullHistory: () => void }) => void;
   /** Callback when user requests to archive turns from minimap context menu */
-  onArchiveTurns?: (turnIndices: number[]) => void;
+  onArchiveTurns?: (turnIndices: number[], turnIds: string[]) => void;
 }
 
 // Threshold in pixels to consider "at bottom"
@@ -102,7 +102,7 @@ const LAZY_LOAD_TOP_THRESHOLD = 500;
 // Number of turns to load per lazy load chunk
 const LAZY_LOAD_CHUNK_SIZE = 50;
 
-export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrollStateChange, onStreamingProgressChange, onTurnsChange, onLoadingChange, archivingTurnIndices, refreshKey, historyLoadMode = 'reverse', onHistoryStateChange, onArchiveTurns }: StreamingTurnsViewProps) {
+export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrollStateChange, onStreamingProgressChange, onTurnsChange, onLoadingChange, archivingTurnIds, refreshKey, historyLoadMode = 'reverse', onHistoryStateChange, onArchiveTurns }: StreamingTurnsViewProps) {
   // useSessionData now gets the clientId directly from client.clientId when connected
   // refreshKey forces re-subscription when incremented (e.g., after archive)
   // historyLoadMode determines which history layer to use: 'history', 'history_reverse', or 'history_lazy'
@@ -428,23 +428,23 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
     }));
   }, [exchangeGroups]);
 
-  // Compute which exchange IDs are currently being archived
+  // Compute which exchange IDs are currently being archived (using stable turn IDs)
   const archivingExchangeIds = useMemo(() => {
-    if (!archivingTurnIndices || archivingTurnIndices.size === 0) {
+    if (!archivingTurnIds || archivingTurnIds.size === 0) {
       return undefined;
     }
     const ids = new Set<string>();
     for (const group of exchangeGroups) {
       const allTurnsInExchange = group.items.flatMap(item => item.turns);
       const isArchiving = allTurnsInExchange.some(
-        t => archivingTurnIndices.has(t.order ?? -1)
+        t => archivingTurnIds.has(t.turnId)
       );
       if (isArchiving && group.exchangeId) {
         ids.add(group.exchangeId);
       }
     }
     return ids.size > 0 ? ids : undefined;
-  }, [exchangeGroups, archivingTurnIndices]);
+  }, [exchangeGroups, archivingTurnIds]);
 
   // Minimap visibility state (persisted to localStorage)
   const [showMinimap, setShowMinimap] = useState(() => {
@@ -492,10 +492,11 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
       // Find the exchange group to get color index, turn range, tokens, and indices
       const group = exchangeGroups.find(g => g.exchangeId === id);
 
-      // Calculate turn range, token count, and turn indices from the exchange group
+      // Calculate turn range, token count, turn indices, and turn IDs from the exchange group
       let turnRange: string | undefined;
       let tokenCount = 0;
       let turnIndices: number[] = [];
+      let turnIds: string[] = [];
 
       if (group) {
         const allTurns = group.items.flatMap(item => item.turns);
@@ -508,6 +509,8 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         tokenCount = allTurns.reduce((sum, t) => sum + (t.tokens || 0), 0);
         // Collect turn indices for archive action
         turnIndices = allTurns.map(t => t.order).filter((o): o is number => o !== undefined);
+        // Collect stable turn IDs for tracking during archive (IDs don't change during reorder)
+        turnIds = allTurns.map(t => t.turnId).filter((id): id is string => !!id);
       }
 
       rects.push({
@@ -518,6 +521,7 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
         turnRange,
         tokenCount,
         turnIndices,
+        turnIds,
       });
     });
 
@@ -1183,9 +1187,9 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
               const turnRange = firstOrder === lastOrder ? `#${firstOrder}` : `#${firstOrder}-${lastOrder}`;
               const timestamp = firstTurn?.timestamp ? new Date(firstTurn.timestamp).toLocaleTimeString() : '';
 
-              // Check if any turns in this exchange are being archived
-              const isArchivingExchange = archivingTurnIndices && allTurnsInExchange.some(
-                t => archivingTurnIndices.has(t.order ?? -1)
+              // Check if any turns in this exchange are being archived (by stable turn ID)
+              const isArchivingExchange = archivingTurnIds && allTurnsInExchange.some(
+                t => archivingTurnIds.has(t.turnId)
               );
 
               return (

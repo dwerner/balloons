@@ -27,6 +27,7 @@ interface ContextMenuInfo {
   exchangeLayout: MinimapExchangeLayout;
   tokenCount?: number;
   turnIndices?: number[];
+  turnIds?: string[];
 }
 
 export interface ChatMinimapProps {
@@ -49,7 +50,7 @@ export interface ChatMinimapProps {
   /** Callback when user clicks on a specific exchange */
   onExchangeClick?: (exchangeId: string) => void;
   /** Callback when user requests to archive an exchange's turns */
-  onArchiveExchange?: (turnIndices: number[]) => void;
+  onArchiveExchange?: (turnIndices: number[], turnIds: string[]) => void;
   /** Currently selected/active exchange ID */
   selectedExchangeId?: string;
   /** Exchange IDs currently being archived */
@@ -349,6 +350,7 @@ export function ChatMinimap({
       exchangeLayout: exLayout,
       tokenCount: exchangeRect?.tokenCount,
       turnIndices: exchangeRect?.turnIndices,
+      turnIds: exchangeRect?.turnIds,
     });
   }, [layout, exchangeRects]);
 
@@ -359,8 +361,8 @@ export function ChatMinimap({
 
   // Handle archive action from context menu
   const handleArchive = useCallback(() => {
-    if (!contextMenu?.turnIndices || !onArchiveExchange) return;
-    onArchiveExchange(contextMenu.turnIndices);
+    if (!contextMenu?.turnIndices || !contextMenu?.turnIds || !onArchiveExchange) return;
+    onArchiveExchange(contextMenu.turnIndices, contextMenu.turnIds);
     closeContextMenu();
   }, [contextMenu, onArchiveExchange, closeContextMenu]);
 

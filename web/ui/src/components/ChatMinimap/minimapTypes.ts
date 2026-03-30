@@ -27,6 +27,7 @@ export interface ExchangeDOMRect {
   turnRange?: string;  // e.g., "#0-5" or "#12"
   tokenCount?: number; // Total tokens in this exchange
   turnIndices?: number[]; // Turn indices for archive action
+  turnIds?: string[]; // Turn IDs for stable tracking during archive
 }
 
 // Calculated layout positions
