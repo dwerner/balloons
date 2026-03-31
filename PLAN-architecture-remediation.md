@@ -61,18 +61,20 @@ Primary goals:
 
 ### Workstream 1: Documentation Reconciliation
 
+**Status:** In progress — current-facing docs substantially reconciled; historical/stale doc cleanup still ongoing.
+
 #### Deliverables
 - Update `ARCHITECTURE.md` to reflect current reality
 - Clarify current runtime architecture, transitional pieces, and future direction
 - Move outdated/historical material into clearly labeled sections or archive docs
 
 #### Tasks
-- [ ] Rewrite architecture overview around headless server + web UI
-- [ ] State explicitly that the TUI is dead and unsupported
-- [ ] State explicitly that `:commands` are dead and unsupported
-- [ ] Document current Rust-backed storage status accurately
-- [ ] Add explicit "current state" vs "transitional debt" sections
-- [ ] Remove or archive outdated references to TUI-first architecture and command-mode workflows
+- [x] Rewrite architecture overview around headless server + web UI
+- [x] State explicitly that the TUI is dead and unsupported
+- [x] State explicitly that `:commands` are dead and unsupported
+- [~] Document current Rust-backed storage status accurately
+- [~] Add explicit "current state" vs "transitional debt" sections
+- [~] Remove or archive outdated references to TUI-first architecture and command-mode workflows
 
 #### Success Criteria
 - A new contributor can understand the actual runtime architecture from docs alone.
@@ -80,6 +82,8 @@ Primary goals:
 ---
 
 ### Workstream 2: Import Hygiene and Service Package Cleanup
+
+**Status:** Completed in fork and merged — lazy `service` re-exports now preserve runtime compatibility while reducing eager import coupling, covered by characterization tests.
 
 #### Deliverables
 - Make `service` submodule imports independent of unrelated optional features
@@ -92,13 +96,13 @@ Primary goals:
 - Only then change internals incrementally
 
 #### Tasks
-- [ ] Audit all imports in `service/__init__.py`
-- [ ] Identify actual public import contracts relied on by runtime code
-- [ ] Add characterization tests for `from service import ...` compatibility
-- [ ] Add targeted import tests for isolated service submodules
-- [ ] Stop eagerly importing optional auth/http modules from package init only when compatibility is preserved
-- [ ] Keep `service/__init__.py` minimal or convert it to safe re-exports only
-- [ ] Update tests/import sites to import concrete modules where appropriate
+- [x] Audit all imports in `service/__init__.py`
+- [x] Identify actual public import contracts relied on by runtime code
+- [x] Add characterization tests for `from service import ...` compatibility
+- [x] Add targeted import tests for isolated service submodules
+- [x] Stop eagerly importing optional auth/http modules from package init only when compatibility is preserved
+- [x] Keep `service/__init__.py` minimal or convert it to safe re-exports only
+- [~] Update tests/import sites to import concrete modules where appropriate
 
 #### Success Criteria
 - Importing `service.goal_tree_state_service` does not require unrelated dependencies.
@@ -109,14 +113,19 @@ Primary goals:
 
 ### Workstream 3: Remove Global Service Locator from Plugin Runtime
 
+**Status:** Completed in fork and merged for active plugin/runtime eventing paths — explicit event-emitter wiring replaced active global locator usage.
+
 #### Deliverables
 - Replace implicit runtime lookups with explicit dependency injection
 
+#### Status
+- Completed for active runtime paths. The headless/plugin runtime now uses explicit event-emitter wiring instead of the global locator. Legacy locator exports remain in `service/__init__.py` as deprecated compatibility surface pending any future import-surface cleanup.
+
 #### Tasks
-- [ ] Identify all plugin/runtime call paths using `get_session_manager_service()`
-- [ ] Introduce explicit runtime/service references where needed
-- [ ] Keep a compatibility shim temporarily if necessary
-- [ ] Deprecate and later remove service locator fallback
+- [x] Identify all plugin/runtime call paths using `get_session_manager_service()`
+- [x] Introduce explicit runtime/service references where needed
+- [x] Keep a compatibility shim temporarily if necessary
+- [x] Deprecate and later remove service locator fallback
 
 #### Success Criteria
 - Plugin execution/event emission works without relying on module-global service state.
@@ -242,40 +251,60 @@ Examples of a single logical change:
 - rewriting one architecture section in one document
 - extracting one workflow cluster from a service into a collaborator
 
+## Reorganized Substantive Workstreams
+
+### Chunk A: Product Surface and Documentation Alignment
+- Finish Workstream 1 documentation reconciliation
+- Complete current-vs-historical doc cleanup
+- Continue Workstream 8 only for documentation-facing legacy inventory
+
+### Chunk B: Service Boundary Cleanup (Completed core milestones)
+- Workstream 2 completed: `service/__init__.py` import hygiene behind tests
+- Workstream 3 completed: active plugin/runtime service-locator removal
+- Remaining follow-up: remove residual compatibility shims only when proven unused
+
+### Chunk C: Architectural Boundary Definition
+- Continue Workstream 4 by defining clear placement rules for `core`, orchestration/application workflow code, and `service`
+- Identify candidate module moves before changing implementation structure broadly
+
+### Chunk D: Stateful Core Decomposition
+- Workstream 5: split `session.py`
+- Workstream 6: split `SessionManagerService`
+- Coordinate these together conceptually, but execute as one logical change at a time with tests after each extraction
+
+### Chunk E: Persistence and Reliability Hardening
+- Workstream 7: document invariants and add stress/characterization coverage
+- Continue Workstream 8 for runtime/code legacy classification once invariants and ownership are clearer
+
 ## Recommended Execution Order
 
-### Phase 1: Safe structural cleanup
-1. Documentation reconciliation, including explicit TUI/`:commands` deprecation cleanup
-   - one file at a time
-   - validate after each file update
-2. Add characterization tests for current package/runtime behavior
-   - one test or test module at a time
-   - run after each addition
-3. Import hygiene in `service/__init__.py` only behind those tests
-   - one import-surface change at a time
+### Phase 1: Finish safe structural cleanup
+1. Finish current-facing and historical documentation reconciliation
+   - one logical doc change at a time
    - validate after each change
+2. Reflect merged work accurately in the plan and supporting docs
+   - keep workstream status current
 
-### Phase 2: Runtime dependency cleanup
-4. Replace service locator usage with explicit wiring
-   - one call path at a time
-   - test after each path change
-5. Clarify runtime/layer boundaries in docs and code structure
-   - one module or doc section at a time
-   - validate after each step
+### Phase 2: Define architecture before broad refactors
+3. Clarify layer boundaries and placement rules
+   - documentation/design first
+   - one module family or boundary rule at a time
+4. Identify residual locator/import compatibility shims that can later be removed
+   - no speculative cleanup without evidence/tests
 
-### Phase 3: Internal decomposition
-6. Split `session.py`
-   - one extraction at a time
+### Phase 3: Decompose the core stateful modules
+5. Split `session.py`
+   - one extraction seam at a time
    - test after each extraction
-7. Split `SessionManagerService`
+6. Split `SessionManagerService`
    - one workflow cluster at a time
    - test after each extraction
 
-### Phase 4: Reliability hardening
-8. Persistence invariant docs + stress tests
+### Phase 4: Reliability + debt retirement
+7. Persistence invariants and stress tests
    - one invariant/test case at a time
-9. Legacy cleanup pass
-   - one dead path or deprecation cleanup at a time
+8. Runtime/code legacy cleanup pass
+   - one dead path or compatibility cleanup at a time
    - validate after each cleanup
 
 ## Immediate Next Steps

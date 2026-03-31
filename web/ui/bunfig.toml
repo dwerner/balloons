@@ -1,0 +1,7 @@
+# Bun configuration
+# Minimum package age: 15 days (1296000 seconds)
+# This helps protect against supply chain attacks by only installing packages
+# that have been published for at least 15 days
+
+[install]
+minimumReleaseAge = 1296000
