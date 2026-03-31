@@ -22,12 +22,15 @@ The service:
 4. Converts ToolResult to JSON-serializable response
 """
 
-from typing import Any, TYPE_CHECKING
+from typing import Any, Awaitable, Callable, TYPE_CHECKING
 import asyncio
 
 from codegen.ws_expose import ws_service, ws_expose, MethodSpec
 from core.debug_log import debug_log, Category
 from .events import payload_to_dict
+
+
+EventEmitter = Callable[[str, str, str, dict[str, Any]], Awaitable[None]]
 
 if TYPE_CHECKING:
     from session import Session
@@ -44,10 +47,15 @@ class DomainRpcService:
     def __init__(self):
         self._domain_methods: dict[str, tuple[Any, str, str]] = {}  # wire_name -> (domain, method_name, domain_id)
         self._manager = None  # Set by headless.py
+        self._event_emitter: EventEmitter | None = None
 
     def set_manager(self, manager: Any) -> None:
         """Set the session manager for session lookups."""
         self._manager = manager
+
+    def set_event_emitter(self, emitter: EventEmitter | None) -> None:
+        """Set the event emitter for propagating domain events to clients."""
+        self._event_emitter = emitter
 
     def register_domain(self, domain: Any) -> list[str]:
         """Register a domain's @ws_expose methods.
@@ -179,24 +187,20 @@ class DomainRpcService:
         This ensures events from @ws_expose methods are propagated to the UI,
         just like events from LLM-called tools.
         """
-        if self._manager is None:
+        emitter = self._event_emitter
+        if emitter is None:
             return
 
         try:
-            from service import get_session_manager_service
-            session_manager = get_session_manager_service()
-            if session_manager is None:
-                return
-
             for event in events:
                 session_id = event.target_session or session.id
                 payload_dict = payload_to_dict(event.payload)
 
-                await session_manager.emit_domain_event(
-                    domain_id=event.source_domain,
-                    event_type=event.type,
-                    session_id=session_id,
-                    data=payload_dict,
+                await emitter(
+                    event.source_domain,
+                    event.type,
+                    session_id,
+                    payload_dict,
                 )
 
                 debug_log.info(

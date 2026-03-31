@@ -89,13 +89,26 @@ impl GitRepo {
     /// Stage specific files for commit.
     ///
     /// Paths should be relative to the repository root.
+    /// Handles both additions/modifications (file exists) and deletions (file doesn't exist).
     pub fn stage_files(&self, paths: &[&str]) -> Result<usize> {
         let mut index = self.repo.index()?;
         let mut staged = 0;
 
+        let workdir = self.repo.workdir().ok_or_else(|| {
+            git2::Error::from_str("Repository has no working directory")
+        })?;
+
         for path in paths {
-            debug!(?path, "Staging file");
-            index.add_path(Path::new(path))?;
+            let full_path = workdir.join(path);
+            if full_path.exists() {
+                // File exists - stage it (add or modify)
+                debug!(?path, "Staging file (add/modify)");
+                index.add_path(Path::new(path))?;
+            } else {
+                // File doesn't exist - stage as deletion
+                debug!(?path, "Staging file deletion");
+                index.remove_path(Path::new(path))?;
+            }
             staged += 1;
         }
 

@@ -418,50 +418,28 @@ class DomainRegistry:
         events: list[DomainEvent],
         session: "Session",
     ) -> None:
-        """Emit domain events through the session manager to WebSocket clients.
+        """Emit domain events through the configured event emitter.
 
         This bridges the domain plugin event system to the Balloons WebSocket layer.
-
-        If an event_emitter callback was provided at construction, it is used.
-        Otherwise, falls back to the service locator pattern for backwards
-        compatibility.
+        If no event emitter is configured, event forwarding is skipped.
         """
+        emitter = self._event_emitter
+        if emitter is None:
+            return
+
         for event in events:
             session_id = event.target_session or session.id
             payload_dict = payload_to_dict(event.payload)
 
-            # Use injected emitter if available
-            if self._event_emitter is not None:
-                try:
-                    await self._event_emitter(
-                        event.source_domain,
-                        event.type,
-                        session_id,
-                        payload_dict,
-                    )
-                except Exception as e:
-                    print(f"Warning: Event emitter failed: {e}")
-                continue
-
-            # Fallback to service locator (backwards compatible)
             try:
-                from service import get_session_manager_service
-                session_manager = get_session_manager_service()
-                if session_manager is None:
-                    continue
-
-                await session_manager.emit_domain_event(
-                    domain_id=event.source_domain,
-                    event_type=event.type,
-                    session_id=session_id,
-                    data=payload_dict,
+                await emitter(
+                    event.source_domain,
+                    event.type,
+                    session_id,
+                    payload_dict,
                 )
-            except ImportError:
-                # Session manager not available (e.g., in tests)
-                pass
             except Exception as e:
-                # Log but don't fail the tool execution
-                print(f"Warning: Failed to emit domain event: {e}")
+                print(f"Warning: Event emitter failed: {e}")
 
     # Event Routing
 

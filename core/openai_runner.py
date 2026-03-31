@@ -193,9 +193,10 @@ class OpenAICompatibleRunner(BaseRunner):
         """
         from .prompt_builder import build_system_prompt
         # Get enabled tools from session (or None for defaults)
+        # Use list to preserve order (order determines prompt order)
         enabled_tools = None
         if self._session:
-            enabled_tools = self._session.get_enabled_tools_set()
+            enabled_tools = self._session.get_enabled_tools_list()
         return build_system_prompt(
             backend_type="openai",
             user_prompt=self._user_prompt,
@@ -547,9 +548,10 @@ class OpenAICompatibleRunner(BaseRunner):
         # Get enabled tools from session if available, otherwise use allowed_tools param
         effective_allowed_tools = allowed_tools
         if effective_allowed_tools is None and self._session:
-            enabled = self._session.get_enabled_tools_set()
+            # get_enabled_tools_list preserves order, but for tool filtering order doesn't matter
+            enabled = self._session.get_enabled_tools_list()
             if enabled:
-                effective_allowed_tools = list(enabled)
+                effective_allowed_tools = enabled
 
         # Get tools for this request
         tools = get_tools_for_request(effective_allowed_tools, disable_tools)

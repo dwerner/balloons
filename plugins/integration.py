@@ -141,20 +141,23 @@ def _emit_domain_event(event_type: str, domain_id: str) -> None:
     """Emit a domain load/unload event to WebSocket clients.
 
     This is fire-and-forget - runs the async emit in a background task.
+    If no event emitter is configured on the registry, event forwarding is skipped.
     """
     import asyncio
 
+    registry = get_registry()
+    emitter = getattr(registry, "_event_emitter", None)
+    if emitter is None:
+        return
+
     async def emit():
         try:
-            from service import get_session_manager_service
-            session_manager = get_session_manager_service()
-            if session_manager:
-                await session_manager.emit_domain_event(
-                    domain_id="system",
-                    event_type=event_type,
-                    session_id="*",  # Broadcast to all
-                    data={"domainId": domain_id},
-                )
+            await emitter(
+                "system",
+                event_type,
+                "*",
+                {"domainId": domain_id},
+            )
         except Exception as e:
             print(f"Warning: Failed to emit {event_type} event: {e}")
 

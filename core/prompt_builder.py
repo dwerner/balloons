@@ -29,7 +29,7 @@ Usage:
 
 import re
 from pathlib import Path
-from typing import Optional, Set, TYPE_CHECKING
+from typing import Optional, Set, Sequence, TYPE_CHECKING
 
 from config import BackendConfig
 
@@ -131,20 +131,21 @@ def _load_prompt_file(filename: str) -> str:
 
 def _load_balloons_tools_prompt(
     backend_type: str,
-    enabled_tools: Optional[Set[str]] = None,
+    enabled_tools: Optional[Sequence[str]] = None,
 ) -> str:
     """Load the balloons tools prompt using per-tool prompts.
 
     Args:
         backend_type: "claude" or "openai" (currently unused, kept for API compat)
-        enabled_tools: Set of tool names to include. None means use default enabled tools.
+        enabled_tools: Ordered list of tool names. Order determines prompt order.
+                       None means use default enabled tools.
 
     Returns:
         The balloons tools documentation prompt
     """
     from .tool_prompts import build_tool_prompts, DEFAULT_ENABLED_TOOLS
 
-    # Use provided set or defaults
+    # Use provided list or defaults (order matters!)
     tools_to_include = enabled_tools if enabled_tools is not None else DEFAULT_ENABLED_TOOLS
     return build_tool_prompts(tools_to_include)
 
@@ -193,7 +194,7 @@ def build_system_prompt(
     backend_type: str = "claude",
     user_prompt: Optional[str] = None,
     session: "Session | None" = None,
-    enabled_tools: Optional[Set[str]] = None,
+    enabled_tools: Optional[Sequence[str]] = None,
 ) -> Optional[str]:
     """Build the complete system prompt for a turn.
 
@@ -205,8 +206,9 @@ def build_system_prompt(
                       documentation to include
         user_prompt: Optional user-provided system prompt (from backend config)
         session: Optional session for session-specific prompts
-        enabled_tools: Set of tool names to include documentation for.
-                       None means use legacy mode (all tools from monolithic file).
+        enabled_tools: Ordered list of tool names to include documentation for.
+                       The order determines the order in the prompt.
+                       None means use default enabled tools.
 
     Returns:
         Complete system prompt string, or None if no content

@@ -65,33 +65,37 @@ Frontend Interaction API:
        session_service.stop_event_pump()
 """
 
-from service.queue_state_service import QueueStateService
-from service.session_manager_service import SessionManagerService
-from service.goal_tree_state_service import GoalTreeStateService
-from service.task_state_service import TaskStateService
-from service.session_data_service import SessionDataService
-from service.image_service import ImageService
-from service.sound_service import SoundService
-from service.debug_log_service import DebugLogService
-from service.file_state_service import FileStateService
-from service.supervisor_state_service import SupervisorStateService
-from service.lsp_service import LSPService
-from service.kanban_ws_service import KanbanWebSocketService
-from service.ws_server import WsServer, create_server
-from service.jwt_auth import JWTAuth, JWTConfig, TokenClaims
-from service.user_auth import (
-    UserAuthService,
-    User,
-    PasswordHasher,
-    UserAuthError,
-    UserNotFoundError,
-    InvalidCredentialsError,
-    UserDisabledError,
-    UsernameExistsError,
-)
-from service.user_storage import JsonFileUserStorage, get_user_storage
-from service.auth_routes import AuthRoutes
-from service.http_server import HttpAuthServer, ServerConfig, create_http_auth_server
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from service.auth_routes import AuthRoutes
+    from service.debug_log_service import DebugLogService
+    from service.file_state_service import FileStateService
+    from service.goal_tree_state_service import GoalTreeStateService
+    from service.http_server import HttpAuthServer, ServerConfig, create_http_auth_server
+    from service.image_service import ImageService
+    from service.jwt_auth import JWTAuth, JWTConfig, TokenClaims
+    from service.kanban_ws_service import KanbanWebSocketService
+    from service.lsp_service import LSPService
+    from service.queue_state_service import QueueStateService
+    from service.session_data_service import SessionDataService
+    from service.session_manager_service import SessionManagerService
+    from service.sound_service import SoundService
+    from service.supervisor_state_service import SupervisorStateService
+    from service.task_state_service import TaskStateService
+    from service.user_auth import (
+        InvalidCredentialsError,
+        PasswordHasher,
+        User,
+        UserAuthError,
+        UserAuthService,
+        UserDisabledError,
+        UserNotFoundError,
+        UsernameExistsError,
+    )
+    from service.user_storage import JsonFileUserStorage, get_user_storage
+    from service.ws_server import WsServer, create_server
 
 __all__ = [
     "QueueStateService",
@@ -127,31 +131,49 @@ __all__ = [
     "HttpAuthServer",
     "ServerConfig",
     "create_http_auth_server",
-    # Service locator
-    "get_session_manager_service",
-    "set_session_manager_service",
 ]
 
-# Simple service locator for accessing the session manager service from plugins
-_session_manager_service: SessionManagerService | None = None
+_EXPORT_MAP = {
+    "QueueStateService": ("service.queue_state_service", "QueueStateService"),
+    "SessionManagerService": ("service.session_manager_service", "SessionManagerService"),
+    "GoalTreeStateService": ("service.goal_tree_state_service", "GoalTreeStateService"),
+    "TaskStateService": ("service.task_state_service", "TaskStateService"),
+    "SessionDataService": ("service.session_data_service", "SessionDataService"),
+    "ImageService": ("service.image_service", "ImageService"),
+    "SoundService": ("service.sound_service", "SoundService"),
+    "DebugLogService": ("service.debug_log_service", "DebugLogService"),
+    "FileStateService": ("service.file_state_service", "FileStateService"),
+    "SupervisorStateService": ("service.supervisor_state_service", "SupervisorStateService"),
+    "LSPService": ("service.lsp_service", "LSPService"),
+    "KanbanWebSocketService": ("service.kanban_ws_service", "KanbanWebSocketService"),
+    "WsServer": ("service.ws_server", "WsServer"),
+    "create_server": ("service.ws_server", "create_server"),
+    "JWTAuth": ("service.jwt_auth", "JWTAuth"),
+    "JWTConfig": ("service.jwt_auth", "JWTConfig"),
+    "TokenClaims": ("service.jwt_auth", "TokenClaims"),
+    "UserAuthService": ("service.user_auth", "UserAuthService"),
+    "User": ("service.user_auth", "User"),
+    "PasswordHasher": ("service.user_auth", "PasswordHasher"),
+    "UserAuthError": ("service.user_auth", "UserAuthError"),
+    "UserNotFoundError": ("service.user_auth", "UserNotFoundError"),
+    "InvalidCredentialsError": ("service.user_auth", "InvalidCredentialsError"),
+    "UserDisabledError": ("service.user_auth", "UserDisabledError"),
+    "UsernameExistsError": ("service.user_auth", "UsernameExistsError"),
+    "JsonFileUserStorage": ("service.user_storage", "JsonFileUserStorage"),
+    "get_user_storage": ("service.user_storage", "get_user_storage"),
+    "AuthRoutes": ("service.auth_routes", "AuthRoutes"),
+    "HttpAuthServer": ("service.http_server", "HttpAuthServer"),
+    "ServerConfig": ("service.http_server", "ServerConfig"),
+    "create_http_auth_server": ("service.http_server", "create_http_auth_server"),
+}
+
+def __getattr__(name: str) -> Any:
+    if name in _EXPORT_MAP:
+        module_name, attr_name = _EXPORT_MAP[name]
+        module = import_module(module_name)
+        value = getattr(module, attr_name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def get_session_manager_service() -> SessionManagerService | None:
-    """Get the global session manager service instance.
-
-    Returns:
-        The session manager service, or None if not initialized
-    """
-    return _session_manager_service
-
-
-def set_session_manager_service(service: SessionManagerService | None) -> None:
-    """Set the global session manager service instance.
-
-    Called by headless.py during server startup.
-
-    Args:
-        service: The session manager service instance
-    """
-    global _session_manager_service
-    _session_manager_service = service

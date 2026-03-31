@@ -82,8 +82,8 @@ class TestBuildToolPrompts:
 
     def test_includes_only_enabled_tools(self):
         """Only enabled tools should have documentation in the prompt."""
-        # Enable just domain tools
-        enabled = {"load_domain", "unload_domain", "list_domains"}
+        # Enable just domain tools (as a list)
+        enabled = ["load_domain", "unload_domain", "list_domains"]
         prompt = build_tool_prompts(enabled)
 
         assert "load_domain" in prompt
@@ -92,6 +92,26 @@ class TestBuildToolPrompts:
         # Should NOT have balloon tools
         assert "ask_user" not in prompt
         assert "propose_fork" not in prompt
+
+    def test_order_preserved_from_list(self):
+        """Order of tools in the list determines prompt order."""
+        # Put domain tools first, then balloon tools
+        enabled = ["load_domain", "list_domains", "ask_user", "propose_fork"]
+        prompt = build_tool_prompts(enabled)
+
+        # Domain tools should appear before balloon tools
+        load_domain_pos = prompt.find("load_domain")
+        ask_user_pos = prompt.find("ask_user")
+        assert load_domain_pos < ask_user_pos, "Domain tools should come before balloon tools"
+
+        # Now reverse the order
+        enabled_reversed = ["ask_user", "propose_fork", "load_domain", "list_domains"]
+        prompt_reversed = build_tool_prompts(enabled_reversed)
+
+        # Balloon tools should appear before domain tools
+        load_domain_pos = prompt_reversed.find("load_domain")
+        ask_user_pos = prompt_reversed.find("ask_user")
+        assert ask_user_pos < load_domain_pos, "Balloon tools should come before domain tools"
 
     def test_empty_enabled_still_has_critical(self):
         """Even with no tools enabled, should have critical usage."""

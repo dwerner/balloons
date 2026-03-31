@@ -6887,18 +6887,18 @@ Summary:""")
         from core.prompt_builder import build_system_prompt
 
         # Determine which tools to include
-        tools_set: set[str] | None = None
+        tools_list: list[str] | None = None
         if enabled_tools is not None:
-            tools_set = set(enabled_tools)
+            tools_list = list(enabled_tools)  # Preserve order from input
         elif session_id:
             session = self._manager.get_session(session_id)
             if session:
-                tools_set = session.get_enabled_tools_set()
+                tools_list = session.get_enabled_tools_list()  # Preserve session order
 
         # Build the prompt
         prompt = build_system_prompt(
             backend_type="openai",  # Backend type no longer matters
-            enabled_tools=tools_set,
+            enabled_tools=tools_list,
         ) or ""
 
         return {

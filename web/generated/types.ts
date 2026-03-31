@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-03-30T13:28:13.608163
+// Generated: 2026-03-31T08:13:32.413707
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -547,105 +547,6 @@ export interface RequestProposalResult {
   error?: string;
 }
 
-export interface GoalInfo {
-  id: string;
-  title: string;
-  description: string;
-  weight: number;
-  status: string;
-  acceptanceCriteria: string[];
-  createdAt: string;
-  updatedAt: string;
-  completedAt?: string | null;
-  parentGoalId?: string | null;
-  planIds?: string[];
-  childGoalIds?: string[];
-  boundSessionIds?: string[];
-  isExpanded?: boolean;
-}
-
-export interface PlanInfo {
-  id: string;
-  goalId: string;
-  title: string;
-  description: string;
-  status: string;
-  createdAt: string;
-  updatedAt: string;
-  completedAt?: string | null;
-  postmortem?: string | null;
-  todoIds?: string[];
-  boundSessionIds?: string[];
-  isExpanded?: boolean;
-}
-
-export interface TodoInfo {
-  id: string;
-  title: string;
-  description: string;
-  status: string;
-  isSpike: boolean;
-  createdAt: string;
-  updatedAt: string;
-  completedAt?: string | null;
-  timeboxMinutes?: number | null;
-  planIds?: string[];
-  boundSessionIds?: string[];
-  dependencyIds?: string[];
-  isExpanded?: boolean;
-  priority?: number;
-}
-
-export interface SessionBindingInfo {
-  sessionId: string;
-  name: string;
-  tokenCount: number;
-  isCurrent: boolean;
-  isStreaming: boolean;
-  forkStatus: string;
-  bindingRole: string;
-}
-
-export interface GoalTreeStats {
-  totalGoals: number;
-  activeGoals: number;
-  totalPlans: number;
-  activePlans: number;
-  totalTodos: number;
-  pendingTodos: number;
-  inProgressTodos: number;
-  boundSessions: number;
-  unboundSessions: number;
-}
-
-export interface GoalProgress {
-  completed: number;
-  total: number;
-}
-
-export interface SelectedEntity {
-  entityType: string;
-  entityId: string;
-}
-
-export interface GoalTreeEventData {
-  eventType: string;
-  entityType?: string | null;
-  entityId?: string | null;
-  data?: Record<string, unknown>;
-}
-
-export interface SmartTodoResult {
-  success: boolean;
-  message: string;
-  todoId?: string | null;
-  todoTitle?: string | null;
-  planId?: string | null;
-  planTitle?: string | null;
-  goalId?: string | null;
-  goalTitle?: string | null;
-}
-
 export interface TaskInfo {
   taskId: string;
   taskType: string;
@@ -1076,80 +977,6 @@ export interface ImageEventData {
   data?: Record<string, unknown>;
 }
 
-export interface SoundInfo {
-  filename: string;
-  mediaType: string;
-  sizeBytes: number;
-  isBuiltin?: boolean;
-}
-
-export interface SoundData {
-  filename: string;
-  mediaType: string;
-  dataBase64: string;
-}
-
-export interface SoundUploadResult {
-  filename: string;
-  mediaType: string;
-  sizeBytes: number;
-  success: boolean;
-  error?: string | null;
-}
-
-export interface SoundEventData {
-  eventType: string;
-  filename: string;
-  data?: Record<string, unknown>;
-}
-
-export interface LogEntryInput {
-  level: string;
-  message: string;
-  category?: string;
-  sessionId?: string;
-  details?: Record<string, unknown> | null;
-}
-
-export interface LogResult {
-  success: boolean;
-  seq?: number;
-}
-
-export interface LogEntryOutput {
-  seq: number;
-  timestamp: string;
-  level: string;
-  message: string;
-  category: string;
-  sessionId: string;
-  runId: string;
-  details: Record<string, unknown>;
-}
-
-export interface QueryResult {
-  entries: LogEntryOutput[];
-  total: number;
-}
-
-export interface BufferStats {
-  category: string;
-  count: number;
-  maxsize: number;
-}
-
-export interface ServerIdentityInfo {
-  gitCommit: string;
-  gitCommitShort: string;
-  gitBranch: string;
-  gitDirty: boolean;
-  gitDiffHash: string;
-  slot: string;
-  port: number;
-  pid: number;
-  startTime: string;
-}
-
 export interface FileEntry {
   name: string;
   path: string;
@@ -1231,6 +1058,179 @@ export interface WorkingTreeStatus {
   stagedFiles: DiffFile[];
   unstagedFiles: DiffFile[];
   untrackedFiles: UntrackedFile[];
+}
+
+export interface LogEntryInput {
+  level: string;
+  message: string;
+  category?: string;
+  sessionId?: string;
+  details?: Record<string, unknown> | null;
+}
+
+export interface LogResult {
+  success: boolean;
+  seq?: number;
+}
+
+export interface LogEntryOutput {
+  seq: number;
+  timestamp: string;
+  level: string;
+  message: string;
+  category: string;
+  sessionId: string;
+  runId: string;
+  details: Record<string, unknown>;
+}
+
+export interface QueryResult {
+  entries: LogEntryOutput[];
+  total: number;
+}
+
+export interface BufferStats {
+  category: string;
+  count: number;
+  maxsize: number;
+}
+
+export interface ServerIdentityInfo {
+  gitCommit: string;
+  gitCommitShort: string;
+  gitBranch: string;
+  gitDirty: boolean;
+  gitDiffHash: string;
+  slot: string;
+  port: number;
+  pid: number;
+  startTime: string;
+}
+
+export interface GoalInfo {
+  id: string;
+  title: string;
+  description: string;
+  weight: number;
+  status: string;
+  acceptanceCriteria: string[];
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string | null;
+  parentGoalId?: string | null;
+  planIds?: string[];
+  childGoalIds?: string[];
+  boundSessionIds?: string[];
+  isExpanded?: boolean;
+}
+
+export interface PlanInfo {
+  id: string;
+  goalId: string;
+  title: string;
+  description: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string | null;
+  postmortem?: string | null;
+  todoIds?: string[];
+  boundSessionIds?: string[];
+  isExpanded?: boolean;
+}
+
+export interface TodoInfo {
+  id: string;
+  title: string;
+  description: string;
+  status: string;
+  isSpike: boolean;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string | null;
+  timeboxMinutes?: number | null;
+  planIds?: string[];
+  boundSessionIds?: string[];
+  dependencyIds?: string[];
+  isExpanded?: boolean;
+  priority?: number;
+}
+
+export interface SessionBindingInfo {
+  sessionId: string;
+  name: string;
+  tokenCount: number;
+  isCurrent: boolean;
+  isStreaming: boolean;
+  forkStatus: string;
+  bindingRole: string;
+}
+
+export interface GoalTreeStats {
+  totalGoals: number;
+  activeGoals: number;
+  totalPlans: number;
+  activePlans: number;
+  totalTodos: number;
+  pendingTodos: number;
+  inProgressTodos: number;
+  boundSessions: number;
+  unboundSessions: number;
+}
+
+export interface GoalProgress {
+  completed: number;
+  total: number;
+}
+
+export interface SelectedEntity {
+  entityType: string;
+  entityId: string;
+}
+
+export interface GoalTreeEventData {
+  eventType: string;
+  entityType?: string | null;
+  entityId?: string | null;
+  data?: Record<string, unknown>;
+}
+
+export interface SmartTodoResult {
+  success: boolean;
+  message: string;
+  todoId?: string | null;
+  todoTitle?: string | null;
+  planId?: string | null;
+  planTitle?: string | null;
+  goalId?: string | null;
+  goalTitle?: string | null;
+}
+
+export interface SoundInfo {
+  filename: string;
+  mediaType: string;
+  sizeBytes: number;
+  isBuiltin?: boolean;
+}
+
+export interface SoundData {
+  filename: string;
+  mediaType: string;
+  dataBase64: string;
+}
+
+export interface SoundUploadResult {
+  filename: string;
+  mediaType: string;
+  sizeBytes: number;
+  success: boolean;
+  error?: string | null;
+}
+
+export interface SoundEventData {
+  eventType: string;
+  filename: string;
+  data?: Record<string, unknown>;
 }
 
 export interface HostInfo {

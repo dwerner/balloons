@@ -368,9 +368,17 @@ def main():
     # Add imports here for any module with services to export to TypeScript
     try:
         import service.queue_state_service  # QueueStateService
+        import service.session_manager_service  # SessionManagerService
         import service.task_state_service  # TaskStateService
         import service.session_data_service  # SessionDataService
         import service.image_service  # ImageService
+        import service.file_state_service  # FileStateService
+        import service.debug_log_service  # DebugLogService
+        import service.goal_tree_state_service  # GoalTreeStateService
+        import service.sound_service  # SoundService
+        import service.supervisor_state_service  # SupervisorStateService
+        import service.lsp_service  # LSPService
+        import service.kanban_ws_service  # KanbanWebSocketService
         import plugins.rpc_service  # DomainRpcService - for plugin @ws_expose methods
     except ImportError as e:
         print(f"Warning: Could not import service modules: {e}")

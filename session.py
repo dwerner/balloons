@@ -110,16 +110,28 @@ class Session:
         return self.total_input_tokens + self.total_output_tokens
 
     def get_enabled_tools_set(self) -> set:
-        """Get enabled tools as a set (for prompt building).
+        """Get enabled tools as a set (for membership checks).
 
         Returns:
             Set of tool names. If session has no explicit tools, returns defaults.
         """
         if not self.enabled_tools:
-            # Empty list - use defaults
-            from core.tool_prompts import DEFAULT_ENABLED_TOOLS
-            return DEFAULT_ENABLED_TOOLS.copy()
+            from core.tool_prompts import DEFAULT_ENABLED_TOOLS_SET
+            return DEFAULT_ENABLED_TOOLS_SET.copy()
         return set(self.enabled_tools)
+
+    def get_enabled_tools_list(self) -> list[str]:
+        """Get enabled tools as an ordered list (for prompt building).
+
+        The order in this list determines the order tools appear in the prompt.
+
+        Returns:
+            Ordered list of tool names. If session has no explicit tools, returns defaults.
+        """
+        if not self.enabled_tools:
+            from core.tool_prompts import DEFAULT_ENABLED_TOOLS
+            return list(DEFAULT_ENABLED_TOOLS)
+        return list(self.enabled_tools)
 
     def calculate_context_tokens(self) -> int:
         """Calculate context tokens by summing turn token counts.

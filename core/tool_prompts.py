@@ -5,10 +5,13 @@ Prompts are loaded from individual files in prompts/tools/.
 
 This allows per-tool control: UI can enable/disable individual tools,
 and only enabled tools will have their documentation included in the prompt.
+
+The order of tools in the enabled list determines the order in the prompt.
+Category overviews are inserted when a tool from that category first appears.
 """
 
 from pathlib import Path
-from typing import Optional, Set
+from typing import Optional, Set, Sequence
 
 from .debug_log import debug_log, Category
 
@@ -78,8 +81,9 @@ ALL_TOOLS: Set[str] = set(CORE_TOOLS) | ALL_BALLOON_TOOLS
 
 # Default enabled tools - core tools plus balloon essentials
 # Users can expand this in config or per-session
-DEFAULT_ENABLED_TOOLS: Set[str] = {
-    # Core file/shell tools
+# NOTE: This is a LIST - order determines prompt order!
+DEFAULT_ENABLED_TOOLS: list[str] = [
+    # Core file/shell tools (no prompts, but tracked for availability)
     "Read",
     "Write",
     "Edit",
@@ -100,7 +104,10 @@ DEFAULT_ENABLED_TOOLS: Set[str] = {
     "load_domain",
     "unload_domain",
     "list_domains",
-}
+]
+
+# Set version for quick membership checks
+DEFAULT_ENABLED_TOOLS_SET: Set[str] = set(DEFAULT_ENABLED_TOOLS)
 
 
 def _load_file(path: Path) -> str:
@@ -171,13 +178,17 @@ def _load_template(name: str) -> str:
 
 
 def build_tool_prompts(
-    enabled_tools: Optional[Set[str]] = None,
+    enabled_tools: Optional[Sequence[str]] = None,
     include_critical_usage: bool = True,
 ) -> str:
     """Build tool documentation prompt for enabled tools.
 
+    The order of tools in enabled_tools determines the prompt order.
+    Category overviews are inserted when a tool from that category first appears.
+
     Args:
-        enabled_tools: Set of tool names to include. None means use DEFAULT_ENABLED_TOOLS.
+        enabled_tools: Ordered sequence of tool names. None uses DEFAULT_ENABLED_TOOLS.
+                       Can be a list (ordered) or set (uses default category order).
         include_critical_usage: Whether to include the critical usage template.
 
     Returns:
@@ -185,6 +196,10 @@ def build_tool_prompts(
     """
     if enabled_tools is None:
         enabled_tools = DEFAULT_ENABLED_TOOLS
+
+    # Convert set to list using default category order
+    if isinstance(enabled_tools, set):
+        enabled_tools = _order_tools_by_category(enabled_tools)
 
     parts = []
 
@@ -195,25 +210,46 @@ def build_tool_prompts(
             parts.append(critical)
             parts.append("---\n")
 
-    # Build category sections
-    for category, tools in TOOL_CATEGORIES.items():
-        # Check which tools in this category are enabled
-        category_enabled = [t for t in tools if t in enabled_tools]
-        if not category_enabled:
+    # Track which category overviews we've already included
+    included_categories: set[str] = set()
+
+    # Build prompt in the order of enabled_tools
+    for tool_name in enabled_tools:
+        category = get_category_for_tool(tool_name)
+        if not category:
+            # Core tool or unknown - no prompt file
             continue
 
-        # Include category overview if any tools are enabled
-        overview = _load_category_overview(category)
-        if overview:
-            parts.append(overview)
+        # Include category overview on first encounter
+        if category not in included_categories:
+            overview = _load_category_overview(category)
+            if overview:
+                parts.append(overview)
+            included_categories.add(category)
 
-        # Include individual tool prompts
-        for tool_name in category_enabled:
-            prompt = _load_tool_prompt(category, tool_name)
-            if prompt:
-                parts.append(prompt)
+        # Include the tool's prompt
+        prompt = _load_tool_prompt(category, tool_name)
+        if prompt:
+            parts.append(prompt)
 
     return "\n".join(parts)
+
+
+def _order_tools_by_category(tools: Set[str]) -> list[str]:
+    """Order a set of tools by their category order.
+
+    Used when a set is passed to maintain backward compatibility.
+    """
+    result = []
+    for category, cat_tools in TOOL_CATEGORIES.items():
+        for tool in cat_tools:
+            if tool in tools:
+                result.append(tool)
+    # Add any tools not in categories (core tools, etc.)
+    for tool in tools:
+        if tool not in result:
+            result.append(tool)
+    return result
 
 
 def get_tools_in_category(category: str) -> list[str]:
@@ -235,5 +271,5 @@ def get_category_for_tool(tool_name: str) -> Optional[str]:
 
 
 def get_default_enabled_tools() -> list[str]:
-    """Get the default enabled tools as a list (for config serialization)."""
-    return sorted(DEFAULT_ENABLED_TOOLS)
+    """Get the default enabled tools as a list (preserving order)."""
+    return list(DEFAULT_ENABLED_TOOLS)

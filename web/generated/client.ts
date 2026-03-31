@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-03-30T13:28:13.613787
+// Generated: 2026-03-31T08:13:32.418877
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -663,6 +663,21 @@ export interface SessionManagerService {
    * List of ExchangeSummary objects with index, summary, and default mode
    */
   getExchangeSummaries(sessionId: string, excludeCurrent?: boolean): Promise<Types.ExchangeSummary[]>;
+
+  /**
+   * Get a preview of the generated system prompt.
+   * 
+   * This allows the UI to show what prompt will be sent to the LLM based
+   * on the currently enabled tools.
+   * 
+   * Args:
+   * session_id: Optional session ID to get session-specific prompt
+   * enabled_tools: Optional explicit list of tools to use (overrides session)
+   * 
+   * Returns:
+   * Dict with 'prompt' (the generated prompt text) and 'length' (char count)
+   */
+  getPromptPreview(sessionId?: string | null, enabledTools?: string[] | null): Promise<Record<string, unknown>>;
 
   /**
    * Get information about a specific session.
@@ -1350,6 +1365,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.call('getExchangeSummaries', { sessionId: sessionId, excludeCurrent: excludeCurrent });
   }
 
+  async getPromptPreview(sessionId?: string | null, enabledTools?: string[] | null): Promise<Record<string, unknown>> {
+    return this.call('getPromptPreview', { sessionId: sessionId, enabledTools: enabledTools });
+  }
+
   async getSession(sessionId: string): Promise<Types.ManagedSessionInfo | null> {
     return this.call('getSession', { sessionId: sessionId });
   }
@@ -1536,690 +1555,6 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   onStreamingStopped(callback: (data: Types.SessionEventData) => void): Unsubscribe {
     return this.subscribe('streamingStopped', callback);
-  }
-
-}
-
-/**
- * WebSocket-exposed service for goal tree state management.
- * 
- * Provides read/write access to goals, plans, todos, and session bindings,
- * with real-time event subscriptions for state changes.
- */
-export interface GoalTreeStateService {
-  /**
-   * Add or update a goal.
-   * 
-   * Args:
-   * goal: Goal data as dictionary (will be converted to GoalData)
-   */
-  addGoal(goal: Record<string, unknown>): Promise<null>;
-
-  /**
-   * Add or update a plan.
-   * 
-   * Args:
-   * plan: Plan data as dictionary (will be converted to PlanData)
-   */
-  addPlan(plan: Record<string, unknown>): Promise<null>;
-
-  /**
-   * Add or update a todo.
-   * 
-   * Args:
-   * todo: Todo data as dictionary (will be converted to TodoData)
-   * plan_ids: Optional list of plan IDs to link the todo to
-   */
-  addTodo(todo: Record<string, unknown>, planIds?: string[] | null): Promise<null>;
-
-  /**
-   * Add a session to the unbound sessions list.
-   * 
-   * Args:
-   * session_id: ID of the session
-   * name: Display name for the session
-   * token_count: Token count for the session
-   * is_current: Whether this is the current session
-   * is_streaming: Whether the session is streaming
-   * fork_status: Fork status of the session
-   */
-  addUnboundSession(sessionId: string, name: string, tokenCount?: number, isCurrent?: boolean, isStreaming?: boolean, forkStatus?: string): Promise<null>;
-
-  /**
-   * Begin batch loading mode - suppress individual notifications.
-   */
-  beginBatchLoading(): Promise<null>;
-
-  /**
-   * Bind a session to an entity.
-   * 
-   * Args:
-   * entity_type: Type of entity ("goal", "plan", "todo")
-   * entity_id: ID of the entity
-   * session_id: ID of the session to bind
-   * name: Display name for the session
-   * binding_role: Role of the binding (e.g., "implementation")
-   * token_count: Token count for the session
-   * is_current: Whether this is the current session
-   * is_streaming: Whether the session is streaming
-   * fork_status: Fork status of the session
-   */
-  bindSession(entityType: string, entityId: string, sessionId: string, name: string, bindingRole?: string, tokenCount?: number, isCurrent?: boolean, isStreaming?: boolean, forkStatus?: string): Promise<null>;
-
-  /**
-   * Clear all state.
-   */
-  clear(): Promise<null>;
-
-  /**
-   * Create a todo with LLM-assisted plan placement.
-   * 
-   * Uses an LLM to analyze the todo's title and description and automatically
-   * place it under the most appropriate plan based on existing goals and plans.
-   * 
-   * This is useful for quick todo creation from web/mobile where the user
-   * doesn't need to manually select a plan - the LLM figures out where it belongs.
-   * 
-   * Args:
-   * title: Todo title (required, max 80 chars)
-   * description: Todo description (optional)
-   * is_spike: Whether this is a timeboxed exploration task
-   * timebox_minutes: For spikes, the maximum time to spend
-   * 
-   * Returns:
-   * SmartTodoResult with success status, created todo info, and placement details
-   */
-  createSmartTodo(title: string, description?: string, isSpike?: boolean, timeboxMinutes?: number | null): Promise<Types.SmartTodoResult>;
-
-  /**
-   * End batch loading mode and trigger a full rebuild.
-   */
-  endBatchLoading(): Promise<null>;
-
-  /**
-   * Get all goals sorted by weight (descending).
-   * 
-   * Returns:
-   * List of all goal info objects
-   */
-  getAllGoals(): Promise<Types.GoalInfo[]>;
-
-  /**
-   * Get sessions bound to an entity.
-   * 
-   * Args:
-   * entity_id: ID of the entity
-   * 
-   * Returns:
-   * List of session binding info objects
-   */
-  getBoundSessions(entityId: string): Promise<Types.SessionBindingInfo[]>;
-
-  /**
-   * Get child goals for a parent goal.
-   * 
-   * Args:
-   * goal_id: The parent goal ID
-   * 
-   * Returns:
-   * List of child goal info objects sorted by weight
-   */
-  getChildGoals(goalId: string): Promise<Types.GoalInfo[]>;
-
-  /**
-   * Get list of all collapsed node IDs.
-   * 
-   * Returns:
-   * List of entity IDs that are collapsed
-   */
-  getCollapsedIds(): Promise<string[]>;
-
-  /**
-   * Get goal information by ID.
-   * 
-   * Args:
-   * goal_id: The goal ID to look up
-   * 
-   * Returns:
-   * Goal info if found, None otherwise
-   */
-  getGoal(goalId: string): Promise<Types.GoalInfo | null>;
-
-  /**
-   * Get progress for a goal.
-   * 
-   * Args:
-   * goal_id: The goal ID
-   * 
-   * Returns:
-   * Progress as (completed_todos, total_todos)
-   */
-  getGoalProgress(goalId: string): Promise<Types.GoalProgress>;
-
-  /**
-   * Get plan information by ID.
-   * 
-   * Args:
-   * plan_id: The plan ID to look up
-   * 
-   * Returns:
-   * Plan info if found, None otherwise
-   */
-  getPlan(planId: string): Promise<Types.PlanInfo | null>;
-
-  /**
-   * Get all plans for a goal.
-   * 
-   * Args:
-   * goal_id: The parent goal ID
-   * 
-   * Returns:
-   * List of plan info objects
-   */
-  getPlansForGoal(goalId: string): Promise<Types.PlanInfo[]>;
-
-  /**
-   * Get root-level goals (goals with no parent).
-   * 
-   * Returns:
-   * List of root goal info objects sorted by weight
-   */
-  getRootGoals(): Promise<Types.GoalInfo[]>;
-
-  /**
-   * Get the currently selected entity.
-   * 
-   * Returns:
-   * Selected entity info or None
-   */
-  getSelectedEntity(): Promise<Types.SelectedEntity | null>;
-
-  /**
-   * Get the entity a session is bound to.
-   * 
-   * Args:
-   * session_id: ID of the session
-   * 
-   * Returns:
-   * (entity_type, entity_id) tuple or None if unbound
-   */
-  getSessionBinding(sessionId: string): Promise<[string, string] | null>;
-
-  /**
-   * Get aggregate statistics for the tree.
-   * 
-   * Returns:
-   * Statistics object
-   */
-  getStats(): Promise<Types.GoalTreeStats>;
-
-  /**
-   * Get todo information by ID.
-   * 
-   * Args:
-   * todo_id: The todo ID to look up
-   * 
-   * Returns:
-   * Todo info if found, None otherwise
-   */
-  getTodo(todoId: string): Promise<Types.TodoInfo | null>;
-
-  /**
-   * Get all todos for a plan.
-   * 
-   * Args:
-   * plan_id: The parent plan ID
-   * 
-   * Returns:
-   * List of todo info objects
-   */
-  getTodosForPlan(planId: string): Promise<Types.TodoInfo[]>;
-
-  /**
-   * Get all unbound sessions.
-   * 
-   * Returns:
-   * List of session binding info objects
-   */
-  getUnboundSessions(): Promise<Types.SessionBindingInfo[]>;
-
-  /**
-   * Check if a node is collapsed.
-   * 
-   * Args:
-   * entity_id: ID of the entity
-   * 
-   * Returns:
-   * True if collapsed, False otherwise
-   */
-  isCollapsed(entityId: string): Promise<boolean>;
-
-  /**
-   * Check if a session is bound to any entity.
-   * 
-   * Args:
-   * session_id: ID of the session
-   * 
-   * Returns:
-   * True if bound, False otherwise
-   */
-  isSessionBound(sessionId: string): Promise<boolean>;
-
-  /**
-   * Remove a goal and its children.
-   * 
-   * Args:
-   * goal_id: The goal ID to remove
-   */
-  removeGoal(goalId: string): Promise<null>;
-
-  /**
-   * Remove a plan.
-   * 
-   * Args:
-   * plan_id: The plan ID to remove
-   */
-  removePlan(planId: string): Promise<null>;
-
-  /**
-   * Remove a todo.
-   * 
-   * Args:
-   * todo_id: The todo ID to remove
-   */
-  removeTodo(todoId: string): Promise<null>;
-
-  /**
-   * Remove a session from the unbound sessions list.
-   * 
-   * Args:
-   * session_id: ID of the session to remove
-   */
-  removeUnboundSession(sessionId: string): Promise<null>;
-
-  /**
-   * Request that all observers rebuild their views.
-   */
-  requestRebuild(): Promise<null>;
-
-  /**
-   * Select an entity in the tree.
-   * 
-   * Args:
-   * entity_type: Type of entity ("goal", "plan", "todo", "session")
-   * entity_id: ID of the entity
-   */
-  selectEntity(entityType: string, entityId: string): Promise<null>;
-
-  /**
-   * Set the collapsed state of a node.
-   * 
-   * Args:
-   * entity_id: ID of the entity
-   * collapsed: True to collapse, False to expand
-   */
-  setCollapsed(entityId: string, collapsed: boolean): Promise<null>;
-
-  /**
-   * Set the collapsed node IDs.
-   * 
-   * Args:
-   * collapsed_ids: List of entity IDs that should be collapsed
-   */
-  setCollapsedIds(collapsedIds: string[]): Promise<null>;
-
-  /**
-   * Set the computed priority for a todo.
-   * 
-   * Args:
-   * todo_id: The todo ID
-   * priority: The priority value
-   */
-  setTodoPriority(todoId: string, priority: number): Promise<null>;
-
-  /**
-   * Toggle the collapsed state of a node.
-   * 
-   * Args:
-   * entity_id: ID of the entity
-   * 
-   * Returns:
-   * The new collapsed state
-   */
-  toggleCollapsed(entityId: string): Promise<boolean>;
-
-  /**
-   * Unbind a session from an entity.
-   * 
-   * Args:
-   * entity_id: ID of the entity
-   * session_id: ID of the session to unbind
-   */
-  unbindSession(entityId: string, sessionId: string): Promise<null>;
-
-}
-
-export interface GoalTreeStateEvents {
-  /**
-   * Emitted when an entity is selected.
-   */
-  onEntitySelected(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a full rebuild is requested.
-   */
-  onFullRebuild(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a goal is added.
-   */
-  onGoalAdded(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a goal is removed.
-   */
-  onGoalRemoved(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a goal is updated.
-   */
-  onGoalUpdated(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a plan is added.
-   */
-  onPlanAdded(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a plan is removed.
-   */
-  onPlanRemoved(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a plan is updated.
-   */
-  onPlanUpdated(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a session is bound to an entity.
-   */
-  onSessionBound(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a session is unbound from an entity.
-   */
-  onSessionUnbound(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a session's metadata changes.
-   */
-  onSessionUpdated(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a todo is added.
-   */
-  onTodoAdded(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a todo is removed.
-   */
-  onTodoRemoved(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a todo is updated.
-   */
-  onTodoUpdated(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
-
-}
-
-export class GoalTreeStateServiceClient implements GoalTreeStateService {
-  private ws: WebSocket;
-  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
-  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
-
-  constructor(ws: WebSocket) {
-    this.ws = ws;
-    this.ws.addEventListener('message', this.handleMessage.bind(this));
-  }
-
-  private handleMessage(event: MessageEvent): void {
-    const msg = JSON.parse(event.data);
-    if (msg.id && this.pending.has(msg.id)) {
-      const { resolve, reject } = this.pending.get(msg.id)!;
-      this.pending.delete(msg.id);
-      if (msg.error) {
-        reject(new Error(msg.error.message));
-      } else {
-        resolve(msg.result);
-      }
-    } else if (msg.event) {
-      const handlers = this.eventHandlers.get(msg.event);
-      if (handlers) {
-        handlers.forEach(h => h(msg.data));
-      }
-    }
-  }
-
-  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
-    const id = generateRequestId();
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.ws.send(JSON.stringify({ id, method, params }));
-    });
-  }
-
-  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
-    if (!this.eventHandlers.has(event)) {
-      this.eventHandlers.set(event, new Set());
-    }
-    this.eventHandlers.get(event)!.add(callback);
-    return () => {
-      this.eventHandlers.get(event)?.delete(callback);
-    };
-  }
-
-  async addGoal(goal: Record<string, unknown>): Promise<null> {
-    return this.call('addGoal', { goal: goal });
-  }
-
-  async addPlan(plan: Record<string, unknown>): Promise<null> {
-    return this.call('addPlan', { plan: plan });
-  }
-
-  async addTodo(todo: Record<string, unknown>, planIds?: string[] | null): Promise<null> {
-    return this.call('addTodo', { todo: todo, planIds: planIds });
-  }
-
-  async addUnboundSession(sessionId: string, name: string, tokenCount?: number, isCurrent?: boolean, isStreaming?: boolean, forkStatus?: string): Promise<null> {
-    return this.call('addUnboundSession', { sessionId: sessionId, name: name, tokenCount: tokenCount, isCurrent: isCurrent, isStreaming: isStreaming, forkStatus: forkStatus });
-  }
-
-  async beginBatchLoading(): Promise<null> {
-    return this.call('beginBatchLoading', {  });
-  }
-
-  async bindSession(entityType: string, entityId: string, sessionId: string, name: string, bindingRole?: string, tokenCount?: number, isCurrent?: boolean, isStreaming?: boolean, forkStatus?: string): Promise<null> {
-    return this.call('bindSession', { entityType: entityType, entityId: entityId, sessionId: sessionId, name: name, bindingRole: bindingRole, tokenCount: tokenCount, isCurrent: isCurrent, isStreaming: isStreaming, forkStatus: forkStatus });
-  }
-
-  async clear(): Promise<null> {
-    return this.call('clear', {  });
-  }
-
-  async createSmartTodo(title: string, description?: string, isSpike?: boolean, timeboxMinutes?: number | null): Promise<Types.SmartTodoResult> {
-    return this.call('createSmartTodo', { title: title, description: description, isSpike: isSpike, timeboxMinutes: timeboxMinutes });
-  }
-
-  async endBatchLoading(): Promise<null> {
-    return this.call('endBatchLoading', {  });
-  }
-
-  async getAllGoals(): Promise<Types.GoalInfo[]> {
-    return this.call('getAllGoals', {  });
-  }
-
-  async getBoundSessions(entityId: string): Promise<Types.SessionBindingInfo[]> {
-    return this.call('getBoundSessions', { entityId: entityId });
-  }
-
-  async getChildGoals(goalId: string): Promise<Types.GoalInfo[]> {
-    return this.call('getChildGoals', { goalId: goalId });
-  }
-
-  async getCollapsedIds(): Promise<string[]> {
-    return this.call('getCollapsedIds', {  });
-  }
-
-  async getGoal(goalId: string): Promise<Types.GoalInfo | null> {
-    return this.call('getGoal', { goalId: goalId });
-  }
-
-  async getGoalProgress(goalId: string): Promise<Types.GoalProgress> {
-    return this.call('getGoalProgress', { goalId: goalId });
-  }
-
-  async getPlan(planId: string): Promise<Types.PlanInfo | null> {
-    return this.call('getPlan', { planId: planId });
-  }
-
-  async getPlansForGoal(goalId: string): Promise<Types.PlanInfo[]> {
-    return this.call('getPlansForGoal', { goalId: goalId });
-  }
-
-  async getRootGoals(): Promise<Types.GoalInfo[]> {
-    return this.call('getRootGoals', {  });
-  }
-
-  async getSelectedEntity(): Promise<Types.SelectedEntity | null> {
-    return this.call('getSelectedEntity', {  });
-  }
-
-  async getSessionBinding(sessionId: string): Promise<[string, string] | null> {
-    return this.call('getSessionBinding', { sessionId: sessionId });
-  }
-
-  async getStats(): Promise<Types.GoalTreeStats> {
-    return this.call('getStats', {  });
-  }
-
-  async getTodo(todoId: string): Promise<Types.TodoInfo | null> {
-    return this.call('getTodo', { todoId: todoId });
-  }
-
-  async getTodosForPlan(planId: string): Promise<Types.TodoInfo[]> {
-    return this.call('getTodosForPlan', { planId: planId });
-  }
-
-  async getUnboundSessions(): Promise<Types.SessionBindingInfo[]> {
-    return this.call('getUnboundSessions', {  });
-  }
-
-  async isCollapsed(entityId: string): Promise<boolean> {
-    return this.call('isCollapsed', { entityId: entityId });
-  }
-
-  async isSessionBound(sessionId: string): Promise<boolean> {
-    return this.call('isSessionBound', { sessionId: sessionId });
-  }
-
-  async removeGoal(goalId: string): Promise<null> {
-    return this.call('removeGoal', { goalId: goalId });
-  }
-
-  async removePlan(planId: string): Promise<null> {
-    return this.call('removePlan', { planId: planId });
-  }
-
-  async removeTodo(todoId: string): Promise<null> {
-    return this.call('removeTodo', { todoId: todoId });
-  }
-
-  async removeUnboundSession(sessionId: string): Promise<null> {
-    return this.call('removeUnboundSession', { sessionId: sessionId });
-  }
-
-  async requestRebuild(): Promise<null> {
-    return this.call('requestRebuild', {  });
-  }
-
-  async selectEntity(entityType: string, entityId: string): Promise<null> {
-    return this.call('selectEntity', { entityType: entityType, entityId: entityId });
-  }
-
-  async setCollapsed(entityId: string, collapsed: boolean): Promise<null> {
-    return this.call('setCollapsed', { entityId: entityId, collapsed: collapsed });
-  }
-
-  async setCollapsedIds(collapsedIds: string[]): Promise<null> {
-    return this.call('setCollapsedIds', { collapsedIds: collapsedIds });
-  }
-
-  async setTodoPriority(todoId: string, priority: number): Promise<null> {
-    return this.call('setTodoPriority', { todoId: todoId, priority: priority });
-  }
-
-  async toggleCollapsed(entityId: string): Promise<boolean> {
-    return this.call('toggleCollapsed', { entityId: entityId });
-  }
-
-  async unbindSession(entityId: string, sessionId: string): Promise<null> {
-    return this.call('unbindSession', { entityId: entityId, sessionId: sessionId });
-  }
-
-  onEntitySelected(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('entitySelected', callback);
-  }
-
-  onFullRebuild(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('fullRebuild', callback);
-  }
-
-  onGoalAdded(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('goalAdded', callback);
-  }
-
-  onGoalRemoved(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('goalRemoved', callback);
-  }
-
-  onGoalUpdated(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('goalUpdated', callback);
-  }
-
-  onPlanAdded(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('planAdded', callback);
-  }
-
-  onPlanRemoved(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('planRemoved', callback);
-  }
-
-  onPlanUpdated(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('planUpdated', callback);
-  }
-
-  onSessionBound(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('sessionBound', callback);
-  }
-
-  onSessionUnbound(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('sessionUnbound', callback);
-  }
-
-  onSessionUpdated(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('sessionUpdated', callback);
-  }
-
-  onTodoAdded(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('todoAdded', callback);
-  }
-
-  onTodoRemoved(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('todoRemoved', callback);
-  }
-
-  onTodoUpdated(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
-    return this.subscribe('todoUpdated', callback);
   }
 
 }
@@ -3556,517 +2891,6 @@ export class ImageServiceClient implements ImageService {
 }
 
 /**
- * WebSocket-exposed service for sound file management.
- * 
- * Handles listing available sounds, retrieving sound data for browser playback,
- * and uploading custom sounds.
- */
-export interface SoundService {
-  /**
-   * Delete a sound file.
-   * 
-   * Args:
-   * filename: Name of the sound file to delete
-   * 
-   * Returns:
-   * True if deleted, False if not found
-   */
-  deleteSound(filename: string): Promise<boolean>;
-
-  /**
-   * Get sound file data for browser playback.
-   * 
-   * Args:
-   * filename: Name of the sound file
-   * 
-   * Returns:
-   * SoundData with base64-encoded audio, or None if not found
-   */
-  getSoundData(filename: string): Promise<Types.SoundData | null>;
-
-  /**
-   * Get the sounds directory path.
-   * 
-   * Returns:
-   * Absolute path to sounds directory
-   */
-  getSoundsDir(): Promise<string>;
-
-  /**
-   * List all available sound files.
-   * 
-   * Returns:
-   * List of SoundInfo objects for each sound file.
-   */
-  listSounds(): Promise<Types.SoundInfo[]>;
-
-  /**
-   * Upload a custom sound file.
-   * 
-   * Args:
-   * data_base64: Base64-encoded audio data
-   * filename: Desired filename
-   * media_type: MIME type (audio/ogg, audio/mpeg, etc.)
-   * 
-   * Returns:
-   * SoundUploadResult with success status
-   */
-  uploadSound(dataBase64: string, filename: string, mediaType: string): Promise<Types.SoundUploadResult>;
-
-}
-
-export interface SoundEvents {
-  /**
-   * Emitted when a sound is deleted.
-   */
-  onSoundDeleted(callback: (data: Types.SoundEventData) => void): Unsubscribe;
-
-  /**
-   * Emitted when a sound is uploaded.
-   */
-  onSoundUploaded(callback: (data: Types.SoundEventData) => void): Unsubscribe;
-
-}
-
-export class SoundServiceClient implements SoundService {
-  private ws: WebSocket;
-  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
-  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
-
-  constructor(ws: WebSocket) {
-    this.ws = ws;
-    this.ws.addEventListener('message', this.handleMessage.bind(this));
-  }
-
-  private handleMessage(event: MessageEvent): void {
-    const msg = JSON.parse(event.data);
-    if (msg.id && this.pending.has(msg.id)) {
-      const { resolve, reject } = this.pending.get(msg.id)!;
-      this.pending.delete(msg.id);
-      if (msg.error) {
-        reject(new Error(msg.error.message));
-      } else {
-        resolve(msg.result);
-      }
-    } else if (msg.event) {
-      const handlers = this.eventHandlers.get(msg.event);
-      if (handlers) {
-        handlers.forEach(h => h(msg.data));
-      }
-    }
-  }
-
-  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
-    const id = generateRequestId();
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.ws.send(JSON.stringify({ id, method, params }));
-    });
-  }
-
-  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
-    if (!this.eventHandlers.has(event)) {
-      this.eventHandlers.set(event, new Set());
-    }
-    this.eventHandlers.get(event)!.add(callback);
-    return () => {
-      this.eventHandlers.get(event)?.delete(callback);
-    };
-  }
-
-  async deleteSound(filename: string): Promise<boolean> {
-    return this.call('deleteSound', { filename: filename });
-  }
-
-  async getSoundData(filename: string): Promise<Types.SoundData | null> {
-    return this.call('getSoundData', { filename: filename });
-  }
-
-  async getSoundsDir(): Promise<string> {
-    return this.call('getSoundsDir', {  });
-  }
-
-  async listSounds(): Promise<Types.SoundInfo[]> {
-    return this.call('listSounds', {  });
-  }
-
-  async uploadSound(dataBase64: string, filename: string, mediaType: string): Promise<Types.SoundUploadResult> {
-    return this.call('uploadSound', { dataBase64: dataBase64, filename: filename, mediaType: mediaType });
-  }
-
-  onSoundDeleted(callback: (data: Types.SoundEventData) => void): Unsubscribe {
-    return this.subscribe('soundDeleted', callback);
-  }
-
-  onSoundUploaded(callback: (data: Types.SoundEventData) => void): Unsubscribe {
-    return this.subscribe('soundUploaded', callback);
-  }
-
-}
-
-/**
- * WebSocket-exposed service for debug logging.
- * 
- * Provides a way for web clients to send log entries to the shared
- * debug log, making them visible in the TUI's debug pane.
- */
-export interface DebugLogService {
-  /**
-   * Clear log entries from a buffer.
-   * 
-   * Args:
-   * category: Category to clear, or None to clear all
-   * 
-   * Returns:
-   * LogResult with success status
-   */
-  clearBuffer(category?: string | null): Promise<Types.LogResult>;
-
-  /**
-   * Clear category filter to log all categories.
-   * 
-   * Returns:
-   * LogResult with success status
-   */
-  clearCategories(): Promise<Types.LogResult>;
-
-  /**
-   * Convenience method to log a debug message.
-   */
-  debug(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult>;
-
-  /**
-   * Disable logging for a specific category.
-   * 
-   * Args:
-   * category: Category to disable
-   * 
-   * Returns:
-   * LogResult with success status
-   */
-  disableCategory(category: string): Promise<Types.LogResult>;
-
-  /**
-   * Enable logging for a specific category.
-   * 
-   * When any categories are enabled, only those categories will be logged.
-   * Useful for targeted debugging.
-   * 
-   * Categories for API debugging:
-   * - 'api': API requests, responses, chunks
-   * - 'tool': Tool execution
-   * - 'json': JSON parsing errors
-   * - 'process': Process lifecycle
-   * 
-   * Args:
-   * category: Category to enable
-   * 
-   * Returns:
-   * LogResult with success status
-   */
-  enableCategory(category: string): Promise<Types.LogResult>;
-
-  /**
-   * Convenience method to log an error.
-   */
-  error(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult>;
-
-  /**
-   * Get all valid category names.
-   * 
-   * Returns:
-   * List of all category names that have dedicated buffers
-   */
-  getAllCategories(): Promise<string[]>;
-
-  /**
-   * Get statistics for all category buffers.
-   * 
-   * Returns:
-   * List of BufferStats for each category
-   */
-  getBufferStats(): Promise<Types.BufferStats[]>;
-
-  /**
-   * Get the list of currently enabled categories.
-   * 
-   * Returns:
-   * List of enabled category names, or empty list if all are enabled
-   */
-  getCategories(): Promise<string[]>;
-
-  /**
-   * Get the current minimum log level.
-   * 
-   * Returns:
-   * Current log level as string (e.g., 'debug', 'trace')
-   */
-  getLevel(): Promise<string>;
-
-  /**
-   * Get server identity (git state, metadata).
-   * 
-   * Returns the server's git commit, branch, dirty status, and
-   * diff hash (fingerprint of local changes). Useful for debugging
-   * to confirm what code version is running.
-   * 
-   * Returns:
-   * ServerIdentityInfo or None if not captured
-   */
-  getServerIdentity(): Promise<Types.ServerIdentityInfo | null>;
-
-  /**
-   * Convenience method to log an info message.
-   */
-  info(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult>;
-
-  /**
-   * Check if debug logging is enabled.
-   * 
-   * Returns:
-   * True if debug logging is enabled
-   */
-  isEnabled(): Promise<boolean>;
-
-  /**
-   * Log a message from a web client.
-   * 
-   * The log entry will appear in the TUI's debug pane with the specified
-   * level, message, and category. Category defaults to "web" for web
-   * client logs.
-   * 
-   * Args:
-   * entry: The log entry to add
-   * 
-   * Returns:
-   * LogResult with success status and sequence number
-   */
-  log(entry: Types.LogEntryInput): Promise<Types.LogResult>;
-
-  /**
-   * Log multiple messages at once.
-   * 
-   * Useful for flushing buffered logs from the web client.
-   * 
-   * Args:
-   * entries: List of log entries to add
-   * 
-   * Returns:
-   * LogResult with success status and last sequence number
-   */
-  logBatch(entries: Types.LogEntryInput[]): Promise<Types.LogResult>;
-
-  /**
-   * Query log entries from a specific category's buffer.
-   * 
-   * This is the primary query method for v2. Use this to efficiently
-   * query entries from a single category's ring buffer.
-   * 
-   * Args:
-   * category: Category to query (e.g., 'api', 'runner')
-   * limit: Max entries to return (newest first)
-   * level: Filter by log level (optional)
-   * session_id: Filter by session (optional)
-   * run_id: Filter by run (optional)
-   * 
-   * Returns:
-   * QueryResult with matching entries and total buffer count
-   */
-  query(category: string, limit?: number, level?: string | null, sessionId?: string | null, runId?: string | null): Promise<Types.QueryResult>;
-
-  /**
-   * Set the buffer size for a category.
-   * 
-   * Args:
-   * category: Category name
-   * size: New max size (must be > 0)
-   * 
-   * Returns:
-   * LogResult with success status
-   */
-  setBufferSize(category: string, size: number): Promise<Types.LogResult>;
-
-  /**
-   * Set the list of enabled categories.
-   * 
-   * Pass an empty list to log all categories (default behavior).
-   * 
-   * Args:
-   * categories: List of category names to enable
-   * 
-   * Returns:
-   * LogResult with success status
-   */
-  setCategories(categories: string[]): Promise<Types.LogResult>;
-
-  /**
-   * Enable or disable debug logging globally.
-   * 
-   * When disabled, no entries are added to buffers or files.
-   * This is the main on/off switch for all debug logging.
-   * 
-   * Args:
-   * enabled: True to enable, False to disable
-   * 
-   * Returns:
-   * LogResult with success status
-   */
-  setEnabled(enabled: boolean): Promise<Types.LogResult>;
-
-  /**
-   * Set the minimum log level for the debug log.
-   * 
-   * This controls what gets logged on the server side. Use 'trace' for
-   * maximum verbosity when debugging API issues.
-   * 
-   * Args:
-   * level: One of 'error', 'warning', 'info', 'perf', 'debug', 'trace'
-   * 
-   * Returns:
-   * LogResult with success status
-   */
-  setLevel(level: string): Promise<Types.LogResult>;
-
-  /**
-   * Convenience method to log a warning.
-   */
-  warning(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult>;
-
-}
-
-export class DebugLogServiceClient implements DebugLogService {
-  private ws: WebSocket;
-  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
-  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
-
-  constructor(ws: WebSocket) {
-    this.ws = ws;
-    this.ws.addEventListener('message', this.handleMessage.bind(this));
-  }
-
-  private handleMessage(event: MessageEvent): void {
-    const msg = JSON.parse(event.data);
-    if (msg.id && this.pending.has(msg.id)) {
-      const { resolve, reject } = this.pending.get(msg.id)!;
-      this.pending.delete(msg.id);
-      if (msg.error) {
-        reject(new Error(msg.error.message));
-      } else {
-        resolve(msg.result);
-      }
-    } else if (msg.event) {
-      const handlers = this.eventHandlers.get(msg.event);
-      if (handlers) {
-        handlers.forEach(h => h(msg.data));
-      }
-    }
-  }
-
-  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
-    const id = generateRequestId();
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.ws.send(JSON.stringify({ id, method, params }));
-    });
-  }
-
-  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
-    if (!this.eventHandlers.has(event)) {
-      this.eventHandlers.set(event, new Set());
-    }
-    this.eventHandlers.get(event)!.add(callback);
-    return () => {
-      this.eventHandlers.get(event)?.delete(callback);
-    };
-  }
-
-  async clearBuffer(category?: string | null): Promise<Types.LogResult> {
-    return this.call('clearBuffer', { category: category });
-  }
-
-  async clearCategories(): Promise<Types.LogResult> {
-    return this.call('clearCategories', {  });
-  }
-
-  async debug(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
-    return this.call('debug', { message: message, category: category, sessionId: sessionId, details: details });
-  }
-
-  async disableCategory(category: string): Promise<Types.LogResult> {
-    return this.call('disableCategory', { category: category });
-  }
-
-  async enableCategory(category: string): Promise<Types.LogResult> {
-    return this.call('enableCategory', { category: category });
-  }
-
-  async error(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
-    return this.call('error', { message: message, category: category, sessionId: sessionId, details: details });
-  }
-
-  async getAllCategories(): Promise<string[]> {
-    return this.call('getAllCategories', {  });
-  }
-
-  async getBufferStats(): Promise<Types.BufferStats[]> {
-    return this.call('getBufferStats', {  });
-  }
-
-  async getCategories(): Promise<string[]> {
-    return this.call('getCategories', {  });
-  }
-
-  async getLevel(): Promise<string> {
-    return this.call('getLevel', {  });
-  }
-
-  async getServerIdentity(): Promise<Types.ServerIdentityInfo | null> {
-    return this.call('getServerIdentity', {  });
-  }
-
-  async info(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
-    return this.call('info', { message: message, category: category, sessionId: sessionId, details: details });
-  }
-
-  async isEnabled(): Promise<boolean> {
-    return this.call('isEnabled', {  });
-  }
-
-  async log(entry: Types.LogEntryInput): Promise<Types.LogResult> {
-    return this.call('log', { entry: entry });
-  }
-
-  async logBatch(entries: Types.LogEntryInput[]): Promise<Types.LogResult> {
-    return this.call('logBatch', { entries: entries });
-  }
-
-  async query(category: string, limit?: number, level?: string | null, sessionId?: string | null, runId?: string | null): Promise<Types.QueryResult> {
-    return this.call('query', { category: category, limit: limit, level: level, sessionId: sessionId, runId: runId });
-  }
-
-  async setBufferSize(category: string, size: number): Promise<Types.LogResult> {
-    return this.call('setBufferSize', { category: category, size: size });
-  }
-
-  async setCategories(categories: string[]): Promise<Types.LogResult> {
-    return this.call('setCategories', { categories: categories });
-  }
-
-  async setEnabled(enabled: boolean): Promise<Types.LogResult> {
-    return this.call('setEnabled', { enabled: enabled });
-  }
-
-  async setLevel(level: string): Promise<Types.LogResult> {
-    return this.call('setLevel', { level: level });
-  }
-
-  async warning(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
-    return this.call('warning', { message: message, category: category, sessionId: sessionId, details: details });
-  }
-
-}
-
-/**
  * WebSocket-exposed service for file browsing with git status.
  * 
  * Provides directory listing with git status integration and session CWD management.
@@ -4483,6 +3307,1201 @@ export class FileStateServiceClient implements FileStateService {
 
   onDirectoryChanged(callback: (data: Types.DirectoryListing) => void): Unsubscribe {
     return this.subscribe('directoryChanged', callback);
+  }
+
+}
+
+/**
+ * WebSocket-exposed service for debug logging.
+ * 
+ * Provides a way for web clients to send log entries to the shared
+ * debug log, making them visible in the TUI's debug pane.
+ */
+export interface DebugLogService {
+  /**
+   * Clear log entries from a buffer.
+   * 
+   * Args:
+   * category: Category to clear, or None to clear all
+   * 
+   * Returns:
+   * LogResult with success status
+   */
+  clearBuffer(category?: string | null): Promise<Types.LogResult>;
+
+  /**
+   * Clear category filter to log all categories.
+   * 
+   * Returns:
+   * LogResult with success status
+   */
+  clearCategories(): Promise<Types.LogResult>;
+
+  /**
+   * Convenience method to log a debug message.
+   */
+  debug(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult>;
+
+  /**
+   * Disable logging for a specific category.
+   * 
+   * Args:
+   * category: Category to disable
+   * 
+   * Returns:
+   * LogResult with success status
+   */
+  disableCategory(category: string): Promise<Types.LogResult>;
+
+  /**
+   * Enable logging for a specific category.
+   * 
+   * When any categories are enabled, only those categories will be logged.
+   * Useful for targeted debugging.
+   * 
+   * Categories for API debugging:
+   * - 'api': API requests, responses, chunks
+   * - 'tool': Tool execution
+   * - 'json': JSON parsing errors
+   * - 'process': Process lifecycle
+   * 
+   * Args:
+   * category: Category to enable
+   * 
+   * Returns:
+   * LogResult with success status
+   */
+  enableCategory(category: string): Promise<Types.LogResult>;
+
+  /**
+   * Convenience method to log an error.
+   */
+  error(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult>;
+
+  /**
+   * Get all valid category names.
+   * 
+   * Returns:
+   * List of all category names that have dedicated buffers
+   */
+  getAllCategories(): Promise<string[]>;
+
+  /**
+   * Get statistics for all category buffers.
+   * 
+   * Returns:
+   * List of BufferStats for each category
+   */
+  getBufferStats(): Promise<Types.BufferStats[]>;
+
+  /**
+   * Get the list of currently enabled categories.
+   * 
+   * Returns:
+   * List of enabled category names, or empty list if all are enabled
+   */
+  getCategories(): Promise<string[]>;
+
+  /**
+   * Get the current minimum log level.
+   * 
+   * Returns:
+   * Current log level as string (e.g., 'debug', 'trace')
+   */
+  getLevel(): Promise<string>;
+
+  /**
+   * Get server identity (git state, metadata).
+   * 
+   * Returns the server's git commit, branch, dirty status, and
+   * diff hash (fingerprint of local changes). Useful for debugging
+   * to confirm what code version is running.
+   * 
+   * Returns:
+   * ServerIdentityInfo or None if not captured
+   */
+  getServerIdentity(): Promise<Types.ServerIdentityInfo | null>;
+
+  /**
+   * Convenience method to log an info message.
+   */
+  info(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult>;
+
+  /**
+   * Check if debug logging is enabled.
+   * 
+   * Returns:
+   * True if debug logging is enabled
+   */
+  isEnabled(): Promise<boolean>;
+
+  /**
+   * Log a message from a web client.
+   * 
+   * The log entry will appear in the TUI's debug pane with the specified
+   * level, message, and category. Category defaults to "web" for web
+   * client logs.
+   * 
+   * Args:
+   * entry: The log entry to add
+   * 
+   * Returns:
+   * LogResult with success status and sequence number
+   */
+  log(entry: Types.LogEntryInput): Promise<Types.LogResult>;
+
+  /**
+   * Log multiple messages at once.
+   * 
+   * Useful for flushing buffered logs from the web client.
+   * 
+   * Args:
+   * entries: List of log entries to add
+   * 
+   * Returns:
+   * LogResult with success status and last sequence number
+   */
+  logBatch(entries: Types.LogEntryInput[]): Promise<Types.LogResult>;
+
+  /**
+   * Query log entries from a specific category's buffer.
+   * 
+   * This is the primary query method for v2. Use this to efficiently
+   * query entries from a single category's ring buffer.
+   * 
+   * Args:
+   * category: Category to query (e.g., 'api', 'runner')
+   * limit: Max entries to return (newest first)
+   * level: Filter by log level (optional)
+   * session_id: Filter by session (optional)
+   * run_id: Filter by run (optional)
+   * 
+   * Returns:
+   * QueryResult with matching entries and total buffer count
+   */
+  query(category: string, limit?: number, level?: string | null, sessionId?: string | null, runId?: string | null): Promise<Types.QueryResult>;
+
+  /**
+   * Set the buffer size for a category.
+   * 
+   * Args:
+   * category: Category name
+   * size: New max size (must be > 0)
+   * 
+   * Returns:
+   * LogResult with success status
+   */
+  setBufferSize(category: string, size: number): Promise<Types.LogResult>;
+
+  /**
+   * Set the list of enabled categories.
+   * 
+   * Pass an empty list to log all categories (default behavior).
+   * 
+   * Args:
+   * categories: List of category names to enable
+   * 
+   * Returns:
+   * LogResult with success status
+   */
+  setCategories(categories: string[]): Promise<Types.LogResult>;
+
+  /**
+   * Enable or disable debug logging globally.
+   * 
+   * When disabled, no entries are added to buffers or files.
+   * This is the main on/off switch for all debug logging.
+   * 
+   * Args:
+   * enabled: True to enable, False to disable
+   * 
+   * Returns:
+   * LogResult with success status
+   */
+  setEnabled(enabled: boolean): Promise<Types.LogResult>;
+
+  /**
+   * Set the minimum log level for the debug log.
+   * 
+   * This controls what gets logged on the server side. Use 'trace' for
+   * maximum verbosity when debugging API issues.
+   * 
+   * Args:
+   * level: One of 'error', 'warning', 'info', 'perf', 'debug', 'trace'
+   * 
+   * Returns:
+   * LogResult with success status
+   */
+  setLevel(level: string): Promise<Types.LogResult>;
+
+  /**
+   * Convenience method to log a warning.
+   */
+  warning(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult>;
+
+}
+
+export class DebugLogServiceClient implements DebugLogService {
+  private ws: WebSocket;
+  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
+  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
+
+  constructor(ws: WebSocket) {
+    this.ws = ws;
+    this.ws.addEventListener('message', this.handleMessage.bind(this));
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    const msg = JSON.parse(event.data);
+    if (msg.id && this.pending.has(msg.id)) {
+      const { resolve, reject } = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      if (msg.error) {
+        reject(new Error(msg.error.message));
+      } else {
+        resolve(msg.result);
+      }
+    } else if (msg.event) {
+      const handlers = this.eventHandlers.get(msg.event);
+      if (handlers) {
+        handlers.forEach(h => h(msg.data));
+      }
+    }
+  }
+
+  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const id = generateRequestId();
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, new Set());
+    }
+    this.eventHandlers.get(event)!.add(callback);
+    return () => {
+      this.eventHandlers.get(event)?.delete(callback);
+    };
+  }
+
+  async clearBuffer(category?: string | null): Promise<Types.LogResult> {
+    return this.call('clearBuffer', { category: category });
+  }
+
+  async clearCategories(): Promise<Types.LogResult> {
+    return this.call('clearCategories', {  });
+  }
+
+  async debug(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
+    return this.call('debug', { message: message, category: category, sessionId: sessionId, details: details });
+  }
+
+  async disableCategory(category: string): Promise<Types.LogResult> {
+    return this.call('disableCategory', { category: category });
+  }
+
+  async enableCategory(category: string): Promise<Types.LogResult> {
+    return this.call('enableCategory', { category: category });
+  }
+
+  async error(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
+    return this.call('error', { message: message, category: category, sessionId: sessionId, details: details });
+  }
+
+  async getAllCategories(): Promise<string[]> {
+    return this.call('getAllCategories', {  });
+  }
+
+  async getBufferStats(): Promise<Types.BufferStats[]> {
+    return this.call('getBufferStats', {  });
+  }
+
+  async getCategories(): Promise<string[]> {
+    return this.call('getCategories', {  });
+  }
+
+  async getLevel(): Promise<string> {
+    return this.call('getLevel', {  });
+  }
+
+  async getServerIdentity(): Promise<Types.ServerIdentityInfo | null> {
+    return this.call('getServerIdentity', {  });
+  }
+
+  async info(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
+    return this.call('info', { message: message, category: category, sessionId: sessionId, details: details });
+  }
+
+  async isEnabled(): Promise<boolean> {
+    return this.call('isEnabled', {  });
+  }
+
+  async log(entry: Types.LogEntryInput): Promise<Types.LogResult> {
+    return this.call('log', { entry: entry });
+  }
+
+  async logBatch(entries: Types.LogEntryInput[]): Promise<Types.LogResult> {
+    return this.call('logBatch', { entries: entries });
+  }
+
+  async query(category: string, limit?: number, level?: string | null, sessionId?: string | null, runId?: string | null): Promise<Types.QueryResult> {
+    return this.call('query', { category: category, limit: limit, level: level, sessionId: sessionId, runId: runId });
+  }
+
+  async setBufferSize(category: string, size: number): Promise<Types.LogResult> {
+    return this.call('setBufferSize', { category: category, size: size });
+  }
+
+  async setCategories(categories: string[]): Promise<Types.LogResult> {
+    return this.call('setCategories', { categories: categories });
+  }
+
+  async setEnabled(enabled: boolean): Promise<Types.LogResult> {
+    return this.call('setEnabled', { enabled: enabled });
+  }
+
+  async setLevel(level: string): Promise<Types.LogResult> {
+    return this.call('setLevel', { level: level });
+  }
+
+  async warning(message: string, category?: string, sessionId?: string, details?: Record<string, unknown> | null): Promise<Types.LogResult> {
+    return this.call('warning', { message: message, category: category, sessionId: sessionId, details: details });
+  }
+
+}
+
+/**
+ * WebSocket-exposed service for goal tree state management.
+ * 
+ * Provides read/write access to goals, plans, todos, and session bindings,
+ * with real-time event subscriptions for state changes.
+ */
+export interface GoalTreeStateService {
+  /**
+   * Add or update a goal.
+   * 
+   * Args:
+   * goal: Goal data as dictionary (will be converted to GoalData)
+   */
+  addGoal(goal: Record<string, unknown>): Promise<null>;
+
+  /**
+   * Add or update a plan.
+   * 
+   * Args:
+   * plan: Plan data as dictionary (will be converted to PlanData)
+   */
+  addPlan(plan: Record<string, unknown>): Promise<null>;
+
+  /**
+   * Add or update a todo.
+   * 
+   * Args:
+   * todo: Todo data as dictionary (will be converted to TodoData)
+   * plan_ids: Optional list of plan IDs to link the todo to
+   */
+  addTodo(todo: Record<string, unknown>, planIds?: string[] | null): Promise<null>;
+
+  /**
+   * Add a session to the unbound sessions list.
+   * 
+   * Args:
+   * session_id: ID of the session
+   * name: Display name for the session
+   * token_count: Token count for the session
+   * is_current: Whether this is the current session
+   * is_streaming: Whether the session is streaming
+   * fork_status: Fork status of the session
+   */
+  addUnboundSession(sessionId: string, name: string, tokenCount?: number, isCurrent?: boolean, isStreaming?: boolean, forkStatus?: string): Promise<null>;
+
+  /**
+   * Begin batch loading mode - suppress individual notifications.
+   */
+  beginBatchLoading(): Promise<null>;
+
+  /**
+   * Bind a session to an entity.
+   * 
+   * Args:
+   * entity_type: Type of entity ("goal", "plan", "todo")
+   * entity_id: ID of the entity
+   * session_id: ID of the session to bind
+   * name: Display name for the session
+   * binding_role: Role of the binding (e.g., "implementation")
+   * token_count: Token count for the session
+   * is_current: Whether this is the current session
+   * is_streaming: Whether the session is streaming
+   * fork_status: Fork status of the session
+   */
+  bindSession(entityType: string, entityId: string, sessionId: string, name: string, bindingRole?: string, tokenCount?: number, isCurrent?: boolean, isStreaming?: boolean, forkStatus?: string): Promise<null>;
+
+  /**
+   * Clear all state.
+   */
+  clear(): Promise<null>;
+
+  /**
+   * Create a todo with LLM-assisted plan placement.
+   * 
+   * Uses an LLM to analyze the todo's title and description and automatically
+   * place it under the most appropriate plan based on existing goals and plans.
+   * 
+   * This is useful for quick todo creation from web/mobile where the user
+   * doesn't need to manually select a plan - the LLM figures out where it belongs.
+   * 
+   * Args:
+   * title: Todo title (required, max 80 chars)
+   * description: Todo description (optional)
+   * is_spike: Whether this is a timeboxed exploration task
+   * timebox_minutes: For spikes, the maximum time to spend
+   * 
+   * Returns:
+   * SmartTodoResult with success status, created todo info, and placement details
+   */
+  createSmartTodo(title: string, description?: string, isSpike?: boolean, timeboxMinutes?: number | null): Promise<Types.SmartTodoResult>;
+
+  /**
+   * End batch loading mode and trigger a full rebuild.
+   */
+  endBatchLoading(): Promise<null>;
+
+  /**
+   * Get all goals sorted by weight (descending).
+   * 
+   * Returns:
+   * List of all goal info objects
+   */
+  getAllGoals(): Promise<Types.GoalInfo[]>;
+
+  /**
+   * Get sessions bound to an entity.
+   * 
+   * Args:
+   * entity_id: ID of the entity
+   * 
+   * Returns:
+   * List of session binding info objects
+   */
+  getBoundSessions(entityId: string): Promise<Types.SessionBindingInfo[]>;
+
+  /**
+   * Get child goals for a parent goal.
+   * 
+   * Args:
+   * goal_id: The parent goal ID
+   * 
+   * Returns:
+   * List of child goal info objects sorted by weight
+   */
+  getChildGoals(goalId: string): Promise<Types.GoalInfo[]>;
+
+  /**
+   * Get list of all collapsed node IDs.
+   * 
+   * Returns:
+   * List of entity IDs that are collapsed
+   */
+  getCollapsedIds(): Promise<string[]>;
+
+  /**
+   * Get goal information by ID.
+   * 
+   * Args:
+   * goal_id: The goal ID to look up
+   * 
+   * Returns:
+   * Goal info if found, None otherwise
+   */
+  getGoal(goalId: string): Promise<Types.GoalInfo | null>;
+
+  /**
+   * Get progress for a goal.
+   * 
+   * Args:
+   * goal_id: The goal ID
+   * 
+   * Returns:
+   * Progress as (completed_todos, total_todos)
+   */
+  getGoalProgress(goalId: string): Promise<Types.GoalProgress>;
+
+  /**
+   * Get plan information by ID.
+   * 
+   * Args:
+   * plan_id: The plan ID to look up
+   * 
+   * Returns:
+   * Plan info if found, None otherwise
+   */
+  getPlan(planId: string): Promise<Types.PlanInfo | null>;
+
+  /**
+   * Get all plans for a goal.
+   * 
+   * Args:
+   * goal_id: The parent goal ID
+   * 
+   * Returns:
+   * List of plan info objects
+   */
+  getPlansForGoal(goalId: string): Promise<Types.PlanInfo[]>;
+
+  /**
+   * Get root-level goals (goals with no parent).
+   * 
+   * Returns:
+   * List of root goal info objects sorted by weight
+   */
+  getRootGoals(): Promise<Types.GoalInfo[]>;
+
+  /**
+   * Get the currently selected entity.
+   * 
+   * Returns:
+   * Selected entity info or None
+   */
+  getSelectedEntity(): Promise<Types.SelectedEntity | null>;
+
+  /**
+   * Get the entity a session is bound to.
+   * 
+   * Args:
+   * session_id: ID of the session
+   * 
+   * Returns:
+   * (entity_type, entity_id) tuple or None if unbound
+   */
+  getSessionBinding(sessionId: string): Promise<[string, string] | null>;
+
+  /**
+   * Get aggregate statistics for the tree.
+   * 
+   * Returns:
+   * Statistics object
+   */
+  getStats(): Promise<Types.GoalTreeStats>;
+
+  /**
+   * Get todo information by ID.
+   * 
+   * Args:
+   * todo_id: The todo ID to look up
+   * 
+   * Returns:
+   * Todo info if found, None otherwise
+   */
+  getTodo(todoId: string): Promise<Types.TodoInfo | null>;
+
+  /**
+   * Get all todos for a plan.
+   * 
+   * Args:
+   * plan_id: The parent plan ID
+   * 
+   * Returns:
+   * List of todo info objects
+   */
+  getTodosForPlan(planId: string): Promise<Types.TodoInfo[]>;
+
+  /**
+   * Get all unbound sessions.
+   * 
+   * Returns:
+   * List of session binding info objects
+   */
+  getUnboundSessions(): Promise<Types.SessionBindingInfo[]>;
+
+  /**
+   * Check if a node is collapsed.
+   * 
+   * Args:
+   * entity_id: ID of the entity
+   * 
+   * Returns:
+   * True if collapsed, False otherwise
+   */
+  isCollapsed(entityId: string): Promise<boolean>;
+
+  /**
+   * Check if a session is bound to any entity.
+   * 
+   * Args:
+   * session_id: ID of the session
+   * 
+   * Returns:
+   * True if bound, False otherwise
+   */
+  isSessionBound(sessionId: string): Promise<boolean>;
+
+  /**
+   * Remove a goal and its children.
+   * 
+   * Args:
+   * goal_id: The goal ID to remove
+   */
+  removeGoal(goalId: string): Promise<null>;
+
+  /**
+   * Remove a plan.
+   * 
+   * Args:
+   * plan_id: The plan ID to remove
+   */
+  removePlan(planId: string): Promise<null>;
+
+  /**
+   * Remove a todo.
+   * 
+   * Args:
+   * todo_id: The todo ID to remove
+   */
+  removeTodo(todoId: string): Promise<null>;
+
+  /**
+   * Remove a session from the unbound sessions list.
+   * 
+   * Args:
+   * session_id: ID of the session to remove
+   */
+  removeUnboundSession(sessionId: string): Promise<null>;
+
+  /**
+   * Request that all observers rebuild their views.
+   */
+  requestRebuild(): Promise<null>;
+
+  /**
+   * Select an entity in the tree.
+   * 
+   * Args:
+   * entity_type: Type of entity ("goal", "plan", "todo", "session")
+   * entity_id: ID of the entity
+   */
+  selectEntity(entityType: string, entityId: string): Promise<null>;
+
+  /**
+   * Set the collapsed state of a node.
+   * 
+   * Args:
+   * entity_id: ID of the entity
+   * collapsed: True to collapse, False to expand
+   */
+  setCollapsed(entityId: string, collapsed: boolean): Promise<null>;
+
+  /**
+   * Set the collapsed node IDs.
+   * 
+   * Args:
+   * collapsed_ids: List of entity IDs that should be collapsed
+   */
+  setCollapsedIds(collapsedIds: string[]): Promise<null>;
+
+  /**
+   * Set the computed priority for a todo.
+   * 
+   * Args:
+   * todo_id: The todo ID
+   * priority: The priority value
+   */
+  setTodoPriority(todoId: string, priority: number): Promise<null>;
+
+  /**
+   * Toggle the collapsed state of a node.
+   * 
+   * Args:
+   * entity_id: ID of the entity
+   * 
+   * Returns:
+   * The new collapsed state
+   */
+  toggleCollapsed(entityId: string): Promise<boolean>;
+
+  /**
+   * Unbind a session from an entity.
+   * 
+   * Args:
+   * entity_id: ID of the entity
+   * session_id: ID of the session to unbind
+   */
+  unbindSession(entityId: string, sessionId: string): Promise<null>;
+
+}
+
+export interface GoalTreeStateEvents {
+  /**
+   * Emitted when an entity is selected.
+   */
+  onEntitySelected(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
+
+  /**
+   * Emitted when a full rebuild is requested.
+   */
+  onFullRebuild(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
+
+  /**
+   * Emitted when a goal is added.
+   */
+  onGoalAdded(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
+
+  /**
+   * Emitted when a goal is removed.
+   */
+  onGoalRemoved(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
+
+  /**
+   * Emitted when a goal is updated.
+   */
+  onGoalUpdated(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
+
+  /**
+   * Emitted when a plan is added.
+   */
+  onPlanAdded(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
+
+  /**
+   * Emitted when a plan is removed.
+   */
+  onPlanRemoved(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
+
+  /**
+   * Emitted when a plan is updated.
+   */
+  onPlanUpdated(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
+
+  /**
+   * Emitted when a session is bound to an entity.
+   */
+  onSessionBound(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
+
+  /**
+   * Emitted when a session is unbound from an entity.
+   */
+  onSessionUnbound(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
+
+  /**
+   * Emitted when a session's metadata changes.
+   */
+  onSessionUpdated(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
+
+  /**
+   * Emitted when a todo is added.
+   */
+  onTodoAdded(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
+
+  /**
+   * Emitted when a todo is removed.
+   */
+  onTodoRemoved(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
+
+  /**
+   * Emitted when a todo is updated.
+   */
+  onTodoUpdated(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe;
+
+}
+
+export class GoalTreeStateServiceClient implements GoalTreeStateService {
+  private ws: WebSocket;
+  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
+  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
+
+  constructor(ws: WebSocket) {
+    this.ws = ws;
+    this.ws.addEventListener('message', this.handleMessage.bind(this));
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    const msg = JSON.parse(event.data);
+    if (msg.id && this.pending.has(msg.id)) {
+      const { resolve, reject } = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      if (msg.error) {
+        reject(new Error(msg.error.message));
+      } else {
+        resolve(msg.result);
+      }
+    } else if (msg.event) {
+      const handlers = this.eventHandlers.get(msg.event);
+      if (handlers) {
+        handlers.forEach(h => h(msg.data));
+      }
+    }
+  }
+
+  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const id = generateRequestId();
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, new Set());
+    }
+    this.eventHandlers.get(event)!.add(callback);
+    return () => {
+      this.eventHandlers.get(event)?.delete(callback);
+    };
+  }
+
+  async addGoal(goal: Record<string, unknown>): Promise<null> {
+    return this.call('addGoal', { goal: goal });
+  }
+
+  async addPlan(plan: Record<string, unknown>): Promise<null> {
+    return this.call('addPlan', { plan: plan });
+  }
+
+  async addTodo(todo: Record<string, unknown>, planIds?: string[] | null): Promise<null> {
+    return this.call('addTodo', { todo: todo, planIds: planIds });
+  }
+
+  async addUnboundSession(sessionId: string, name: string, tokenCount?: number, isCurrent?: boolean, isStreaming?: boolean, forkStatus?: string): Promise<null> {
+    return this.call('addUnboundSession', { sessionId: sessionId, name: name, tokenCount: tokenCount, isCurrent: isCurrent, isStreaming: isStreaming, forkStatus: forkStatus });
+  }
+
+  async beginBatchLoading(): Promise<null> {
+    return this.call('beginBatchLoading', {  });
+  }
+
+  async bindSession(entityType: string, entityId: string, sessionId: string, name: string, bindingRole?: string, tokenCount?: number, isCurrent?: boolean, isStreaming?: boolean, forkStatus?: string): Promise<null> {
+    return this.call('bindSession', { entityType: entityType, entityId: entityId, sessionId: sessionId, name: name, bindingRole: bindingRole, tokenCount: tokenCount, isCurrent: isCurrent, isStreaming: isStreaming, forkStatus: forkStatus });
+  }
+
+  async clear(): Promise<null> {
+    return this.call('clear', {  });
+  }
+
+  async createSmartTodo(title: string, description?: string, isSpike?: boolean, timeboxMinutes?: number | null): Promise<Types.SmartTodoResult> {
+    return this.call('createSmartTodo', { title: title, description: description, isSpike: isSpike, timeboxMinutes: timeboxMinutes });
+  }
+
+  async endBatchLoading(): Promise<null> {
+    return this.call('endBatchLoading', {  });
+  }
+
+  async getAllGoals(): Promise<Types.GoalInfo[]> {
+    return this.call('getAllGoals', {  });
+  }
+
+  async getBoundSessions(entityId: string): Promise<Types.SessionBindingInfo[]> {
+    return this.call('getBoundSessions', { entityId: entityId });
+  }
+
+  async getChildGoals(goalId: string): Promise<Types.GoalInfo[]> {
+    return this.call('getChildGoals', { goalId: goalId });
+  }
+
+  async getCollapsedIds(): Promise<string[]> {
+    return this.call('getCollapsedIds', {  });
+  }
+
+  async getGoal(goalId: string): Promise<Types.GoalInfo | null> {
+    return this.call('getGoal', { goalId: goalId });
+  }
+
+  async getGoalProgress(goalId: string): Promise<Types.GoalProgress> {
+    return this.call('getGoalProgress', { goalId: goalId });
+  }
+
+  async getPlan(planId: string): Promise<Types.PlanInfo | null> {
+    return this.call('getPlan', { planId: planId });
+  }
+
+  async getPlansForGoal(goalId: string): Promise<Types.PlanInfo[]> {
+    return this.call('getPlansForGoal', { goalId: goalId });
+  }
+
+  async getRootGoals(): Promise<Types.GoalInfo[]> {
+    return this.call('getRootGoals', {  });
+  }
+
+  async getSelectedEntity(): Promise<Types.SelectedEntity | null> {
+    return this.call('getSelectedEntity', {  });
+  }
+
+  async getSessionBinding(sessionId: string): Promise<[string, string] | null> {
+    return this.call('getSessionBinding', { sessionId: sessionId });
+  }
+
+  async getStats(): Promise<Types.GoalTreeStats> {
+    return this.call('getStats', {  });
+  }
+
+  async getTodo(todoId: string): Promise<Types.TodoInfo | null> {
+    return this.call('getTodo', { todoId: todoId });
+  }
+
+  async getTodosForPlan(planId: string): Promise<Types.TodoInfo[]> {
+    return this.call('getTodosForPlan', { planId: planId });
+  }
+
+  async getUnboundSessions(): Promise<Types.SessionBindingInfo[]> {
+    return this.call('getUnboundSessions', {  });
+  }
+
+  async isCollapsed(entityId: string): Promise<boolean> {
+    return this.call('isCollapsed', { entityId: entityId });
+  }
+
+  async isSessionBound(sessionId: string): Promise<boolean> {
+    return this.call('isSessionBound', { sessionId: sessionId });
+  }
+
+  async removeGoal(goalId: string): Promise<null> {
+    return this.call('removeGoal', { goalId: goalId });
+  }
+
+  async removePlan(planId: string): Promise<null> {
+    return this.call('removePlan', { planId: planId });
+  }
+
+  async removeTodo(todoId: string): Promise<null> {
+    return this.call('removeTodo', { todoId: todoId });
+  }
+
+  async removeUnboundSession(sessionId: string): Promise<null> {
+    return this.call('removeUnboundSession', { sessionId: sessionId });
+  }
+
+  async requestRebuild(): Promise<null> {
+    return this.call('requestRebuild', {  });
+  }
+
+  async selectEntity(entityType: string, entityId: string): Promise<null> {
+    return this.call('selectEntity', { entityType: entityType, entityId: entityId });
+  }
+
+  async setCollapsed(entityId: string, collapsed: boolean): Promise<null> {
+    return this.call('setCollapsed', { entityId: entityId, collapsed: collapsed });
+  }
+
+  async setCollapsedIds(collapsedIds: string[]): Promise<null> {
+    return this.call('setCollapsedIds', { collapsedIds: collapsedIds });
+  }
+
+  async setTodoPriority(todoId: string, priority: number): Promise<null> {
+    return this.call('setTodoPriority', { todoId: todoId, priority: priority });
+  }
+
+  async toggleCollapsed(entityId: string): Promise<boolean> {
+    return this.call('toggleCollapsed', { entityId: entityId });
+  }
+
+  async unbindSession(entityId: string, sessionId: string): Promise<null> {
+    return this.call('unbindSession', { entityId: entityId, sessionId: sessionId });
+  }
+
+  onEntitySelected(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
+    return this.subscribe('entitySelected', callback);
+  }
+
+  onFullRebuild(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
+    return this.subscribe('fullRebuild', callback);
+  }
+
+  onGoalAdded(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
+    return this.subscribe('goalAdded', callback);
+  }
+
+  onGoalRemoved(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
+    return this.subscribe('goalRemoved', callback);
+  }
+
+  onGoalUpdated(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
+    return this.subscribe('goalUpdated', callback);
+  }
+
+  onPlanAdded(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
+    return this.subscribe('planAdded', callback);
+  }
+
+  onPlanRemoved(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
+    return this.subscribe('planRemoved', callback);
+  }
+
+  onPlanUpdated(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
+    return this.subscribe('planUpdated', callback);
+  }
+
+  onSessionBound(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
+    return this.subscribe('sessionBound', callback);
+  }
+
+  onSessionUnbound(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
+    return this.subscribe('sessionUnbound', callback);
+  }
+
+  onSessionUpdated(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
+    return this.subscribe('sessionUpdated', callback);
+  }
+
+  onTodoAdded(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
+    return this.subscribe('todoAdded', callback);
+  }
+
+  onTodoRemoved(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
+    return this.subscribe('todoRemoved', callback);
+  }
+
+  onTodoUpdated(callback: (data: Types.GoalTreeEventData) => void): Unsubscribe {
+    return this.subscribe('todoUpdated', callback);
+  }
+
+}
+
+/**
+ * WebSocket-exposed service for sound file management.
+ * 
+ * Handles listing available sounds, retrieving sound data for browser playback,
+ * and uploading custom sounds.
+ */
+export interface SoundService {
+  /**
+   * Delete a sound file.
+   * 
+   * Args:
+   * filename: Name of the sound file to delete
+   * 
+   * Returns:
+   * True if deleted, False if not found
+   */
+  deleteSound(filename: string): Promise<boolean>;
+
+  /**
+   * Get sound file data for browser playback.
+   * 
+   * Args:
+   * filename: Name of the sound file
+   * 
+   * Returns:
+   * SoundData with base64-encoded audio, or None if not found
+   */
+  getSoundData(filename: string): Promise<Types.SoundData | null>;
+
+  /**
+   * Get the sounds directory path.
+   * 
+   * Returns:
+   * Absolute path to sounds directory
+   */
+  getSoundsDir(): Promise<string>;
+
+  /**
+   * List all available sound files.
+   * 
+   * Returns:
+   * List of SoundInfo objects for each sound file.
+   */
+  listSounds(): Promise<Types.SoundInfo[]>;
+
+  /**
+   * Upload a custom sound file.
+   * 
+   * Args:
+   * data_base64: Base64-encoded audio data
+   * filename: Desired filename
+   * media_type: MIME type (audio/ogg, audio/mpeg, etc.)
+   * 
+   * Returns:
+   * SoundUploadResult with success status
+   */
+  uploadSound(dataBase64: string, filename: string, mediaType: string): Promise<Types.SoundUploadResult>;
+
+}
+
+export interface SoundEvents {
+  /**
+   * Emitted when a sound is deleted.
+   */
+  onSoundDeleted(callback: (data: Types.SoundEventData) => void): Unsubscribe;
+
+  /**
+   * Emitted when a sound is uploaded.
+   */
+  onSoundUploaded(callback: (data: Types.SoundEventData) => void): Unsubscribe;
+
+}
+
+export class SoundServiceClient implements SoundService {
+  private ws: WebSocket;
+  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
+  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
+
+  constructor(ws: WebSocket) {
+    this.ws = ws;
+    this.ws.addEventListener('message', this.handleMessage.bind(this));
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    const msg = JSON.parse(event.data);
+    if (msg.id && this.pending.has(msg.id)) {
+      const { resolve, reject } = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      if (msg.error) {
+        reject(new Error(msg.error.message));
+      } else {
+        resolve(msg.result);
+      }
+    } else if (msg.event) {
+      const handlers = this.eventHandlers.get(msg.event);
+      if (handlers) {
+        handlers.forEach(h => h(msg.data));
+      }
+    }
+  }
+
+  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const id = generateRequestId();
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, new Set());
+    }
+    this.eventHandlers.get(event)!.add(callback);
+    return () => {
+      this.eventHandlers.get(event)?.delete(callback);
+    };
+  }
+
+  async deleteSound(filename: string): Promise<boolean> {
+    return this.call('deleteSound', { filename: filename });
+  }
+
+  async getSoundData(filename: string): Promise<Types.SoundData | null> {
+    return this.call('getSoundData', { filename: filename });
+  }
+
+  async getSoundsDir(): Promise<string> {
+    return this.call('getSoundsDir', {  });
+  }
+
+  async listSounds(): Promise<Types.SoundInfo[]> {
+    return this.call('listSounds', {  });
+  }
+
+  async uploadSound(dataBase64: string, filename: string, mediaType: string): Promise<Types.SoundUploadResult> {
+    return this.call('uploadSound', { dataBase64: dataBase64, filename: filename, mediaType: mediaType });
+  }
+
+  onSoundDeleted(callback: (data: Types.SoundEventData) => void): Unsubscribe {
+    return this.subscribe('soundDeleted', callback);
+  }
+
+  onSoundUploaded(callback: (data: Types.SoundEventData) => void): Unsubscribe {
+    return this.subscribe('soundUploaded', callback);
   }
 
 }

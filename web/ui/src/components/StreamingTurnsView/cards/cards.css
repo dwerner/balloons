@@ -1957,6 +1957,70 @@
     padding: 1px 3px;
   }
 
+  /* Grep card mobile styles */
+  .grep-card .tool-card-header-content {
+    /* Stack grep header elements more naturally on mobile */
+    row-gap: 2px;
+  }
+
+  .grep-card .tool-pattern {
+    /* Let pattern wrap if needed */
+    max-width: 100%;
+    word-break: break-all;
+  }
+
+  .grep-card .tool-in-label {
+    font-size: 9px;
+  }
+
+  .grep-card .tool-search-path {
+    /* Allow path to shrink and wrap */
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .grep-card .tool-glob {
+    font-size: 9px;
+  }
+
+  .grep-card .tool-match-count {
+    font-size: 9px;
+    margin-left: 0;
+    padding-left: 4px;
+  }
+
+  /* Grep results mobile - stack file:line above content */
+  .grep-result-line {
+    flex-direction: column;
+    gap: 0;
+    padding: 4px 6px;
+  }
+
+  .grep-file {
+    font-size: 10px;
+    margin-right: 0;
+  }
+
+  .grep-line-num {
+    font-size: 10px;
+    display: inline;
+    min-width: unset;
+    text-align: left;
+    margin-right: 0;
+  }
+
+  .grep-content {
+    font-size: 10px;
+    padding-left: 0;
+    margin-top: 2px;
+  }
+
+  .grep-results {
+    font-size: 10px;
+  }
+
   /* Collapsible components mobile */
   .collapsible-header {
     padding: 5px 6px;

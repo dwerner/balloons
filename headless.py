@@ -249,9 +249,9 @@ async def run_server(
     # for session lookup and domain event emission (used by requestDomainState)
     session_data_service.set_manager(session_service)
 
-    # Register session service globally for plugin event emission
-    from service import set_session_manager_service
-    set_session_manager_service(session_service)
+    # Wire plugin event emission to the session service explicitly
+    from plugins import get_registry
+    get_registry().set_event_emitter(session_service.emit_domain_event)
 
     # Initialize async components (rebuilds watcher relationships)
     await session_service.initialize()
@@ -321,6 +321,7 @@ async def run_server(
     from plugins import get_registry
     domain_rpc_service = DomainRpcService()
     domain_rpc_service.set_manager(session_service)
+    domain_rpc_service.set_event_emitter(session_service.emit_domain_event)
     ws_server.register_service(domain_rpc_service)
     # Wire up registry to register domains with RPC service when loaded
     get_registry().set_rpc_service(domain_rpc_service)

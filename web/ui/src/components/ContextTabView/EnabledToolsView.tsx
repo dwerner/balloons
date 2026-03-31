@@ -3,10 +3,13 @@
  *
  * Shows tools grouped by category with checkboxes to enable/disable each.
  * Changes are saved immediately to the session or global config.
- * Includes a prompt preview section showing the generated system prompt.
+ * Includes a Monaco editor showing the generated system prompt preview.
+ *
+ * Layout: Two columns - checkboxes on left, Monaco preview on right.
  */
 
 import React, { useState, useEffect, useCallback, useMemo, memo } from 'react';
+import Editor from '@monaco-editor/react';
 import type { BalloonsClient } from '../../../../generated/balloons-client';
 import { createLogger } from '../../utils/debugLog';
 import './EnabledToolsView.css';
@@ -96,10 +99,34 @@ export const EnabledToolsView = memo(function EnabledToolsView({
   const [error, setError] = useState<string | null>(null);
 
   // Prompt preview state
-  const [showPromptPreview, setShowPromptPreview] = useState(false);
-  const [promptPreview, setPromptPreview] = useState<string | null>(null);
+  const [promptPreview, setPromptPreview] = useState<string>('');
   const [promptLength, setPromptLength] = useState<number>(0);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
+
+  // Mobile view state (tabs instead of side-by-side)
+  const [mobileTab, setMobileTab] = useState<'tools' | 'preview'>('tools');
+  const [isMobile, setIsMobile] = useState(false);
+
+  // Detect mobile viewport
+  useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth <= 768);
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
+  // Dark mode detection
+  const [isDarkMode, setIsDarkMode] = useState(true);
+  useEffect(() => {
+    const checkDarkMode = () => {
+      const theme = document.documentElement.getAttribute('data-theme');
+      setIsDarkMode(theme !== 'light');
+    };
+    checkDarkMode();
+    const observer = new MutationObserver(checkDarkMode);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => observer.disconnect();
+  }, []);
 
   // Load available tools and current enabled state
   useEffect(() => {
@@ -246,17 +273,18 @@ export const EnabledToolsView = memo(function EnabledToolsView({
       const msg = e instanceof Error ? e.message : String(e);
       debugLog('Error loading prompt preview', { error: msg });
       setPromptPreview(`Error loading preview: ${msg}`);
+      setPromptLength(0);
     } finally {
       setIsLoadingPreview(false);
     }
   }, [client, sessionId, enabledTools]);
 
-  // Load preview when shown or when tools change
+  // Load preview when tools change
   useEffect(() => {
-    if (showPromptPreview) {
+    if (!isLoading) {
       loadPromptPreview();
     }
-  }, [showPromptPreview, loadPromptPreview]);
+  }, [isLoading, loadPromptPreview]);
 
   // Build category groups
   const categoryGroups = useMemo(() => {
@@ -313,23 +341,17 @@ export const EnabledToolsView = memo(function EnabledToolsView({
     );
   }
 
-  return (
-    <div className={`enabled-tools-view ${showPromptPreview ? 'enabled-tools-view--with-preview' : ''}`}>
+  // Render the tools panel content
+  const renderToolsPanel = () => (
+    <>
       <div className="enabled-tools-view__header">
         <h3 className="enabled-tools-view__title">
           {isGlobalSettings ? 'Default Enabled Tools' : 'Session Tools'}
         </h3>
         <div className="enabled-tools-view__actions">
           <span className="enabled-tools-view__count">
-            {enabledTools.size} of {availableTools.all.length} enabled
+            {enabledTools.size}/{availableTools.all.length}
           </span>
-          <button
-            className={`enabled-tools-view__preview-btn ${showPromptPreview ? 'enabled-tools-view__preview-btn--active' : ''}`}
-            onClick={() => setShowPromptPreview(prev => !prev)}
-            title={showPromptPreview ? 'Hide prompt preview' : 'Show prompt preview'}
-          >
-            {showPromptPreview ? 'Hide Preview' : 'Show Preview'}
-          </button>
           {!isGlobalSettings && sessionId && (
             <button
               className="enabled-tools-view__reset-btn"
@@ -396,25 +418,93 @@ export const EnabledToolsView = memo(function EnabledToolsView({
       {isSaving && (
         <div className="enabled-tools-view__saving">Saving...</div>
       )}
+    </>
+  );
 
-      {/* Prompt Preview Section */}
-      {showPromptPreview && (
-        <div className="enabled-tools-view__preview">
-          <div className="enabled-tools-view__preview-header">
-            <span className="enabled-tools-view__preview-title">Generated Prompt</span>
-            <span className="enabled-tools-view__preview-length">
-              {isLoadingPreview ? 'Loading...' : formatLength(promptLength)}
-            </span>
-          </div>
-          <div className="enabled-tools-view__preview-content">
-            {isLoadingPreview ? (
-              <div className="enabled-tools-view__preview-loading">Loading prompt preview...</div>
-            ) : (
-              <pre className="enabled-tools-view__preview-text">{promptPreview}</pre>
-            )}
-          </div>
+  // Render the preview panel content
+  const renderPreviewPanel = () => (
+    <>
+      <div className="enabled-tools-view__preview-header">
+        <span className="enabled-tools-view__preview-title">Generated Prompt</span>
+        <span className="enabled-tools-view__preview-length">
+          {isLoadingPreview ? 'Loading...' : formatLength(promptLength)}
+        </span>
+      </div>
+      <div className="enabled-tools-view__preview-editor">
+        {isLoadingPreview ? (
+          <div className="enabled-tools-view__preview-loading">Loading prompt preview...</div>
+        ) : (
+          <Editor
+            height="100%"
+            language="markdown"
+            value={promptPreview}
+            theme={isDarkMode ? 'vs-dark' : 'light'}
+            options={{
+              readOnly: true,
+              minimap: { enabled: false },
+              fontSize: 12,
+              lineNumbers: 'on',
+              wordWrap: 'on',
+              scrollBeyondLastLine: false,
+              automaticLayout: true,
+              padding: { top: 8, bottom: 8 },
+              folding: true,
+              foldingStrategy: 'indentation',
+            }}
+          />
+        )}
+      </div>
+    </>
+  );
+
+  // Mobile: tab-based layout
+  if (isMobile) {
+    return (
+      <div className="enabled-tools-view enabled-tools-view--mobile">
+        {/* Tab bar */}
+        <div className="enabled-tools-view__tabs">
+          <button
+            className={`enabled-tools-view__tab ${mobileTab === 'tools' ? 'enabled-tools-view__tab--active' : ''}`}
+            onClick={() => setMobileTab('tools')}
+          >
+            Tools ({enabledTools.size})
+          </button>
+          <button
+            className={`enabled-tools-view__tab ${mobileTab === 'preview' ? 'enabled-tools-view__tab--active' : ''}`}
+            onClick={() => setMobileTab('preview')}
+          >
+            Preview ({formatLength(promptLength)})
+          </button>
         </div>
-      )}
+
+        {/* Tab content */}
+        <div className="enabled-tools-view__tab-content">
+          {mobileTab === 'tools' ? (
+            <div className="enabled-tools-view__sidebar enabled-tools-view__sidebar--mobile">
+              {renderToolsPanel()}
+            </div>
+          ) : (
+            <div className="enabled-tools-view__preview enabled-tools-view__preview--mobile">
+              {renderPreviewPanel()}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Desktop: side-by-side layout
+  return (
+    <div className="enabled-tools-view enabled-tools-view--split">
+      {/* Left column: checkboxes */}
+      <div className="enabled-tools-view__sidebar">
+        {renderToolsPanel()}
+      </div>
+
+      {/* Right column: Monaco preview */}
+      <div className="enabled-tools-view__preview">
+        {renderPreviewPanel()}
+      </div>
     </div>
   );
 });
