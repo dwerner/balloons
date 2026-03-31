@@ -59,8 +59,13 @@ TOOL_CATEGORIES = {
         "debug_log_config",
         "debug_log_tail",
     ],
+    "domain": [
+        "load_domain",
+        "unload_domain",
+        "list_domains",
+    ],
     # Note: LSP tools could be added here when prompt files are created
-    # Note: Domain tools (kanban, chess) are handled by domain plugin system
+    # Note: Domain plugin tools (kanban, chess) are loaded dynamically via the domain system
 }
 
 # All tool names for quick lookup (balloon-specific only)
@@ -91,6 +96,10 @@ DEFAULT_ENABLED_TOOLS: Set[str] = {
     "follow_link",
     "search_linked_session",
     "session_info",
+    # Domain plugins
+    "load_domain",
+    "unload_domain",
+    "list_domains",
 }
 
 

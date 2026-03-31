@@ -6869,6 +6869,44 @@ Summary:""")
         return True
 
     @ws_expose
+    async def get_prompt_preview(
+        self, session_id: str | None = None, enabled_tools: list[str] | None = None
+    ) -> dict:
+        """Get a preview of the generated system prompt.
+
+        This allows the UI to show what prompt will be sent to the LLM based
+        on the currently enabled tools.
+
+        Args:
+            session_id: Optional session ID to get session-specific prompt
+            enabled_tools: Optional explicit list of tools to use (overrides session)
+
+        Returns:
+            Dict with 'prompt' (the generated prompt text) and 'length' (char count)
+        """
+        from core.prompt_builder import build_system_prompt
+
+        # Determine which tools to include
+        tools_set: set[str] | None = None
+        if enabled_tools is not None:
+            tools_set = set(enabled_tools)
+        elif session_id:
+            session = self._manager.get_session(session_id)
+            if session:
+                tools_set = session.get_enabled_tools_set()
+
+        # Build the prompt
+        prompt = build_system_prompt(
+            backend_type="openai",  # Backend type no longer matters
+            enabled_tools=tools_set,
+        ) or ""
+
+        return {
+            "prompt": prompt,
+            "length": len(prompt),
+        }
+
+    @ws_expose
     async def set_session_title(
         self, session_id: str, title: str
     ) -> bool:

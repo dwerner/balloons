@@ -160,3 +160,90 @@
   font-size: 0.75rem;
   color: var(--text-muted, #888);
 }
+
+/* Preview button */
+.enabled-tools-view__preview-btn {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  background: transparent;
+  border: 1px solid var(--border, #444);
+  border-radius: 4px;
+  color: var(--text-muted, #888);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.enabled-tools-view__preview-btn:hover {
+  background: var(--hover-bg, #333);
+  border-color: var(--text-muted, #888);
+  color: var(--text, #e5e5e5);
+}
+
+.enabled-tools-view__preview-btn--active {
+  background: var(--accent-bg, #1a3a5c);
+  border-color: var(--accent, #4a9eff);
+  color: var(--accent, #4a9eff);
+}
+
+/* Preview section */
+.enabled-tools-view--with-preview {
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+}
+
+.enabled-tools-view__preview {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border, #333);
+  margin-top: 0.75rem;
+  min-height: 200px;
+  max-height: 50vh;
+}
+
+.enabled-tools-view__preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0;
+  flex-shrink: 0;
+}
+
+.enabled-tools-view__preview-title {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text, #e5e5e5);
+}
+
+.enabled-tools-view__preview-length {
+  font-size: 0.75rem;
+  color: var(--text-muted, #888);
+  font-family: monospace;
+}
+
+.enabled-tools-view__preview-content {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--surface-0, #0d0d0d);
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+}
+
+.enabled-tools-view__preview-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted, #888);
+  font-size: 0.875rem;
+}
+
+.enabled-tools-view__preview-text {
+  margin: 0;
+  padding: 0.75rem;
+  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--text, #e5e5e5);
+  white-space: pre-wrap;
+  word-break: break-word;
+}

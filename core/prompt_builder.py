@@ -41,10 +41,6 @@ if TYPE_CHECKING:
 _USER_PROMPTS_DIR = Path.home() / ".balloons" / "prompts"
 _SOURCE_PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
-# Prompt filenames
-_CLAUDE_BALLOONS_TOOLS_FILENAME = "claude-balloons-tools.md"
-_OPENAI_BALLOONS_TOOLS_FILENAME = "openai-balloons-tools.md"
-
 # Regex for include directives: <!-- #include path/to/file.md -->
 _INCLUDE_PATTERN = re.compile(r'<!--\s*#include\s+(\S+)\s*-->')
 
@@ -137,25 +133,20 @@ def _load_balloons_tools_prompt(
     backend_type: str,
     enabled_tools: Optional[Set[str]] = None,
 ) -> str:
-    """Load the backend-appropriate balloons tools prompt.
+    """Load the balloons tools prompt using per-tool prompts.
 
     Args:
-        backend_type: "claude" or "openai"
-        enabled_tools: Set of tool names to include. None means all tools (legacy mode).
+        backend_type: "claude" or "openai" (currently unused, kept for API compat)
+        enabled_tools: Set of tool names to include. None means use default enabled tools.
 
     Returns:
         The balloons tools documentation prompt
     """
-    # Per-tool mode: build from individual tool files
-    if enabled_tools is not None:
-        from .tool_prompts import build_tool_prompts
-        return build_tool_prompts(enabled_tools)
+    from .tool_prompts import build_tool_prompts, DEFAULT_ENABLED_TOOLS
 
-    # Legacy mode: load monolithic file
-    if backend_type == "openai":
-        return _load_prompt_file(_OPENAI_BALLOONS_TOOLS_FILENAME)
-    else:
-        return _load_prompt_file(_CLAUDE_BALLOONS_TOOLS_FILENAME)
+    # Use provided set or defaults
+    tools_to_include = enabled_tools if enabled_tools is not None else DEFAULT_ENABLED_TOOLS
+    return build_tool_prompts(tools_to_include)
 
 
 def _get_domain_prompt() -> str:

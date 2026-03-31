@@ -3,32 +3,38 @@
 import pytest
 
 from core.prompt_builder import build_system_prompt, build_system_prompt_for_backend
+from core.tool_prompts import DEFAULT_ENABLED_TOOLS
 from config import BackendConfig
 
 
 class TestBuildSystemPrompt:
     """Tests for build_system_prompt()."""
 
-    def test_claude_prompt_includes_balloons_tools(self):
-        """Claude backend gets balloons-tool XML documentation."""
-        prompt = build_system_prompt(backend_type="claude")
-
-        assert prompt is not None
-        assert "<balloons-tool>" in prompt
-        assert "propose_fork" in prompt
-
-    def test_openai_prompt_includes_supervisor_docs(self):
-        """OpenAI backend gets supervisor tool documentation."""
+    def test_prompt_includes_default_tools(self):
+        """Prompt includes documentation for default enabled tools."""
         prompt = build_system_prompt(backend_type="openai")
 
         assert prompt is not None
-        assert "supervisor" in prompt.lower()
-        assert "supervisor_start" in prompt
+        # Should have propose_fork (in default enabled tools)
+        assert "propose_fork" in prompt
+        # Should have domain tools (in default enabled tools)
+        assert "load_domain" in prompt
+
+    def test_prompt_includes_enabled_tools_only(self):
+        """Prompt only includes enabled tools when specified."""
+        # Only enable domain tools
+        enabled = {"load_domain", "list_domains"}
+        prompt = build_system_prompt(backend_type="openai", enabled_tools=enabled)
+
+        assert prompt is not None
+        assert "load_domain" in prompt
+        # Should NOT have propose_fork (not in enabled set)
+        assert "propose_fork" not in prompt
 
     def test_user_prompt_included(self):
         """User-provided prompt is included."""
         user_prompt = "You are a helpful assistant."
-        prompt = build_system_prompt(backend_type="claude", user_prompt=user_prompt)
+        prompt = build_system_prompt(backend_type="openai", user_prompt=user_prompt)
 
         assert prompt is not None
         assert user_prompt in prompt
@@ -36,27 +42,28 @@ class TestBuildSystemPrompt:
     def test_user_prompt_first(self):
         """User prompt appears before balloons tools."""
         user_prompt = "CUSTOM_USER_PROMPT_MARKER"
-        prompt = build_system_prompt(backend_type="claude", user_prompt=user_prompt)
+        prompt = build_system_prompt(backend_type="openai", user_prompt=user_prompt)
 
         user_pos = prompt.find(user_prompt)
-        balloons_pos = prompt.find("<balloons-tool>")
+        tools_pos = prompt.find("# CRITICAL")  # Start of tool prompts
 
-        assert user_pos < balloons_pos
+        assert user_pos < tools_pos
 
     def test_no_user_prompt_still_has_content(self):
         """Even without user prompt, balloons tools are included."""
-        prompt = build_system_prompt(backend_type="claude", user_prompt=None)
+        prompt = build_system_prompt(backend_type="openai", user_prompt=None)
 
         assert prompt is not None
         assert len(prompt) > 1000  # Should have balloons tools
 
-    def test_unknown_backend_defaults_to_claude(self):
-        """Unknown backend type uses Claude balloons tools."""
-        prompt = build_system_prompt(backend_type="unknown")
+    def test_backend_type_no_longer_matters(self):
+        """Backend type is now ignored - all use per-tool prompts."""
+        prompt_openai = build_system_prompt(backend_type="openai")
+        prompt_claude = build_system_prompt(backend_type="claude")
+        prompt_unknown = build_system_prompt(backend_type="unknown")
 
-        # Should get Claude-style prompt (with XML tags)
-        assert prompt is not None
-        assert "<balloons-tool>" in prompt
+        # All should be the same (no backend-specific prompts anymore)
+        assert prompt_openai == prompt_claude == prompt_unknown
 
 
 class TestBuildSystemPromptForBackend:
@@ -70,7 +77,8 @@ class TestBuildSystemPromptForBackend:
 
         config = BackendConfig(
             name="test",
-            type="claude",
+            type="openai",
+            base_url="http://test",
             system_prompt=str(prompt_file),
         )
 
@@ -79,24 +87,23 @@ class TestBuildSystemPromptForBackend:
         assert prompt is not None
         assert "Backend custom prompt content" in prompt
 
-    def test_uses_backend_type(self, tmp_path):
-        """Uses correct backend type for prompt selection."""
+    def test_includes_default_tools(self, tmp_path):
+        """Includes default tools regardless of backend type."""
         prompt_file = tmp_path / "prompt.md"
         prompt_file.write_text("Test prompt")
 
-        openai_config = BackendConfig(
+        config = BackendConfig(
             name="test",
             type="openai",
             base_url="http://test",
             system_prompt=str(prompt_file),
         )
 
-        prompt = build_system_prompt_for_backend(openai_config)
+        prompt = build_system_prompt_for_backend(config)
 
-        # Should have OpenAI-style docs (supervisor tools, not XML tags)
-        assert "supervisor_start" in prompt
-        # Should NOT have Claude-style XML tag documentation
-        assert "balloons-tool" not in prompt
+        # Should have default tools
+        assert "propose_fork" in prompt
+        assert "load_domain" in prompt
 
 
 class TestDomainPromptIntegration:
@@ -106,11 +113,11 @@ class TestDomainPromptIntegration:
         """Domain prompts are included when domains are loaded."""
         from plugins.integration import load_domain, unload_domain
 
-        prompt_before = build_system_prompt(backend_type="claude")
+        prompt_before = build_system_prompt(backend_type="openai")
 
         load_domain("chess", emit_event=False)
         try:
-            prompt_with_chess = build_system_prompt(backend_type="claude")
+            prompt_with_chess = build_system_prompt(backend_type="openai")
 
             # Chess domain adds ~2500 chars
             assert len(prompt_with_chess) > len(prompt_before)
@@ -122,13 +129,13 @@ class TestDomainPromptIntegration:
         """Domain prompts are removed when domains are unloaded."""
         from plugins.integration import load_domain, unload_domain
 
-        prompt_initial = build_system_prompt(backend_type="claude")
+        prompt_initial = build_system_prompt(backend_type="openai")
         initial_len = len(prompt_initial)
 
         load_domain("chess", emit_event=False)
         unload_domain("chess", emit_event=False)
 
-        prompt_final = build_system_prompt(backend_type="claude")
+        prompt_final = build_system_prompt(backend_type="openai")
 
         # Should be back to original length
         assert len(prompt_final) == initial_len

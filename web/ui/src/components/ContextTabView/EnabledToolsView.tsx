@@ -3,6 +3,7 @@
  *
  * Shows tools grouped by category with checkboxes to enable/disable each.
  * Changes are saved immediately to the session or global config.
+ * Includes a prompt preview section showing the generated system prompt.
  */
 
 import React, { useState, useEffect, useCallback, useMemo, memo } from 'react';
@@ -11,6 +12,13 @@ import { createLogger } from '../../utils/debugLog';
 import './EnabledToolsView.css';
 
 const debugLog = createLogger('EnabledToolsView');
+
+// Format char count as kt (thousands)
+function formatLength(len: number): string {
+  if (len < 1000) return `${len} chars`;
+  const kt = Math.round(len / 100) / 10;
+  return `${kt.toFixed(1)}k chars`;
+}
 
 interface AvailableTools {
   core: string[];
@@ -29,13 +37,14 @@ interface EnabledToolsViewProps {
 const CATEGORY_LABELS: Record<string, string> = {
   core: 'Core',
   balloon: 'Balloon',
+  domain: 'Domain',
   supervisor: 'Supervisor',
   watcher: 'Watcher',
   midi: 'MIDI',
   debug: 'Debug',
 };
 
-const CATEGORY_ORDER = ['core', 'balloon', 'supervisor', 'watcher', 'midi', 'debug'];
+const CATEGORY_ORDER = ['core', 'balloon', 'domain', 'supervisor', 'watcher', 'midi', 'debug'];
 
 // Tool descriptions for tooltips
 const TOOL_DESCRIPTIONS: Record<string, string> = {
@@ -54,6 +63,10 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   follow_link: 'Load context from a linked session',
   search_linked_session: 'Search within a linked session',
   session_info: 'Get current session info',
+  // Domain
+  load_domain: 'Load a domain plugin (chess, kanban, etc.)',
+  unload_domain: 'Unload a domain plugin',
+  list_domains: 'List available domain plugins',
   // Supervisor
   supervisor_start: 'Start a background process',
   supervisor_list: 'List running processes',
@@ -81,6 +94,12 @@ export const EnabledToolsView = memo(function EnabledToolsView({
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Prompt preview state
+  const [showPromptPreview, setShowPromptPreview] = useState(false);
+  const [promptPreview, setPromptPreview] = useState<string | null>(null);
+  const [promptLength, setPromptLength] = useState<number>(0);
+  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
 
   // Load available tools and current enabled state
   useEffect(() => {
@@ -210,6 +229,35 @@ export const EnabledToolsView = memo(function EnabledToolsView({
     }
   }, [client, sessionId, isGlobalSettings, isSaving]);
 
+  // Load prompt preview
+  const loadPromptPreview = useCallback(async () => {
+    if (!client) return;
+
+    setIsLoadingPreview(true);
+    try {
+      const result = await client.sessions.getPromptPreview(
+        sessionId || undefined,
+        Array.from(enabledTools)
+      ) as { prompt: string; length: number };
+      setPromptPreview(result.prompt);
+      setPromptLength(result.length);
+      debugLog('Loaded prompt preview', { length: result.length });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      debugLog('Error loading prompt preview', { error: msg });
+      setPromptPreview(`Error loading preview: ${msg}`);
+    } finally {
+      setIsLoadingPreview(false);
+    }
+  }, [client, sessionId, enabledTools]);
+
+  // Load preview when shown or when tools change
+  useEffect(() => {
+    if (showPromptPreview) {
+      loadPromptPreview();
+    }
+  }, [showPromptPreview, loadPromptPreview]);
+
   // Build category groups
   const categoryGroups = useMemo(() => {
     if (!availableTools) return [];
@@ -266,7 +314,7 @@ export const EnabledToolsView = memo(function EnabledToolsView({
   }
 
   return (
-    <div className="enabled-tools-view">
+    <div className={`enabled-tools-view ${showPromptPreview ? 'enabled-tools-view--with-preview' : ''}`}>
       <div className="enabled-tools-view__header">
         <h3 className="enabled-tools-view__title">
           {isGlobalSettings ? 'Default Enabled Tools' : 'Session Tools'}
@@ -275,6 +323,13 @@ export const EnabledToolsView = memo(function EnabledToolsView({
           <span className="enabled-tools-view__count">
             {enabledTools.size} of {availableTools.all.length} enabled
           </span>
+          <button
+            className={`enabled-tools-view__preview-btn ${showPromptPreview ? 'enabled-tools-view__preview-btn--active' : ''}`}
+            onClick={() => setShowPromptPreview(prev => !prev)}
+            title={showPromptPreview ? 'Hide prompt preview' : 'Show prompt preview'}
+          >
+            {showPromptPreview ? 'Hide Preview' : 'Show Preview'}
+          </button>
           {!isGlobalSettings && sessionId && (
             <button
               className="enabled-tools-view__reset-btn"
@@ -282,7 +337,7 @@ export const EnabledToolsView = memo(function EnabledToolsView({
               disabled={isSaving}
               title="Reset to default enabled tools"
             >
-              Reset to Defaults
+              Reset
             </button>
           )}
         </div>
@@ -340,6 +395,25 @@ export const EnabledToolsView = memo(function EnabledToolsView({
 
       {isSaving && (
         <div className="enabled-tools-view__saving">Saving...</div>
+      )}
+
+      {/* Prompt Preview Section */}
+      {showPromptPreview && (
+        <div className="enabled-tools-view__preview">
+          <div className="enabled-tools-view__preview-header">
+            <span className="enabled-tools-view__preview-title">Generated Prompt</span>
+            <span className="enabled-tools-view__preview-length">
+              {isLoadingPreview ? 'Loading...' : formatLength(promptLength)}
+            </span>
+          </div>
+          <div className="enabled-tools-view__preview-content">
+            {isLoadingPreview ? (
+              <div className="enabled-tools-view__preview-loading">Loading prompt preview...</div>
+            ) : (
+              <pre className="enabled-tools-view__preview-text">{promptPreview}</pre>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
