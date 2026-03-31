@@ -3,6 +3,7 @@ name = "balloons-supervisor"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Process supervisor for long-running commands with streaming output"
 
 [dependencies]

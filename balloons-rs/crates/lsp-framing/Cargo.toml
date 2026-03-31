@@ -4,6 +4,7 @@ version.workspace = true
 edition = "2021"
 description = "LSP Content-Length framing parser using nom"
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 nom.workspace = true
