@@ -9,6 +9,7 @@ Usage:
     python balloons-server.py ui start              # Start bun dev server (TLS)
     python balloons-server.py ui stop               # Stop bun dev server
     python balloons-server.py ui restart            # Restart bun dev server
+    python balloons-server.py ui log                # Tail bun dev server log
 
 Default ports:
     A: 8700 (primary backend)
@@ -270,6 +271,28 @@ def stop_ui_server() -> bool:
         return False
 
 
+def tail_ui_log(lines: int = 50, follow: bool = False) -> None:
+    """Tail the UI server log file.
+
+    Args:
+        lines: Number of lines to show (default 50)
+        follow: If True, continuously follow the log (like tail -f)
+    """
+    if not UI_LOG_FILE.exists():
+        print(f"Log file not found: {UI_LOG_FILE}")
+        return
+
+    if follow:
+        # Use tail -f for continuous following
+        try:
+            subprocess.run(["tail", "-f", "-n", str(lines), str(UI_LOG_FILE)])
+        except KeyboardInterrupt:
+            pass  # Clean exit on Ctrl+C
+    else:
+        # Just show last N lines
+        subprocess.run(["tail", "-n", str(lines), str(UI_LOG_FILE)])
+
+
 def list_instances() -> None:
     """List all running instances."""
     found = False
@@ -376,6 +399,11 @@ Examples:
     ui_subparsers.add_parser("stop", help="Stop bun dev server")
     ui_subparsers.add_parser("restart", help="Restart bun dev server")
     ui_subparsers.add_parser("status", help="Check if bun dev server is running")
+    log_parser = ui_subparsers.add_parser("log", help="Tail bun dev server log")
+    log_parser.add_argument("-n", "--lines", type=int, default=50,
+                            help="Number of lines to show (default: 50)")
+    log_parser.add_argument("-f", "--follow", action="store_true",
+                            help="Follow the log output (like tail -f)")
 
     args = parser.parse_args()
 
@@ -411,6 +439,8 @@ Examples:
                 print(f"UI server running on port {UI_PORT} (PID {pid})")
             else:
                 print("UI server not running")
+        elif args.ui_command == "log":
+            tail_ui_log(lines=args.lines, follow=args.follow)
 
 
 if __name__ == "__main__":
