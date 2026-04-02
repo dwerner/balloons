@@ -13,7 +13,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { usePlugins, pluginRegistry, type PluginInfo, type PluginContext, type ConfirmOptions } from '../../plugins';
-import type { SessionDataServiceClient, DomainRpcServiceClient } from '../../../../generated/balloons-client';
+import type { SessionDataServiceClient, DomainRpcServiceClient, SessionManagerServiceClient } from '../../../../generated/balloons-client';
 import { useDialog } from '../Dialog/DialogContext';
 import './DomainsTab.css';
 
@@ -26,6 +26,8 @@ interface DomainsTabProps {
   sessionDataClient?: SessionDataServiceClient;
   /** Domain RPC service client for calling @ws_expose methods */
   domainRpcClient?: DomainRpcServiceClient;
+  /** Session manager service client for loadDomain/unloadDomain */
+  sessionsClient?: SessionManagerServiceClient;
   /** Whether the LLM is currently responding (streaming) */
   isLLMResponding?: boolean;
 }
@@ -35,6 +37,7 @@ export function DomainsTab({
   sessionId,
   sessionDataClient,
   domainRpcClient,
+  sessionsClient,
   isLLMResponding = false,
 }: DomainsTabProps) {
   const { loaded, load, unload, isLoaded } = usePlugins();
@@ -97,6 +100,43 @@ export function DomainsTab({
   useEffect(() => {
     refreshAvailable();
   }, [refreshAvailable]);
+
+  // Listen for backend domain_loaded / domain_unloaded events to auto-load/unload UI plugins
+  useEffect(() => {
+    if (!sessionDataClient) return;
+
+    const unsubscribe = sessionDataClient.sessionDataDomainEvent((event) => {
+      // System-level domain events (load/unload)
+      if (event.domainId === 'system') {
+        const data = event.data as { domainId?: string };
+        const domainId = data.domainId;
+
+        if (!domainId) return;
+
+        if (event.eventType === 'domain_loaded') {
+          console.log(`[DomainsTab] Backend loaded domain: ${domainId}, auto-loading UI`);
+          // Check if UI plugin exists and isn't already loaded
+          if (!isLoaded(domainId)) {
+            load(domainId).catch(err => {
+              console.warn(`[DomainsTab] Failed to auto-load UI for ${domainId}:`, err);
+            });
+          }
+          // Refresh available list
+          refreshAvailable();
+        } else if (event.eventType === 'domain_unloaded') {
+          console.log(`[DomainsTab] Backend unloaded domain: ${domainId}, auto-unloading UI`);
+          // Unload UI plugin if loaded
+          if (isLoaded(domainId)) {
+            unload(domainId);
+          }
+          // Refresh available list
+          refreshAvailable();
+        }
+      }
+    });
+
+    return unsubscribe;
+  }, [sessionDataClient, load, unload, isLoaded, refreshAvailable]);
 
   // Reload a plugin (unload then load to get new version)
   // Also reloads the server-side domain to pick up Python code changes
@@ -194,7 +234,7 @@ export function DomainsTab({
     };
   }, [sendMessage, sessionId, sessionDataClient, domainRpcClient, isLLMResponding, pluginConfirm, subscribeToDomainEvents, requestDomainState, callDomainMethod]);
 
-  // Handle loading a plugin
+  // Handle loading a plugin (loads both backend domain and frontend UI)
   const handleLoad = async (pluginId: string) => {
     if (loading.has(pluginId)) return;
 
@@ -202,6 +242,13 @@ export function DomainsTab({
     setError(null);
 
     try {
+      // Load backend domain first (if sessionsClient available)
+      // This will emit domain_loaded event which triggers auto-load of UI
+      if (sessionsClient) {
+        console.log(`[DomainsTab] Loading backend domain: ${pluginId}`);
+        await sessionsClient.loadDomain(pluginId, sessionId || undefined);
+      }
+      // Load frontend UI
       await load(pluginId);
       setActivePlugin(pluginId);
     } catch (err) {
@@ -215,8 +262,15 @@ export function DomainsTab({
     }
   };
 
-  // Handle unloading a plugin
-  const handleUnload = (pluginId: string) => {
+  // Handle unloading a plugin (unloads both backend domain and frontend UI)
+  const handleUnload = async (pluginId: string) => {
+    // Unload backend domain first (if sessionsClient available)
+    // This will emit domain_unloaded event
+    if (sessionsClient) {
+      console.log(`[DomainsTab] Unloading backend domain: ${pluginId}`);
+      await sessionsClient.unloadDomain(pluginId, sessionId || undefined);
+    }
+    // Unload frontend UI
     unload(pluginId);
     if (activePlugin === pluginId) {
       // Switch to another loaded plugin or null

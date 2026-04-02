@@ -14,6 +14,7 @@ import type { NodeRendererProps } from 'react-arborist';
 import useResizeObserver from 'use-resize-observer';
 import type { SessionInfo } from '../../../../generated/balloons-client';
 import { createLogger } from '../../utils/debugLog';
+import { getModelColor } from '../../utils';
 import { usePreferences } from '../layout/PreferencesContext';
 import { useDialog } from '../Dialog';
 import './HierarchyView.css';
@@ -82,7 +83,8 @@ function hexToRgb(hex: string): string {
 
 // ==================== Icons ====================
 
-function StreamingSpinner() {
+function StreamingSpinner({ color }: { color?: string }) {
+  const strokeColor = color || 'currentColor';
   return (
     <svg
       width="14"
@@ -92,8 +94,8 @@ function StreamingSpinner() {
       className="hierarchy-spinner"
       style={{ display: 'inline-block' }}
     >
-      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill="none" opacity="0.2" />
-      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeDasharray="47 63" />
+      <circle cx="12" cy="12" r="10" stroke={strokeColor} strokeWidth="2" fill="none" opacity="0.2" />
+      <circle cx="12" cy="12" r="10" stroke={strokeColor} strokeWidth="2" fill="none" strokeLinecap="round" strokeDasharray="47 63" />
     </svg>
   );
 }
@@ -447,7 +449,7 @@ const SessionNodeRenderer = memo(function SessionNodeRenderer({
         {/* Status indicators */}
         {session.isStreaming && (
           <span className="hierarchy-node__badge hierarchy-node__badge--streaming" title="Streaming">
-            <StreamingSpinner />
+            <StreamingSpinner color={getModelColor(session.model, session.backendName)} />
           </span>
         )}
 
@@ -629,7 +631,7 @@ export const HierarchyView = memo(function HierarchyView({
       }
     }
     for (const [, children] of childMap) {
-      children.sort((a, b) => new Date(a.created).getTime() - new Date(b.created).getTime());
+      children.sort((a, b) => new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime());
     }
 
     // Root finding with cache
@@ -853,7 +855,7 @@ export const HierarchyView = memo(function HierarchyView({
       <div className="hierarchy-tree-wrapper" ref={treeWrapperRef}>
         {containerHeight && containerHeight > 0 && (
           <Tree<TreeNodeData>
-            key={`tree-${sessions.length}-${mode}`}
+            key={`tree-${mode}`}
             ref={treeRef}
             data={treeData}
             width={containerWidth || '100%'}

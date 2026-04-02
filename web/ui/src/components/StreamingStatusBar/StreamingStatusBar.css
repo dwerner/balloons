@@ -8,8 +8,9 @@
   gap: 4px;
   padding: 6px 8px;
   margin-bottom: 8px;
-  background: rgba(74, 222, 128, 0.08);
-  border: 1px solid rgba(74, 222, 128, 0.2);
+  /* Use CSS custom properties for model-specific colors, with fallbacks */
+  background: var(--model-color-bg, rgba(74, 222, 128, 0.08));
+  border: 1px solid var(--model-color-border, rgba(74, 222, 128, 0.2));
   border-radius: 6px;
   font-size: 12px;
 
@@ -167,14 +168,16 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--color-accent-green);
+  /* Background set via inline style for model-specific color */
+  background: var(--model-color, var(--color-accent-green));
   animation: pulse 1s infinite;
   flex-shrink: 0;
 }
 
 .streaming-status-bar__model-name {
   font-weight: 600;
-  color: var(--color-accent-green);
+  /* Color set via inline style for model-specific color */
+  color: var(--model-color, var(--color-accent-green));
   font-size: 12px;
   white-space: nowrap;
   overflow: hidden;

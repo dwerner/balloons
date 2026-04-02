@@ -42,6 +42,7 @@ class ForkData:
     copy_items: list[tuple[Message, int]]  # (message, original_index)
     compress_group_positions: list[int]  # First index of each compress group
     fork_point: int
+    backend_name: str = ""  # Backend to use for the fork (empty = inherit from parent)
 
 
 @dataclass
@@ -98,6 +99,7 @@ class ForkProposal:
     context_plan: list[ContextAssignment] = field(default_factory=list)
     initial_prompt: str = ""  # Optional starting prompt
     bind_to: ForkBindingSpec | str | None = None  # "inherit" or explicit spec
+    backend_name: str = ""  # Backend/model to use (empty = inherit from parent)
 
     def resolve_exchange_indices(
         self,
@@ -389,6 +391,7 @@ class ForkManager:
         allowed_tools: list[str],
         name: str = "",
         background: bool = False,
+        backend_name: str = "",
     ) -> ForkResult:
         """Prepare a fork operation.
 
@@ -402,6 +405,7 @@ class ForkManager:
             allowed_tools: Tools enabled for the fork
             name: Optional name for the fork
             background: Whether to run in background
+            backend_name: Backend/model to use for the fork (empty = inherit from parent)
 
         Returns:
             ForkResult with session info and next steps
@@ -431,8 +435,10 @@ class ForkManager:
         # Inherit enabled tools from parent
         if current_session.enabled_tools:
             child_session.enabled_tools = current_session.enabled_tools.copy()
-        # Inherit backend/model configuration from parent
-        if current_session.backend_name:
+        # Set backend/model configuration (explicit choice or inherit from parent)
+        if backend_name:
+            child_session.backend_name = backend_name
+        elif current_session.backend_name:
             child_session.backend_name = current_session.backend_name
 
         # Generate fork_id to share between parent and child
@@ -530,6 +536,7 @@ class ForkManager:
                     copy_items=groups.copy_items,
                     compress_group_positions=groups.compress_group_positions[:1],
                     fork_point=fork_point,
+                    backend_name=backend_name,
                 ),
                 prompt=prompt,
                 name=name,

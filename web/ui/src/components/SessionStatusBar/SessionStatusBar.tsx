@@ -1,9 +1,10 @@
-import React, { memo, useState, useEffect, useCallback } from 'react';
+import React, { memo, useState, useEffect, useCallback, useMemo } from 'react';
 import type { SessionInfo, BalloonsClient } from '../../../../generated/balloons-client';
 import { useLongPress, useNotifications } from '../../hooks';
 import { useLayout } from '../layout';
 import { usePreferences } from '../layout/PreferencesContext';
 import { RenameSessionModal } from '../RenameSessionModal';
+import { getModelColor } from '../../utils';
 import './SessionStatusBar.css';
 
 export interface SessionStatusBarProps {
@@ -187,6 +188,12 @@ export const SessionStatusBar = memo(function SessionStatusBar({
   const modelDisplay = getModelDisplayName(session.model);
   const isPinned = session.isPinned ?? false;
   const sessionName = getSessionDisplayName(session);
+
+  // Get model-specific color for the streaming indicator
+  const modelColor = useMemo(
+    () => getModelColor(session.model, session.backendName),
+    [session.model, session.backendName]
+  );
 
   // Notifications hook for per-session notifications
   const {
@@ -452,6 +459,7 @@ export const SessionStatusBar = memo(function SessionStatusBar({
               {isStreaming && (
                 <span
                   className="session-status-bar__streaming-indicator"
+                  style={{ background: modelColor }}
                   aria-label="Streaming active"
                   title="Streaming active"
                 />
@@ -468,6 +476,10 @@ export const SessionStatusBar = memo(function SessionStatusBar({
                   aria-expanded={showBackendSelector}
                   aria-haspopup="listbox"
                 >
+                  <span
+                    className="session-status-bar__backend-color"
+                    style={{ background: getModelColor(session.model, selectedBackend || session.backendName) }}
+                  />
                   {selectedBackend || modelDisplay}
                   {backends.length > 1 && !isStreaming && (
                     <span className="session-status-bar__dropdown-arrow" aria-hidden="true">
@@ -495,6 +507,10 @@ export const SessionStatusBar = memo(function SessionStatusBar({
                           onClick={() => handleBackendChange(backend)}
                           disabled={isChangingBackend}
                         >
+                          <span
+                            className="session-status-bar__backend-color"
+                            style={{ background: getModelColor(null, backend) }}
+                          />
                           {backend}
                         </button>
                       ))}

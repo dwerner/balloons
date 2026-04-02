@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-03-31T08:13:32.418877
+// Generated: 2026-03-31T13:41:08.054048
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -592,11 +592,12 @@ export interface SessionManagerService {
    * allowed_tools: List of tool names to allow, or None for all tools
    * start_streaming: If True, start streaming after fork creation. Set False
    * if you want to handle streaming separately.
+   * backend_name: Backend/model to use for the fork. If empty, inherits from parent.
    * 
    * Returns:
    * ForkSessionResult with child session info and streaming state
    */
-  forkSession(parentSessionId: string, prompt: string, name?: string, background?: boolean, contextModes?: Record<string, unknown>[] | null, allowedTools?: string[] | null, startStreaming?: boolean, autoCompleteCompression?: boolean): Promise<Types.ForkSessionResult>;
+  forkSession(parentSessionId: string, prompt: string, name?: string, background?: boolean, contextModes?: Record<string, unknown>[] | null, allowedTools?: string[] | null, startStreaming?: boolean, autoCompleteCompression?: boolean, backendName?: string): Promise<Types.ForkSessionResult>;
 
   /**
    * Generate a commit message using the LLM.
@@ -645,6 +646,16 @@ export interface SessionManagerService {
    * List of default enabled tool names
    */
   getDefaultEnabledTools(): Promise<string[]>;
+
+  /**
+   * Get information about available and loaded domain plugins.
+   * 
+   * Returns:
+   * Dict with:
+   * - available: list of available domain IDs
+   * - loaded: list of currently loaded domain IDs
+   */
+  getDomainInfo(): Promise<Record<string, unknown>>;
 
   /**
    * Get summaries of each exchange in a session for proposal UIs.
@@ -807,11 +818,12 @@ export interface SessionManagerService {
    * 
    * Args:
    * domain_id: ID of the domain to load (e.g., "chess")
+   * session_id: Optional session to associate the domain with
    * 
    * Returns:
    * Dict with success status and error message if any
    */
-  loadDomain(domainId: string): Promise<Record<string, unknown>>;
+  loadDomain(domainId: string, sessionId?: string | null): Promise<Record<string, unknown>>;
 
   /**
    * Merge a fork session back to its parent.
@@ -911,11 +923,12 @@ export interface SessionManagerService {
    * name: Fork name (if not provided, uses original from proposal)
    * description: Fork description (if not provided, uses original from proposal)
    * start_streaming: If True and accepted, start streaming after fork creation
+   * backend_name: Backend/model to use for the fork. If not provided, inherits from parent.
    * 
    * Returns:
    * RespondToForkProposalResult with fork session info if accepted
    */
-  respondToForkProposal(sessionId: string, proposalId: string, accepted: boolean, contextPlan?: Record<string, unknown>[] | null, initialPrompt?: string | null, name?: string | null, description?: string | null, startStreaming?: boolean): Promise<Types.RespondToForkProposalResult>;
+  respondToForkProposal(sessionId: string, proposalId: string, accepted: boolean, contextPlan?: Record<string, unknown>[] | null, initialPrompt?: string | null, name?: string | null, description?: string | null, startStreaming?: boolean, backendName?: string | null): Promise<Types.RespondToForkProposalResult>;
 
   /**
    * Respond to a merge proposal by accepting or rejecting it.
@@ -1140,11 +1153,12 @@ export interface SessionManagerService {
    * 
    * Args:
    * domain_id: ID of the domain to unload
+   * session_id: Optional session to disassociate the domain from
    * 
    * Returns:
    * Dict with success status and error message if any
    */
-  unloadDomain(domainId: string): Promise<Record<string, unknown>>;
+  unloadDomain(domainId: string, sessionId?: string | null): Promise<Record<string, unknown>>;
 
   /**
    * Validate that a merge is possible for a fork session.
@@ -1337,8 +1351,8 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.call('findSwitchTarget', { sessionId: sessionId, name: name });
   }
 
-  async forkSession(parentSessionId: string, prompt: string, name?: string, background?: boolean, contextModes?: Record<string, unknown>[] | null, allowedTools?: string[] | null, startStreaming?: boolean, autoCompleteCompression?: boolean): Promise<Types.ForkSessionResult> {
-    return this.call('forkSession', { parentSessionId: parentSessionId, prompt: prompt, name: name, background: background, contextModes: contextModes, allowedTools: allowedTools, startStreaming: startStreaming, autoCompleteCompression: autoCompleteCompression });
+  async forkSession(parentSessionId: string, prompt: string, name?: string, background?: boolean, contextModes?: Record<string, unknown>[] | null, allowedTools?: string[] | null, startStreaming?: boolean, autoCompleteCompression?: boolean, backendName?: string): Promise<Types.ForkSessionResult> {
+    return this.call('forkSession', { parentSessionId: parentSessionId, prompt: prompt, name: name, background: background, contextModes: contextModes, allowedTools: allowedTools, startStreaming: startStreaming, autoCompleteCompression: autoCompleteCompression, backendName: backendName });
   }
 
   async generateCommitMessage(gitRoot: string, stagedDiff: string): Promise<Types.GenerateCommitMessageResult> {
@@ -1359,6 +1373,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   async getDefaultEnabledTools(): Promise<string[]> {
     return this.call('getDefaultEnabledTools', {  });
+  }
+
+  async getDomainInfo(): Promise<Record<string, unknown>> {
+    return this.call('getDomainInfo', {  });
   }
 
   async getExchangeSummaries(sessionId: string, excludeCurrent?: boolean): Promise<Types.ExchangeSummary[]> {
@@ -1413,8 +1431,8 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.call('listSessions', {  });
   }
 
-  async loadDomain(domainId: string): Promise<Record<string, unknown>> {
-    return this.call('loadDomain', { domainId: domainId });
+  async loadDomain(domainId: string, sessionId?: string | null): Promise<Record<string, unknown>> {
+    return this.call('loadDomain', { domainId: domainId, sessionId: sessionId });
   }
 
   async mergeSession(forkSessionId: string, mergeSummary: string, filesChanged?: string[] | null, keyAccomplishments?: string[] | null, reason?: string): Promise<Types.MergeSessionResult> {
@@ -1437,8 +1455,8 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.call('requestProposal', { sessionId: sessionId, proposalType: proposalType, seedPrompt: seedPrompt });
   }
 
-  async respondToForkProposal(sessionId: string, proposalId: string, accepted: boolean, contextPlan?: Record<string, unknown>[] | null, initialPrompt?: string | null, name?: string | null, description?: string | null, startStreaming?: boolean): Promise<Types.RespondToForkProposalResult> {
-    return this.call('respondToForkProposal', { sessionId: sessionId, proposalId: proposalId, accepted: accepted, contextPlan: contextPlan, initialPrompt: initialPrompt, name: name, description: description, startStreaming: startStreaming });
+  async respondToForkProposal(sessionId: string, proposalId: string, accepted: boolean, contextPlan?: Record<string, unknown>[] | null, initialPrompt?: string | null, name?: string | null, description?: string | null, startStreaming?: boolean, backendName?: string | null): Promise<Types.RespondToForkProposalResult> {
+    return this.call('respondToForkProposal', { sessionId: sessionId, proposalId: proposalId, accepted: accepted, contextPlan: contextPlan, initialPrompt: initialPrompt, name: name, description: description, startStreaming: startStreaming, backendName: backendName });
   }
 
   async respondToMergeProposal(sessionId: string, proposalId: string, accepted: boolean, summary?: string | null, filesChanged?: string[] | null, keyAccomplishments?: string[] | null, reason?: string | null): Promise<Types.RespondToMergeProposalResult> {
@@ -1493,8 +1511,8 @@ export class SessionManagerServiceClient implements SessionManagerService {
     return this.call('switchSession', { sessionId: sessionId });
   }
 
-  async unloadDomain(domainId: string): Promise<Record<string, unknown>> {
-    return this.call('unloadDomain', { domainId: domainId });
+  async unloadDomain(domainId: string, sessionId?: string | null): Promise<Record<string, unknown>> {
+    return this.call('unloadDomain', { domainId: domainId, sessionId: sessionId });
   }
 
   async validateMerge(forkSessionId: string): Promise<Types.MergeSessionResult> {

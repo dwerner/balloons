@@ -38,7 +38,7 @@
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--border, #333);
-  overflow-y: auto;
+  overflow: hidden; /* Don't scroll the whole sidebar */
   flex-shrink: 0;
 }
 
@@ -104,7 +104,8 @@
 .enabled-tools-view__category {
   border: 1px solid var(--border, #333);
   border-radius: 4px;
-  overflow: hidden;
+  /* Don't use overflow:hidden - it clips content. Border-radius on children handles corners */
+  flex-shrink: 0; /* Don't shrink categories */
 }
 
 .enabled-tools-view__category-header {
@@ -112,6 +113,7 @@
   align-items: center;
   gap: 0.375rem;
   padding: 0.375rem 0.5rem;
+  border-radius: 3px 3px 0 0; /* Match parent border-radius */
   background: var(--surface-1, #1a1a1a);
   cursor: pointer;
   user-select: none;
@@ -145,6 +147,7 @@
   flex-direction: column;
   padding: 0.25rem;
   background: var(--surface-0, #111);
+  border-radius: 0 0 3px 3px; /* Match parent border-radius */
 }
 
 .enabled-tools-view__tool {
@@ -177,6 +180,33 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+}
+
+/* Domain plugins section */
+.enabled-tools-view__category--domains {
+  border-color: var(--accent, #4a9eff);
+  border-style: dashed;
+}
+
+.enabled-tools-view__category-header--domains {
+  cursor: default;
+}
+
+.enabled-tools-view__category-icon {
+  font-size: 0.8125rem;
+}
+
+.enabled-tools-view__domain-badge {
+  font-size: 0.625rem;
+  padding: 0.0625rem 0.25rem;
+  border-radius: 2px;
+  background: var(--accent, #4a9eff);
+  color: var(--surface-0, #0d0d0d);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
 }
 
 .enabled-tools-view__saving {
@@ -289,6 +319,7 @@
   border-right: none;
   display: flex;
   flex-direction: column;
+  overflow: hidden; /* Categories section scrolls, not the whole sidebar */
 }
 
 .enabled-tools-view__preview--mobile {

@@ -307,6 +307,10 @@ Use this instead of asking "Would you like me to implement this?" when you have 
                             }
                         ],
                         "description": "Binding for the fork: 'inherit' to copy parent's binding, or explicit {entity_type, entity_id, role}"
+                    },
+                    "backend_name": {
+                        "type": "string",
+                        "description": "Backend/model to use for the fork (e.g., 'claude', 'openrouter'). If not specified, inherits from parent session."
                     }
                 },
                 "required": ["name", "description", "context_plan"]

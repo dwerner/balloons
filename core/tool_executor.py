@@ -665,6 +665,7 @@ def execute_propose_fork(args: dict) -> tuple[str, bool]:
         "context_plan": context_plan,
         "initial_prompt": args.get("initial_prompt", ""),
         "bind_to": args.get("bind_to"),
+        "backend_name": args.get("backend_name", ""),
         # These are set when fork is accepted:
         "_child_session_id": None,
     }
@@ -719,6 +720,7 @@ def parse_fork_proposal(args: dict) -> ForkProposal | None:
             context_plan=context_plan,
             initial_prompt=initial_prompt,
             bind_to=bind_to,
+            backend_name=args.get("backend_name", ""),
         )
     except Exception:
         return None

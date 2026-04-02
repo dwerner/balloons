@@ -15,6 +15,7 @@ import type { SessionDataTurn } from '../../hooks/useSessionData';
 import { TurnCard } from '../StreamingTurnsView/cards';
 import { ClientContext } from '../StreamingTurnsView/cards/ClientContext';
 import { createLogger } from '../../utils/debugLog';
+import { formatTimestamp } from '../../utils';
 import './ExchangesV2.css';
 
 const log = createLogger('ExchangesV2');
@@ -69,28 +70,6 @@ function formatTokens(tokens: number): string {
   const kt = Math.ceil(tokens / 100) / 10;
   if (kt < 1) return `.${Math.floor(kt * 10)}kt`;
   return `${kt.toFixed(1)}kt`;
-}
-
-function formatTimestamp(timestamp: string | undefined): string {
-  if (!timestamp) return '';
-  const date = new Date(timestamp);
-  if (isNaN(date.getTime())) return '';
-
-  const now = new Date();
-  const isToday = date.toDateString() === now.toDateString();
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const isYesterday = date.toDateString() === yesterday.toDateString();
-  const isThisYear = date.getFullYear() === now.getFullYear();
-
-  const time = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-
-  if (isToday) return time;
-  if (isYesterday) return `Yesterday ${time}`;
-  if (isThisYear) {
-    return `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${time}`;
-  }
-  return `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} ${time}`;
 }
 
 function getTokenWeightClass(tokens: number): string {

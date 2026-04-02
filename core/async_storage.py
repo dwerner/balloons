@@ -167,6 +167,10 @@ class AsyncStorage:
 
     async def _full_save_session(self, session: Session) -> None:
         """Full save: session metadata + all turns atomically."""
+        # Update last_modified timestamp before saving
+        from datetime import datetime
+        session.last_modified = datetime.now().isoformat()
+
         # Build the wire format data
         session_data = self._session_to_wire(session)
         session_json = json.dumps(session_data)
@@ -221,6 +225,10 @@ class AsyncStorage:
 
         # 1. Always save session metadata (small, and direct attribute changes
         # don't trigger dirty tracking without property setters)
+        # Update last_modified timestamp before saving
+        from datetime import datetime
+        session.last_modified = datetime.now().isoformat()
+
         session_data = self._session_to_wire(session)
         session_json = json.dumps(session_data)
         await self._run_sync(self._storage.save_session, session.id, session_json)

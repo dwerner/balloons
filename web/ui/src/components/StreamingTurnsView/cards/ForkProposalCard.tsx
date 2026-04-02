@@ -50,6 +50,7 @@ function parseResultProposal(resultContent: string): {
   bindToInherit: boolean;
   status: ForkStatus;
   childSessionId: string | null;
+  backendName: string;
 } | null {
   if (!resultContent) return null;
 
@@ -77,6 +78,7 @@ function parseResultProposal(resultContent: string): {
       bindToInherit: bindToRaw === 'inherit',
       status: (data._status as ForkStatus) || 'pending',
       childSessionId: data._child_session_id || null,
+      backendName: data.backend_name || '',
     };
   } catch {
     return null;
@@ -110,6 +112,7 @@ function extractProposalFromInput(input: Record<string, unknown>) {
     // Legacy: check if status was persisted in tool_use input (old behavior)
     status: ((input._status as string) === 'accepted' ? 'accepted' : 'pending') as ForkStatus,
     childSessionId: (input._child_session_id as string) || null,
+    backendName: (input.backendName as string) || (input.backend_name as string) || '',
   };
 }
 
@@ -174,6 +177,8 @@ export const ForkProposalCard = React.memo(function ForkProposalCard({
   const [error, setError] = useState<string | null>(null);
   const [childSessionId, setChildSessionId] = useState<string | null>(proposalData.childSessionId);
   const [exchanges, setExchanges] = useState<ExchangeSummary[]>([]);
+  const [backendName, setBackendName] = useState(proposalData.backendName);
+  const [availableBackends, setAvailableBackends] = useState<string[]>([]);
 
   // Update local state when proposal data changes (e.g., after fork accepted and result updated)
   useEffect(() => {
@@ -182,8 +187,18 @@ export const ForkProposalCard = React.memo(function ForkProposalCard({
       setInitialPrompt(proposalData.initialPrompt);
       setStatus(proposalData.status);
       setChildSessionId(proposalData.childSessionId);
+      setBackendName(proposalData.backendName);
     }
   }, [inputIsStreaming, proposalData]);
+
+  // Fetch available backends on mount when pending
+  useEffect(() => {
+    if (status === 'pending' && client && !inputIsStreaming) {
+      client.sessions.listBackends()
+        .then(setAvailableBackends)
+        .catch((err) => console.warn('Failed to fetch backends:', err));
+    }
+  }, [status, client, inputIsStreaming]);
 
   // Fetch exchange summaries on mount when pending
   useEffect(() => {
@@ -226,6 +241,7 @@ export const ForkProposalCard = React.memo(function ForkProposalCard({
         proposalData.name || null,
         proposalData.description || null,
         true, // start streaming
+        backendName || null, // backend name
       );
 
       if (forkResult.success && forkResult.accepted) {
@@ -246,7 +262,7 @@ export const ForkProposalCard = React.memo(function ForkProposalCard({
       setStatus('error');
       setError(err instanceof Error ? err.message : 'Unknown error');
     }
-  }, [client, sessionId, toolUseId, contextPlan, initialPrompt, proposalData.name, proposalData.description, selectSession]);
+  }, [client, sessionId, toolUseId, contextPlan, initialPrompt, proposalData.name, proposalData.description, selectSession, backendName]);
 
   // Handler for navigating to the created fork
   const handleGoToFork = useCallback(() => {
@@ -352,6 +368,24 @@ export const ForkProposalCard = React.memo(function ForkProposalCard({
                   {proposalData.bindTo.role && ` (${proposalData.bindTo.role})`}
                 </span>
               ) : null}
+            </div>
+          )}
+
+          {/* Backend selector - show when multiple backends available */}
+          {isPending && availableBackends.length > 1 && (
+            <div className="fork-proposal-backend">
+              <span className="label">Backend:</span>
+              <select
+                className="backend-select"
+                value={backendName}
+                onChange={(e) => setBackendName(e.target.value)}
+                disabled={isCreating}
+              >
+                <option value="">Inherit from parent</option>
+                {availableBackends.map((b) => (
+                  <option key={b} value={b}>{b}</option>
+                ))}
+              </select>
             </div>
           )}
 
@@ -473,6 +507,42 @@ export const ForkProposalCard = React.memo(function ForkProposalCard({
         .fork-proposal-card .fork-proposal-binding .binding-inherit {
           color: #a78bfa;
           font-style: italic;
+        }
+
+        .fork-proposal-card .fork-proposal-backend {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 12px;
+          color: #9ca3af;
+        }
+
+        .fork-proposal-card .fork-proposal-backend .label {
+          color: #6b7280;
+        }
+
+        .fork-proposal-card .backend-select {
+          padding: 4px 8px;
+          background: #1f2937;
+          border: 1px solid #374151;
+          border-radius: 4px;
+          color: #e5e7eb;
+          font-size: 12px;
+          cursor: pointer;
+        }
+
+        .fork-proposal-card .backend-select:hover:not(:disabled) {
+          border-color: #4b5563;
+        }
+
+        .fork-proposal-card .backend-select:focus {
+          outline: none;
+          border-color: #60a5fa;
+        }
+
+        .fork-proposal-card .backend-select:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
         }
 
         .fork-proposal-card .fork-proposal-section {

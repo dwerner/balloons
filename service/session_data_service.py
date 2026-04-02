@@ -679,6 +679,19 @@ class SessionDataService:
         """
         self._stream_state = stream_state
 
+    def _get_default_backend_name(self) -> str:
+        """Get the default backend name from config.
+
+        Returns:
+            The default backend name, or 'claude' if config is unavailable.
+        """
+        try:
+            from config import get_config
+            config = get_config()
+            return config.default_backend
+        except Exception:
+            return "claude"
+
     def add_event_handler(
         self, handler: Callable[[str, dict, set[str] | None], None]
     ) -> None:
@@ -1685,7 +1698,7 @@ class SessionDataService:
             cached_context_tokens=session.ensure_context_tokens() if hasattr(session, 'ensure_context_tokens') else getattr(session, "cached_context_tokens", 0),
             context_window=getattr(session, "context_window", 150000),
             binding_indicator=getattr(session, "binding_indicator", ""),
-            backend_name=getattr(session, "backend_name", ""),
+            backend_name=getattr(session, "backend_name", "") or self._get_default_backend_name(),
             is_pinned=is_pinned,
             working_directory=session.working_directory or "",
             children=children,
@@ -1752,7 +1765,7 @@ class SessionDataService:
             cached_context_tokens=data.get("cached_context_tokens", 0),
             context_window=data.get("context_window", 150000),
             binding_indicator=data.get("binding_indicator", ""),
-            backend_name=data.get("backend_name", ""),
+            backend_name=data.get("backend_name", "") or self._get_default_backend_name(),
             is_pinned=session_id in pinned_ids,
             working_directory=working_dir,
             children=children,

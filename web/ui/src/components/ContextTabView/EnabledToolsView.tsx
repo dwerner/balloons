@@ -103,6 +103,10 @@ export const EnabledToolsView = memo(function EnabledToolsView({
   const [promptLength, setPromptLength] = useState<number>(0);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
 
+  // Domain plugin state
+  const [loadedDomains, setLoadedDomains] = useState<string[]>([]);
+  const [availableDomains, setAvailableDomains] = useState<string[]>([]);
+
   // Mobile view state (tabs instead of side-by-side)
   const [mobileTab, setMobileTab] = useState<'tools' | 'preview'>('tools');
   const [isMobile, setIsMobile] = useState(false);
@@ -153,6 +157,18 @@ export const EnabledToolsView = memo(function EnabledToolsView({
           enabled = available.all;
         }
         setEnabledTools(new Set(enabled));
+
+        // Load domain info
+        try {
+          const domainInfo = await client.sessions.getDomainInfo() as { available: string[]; loaded: string[] };
+          setAvailableDomains(domainInfo.available);
+          setLoadedDomains(domainInfo.loaded);
+          debugLog('Loaded domain info', domainInfo);
+        } catch {
+          // Domain system might not be available
+          setAvailableDomains([]);
+          setLoadedDomains([]);
+        }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         setError(msg);
@@ -279,12 +295,82 @@ export const EnabledToolsView = memo(function EnabledToolsView({
     }
   }, [client, sessionId, enabledTools]);
 
+  // Refresh domain info from backend
+  const refreshDomainInfo = useCallback(async () => {
+    if (!client) return;
+    try {
+      const domainInfo = await client.sessions.getDomainInfo() as { available: string[]; loaded: string[] };
+      setAvailableDomains(domainInfo.available);
+      setLoadedDomains(domainInfo.loaded);
+      debugLog('Refreshed domain info', domainInfo);
+    } catch {
+      // Domain system might not be available
+    }
+  }, [client]);
+
+  // Load/unload a domain (persists to session if sessionId provided)
+  const handleToggleDomain = useCallback(async (domainId: string, isLoaded: boolean) => {
+    if (!client || isSaving) return;
+
+    setIsSaving(true);
+    try {
+      if (isLoaded) {
+        // Pass sessionId to persist the change
+        await client.sessions.unloadDomain(domainId, sessionId || undefined);
+        debugLog('Unloaded domain', { domainId, sessionId });
+      } else {
+        // Pass sessionId to persist the change
+        await client.sessions.loadDomain(domainId, sessionId || undefined);
+        debugLog('Loaded domain', { domainId, sessionId });
+      }
+      // Refresh domain info from backend to get actual state
+      await refreshDomainInfo();
+      // Refresh preview after domain change
+      setTimeout(loadPromptPreview, 100);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      debugLog('Error toggling domain', { domainId, error: msg });
+    } finally {
+      setIsSaving(false);
+    }
+  }, [client, sessionId, isSaving, loadPromptPreview, refreshDomainInfo]);
+
   // Load preview when tools change
   useEffect(() => {
     if (!isLoading) {
       loadPromptPreview();
     }
   }, [isLoading, loadPromptPreview]);
+
+  // Subscribe to domain loaded/unloaded events to stay in sync with DomainsTab
+  useEffect(() => {
+    if (!client) return;
+
+    const unsubscribe = client.sessionData.sessionDataDomainEvent((event) => {
+      // System-level domain events (load/unload)
+      if (event.domainId === 'system') {
+        const data = event.data as { domainId?: string };
+        const domainId = data.domainId;
+
+        if (!domainId) return;
+
+        if (event.eventType === 'domain_loaded') {
+          debugLog('Domain loaded event received', { domainId });
+          setLoadedDomains(prev => prev.includes(domainId) ? prev : [...prev, domainId]);
+          // Refresh preview when domains change
+          loadPromptPreview();
+        } else if (event.eventType === 'domain_unloaded') {
+          debugLog('Domain unloaded event received', { domainId });
+          setLoadedDomains(prev => prev.filter(d => d !== domainId));
+          // Refresh preview when domains change
+          loadPromptPreview();
+        }
+      }
+    });
+
+    return unsubscribe;
+  }, [client, loadPromptPreview]);
 
   // Build category groups
   const categoryGroups = useMemo(() => {
@@ -413,6 +499,40 @@ export const EnabledToolsView = memo(function EnabledToolsView({
             </div>
           );
         })}
+
+        {/* Loaded Domains Section */}
+        {availableDomains.length > 0 && (
+          <div className="enabled-tools-view__category enabled-tools-view__category--domains">
+            <div className="enabled-tools-view__category-header enabled-tools-view__category-header--domains">
+              <span className="enabled-tools-view__category-icon">🔌</span>
+              <span className="enabled-tools-view__category-label">Domain Plugins</span>
+              <span className="enabled-tools-view__category-count">
+                {loadedDomains.length}/{availableDomains.length}
+              </span>
+            </div>
+            <div className="enabled-tools-view__tools">
+              {availableDomains.map(domain => {
+                const isLoaded = loadedDomains.includes(domain);
+                return (
+                  <label
+                    key={domain}
+                    className={`enabled-tools-view__tool ${isLoaded ? 'enabled-tools-view__tool--enabled' : ''}`}
+                    title={`${isLoaded ? 'Unload' : 'Load'} ${domain} domain`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isLoaded}
+                      onChange={() => handleToggleDomain(domain, isLoaded)}
+                      disabled={isSaving}
+                    />
+                    <span className="enabled-tools-view__tool-name">{domain}</span>
+                    {isLoaded && <span className="enabled-tools-view__domain-badge">loaded</span>}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       {isSaving && (

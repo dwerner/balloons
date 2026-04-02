@@ -3940,6 +3940,7 @@ function AppContent() {
               sessionId={selectedSessionId || undefined}
               sessionDataClient={connectionState === 'connected' ? clientRef.current?.sessionData : undefined}
               domainRpcClient={connectionState === 'connected' ? clientRef.current?.domainRpc : undefined}
+              sessionsClient={connectionState === 'connected' ? clientRef.current?.sessions : undefined}
               isLLMResponding={selectedSession?.isStreaming ?? false}
               sendMessage={(msg) => {
                 if (selectedSessionId && clientRef.current) {

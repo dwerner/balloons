@@ -14,4 +14,6 @@ Propose creating a new conversation branch with curated context.
 
 **Exchange ranges:** `"0-2"` (indices), `"5"` (single), `"last"` (most recent), `"-3"` (last 3), `"all"`
 
+**Backend selection:** Use `backend_name` to specify a different model/backend for the fork (e.g., "claude", "openrouter"). If not specified, the fork inherits the parent session's backend.
+
 The user will see a visual proposal and can accept, modify, or reject.

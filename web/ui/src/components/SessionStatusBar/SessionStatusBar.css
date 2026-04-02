@@ -250,7 +250,9 @@
 }
 
 .session-status-bar__backend-option {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   padding: 12px 16px;
   min-height: 44px; /* Touch-friendly minimum size */
@@ -263,6 +265,14 @@
   cursor: pointer;
   transition: background-color 0.1s ease;
   box-sizing: border-box;
+}
+
+/* Color indicator dot for backend options */
+.session-status-bar__backend-color {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
 .session-status-bar__backend-option:hover:not(:disabled) {

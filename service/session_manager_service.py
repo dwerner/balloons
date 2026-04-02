@@ -2898,6 +2898,7 @@ class SessionManagerService:
         allowed_tools: list[str] | None = None,
         start_streaming: bool = True,
         auto_complete_compression: bool = False,
+        backend_name: str = "",
     ) -> ForkSessionResult:
         """Fork a new session from an existing parent session.
 
@@ -2920,6 +2921,7 @@ class SessionManagerService:
             allowed_tools: List of tool names to allow, or None for all tools
             start_streaming: If True, start streaming after fork creation. Set False
                            if you want to handle streaming separately.
+            backend_name: Backend/model to use for the fork. If empty, inherits from parent.
 
         Returns:
             ForkSessionResult with child session info and streaming state
@@ -2990,6 +2992,7 @@ class SessionManagerService:
             allowed_tools=tools,
             name=name,
             background=background,
+            backend_name=backend_name,
         )
 
         if not result.success:
@@ -3691,11 +3694,12 @@ Then I'll mark the session as concluded."""
         )
 
     @ws_expose
-    async def load_domain(self, domain_id: str) -> dict:
+    async def load_domain(self, domain_id: str, session_id: str | None = None) -> dict:
         """Load a domain plugin.
 
         Args:
             domain_id: ID of the domain to load (e.g., "chess")
+            session_id: Optional session to associate the domain with
 
         Returns:
             Dict with success status and error message if any
@@ -3704,16 +3708,25 @@ Then I'll mark the session as concluded."""
             from plugins.integration import load_domain
             # Event emission is handled by integration.load_domain()
             load_domain(domain_id, emit_event=True)
+
+            # Track on session if provided
+            if session_id:
+                session = self._manager.get_session(session_id)
+                if session and domain_id not in session.loaded_domains:
+                    session.loaded_domains.append(domain_id)
+                    await self._manager.save_session(session)
+
             return {"success": True, "domain_id": domain_id}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
     @ws_expose
-    async def unload_domain(self, domain_id: str) -> dict:
+    async def unload_domain(self, domain_id: str, session_id: str | None = None) -> dict:
         """Unload a domain plugin.
 
         Args:
             domain_id: ID of the domain to unload
+            session_id: Optional session to disassociate the domain from
 
         Returns:
             Dict with success status and error message if any
@@ -3722,9 +3735,36 @@ Then I'll mark the session as concluded."""
             from plugins.integration import unload_domain
             # Event emission is handled by integration.unload_domain()
             unload_domain(domain_id, emit_event=True)
+
+            # Remove from session if provided
+            if session_id:
+                session = self._manager.get_session(session_id)
+                if session and domain_id in session.loaded_domains:
+                    session.loaded_domains.remove(domain_id)
+                    await self._manager.save_session(session)
+
             return {"success": True, "domain_id": domain_id}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    @ws_expose
+    async def get_domain_info(self) -> dict:
+        """Get information about available and loaded domain plugins.
+
+        Returns:
+            Dict with:
+              - available: list of available domain IDs
+              - loaded: list of currently loaded domain IDs
+        """
+        try:
+            from plugins.registry import get_registry
+            registry = get_registry()
+            return {
+                "available": registry.available_domains,
+                "loaded": registry.loaded_domains,
+            }
+        except ImportError:
+            return {"available": [], "loaded": []}
 
     # =========================================================================
     # Session Prompt Files
@@ -3917,6 +3957,7 @@ Then I'll mark the session as concluded."""
         name: str | None = None,
         description: str | None = None,
         start_streaming: bool = True,
+        backend_name: str | None = None,
     ) -> RespondToForkProposalResult:
         """Respond to a fork proposal by accepting or rejecting it.
 
@@ -3934,6 +3975,7 @@ Then I'll mark the session as concluded."""
             name: Fork name (if not provided, uses original from proposal)
             description: Fork description (if not provided, uses original from proposal)
             start_streaming: If True and accepted, start streaming after fork creation
+            backend_name: Backend/model to use for the fork. If not provided, inherits from parent.
 
         Returns:
             RespondToForkProposalResult with fork session info if accepted
@@ -4041,6 +4083,7 @@ Then I'll mark the session as concluded."""
             allowed_tools=None,  # All tools
             start_streaming=start_streaming,
             auto_complete_compression=True,
+            backend_name=backend_name or "",
         )
 
         debug_log.info(

@@ -1,9 +1,10 @@
-import React, { memo, useEffect, useState, useRef, useCallback } from 'react';
+import React, { memo, useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import type { TaskInfo, SessionInfo, BalloonsClient } from '../../../../generated/balloons-client';
 import { useLongPress, useNotifications } from '../../hooks';
 import { useLayout } from '../layout';
 import { usePreferences } from '../layout/PreferencesContext';
 import { RenameSessionModal } from '../RenameSessionModal';
+import { getModelColor, getModelColorVars } from '../../utils';
 import './StreamingStatusBar.css';
 
 export interface StreamingStatusBarProps {
@@ -265,9 +266,24 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
   const hasTokens = task.tokensStreamed > 0;
   const hasRate = task.currentTokenRate > 0;
 
+  // Get model-specific color for the streaming indicator
+  const modelColor = useMemo(
+    () => getModelColor(task.model, task.backendName),
+    [task.model, task.backendName]
+  );
+  const modelColorVars = useMemo(
+    () => getModelColorVars(task.model, task.backendName),
+    [task.model, task.backendName]
+  ) as React.CSSProperties;
+
   return (
     <>
-    <div className={`streaming-status-bar ${isCollapsed ? 'streaming-status-bar--collapsed' : ''}`} role="status" aria-live="polite">
+    <div
+      className={`streaming-status-bar ${isCollapsed ? 'streaming-status-bar--collapsed' : ''}`}
+      role="status"
+      aria-live="polite"
+      style={modelColorVars}
+    >
       {/* Collapsed view: toggle + minimal progress bar with streaming indicator and stop */}
       {isCollapsed ? (
         <div className="streaming-status-bar__collapsed-view">
@@ -281,7 +297,11 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
           >
             <span className="streaming-status-bar__toggle-icon">▲</span>
           </button>
-          <span className="streaming-status-bar__indicator streaming-status-bar__indicator--mini" aria-hidden="true" />
+          <span
+            className="streaming-status-bar__indicator streaming-status-bar__indicator--mini"
+            style={{ background: modelColor }}
+            aria-hidden="true"
+          />
           {/* Scroll state indicator in collapsed view (only show when paused) */}
           {scrollState && !scrollState.isFollowing && (
             <span className="streaming-status-bar__scroll-state paused mini" title="Auto-scroll PAUSED">⏸</span>
@@ -428,11 +448,15 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
           {/* Row 2: Model/status + context bar + tokens */}
           <div className="streaming-status-bar__row">
             <div className="streaming-status-bar__model">
-              <span className="streaming-status-bar__indicator" aria-hidden="true" />
+              <span
+                className="streaming-status-bar__indicator"
+                style={{ background: modelColor }}
+                aria-hidden="true"
+              />
               {isToolRunning ? (
                 <span className="streaming-status-bar__tool-name">{task.toolName}</span>
               ) : (
-                <span className="streaming-status-bar__model-name">
+                <span className="streaming-status-bar__model-name" style={{ color: modelColor }}>
                   {task.model || task.backendName || 'Streaming'}
                 </span>
               )}
