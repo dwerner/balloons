@@ -121,6 +121,8 @@ pub struct SessionMetadata {
     pub children: Vec<ForkChildData>,
     #[serde(default)]
     pub loaded_domains: Vec<String>,
+    #[serde(default)]
+    pub backend_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

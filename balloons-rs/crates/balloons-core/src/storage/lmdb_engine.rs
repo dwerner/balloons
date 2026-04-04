@@ -828,6 +828,8 @@ impl StorageEngine for LmdbEngine {
                 children: data.children.clone(),
                 // Domain plugins used by this session
                 loaded_domains: data.loaded_domains.clone(),
+                // Backend configuration
+                backend_name: data.backend_name.clone(),
             });
         }
 
