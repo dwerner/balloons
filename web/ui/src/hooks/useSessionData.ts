@@ -100,6 +100,10 @@ export interface SessionDataTurn {
   parallelGroupId?: string;
   /** ISO 8601 timestamp when turn was created */
   timestamp?: string;
+  /** True if this user turn was injected mid-stream as steering */
+  isSteering?: boolean;
+  /** True if this assistant turn follows a steering message (optimistic) */
+  respondsToSteering?: boolean;
 }
 
 /**
@@ -335,13 +339,19 @@ export function useSessionData(
           });
           hasChanges = true;
         } else {
-          // Append accumulated delta to existing turn
-          next.set(turnId, {
-            ...existing,
-            contentBlock: appendTextDelta(existing.contentBlock, accumulatedDelta),
-            streaming: true,
-          });
-          hasChanges = true;
+          // Only append to turns that are still streaming
+          // If turnFinished already set streaming=false, the content is already complete
+          if (existing.streaming) {
+            next.set(turnId, {
+              ...existing,
+              contentBlock: appendTextDelta(existing.contentBlock, accumulatedDelta),
+              streaming: true,
+            });
+            hasChanges = true;
+          } else {
+            // Turn already finished - discard late deltas (they're duplicates of final content)
+            debugLog(`[useSessionData] discarding late delta for finished turn ${turnId.substring(0, 8)}`);
+          }
         }
       }
 
@@ -522,6 +532,7 @@ export function useSessionData(
                 exchangeId: event.exchangeId ?? undefined,
                 parallelGroupId: event.parallelGroupId ?? undefined,
                 timestamp: new Date().toISOString(),
+                isSteering: event.isSteering ?? false,
               });
 
               const elapsed = performance.now() - tStart;
@@ -846,8 +857,10 @@ export function useSessionData(
                     tokens: turn.tokens || 0,
                     contextMode: turn.contextMode || 'copy',
                     exchangeId: turn.exchangeId ?? undefined,
-                    parallelGroupId: (turn as unknown as { parallelGroupId?: string }).parallelGroupId ?? undefined,
-                    timestamp: (turn as unknown as { timestamp?: string }).timestamp ?? undefined,
+                    parallelGroupId: turn.parallelGroupId ?? undefined,
+                    timestamp: turn.timestamp ?? undefined,
+                    isSteering: turn.isSteering ?? false,
+                    respondsToSteering: turn.respondsToSteering ?? false,
                   });
                 }
               }

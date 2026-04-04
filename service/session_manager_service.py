@@ -2469,6 +2469,7 @@ class SessionManagerService:
             )
 
             # Also emit turn_created for this user turn so UI creates a new node
+            # Mark is_steering=True so UI can display a visual callout
             await self._notify_observers(
                 "on_turn_created",
                 TurnCreatedEvent(
@@ -2479,6 +2480,7 @@ class SessionManagerService:
                     exchange_id=ctx.exchange_id,
                     content_block_type="text",
                     parallel_group_id=None,
+                    is_steering=True,
                 ),
             )
 

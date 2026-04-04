@@ -81,6 +81,7 @@ class TurnCreatedEvent:
     exchange_id: str  # Groups related turns (user prompt + assistant response)
     content_block_type: str = "text"  # "text", "tool_use", "tool_result", "watch_start", etc.
     parallel_group_id: str | None = None  # Groups parallel tool calls
+    is_steering: bool = False  # True if this user turn was injected mid-stream as steering
 
 
 @dataclass

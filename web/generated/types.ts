@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-03-31T13:41:08.048822
+// Generated: 2026-04-03T10:33:26.195810
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -687,6 +687,8 @@ export interface TurnSnapshot {
   exchangeId?: string | null;
   timestamp?: string | null;
   parallelGroupId?: string | null;
+  isSteering?: boolean;
+  respondsToSteering?: boolean;
 }
 
 export interface SessionSnapshot {
@@ -721,6 +723,7 @@ export interface SessionTurnCreatedEvent {
   exchangeId?: string | null;
   contentBlockType?: string;
   parallelGroupId?: string | null;
+  isSteering?: boolean;
 }
 
 export interface SessionTurnDeltaEvent {

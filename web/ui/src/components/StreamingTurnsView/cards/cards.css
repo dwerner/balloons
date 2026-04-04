@@ -286,6 +286,72 @@
   border-color: var(--accent-active);
 }
 
+/* Steering message - mid-stream user injection with distinct visual treatment */
+.text-card.user.steering {
+  border-color: var(--accent-steering, #fbbf24);
+  border-style: dashed;
+  background: linear-gradient(
+    135deg,
+    rgba(251, 191, 36, 0.05) 0%,
+    rgba(251, 191, 36, 0.02) 100%
+  );
+}
+
+.text-card.user.steering .turn-card-header {
+  background: rgba(251, 191, 36, 0.15);
+  color: var(--accent-steering, #fbbf24);
+}
+
+.text-card.user.steering .turn-label {
+  font-weight: 600;
+}
+
+/* Subtle animation pulse to draw attention */
+.text-card.user.steering::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border: 1px dashed var(--accent-steering, #fbbf24);
+  border-radius: 8px;
+  animation: steering-pulse 2s ease-in-out 3;
+  pointer-events: none;
+  z-index: 0;
+}
+
+@keyframes steering-pulse {
+  0%, 100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+/* Assistant turn that responds to a steering message (optimistic) */
+.text-card.assistant.responds-to-steering {
+  border-color: var(--accent-steering, #fbbf24);
+  border-left-width: 3px;
+  border-left-style: solid;
+}
+
+.text-card.assistant.responds-to-steering .turn-card-header {
+  background: linear-gradient(
+    90deg,
+    rgba(251, 191, 36, 0.1) 0%,
+    rgba(248, 113, 113, 0.1) 100%
+  );
+}
+
+.text-card.assistant.responds-to-steering .turn-label::after {
+  content: ' (to steering)';
+  font-size: 0.85em;
+  opacity: 0.7;
+  font-style: italic;
+}
+
 /* ============================================================================
  * Tool Use Card Styles
  * ============================================================================ */
@@ -2834,6 +2900,19 @@
   background: transparent;
 }
 
+/* Steering messages in dark-flat theme */
+:root[data-theme="dark-flat"] .text-card.user.steering,
+[data-theme="dark-flat"] .text-card.user.steering {
+  border: none;
+  border-left: 2px dashed var(--accent-steering, #d4a520);
+  background: transparent;
+}
+
+:root[data-theme="dark-flat"] .text-card.user.steering .turn-card-header,
+[data-theme="dark-flat"] .text-card.user.steering .turn-card-header {
+  background: rgba(212, 165, 32, 0.1);
+}
+
 :root[data-theme="dark-flat"] .text-card.assistant,
 [data-theme="dark-flat"] .text-card.assistant {
   border: none;
@@ -2842,6 +2921,18 @@
 
 :root[data-theme="dark-flat"] .text-card.assistant .turn-card-header,
 [data-theme="dark-flat"] .text-card.assistant .turn-card-header {
+  background: transparent;
+}
+
+/* Responds to steering in dark-flat theme */
+:root[data-theme="dark-flat"] .text-card.assistant.responds-to-steering,
+[data-theme="dark-flat"] .text-card.assistant.responds-to-steering {
+  border: none;
+  border-left: 3px solid var(--accent-steering, #d4a520);
+}
+
+:root[data-theme="dark-flat"] .text-card.assistant.responds-to-steering .turn-card-header,
+[data-theme="dark-flat"] .text-card.assistant.responds-to-steering .turn-card-header {
   background: transparent;
 }
 

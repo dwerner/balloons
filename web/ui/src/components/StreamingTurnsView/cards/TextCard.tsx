@@ -83,7 +83,7 @@ function RawDataDisplay({ data }: { data: unknown }) {
 }
 
 export const TextCard = React.memo(function TextCard({ turn }: TextCardProps) {
-  const { role, contentBlock, streaming, tokens, order, timestamp } = turn;
+  const { role, contentBlock, streaming, tokens, order, timestamp, isSteering, respondsToSteering } = turn;
   const isUser = role === 'user';
   const isAssistant = role === 'assistant';
   const isMarkdownBlock = contentBlock?.type === 'markdown';
@@ -96,10 +96,16 @@ export const TextCard = React.memo(function TextCard({ turn }: TextCardProps) {
     ? ((contentBlock as TextBlock | MarkdownBlock).text ?? '')
     : '';
 
-  const roleConfig = {
-    user: { icon: '👤', label: 'User', className: 'user' },
-    assistant: { icon: '🤖', label: 'Assistant', className: 'assistant' },
-  }[role] || { icon: '📄', label: role, className: 'other' };
+  // Steering messages get a special visual treatment
+  // Assistant turns that respond to steering also get highlighted
+  const roleConfig = isSteering
+    ? { icon: '📢', label: 'Steering', className: 'user steering' }
+    : respondsToSteering
+    ? { icon: '💬', label: 'Response', className: 'assistant responds-to-steering' }
+    : {
+        user: { icon: '👤', label: 'User', className: 'user' },
+        assistant: { icon: '🤖', label: 'Assistant', className: 'assistant' },
+      }[role] || { icon: '📄', label: role, className: 'other' };
 
   // Show "done" indicator for completed assistant turns
   const showDoneIndicator = isAssistant && !streaming && content;

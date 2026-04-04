@@ -70,6 +70,73 @@ def resolve_path(file_path: str, working_dir: str) -> Path:
 from .tool_result import ToolExecutionResult
 
 
+def _camel_to_snake(name: str) -> str:
+    """Convert camelCase to snake_case."""
+    # Insert underscore before uppercase letters and lowercase them
+    result = re.sub(r'([A-Z])', r'_\1', name).lower()
+    # Remove leading underscore if present
+    return result.lstrip('_')
+
+
+def _normalize_tool_args(args: dict, field_map: dict[str, str] | None = None) -> dict:
+    """Normalize tool arguments to handle camelCase/snake_case variants and stringified JSON.
+
+    LLMs sometimes use camelCase instead of snake_case for parameter names,
+    or stringify arrays/objects instead of passing them as native types.
+    This function normalizes these variations.
+
+    Args:
+        args: Raw tool arguments from the model
+        field_map: Optional mapping of canonical field names to their expected types.
+                   Types can be: "str", "list", "dict", "any"
+                   Example: {"context_plan": "list", "bind_to": "any"}
+
+    Returns:
+        Normalized arguments dict with snake_case keys and parsed JSON values
+    """
+    if field_map is None:
+        field_map = {}
+
+    normalized = {}
+
+    # Build a lookup for camelCase -> snake_case
+    # e.g., "contextPlan" -> "context_plan"
+    snake_keys = set(field_map.keys())
+    camel_to_canonical = {}
+    for snake_key in snake_keys:
+        # Generate camelCase variant
+        parts = snake_key.split('_')
+        camel_key = parts[0] + ''.join(p.capitalize() for p in parts[1:])
+        camel_to_canonical[camel_key] = snake_key
+        camel_to_canonical[snake_key] = snake_key
+
+    for key, value in args.items():
+        # Normalize key to snake_case
+        if key in camel_to_canonical:
+            canonical_key = camel_to_canonical[key]
+        else:
+            # Convert unknown camelCase keys
+            canonical_key = _camel_to_snake(key)
+
+        # Get expected type for this field
+        expected_type = field_map.get(canonical_key, "any")
+
+        # Try to parse stringified JSON for list/dict types
+        if isinstance(value, str) and expected_type in ("list", "dict"):
+            try:
+                parsed = json.loads(value)
+                if expected_type == "list" and isinstance(parsed, list):
+                    value = parsed
+                elif expected_type == "dict" and isinstance(parsed, dict):
+                    value = parsed
+            except (json.JSONDecodeError, TypeError):
+                pass  # Keep original string value
+
+        normalized[canonical_key] = value
+
+    return normalized
+
+
 async def execute_tool(
     name: str,
     args: dict,
@@ -626,10 +693,21 @@ def execute_propose_fork(args: dict) -> tuple[str, bool]:
 
     Args:
         args: Tool arguments containing name, description, context_plan, etc.
+              Accepts both snake_case and camelCase parameter names.
 
     Returns:
         Tuple of (result_string, is_error) - result is JSON with proposal state
     """
+    # Normalize args to handle camelCase variants and stringified JSON
+    args = _normalize_tool_args(args, {
+        "name": "str",
+        "description": "str",
+        "context_plan": "list",
+        "initial_prompt": "str",
+        "bind_to": "any",
+        "backend_name": "str",
+    })
+
     name = args.get("name")
     if not name:
         return "Error: name is required", True
@@ -642,11 +720,19 @@ def execute_propose_fork(args: dict) -> tuple[str, bool]:
     if not context_plan:
         return "Error: context_plan is required (list of context assignments)", True
 
-    # Validate context_plan entries
+    # Validate context_plan entries (also normalize each entry)
     valid_modes = {"copy", "compress", "drop"}
+    normalized_plan = []
     for i, assignment in enumerate(context_plan):
         if not isinstance(assignment, dict):
             return f"Error: context_plan[{i}] must be an object", True
+
+        # Normalize assignment keys (e.g., exchangeRange -> exchange_range)
+        assignment = _normalize_tool_args(assignment, {
+            "exchange_range": "str",
+            "mode": "str",
+            "reason": "str",
+        })
 
         if "exchange_range" not in assignment:
             return f"Error: context_plan[{i}] missing exchange_range", True
@@ -655,6 +741,8 @@ def execute_propose_fork(args: dict) -> tuple[str, bool]:
         if mode not in valid_modes:
             return f"Error: context_plan[{i}] has invalid mode '{mode}' (must be copy/compress/drop)", True
 
+        normalized_plan.append(assignment)
+
     # Return structured JSON with the full proposal state
     # This becomes the source of truth - UI reads from and updates this
     result = {
@@ -662,7 +750,7 @@ def execute_propose_fork(args: dict) -> tuple[str, bool]:
         "_status": "pending",  # pending | accepted | rejected
         "name": name,
         "description": description,
-        "context_plan": context_plan,
+        "context_plan": normalized_plan,
         "initial_prompt": args.get("initial_prompt", ""),
         "bind_to": args.get("bind_to"),
         "backend_name": args.get("backend_name", ""),
@@ -678,12 +766,22 @@ def parse_fork_proposal(args: dict) -> ForkProposal | None:
     Called by the app layer when it intercepts a propose_fork tool call.
 
     Args:
-        args: Tool arguments from the model
+        args: Tool arguments from the model (accepts both snake_case and camelCase)
 
     Returns:
         ForkProposal object, or None if parsing fails
     """
     try:
+        # Normalize args to handle camelCase variants and stringified JSON
+        args = _normalize_tool_args(args, {
+            "name": "str",
+            "description": "str",
+            "context_plan": "list",
+            "initial_prompt": "str",
+            "bind_to": "any",
+            "backend_name": "str",
+        })
+
         debug_log.info(
             f"parse_fork_proposal received args",
             category=Category.SESSION,
@@ -695,6 +793,12 @@ def parse_fork_proposal(args: dict) -> ForkProposal | None:
 
         context_plan = []
         for assignment in args.get("context_plan", []):
+            # Normalize each assignment's keys too
+            assignment = _normalize_tool_args(assignment, {
+                "exchange_range": "str",
+                "mode": "str",
+                "reason": "str",
+            })
             context_plan.append(ContextAssignment(
                 exchange_range=assignment.get("exchange_range", ""),
                 mode=assignment.get("mode", "drop").lower(),
@@ -707,6 +811,12 @@ def parse_fork_proposal(args: dict) -> ForkProposal | None:
         if bind_to_raw == "inherit":
             bind_to = "inherit"
         elif isinstance(bind_to_raw, dict):
+            # Normalize bind_to keys
+            bind_to_raw = _normalize_tool_args(bind_to_raw, {
+                "entity_type": "str",
+                "entity_id": "str",
+                "role": "str",
+            })
             from core.fork import ForkBindingSpec
             bind_to = ForkBindingSpec(
                 entity_type=bind_to_raw.get("entity_type", ""),
@@ -737,10 +847,19 @@ def execute_propose_merge(args: dict) -> tuple[str, bool]:
 
     Args:
         args: Tool arguments containing summary, reason, files_changed, etc.
+              Accepts both snake_case and camelCase parameter names.
 
     Returns:
         Tuple of (result_string, is_error) - result is JSON with proposal state
     """
+    # Normalize args to handle camelCase variants and stringified JSON
+    args = _normalize_tool_args(args, {
+        "summary": "str",
+        "reason": "str",
+        "files_changed": "list",
+        "key_accomplishments": "list",
+    })
+
     summary = args.get("summary")
     if not summary:
         return "Error: summary is required", True
@@ -775,12 +894,20 @@ def parse_merge_proposal(args: dict) -> MergeProposal | None:
     Called by the app layer when it intercepts a propose_merge tool call.
 
     Args:
-        args: Tool arguments from the model
+        args: Tool arguments from the model (accepts both snake_case and camelCase)
 
     Returns:
         MergeProposal object, or None if parsing fails
     """
     try:
+        # Normalize args to handle camelCase variants and stringified JSON
+        args = _normalize_tool_args(args, {
+            "summary": "str",
+            "reason": "str",
+            "files_changed": "list",
+            "key_accomplishments": "list",
+        })
+
         debug_log.info(
             f"parse_merge_proposal received args",
             category=Category.SESSION,

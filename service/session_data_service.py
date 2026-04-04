@@ -113,6 +113,8 @@ class TurnSnapshot:
     exchange_id: str | None = None
     timestamp: str | None = None  # ISO 8601 format, when turn was created
     parallel_group_id: str | None = None  # Groups parallel tool calls from same LLM response
+    is_steering: bool = False  # True if this user turn was injected mid-stream as steering
+    responds_to_steering: bool = False  # True if this assistant turn follows a steering message
 
 
 @ws_type
@@ -179,6 +181,7 @@ class SessionTurnCreatedEvent:
     exchange_id: str | None = None
     content_block_type: str = "text"
     parallel_group_id: str | None = None  # For grouping parallel tool calls
+    is_steering: bool = False  # True if this user turn was injected mid-stream as steering
 
 
 @ws_type
@@ -991,6 +994,8 @@ class SessionDataService:
                 exchange_id=getattr(turn, 'exchange_id', None),
                 timestamp=getattr(turn, 'timestamp', None),
                 parallel_group_id=getattr(turn, 'parallel_group_id', None),
+                is_steering=getattr(turn, 'is_steering', False),
+                responds_to_steering=getattr(turn, 'responds_to_steering', False),
             )
             turn_snapshots.append(snapshot)
 
@@ -1101,6 +1106,8 @@ class SessionDataService:
                     exchange_id=getattr(turn, 'exchange_id', None),
                     timestamp=getattr(turn, 'timestamp', None),
                     parallel_group_id=getattr(turn, 'parallel_group_id', None),
+                    is_steering=getattr(turn, 'is_steering', False),
+                responds_to_steering=getattr(turn, 'responds_to_steering', False),
                 )
                 turn_snapshots.append(snapshot)
 
@@ -1223,6 +1230,8 @@ class SessionDataService:
                 exchange_id=getattr(turn, 'exchange_id', None),
                 timestamp=getattr(turn, 'timestamp', None),
                 parallel_group_id=getattr(turn, 'parallel_group_id', None),
+                is_steering=getattr(turn, 'is_steering', False),
+                responds_to_steering=getattr(turn, 'responds_to_steering', False),
             )
             turn_snapshots.append(turn_snapshot)
 
@@ -1417,6 +1426,8 @@ class SessionDataService:
             exchange_id=exchange_id,
             timestamp=turn_dict.get("timestamp"),
             parallel_group_id=turn_dict.get("parallel_group_id"),
+            is_steering=turn_dict.get("is_steering", False),
+            responds_to_steering=turn_dict.get("responds_to_steering", False),
         )
 
     def _deserialize_content_block(self, data: dict) -> ContentBlock:
@@ -2504,6 +2515,7 @@ class SessionDataService:
         exchange_id: str | None = None,
         content_block_type: str = "text",
         parallel_group_id: str | None = None,
+        is_steering: bool = False,
     ) -> None:
         """Emit a turn created event to subscribed clients.
 
@@ -2518,6 +2530,7 @@ class SessionDataService:
             exchange_id: Exchange ID grouping related turns
             content_block_type: Type of content block
             parallel_group_id: Group ID for parallel tool calls
+            is_steering: True if this user turn was injected mid-stream as steering
         """
         from core.debug_log import debug_log
 
@@ -2526,7 +2539,7 @@ class SessionDataService:
         debug_log.debug(
             f"emit_turn_created: session={session_id[:8]}, turn={turn_id[:8] if turn_id else 'none'}, "
             f"role={role}, order={order}, parallel_group={parallel_group_id[:8] if parallel_group_id else 'none'}, "
-            f"subscribers={len(subscribers)}",
+            f"is_steering={is_steering}, subscribers={len(subscribers)}",
             category=Category.API,
         )
         if not subscribers:
@@ -2540,6 +2553,7 @@ class SessionDataService:
             exchange_id=exchange_id,
             content_block_type=content_block_type,
             parallel_group_id=parallel_group_id,
+            is_steering=is_steering,
         )
         self._emit_event("sessionDataTurnCreated", event_data.__dict__, subscribers)
 
@@ -3019,6 +3033,7 @@ class SessionDataService:
             exchange_id=event.exchange_id,
             content_block_type=event.content_block_type,
             parallel_group_id=event.parallel_group_id,
+            is_steering=event.is_steering,
         )
 
     async def on_turn_delta(self, event: TurnDeltaEvent) -> None:

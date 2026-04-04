@@ -212,6 +212,10 @@ class SessionRunner:
         # Pre-generated ID for the initial assistant turn (used in turn_started event)
         self._initial_turn_id: str | None = None
 
+        # Track steering state for optimistic responds_to_steering marking
+        # When steering is injected, the next assistant turn responds to it
+        self._steering_pending: bool = False
+
         # Debounced save state - coalesce rapid save requests
         self._save_pending: bool = False
         self._save_task: Optional[asyncio.Task] = None
@@ -665,6 +669,8 @@ class SessionRunner:
         ended_at: str | None = None,
         turn_id: str | None = None,
         parallel_group_id: str | None = None,
+        is_steering: bool = False,
+        responds_to_steering: bool = False,
     ) -> Turn:
         """Create a Turn with the current exchange_id and timing info.
 
@@ -676,6 +682,8 @@ class SessionRunner:
             ended_at: ISO timestamp when this turn completed (optional, defaults to now)
             turn_id: Pre-generated turn ID (optional, auto-generated if not provided)
             parallel_group_id: Groups parallel tool calls from same LLM response
+            is_steering: True if this is a mid-stream steering injection
+            responds_to_steering: True if this turn responds to a steering message (optimistic)
 
         Returns:
             Turn with exchange_id and timing fields set
@@ -691,6 +699,8 @@ class SessionRunner:
             started_at=started_at,
             ended_at=ended_at or now,  # Default ended_at to now if not specified
             parallel_group_id=parallel_group_id,
+            is_steering=is_steering,
+            responds_to_steering=responds_to_steering,
         )
         # Use pre-generated ID if provided (e.g., from turn_started event)
         if turn_id:
@@ -793,17 +803,24 @@ class SessionRunner:
                 turn_id_to_use = self._initial_turn_id
 
             # Create turn with timing info and save to session
+            # If steering was just injected, mark this turn as responding to it (optimistic)
+            responds_to_steering = self._steering_pending
             turn = self._create_turn(
                 "assistant",
                 flushed_text,
                 [text_block],
                 started_at=self._text_turn_started_at,
                 turn_id=turn_id_to_use,
+                responds_to_steering=responds_to_steering,
             )
             self._turns.append(turn)
             self._save_turn_to_session(turn, save_now=save_now)
             self._text_buffer = ""
             self._text_turn_started_at = None  # Reset for next text turn
+
+            # Clear steering pending flag after first assistant turn uses it
+            if responds_to_steering:
+                self._steering_pending = False
 
             # Clear pending turn ID after use (post-tool text was flushed)
             if use_pending_id:
@@ -1066,14 +1083,19 @@ class SessionRunner:
                 # Create a text block for the steering content
                 steering_block = TextBlock(text=event.content)
 
-                # Create a user turn for the steering message
+                # Create a user turn for the steering message with is_steering=True
+                # This allows the UI to display a visual callout for injected steering
                 turn = self._create_turn(
                     "user",
                     event.content[:100],  # Preview
                     [steering_block],
+                    is_steering=True,
                 )
                 self._turns.append(turn)
                 self._save_turn_to_session(turn, save_now=True)
+
+                # Mark that the next assistant turn responds to this steering (optimistic)
+                self._steering_pending = True
 
                 debug_log.info(
                     f"Steering injected as user turn {steering_turn_id[:8]}",

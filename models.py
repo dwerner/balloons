@@ -799,6 +799,8 @@ class Turn:
     started_at: Optional[str] = None  # ISO timestamp when streaming began
     ended_at: Optional[str] = None  # ISO timestamp when streaming completed
     parallel_group_id: Optional[str] = None  # Groups parallel tool calls from same LLM response
+    is_steering: bool = False  # True if this user turn was injected mid-stream as steering
+    responds_to_steering: bool = False  # True if this assistant turn follows a steering message (optimistic)
     # Persistent ID for incremental saves (generated once, stored in DB)
     id: str = field(default_factory=_generate_turn_id)
     # Dirty tracking - not persisted, used for incremental saves
