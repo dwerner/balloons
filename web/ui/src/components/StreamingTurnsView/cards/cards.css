@@ -1553,16 +1553,12 @@
   font-family: var(--font-mono, monospace);
   font-size: 11px;
   line-height: 1.5;
+  padding: 4px 0;
 }
 
 .grep-result-line {
   display: flex;
-  padding: 2px 8px;
-  border-bottom: 1px solid var(--border-muted, #1f3a2f);
-}
-
-.grep-result-line:last-child {
-  border-bottom: none;
+  padding: 1px 8px;
 }
 
 .grep-result-line:hover {
@@ -2057,11 +2053,9 @@
     padding-left: 4px;
   }
 
-  /* Grep results mobile - stack file:line above content */
+  /* Grep results mobile */
   .grep-result-line {
-    flex-direction: column;
-    gap: 0;
-    padding: 4px 6px;
+    padding: 1px 6px;
   }
 
   .grep-file {
@@ -2079,8 +2073,6 @@
 
   .grep-content {
     font-size: 10px;
-    padding-left: 0;
-    margin-top: 2px;
   }
 
   .grep-results {
@@ -3148,11 +3140,6 @@
 }
 
 /* Grep results - flat */
-:root[data-theme="dark-flat"] .grep-result-line,
-[data-theme="dark-flat"] .grep-result-line {
-  border-bottom-color: var(--border-muted, #141414);
-}
-
 /* Tool result section - flat */
 :root[data-theme="dark-flat"] .tool-result-section,
 [data-theme="dark-flat"] .tool-result-section {
