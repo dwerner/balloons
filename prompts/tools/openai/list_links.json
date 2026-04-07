@@ -1,0 +1,12 @@
+{
+  "type": "function",
+  "function": {
+    "name": "list_links",
+    "description": "List all links from the current session. Returns link IDs, summaries, and linked session names.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  }
+}

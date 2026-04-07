@@ -103,6 +103,13 @@ export const EnabledToolsView = memo(function EnabledToolsView({
   const [promptLength, setPromptLength] = useState<number>(0);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
 
+  // Tool schemas preview state (for OpenAI backends only)
+  const [backendType, setBackendType] = useState<string>('claude');
+  const [toolSchemasPreview, setToolSchemasPreview] = useState<string>('');
+  const [toolSchemasLength, setToolSchemasLength] = useState<number>(0);
+  const [isLoadingSchemasPreview, setIsLoadingSchemasPreview] = useState(false);
+  const [previewTab, setPreviewTab] = useState<'prompt' | 'schemas'>('prompt');
+
   // Domain plugin state
   const [loadedDomains, setLoadedDomains] = useState<string[]>([]);
   const [availableDomains, setAvailableDomains] = useState<string[]>([]);
@@ -295,6 +302,44 @@ export const EnabledToolsView = memo(function EnabledToolsView({
     }
   }, [client, sessionId, enabledTools]);
 
+  // Load tool schemas preview (for OpenAI backends)
+  const loadToolSchemasPreview = useCallback(async () => {
+    if (!client) return;
+
+    setIsLoadingSchemasPreview(true);
+    try {
+      const result = await client.sessions.getToolSchemasPreview(
+        sessionId || undefined,
+        Array.from(enabledTools)
+      ) as { schemas: string; tool_count: number; length: number };
+      setToolSchemasPreview(result.schemas);
+      setToolSchemasLength(result.length);
+      debugLog('Loaded tool schemas preview', { length: result.length, count: result.tool_count });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      debugLog('Error loading tool schemas preview', { error: msg });
+      setToolSchemasPreview(`Error loading schemas: ${msg}`);
+      setToolSchemasLength(0);
+    } finally {
+      setIsLoadingSchemasPreview(false);
+    }
+  }, [client, sessionId, enabledTools]);
+
+  // Load backend type from session info
+  const loadBackendType = useCallback(async () => {
+    if (!client) return;
+
+    try {
+      const result = await client.sessions.getSystemPromptInfo(sessionId || undefined);
+      const type = result.backendType || 'claude';
+      setBackendType(type);
+      debugLog('Loaded backend type', { backendType: type });
+    } catch (e) {
+      debugLog('Error loading backend type', { error: e });
+      setBackendType('claude'); // Default to claude
+    }
+  }, [client, sessionId]);
+
   // Refresh domain info from backend
   const refreshDomainInfo = useCallback(async () => {
     if (!client) return;
@@ -336,12 +381,21 @@ export const EnabledToolsView = memo(function EnabledToolsView({
     }
   }, [client, sessionId, isSaving, loadPromptPreview, refreshDomainInfo]);
 
-  // Load preview when tools change
+  // Load backend type on mount
+  useEffect(() => {
+    loadBackendType();
+  }, [loadBackendType]);
+
+  // Load previews when tools change
   useEffect(() => {
     if (!isLoading) {
       loadPromptPreview();
+      // Also load schemas for OpenAI backends
+      if (backendType === 'openai') {
+        loadToolSchemasPreview();
+      }
     }
-  }, [isLoading, loadPromptPreview]);
+  }, [isLoading, loadPromptPreview, loadToolSchemasPreview, backendType]);
 
   // Subscribe to domain loaded/unloaded events to stay in sync with DomainsTab
   useEffect(() => {
@@ -358,19 +412,25 @@ export const EnabledToolsView = memo(function EnabledToolsView({
         if (event.eventType === 'domain_loaded') {
           debugLog('Domain loaded event received', { domainId });
           setLoadedDomains(prev => prev.includes(domainId) ? prev : [...prev, domainId]);
-          // Refresh preview when domains change
+          // Refresh previews when domains change
           loadPromptPreview();
+          if (backendType === 'openai') {
+            loadToolSchemasPreview();
+          }
         } else if (event.eventType === 'domain_unloaded') {
           debugLog('Domain unloaded event received', { domainId });
           setLoadedDomains(prev => prev.filter(d => d !== domainId));
-          // Refresh preview when domains change
+          // Refresh previews when domains change
           loadPromptPreview();
+          if (backendType === 'openai') {
+            loadToolSchemasPreview();
+          }
         }
       }
     });
 
     return unsubscribe;
-  }, [client, loadPromptPreview]);
+  }, [client, loadPromptPreview, loadToolSchemasPreview, backendType]);
 
   // Build category groups
   const categoryGroups = useMemo(() => {
@@ -542,40 +602,76 @@ export const EnabledToolsView = memo(function EnabledToolsView({
   );
 
   // Render the preview panel content
-  const renderPreviewPanel = () => (
-    <>
-      <div className="enabled-tools-view__preview-header">
-        <span className="enabled-tools-view__preview-title">Generated Prompt</span>
-        <span className="enabled-tools-view__preview-length">
-          {isLoadingPreview ? 'Loading...' : formatLength(promptLength)}
-        </span>
-      </div>
-      <div className="enabled-tools-view__preview-editor">
-        {isLoadingPreview ? (
-          <div className="enabled-tools-view__preview-loading">Loading prompt preview...</div>
-        ) : (
-          <Editor
-            height="100%"
-            language="markdown"
-            value={promptPreview}
-            theme={isDarkMode ? 'vs-dark' : 'light'}
-            options={{
-              readOnly: true,
-              minimap: { enabled: false },
-              fontSize: 12,
-              lineNumbers: 'on',
-              wordWrap: 'on',
-              scrollBeyondLastLine: false,
-              automaticLayout: true,
-              padding: { top: 8, bottom: 8 },
-              folding: true,
-              foldingStrategy: 'indentation',
-            }}
-          />
-        )}
-      </div>
-    </>
-  );
+  const renderPreviewPanel = () => {
+    const isOpenAI = backendType === 'openai';
+    const showingPrompt = previewTab === 'prompt';
+    const currentPreview = showingPrompt ? promptPreview : toolSchemasPreview;
+    const currentLength = showingPrompt ? promptLength : toolSchemasLength;
+    const currentLoading = showingPrompt ? isLoadingPreview : isLoadingSchemasPreview;
+    const language = showingPrompt ? 'markdown' : 'json';
+
+    return (
+      <>
+        <div className="enabled-tools-view__preview-header">
+          {isOpenAI ? (
+            // OpenAI: Show tabs to switch between prompt and schemas
+            <div className="enabled-tools-view__preview-tabs">
+              <button
+                className={`enabled-tools-view__preview-tab ${showingPrompt ? 'enabled-tools-view__preview-tab--active' : ''}`}
+                onClick={() => setPreviewTab('prompt')}
+              >
+                System Prompt
+              </button>
+              <button
+                className={`enabled-tools-view__preview-tab ${!showingPrompt ? 'enabled-tools-view__preview-tab--active' : ''}`}
+                onClick={() => {
+                  setPreviewTab('schemas');
+                  // Load schemas on first click if not loaded
+                  if (toolSchemasPreview === '') {
+                    loadToolSchemasPreview();
+                  }
+                }}
+              >
+                Tool Schemas
+              </button>
+            </div>
+          ) : (
+            // Claude: Just show title
+            <span className="enabled-tools-view__preview-title">System Prompt</span>
+          )}
+          <span className="enabled-tools-view__preview-length">
+            {currentLoading ? 'Loading...' : formatLength(currentLength)}
+          </span>
+        </div>
+        <div className="enabled-tools-view__preview-editor">
+          {currentLoading ? (
+            <div className="enabled-tools-view__preview-loading">
+              Loading {showingPrompt ? 'prompt' : 'schemas'} preview...
+            </div>
+          ) : (
+            <Editor
+              height="100%"
+              language={language}
+              value={currentPreview}
+              theme={isDarkMode ? 'vs-dark' : 'light'}
+              options={{
+                readOnly: true,
+                minimap: { enabled: false },
+                fontSize: 12,
+                lineNumbers: 'on',
+                wordWrap: 'on',
+                scrollBeyondLastLine: false,
+                automaticLayout: true,
+                padding: { top: 8, bottom: 8 },
+                folding: true,
+                foldingStrategy: 'indentation',
+              }}
+            />
+          )}
+        </div>
+      </>
+    );
+  };
 
   // Mobile: tab-based layout
   if (isMobile) {

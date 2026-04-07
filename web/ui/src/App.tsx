@@ -32,6 +32,7 @@ import { LinkStashArea } from './components/LinkStashArea';
 import { RenameSessionModal } from './components/RenameSessionModal';
 // LinkSessionModal removed - link stash workflow replaces session picker
 import { VoiceInput } from './components/VoiceInput';
+import { MessageInputWithIcons, type MessageInputWithIconsHandle } from './components/MessageInputWithIcons';
 import { SendActionButton, type SendAction } from './components/SendActionButton';
 import { setDebugClient, createLogger, isDebugEnabled, setDebugEnabled, debugLog as rawDebugLog } from './utils/debugLog';
 import { logout, isAuthenticated, getToken } from './utils/auth';
@@ -1289,7 +1290,7 @@ function AppContent() {
 
   const clientRef = useRef<BalloonsClient | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const messageInputRef = useRef<MessageInputHandle>(null);
+  const messageInputRef = useRef<MessageInputWithIconsHandle>(null);
   const fileBrowserRef = useRef<FileBrowserViewRef>(null);
   const codeTabRef = useRef<CodeTabHandle>(null);
 
@@ -2307,6 +2308,8 @@ function AppContent() {
   const [voicePartialText, setVoicePartialText] = useState('');
   // Track whether there's any voice content (for clear button)
   const [hasVoiceContent, setHasVoiceContent] = useState(false);
+  // Track text before recording started (for cancel/restore)
+  const voicePreRecordingTextRef = useRef('');
 
   // Clear voice input state
   const handleVoiceClear = useCallback(() => {
@@ -2315,6 +2318,34 @@ function AppContent() {
     setHasVoiceContent(false);
     messageInputRef.current?.setValue('');
     messageInputRef.current?.focus();
+  }, []);
+
+  // Called when voice recording starts - save current text for potential cancel
+  const handleVoiceRecordingStart = useCallback(() => {
+    voicePreRecordingTextRef.current = voiceCommittedTextRef.current;
+  }, []);
+
+  // Called when voice recording ends with commit - commit any remaining partial text
+  const handleVoiceCommit = useCallback(() => {
+    // If there's partial text that hasn't been finalized, commit it now
+    if (voicePartialText) {
+      const newCommitted = voiceCommittedTextRef.current
+        ? `${voiceCommittedTextRef.current} ${voicePartialText}`
+        : voicePartialText;
+      voiceCommittedTextRef.current = newCommitted;
+      messageInputRef.current?.setValue(newCommitted);
+      setVoicePartialText('');
+      setHasVoiceContent(true);
+    }
+  }, [voicePartialText]);
+
+  // Cancel voice input (slide-to-cancel gesture) - restore text from before recording
+  const handleVoiceCancel = useCallback(() => {
+    // Restore text to what it was before recording started
+    voiceCommittedTextRef.current = voicePreRecordingTextRef.current;
+    messageInputRef.current?.setValue(voicePreRecordingTextRef.current);
+    setVoicePartialText('');
+    setHasVoiceContent(voicePreRecordingTextRef.current.length > 0);
   }, []);
 
   // Commit partial text to the input (called on disconnect to save work)
@@ -3777,34 +3808,11 @@ function AppContent() {
                     onChange={handleFileInputChange}
                     style={{ display: 'none' }}
                   />
-                  <button
-                    type="button"
-                    className="attach-button"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={connectionState !== 'connected' || selectedSession?.isStreaming || isLoadingTurns}
-                    title="Attach image (or paste from clipboard)"
-                  >
-                    📎
-                  </button>
-                  {voiceInputEnabled && (
-                    <VoiceInput
-                      serverHost={voiceInputHost}
-                      dataPort={parseInt(voiceInputPort, 10) || 8012}
-                      onTranscription={handleVoiceTranscription}
-                      disabled={connectionState !== 'connected' || isLoadingTurns}
-                      onClear={handleVoiceClear}
-                      hasContent={hasVoiceContent}
-                      hasPartialText={!!voicePartialText}
-                      onCommitPartial={handleVoiceCommitPartial}
-                    />
-                  )}
-                  <MessageInput
+                  <MessageInputWithIcons
                     ref={messageInputRef}
                     placeholder={isLoadingTurns
                       ? "Loading session..."
-                      : selectedSession?.isStreaming
-                        ? "Type to queue... (messages will be sent after streaming completes)"
-                        : sendAction === 'send'
+                      : sendAction === 'send'
                           ? "Type a message... (Enter to send, Shift+Enter for newline)"
                           : sendAction === 'btw'
                             ? "Side comment (won't change the current task)..."
@@ -3822,6 +3830,16 @@ function AppContent() {
                     onPaste={handlePaste}
                     partialText={voicePartialText}
                     onChange={handleInputChange}
+                    onAttachClick={() => fileInputRef.current?.click()}
+                    attachDisabled={selectedSession?.isStreaming}
+                    voiceEnabled={voiceInputEnabled}
+                    voiceServerHost={voiceInputHost}
+                    voiceDataPort={parseInt(voiceInputPort, 10) || 8012}
+                    onVoiceTranscription={handleVoiceTranscription}
+                    onVoiceCancel={handleVoiceCancel}
+                    onVoiceRecordingStart={handleVoiceRecordingStart}
+                    onVoiceCommit={handleVoiceCommit}
+                    voiceDisabled={false}
                   />
                   <SendActionButton
                     action={sendAction}

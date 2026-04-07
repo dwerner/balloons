@@ -1,0 +1,159 @@
+/* Push-to-Talk Input Widget Styles */
+
+.ptt-container {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  /* Reserve space for cancel zone when not recording */
+  min-width: 36px;
+}
+
+.ptt-container.recording {
+  /* Expand to show cancel zone */
+  min-width: 100px;
+}
+
+/* Cancel zone - appears to the left of the button */
+.ptt-cancel-zone {
+  position: absolute;
+  right: 36px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--color-danger, #d32f2f);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  pointer-events: none;
+}
+
+.ptt-cancel-zone.active {
+  opacity: 1 !important;
+  transform: translateY(-50%) scale(1.1);
+  box-shadow: 0 0 12px rgba(211, 47, 47, 0.5);
+}
+
+.ptt-cancel-icon {
+  color: white;
+  font-size: 16px;
+  font-weight: bold;
+}
+
+/* Main mic button */
+.ptt-button {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary, #888);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, transform 0.05s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  touch-action: none; /* Prevent scroll during drag */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none; /* Prevent iOS callout */
+  flex-shrink: 0;
+  outline: none; /* Prevent focus ring */
+}
+
+.ptt-button:hover:not(:disabled):not(.recording) {
+  background: var(--color-bg-hover, rgba(255, 255, 255, 0.05));
+  color: var(--color-text-primary, #fff);
+}
+
+.ptt-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Recording state */
+.ptt-button.recording {
+  background: var(--color-danger, #d32f2f);
+  color: white;
+  animation: ptt-pulse 1s ease-in-out infinite;
+}
+
+.ptt-button.recording:hover {
+  background: var(--color-danger, #d32f2f);
+}
+
+/* Cancel zone reached */
+.ptt-button.cancel {
+  background: var(--color-danger-light, #e57373);
+  animation: none;
+  transform: scale(0.9);
+}
+
+.ptt-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+/* Slide hint text */
+.ptt-slide-hint {
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--color-text-tertiary, #666);
+  padding-right: 8px;
+  pointer-events: none;
+  animation: ptt-hint-fade 2s ease-in-out infinite;
+}
+
+@keyframes ptt-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(211, 47, 47, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(211, 47, 47, 0);
+  }
+}
+
+@keyframes ptt-hint-fade {
+  0%, 100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Mobile adjustments */
+@media (max-width: 767px) {
+  .ptt-button {
+    width: 44px;
+    height: 44px;
+  }
+
+  .ptt-container.recording {
+    min-width: 120px;
+  }
+
+  .ptt-cancel-zone {
+    width: 40px;
+    height: 40px;
+    right: 44px;
+  }
+
+  .ptt-icon {
+    font-size: 20px;
+  }
+
+  .ptt-slide-hint {
+    font-size: 12px;
+  }
+}

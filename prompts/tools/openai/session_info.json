@@ -1,0 +1,12 @@
+{
+  "type": "function",
+  "function": {
+    "name": "session_info",
+    "description": "Get information about the current session including context usage, token counts, and fork status.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  }
+}

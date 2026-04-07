@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-04-03T10:33:26.201027
+// Generated: 2026-04-06T16:41:24.808435
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -782,6 +782,21 @@ export interface SessionManagerService {
   getSystemPromptInfo(sessionId?: string | null): Promise<Types.SystemPromptInfoResult>;
 
   /**
+   * Get a preview of the tool schemas that would be sent to OpenAI-compatible APIs.
+   * 
+   * This shows the JSON function definitions used for native function calling.
+   * Only relevant for OpenAI-type backends (not Claude, which uses balloons-tool XML).
+   * 
+   * Args:
+   * session_id: Optional session ID to get session-specific tools
+   * enabled_tools: Optional explicit list of tools to use (overrides session)
+   * 
+   * Returns:
+   * Dict with 'schemas' (JSON array as string), 'tool_count', and 'length'
+   */
+  getToolSchemasPreview(sessionId?: string | null, enabledTools?: string[] | null): Promise<Record<string, unknown>>;
+
+  /**
    * Create a bidirectional link between two sessions.
    * 
    * Links allow navigation between sessions without a parent/child relationship.
@@ -1417,6 +1432,10 @@ export class SessionManagerServiceClient implements SessionManagerService {
 
   async getSystemPromptInfo(sessionId?: string | null): Promise<Types.SystemPromptInfoResult> {
     return this.call('getSystemPromptInfo', { sessionId: sessionId });
+  }
+
+  async getToolSchemasPreview(sessionId?: string | null, enabledTools?: string[] | null): Promise<Record<string, unknown>> {
+    return this.call('getToolSchemasPreview', { sessionId: sessionId, enabledTools: enabledTools });
   }
 
   async linkSessions(sourceSessionId: string, targetSessionId: string, summary?: string): Promise<Types.LinkSessionsResult> {

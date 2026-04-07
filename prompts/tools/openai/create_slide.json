@@ -1,0 +1,25 @@
+{
+  "type": "function",
+  "function": {
+    "name": "create_slide",
+    "description": "Create a presentation slide that appears in the Slides tab.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Slide title (max ~50 characters for 1080p)"
+        },
+        "content": {
+          "type": "string",
+          "description": "Markdown body content (max ~10 lines for 1080p)"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Optional speaker notes (not shown in presentation)"
+        }
+      },
+      "required": []
+    }
+  }
+}

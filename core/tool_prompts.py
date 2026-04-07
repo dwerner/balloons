@@ -180,6 +180,7 @@ def _load_template(name: str) -> str:
 def build_tool_prompts(
     enabled_tools: Optional[Sequence[str]] = None,
     include_critical_usage: bool = True,
+    backend_type: str = "openai",
 ) -> str:
     """Build tool documentation prompt for enabled tools.
 
@@ -190,6 +191,8 @@ def build_tool_prompts(
         enabled_tools: Ordered sequence of tool names. None uses DEFAULT_ENABLED_TOOLS.
                        Can be a list (ordered) or set (uses default category order).
         include_critical_usage: Whether to include the critical usage template.
+        backend_type: "claude" or "openai" - determines whether to include
+                      balloons-tool XML format instructions (Claude only).
 
     Returns:
         Combined tool documentation as markdown string.
@@ -208,6 +211,13 @@ def build_tool_prompts(
         critical = _load_template("tool_usage_critical")
         if critical:
             parts.append(critical)
+            parts.append("---\n")
+
+    # For Claude backend, include balloons-tool XML format instructions
+    if backend_type == "claude":
+        balloons_format = _load_template("balloons_tool_format")
+        if balloons_format:
+            parts.append(balloons_format)
             parts.append("---\n")
 
     # Track which category overviews we've already included

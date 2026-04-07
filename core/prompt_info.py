@@ -17,13 +17,9 @@ if TYPE_CHECKING:
     from session import Session
 
 
-# Prompt directories - same as runner_factory
+# Prompt directories - for user prompt loading
 _USER_PROMPTS_DIR = Path.home() / ".balloons" / "prompts"
 _SOURCE_PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
-
-# Prompt filenames
-_CLAUDE_BALLOONS_TOOLS_FILENAME = "claude-balloons-tools.md"
-_OPENAI_BALLOONS_TOOLS_FILENAME = "openai-balloons-tools.md"
 
 
 @dataclass
@@ -122,15 +118,15 @@ def get_user_prompt_info(backend_name: str = "") -> PromptComponentInfo:
 
 
 def get_tool_syntax_info(backend_type: str = "claude") -> PromptComponentInfo:
-    """Get information about the tool syntax documentation."""
-    if backend_type == "openai":
-        filename = _OPENAI_BALLOONS_TOOLS_FILENAME
-        name = "OpenAI Tool Syntax"
-    else:
-        filename = _CLAUDE_BALLOONS_TOOLS_FILENAME
-        name = "Claude Tool Syntax"
+    """Get information about the tool syntax documentation.
 
-    content = _load_prompt_content(filename)
+    Uses the per-tool prompt builder to get the actual prompt content that
+    will be sent to the LLM.
+    """
+    from .tool_prompts import build_tool_prompts
+
+    name = "Claude Tool Syntax" if backend_type == "claude" else "OpenAI Tool Syntax"
+    content = build_tool_prompts(backend_type=backend_type)
     tokens = count_tokens(content) if content else 0
 
     return PromptComponentInfo(

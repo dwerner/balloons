@@ -1,0 +1,33 @@
+{
+  "type": "function",
+  "function": {
+    "name": "search_linked_session",
+    "description": "Search for content within a linked session's conversation history.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "link_id": {
+          "type": "string",
+          "description": "The link ID of the session to search"
+        },
+        "query": {
+          "type": "string",
+          "description": "Search query (case-insensitive substring match)"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max results to return (default 20)"
+        },
+        "offset": {
+          "type": "integer",
+          "description": "Skip first N matches for pagination (default 0)"
+        },
+        "full_content": {
+          "type": "boolean",
+          "description": "If true, returns full turn content. Default returns a preview."
+        }
+      },
+      "required": ["link_id", "query"]
+    }
+  }
+}

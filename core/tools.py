@@ -526,6 +526,39 @@ BALLOON_TOOL_NAMES = {
     "send_to_target",
 }
 
+
+def get_balloon_tools() -> list[dict]:
+    """Get balloon tools, loading from JSON files when available.
+
+    Tries to load each tool from prompts/tools/openai/*.json first,
+    falling back to the hardcoded BALLOON_TOOLS for tools without JSON files.
+
+    Returns:
+        List of OpenAI function calling schema dicts
+    """
+    from .tool_schemas import get_balloon_tool_schema
+
+    result = []
+    hardcoded_by_name = {t["function"]["name"]: t for t in BALLOON_TOOLS}
+
+    # List of balloon tool names (excluding watcher tools which are separate)
+    balloon_names = [
+        "ask_user", "propose_fork", "propose_merge", "create_slide",
+        "list_links", "follow_link", "search_linked_session", "session_info",
+        "speak",
+    ]
+
+    for name in balloon_names:
+        # Try loading from JSON file first
+        schema = get_balloon_tool_schema(name)
+        if schema:
+            result.append(schema)
+        elif name in hardcoded_by_name:
+            # Fall back to hardcoded
+            result.append(hardcoded_by_name[name])
+
+    return result
+
 # Watcher mode tools - for cross-session communication
 WATCHER_TOOLS = [
     {
@@ -1121,7 +1154,8 @@ def get_tools_for_request(
     # Combine tool categories
     all_tools = TOOLS
     if include_balloon_tools:
-        all_tools = all_tools + BALLOON_TOOLS
+        # Use file-based schemas when available, fall back to hardcoded
+        all_tools = all_tools + get_balloon_tools()
     if include_supervisor_tools:
         all_tools = all_tools + SUPERVISOR_TOOLS
     if include_review_tools:

@@ -1,10 +1,45 @@
-import React, { useMemo, useDeferredValue } from 'react';
+import React, { useMemo, useDeferredValue, useState, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { useTheme } from './components/layout';
+
+// Copy button component for code blocks
+function CopyButton({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  }, [code]);
+
+  return (
+    <button
+      className="code-copy-button"
+      onClick={handleCopy}
+      title={copied ? 'Copied!' : 'Copy code'}
+      aria-label={copied ? 'Copied!' : 'Copy code'}
+    >
+      {copied ? (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      ) : (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </svg>
+      )}
+    </button>
+  );
+}
 
 interface MarkdownContentProps {
   content: string;
@@ -67,7 +102,10 @@ function createMarkdownComponents(isLightTheme: boolean) {
       if (!inline && (match || codeString.includes('\n'))) {
         return (
           <div className="code-block-wrapper">
-            {language && <div className="code-language">{language}</div>}
+            <div className="code-block-header">
+              {language && <div className="code-language">{language}</div>}
+              <CopyButton code={codeString} />
+            </div>
             <SyntaxHighlighter
               style={theme}
               language={language || 'text'}

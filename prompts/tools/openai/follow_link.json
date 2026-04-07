@@ -1,0 +1,29 @@
+{
+  "type": "function",
+  "function": {
+    "name": "follow_link",
+    "description": "Load context from a linked session. Returns the session metadata and recent conversation history.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "link_id": {
+          "type": "string",
+          "description": "The link ID to follow (from list_links)"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Number of turns to return (default 10)"
+        },
+        "offset": {
+          "type": "integer",
+          "description": "Turn index to start from. If omitted, returns the last N turns."
+        },
+        "full_content": {
+          "type": "boolean",
+          "description": "If true, returns full turn content. Default returns truncated content."
+        }
+      },
+      "required": ["link_id"]
+    }
+  }
+}

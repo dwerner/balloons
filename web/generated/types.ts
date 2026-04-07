@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-04-03T10:33:26.195810
+// Generated: 2026-04-06T16:41:24.803155
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -439,6 +439,7 @@ export interface SystemPromptInfoResult {
   sessionPromptFiles?: SessionPromptFileInfo[];
   totalTokens?: number;
   contextWindow?: number;
+  backendType?: string;
 }
 
 export interface RespondToForkProposalResult {

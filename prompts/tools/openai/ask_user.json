@@ -1,0 +1,26 @@
+{
+  "type": "function",
+  "function": {
+    "name": "ask_user",
+    "description": "Ask the user a question and wait for their response.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "question": {
+          "type": "string",
+          "description": "The question to ask the user. Be clear and specific."
+        },
+        "context": {
+          "type": "string",
+          "description": "Optional additional context to help the user answer (e.g., tradeoffs, implications)"
+        },
+        "options": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Optional list of suggested options for the user to choose from"
+        }
+      },
+      "required": ["question"]
+    }
+  }
+}

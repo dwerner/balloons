@@ -326,6 +326,7 @@ class SystemPromptInfoResult:
     session_prompt_files: list[SessionPromptFileInfo] = field(default_factory=list)
     total_tokens: int = 0
     context_window: int = 150000
+    backend_type: str = "claude"  # "claude" or "openai" - affects which tool format is used
 
 
 @ws_type
@@ -3619,29 +3620,31 @@ Then I'll mark the session as concluded."""
             SystemPromptInfoResult with component information
         """
         from core.prompt_info import get_system_prompt_info
+        from config import get_config
 
         session = None
-        backend_name = ""
-        backend_type = "claude"
-
         if session_id:
             session = self._manager.get_session(session_id)
             if not session:
                 session = await self._manager.load_session(session_id)
-            if session:
-                backend_name = getattr(session, 'backend_name', '')
-                print(f"[getSystemPromptInfo] session {session_id[:8]} backend_name={backend_name!r}")
 
-        # Get the actual backend type from config
-        if backend_name:
-            from config import get_config
-            config = get_config()
-            backend = config.get_backend(backend_name)
-            if backend:
-                backend_type = backend.type or "claude"
-                print(f"[getSystemPromptInfo] resolved backend_type={backend_type!r}")
+        # Resolve backend type properly:
+        # 1. If session has backend_name, use that
+        # 2. Otherwise use config's default_backend
+        # 3. Then get the actual type from the backend config
+        config = get_config()
+        if session:
+            backend_config = self._get_backend_for_session(session)
+        else:
+            backend_config = config.get_backend(config.default_backend)
 
-        # Get prompt info
+        backend_name = backend_config.name
+        backend_type = backend_config.type or "claude"
+
+        debug_log.info(
+            f"[getSystemPromptInfo] session={session_id[:8] if session_id else None}, resolved_backend={backend_name}, backend_type={backend_type}",
+            category=Category.API,
+        )
         info = get_system_prompt_info(
             session=session,
             backend_name=backend_name,
@@ -3693,6 +3696,7 @@ Then I'll mark the session as concluded."""
             session_prompt_files=session_prompt_files,
             total_tokens=info.total_tokens,
             context_window=info.context_window,
+            backend_type=backend_type,
         )
 
     @ws_expose
@@ -6931,24 +6935,100 @@ Summary:""")
         """
         from core.prompt_builder import build_system_prompt
 
-        # Determine which tools to include
+        from config import get_config
+
+        # Determine which tools to include and backend type
         tools_list: list[str] | None = None
+        session = None
+        if session_id:
+            session = self._manager.get_session(session_id)
+            if not session:
+                session = await self._manager.load_session(session_id)
+
         if enabled_tools is not None:
             tools_list = list(enabled_tools)  # Preserve order from input
-        elif session_id:
-            session = self._manager.get_session(session_id)
-            if session:
-                tools_list = session.get_enabled_tools_list()  # Preserve session order
+        elif session:
+            tools_list = session.get_enabled_tools_list()  # Preserve session order
+
+        # Resolve backend type properly:
+        # 1. If session has backend_name, use that
+        # 2. Otherwise use config's default_backend
+        # 3. Then get the actual type from the backend config
+        config = get_config()
+        if session:
+            backend_config = self._get_backend_for_session(session)
+        else:
+            backend_config = config.get_backend(config.default_backend)
+        backend_type = backend_config.type or "claude"
+
+        debug_log.info(
+            f"get_prompt_preview: session_id={session_id}, backend_name={session.backend_name if session else None}, resolved_backend={backend_config.name}, backend_type={backend_type}",
+            category=Category.API,
+        )
 
         # Build the prompt
         prompt = build_system_prompt(
-            backend_type="openai",  # Backend type no longer matters
+            backend_type=backend_type,
             enabled_tools=tools_list,
         ) or ""
 
         return {
             "prompt": prompt,
             "length": len(prompt),
+        }
+
+    @ws_expose
+    async def get_tool_schemas_preview(
+        self, session_id: str | None = None, enabled_tools: list[str] | None = None
+    ) -> dict:
+        """Get a preview of the tool schemas that would be sent to OpenAI-compatible APIs.
+
+        This shows the JSON function definitions used for native function calling.
+        Only relevant for OpenAI-type backends (not Claude, which uses balloons-tool XML).
+
+        Includes:
+        - Core tools (Read, Write, Bash, etc.)
+        - Balloon tools (propose_fork, ask_user, etc.)
+        - Domain tools (from currently loaded domains like kanban, chess)
+        - Other enabled tool categories
+
+        Args:
+            session_id: Optional session ID to get session-specific tools
+            enabled_tools: Optional explicit list of tools to use (overrides session)
+
+        Returns:
+            Dict with 'schemas' (JSON array as string), 'tool_count', and 'length'
+        """
+        import json
+        from core.tools import get_tools_for_request
+
+        # Determine which tools to include
+        tools_list: list[str] | None = None
+        if enabled_tools is not None:
+            tools_list = list(enabled_tools)
+        elif session_id:
+            session = self._manager.get_session(session_id)
+            if not session:
+                session = await self._manager.load_session(session_id)
+            if session:
+                tools_list = session.get_enabled_tools_list()
+
+        # Get all tools that would be sent to the OpenAI API
+        # This includes core tools, balloon tools, domain tools, etc.
+        all_schemas = get_tools_for_request(
+            allowed_tools=tools_list,
+            include_domain_tools=True,  # Include loaded domain tools
+        )
+
+        if all_schemas is None:
+            all_schemas = []
+
+        preview = json.dumps(all_schemas, indent=2)
+
+        return {
+            "schemas": preview,
+            "tool_count": len(all_schemas),
+            "length": len(preview),
         }
 
     @ws_expose

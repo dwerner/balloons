@@ -39,6 +39,20 @@ function isStreamingInput(input: Record<string, unknown>): boolean {
   return typeof input._streaming === 'string';
 }
 
+// Try to parse a value that might be a stringified JSON array
+function tryParseJsonArray(value: unknown): unknown[] | null {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      // Not valid JSON
+    }
+  }
+  return null;
+}
+
 // Parse proposal data from tool_result JSON content
 // Returns null if not valid JSON or not a fork_proposal
 function parseResultProposal(resultContent: string): {
@@ -58,7 +72,7 @@ function parseResultProposal(resultContent: string): {
     const data = JSON.parse(resultContent);
     if (data._type !== 'fork_proposal') return null;
 
-    const rawContextPlan = Array.isArray(data.context_plan) ? data.context_plan : [];
+    const rawContextPlan = tryParseJsonArray(data.context_plan) ?? [];
     const bindToRaw = data.bind_to;
 
     return {
@@ -88,7 +102,7 @@ function parseResultProposal(resultContent: string): {
 // Legacy: Extract proposal data from tool_use input (fallback for old proposals)
 function extractProposalFromInput(input: Record<string, unknown>) {
   const rawContextPlanValue = input.contextPlan ?? input.context_plan;
-  const rawContextPlan = Array.isArray(rawContextPlanValue) ? rawContextPlanValue : [];
+  const rawContextPlan = tryParseJsonArray(rawContextPlanValue) ?? [];
   const bindToRaw = input.bindTo ?? input.bind_to;
 
   return {

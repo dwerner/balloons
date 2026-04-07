@@ -245,6 +245,40 @@
   color: var(--text, #e5e5e5);
 }
 
+/* Preview tabs (for OpenAI backends - switch between prompt and schemas) */
+.enabled-tools-view__preview-tabs {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.enabled-tools-view__preview-tab {
+  padding: 0.25rem 0.625rem;
+  background: transparent;
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  color: var(--text-muted, #888);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.1s;
+}
+
+.enabled-tools-view__preview-tab:hover {
+  background: var(--hover-bg, #1a1a1a);
+  color: var(--text, #e5e5e5);
+}
+
+.enabled-tools-view__preview-tab--active {
+  background: var(--accent, #4a9eff);
+  border-color: var(--accent, #4a9eff);
+  color: var(--surface-0, #0d0d0d);
+}
+
+.enabled-tools-view__preview-tab--active:hover {
+  background: var(--accent, #4a9eff);
+  color: var(--surface-0, #0d0d0d);
+}
+
 .enabled-tools-view__preview-length {
   font-size: 0.75rem;
   color: var(--accent, #4a9eff);
