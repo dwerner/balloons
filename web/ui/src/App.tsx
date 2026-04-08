@@ -1332,6 +1332,29 @@ function AppContent() {
     }
   }, []);
 
+  // Handle streaming state changes from StreamingTurnsView
+  // This is critical for mobile: when the screen turns off during streaming and back on,
+  // useSessionData queries the server for the actual streaming state. We need to update
+  // sessions[].isStreaming to match, otherwise the UI shows stale "streaming" state and
+  // new messages get queued when they should be submitted directly.
+  const handleStreamingStateChange = useCallback((sessionId: string, isStreaming: boolean) => {
+    setSessions(prev => {
+      const session = prev.find(s => s.id === sessionId);
+      // Only update if the streaming state actually changed
+      if (session && session.isStreaming !== isStreaming) {
+        console.log('[App] handleStreamingStateChange - syncing stale streaming state:', {
+          sessionId: sessionId.slice(0, 8),
+          was: session.isStreaming,
+          now: isStreaming,
+        });
+        return prev.map(s =>
+          s.id === sessionId ? { ...s, isStreaming } : s
+        );
+      }
+      return prev;
+    });
+  }, []);
+
   // Persist selected session ID to localStorage
   useEffect(() => {
     if (selectedSessionId) {
@@ -2009,6 +2032,16 @@ function AppContent() {
     // Mark that we should scroll to the latest turn when turns arrive
     scrollToLatestOnLoadRef.current = true;
 
+    // Save current draft to localStorage before switching
+    if (selectedSessionId) {
+      const currentDraft = messageInputRef.current?.getValue() || '';
+      if (currentDraft.trim()) {
+        localStorage.setItem(`balloons:draft:${selectedSessionId}`, currentDraft);
+      } else {
+        localStorage.removeItem(`balloons:draft:${selectedSessionId}`);
+      }
+    }
+
     // Clear state immediately to prevent stale data display
     // Note: turns will be populated via onTurnsChange from StreamingTurnsView
     const t1 = performance.now();
@@ -2020,12 +2053,27 @@ function AppContent() {
     setError(null);
     // Clear archiving state - it's session-specific and shouldn't persist across session switches
     setArchivingByHelper(new Map());
+    // Clear input box and voice input state immediately
+    // (draft restore happens after setSelectedSessionId)
+    messageInputRef.current?.setValue('');
+    voiceCommittedTextRef.current = '';
+    voicePartialTextRef.current = '';
+    voicePreRecordingTextRef.current = '';
+    setVoicePartialText('');
+    setHasVoiceContent(false);
     const t2 = performance.now();
     rawDebugLog('perf', `[handleSelectSession] state clears: ${(t2-t1).toFixed(1)}ms`, {});
 
     // Now set the new session ID - this triggers StreamingTurnsView to subscribe
     // and report turns via onTurnsChange callback
     setSelectedSessionId(sessionId);
+
+    // Restore draft from localStorage for the new session (or clear if no draft)
+    const savedDraft = localStorage.getItem(`balloons:draft:${sessionId}`) || '';
+    // Always set the value, even if empty - this clears any text from the previous session
+    messageInputRef.current?.setValue(savedDraft);
+    voiceCommittedTextRef.current = savedDraft;
+    setHasVoiceContent(savedDraft.length > 0);
     const t3 = performance.now();
     rawDebugLog('perf', `[handleSelectSession] setSelectedSessionId: ${(t3-t2).toFixed(1)}ms`, {});
 
@@ -2306,6 +2354,8 @@ function AppContent() {
   const voiceCommittedTextRef = useRef('');
   // Track partial (uncommitted) text for display in italic
   const [voicePartialText, setVoicePartialText] = useState('');
+  // Also track partial text in a ref so we can read it synchronously in callbacks
+  const voicePartialTextRef = useRef('');
   // Track whether there's any voice content (for clear button)
   const [hasVoiceContent, setHasVoiceContent] = useState(false);
   // Track text before recording started (for cancel/restore)
@@ -2317,33 +2367,41 @@ function AppContent() {
     setVoicePartialText('');
     setHasVoiceContent(false);
     messageInputRef.current?.setValue('');
-    messageInputRef.current?.focus();
+    // Note: Don't focus the input - on mobile it would trigger the keyboard
   }, []);
 
   // Called when voice recording starts - save current text for potential cancel
+  // and clear any stale partial text from previous recordings
   const handleVoiceRecordingStart = useCallback(() => {
     voicePreRecordingTextRef.current = voiceCommittedTextRef.current;
+    // Clear any leftover partial text from previous recording
+    voicePartialTextRef.current = '';
+    setVoicePartialText('');
   }, []);
 
-  // Called when voice recording ends with commit - commit any remaining partial text
+  // Called when voice recording ends with commit
+  // Commit any remaining partial text that hasn't been finalized by fullSentence
   const handleVoiceCommit = useCallback(() => {
-    // If there's partial text that hasn't been finalized, commit it now
-    if (voicePartialText) {
+    const partialText = voicePartialTextRef.current;
+    if (partialText && partialText.trim()) {
+      // Commit the partial text
       const newCommitted = voiceCommittedTextRef.current
-        ? `${voiceCommittedTextRef.current} ${voicePartialText}`
-        : voicePartialText;
+        ? `${voiceCommittedTextRef.current} ${partialText}`
+        : partialText;
       voiceCommittedTextRef.current = newCommitted;
       messageInputRef.current?.setValue(newCommitted);
-      setVoicePartialText('');
       setHasVoiceContent(true);
     }
-  }, [voicePartialText]);
+    voicePartialTextRef.current = '';
+    setVoicePartialText('');
+  }, []);
 
   // Cancel voice input (slide-to-cancel gesture) - restore text from before recording
   const handleVoiceCancel = useCallback(() => {
     // Restore text to what it was before recording started
     voiceCommittedTextRef.current = voicePreRecordingTextRef.current;
     messageInputRef.current?.setValue(voicePreRecordingTextRef.current);
+    voicePartialTextRef.current = '';
     setVoicePartialText('');
     setHasVoiceContent(voicePreRecordingTextRef.current.length > 0);
   }, []);
@@ -2379,25 +2437,28 @@ function AppContent() {
     if (!text) return;
 
     if (isFinal) {
-      // For final transcription, append to committed text
-      const newCommitted = voiceCommittedTextRef.current
-        ? `${voiceCommittedTextRef.current} ${text}`
+      // For final transcription: the final text REPLACES the partial text
+      // (it's the finalized version of what was showing as partial)
+      // We append to any previously committed text, not the current partial
+      const baseText = voiceCommittedTextRef.current;
+      const newCommitted = baseText
+        ? `${baseText} ${text}`
         : text;
       voiceCommittedTextRef.current = newCommitted;
       messageInputRef.current?.setValue(newCommitted);
       // Clear partial text since it's now committed
+      voicePartialTextRef.current = '';
       setVoicePartialText('');
       setHasVoiceContent(true);
     } else {
       // For partial (realtime) transcription, show committed in textarea, partial in overlay
-      messageInputRef.current?.setValue(voiceCommittedTextRef.current);
+      // Don't update the textarea - it already has committed text
+      voicePartialTextRef.current = text;
       setVoicePartialText(text);
       // Mark as having content if there's partial text
       if (text) setHasVoiceContent(true);
     }
-
-    // Keep focus on input
-    messageInputRef.current?.focus();
+    // Note: Don't focus the input here - on mobile it would trigger the keyboard
   }, []);
 
   // Send a message - called from MessageInput component or form submit
@@ -2432,10 +2493,15 @@ function AppContent() {
     // Clear input state
     messageInputRef.current?.setValue('');
     voiceCommittedTextRef.current = ''; // Clear voice input buffer
+    voicePartialTextRef.current = '';
     setVoicePartialText(''); // Clear partial text display
     setHasVoiceContent(false); // Clear voice content flag
     setImageAttachments([]);
     setError(null);
+    // Clear draft from localStorage since we're sending
+    if (selectedSessionId) {
+      localStorage.removeItem(`balloons:draft:${selectedSessionId}`);
+    }
 
     // Check if session is currently streaming
     const session = sessions.find(s => s.id === selectedSessionId);
@@ -3300,6 +3366,7 @@ function AppContent() {
                       onSelectSession={setSelectedSessionId}
                       onScrollStateChange={setScrollState}
                       onStreamingProgressChange={handleStreamingProgressChange}
+                      onStreamingStateChange={handleStreamingStateChange}
                       onTurnsChange={handleTurnsChange}
                       onLoadingChange={handleSessionLoadingChange}
                       archivingTurnIds={archivingTurnIds}

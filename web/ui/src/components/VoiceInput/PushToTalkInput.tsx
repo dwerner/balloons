@@ -86,6 +86,10 @@ export function PushToTalkInput({
   const hasTextRef = useRef(false);
   // Track if session was cancelled (to ignore late transcriptions)
   const wasCancelledRef = useRef(false);
+  // Session ID - increments each time we start recording. Used to ignore stale transcriptions.
+  const sessionIdRef = useRef(0);
+  // The session ID that was active when we set up the current WebSocket message handler
+  const activeSessionIdRef = useRef(0);
 
   const wsRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -101,6 +105,11 @@ export function PushToTalkInput({
   }, []);
 
   const stopRecording = useCallback((commit: boolean) => {
+    // FIRST: Invalidate the session so no more messages are processed
+    // This must happen before anything else to prevent race conditions
+    activeSessionIdRef.current = -1;
+    isRecordingRef.current = false;
+
     // Stop audio processing
     if (processorRef.current) {
       processorRef.current.disconnect();
@@ -125,7 +134,6 @@ export function PushToTalkInput({
       wsRef.current = null;
     }
 
-    isRecordingRef.current = false;
     wasCancelledRef.current = !commit;
     setIsRecording(false);
     onRecordingChange?.(false);
@@ -149,6 +157,9 @@ export function PushToTalkInput({
     shouldCancelRef.current = false;
     hasTextRef.current = false;
     wasCancelledRef.current = false;
+    // Increment session ID - any messages from previous sessions will be ignored
+    sessionIdRef.current++;
+    const currentSessionId = sessionIdRef.current;
 
     try {
       // Request microphone access
@@ -178,6 +189,12 @@ export function PushToTalkInput({
       wsRef.current = ws;
 
       ws.onopen = () => {
+        // Store which session this WebSocket belongs to
+        activeSessionIdRef.current = currentSessionId;
+
+        // Track when THIS connection opened
+        const connectionOpenTime = Date.now();
+
         setIsConnected(true);
         isRecordingRef.current = true;
         setIsRecording(true);
@@ -201,29 +218,46 @@ export function PushToTalkInput({
 
           const message = packAudioMessage(int16Data, actualSampleRate);
           ws.send(message);
+          audioPacketsSentRef.current++;
         };
 
         source.connect(processor);
         processor.connect(audioContext.destination);
-      };
 
-      ws.onmessage = (event) => {
-        // Ignore messages if we've been cancelled
-        if (wasCancelledRef.current) return;
+        // Ignore any messages that arrive within 800ms of connection
+        // This gives time for the STT server to flush any stale buffer
+        const ignoreUntil = connectionOpenTime + 800;
 
-        try {
-          const data = JSON.parse(event.data);
-
-          if (data.type === 'realtime') {
-            hasTextRef.current = true;
-            onTranscription(data.text || '', false);
-          } else if (data.type === 'fullSentence') {
-            hasTextRef.current = true;
-            onTranscription(data.text || '', true);
+        ws.onmessage = (event) => {
+          // Ignore messages from old sessions
+          if (activeSessionIdRef.current !== currentSessionId) {
+            console.log('PushToTalkInput: Ignoring message from old session');
+            return;
           }
-        } catch (e) {
-          console.error('PushToTalkInput: Failed to parse message:', e);
-        }
+
+          // Ignore messages if we've stopped recording
+          if (!isRecordingRef.current) return;
+
+          // Ignore early messages (likely stale buffer from server)
+          if (Date.now() < ignoreUntil) {
+            console.log('PushToTalkInput: Ignoring early message', Date.now() - connectionOpenTime);
+            return;
+          }
+
+          try {
+            const data = JSON.parse(event.data);
+
+            if (data.type === 'realtime') {
+              hasTextRef.current = true;
+              onTranscription(data.text || '', false);
+            } else if (data.type === 'fullSentence') {
+              hasTextRef.current = true;
+              onTranscription(data.text || '', true);
+            }
+          } catch (e) {
+            console.error('PushToTalkInput: Failed to parse message:', e);
+          }
+        };
       };
 
       ws.onerror = (event) => {

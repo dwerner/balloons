@@ -58,6 +58,7 @@ const MessageInputWithIconsInner = forwardRef<MessageInputWithIconsHandle, Messa
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const valueRef = useRef('');
     const [isRecording, setIsRecording] = useState(false);
+    const [hasContent, setHasContent] = useState(false);
 
     // Store callbacks in refs to avoid re-creating handlers
     const onSubmitRef = useRef(onSubmit);
@@ -75,12 +76,14 @@ const MessageInputWithIconsInner = forwardRef<MessageInputWithIconsHandle, Messa
         if (textareaRef.current) {
           textareaRef.current.value = value;
         }
+        setHasContent(value.trim().length > 0);
       },
       focus: () => textareaRef.current?.focus(),
     }), []);
 
     const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
       valueRef.current = e.target.value;
+      setHasContent(e.target.value.trim().length > 0);
       onChangeRef.current?.(e.target.value);
     }, []);
 
@@ -108,7 +111,7 @@ const MessageInputWithIconsInner = forwardRef<MessageInputWithIconsHandle, Messa
         )}
 
         {/* Main input container */}
-        <div className="input-with-icons-container">
+        <div className={`input-with-icons-container ${hasContent ? 'has-content' : ''}`}>
           {/* Textarea */}
           <textarea
             ref={textareaRef}

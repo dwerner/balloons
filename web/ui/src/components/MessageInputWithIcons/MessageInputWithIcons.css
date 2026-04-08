@@ -24,6 +24,16 @@
   border-color: var(--color-accent-green);
 }
 
+/* Subtle tint when there's draft content */
+.input-with-icons-container.has-content {
+  background: rgba(74, 144, 226, 0.08); /* Subtle blue tint */
+  border-color: rgba(74, 144, 226, 0.3);
+}
+
+.input-with-icons-container.has-content:focus-within {
+  border-color: var(--color-accent-green);
+}
+
 /* The textarea itself - no border since container has it */
 .input-with-icons-field {
   flex: 1;
