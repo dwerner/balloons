@@ -58,8 +58,12 @@ def validate_backend_config(backend: BackendConfig) -> str | None:
         if not backend.base_url:
             return f"Backend '{backend.name}' requires base_url for type 'openai'"
         # Note: model is optional for local servers like llama.cpp that only have one model loaded
+    elif backend_type == "gemini":
+        if not backend.api_key:
+            return f"Backend '{backend.name}' requires api_key for type 'gemini'"
+        # Note: model defaults to gemini-2.5-flash if not specified
     elif backend_type != "claude":
-        return f"Unknown backend type: {backend_type}. Valid types: 'claude', 'openai'"
+        return f"Unknown backend type: {backend_type}. Valid types: 'claude', 'openai', 'gemini'"
 
     return None
 
@@ -99,7 +103,7 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
         backend: Backend configuration
 
     Returns:
-        A BaseRunner instance (ClaudeRunner or OpenAICompatibleRunner)
+        A BaseRunner instance (ClaudeRunner, OpenAICompatibleRunner, or GeminiRunner)
 
     Raises:
         ValueError: If backend type is invalid or required fields are missing
@@ -130,6 +134,23 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
             context_window=backend.context_window,
         )
 
+    elif backend_type == "gemini":
+        # Google Gemini backend
+        from .gemini_runner import GeminiRunner
+
+        if not backend.api_key:
+            raise ValueError(f"Backend '{backend.name}' requires api_key for type 'gemini'")
+
+        api_key = resolve_env_var(backend.api_key)
+        model = backend.model or "gemini-2.5-flash"
+
+        return GeminiRunner(
+            api_key=api_key,
+            model=model,
+            user_prompt=user_prompt,
+            context_window=backend.context_window or 200000,
+        )
+
     elif backend_type == "claude":
         # Claude CLI backend
         from claude_runner import ClaudeRunner
@@ -149,4 +170,4 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
         )
 
     else:
-        raise ValueError(f"Unknown backend type: {backend_type}. Valid types: 'claude', 'openai'")
+        raise ValueError(f"Unknown backend type: {backend_type}. Valid types: 'claude', 'openai', 'gemini'")

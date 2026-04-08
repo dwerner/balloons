@@ -18,7 +18,7 @@
  * - See docs/url-routing.md for the full routing design
  */
 
-import React, { useState, useCallback, useEffect, memo } from 'react';
+import React, { useState, useCallback, useEffect, memo, useRef } from 'react';
 import type { TaskInfo, TaskEventData, BackendSummary } from '../../../../generated/types';
 import type { TaskStateServiceClient } from '../../../../generated/client';
 import './LLMTab.css';
@@ -165,6 +165,76 @@ const ActiveStreamCard = memo(function ActiveStreamCard({
   );
 });
 
+// Expandable error component with copy functionality
+function ErrorMessage({ error }: { error: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
+
+  const handleCopy = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(error);
+      setCopied(true);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      timeoutRef.current = setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Fallback for older browsers
+      console.error('Failed to copy to clipboard');
+    }
+  }, [error]);
+
+  const toggleExpand = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExpanded((prev) => !prev);
+  }, []);
+
+  // Short preview (80 chars instead of 30)
+  const preview = error.length > 80 ? error.slice(0, 80) + '...' : error;
+  const isLong = error.length > 80;
+
+  return (
+    <div className={`llm-error-message ${expanded ? 'llm-error-message--expanded' : ''}`}>
+      {expanded ? (
+        <pre className="llm-error-message__pre">{error}</pre>
+      ) : (
+        <span
+          className="llm-error-message__text"
+          onClick={isLong ? toggleExpand : undefined}
+          title={isLong ? 'Click to expand' : undefined}
+        >
+          {preview}
+        </span>
+      )}
+      <div className="llm-error-message__actions">
+        {isLong && (
+          <button
+            className="llm-error-message__toggle"
+            onClick={toggleExpand}
+            title={expanded ? 'Collapse' : 'Expand'}
+          >
+            {expanded ? '▲' : '▼'}
+          </button>
+        )}
+        <button
+          className="llm-error-message__copy"
+          onClick={handleCopy}
+          title={copied ? 'Copied!' : 'Copy error'}
+        >
+          {copied ? '✓' : '📋'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // Recent stream card (compact)
 const RecentStreamCard = memo(function RecentStreamCard({
   task,
@@ -181,12 +251,7 @@ const RecentStreamCard = memo(function RecentStreamCard({
       <span className="llm-recent-card__tokens">
         {formatTokens(task.inputTokens)}↓ {formatTokens(task.outputTokens)}↑
       </span>
-      {task.error && (
-        <span className="llm-recent-card__error" title={task.error}>
-          {task.error.slice(0, 30)}
-          {task.error.length > 30 ? '...' : ''}
-        </span>
-      )}
+      {task.error && <ErrorMessage error={task.error} />}
       {task.sessionId && (
         <span
           className="llm-recent-card__session"

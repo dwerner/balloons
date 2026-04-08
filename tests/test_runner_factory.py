@@ -57,6 +57,41 @@ class TestValidateBackendConfig:
         result = validate_backend_config(backend)
         assert result is None
 
+    def test_gemini_type_requires_api_key(self):
+        """Gemini type requires api_key."""
+        backend = MagicMock(
+            type="gemini",
+            name="test-gemini",
+            api_key=None,
+            model="gemini-2.5-flash",
+        )
+        result = validate_backend_config(backend)
+        assert result is not None
+        assert "requires api_key" in result
+        assert "test-gemini" in result
+
+    def test_gemini_type_valid_with_api_key(self):
+        """Gemini type is valid when api_key present."""
+        backend = MagicMock(
+            type="gemini",
+            name="test-gemini",
+            api_key="test-key",
+            model="gemini-2.5-flash",
+        )
+        result = validate_backend_config(backend)
+        assert result is None
+
+    def test_gemini_type_model_optional(self):
+        """Gemini type doesn't require model (defaults to gemini-2.5-flash)."""
+        backend = MagicMock(
+            type="gemini",
+            name="test-gemini",
+            api_key="test-key",
+            model=None,
+        )
+        result = validate_backend_config(backend)
+        assert result is None
+
     def test_unknown_type_returns_error(self):
         """Unknown backend type returns error."""
         backend = MagicMock(type="unknown", name="test")
@@ -65,6 +100,7 @@ class TestValidateBackendConfig:
         assert "Unknown backend type" in result
         assert "unknown" in result
         assert "claude" in result  # Lists valid types
+        assert "gemini" in result  # Lists valid types
 
     def test_empty_string_base_url_fails(self):
         """Empty string base_url is treated as missing."""

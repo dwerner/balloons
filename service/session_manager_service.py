@@ -57,7 +57,7 @@ from core.stream_state import (
 )
 # TreeState removed in Phase 8 - events go directly to SessionDataService
 from core.queue_state import QueueState, QueueEvent, QueueSnapshot
-from models import TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, Turn, SessionSummaryBlock
+from models import TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, Turn, SessionSummaryBlock
 from service.session_events import (
     SessionEventObserver,
     TurnCreatedEvent,
@@ -2633,10 +2633,42 @@ class SessionManagerService:
             )
 
             self._stream_state.fail_stream(ctx.exchange_id, error_msg)
-            # Emit session updated so React frontend hides stop button
+
+            # The runner has already added an ErrorBlock turn to the session
+            # Emit turn events so the UI displays it
             session = self._manager.get_session(session_id)
-            if session:
+            if session and session.turns:
+                last_turn = session.turns[-1]
+                # Check if the last turn is an error turn
+                if isinstance(last_turn.content_block, ErrorBlock):
+                    turn_idx = len(session.turns) - 1
+                    await self._notify_observers(
+                        "on_turn_created",
+                        TurnCreatedEvent(
+                            session_id=session_id,
+                            turn_id=last_turn.id,
+                            turn_index=turn_idx,
+                            role="assistant",
+                            exchange_id=ctx.exchange_id,
+                            content_block_type="error",
+                        ),
+                    )
+                    await self._notify_observers(
+                        "on_turn_finished",
+                        TurnFinishedEvent(
+                            session_id=session_id,
+                            turn_id=last_turn.id,
+                            turn_index=turn_idx,
+                            role="assistant",
+                            content=last_turn.content_block.details or error_msg,
+                            tokens=0,
+                            content_block=last_turn.content_block,
+                            context_tokens=0,
+                            output_tokens_total=0,
+                        ),
+                    )
                 self._emit_session_updated(session, is_streaming=False)
+
             # Clean up context
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
@@ -2657,10 +2689,42 @@ class SessionManagerService:
             )
 
             self._stream_state.fail_stream(ctx.exchange_id, f"Rate limit: {error_msg}")
-            # Emit session updated so React frontend hides stop button
+
+            # The runner has already added an ErrorBlock turn to the session
+            # Emit turn events so the UI displays it
             session = self._manager.get_session(session_id)
-            if session:
+            if session and session.turns:
+                last_turn = session.turns[-1]
+                # Check if the last turn is an error turn
+                if isinstance(last_turn.content_block, ErrorBlock):
+                    turn_idx = len(session.turns) - 1
+                    await self._notify_observers(
+                        "on_turn_created",
+                        TurnCreatedEvent(
+                            session_id=session_id,
+                            turn_id=last_turn.id,
+                            turn_index=turn_idx,
+                            role="assistant",
+                            exchange_id=ctx.exchange_id,
+                            content_block_type="error",
+                        ),
+                    )
+                    await self._notify_observers(
+                        "on_turn_finished",
+                        TurnFinishedEvent(
+                            session_id=session_id,
+                            turn_id=last_turn.id,
+                            turn_index=turn_idx,
+                            role="assistant",
+                            content=last_turn.content_block.details or error_msg,
+                            tokens=0,
+                            content_block=last_turn.content_block,
+                            context_tokens=0,
+                            output_tokens_total=0,
+                        ),
+                    )
                 self._emit_session_updated(session, is_streaming=False)
+
             if session_id in self._streaming_contexts:
                 del self._streaming_contexts[session_id]
 

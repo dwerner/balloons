@@ -381,11 +381,23 @@ class SessionRunner:
         except RateLimitError as e:
             self._status = RunnerStatus.ERROR
             debug_log.warning(f"Rate limit: {e}", session_id=self.session.id, category=Category.RUNNER)
+            # Create an error turn for rate limit so it's visible in the conversation
+            error_block = ErrorBlock(
+                reason="rate_limit",
+                details=str(e),
+            )
+            self._content_blocks.append(error_block)
+            turn = self._create_turn("assistant", f"[Rate Limit: {e}]", [error_block])
+            self._turns.append(turn)
+            self._save_turn_to_session(turn, save_now=True)
+            await self._flush_pending_save()
             self._result = StreamResult(
                 content=self._text_buffer,
                 content_blocks=self._content_blocks,
                 raw_events=self._raw_events,
                 error=str(e),
+                exchange_id=self._exchange_id,
+                turns=self._turns,
             )
             yield self._make_event("rate_limit", str(e))
         except InputRequiredError as e:
@@ -419,11 +431,23 @@ class SessionRunner:
         except Exception as e:
             self._status = RunnerStatus.ERROR
             debug_log.error(f"Stream error: {e}", session_id=self.session.id, category=Category.RUNNER)
+            # Create an error turn so the error is visible in the conversation
+            error_block = ErrorBlock(
+                reason="api_error",
+                details=str(e),
+            )
+            self._content_blocks.append(error_block)
+            turn = self._create_turn("assistant", f"[Error: {e}]", [error_block])
+            self._turns.append(turn)
+            self._save_turn_to_session(turn, save_now=True)
+            await self._flush_pending_save()
             self._result = StreamResult(
                 content=self._text_buffer,
                 content_blocks=self._content_blocks,
                 raw_events=self._raw_events,
                 error=str(e),
+                exchange_id=self._exchange_id,
+                turns=self._turns,
             )
             yield self._make_event("error", str(e))
 
@@ -537,11 +561,23 @@ class SessionRunner:
         except RateLimitError as e:
             self._status = RunnerStatus.ERROR
             debug_log.warning(f"Rate limit: {e}", session_id=self.session.id, category=Category.RUNNER)
+            # Create an error turn for rate limit so it's visible in the conversation
+            error_block = ErrorBlock(
+                reason="rate_limit",
+                details=str(e),
+            )
+            self._content_blocks.append(error_block)
+            turn = self._create_turn("assistant", f"[Rate Limit: {e}]", [error_block])
+            self._turns.append(turn)
+            self._save_turn_to_session(turn, save_now=True)
+            await self._flush_pending_save()
             self._result = StreamResult(
                 content=self._text_buffer,
                 content_blocks=self._content_blocks,
                 raw_events=self._raw_events,
                 error=str(e),
+                exchange_id=self._exchange_id,
+                turns=self._turns,
             )
             await self._event_queue.put(self._make_event("rate_limit", str(e)))
         except InputRequiredError as e:
@@ -575,11 +611,23 @@ class SessionRunner:
         except Exception as e:
             self._status = RunnerStatus.ERROR
             debug_log.error(f"Stream error: {e}", session_id=self.session.id, category=Category.RUNNER)
+            # Create an error turn so the error is visible in the conversation
+            error_block = ErrorBlock(
+                reason="api_error",
+                details=str(e),
+            )
+            self._content_blocks.append(error_block)
+            turn = self._create_turn("assistant", f"[Error: {e}]", [error_block])
+            self._turns.append(turn)
+            self._save_turn_to_session(turn, save_now=True)
+            await self._flush_pending_save()
             self._result = StreamResult(
                 content=self._text_buffer,
                 content_blocks=self._content_blocks,
                 raw_events=self._raw_events,
                 error=str(e),
+                exchange_id=self._exchange_id,
+                turns=self._turns,
             )
             await self._event_queue.put(self._make_event("error", str(e)))
 

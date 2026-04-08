@@ -250,12 +250,22 @@
 
 .llm-recent-card {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 8px 12px;
   background: var(--bg-secondary, #252525);
   border-radius: 4px;
   font-size: 12px;
+}
+
+/* Keep single-line items aligned to center when not expanded */
+.llm-recent-card > .llm-status,
+.llm-recent-card > .llm-type-badge,
+.llm-recent-card > .llm-recent-card__duration,
+.llm-recent-card > .llm-recent-card__tokens,
+.llm-recent-card > .llm-recent-card__session {
+  align-self: center;
 }
 
 .llm-recent-card--completed {
@@ -280,6 +290,89 @@
   color: var(--text-secondary, #999);
 }
 
+/* Error message with expand/copy */
+.llm-error-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.llm-error-message__text {
+  color: #f44336;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+}
+
+.llm-error-message__text[title] {
+  cursor: pointer;
+}
+
+.llm-error-message__text[title]:hover {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+
+/* Expanded state - takes full width */
+.llm-error-message--expanded {
+  flex-basis: 100%;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.llm-error-message__pre {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Mono', 'Droid Sans Mono', monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #f44336;
+  background: rgba(244, 67, 54, 0.08);
+  border: 1px solid rgba(244, 67, 54, 0.2);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.llm-error-message__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.llm-error-message--expanded .llm-error-message__actions {
+  align-self: flex-end;
+}
+
+.llm-error-message__toggle,
+.llm-error-message__copy {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  font-size: 10px;
+  background: transparent;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.2s, background 0.2s;
+}
+
+.llm-error-message__toggle:hover,
+.llm-error-message__copy:hover {
+  opacity: 1;
+  background: var(--bg-tertiary, #333);
+}
+
+/* Legacy class kept for compatibility */
 .llm-recent-card__error {
   color: #f44336;
   flex: 1;
