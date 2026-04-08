@@ -17,6 +17,19 @@ import { Modal, ModalFooter } from '../Modal/Modal';
 import type { GoalTreeStateServiceClient } from '../../../../generated/client';
 import './CreatePlanModal.css';
 
+// Custom comparison function for memo - prevents re-renders when modal is open
+// When modal is open, internal state manages the form, so we only need to re-render
+// when isOpen changes from true to false (closing) or false to true (opening)
+function arePropsEqual(prevProps: CreatePlanModalProps, nextProps: CreatePlanModalProps): boolean {
+  // If modal is open in both prev and next, skip re-render
+  // Internal state handles the form values during editing
+  if (prevProps.isOpen && nextProps.isOpen) {
+    return true;
+  }
+  // Otherwise use default shallow comparison for memo
+  return false;
+}
+
 // Result type matching Python CreatePlanResult
 export interface CreatePlanResult {
   goalId: string;
@@ -270,6 +283,6 @@ export const CreatePlanModal = memo(function CreatePlanModal({
       </ModalFooter>
     </Modal>
   );
-});
+}, arePropsEqual);
 
 export default CreatePlanModal;

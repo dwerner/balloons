@@ -1355,6 +1355,25 @@ function AppContent() {
     });
   }, []);
 
+  // Memoized handlers for CreateTodoModal to prevent re-renders when App state changes
+  // Without these, every streaming update would cause modal re-render and typing lag
+  const handleCloseTodoModal = useCallback(() => {
+    setCreateTodoModalState({ isOpen: false, planId: '', planTitle: '' });
+  }, []);
+
+  const handleTodoSubmit = useCallback((result: CreateTodoResult) => {
+    console.log('Todo created:', result);
+  }, []);
+
+  // Memoized handlers for SessionReviewModal
+  const handleCloseReviewModal = useCallback(() => {
+    setReviewModalState({ isOpen: false, sessionId: '', sessionTitle: '' });
+    setCurrentReview(null);
+    setIsGeneratingReview(false);
+    reviewHelperIdRef.current = null;
+    reviewAccumulatedTextRef.current = '';
+  }, []);
+
   // Persist selected session ID to localStorage
   useEffect(() => {
     if (selectedSessionId) {
@@ -1941,6 +1960,22 @@ function AppContent() {
       console.error('Failed to toggle pin:', err);
     }
   }, [connectionState]);
+
+  // Memoized handler for toggling pin on the selected session
+  // This prevents inline arrow function recreation that causes status bar re-renders
+  const handleTogglePinSelected = useCallback(() => {
+    if (selectedSessionId) {
+      handleTogglePin(selectedSessionId);
+    }
+  }, [selectedSessionId, handleTogglePin]);
+
+  // Memoized handler for title change - triggers session refresh
+  // This prevents inline arrow function recreation during typing in modal
+  const handleTitleChangeRefresh = useCallback(() => {
+    if (selectedSessionId && clientRef.current) {
+      clientRef.current.sessions.getSession(selectedSessionId).catch(console.error);
+    }
+  }, [selectedSessionId]);
 
   // Handle CWD click - open detail panel and navigate file browser
   // Note: We need to use a callback that accesses layout context
@@ -3325,16 +3360,13 @@ function AppContent() {
                 stopDisabled={connectionState !== 'connected'}
                 sessionContextTokens={liveContextTokens > 0 ? liveContextTokens : selectedSession.cachedContextTokens}
                 isPinned={selectedSession.isPinned ?? false}
-                onTogglePin={() => handleTogglePin(selectedSession.id)}
+                onTogglePin={handleTogglePinSelected}
                 onSelectSession={setSelectedSessionId}
                 scrollState={scrollState}
                 session={selectedSession}
                 client={clientRef.current}
                 cwd={selectedSession.workingDirectory}
-                onTitleChange={(newTitle) => {
-                  // Force a refresh of session data
-                  clientRef.current?.sessions.getSession(selectedSession.id).catch(console.error);
-                }}
+                onTitleChange={handleTitleChangeRefresh}
                 onCwdClick={handleCwdClick}
                 onSetCwd={handleSetCwd}
               />
@@ -3344,7 +3376,7 @@ function AppContent() {
                 isStreaming={selectedSession.isStreaming}
                 liveContextTokens={liveContextTokens}
                 client={clientRef.current}
-                onTogglePin={() => handleTogglePin(selectedSession.id)}
+                onTogglePin={handleTogglePinSelected}
                 onSelectSession={setSelectedSessionId}
                 cwd={selectedSession.workingDirectory}
                 scrollState={scrollState}
@@ -4048,13 +4080,11 @@ function AppContent() {
       {/* CreateTodoModal - rendered at App level for portal */}
       <CreateTodoModal
         isOpen={createTodoModalState.isOpen}
-        onClose={() => setCreateTodoModalState({ isOpen: false, planId: '', planTitle: '' })}
+        onClose={handleCloseTodoModal}
         planId={createTodoModalState.planId}
         planTitle={createTodoModalState.planTitle}
         goalsClient={connectionState === 'connected' ? clientRef.current?.goals : undefined}
-        onSubmit={(result) => {
-          console.log('Todo created:', result);
-        }}
+        onSubmit={handleTodoSubmit}
         onBeginSession={async (todoId, todoTitle, todoDescription, planId, planTitle, isSpike, timeboxMinutes) => {
           const client = clientRef.current;
           const goalsClient = client?.goals;
@@ -4111,13 +4141,7 @@ function AppContent() {
       {/* SessionReviewModal - rendered at App level for portal */}
       <SessionReviewModal
         isOpen={reviewModalState.isOpen}
-        onClose={() => {
-          setReviewModalState({ isOpen: false, sessionId: '', sessionTitle: '' });
-          setCurrentReview(null);
-          setIsGeneratingReview(false);
-          reviewHelperIdRef.current = null;
-          reviewAccumulatedTextRef.current = '';
-        }}
+        onClose={handleCloseReviewModal}
         sessionId={reviewModalState.sessionId}
         sessionTitle={reviewModalState.sessionTitle}
         availableBackends={availableBackends}
@@ -4696,6 +4720,11 @@ function SidebarContent({
   // State for the shared rename modal (one modal, not one per session)
   const [renameModalSession, setRenameModalSession] = useState<SessionInfo | null>(null);
 
+  // Memoized handler for closing rename modal to prevent re-renders during typing
+  const handleCloseRenameModal = useCallback(() => {
+    setRenameModalSession(null);
+  }, []);
+
   // View mode state (persisted in localStorage)
   const [viewMode, setViewMode] = useState<SidebarView>(() => {
     if (typeof window !== 'undefined') {
@@ -4968,12 +4997,12 @@ function SidebarContent({
       {client?.isConnected && renameModalSession && (
         <RenameSessionModal
           isOpen={!!renameModalSession}
-          onClose={() => setRenameModalSession(null)}
+          onClose={handleCloseRenameModal}
           sessionId={renameModalSession.id}
           currentTitle={renameModalSession.title || renameModalSession.forkName || ''}
           client={client.sessions}
           sessionDataClient={client.sessionData}
-          onRenamed={() => setRenameModalSession(null)}
+          onRenamed={handleCloseRenameModal}
           onNavigateToSession={onSelectSession}
         />
       )}

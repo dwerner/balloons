@@ -648,6 +648,11 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
     loadWorkingTreeStatus();
   }, [loadWorkingTreeStatus]);
 
+  // Memoized handler for closing commit modal to prevent re-renders during typing
+  const handleCloseCommitModal = useCallback(() => {
+    setIsCommitModalOpen(false);
+  }, []);
+
   // Build a ReviewState for views
   const reviewState = useMemo(() => ({
     active: true, // Always active - selection always enabled
@@ -920,7 +925,7 @@ export const CodeTab = memo(forwardRef<CodeTabHandle, CodeTabProps>(function Cod
       {workingTreeStatus && (
         <CommitModal
           isOpen={isCommitModalOpen}
-          onClose={() => setIsCommitModalOpen(false)}
+          onClose={handleCloseCommitModal}
           gitRoot={workingTreeStatus.gitRoot}
           stagedFiles={workingTreeStatus.stagedFiles}
           client={client}

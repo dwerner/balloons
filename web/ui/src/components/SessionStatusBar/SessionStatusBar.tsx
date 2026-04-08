@@ -260,6 +260,11 @@ export const SessionStatusBar = memo(function SessionStatusBar({
     onTitleChange?.(newTitle);
   }, [onTitleChange]);
 
+  // Memoized handler for closing rename modal to prevent re-renders
+  const handleCloseRenameModal = useCallback(() => {
+    setShowRenameModal(false);
+  }, []);
+
   // Load available backends
   useEffect(() => {
     if (client && isConnected) {
@@ -550,7 +555,7 @@ export const SessionStatusBar = memo(function SessionStatusBar({
     {client && isConnected && (
       <RenameSessionModal
         isOpen={showRenameModal}
-        onClose={() => setShowRenameModal(false)}
+        onClose={handleCloseRenameModal}
         sessionId={session.id}
         currentTitle={session.title || session.forkName || ''}
         client={client.sessions}

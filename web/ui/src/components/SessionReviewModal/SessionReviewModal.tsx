@@ -31,6 +31,25 @@ import { Modal, ModalFooter } from '../Modal/Modal';
 import ReactMarkdown from 'react-markdown';
 import './SessionReviewModal.css';
 
+// Custom comparison function for memo - prevents re-renders when modal is open
+// When modal is open, internal state manages the form, so we only need to re-render
+// when isOpen changes from true to false (closing) or false to true (opening)
+// Exception: we allow re-renders when currentReview or isGenerating changes (for streaming updates)
+function arePropsEqual(prevProps: SessionReviewModalProps, nextProps: SessionReviewModalProps): boolean {
+  // If modal is open in both prev and next
+  if (prevProps.isOpen && nextProps.isOpen) {
+    // Allow re-renders for streaming updates
+    if (prevProps.currentReview !== nextProps.currentReview ||
+        prevProps.isGenerating !== nextProps.isGenerating) {
+      return false;
+    }
+    // Otherwise skip re-render - internal state handles the form
+    return true;
+  }
+  // Otherwise use default shallow comparison for memo
+  return false;
+}
+
 // Types for the review data
 export interface SessionReview {
   summary_id: string;
@@ -338,6 +357,6 @@ export const SessionReviewModal = memo(function SessionReviewModal({
       </ModalFooter>
     </Modal>
   );
-});
+}, arePropsEqual);
 
 export default SessionReviewModal;

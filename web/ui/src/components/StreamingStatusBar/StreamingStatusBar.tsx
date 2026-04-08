@@ -228,6 +228,11 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
     onTitleChange?.(newTitle);
   }, [onTitleChange]);
 
+  // Memoized handler for closing rename modal to prevent re-renders
+  const handleCloseRenameModal = useCallback(() => {
+    setShowRenameModal(false);
+  }, []);
+
   // Get session display name
   const sessionName = session ? getSessionDisplayName(session) : null;
 
@@ -500,7 +505,7 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
     {client && isConnected && session && (
       <RenameSessionModal
         isOpen={showRenameModal}
-        onClose={() => setShowRenameModal(false)}
+        onClose={handleCloseRenameModal}
         sessionId={session.id}
         currentTitle={session.title || session.forkName || ''}
         client={client.sessions}

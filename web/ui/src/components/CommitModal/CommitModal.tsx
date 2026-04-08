@@ -20,6 +20,19 @@ import './CommitModal.css';
 
 const log = createLogger('CommitModal');
 
+// Custom comparison function for memo - prevents re-renders when modal is open
+// When modal is open, internal state manages the form, so we only need to re-render
+// when isOpen changes from true to false (closing) or false to true (opening)
+function arePropsEqual(prevProps: CommitModalProps, nextProps: CommitModalProps): boolean {
+  // If modal is open in both prev and next, skip re-render
+  // Internal state handles the form values during editing
+  if (prevProps.isOpen && nextProps.isOpen) {
+    return true;
+  }
+  // Otherwise use default shallow comparison for memo
+  return false;
+}
+
 /** Callback for streaming AI commit message generation */
 export interface StreamingMessageCallbacks {
   onDelta: (delta: string) => void;
@@ -428,6 +441,6 @@ export const CommitModal = memo(function CommitModal({
       </ModalFooter>
     </Modal>
   );
-});
+}, arePropsEqual);
 
 export default CommitModal;
