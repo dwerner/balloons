@@ -1332,29 +1332,6 @@ function AppContent() {
     }
   }, []);
 
-  // Handle streaming state changes from StreamingTurnsView
-  // This is critical for mobile: when the screen turns off during streaming and back on,
-  // useSessionData queries the server for the actual streaming state. We need to update
-  // sessions[].isStreaming to match, otherwise the UI shows stale "streaming" state and
-  // new messages get queued when they should be submitted directly.
-  const handleStreamingStateChange = useCallback((sessionId: string, isStreaming: boolean) => {
-    setSessions(prev => {
-      const session = prev.find(s => s.id === sessionId);
-      // Only update if the streaming state actually changed
-      if (session && session.isStreaming !== isStreaming) {
-        console.log('[App] handleStreamingStateChange - syncing stale streaming state:', {
-          sessionId: sessionId.slice(0, 8),
-          was: session.isStreaming,
-          now: isStreaming,
-        });
-        return prev.map(s =>
-          s.id === sessionId ? { ...s, isStreaming } : s
-        );
-      }
-      return prev;
-    });
-  }, []);
-
   // Memoized handlers for CreateTodoModal to prevent re-renders when App state changes
   // Without these, every streaming update would cause modal re-render and typing lag
   const handleCloseTodoModal = useCallback(() => {
@@ -1942,6 +1919,44 @@ function AppContent() {
 
     return () => {
       unsubscribers.forEach(unsub => unsub());
+    };
+  }, [connectionState, selectedSessionId]);
+
+  // Sync streaming state when page becomes visible
+  // This handles the case where the browser was backgrounded (e.g., phone screen off)
+  // and the WebSocket missed events. When the page becomes visible again, we query the
+  // server for the selected session's actual streaming state to prevent stale UI.
+  useEffect(() => {
+    const client = clientRef.current;
+    if (!client || connectionState !== 'connected' || !selectedSessionId) return;
+
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState === 'visible') {
+        try {
+          const actuallyStreaming = await client.sessionData.isSessionStreaming(selectedSessionId);
+          setSessions(prev => {
+            const session = prev.find(s => s.id === selectedSessionId);
+            if (session && session.isStreaming !== actuallyStreaming) {
+              console.log('[App] Visibility sync - correcting stale streaming state:', {
+                sessionId: selectedSessionId.slice(0, 8),
+                was: session.isStreaming,
+                now: actuallyStreaming,
+              });
+              return prev.map(s =>
+                s.id === selectedSessionId ? { ...s, isStreaming: actuallyStreaming } : s
+              );
+            }
+            return prev;
+          });
+        } catch (err) {
+          console.warn('[App] Failed to sync streaming state on visibility change:', err);
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [connectionState, selectedSessionId]);
 
@@ -3398,7 +3413,6 @@ function AppContent() {
                       onSelectSession={setSelectedSessionId}
                       onScrollStateChange={setScrollState}
                       onStreamingProgressChange={handleStreamingProgressChange}
-                      onStreamingStateChange={handleStreamingStateChange}
                       onTurnsChange={handleTurnsChange}
                       onLoadingChange={handleSessionLoadingChange}
                       archivingTurnIds={archivingTurnIds}

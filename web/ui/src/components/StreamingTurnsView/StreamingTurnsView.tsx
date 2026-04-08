@@ -77,8 +77,6 @@ interface StreamingTurnsViewProps {
   onScrollStateChange?: (state: { isFollowing: boolean; isAtBottom: boolean }) => void;
   /** Callback when streaming progress updates (for status bar token counts) */
   onStreamingProgressChange?: (progress: StreamingProgress | null) => void;
-  /** Callback when streaming state changes (for syncing session state after visibility change) */
-  onStreamingStateChange?: (sessionId: string, isStreaming: boolean) => void;
   /** Callback when turns change (for sharing with sidebar/tree view) */
   onTurnsChange?: (turns: SessionDataTurn[]) => void;
   /** Callback when session data loading state changes (for clearing parent loading indicators) */
@@ -104,7 +102,7 @@ const LAZY_LOAD_TOP_THRESHOLD = 500;
 // Number of turns to load per lazy load chunk
 const LAZY_LOAD_CHUNK_SIZE = 50;
 
-export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrollStateChange, onStreamingProgressChange, onStreamingStateChange, onTurnsChange, onLoadingChange, archivingTurnIds, refreshKey, historyLoadMode = 'reverse', onHistoryStateChange, onArchiveTurns }: StreamingTurnsViewProps) {
+export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrollStateChange, onStreamingProgressChange, onTurnsChange, onLoadingChange, archivingTurnIds, refreshKey, historyLoadMode = 'reverse', onHistoryStateChange, onArchiveTurns }: StreamingTurnsViewProps) {
   // useSessionData now gets the clientId directly from client.clientId when connected
   // refreshKey forces re-subscription when incremented (e.g., after archive)
   // historyLoadMode determines which history layer to use: 'history', 'history_reverse', or 'history_lazy'
@@ -599,16 +597,6 @@ export function StreamingTurnsView({ sessionId, client, onSelectSession, onScrol
       onStreamingProgressChange(streamingProgress);
     }
   }, [streamingProgress, onStreamingProgressChange]);
-
-  // Report streaming state changes to parent (for syncing session state after visibility change)
-  // This is critical for mobile: when the screen turns off during streaming and back on,
-  // useSessionData queries the server for the actual streaming state. We need to bubble
-  // this up to App.tsx so it can update sessions[].isStreaming which controls message queuing.
-  useEffect(() => {
-    if (onStreamingStateChange && sessionId) {
-      onStreamingStateChange(sessionId, isStreaming);
-    }
-  }, [sessionId, isStreaming, onStreamingStateChange]);
 
   // Create a stable loadFullHistory callback for the parent
   const loadFullHistory = useCallback(() => {
