@@ -1,0 +1,17 @@
+{
+  "type": "function",
+  "function": {
+    "name": "browser_goto",
+    "description": "Navigate to a URL. After navigation, use browser_see to understand the page structure.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "The URL to navigate to (must be fully qualified, e.g., 'https://example.com')"
+        }
+      },
+      "required": ["url"]
+    }
+  }
+}

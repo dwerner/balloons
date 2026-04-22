@@ -1,0 +1,17 @@
+{
+  "type": "function",
+  "function": {
+    "name": "browser_click",
+    "description": "Click an element by CSS selector. For clicking buttons by index, use browser_click_button instead.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "selector": {
+          "type": "string",
+          "description": "CSS selector for the element (e.g., '#submit', '.btn-primary', 'button[type=\"submit\"]')"
+        }
+      },
+      "required": ["selector"]
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "type": "function",
+  "function": {
+    "name": "browser_click_button",
+    "description": "Click a button by its index from browser_buttons. More reliable than CSS selectors since it uses discovered buttons.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer",
+          "description": "Button index (0-based, from browser_buttons discovery)"
+        }
+      },
+      "required": ["index"]
+    }
+  }
+}

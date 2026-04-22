@@ -56,14 +56,18 @@ class TestBuildSystemPrompt:
         assert prompt is not None
         assert len(prompt) > 1000  # Should have balloons tools
 
-    def test_backend_type_no_longer_matters(self):
-        """Backend type is now ignored - all use per-tool prompts."""
+    def test_backend_type_affects_claude_format(self):
+        """Claude backend gets extra balloons-tool XML format instructions."""
         prompt_openai = build_system_prompt(backend_type="openai")
         prompt_claude = build_system_prompt(backend_type="claude")
         prompt_unknown = build_system_prompt(backend_type="unknown")
 
-        # All should be the same (no backend-specific prompts anymore)
-        assert prompt_openai == prompt_claude == prompt_unknown
+        # OpenAI and unknown backends are the same (no XML format needed)
+        assert prompt_openai == prompt_unknown
+
+        # Claude includes balloons-tool XML format instructions
+        assert "balloons-tool" in prompt_claude
+        assert "balloons-tool" not in prompt_openai
 
 
 class TestBuildSystemPromptForBackend:

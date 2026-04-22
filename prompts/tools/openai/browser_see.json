@@ -1,0 +1,12 @@
+{
+  "type": "function",
+  "function": {
+    "name": "browser_see",
+    "description": "Get a structured view of the current page content (PageVision). Returns semantic sections (Navigation, Sidebar, Content, Form, etc.) with their visible items. This is the primary way to understand what's on a page.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  }
+}

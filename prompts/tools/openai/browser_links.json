@@ -1,0 +1,17 @@
+{
+  "type": "function",
+  "function": {
+    "name": "browser_links",
+    "description": "Discover all links on the current page. Returns a JSON array with index, text, and href for each link.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of links to return (optional)"
+        }
+      },
+      "required": []
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "type": "function",
+  "function": {
+    "name": "browser_inputs",
+    "description": "Discover all input elements on the current page. Returns a JSON array with index, type, name, placeholder, and value for each input. Use index with browser_set_input.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  }
+}

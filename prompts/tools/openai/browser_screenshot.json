@@ -1,0 +1,12 @@
+{
+  "type": "function",
+  "function": {
+    "name": "browser_screenshot",
+    "description": "Take a screenshot of the current page. Returns PNG image data.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  }
+}

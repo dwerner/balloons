@@ -12,6 +12,10 @@ from core.tool_prompts import (
     get_tools_in_category,
     get_all_categories,
     get_category_for_tool,
+    discover_tool_categories,
+    clear_discovery_cache,
+    get_all_balloon_tools,
+    get_all_tools,
 )
 
 
@@ -188,3 +192,89 @@ class TestDefaultEnabledTools:
     def test_debug_tools_not_in_defaults(self):
         """Debug tools should NOT be in defaults (they're for debugging)."""
         assert "debug_log_query" not in DEFAULT_ENABLED_TOOLS
+
+
+class TestFilesystemDiscovery:
+    """Tests for filesystem-based tool discovery."""
+
+    def test_discover_tool_categories_returns_dict(self):
+        """discover_tool_categories() should return a dict of categories."""
+        categories = discover_tool_categories()
+        assert isinstance(categories, dict)
+        assert len(categories) > 0
+
+    def test_discovered_categories_match_directories(self):
+        """Discovered categories should match directories in prompts/tools/."""
+        prompts_dir = Path(__file__).parent.parent / "prompts" / "tools"
+        categories = discover_tool_categories()
+
+        # Check that expected categories are discovered
+        expected = ["balloon", "browser", "debug", "domain", "midi", "supervisor", "watcher"]
+        for cat in expected:
+            assert cat in categories, f"Category {cat} should be discovered"
+
+        # Check that excluded directories are NOT discovered
+        assert "_templates" not in categories
+        assert "openai" not in categories
+
+    def test_discovered_tools_match_md_files(self):
+        """Discovered tools should match .md files in category directories."""
+        prompts_dir = Path(__file__).parent.parent / "prompts" / "tools"
+        categories = discover_tool_categories()
+
+        for category, tools in categories.items():
+            category_dir = prompts_dir / category
+            if category_dir.exists():
+                # Check that each tool has a corresponding .md file
+                for tool in tools:
+                    tool_file = category_dir / f"{tool}.md"
+                    assert tool_file.exists(), f"Tool {tool} should have {tool_file}"
+
+    def test_discovered_excludes_overview_files(self):
+        """_overview.md files should not be included as tools."""
+        categories = discover_tool_categories()
+
+        for category, tools in categories.items():
+            assert "_overview" not in tools, f"_overview should not be a tool in {category}"
+
+    def test_legacy_aliases_match_discovery(self):
+        """Legacy TOOL_CATEGORIES and ALL_BALLOON_TOOLS should match discovery."""
+        discovered = discover_tool_categories()
+
+        # TOOL_CATEGORIES should equal discovered
+        assert TOOL_CATEGORIES == discovered
+
+        # ALL_BALLOON_TOOLS should equal union of all discovered tools
+        expected_all = set()
+        for tools in discovered.values():
+            expected_all.update(tools)
+        assert ALL_BALLOON_TOOLS == expected_all
+
+    def test_get_all_balloon_tools_function(self):
+        """get_all_balloon_tools() should return all discovered balloon tools."""
+        all_tools = get_all_balloon_tools()
+        assert isinstance(all_tools, set)
+        assert "ask_user" in all_tools
+        assert "browser_start" in all_tools
+        assert "load_domain" in all_tools
+
+    def test_get_all_tools_includes_core(self):
+        """get_all_tools() should include core tools plus balloon tools."""
+        all_tools = get_all_tools()
+        # Should include core tools
+        for core in CORE_TOOLS:
+            assert core in all_tools, f"Core tool {core} should be in all tools"
+        # Should include balloon tools
+        assert "ask_user" in all_tools
+
+    def test_cache_clearing(self):
+        """clear_discovery_cache() should allow re-discovery."""
+        # First discovery
+        cats1 = discover_tool_categories()
+
+        # Clear and re-discover
+        clear_discovery_cache()
+        cats2 = discover_tool_categories()
+
+        # Should be the same (filesystem unchanged)
+        assert cats1 == cats2

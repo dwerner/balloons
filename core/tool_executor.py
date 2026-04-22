@@ -24,6 +24,7 @@ from .debug_tools import DEBUG_TOOL_NAMES, execute_debug_tool
 from .watcher_tools import WATCHER_TOOL_NAMES, execute_watcher_tool
 from .lsp_tools import LSP_TOOL_NAMES, execute_lsp_tool
 from .domain_tools import DOMAIN_TOOL_NAMES, execute_domain_management_tool
+from .browser_tools import BROWSER_TOOL_NAMES, execute_browser_tool
 from .fork import ForkProposal, ContextAssignment, MergeProposal
 from .tts import get_tts_runner, TTSConfig
 
@@ -239,6 +240,12 @@ async def execute_tool(
             if session is None:
                 return "Error: Domain tools require a session context", True
             return await execute_domain_management_tool(name, args, session)
+
+        # Browser automation tools
+        if name in BROWSER_TOOL_NAMES:
+            if session is None:
+                return "Error: Browser tools require a session context", True
+            return await execute_browser_tool(name, args, session, working_dir)
 
         # Standard file/shell tools
         if name == "Read":

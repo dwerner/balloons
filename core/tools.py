@@ -524,32 +524,56 @@ BALLOON_TOOL_NAMES = {
     "speak", "play_midi",
     # Watcher mode tools
     "send_to_target",
+    # Browser automation tools
+    "browser_start", "browser_stop", "browser_goto", "browser_see",
+    "browser_inputs", "browser_buttons", "browser_links",
+    "browser_click", "browser_click_button", "browser_fill", "browser_set_input",
+    "browser_screenshot", "browser_execute_js",
+    "browser_back", "browser_forward", "browser_refresh",
+    "browser_url", "browser_title", "browser_html",
+    "browser_type_text", "browser_submit", "browser_select_option",
+    "browser_press_enter", "browser_search",
+    "browser_get_cookies", "browser_set_cookie", "browser_delete_cookie",
 }
 
 
 def get_balloon_tools() -> list[dict]:
-    """Get balloon tools, loading from JSON files when available.
+    """Get balloon tools by discovering JSON schema files.
 
-    Tries to load each tool from prompts/tools/openai/*.json first,
-    falling back to the hardcoded BALLOON_TOOLS for tools without JSON files.
+    Discovers all available balloon tool schemas from prompts/tools/openai/*.json
+    and loads them. Falls back to hardcoded BALLOON_TOOLS for tools without
+    JSON schema files.
 
     Returns:
         List of OpenAI function calling schema dicts
     """
-    from .tool_schemas import get_balloon_tool_schema
+    from .tool_schemas import get_balloon_tool_schema, list_available_balloon_schemas
 
     result = []
     hardcoded_by_name = {t["function"]["name"]: t for t in BALLOON_TOOLS}
 
-    # List of balloon tool names (excluding watcher tools which are separate)
-    balloon_names = [
-        "ask_user", "propose_fork", "propose_merge", "create_slide",
-        "list_links", "follow_link", "search_linked_session", "session_info",
-        "speak",
-    ]
+    # Discover all available JSON schemas
+    available_schemas = list_available_balloon_schemas()
 
-    for name in balloon_names:
-        # Try loading from JSON file first
+    # Filter to only include "balloon" category tools (not browser, supervisor, etc.)
+    # Those have their own get_*_tools() functions
+    # Balloon tools are: ask_user, propose_*, list_links, follow_link, etc.
+    # Plus any discovered that aren't in other tool sets
+    balloon_prefixes = ("ask_", "propose_", "list_links", "follow_link",
+                        "search_linked", "session_info", "create_slide", "speak")
+
+    for name in available_schemas:
+        # Skip browser tools - handled by get_browser_tools()
+        if name.startswith("browser_"):
+            continue
+        # Skip supervisor tools - handled separately
+        if name.startswith("supervisor_"):
+            continue
+        # Skip domain tools - handled separately
+        if name in ("load_domain", "unload_domain", "list_domains"):
+            continue
+
+        # Load the schema
         schema = get_balloon_tool_schema(name)
         if schema:
             result.append(schema)
@@ -1121,6 +1145,7 @@ def get_tools_for_request(
     include_watcher_tools: bool = False,
     include_lsp_tools: bool = True,
     include_domain_tools: bool = True,
+    include_browser_tools: bool = False,
 ) -> list[dict] | None:
     """Get the list of tools to include in an API request.
 
@@ -1144,6 +1169,7 @@ def get_tools_for_request(
         include_watcher_tools: If True, include watcher mode tools (send_to_target)
         include_lsp_tools: If True, include LSP semantic code tools (lsp_hover, etc.)
         include_domain_tools: If True, include tools from loaded domain plugins
+        include_browser_tools: If True, include browser automation tools (browser_goto, etc.)
 
     Returns:
         List of tool definitions, or None if tools disabled
@@ -1179,6 +1205,9 @@ def get_tools_for_request(
             all_tools = all_tools + get_domain_tools()
         except ImportError:
             pass  # Plugin system not available
+    if include_browser_tools:
+        from .browser_tools import get_browser_tools
+        all_tools = all_tools + get_browser_tools()
 
     if allowed_tools is None:
         return all_tools
@@ -1275,6 +1304,7 @@ def get_tools_for_gemini(
     include_watcher_tools: bool = False,
     include_lsp_tools: bool = True,
     include_domain_tools: bool = True,
+    include_browser_tools: bool = False,
 ) -> list | None:
     """Get tools in Gemini FunctionDeclaration format.
 
@@ -1307,6 +1337,7 @@ def get_tools_for_gemini(
         include_watcher_tools=include_watcher_tools,
         include_lsp_tools=include_lsp_tools,
         include_domain_tools=include_domain_tools,
+        include_browser_tools=include_browser_tools,
     )
 
     if not openai_tools:

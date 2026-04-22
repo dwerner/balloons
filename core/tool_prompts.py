@@ -8,6 +8,12 @@ and only enabled tools will have their documentation included in the prompt.
 
 The order of tools in the enabled list determines the order in the prompt.
 Category overviews are inserted when a tool from that category first appears.
+
+Tool Discovery:
+- Categories are discovered from subdirectories of prompts/tools/
+- Tools are discovered from *.md files within each category directory
+- Both source (prompts/tools/) and user (~/.balloons/prompts/tools/) directories are scanned
+- Directories starting with _ (like _templates) and 'openai' are excluded from categories
 """
 
 from pathlib import Path
@@ -20,6 +26,102 @@ from .debug_log import debug_log, Category
 _TOOL_PROMPTS_DIR = Path(__file__).parent.parent / "prompts" / "tools"
 _USER_TOOL_PROMPTS_DIR = Path.home() / ".balloons" / "prompts" / "tools"
 
+# Directories to exclude from category discovery
+_EXCLUDED_DIRS = {"_templates", "openai"}
+
+# Cache for discovered categories and tools
+_discovery_cache: dict[str, dict[str, list[str]]] | None = None
+
+
+def _discover_tools_in_directory(base_dir: Path) -> dict[str, list[str]]:
+    """Discover tool categories and tools from a directory.
+
+    Args:
+        base_dir: Directory to scan (e.g., prompts/tools/)
+
+    Returns:
+        Dict mapping category name to list of tool names
+    """
+    categories: dict[str, list[str]] = {}
+
+    if not base_dir.exists():
+        return categories
+
+    for category_dir in base_dir.iterdir():
+        if not category_dir.is_dir():
+            continue
+
+        category_name = category_dir.name
+
+        # Skip excluded directories
+        if category_name in _EXCLUDED_DIRS or category_name.startswith("_"):
+            continue
+
+        # Find all .md files (excluding _overview.md)
+        tools = []
+        for md_file in category_dir.glob("*.md"):
+            if md_file.name.startswith("_"):
+                continue  # Skip _overview.md and similar
+            tool_name = md_file.stem
+            tools.append(tool_name)
+
+        if tools:
+            # Sort tools alphabetically for consistent ordering
+            categories[category_name] = sorted(tools)
+
+    return categories
+
+
+def discover_tool_categories() -> dict[str, list[str]]:
+    """Discover all tool categories and their tools from the filesystem.
+
+    Scans both source directory (prompts/tools/) and user directory
+    (~/.balloons/prompts/tools/). User directory takes precedence for
+    individual tool prompts, but categories are merged.
+
+    Returns:
+        Dict mapping category name to list of tool names.
+        Results are cached - call clear_discovery_cache() to refresh.
+    """
+    global _discovery_cache
+
+    if _discovery_cache is not None:
+        return _discovery_cache
+
+    # Start with source directory
+    categories = _discover_tools_in_directory(_TOOL_PROMPTS_DIR)
+
+    # Merge user directory (adds new categories, adds new tools to existing categories)
+    user_categories = _discover_tools_in_directory(_USER_TOOL_PROMPTS_DIR)
+    for category, tools in user_categories.items():
+        if category in categories:
+            # Merge tools, avoiding duplicates
+            existing = set(categories[category])
+            for tool in tools:
+                if tool not in existing:
+                    categories[category].append(tool)
+            categories[category] = sorted(categories[category])
+        else:
+            categories[category] = tools
+
+    _discovery_cache = categories
+    return categories
+
+
+def clear_discovery_cache() -> None:
+    """Clear the tool discovery cache.
+
+    Call this after adding/removing tool prompt files to refresh discovery.
+    """
+    global _discovery_cache
+    _discovery_cache = None
+
+
+# For backward compatibility, these reference discovered categories
+def _get_tool_categories() -> dict[str, list[str]]:
+    """Get tool categories (discovered from filesystem)."""
+    return discover_tool_categories()
+
 
 # Core file/shell tools (always available, no per-tool prompts needed)
 CORE_TOOLS = [
@@ -31,53 +133,49 @@ CORE_TOOLS = [
     "Grep",
 ]
 
-# Tool categories and their tools (balloon-specific, have prompt files)
-# Each category has an optional _overview.md and individual tool files
-TOOL_CATEGORIES = {
-    "balloon": [
-        "ask_user",
-        "propose_fork",
-        "propose_merge",
-        "list_links",
-        "follow_link",
-        "search_linked_session",
-        "session_info",
-    ],
-    "supervisor": [
-        "supervisor_start",
-        "supervisor_list",
-        "supervisor_output",
-        "supervisor_stop",
-        "supervisor_query",
-        "supervisor_host_status",
-    ],
-    "watcher": [
-        "send_to_target",
-    ],
-    "midi": [
-        "play_midi",
-    ],
-    "debug": [
-        "debug_log_query",
-        "debug_log_config",
-        "debug_log_tail",
-    ],
-    "domain": [
-        "load_domain",
-        "unload_domain",
-        "list_domains",
-    ],
-    # Note: LSP tools could be added here when prompt files are created
-    # Note: Domain plugin tools (kanban, chess) are loaded dynamically via the domain system
-}
 
-# All tool names for quick lookup (balloon-specific only)
-ALL_BALLOON_TOOLS: Set[str] = set()
-for tools in TOOL_CATEGORIES.values():
-    ALL_BALLOON_TOOLS.update(tools)
+def _compute_all_balloon_tools() -> Set[str]:
+    """Compute set of all balloon tool names from discovered categories."""
+    all_tools: Set[str] = set()
+    for tools in discover_tool_categories().values():
+        all_tools.update(tools)
+    return all_tools
 
-# All tools including core
-ALL_TOOLS: Set[str] = set(CORE_TOOLS) | ALL_BALLOON_TOOLS
+
+def _compute_all_tools() -> Set[str]:
+    """Compute set of all tools including core."""
+    return set(CORE_TOOLS) | _compute_all_balloon_tools()
+
+
+# Backward compatibility properties - now computed from discovery
+# Note: These are functions to ensure they reflect current discovery state
+def get_all_balloon_tools() -> Set[str]:
+    """Get set of all balloon tool names (discovered from filesystem)."""
+    return _compute_all_balloon_tools()
+
+
+def get_all_tools() -> Set[str]:
+    """Get set of all tool names including core (discovered from filesystem)."""
+    return _compute_all_tools()
+
+
+# Legacy aliases for backward compatibility (computed on first access)
+# These will be populated lazily
+ALL_BALLOON_TOOLS: Set[str] = set()  # Use get_all_balloon_tools() instead
+ALL_TOOLS: Set[str] = set()  # Use get_all_tools() instead
+
+# Legacy alias for backward compatibility - returns discovered categories
+# Code should use discover_tool_categories() or get_tools_in_category() instead
+TOOL_CATEGORIES: dict[str, list[str]] = {}  # Populated on init
+
+# Populate legacy sets/dicts on module load
+def _init_legacy_data():
+    global ALL_BALLOON_TOOLS, ALL_TOOLS, TOOL_CATEGORIES
+    ALL_BALLOON_TOOLS = _compute_all_balloon_tools()
+    ALL_TOOLS = _compute_all_tools()
+    TOOL_CATEGORIES = discover_tool_categories()
+
+_init_legacy_data()
 
 # Default enabled tools - core tools plus balloon essentials
 # Users can expand this in config or per-session
@@ -251,7 +349,8 @@ def _order_tools_by_category(tools: Set[str]) -> list[str]:
     Used when a set is passed to maintain backward compatibility.
     """
     result = []
-    for category, cat_tools in TOOL_CATEGORIES.items():
+    categories = discover_tool_categories()
+    for category, cat_tools in categories.items():
         for tool in cat_tools:
             if tool in tools:
                 result.append(tool)
@@ -263,18 +362,18 @@ def _order_tools_by_category(tools: Set[str]) -> list[str]:
 
 
 def get_tools_in_category(category: str) -> list[str]:
-    """Get tool names for a category."""
-    return TOOL_CATEGORIES.get(category, [])
+    """Get tool names for a category (discovered from filesystem)."""
+    return discover_tool_categories().get(category, [])
 
 
 def get_all_categories() -> list[str]:
-    """Get all category names."""
-    return list(TOOL_CATEGORIES.keys())
+    """Get all category names (discovered from filesystem)."""
+    return list(discover_tool_categories().keys())
 
 
 def get_category_for_tool(tool_name: str) -> Optional[str]:
-    """Get the category a tool belongs to."""
-    for category, tools in TOOL_CATEGORIES.items():
+    """Get the category a tool belongs to (discovered from filesystem)."""
+    for category, tools in discover_tool_categories().items():
         if tool_name in tools:
             return category
     return None

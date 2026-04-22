@@ -1,0 +1,22 @@
+{
+  "type": "function",
+  "function": {
+    "name": "browser_start",
+    "description": "Start a new browser session. Call this before any other browser operations. Returns a browser ID for reference.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "browser_type": {
+          "type": "string",
+          "enum": ["firefox", "chrome"],
+          "description": "Browser to use (default: firefox)"
+        },
+        "headless": {
+          "type": "boolean",
+          "description": "Run without visible window (default: true)"
+        }
+      },
+      "required": []
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "type": "function",
+  "function": {
+    "name": "browser_fill",
+    "description": "Fill an input field by CSS selector. Clears existing content first. For filling by index, use browser_set_input instead.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "selector": {
+          "type": "string",
+          "description": "CSS selector for the input element"
+        },
+        "text": {
+          "type": "string",
+          "description": "Text to enter"
+        }
+      },
+      "required": ["selector", "text"]
+    }
+  }
+}

@@ -480,7 +480,8 @@ class TestOpenAIContextFormat:
         # Should have system prompt (balloons tools) + user message
         assert len(result) == 2
         assert result[0]["role"] == "system"
-        assert "Balloons" in result[0]["content"] or "supervisor" in result[0]["content"].lower()
+        # Check for common content that should be in all tool prompts
+        assert "CRITICAL" in result[0]["content"] or "ask_user" in result[0]["content"]
         assert result[1] == {"role": "user", "content": "Hello"}
 
     def test_user_prompt_included_in_system(self, runner_with_user_prompt):

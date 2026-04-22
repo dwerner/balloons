@@ -1,0 +1,17 @@
+{
+  "type": "function",
+  "function": {
+    "name": "browser_execute_js",
+    "description": "Execute JavaScript in the browser context. Returns the result as JSON.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "script": {
+          "type": "string",
+          "description": "JavaScript code to execute"
+        }
+      },
+      "required": ["script"]
+    }
+  }
+}

@@ -5,7 +5,6 @@ import { MarkdownContent } from './MarkdownContent';
 import { AppLayout, useLayout, useTheme, ThemeProvider, usePreferences, PreferencesProvider, MarkdownThemeApplicator } from './components/layout';
 import { SessionTreeView } from './components/SessionTreeView';
 import { HierarchyView } from './components/HierarchyView';
-import { GoalTreeView } from './components/GoalTreeView';
 import { FileBrowserView, type FileBrowserViewRef } from './components/FileBrowserView';
 import { SupervisorTab } from './components/SupervisorTab';
 import { DomainsTab } from './components/DomainsTab';
@@ -2999,7 +2998,6 @@ function AppContent() {
           onTogglePin={handleTogglePin}
           onLoadTurns={handleLoadTurns}
           isLoadingTurns={isLoadingTurns}
-          goalsClient={connectionState === 'connected' ? clientRef.current?.goals : undefined}
           onOpenCreateTodoModal={(planId, planTitle) => {
             setCreateTodoModalState({ isOpen: true, planId, planTitle });
           }}
@@ -4566,7 +4564,7 @@ function MainContentHeader({
 }
 
 // Sidebar view mode
-type SidebarView = 'list' | 'tree' | 'hierarchy' | 'goals';
+type SidebarView = 'list' | 'tree' | 'hierarchy';
 
 // Exchange action type from SessionTreeView
 type ExchangeAction = 'archive' | 'delete';
@@ -4666,7 +4664,6 @@ interface SidebarContentProps {
   onTogglePin?: (sessionId: string) => void;
   onLoadTurns?: (sessionId: string) => Promise<TurnInfo[]>;
   isLoadingTurns?: boolean;
-  goalsClient?: GoalTreeStateServiceClient;
   onOpenCreateTodoModal?: (planId: string, planTitle: string) => void;
   onNewBareSession?: () => void;
   onNewBoundSession?: (entityType: string, entityId: string) => Promise<void>;
@@ -4710,7 +4707,6 @@ function SidebarContent({
   onTogglePin,
   onLoadTurns,
   isLoadingTurns = false,
-  goalsClient,
   onOpenCreateTodoModal,
   onNewBareSession,
   onNewBoundSession,
@@ -4743,7 +4739,7 @@ function SidebarContent({
   const [viewMode, setViewMode] = useState<SidebarView>(() => {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('balloons:sidebar-view');
-      return (stored === 'tree' || stored === 'list' || stored === 'hierarchy' || stored === 'goals') ? stored : 'list';
+      return (stored === 'tree' || stored === 'list' || stored === 'hierarchy') ? stored : 'list';
     }
     return 'list';
   });
@@ -4861,13 +4857,6 @@ function SidebarContent({
         >
           Hierarchy
         </button>
-        <button
-          className={`sidebar-view-tab ${viewMode === 'goals' ? 'active' : ''}`}
-          onClick={() => handleViewModeChange('goals')}
-          title="Goals view"
-        >
-          Goals
-        </button>
       </div>
 
       {onNewBareSession && (
@@ -4881,76 +4870,7 @@ function SidebarContent({
         </button>
       )}
 
-      {viewMode === 'goals' ? (
-        <GoalTreeView
-          goalsClient={goalsClient}
-          onSelectSession={handleSelectSession}
-          onSelectEntity={(entityType, entityId) => {
-            // TODO: Update detail pane with entity info
-            console.log('Selected entity:', entityType, entityId);
-          }}
-          onNewPlan={(goalId) => {
-            goalsClient?.addPlan({ goalId, title: 'New Plan', status: 'draft' });
-          }}
-          onNewTodo={(planId) => {
-            // Fetch plan title and open the modal via App-level callback
-            if (onOpenCreateTodoModal && goalsClient) {
-              goalsClient.getPlan(planId).then(plan => {
-                onOpenCreateTodoModal(planId, plan?.title || 'Unknown Plan');
-              }).catch(() => {
-                // Still open modal with fallback title
-                onOpenCreateTodoModal(planId, 'Unknown Plan');
-              });
-            } else if (onOpenCreateTodoModal) {
-              // No goalsClient, open modal anyway with fallback
-              onOpenCreateTodoModal(planId, 'Unknown Plan');
-            }
-          }}
-          onNewSession={(entityType, entityId) => {
-            if (onNewBoundSession) {
-              onNewBoundSession(entityType, entityId);
-            }
-          }}
-          onMarkTodoDone={(todoId) => {
-            // Update todo status to completed
-            goalsClient?.getTodo(todoId).then(todo => {
-              if (todo) {
-                const now = new Date().toISOString();
-                goalsClient?.addTodo({ ...todo, status: 'completed', updated_at: now, completed_at: now }, todo.planIds);
-              }
-            });
-          }}
-          onMarkTodoUndone={(todoId) => {
-            // Update todo status back to pending
-            goalsClient?.getTodo(todoId).then(todo => {
-              if (todo) {
-                const now = new Date().toISOString();
-                goalsClient?.addTodo({ ...todo, status: 'pending', updated_at: now, completed_at: undefined }, todo.planIds);
-              }
-            });
-          }}
-          onMoveSession={(sessionId) => {
-            // TODO: Show entity picker to move session
-            console.log('Move session:', sessionId);
-          }}
-          onUnbindSession={(sessionId) => {
-            // Get current binding and unbind
-            goalsClient?.getSessionBinding(sessionId).then(binding => {
-              if (binding) {
-                const [, entityId] = binding;
-                goalsClient?.unbindSession(entityId, sessionId);
-              }
-            });
-          }}
-          onRollup={(scopeType, scopeId) => {
-            // TODO: Trigger rollup generation
-            console.log('Generate rollup for:', scopeType, scopeId);
-          }}
-          onNewBareSession={onNewBareSession}
-          isLoading={connectionState !== 'connected'}
-          creatingSessionFor={creatingSessionFor}
-        />
-      ) : viewMode === 'tree' ? (
+      {viewMode === 'tree' ? (
         <SessionTreeView
           sessions={sessions}
           selectedSessionId={selectedSessionId}

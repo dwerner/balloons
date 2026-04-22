@@ -1,0 +1,12 @@
+{
+  "type": "function",
+  "function": {
+    "name": "browser_stop",
+    "description": "Stop the current browser session and close the browser. Always call this when done to free resources.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  }
+}

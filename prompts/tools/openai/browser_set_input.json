@@ -1,0 +1,21 @@
+{
+  "type": "function",
+  "function": {
+    "name": "browser_set_input",
+    "description": "Set an input field by its index from browser_inputs. More reliable than CSS selectors since it uses discovered inputs.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer",
+          "description": "Input index (0-based, from browser_inputs discovery)"
+        },
+        "value": {
+          "type": "string",
+          "description": "Value to set"
+        }
+      },
+      "required": ["index", "value"]
+    }
+  }
+}

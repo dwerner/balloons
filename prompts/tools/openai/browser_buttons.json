@@ -1,0 +1,12 @@
+{
+  "type": "function",
+  "function": {
+    "name": "browser_buttons",
+    "description": "Discover all button elements on the current page. Returns a JSON array with index, text, and type for each button. Use index with browser_click_button.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  }
+}
