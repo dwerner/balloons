@@ -49,6 +49,13 @@ export const BashCard = React.memo(function BashCard({ turn, result }: BashCardP
     : null;
   const hasResult = !!resultBlock;
   const resultContent = resultBlock?.content || '';
+  const isPreviewResult = !!result?.streaming;
+  const previewChunks = turn.toolResultPreview || [];
+  const stdoutPreview = previewChunks.filter((chunk) => chunk.stream !== 'stderr').map((chunk) => chunk.delta).join('');
+  const stderrPreview = previewChunks.filter((chunk) => chunk.stream === 'stderr').map((chunk) => chunk.delta).join('');
+  const hasPreviewChunks = previewChunks.length > 0;
+  const hasStdoutPreview = stdoutPreview.length > 0;
+  const hasStderrPreview = stderrPreview.length > 0;
   const isError = resultBlock?.isError || false;
 
   // Calculate phase
@@ -120,16 +127,43 @@ export const BashCard = React.memo(function BashCard({ turn, result }: BashCardP
             <code>{displayOutput || '(no output)'}</code>
           </pre>
         ) : (
-          <LazySyntaxHighlightedCode
-            code={displayOutput || '(no output)'}
-            language="bash"
-          />
+          <>
+            {isPreviewResult && hasPreviewChunks && (
+              <div className="tool-preview-badge">Live output</div>
+            )}
+            <LazySyntaxHighlightedCode
+              code={displayOutput || '(no output)'}
+              language="bash"
+            />
+          </>
         )
       )}
 
       {/* Executing state */}
       {!hasResult && phase === 'executing' && (
-        <div className="tool-executing">Running command...</div>
+        hasPreviewChunks ? (
+          <>
+            {hasStdoutPreview && (
+              <div>
+                <div className="tool-preview-stream-label">stdout</div>
+                <pre className="tool-output">
+                  <code>{stdoutPreview}</code>
+                </pre>
+              </div>
+            )}
+            {hasStderrPreview && (
+              <div>
+                <div className="tool-preview-stream-label error">stderr</div>
+                <pre className="tool-output error">
+                  <code>{stderrPreview}</code>
+                </pre>
+              </div>
+            )}
+            <div className="tool-executing">Running command...</div>
+          </>
+        ) : (
+          <div className="tool-executing">Running command...</div>
+        )
       )}
     </BaseToolCard>
   );

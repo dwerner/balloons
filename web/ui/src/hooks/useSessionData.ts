@@ -26,6 +26,7 @@ import type {
   SessionToolUseStartedEvent,
   SessionToolInputDeltaEvent,
   SessionToolUseEvent,
+  SessionToolResultDeltaEvent,
   SessionToolResultEvent,
   SessionHistoryChunkEvent,
   SessionHistoryCompleteEvent,
@@ -77,6 +78,13 @@ const debugLog = createLogger('useSessionData');
  * Internal turn state maintained by the hook.
  * Uses turn_id (UUID) as the key, not turn index.
  */
+export interface ToolResultPreviewChunk {
+  /** Stream label from backend, typically stdout/stderr */
+  stream: 'stdout' | 'stderr' | string;
+  /** Text chunk content */
+  delta: string;
+}
+
 export interface SessionDataTurn {
   /** Stable UUID for this turn (primary identifier) */
   turnId: string;
@@ -100,6 +108,8 @@ export interface SessionDataTurn {
   parallelGroupId?: string;
   /** ISO 8601 timestamp when turn was created */
   timestamp?: string;
+  /** Best-effort live tool output preview while execution is in progress */
+  toolResultPreview?: ToolResultPreviewChunk[];
   /** True if this user turn was injected mid-stream as steering */
   isSteering?: boolean;
   /** True if this assistant turn follows a steering message (optimistic) */
@@ -811,10 +821,59 @@ export function useSessionData(
         );
 
         handlers.push(
+          client.sessionData.sessionDataToolResultDelta((event: SessionToolResultDeltaEvent) => {
+            if (event.sessionId !== newSessionId) return;
+            debugLog('sessionDataToolResultDelta', event);
+
+            setTurnsById((prev) => {
+              for (const [turnId, turn] of prev.entries()) {
+                if (
+                  turn.contentBlock?.type === 'tool_use' &&
+                  (turn.contentBlock as ToolUseBlock).id === event.toolUseId
+                ) {
+                  const next = new Map(prev);
+                  const existingPreview = turn.toolResultPreview || [];
+                  next.set(turnId, {
+                    ...turn,
+                    toolResultPreview: [
+                      ...existingPreview,
+                      {
+                        stream: event.stream,
+                        delta: event.delta,
+                      },
+                    ],
+                  });
+                  return next;
+                }
+              }
+              return prev;
+            });
+          })
+        );
+
+        handlers.push(
           client.sessionData.sessionDataToolResult((event: SessionToolResultEvent) => {
             if (event.sessionId !== newSessionId) return;
             // Tool result turn is created via turnCreated/turnFinished - this is informational
             debugLog('sessionDataToolResult', event);
+
+            setTurnsById((prev) => {
+              for (const [turnId, turn] of prev.entries()) {
+                if (
+                  turn.contentBlock?.type === 'tool_use' &&
+                  (turn.contentBlock as ToolUseBlock).id === event.toolUseId
+                ) {
+                  if (!turn.toolResultPreview?.length) return prev;
+                  const next = new Map(prev);
+                  next.set(turnId, {
+                    ...turn,
+                    toolResultPreview: undefined,
+                  });
+                  return next;
+                }
+              }
+              return prev;
+            });
           })
         );
 

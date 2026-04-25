@@ -58,6 +58,10 @@ export const GenericToolCard = React.memo(function GenericToolCard({ turn, resul
     : null;
   const hasResult = !!resultBlock;
   const resultContent = resultBlock?.content || '';
+  const previewChunks = turn.toolResultPreview || [];
+  const previewText = previewChunks.map((chunk) => chunk.delta).join('');
+  const previewIsError = previewChunks.every((chunk) => chunk.stream === 'stderr') && previewChunks.length > 0;
+  const hasPreviewChunks = previewChunks.length > 0;
   const isError = resultBlock?.isError || false;
 
   // Calculate phase
@@ -126,7 +130,16 @@ export const GenericToolCard = React.memo(function GenericToolCard({ turn, resul
 
       {/* Executing state */}
       {!hasResult && phase === 'executing' && (
-        <div className="tool-executing">Executing...</div>
+        hasPreviewChunks ? (
+          <>
+            <pre className={`tool-output ${previewIsError ? 'error' : ''}`}>
+              <code>{previewText || '(waiting for output...)'}</code>
+            </pre>
+            <div className="tool-executing">Executing...</div>
+          </>
+        ) : (
+          <div className="tool-executing">Executing...</div>
+        )
       )}
     </BaseToolCard>
   );

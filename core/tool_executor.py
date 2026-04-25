@@ -11,7 +11,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Awaitable, Callable
 
 import aiofiles
 
@@ -69,6 +69,10 @@ def resolve_path(file_path: str, working_dir: str) -> Path:
 
 
 from .tool_result import ToolExecutionResult
+from models import ToolResultDeltaEvent
+
+
+ToolOutputCallback = Callable[[str, str], Awaitable[None]]
 
 
 def _camel_to_snake(name: str) -> str:
@@ -144,6 +148,7 @@ async def execute_tool(
     working_dir: str,
     run_id: str = "",
     session: "Session | None" = None,
+    output_callback: ToolOutputCallback | None = None,
 ) -> tuple[str, bool] | ToolExecutionResult:
     """Execute a tool and return the result.
 
@@ -255,7 +260,7 @@ async def execute_tool(
         elif name == "Edit":
             return await execute_edit(args, working_dir)
         elif name == "Bash":
-            return await execute_bash(args, working_dir)
+            return await execute_bash(args, working_dir, output_callback=output_callback)
         elif name == "Glob":
             return await execute_glob(args, working_dir)
         elif name == "Grep":
@@ -424,7 +429,31 @@ async def execute_edit(args: dict, working_dir: str) -> tuple[str, bool]:
         return f"Error writing file: {e}", True
 
 
-async def execute_bash(args: dict, working_dir: str) -> tuple[str, bool]:
+async def _read_stream_lines(
+    stream: asyncio.StreamReader | None,
+    stream_name: str,
+    chunks: list[str],
+    output_callback: ToolOutputCallback | None = None,
+) -> None:
+    """Read a subprocess stream line-by-line and optionally emit live deltas."""
+    if stream is None:
+        return
+
+    while True:
+        line = await stream.readline()
+        if not line:
+            break
+        text = line.decode("utf-8", errors="replace")
+        chunks.append(text)
+        if output_callback is not None:
+            await output_callback(stream_name, text)
+
+
+async def execute_bash(
+    args: dict,
+    working_dir: str,
+    output_callback: ToolOutputCallback | None = None,
+) -> tuple[str, bool]:
     """Execute a bash command."""
     command = args.get("command")
     if not command:
@@ -440,18 +469,28 @@ async def execute_bash(args: dict, working_dir: str) -> tuple[str, bool]:
             cwd=working_dir,
         )
 
+        stdout_chunks: list[str] = []
+        stderr_chunks: list[str] = []
+        stdout_task = asyncio.create_task(
+            _read_stream_lines(process.stdout, "stdout", stdout_chunks, output_callback)
+        )
+        stderr_task = asyncio.create_task(
+            _read_stream_lines(process.stderr, "stderr", stderr_chunks, output_callback)
+        )
+
         try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
-                timeout=timeout
+            await asyncio.wait_for(
+                asyncio.gather(process.wait(), stdout_task, stderr_task),
+                timeout=timeout,
             )
         except asyncio.TimeoutError:
             process.kill()
             await process.wait()
+            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
             return f"Error: Command timed out after {timeout} seconds", True
 
-        stdout_text = stdout.decode("utf-8", errors="replace")
-        stderr_text = stderr.decode("utf-8", errors="replace")
+        stdout_text = "".join(stdout_chunks)
+        stderr_text = "".join(stderr_chunks)
 
         result_parts = []
         if stdout_text:

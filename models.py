@@ -544,6 +544,18 @@ class ToolResultEvent:
 
 
 @dataclass
+class ToolResultDeltaEvent:
+    """Partial output streamed from a running tool for UI display only."""
+    tool_use_id: str
+    delta: str
+    stream: str = "stdout"
+    session_id: str = ""
+    exchange_id: str = ""
+    turn_id: str = ""
+    tool_name: str = ""
+
+
+@dataclass
 class SteeringInjectedEvent:
     """User steering message was injected mid-stream.
 

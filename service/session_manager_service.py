@@ -23,6 +23,7 @@ Frontend Interaction:
     2. Streaming events via TaskStateService:
        - onContentDelta: Text chunks as they arrive
        - onToolUseStarted: Tool execution beginning
+       - onToolResultDelta: Incremental tool stdout/stderr
        - onToolResult: Tool execution completed
        - onTurnFinished: Exchange complete
 
@@ -71,6 +72,7 @@ from service.session_events import (
     ToolInputDeltaEvent,
     ToolUseEvent,
     ToolResultEvent,
+    ToolResultDeltaEvent,
     SteeringInjectedEvent,
     HelperStartedEvent,
     HelperDeltaEvent,
@@ -2257,6 +2259,36 @@ class SessionManagerService:
                     tool_input=tool_input,
                     tool_index=tool_idx,
                     parallel_group_id=ctx.parallel_group_id,
+                )
+
+        elif event_type == "tool_result_delta":
+            tool_use_id = data.get("tool_use_id", "")
+            tool_name = data.get("tool_name", ctx.tool_names.get(tool_use_id, ""))
+            delta = data.get("delta", "")
+            stream_name = data.get("stream", "stdout")
+            turn_id = ctx.tool_turn_ids.get((tool_use_id, "tool_result"), "")
+
+            await self._notify_observers(
+                "on_tool_result_delta",
+                ToolResultDeltaEvent(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    tool_use_id=tool_use_id,
+                    tool_name=tool_name,
+                    delta=delta,
+                    stream=stream_name,
+                ),
+            )
+
+            if self._task_service and delta:
+                self._task_service.emit_tool_result_delta(
+                    session_id=session_id,
+                    exchange_id=ctx.exchange_id,
+                    turn_id=turn_id,
+                    tool_use_id=tool_use_id,
+                    tool_name=tool_name,
+                    delta=delta,
+                    stream=stream_name,
                 )
 
         elif event_type == "tool_result_turn_started":
@@ -6374,6 +6406,13 @@ Summary:""")
         # Set up mid-stream injection callback for user steering
         runner.set_injection_callback(self._create_injection_callback(session_id))
 
+        async def emit_live_tool_event(event: ToolResultDeltaEvent) -> None:
+            runner_events = runner._process_event(event)
+            for runner_event in runner_events:
+                await self._dispatch_event(session_id, runner_event, self._streaming_contexts[session_id])
+
+        runner.set_tool_event_callback(emit_live_tool_event)
+
         # Start background streaming
         # Use provided messages for context, or fall back to all session turns
         context_messages = messages if messages is not None else session.turns
@@ -6584,6 +6623,13 @@ Summary:""")
 
         # Set up mid-stream injection callback for user steering
         runner.set_injection_callback(self._create_injection_callback(session_id))
+
+        async def emit_live_tool_event(event: ToolResultDeltaEvent) -> None:
+            runner_events = runner._process_event(event)
+            for runner_event in runner_events:
+                await self._dispatch_event(session_id, runner_event, self._streaming_contexts[session_id])
+
+        runner.set_tool_event_callback(emit_live_tool_event)
 
         runner.start_background(
             prompt=content,

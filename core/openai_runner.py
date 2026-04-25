@@ -13,7 +13,7 @@ from openai import AsyncOpenAI
 from models import (
     Message, TextDelta, ResultEvent, InitEvent,
     TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ArchiveBlock, ContextMode,
-    ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultEvent, SteeringInjectedEvent,
+    ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultDeltaEvent, ToolResultEvent, SteeringInjectedEvent,
 )
 from .base_runner import BaseRunner, RunnerEvent, SteeringCapability
 from .debug_log import debug_log, dump_failed_json, perf_marker, Category
@@ -657,12 +657,28 @@ class OpenAICompatibleRunner(BaseRunner):
                         })
                         continue
 
+                    async def emit_tool_output(stream_name: str, delta: str) -> None:
+                        if not delta or self._tool_event_callback is None:
+                            return
+                        await self._tool_event_callback(
+                            ToolResultDeltaEvent(
+                                tool_use_id=tc["id"],
+                                delta=delta,
+                                stream=stream_name,
+                                session_id=self._session.id if self._session else "",
+                                exchange_id="",
+                                turn_id="",
+                                tool_name=tool_name,
+                            )
+                        )
+
                     tool_result = await execute_tool(
                         tool_name,
                         tc["arguments"],
                         working_dir or ".",
                         self._run_id,
                         session=self._session,
+                        output_callback=emit_tool_output,
                     )
 
                     # Handle both legacy tuple and new ToolExecutionResult

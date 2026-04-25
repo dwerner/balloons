@@ -89,6 +89,10 @@ export const ToolResultCard = React.memo(function ToolResultCard({ turn }: ToolR
     : null;
   const content = resultBlock?.content || '';
   const isError = resultBlock?.isError || false;
+  const isPreview = streaming;
+  const previewChunks = turn.toolResultPreview || [];
+  const stdoutPreview = previewChunks.filter((chunk) => chunk.stream !== 'stderr').map((chunk) => chunk.delta).join('');
+  const stderrPreview = previewChunks.filter((chunk) => chunk.stream === 'stderr').map((chunk) => chunk.delta).join('');
 
   // Show all content (no truncation)
   const displayContent = content;
@@ -97,6 +101,29 @@ export const ToolResultCard = React.memo(function ToolResultCard({ turn }: ToolR
   const renderBody = () => {
     if (displayMode === 'raw') {
       return <RawDataDisplay data={turn} />;
+    }
+
+    if (isPreview && previewChunks.length > 0) {
+      return (
+        <div className="tool-preview-streams">
+          {stdoutPreview && (
+            <>
+              <div className="tool-preview-stream-label">stdout</div>
+              <pre className="tool-result-output">
+                <code>{stdoutPreview}</code>
+              </pre>
+            </>
+          )}
+          {stderrPreview && (
+            <>
+              <div className="tool-preview-stream-label error">stderr</div>
+              <pre className="tool-result-output error">
+                <code>{stderrPreview}</code>
+              </pre>
+            </>
+          )}
+        </div>
+      );
     }
 
     return (
@@ -111,6 +138,7 @@ export const ToolResultCard = React.memo(function ToolResultCard({ turn }: ToolR
       <div className="turn-card-header">
         <span className="turn-icon">{isError ? '❌' : '✓'}</span>
         <span className="turn-label">Tool Result</span>
+        {isPreview && <span className="tool-preview-badge">Live output</span>}
         {timestamp && <span className="turn-timestamp">{formatTimestamp(timestamp)}</span>}
         <ModeSwitcher mode={displayMode} onModeChange={setDisplayMode} />
       </div>

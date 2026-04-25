@@ -11,7 +11,7 @@
 
 import React, { memo } from 'react';
 import type { SessionDataTurn } from '../../../hooks/useSessionData';
-import type { ToolUseBlock } from '../../../../../generated/types';
+import type { ToolUseBlock, ToolResultBlock } from '../../../../../generated/types';
 import { TextCard } from './TextCard';
 import { ToolResultCard } from './ToolResultCard';
 import { SystemCard } from './SystemCard';
@@ -109,7 +109,32 @@ export const TurnCard = memo(function TurnCard({ turn, toolResultMap = EMPTY_MAP
     }
 
     // O(1) lookup using pre-computed map from parent
-    const matchingResult = toolUseId ? toolResultMap.get(toolUseId) ?? null : null;
+    let matchingResult = toolUseId ? toolResultMap.get(toolUseId) ?? null : null;
+
+    // If we have live preview output but no final tool_result turn yet, synthesize a preview result.
+    // Keep this minimal: specialized cards can still read turn.toolResultPreview to render stdout/stderr cleanly.
+    if (!matchingResult && toolUseId && turn.toolResultPreview?.length) {
+      const previewContent = turn.toolResultPreview.map((chunk) => chunk.delta).join('');
+      const previewIsError = turn.toolResultPreview.every((chunk) => chunk.stream === 'stderr');
+      matchingResult = {
+        turnId: `${turn.turnId}::preview-result`,
+        order: turn.order,
+        role: 'tool',
+        contentBlock: {
+          type: 'tool_result',
+          toolUseId,
+          content: previewContent,
+          isError: previewIsError,
+        } as ToolResultBlock,
+        streaming: true,
+        viewed: turn.viewed,
+        tokens: 0,
+        contextMode: turn.contextMode,
+        exchangeId: turn.exchangeId,
+        parallelGroupId: turn.parallelGroupId,
+        timestamp: turn.timestamp,
+      };
+    }
 
     // Try to get a tool-specific card
     const ToolCardComponent = TOOL_CARD_MAP[toolName];

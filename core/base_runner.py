@@ -6,15 +6,18 @@ from typing import AsyncIterator, Union, Callable, Awaitable
 
 from models import (
     Message, TextDelta, ResultEvent, InitEvent, RawEvent,
-    ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultEvent,
+    ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultDeltaEvent, ToolResultEvent,
     SteeringInjectedEvent,
 )
+
+
+ToolEventCallback = Callable[[ToolResultDeltaEvent], Awaitable[None]]
 
 
 # Type alias for all possible events yielded by runners
 RunnerEvent = Union[
     TextDelta, ResultEvent, InitEvent, RawEvent,
-    ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultEvent,
+    ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultDeltaEvent, ToolResultEvent,
     SteeringInjectedEvent,
 ]
 
@@ -57,6 +60,7 @@ class BaseRunner(ABC):
     """
 
     _injection_callback: InjectionCallback | None = None
+    _tool_event_callback: ToolEventCallback | None = None
 
     @property
     def steering_capability(self) -> SteeringCapability:
@@ -85,6 +89,15 @@ class BaseRunner(ABC):
                       to disable injection.
         """
         self._injection_callback = callback
+
+    def set_tool_event_callback(self, callback: ToolEventCallback | None) -> None:
+        """Set a callback for live tool output events.
+
+        The callback is invoked while a tool is still running so incremental
+        stdout/stderr can be surfaced to the UI without changing model-side
+        tool semantics.
+        """
+        self._tool_event_callback = callback
 
     @abstractmethod
     async def stream_response(

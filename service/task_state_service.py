@@ -222,6 +222,23 @@ class ToolResultEvent:
     parallel_group_id: str | None = None  # Groups parallel tool calls
 
 
+@ws_type
+@dataclass
+class ToolResultDeltaEvent:
+    """Event payload for incremental output from a running tool.
+
+    Emitted while a tool is still executing so the UI can show live progress.
+    """
+
+    session_id: str
+    exchange_id: str
+    turn_id: str  # Stable UUID for the eventual tool_result turn if known
+    tool_use_id: str
+    tool_name: str
+    delta: str
+    stream: str  # "stdout" or "stderr"
+
+
 def _task_to_info(task: Task) -> TaskInfo:
     """Convert internal Task to wire-format TaskInfo."""
     return TaskInfo(
@@ -964,6 +981,32 @@ class TaskStateService:
         )
         for handler in self._event_handlers:
             handler("toolResult", event_data.__dict__)
+
+    def emit_tool_result_delta(
+        self,
+        session_id: str,
+        exchange_id: str,
+        turn_id: str,
+        tool_use_id: str,
+        tool_name: str,
+        delta: str,
+        stream: str,
+    ) -> None:
+        """Emit an incremental tool output event.
+
+        Called while a tool is executing so the UI can render live stdout/stderr.
+        """
+        event_data = ToolResultDeltaEvent(
+            session_id=session_id,
+            exchange_id=exchange_id,
+            turn_id=turn_id,
+            tool_use_id=tool_use_id,
+            tool_name=tool_name,
+            delta=delta,
+            stream=stream,
+        )
+        for handler in self._event_handlers:
+            handler("toolResultDelta", event_data.__dict__)
 
     # --- Cleanup Operations ---
 

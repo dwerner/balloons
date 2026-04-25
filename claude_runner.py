@@ -10,7 +10,7 @@ import base64
 
 from models import (
     Message, TextDelta, ResultEvent, InitEvent, RawEvent, ContextTokensEvent,
-    ToolUseStartEvent, ToolUseEvent, ToolResultEvent, SteeringInjectedEvent,
+    ToolUseStartEvent, ToolUseEvent, ToolResultDeltaEvent, ToolResultEvent, SteeringInjectedEvent,
     RepairedToolEvent, HallucinatedUserEvent,
     TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, LinkBlock, ArchiveBlock, ContextMode,
 )
@@ -1107,12 +1107,28 @@ class ClaudeRunner(BaseRunner):
                     accumulated_steering: list[str] = []
 
                     for tc in custom_tool_calls:
+                        async def emit_tool_output(stream_name: str, delta: str) -> None:
+                            if not delta or self._tool_event_callback is None:
+                                return
+                            await self._tool_event_callback(
+                                ToolResultDeltaEvent(
+                                    session_id=self._current_session.id if self._current_session else "",
+                                    exchange_id="",
+                                    turn_id="",
+                                    tool_use_id=tc["id"],
+                                    tool_name=tc["name"],
+                                    delta=delta,
+                                    stream=stream_name,
+                                )
+                            )
+
                         tool_exec_result = await execute_tool(
                             tc["name"],
                             tc["input"],
                             working_dir,
                             self._run_id,
                             session=self._current_session,
+                            output_callback=emit_tool_output,
                         )
 
                         # Handle both legacy tuple and new ToolExecutionResult

@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-04-06T16:41:24.803155
+// Generated: 2026-04-24T19:41:33.174531
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -668,6 +668,16 @@ export interface ToolResultEvent {
   parallelGroupId?: string | null;
 }
 
+export interface ToolResultDeltaEvent {
+  sessionId: string;
+  exchangeId: string;
+  turnId: string;
+  toolUseId: string;
+  toolName: string;
+  delta: string;
+  stream: string;
+}
+
 export interface TurnDelta {
   sessionId: string;
   turnId: string;
@@ -828,6 +838,15 @@ export interface SessionToolResultEvent {
   result: string;
   isError: boolean;
   toolIndex: number;
+}
+
+export interface SessionToolResultDeltaEvent {
+  sessionId: string;
+  exchangeId: string;
+  toolUseId: string;
+  toolName: string;
+  delta: string;
+  stream: string;
 }
 
 export interface SessionDomainEvent {

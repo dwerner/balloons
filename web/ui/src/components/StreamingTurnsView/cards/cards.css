@@ -1576,6 +1576,39 @@
   color: var(--error, #ff6b6b);
 }
 
+.tool-preview-badge {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 0 8px 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(116, 192, 252, 0.15);
+  color: var(--accent-blue, #74c0fc);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tool-preview-streams {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tool-preview-stream-label {
+  margin: 0 0 4px 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary, #999);
+}
+
+.tool-preview-stream-label.error {
+  color: var(--error, #ff6b6b);
+}
+
 .tool-search-results {
   margin: 0;
   padding: 8px;

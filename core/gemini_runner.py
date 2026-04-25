@@ -11,7 +11,7 @@ from models import (
     Message, TextDelta, ResultEvent, InitEvent,
     TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock,
     ErrorBlock, ArchiveBlock, ContextMode,
-    ToolUseStartEvent, ToolUseEvent, ToolResultEvent, SteeringInjectedEvent,
+    ToolUseStartEvent, ToolUseEvent, ToolResultDeltaEvent, ToolResultEvent, SteeringInjectedEvent,
 )
 from .base_runner import BaseRunner, RunnerEvent, SteeringCapability
 from .debug_log import debug_log, Category
@@ -450,6 +450,21 @@ class GeminiRunner(BaseRunner):
                         )
                         continue
 
+                    async def emit_tool_output(stream_name: str, delta: str) -> None:
+                        if not delta or self._tool_event_callback is None:
+                            return
+                        await self._tool_event_callback(
+                            ToolResultDeltaEvent(
+                                session_id=self._session.id if self._session else "",
+                                exchange_id="",
+                                turn_id="",
+                                tool_use_id=tc["id"],
+                                tool_name=tool_name,
+                                delta=delta,
+                                stream=stream_name,
+                            )
+                        )
+
                     # Execute the tool
                     tool_result = await execute_tool(
                         tool_name,
@@ -457,6 +472,7 @@ class GeminiRunner(BaseRunner):
                         working_dir or ".",
                         self._run_id,
                         session=self._session,
+                        output_callback=emit_tool_output,
                     )
 
                     # Handle both legacy tuple and new ToolExecutionResult

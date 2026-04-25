@@ -14,7 +14,7 @@ from typing import AsyncIterator, Any, Optional
 
 from models import (
     Message, TextDelta, ResultEvent, InitEvent, RawEvent, ContextTokensEvent,
-    ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultEvent,
+    ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultDeltaEvent, ToolResultEvent,
     SteeringInjectedEvent,
     TextBlock, ToolUseBlock, ToolResultBlock, ErrorBlock,
 )
@@ -245,6 +245,11 @@ class SessionRunner:
         """
         if hasattr(self._runner, 'set_injection_callback'):
             self._runner.set_injection_callback(callback)
+
+    def set_tool_event_callback(self, callback) -> None:
+        """Set a callback for live tool output events."""
+        if hasattr(self._runner, 'set_tool_event_callback'):
+            self._runner.set_tool_event_callback(callback)
 
     def _make_event(self, event_type: str, data: Any = None) -> StreamEvent:
         """Create an event tagged with this session's ID."""
@@ -1057,6 +1062,13 @@ class SessionRunner:
                     "turn_id": turn.id,
                 }))
                 return events
+
+            elif isinstance(event, ToolResultDeltaEvent):
+                return [self._make_event("tool_result_delta", {
+                    "tool_use_id": event.tool_use_id,
+                    "delta": event.delta,
+                    "stream": event.stream,
+                })]
 
             elif isinstance(event, ToolResultEvent):
                 # Strip system reminders from tool results before storing

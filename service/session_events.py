@@ -239,6 +239,21 @@ class ToolResultEvent:
     tool_index: int
 
 
+@dataclass
+class ToolResultDeltaEvent:
+    """Emitted with incremental output from a running tool.
+
+    Intended for UI display only; the final ToolResultEvent remains canonical.
+    """
+
+    session_id: str
+    exchange_id: str
+    tool_use_id: str
+    tool_name: str
+    delta: str
+    stream: str  # "stdout" or "stderr"
+
+
 @ws_type
 @dataclass
 class SteeringInjectedEvent:
@@ -392,6 +407,10 @@ class SessionEventObserver(Protocol):
 
     async def on_tool_result(self, event: ToolResultEvent) -> None:
         """Called when a tool finishes execution."""
+        ...
+
+    async def on_tool_result_delta(self, event: ToolResultDeltaEvent) -> None:
+        """Called when a running tool emits incremental output."""
         ...
 
     async def on_helper_started(self, event: HelperStartedEvent) -> None:

@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-04-06T16:41:24.808435
+// Generated: 2026-04-24T19:41:33.179654
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -786,6 +786,12 @@ export interface SessionManagerService {
    * 
    * This shows the JSON function definitions used for native function calling.
    * Only relevant for OpenAI-type backends (not Claude, which uses balloons-tool XML).
+   * 
+   * Includes:
+   * - Core tools (Read, Write, Bash, etc.)
+   * - Balloon tools (propose_fork, ask_user, etc.)
+   * - Domain tools (from currently loaded domains like kanban, chess)
+   * - Other enabled tool categories
    * 
    * Args:
    * session_id: Optional session ID to get session-specific tools
@@ -2483,6 +2489,11 @@ export interface SessionDataEvents {
   sessionDataToolResult(callback: (data: Types.SessionToolResultEvent) => void): Unsubscribe;
 
   /**
+   * Emitted while a running tool streams incremental output.
+   */
+  sessionDataToolResultDelta(callback: (data: Types.SessionToolResultDeltaEvent) => void): Unsubscribe;
+
+  /**
    * Emitted when tool input is complete and execution begins.
    */
   sessionDataToolUse(callback: (data: Types.SessionToolUseEvent) => void): Unsubscribe;
@@ -2715,6 +2726,10 @@ export class SessionDataServiceClient implements SessionDataService {
 
   sessionDataToolResult(callback: (data: Types.SessionToolResultEvent) => void): Unsubscribe {
     return this.subscribe('sessionDataToolResult', callback);
+  }
+
+  sessionDataToolResultDelta(callback: (data: Types.SessionToolResultDeltaEvent) => void): Unsubscribe {
+    return this.subscribe('sessionDataToolResultDelta', callback);
   }
 
   sessionDataToolUse(callback: (data: Types.SessionToolUseEvent) => void): Unsubscribe {

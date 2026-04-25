@@ -42,6 +42,7 @@ from service.session_events import (
     ToolInputDeltaEvent,
     ToolUseEvent,
     ToolResultEvent,
+    ToolResultDeltaEvent,
     DomainEventWrapper,
 )
 from models import (
@@ -347,6 +348,19 @@ class SessionToolResultEvent:
     result: str
     is_error: bool
     tool_index: int
+
+
+@ws_type
+@dataclass
+class SessionToolResultDeltaEvent:
+    """Event payload for incremental output from a running tool."""
+
+    session_id: str
+    exchange_id: str
+    tool_use_id: str
+    tool_name: str
+    delta: str
+    stream: str
 
 
 @ws_type
@@ -2952,6 +2966,11 @@ class SessionDataService:
         """Emitted when a tool finishes execution."""
         ...
 
+    @ws_event(name="sessionDataToolResultDelta")
+    async def on_session_data_tool_result_delta(self) -> SessionToolResultDeltaEvent:
+        """Emitted while a running tool streams incremental output."""
+        ...
+
     @ws_event(name="sessionDataDomainEvent")
     async def on_session_data_domain_event(self) -> SessionDomainEvent:
         """Emitted when a domain plugin sends an event.
@@ -3234,6 +3253,26 @@ class SessionDataService:
             "tool_index": event.tool_index,
         }
         self._emit_event("sessionDataToolResult", event_data, subscribers)
+
+    async def on_tool_result_delta(self, event: ToolResultDeltaEvent) -> None:
+        """Handle incremental tool output from SessionManagerService.
+
+        Emits toolResultDelta WebSocket event to DELTA layer subscribers.
+        """
+        session_id = event.session_id
+        subscribers = self._subscription_manager.get_clients_for_layer(session_id, Layer.DELTA)
+        if not subscribers:
+            return
+
+        event_data = {
+            "session_id": session_id,
+            "exchange_id": event.exchange_id,
+            "tool_use_id": event.tool_use_id,
+            "tool_name": event.tool_name,
+            "delta": event.delta,
+            "stream": event.stream,
+        }
+        self._emit_event("sessionDataToolResultDelta", event_data, subscribers)
 
     async def on_domain_event(self, event: DomainEventWrapper) -> None:
         """Handle domain plugin event from SessionManagerService.
