@@ -54,16 +54,16 @@ def validate_backend_config(backend: BackendConfig) -> str | None:
     """
     backend_type = backend.type or "claude"
 
-    if backend_type == "openai":
+    if backend_type in {"openai", "openai_strict"}:
         if not backend.base_url:
-            return f"Backend '{backend.name}' requires base_url for type 'openai'"
+            return f"Backend '{backend.name}' requires base_url for type '{backend_type}'"
         # Note: model is optional for local servers like llama.cpp that only have one model loaded
     elif backend_type == "gemini":
         if not backend.api_key:
             return f"Backend '{backend.name}' requires api_key for type 'gemini'"
         # Note: model defaults to gemini-2.5-flash if not specified
     elif backend_type != "claude":
-        return f"Unknown backend type: {backend_type}. Valid types: 'claude', 'openai', 'gemini'"
+        return f"Unknown backend type: {backend_type}. Valid types: 'claude', 'openai', 'openai_strict', 'gemini'"
 
     return None
 
@@ -114,17 +114,28 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
     # The runners will combine this with balloons tools and domain prompts per-turn
     user_prompt = backend.load_system_prompt()
 
-    if backend_type == "openai":
+    if backend_type in {"openai", "openai_strict"}:
         # OpenAI-compatible backend (OpenRouter, llamacpp, etc.)
-        from .openai_runner import OpenAICompatibleRunner
-
         if not backend.base_url:
-            raise ValueError(f"Backend '{backend.name}' requires base_url for type 'openai'")
+            raise ValueError(f"Backend '{backend.name}' requires base_url for type '{backend_type}'")
 
         api_key = resolve_env_var(backend.api_key or "")
 
         # Model defaults to "default" for local servers like llama.cpp that ignore this field
         model = backend.model or "default"
+
+        if backend_type == "openai_strict":
+            from .strict_openai_runner import StrictOpenAICompatibleRunner
+
+            return StrictOpenAICompatibleRunner(
+                base_url=backend.base_url,
+                api_key=api_key,
+                model=model,
+                user_prompt=user_prompt,
+                context_window=backend.context_window,
+            )
+
+        from .openai_runner import OpenAICompatibleRunner
 
         return OpenAICompatibleRunner(
             base_url=backend.base_url,
@@ -170,4 +181,4 @@ def create_runner(backend: BackendConfig) -> BaseRunner:
         )
 
     else:
-        raise ValueError(f"Unknown backend type: {backend_type}. Valid types: 'claude', 'openai', 'gemini'")
+        raise ValueError(f"Unknown backend type: {backend_type}. Valid types: 'claude', 'openai', 'openai_strict', 'gemini'")

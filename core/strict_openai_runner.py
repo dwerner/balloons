@@ -1,4 +1,4 @@
-"""OpenAI-compatible runner for OpenRouter, llamacpp, and similar backends."""
+"""Experimental strict OpenAI-compatible runner for validating Jinja backends."""
 
 import asyncio
 import json
@@ -21,6 +21,7 @@ from .exceptions import InputRequiredError
 from .tools import get_tools_for_request
 from .tool_executor import execute_tool
 from .tool_result import ToolExecutionResult
+from .strict_openai_packaging import MISTRAL_STRICT_PROFILE, StrictOpenAIMessagePackager
 
 if TYPE_CHECKING:
     from session import Session
@@ -129,8 +130,8 @@ def _dump_interaction(
         return None
 
 
-class OpenAICompatibleRunner(BaseRunner):
-    """Runner for OpenAI-compatible APIs (OpenRouter, llamacpp, etc.)
+class StrictOpenAICompatibleRunner(BaseRunner):
+    """Experimental strict runner for OpenAI-compatible APIs.
 
     Uses the OpenAI Python SDK to stream responses. Supports tool calling
     for models that implement OpenAI's function calling API.
@@ -167,6 +168,7 @@ class OpenAICompatibleRunner(BaseRunner):
         self._run_id = ""
         self._session: "Session | None" = None
         self._collected_chunks: list[dict] = []  # Raw chunks for dump on error
+        self._strict_packager = StrictOpenAIMessagePackager(MISTRAL_STRICT_PROFILE)
 
     @property
     def steering_capability(self) -> SteeringCapability:
@@ -280,11 +282,13 @@ class OpenAICompatibleRunner(BaseRunner):
                         # Collect tool results for proper OpenAI format
                         tool_result_blocks.append(block)
                     elif isinstance(block, InterruptionBlock):
-                        # Mark that the response was interrupted
-                        content_parts.append(f"[Interrupted: {block.reason}]")
+                        # Strict replay drops interruption markers.
+                        content_parts = [p for p in content_parts if p != f"[Interrupted: {block.reason}]"]
+                        continue
                     elif isinstance(block, ErrorBlock):
-                        # Mark that the response was truncated due to error
-                        content_parts.append(f"[Error: {block.reason}]")
+                        # Strict replay drops error markers.
+                        content_parts = [p for p in content_parts if p != f"[Error: {block.reason}]"]
+                        continue
                     elif isinstance(block, ArchiveBlock):
                         # Format archive reference with summary
                         archive_info = f"[Archived {block.message_count} turns: {block.summary}]"
@@ -384,9 +388,8 @@ class OpenAICompatibleRunner(BaseRunner):
                     "content": msg.content,
                 })
 
-        # Add the new user prompt unless the previous message is already a user turn.
-        # Strict Jinja chat templates (e.g. Mistral) require alternation after the
-        # optional system prompt, so merge consecutive user content when needed.
+        # Add the new user prompt, but do not merge it into an assistant turn.
+        # Strict backends need real turn boundaries preserved.
         if openai_messages and openai_messages[-1].get("role") == "user":
             prev = openai_messages[-1].get("content")
             if prev is None:
@@ -394,217 +397,30 @@ class OpenAICompatibleRunner(BaseRunner):
             elif isinstance(prev, str):
                 openai_messages[-1]["content"] = f"{prev}\n\n{new_prompt}" if new_prompt else prev
             else:
-                openai_messages.append({
-                    "role": "user",
-                    "content": new_prompt,
-                })
+                openai_messages.append({"role": "user", "content": new_prompt})
         else:
-            openai_messages.append({
-                "role": "user",
-                "content": new_prompt,
-            })
+            openai_messages.append({"role": "user", "content": new_prompt})
 
-        # Legacy post-processing kept for the default OpenAI-compatible runner.
-        # Strict Jinja backends should use StrictOpenAICompatibleRunner, which
-        # applies an isolated conservative packaging model.
-        openai_messages = self._reorder_tool_messages(openai_messages)
-        openai_messages = self._normalize_strict_alternation(openai_messages)
+        # Strict runner uses canonical profile-driven packaging.
+        return self._strict_packager.package(openai_messages)
 
-        return openai_messages
 
-    def _is_placeholder_assistant_error(self, msg: dict) -> bool:
-        if msg.get("role") != "assistant" or msg.get("tool_calls") or not isinstance(msg.get("content"), str):
-            return False
-        content = msg.get("content", "").strip()
-        return content in {
-            "[Error: api_error]",
-            "[Interrupted: user_cancelled]",
-            "[Interrupted: user_cancelled]\n\n[Interrupted: user_cancelled]",
-        }
+    def _rebuild_strict_messages(self, messages: list[Message], prompt: str, openai_messages: list[dict]) -> list[dict]:
+        """Rebuild the strict transcript from current session history and latest user prompt.
 
-    def _normalize_strict_alternation(self, messages: list[dict]) -> list[dict]:
-        """Normalize history to system? then strict user/assistant alternation.
-
-        Preserves tool-call blocks (assistant with tool_calls followed by tool results),
-        drops placeholder assistant error turns, and merges adjacent same-role text turns.
+        Strict backends require canonical replay before each API call because the
+        effective system prompt and enabled tools can change during a session.
         """
-        if not messages:
-            return messages
+        rebuilt = self.build_messages(messages, prompt)
 
-        # First remove placeholder assistant errors from outbound history.
-        filtered = [m for m in messages if not self._is_placeholder_assistant_error(m)]
-
-        # Then merge remaining adjacent user/user or assistant/assistant plain text turns.
-        return self._merge_consecutive_messages(filtered)
-
-    def _merge_consecutive_messages(self, messages: list[dict]) -> list[dict]:
-        """Merge consecutive user/user or assistant/assistant text messages.
-
-        Keeps tool call and tool result structure intact while normalizing plain
-        text history into strict alternation for backends with validating chat
-        templates. Only merges messages that do not contain tool_calls and are
-        not role=tool.
-        """
-        if not messages:
-            return messages
-
-        merged: list[dict] = []
-        for msg in messages:
-            role = msg.get("role")
-            if not merged:
-                merged.append(msg)
+        # Preserve the live assistant/tool exchange that has happened since the
+        # initial history snapshot, then repackage canonically.
+        for msg in openai_messages:
+            if msg.get("role") == "system":
                 continue
+            rebuilt.append(dict(msg))
 
-            prev = merged[-1]
-            prev_role = prev.get("role")
-
-            can_merge = (
-                role in {"user", "assistant"}
-                and prev_role == role
-                and role != "tool"
-                and not prev.get("tool_calls")
-                and not msg.get("tool_calls")
-                and isinstance(prev.get("content"), str)
-                and isinstance(msg.get("content"), str)
-            )
-
-            if can_merge:
-                if msg.get("content"):
-                    prev["content"] = f"{prev['content']}\n\n{msg['content']}" if prev.get("content") else msg["content"]
-            else:
-                merged.append(msg)
-
-        return merged
-
-    def _reorder_tool_messages(self, messages: list[dict]) -> list[dict]:
-        """Reorder messages to ensure tool results immediately follow their tool calls.
-
-        OpenAI requires that an assistant message with tool_calls must be immediately
-        followed by tool role messages for ALL those tool_call_ids before any other
-        message type.
-
-        This method uses a two-pass approach:
-        1. First pass: Build a map of tool_call_id -> tool result message
-        2. Second pass: When encountering assistant messages with tool_calls,
-           merge consecutive ones and pull in their results immediately after
-
-        Args:
-            messages: List of OpenAI message dicts
-
-        Returns:
-            Reordered message list with proper tool call/result ordering
-        """
-        if not messages:
-            return messages
-
-        # First pass: collect all tool results by their tool_call_id
-        tool_results_by_id: dict[str, dict] = {}
-        for msg in messages:
-            if msg.get("role") == "tool":
-                tool_call_id = msg.get("tool_call_id")
-                if tool_call_id:
-                    tool_results_by_id[tool_call_id] = msg
-
-        # Track which tool_call_ids have been consumed
-        consumed_tool_ids: set[str] = set()
-
-        # Second pass: build output with proper ordering
-        result = []
-        i = 0
-
-        while i < len(messages):
-            msg = messages[i]
-
-            # Skip tool messages - they'll be pulled in by their assistant message
-            if msg.get("role") == "tool":
-                i += 1
-                continue
-
-            # Check if this is an assistant message with tool_calls
-            if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                # Collect all consecutive assistant tool_calls messages, and also
-                # absorb an immediately preceding assistant text-only message.
-                merged_tool_calls = list(msg.get("tool_calls", []))
-                merged_content_parts = []
-
-                if result:
-                    prev_msg = result[-1]
-                    if (
-                        prev_msg.get("role") == "assistant"
-                        and not prev_msg.get("tool_calls")
-                        and isinstance(prev_msg.get("content"), str)
-                    ):
-                        merged_content_parts.append(prev_msg["content"])
-                        result.pop()
-
-                if msg.get("content"):
-                    merged_content_parts.append(msg["content"])
-
-                # Look ahead for more consecutive assistant tool_calls messages
-                j = i + 1
-                while j < len(messages):
-                    next_msg = messages[j]
-                    # Skip tool messages when looking for consecutive assistant tool_calls
-                    if next_msg.get("role") == "tool":
-                        j += 1
-                        continue
-                    # Also skip intervening user messages here: if the stored history
-                    # captured a failed/aborted tool phase, the next real user prompt may
-                    # already be merged into the current request prompt. Strict Jinja
-                    # backends care about the final normalized turn sequence, not these
-                    # internal fragments.
-                    if next_msg.get("role") == "user":
-                        j += 1
-                        continue
-                    if next_msg.get("role") == "assistant" and next_msg.get("tool_calls"):
-                        # Merge this into the current assistant message
-                        merged_tool_calls.extend(next_msg.get("tool_calls", []))
-                        if next_msg.get("content"):
-                            merged_content_parts.append(next_msg["content"])
-                        j += 1
-                    elif next_msg.get("role") == "assistant" and not next_msg.get("tool_calls") and isinstance(next_msg.get("content"), str) and next_msg.get("content", "").strip() in {
-                        "[Interrupted: user_cancelled]",
-                        "[Interrupted: user_cancelled]\n\n[Interrupted: user_cancelled]",
-                        "[Error: api_error]",
-                    }:
-                        # Skip placeholder assistant artifacts between tool phases.
-                        j += 1
-                    else:
-                        break
-
-                # Create the merged assistant message
-                merged_assistant: dict = {
-                    "role": "assistant",
-                    "tool_calls": merged_tool_calls,
-                }
-                if merged_content_parts:
-                    merged_assistant["content"] = "\n\n".join(merged_content_parts)
-                else:
-                    merged_assistant["content"] = None
-
-                result.append(merged_assistant)
-
-                # Collect tool results for all tool_call_ids in this merged message
-                for tc in merged_tool_calls:
-                    tc_id = tc["id"]
-                    if tc_id in tool_results_by_id and tc_id not in consumed_tool_ids:
-                        result.append(tool_results_by_id[tc_id])
-                        consumed_tool_ids.add(tc_id)
-                    elif tc_id not in consumed_tool_ids:
-                        # No tool result found - add synthetic one
-                        result.append({
-                            "role": "tool",
-                            "tool_call_id": tc_id,
-                            "content": "[Tool result not available]",
-                        })
-                        consumed_tool_ids.add(tc_id)
-
-                i = j
-            else:
-                result.append(msg)
-                i += 1
-
-        return result
+        return self._strict_packager.package(rebuilt)
 
     async def stream_response(
         self,
@@ -670,6 +486,9 @@ class OpenAICompatibleRunner(BaseRunner):
             while True:
                 if self._cancelled:
                     break
+
+                # Rebuild canonical strict transcript before each backend call.
+                openai_messages = self._rebuild_strict_messages(messages, prompt, openai_messages)
 
                 # Stream one response
                 tool_calls_data, input_tokens, output_tokens = await self._stream_one_response(
@@ -887,14 +706,7 @@ class OpenAICompatibleRunner(BaseRunner):
                     for i, m in enumerate(openai_messages)
                 ]
 
-            debug_log.error(
-                f"OpenAI stream error: {e}",
-                category=Category.RUNNER,
-                details=details,
-                run_id=self._run_id,
-            )
-            # Dump full interaction for debugging
-            _dump_interaction(
+            dump_path = _dump_interaction(
                 context="stream_error",
                 model=self.model,
                 messages=openai_messages,
@@ -902,7 +714,17 @@ class OpenAICompatibleRunner(BaseRunner):
                 chunks=self._collected_chunks,
                 error=f"{type(e).__name__}: {e}",
             )
-            raise
+            if dump_path is not None:
+                details["dump_file"] = str(dump_path)
+                error_str = f"{error_str} (debug dump: {dump_path})"
+
+            debug_log.error(
+                f"OpenAI stream error: {error_str}",
+                category=Category.RUNNER,
+                details=details,
+                run_id=self._run_id,
+            )
+            raise RuntimeError(error_str) from e
 
         finally:
             self._running = False
@@ -1206,9 +1028,11 @@ class OpenAICompatibleRunner(BaseRunner):
                     },
                     run_id=self._run_id,
                 )
-                # Dump interaction for analysis if no proper tool calls were made
+                # Dump interaction for analysis if no proper tool calls were made.
+                # For strict backends, this also serves as the error-file path for
+                # invalid responses that lead to runner-level failures.
                 if len(finalized_tool_calls) == 0:
-                    _dump_interaction(
+                    dump_path = _dump_interaction(
                         context="embedded_tool_call",
                         model=self.model,
                         messages=openai_messages,
@@ -1216,6 +1040,13 @@ class OpenAICompatibleRunner(BaseRunner):
                         chunks=self._collected_chunks,
                         error=f"Detected {description} in content",
                     )
+                    if dump_path is not None:
+                        debug_log.warning(
+                            f"Strict runner error dump created: {dump_path}",
+                            category=Category.RUNNER,
+                            details={"file": str(dump_path), "context": "embedded_tool_call", "error_dump_path": str(dump_path)},
+                            run_id=self._run_id,
+                        )
                 break  # Only warn once per response
 
         return {

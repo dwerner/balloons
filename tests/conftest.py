@@ -1,6 +1,10 @@
 """Shared test fixtures for balloons tests."""
 
 import pytest
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "integration: live or slow integration test")
 from unittest.mock import patch
 
 

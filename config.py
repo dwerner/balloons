@@ -221,19 +221,20 @@ class BackendConfig:
 
     Attributes:
         name: Backend identifier
-        type: Backend type - "claude" (CLI subprocess) or "openai" (OpenAI-compatible API)
+        type: Backend type - "claude" (CLI subprocess), "openai" (OpenAI-compatible API), or "openai_strict" (strict Jinja-compatible OpenAI API)
         base_url: API base URL (required for openai type, optional for claude)
         api_key: API key (supports ${ENV_VAR} syntax)
         model: Model identifier (required for openai type)
         system_prompt: Path to system prompt file (supports ~ expansion)
     """
     name: str
-    type: str = "claude"  # "claude" or "openai"
+    type: str = "claude"  # "claude", "openai", or "openai_strict"
     base_url: Optional[str] = None
     api_key: Optional[str] = None
     model: Optional[str] = None
     system_prompt: Optional[str] = None  # Path to system prompt file
     context_window: int = 150000  # Max context tokens for this backend
+    openai_variant: Optional[str] = None  # Optional experimental runner/packaging variant
 
     # Cached at runtime (not persisted)
     _system_prompt_content: Optional[str] = field(default=None, repr=False, compare=False)

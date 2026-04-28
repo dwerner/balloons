@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import MagicMock
 
-from core.runner_factory import validate_backend_config
+from core.runner_factory import validate_backend_config, create_runner
 
 
 class TestValidateBackendConfig:
@@ -46,11 +46,11 @@ class TestValidateBackendConfig:
         # Model is optional - local servers like llama.cpp ignore it
         assert result is None
 
-    def test_openai_type_valid_with_all_fields(self):
-        """OpenAI type is valid when all fields present."""
+    def test_openai_strict_type_valid_with_all_fields(self):
+        """OpenAI strict type is valid when all fields present."""
         backend = MagicMock(
-            type="openai",
-            name="test-openai",
+            type="openai_strict",
+            name="test-openai-strict",
             base_url="http://localhost:8080",
             model="llama-3",
         )
@@ -101,6 +101,7 @@ class TestValidateBackendConfig:
         assert "unknown" in result
         assert "claude" in result  # Lists valid types
         assert "gemini" in result  # Lists valid types
+        assert "openai_strict" in result  # Lists valid types
 
     def test_empty_string_base_url_fails(self):
         """Empty string base_url is treated as missing."""
@@ -125,3 +126,21 @@ class TestValidateBackendConfig:
         result = validate_backend_config(backend)
         # Empty model is fine - will default to "default" when runner is created
         assert result is None
+
+
+class TestCreateRunner:
+    def test_openai_strict_type_uses_experimental_runner(self):
+        backend = MagicMock(
+            type="openai_strict",
+            name="strict-openai",
+            base_url="http://localhost:8000/v1",
+            api_key="test-key",
+            model="mistral",
+            context_window=12345,
+        )
+        backend.load_system_prompt.return_value = None
+
+        runner = create_runner(backend)
+
+        from core.strict_openai_runner import StrictOpenAICompatibleRunner
+        assert type(runner) is StrictOpenAICompatibleRunner
