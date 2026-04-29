@@ -17,7 +17,7 @@ Tool Discovery:
 """
 
 from pathlib import Path
-from typing import Optional, Set, Sequence
+from typing import Final, Optional, Set, Sequence
 
 from .debug_log import debug_log, Category
 
@@ -28,10 +28,6 @@ _USER_TOOL_PROMPTS_DIR = Path.home() / ".balloons" / "prompts" / "tools"
 
 # Directories to exclude from category discovery
 _EXCLUDED_DIRS = {"_templates", "openai"}
-
-# Cache for discovered categories and tools
-_discovery_cache: dict[str, dict[str, list[str]]] | None = None
-
 
 def _discover_tools_in_directory(base_dir: Path) -> dict[str, list[str]]:
     """Discover tool categories and tools from a directory.
@@ -81,21 +77,12 @@ def discover_tool_categories() -> dict[str, list[str]]:
 
     Returns:
         Dict mapping category name to list of tool names.
-        Results are cached - call clear_discovery_cache() to refresh.
     """
-    global _discovery_cache
-
-    if _discovery_cache is not None:
-        return _discovery_cache
-
-    # Start with source directory
     categories = _discover_tools_in_directory(_TOOL_PROMPTS_DIR)
 
-    # Merge user directory (adds new categories, adds new tools to existing categories)
     user_categories = _discover_tools_in_directory(_USER_TOOL_PROMPTS_DIR)
     for category, tools in user_categories.items():
         if category in categories:
-            # Merge tools, avoiding duplicates
             existing = set(categories[category])
             for tool in tools:
                 if tool not in existing:
@@ -104,78 +91,36 @@ def discover_tool_categories() -> dict[str, list[str]]:
         else:
             categories[category] = tools
 
-    _discovery_cache = categories
     return categories
 
 
-def clear_discovery_cache() -> None:
-    """Clear the tool discovery cache.
-
-    Call this after adding/removing tool prompt files to refresh discovery.
-    """
-    global _discovery_cache
-    _discovery_cache = None
-
-
-# For backward compatibility, these reference discovered categories
-def _get_tool_categories() -> dict[str, list[str]]:
-    """Get tool categories (discovered from filesystem)."""
-    return discover_tool_categories()
-
-
 # Core file/shell tools (always available, no per-tool prompts needed)
-CORE_TOOLS = [
+CORE_TOOL_NAMES: Final[tuple[str, ...]] = (
     "Read",
     "Write",
     "Edit",
     "Bash",
     "Glob",
     "Grep",
-]
+)
 
 
-def _compute_all_balloon_tools() -> Set[str]:
-    """Compute set of all balloon tool names from discovered categories."""
+def get_core_tool_names() -> list[str]:
+    """Get core tool names in stable display/prompt order."""
+    return list(CORE_TOOL_NAMES)
+
+
+def get_all_balloon_tools() -> Set[str]:
+    """Get set of all non-core tool names discovered from the filesystem."""
     all_tools: Set[str] = set()
     for tools in discover_tool_categories().values():
         all_tools.update(tools)
     return all_tools
 
 
-def _compute_all_tools() -> Set[str]:
-    """Compute set of all tools including core."""
-    return set(CORE_TOOLS) | _compute_all_balloon_tools()
-
-
-# Backward compatibility properties - now computed from discovery
-# Note: These are functions to ensure they reflect current discovery state
-def get_all_balloon_tools() -> Set[str]:
-    """Get set of all balloon tool names (discovered from filesystem)."""
-    return _compute_all_balloon_tools()
-
-
 def get_all_tools() -> Set[str]:
-    """Get set of all tool names including core (discovered from filesystem)."""
-    return _compute_all_tools()
-
-
-# Legacy aliases for backward compatibility (computed on first access)
-# These will be populated lazily
-ALL_BALLOON_TOOLS: Set[str] = set()  # Use get_all_balloon_tools() instead
-ALL_TOOLS: Set[str] = set()  # Use get_all_tools() instead
-
-# Legacy alias for backward compatibility - returns discovered categories
-# Code should use discover_tool_categories() or get_tools_in_category() instead
-TOOL_CATEGORIES: dict[str, list[str]] = {}  # Populated on init
-
-# Populate legacy sets/dicts on module load
-def _init_legacy_data():
-    global ALL_BALLOON_TOOLS, ALL_TOOLS, TOOL_CATEGORIES
-    ALL_BALLOON_TOOLS = _compute_all_balloon_tools()
-    ALL_TOOLS = _compute_all_tools()
-    TOOL_CATEGORIES = discover_tool_categories()
-
-_init_legacy_data()
+    """Get set of all tool names including core tools and discovered tools."""
+    return set(CORE_TOOL_NAMES) | get_all_balloon_tools()
 
 # Default enabled tools - core tools plus balloon essentials
 # Users can expand this in config or per-session

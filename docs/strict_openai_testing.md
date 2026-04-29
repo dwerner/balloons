@@ -9,8 +9,9 @@ The goal is to verify that our strict transcript builder matches the live backen
 Confirmed Mistral behavior:
 
 - `user -> assistant(tool_calls) -> tool -> assistant -> user` is valid
+- `user -> assistant(tool_calls) -> tool -> assistant(tool_calls) -> tool -> assistant -> user` is valid for successive function calling
 - `user -> assistant(tool_calls) -> tool -> user` is invalid
-- `user -> assistant(tool_calls) -> tool -> assistant -> assistant -> user` is invalid
+- `user -> assistant(tool_calls) -> tool -> assistant -> assistant -> user` is invalid when that creates two plain assistant turns
 - `user -> assistant(text)` is rejected in this strict configuration
 
 ## Configuring a strict backend

@@ -59,6 +59,14 @@ class MarkdownBlock:
 
 @ws_type
 @dataclass
+class ThinkingBlock:
+    """Model reasoning / thinking text shown separately from final answer text."""
+    type: str = "thinking"
+    text: str = ""
+
+
+@ws_type
+@dataclass
 class ImageBlock:
     """Image content - stores reference to uploaded image.
 
@@ -464,7 +472,7 @@ class WatchSummaryBlock:
 
 
 # Union type for all content block types
-ContentBlock = Union[TextBlock, MarkdownBlock, ImageBlock, ToolUseBlock, ToolResultBlock, RepairedToolBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ForkedFromBlock, ArchiveBlock, SessionSummaryBlock, SlideBlock, ReviewBlock, ForkProposalBlock, MergeProposalBlock, WatchStartBlock, WatchStopBlock, WatchSummaryBlock]
+ContentBlock = Union[TextBlock, MarkdownBlock, ThinkingBlock, ImageBlock, ToolUseBlock, ToolResultBlock, RepairedToolBlock, InterruptionBlock, ErrorBlock, LinkBlock, ForkBlock, MergeBlock, MergedToBlock, ForkedFromBlock, ArchiveBlock, SessionSummaryBlock, SlideBlock, ReviewBlock, ForkProposalBlock, MergeProposalBlock, WatchStartBlock, WatchStopBlock, WatchSummaryBlock]
 
 
 @dataclass
@@ -483,6 +491,20 @@ class Message:
 class TextDelta:
     text: str
     raw: dict = field(default_factory=dict)
+
+
+@dataclass
+class ThinkingDelta:
+    text: str
+    raw: dict = field(default_factory=dict)
+
+
+@ws_type
+@dataclass
+class ThinkingBlock:
+    """Model reasoning / thinking text shown separately from final answer text."""
+    type: str = "thinking"
+    text: str = ""
 
 
 @dataclass

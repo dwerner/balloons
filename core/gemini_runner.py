@@ -292,7 +292,11 @@ class GeminiRunner(BaseRunner):
                 effective_allowed_tools = enabled
 
         # Get tools in Gemini format
-        tools = get_tools_for_gemini(effective_allowed_tools, disable_tools)
+        tools = get_tools_for_gemini(
+            effective_allowed_tools,
+            disable_tools,
+            include_browser_tools=True,
+        )
 
         # Build config
         config = types.GenerateContentConfig(
@@ -482,7 +486,11 @@ class GeminiRunner(BaseRunner):
                         is_error = tool_result.is_error
                         input_required = tool_result.input_required
                         if tool_result.domains_changed:
-                            tools = get_tools_for_gemini(allowed_tools, disable_tools)
+                            tools = get_tools_for_gemini(
+                                allowed_tools,
+                                disable_tools,
+                                include_browser_tools=True,
+                            )
                             config = types.GenerateContentConfig(
                                 system_instruction=self._get_system_prompt(),
                                 tools=tools,

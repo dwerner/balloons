@@ -642,7 +642,11 @@ class OpenAICompatibleRunner(BaseRunner):
                 effective_allowed_tools = enabled
 
         # Get tools for this request
-        tools = get_tools_for_request(effective_allowed_tools, disable_tools)
+        tools = get_tools_for_request(
+            effective_allowed_tools,
+            disable_tools,
+            include_browser_tools=True,
+        )
 
         debug_log.info(
             f"OpenAI request to {self.model}",

@@ -2,18 +2,26 @@
   "type": "function",
   "function": {
     "name": "browser_start",
-    "description": "Start a new browser session. Call this before any other browser operations. Returns a browser ID for reference.",
+    "description": "Start a new browser session. Call this before any other browser operations. Supports headless mode, GUI mode when a DISPLAY is available, or attaching to an existing WebDriver via webdriver_url.",
     "parameters": {
       "type": "object",
       "properties": {
         "browser_type": {
           "type": "string",
           "enum": ["firefox", "chrome"],
-          "description": "Browser to use (default: firefox)"
+          "description": "Browser to use (default: chrome)"
         },
         "headless": {
           "type": "boolean",
-          "description": "Run without visible window (default: true)"
+          "description": "Run without visible window. Default: true. Set false for a real inspectable browser window when DISPLAY or a GUI WebDriver is available."
+        },
+        "webdriver_url": {
+          "type": "string",
+          "description": "Optional existing WebDriver endpoint such as http://localhost:9515 or a remote GUI webdriver. If provided, browser_start connects to it instead of starting its own driver."
+        },
+        "port": {
+          "type": "integer",
+          "description": "Optional local WebDriver port to use when starting a local driver. Useful for ChromeDriver setups like 9515."
         }
       },
       "required": []

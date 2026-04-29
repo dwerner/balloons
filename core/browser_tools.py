@@ -130,20 +130,20 @@ async def execute_browser_tool(
 
         elif name == "browser_see":
             result = await browser.see()
-            return result, False
+            return _format_browser_json(result), False
 
         elif name == "browser_inputs":
             result = await browser.inputs()
-            return result, False
+            return _format_browser_json(result), False
 
         elif name == "browser_buttons":
             result = await browser.buttons()
-            return result, False
+            return _format_browser_json(result), False
 
         elif name == "browser_links":
             limit = args.get("limit")
             result = await browser.links(limit)
-            return result, False
+            return _format_browser_links(result), False
 
         elif name == "browser_click":
             selector = args.get("selector")
@@ -290,6 +290,59 @@ async def execute_browser_tool(
         return f"Browser error: {str(e)}", True
 
 
+def _format_browser_json(result) -> str:
+    """Pretty-print JSON strings returned by the Rust browser bindings."""
+    if isinstance(result, str):
+        try:
+            parsed = json.loads(result)
+            return json.dumps(parsed, indent=2, ensure_ascii=False)
+        except Exception:
+            return result
+    try:
+        return json.dumps(result, indent=2, ensure_ascii=False)
+    except Exception:
+        return str(result)
+
+
+def _format_browser_links(result) -> str:
+    """Format links with lightweight filtering so search results are more useful."""
+    parsed = result
+    if isinstance(result, str):
+        try:
+            parsed = json.loads(result)
+        except Exception:
+            return result
+
+    if not isinstance(parsed, list):
+        return _format_browser_json(parsed)
+
+    def is_useful_link(item: dict) -> bool:
+        href = (item.get("href") or "").strip()
+        text = (item.get("text") or "").strip()
+        if not href:
+            return False
+        if href.startswith("javascript:"):
+            return False
+        if href.startswith("/"):
+            return False
+        if "duckduckgo.com/?" in href:
+            return False
+        if "duck.ai" in href:
+            return False
+        if "start.duckduckgo.com" in href:
+            return False
+        if not text:
+            return False
+        return True
+
+    useful = [item for item in parsed if isinstance(item, dict) and is_useful_link(item)]
+    payload = {
+        "useful_links": useful,
+        "all_links": parsed,
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
 async def _get_browser(session: "Session"):
     """Get the browser instance from session, if any."""
     return getattr(session, "_browser", None)
@@ -300,21 +353,38 @@ async def _browser_start(args: dict, session: "Session") -> tuple[str, bool]:
     try:
         from balloons_storage import Browser, BrowserConfig
 
-        browser_type = args.get("browser_type", "firefox")
-        headless = args.get("headless", True)
+        browser_type = args.get("browser_type", "chrome")
+        requested_headless = args.get("headless")
+        headless = True if requested_headless is None else bool(requested_headless)
+        webdriver_url = args.get("webdriver_url")
+        port = args.get("port")
 
-        # Create config
-        if browser_type == "chrome":
-            config = BrowserConfig.chrome()
-        else:
-            config = BrowserConfig.firefox()
+        # If the caller wants a visible browser but this process has no display,
+        # prefer using the system X server when available.
+        if not headless and not webdriver_url:
+            import os
+            display = os.environ.get("DISPLAY")
+            if not display and os.path.exists("/tmp/.X11-unix/X0"):
+                display = ":0"
+            if display:
+                os.environ["DISPLAY"] = display
+            else:
+                return (
+                    "Error starting browser: non-headless browser requested but no DISPLAY is available. "
+                    "Either run with headless=true, start Balloons with DISPLAY=:0, or provide webdriver_url to an existing GUI WebDriver.",
+                    True,
+                )
 
-        # Update headless setting
-        # Note: BrowserConfig is immutable, so we create new with parameters
-        config = BrowserConfig(
-            browser_type=browser_type,
-            headless=headless,
-        )
+        config_kwargs = {
+            "browser_type": browser_type,
+            "headless": headless,
+        }
+        if port is not None:
+            config_kwargs["port"] = port
+        if webdriver_url:
+            config_kwargs["webdriver_url"] = webdriver_url
+
+        config = BrowserConfig(**config_kwargs)
 
         # Create and connect browser
         browser = Browser(config)
@@ -329,7 +399,12 @@ async def _browser_start(args: dict, session: "Session") -> tuple[str, bool]:
             category=Category.RUNNER,
         )
 
-        return f"Browser started (ID: {browser_id[:8]}..., type: {browser_type}, headless: {headless})", False
+        details = [f"ID: {browser_id[:8]}...", f"type: {browser_type}", f"headless: {headless}"]
+        if webdriver_url:
+            details.append(f"webdriver_url: {webdriver_url}")
+        elif port is not None:
+            details.append(f"port: {port}")
+        return f"Browser started ({', '.join(details)})", False
 
     except ImportError as e:
         return f"Error: Browser bindings not available ({e})", True

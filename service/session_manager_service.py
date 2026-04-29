@@ -640,7 +640,7 @@ class SessionManagerService:
 
         # Register SessionDataService as observer if provided
         if session_data_service is not None:
-            self.add_observer(session_data_service)
+            self.set_session_data_service(session_data_service)
 
         # Wire up StreamState observer to emit streaming events
         self._stream_state.add_observer(self._on_stream_event)
@@ -1857,8 +1857,8 @@ class SessionManagerService:
                     turn_type="text_turn",
                 )
 
-        elif event_type == "text":
-            # Text delta - accumulate and emit
+        elif event_type in {"text", "thinking"}:
+            # Streamed assistant content delta.
             text = data if isinstance(data, str) else str(data)
             ctx.content += text
 
@@ -1875,6 +1875,7 @@ class SessionManagerService:
                     turn_index=ctx.assistant_turn_idx,
                     delta=text,
                     accumulated_length=len(ctx.content),
+                    content_block_type="thinking" if event_type == "thinking" else "text",
                 ),
             )
 
@@ -6942,8 +6943,9 @@ Summary:""")
             if not session:
                 return []
 
-        # Return session's enabled tools, or defaults
-        return list(session.get_enabled_tools_set())
+        # Return session's enabled tools, or defaults, preserving order.
+        # Order matters for prompt construction and Context tab previews.
+        return session.get_enabled_tools_list()
 
     @ws_expose
     async def set_session_enabled_tools(
@@ -6985,12 +6987,16 @@ Summary:""")
         Returns:
             Dict with categories mapping to tool lists, plus 'core' and 'all'
         """
-        from core.tool_prompts import TOOL_CATEGORIES, CORE_TOOLS, ALL_TOOLS
+        from core.tool_prompts import discover_tool_categories, get_core_tool_names, get_all_tools
+
+        categories = discover_tool_categories()
+        core_tools = sorted(get_core_tool_names())
+        all_tools = sorted(get_all_tools())
 
         return {
-            "core": CORE_TOOLS,
-            "categories": TOOL_CATEGORIES,
-            "all": sorted(ALL_TOOLS),
+            "core": core_tools,
+            "categories": categories,
+            "all": all_tools,
         }
 
     @ws_expose
@@ -7128,6 +7134,7 @@ Summary:""")
         all_schemas = get_tools_for_request(
             allowed_tools=tools_list,
             include_domain_tools=True,  # Include loaded domain tools
+            include_browser_tools=True,
         )
 
         if all_schemas is None:

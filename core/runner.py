@@ -13,10 +13,10 @@ from enum import Enum
 from typing import AsyncIterator, Any, Optional
 
 from models import (
-    Message, TextDelta, ResultEvent, InitEvent, RawEvent, ContextTokensEvent,
+    Message, TextDelta, ThinkingDelta, ResultEvent, InitEvent, RawEvent, ContextTokensEvent,
     ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultDeltaEvent, ToolResultEvent,
     SteeringInjectedEvent,
-    TextBlock, ToolUseBlock, ToolResultBlock, ErrorBlock,
+    TextBlock, ThinkingBlock, ToolUseBlock, ToolResultBlock, ErrorBlock,
 )
 from .exceptions import RateLimitError, InputRequiredError, StreamTimeoutError
 from .binding_context import build_binding_context_for_session
@@ -972,6 +972,16 @@ class SessionRunner:
 
                 self._text_buffer += event.text
                 events.append(self._make_event("text", event.text))
+                return events
+
+            elif isinstance(event, ThinkingDelta):
+                # Thinking/reasoning delta should stream immediately to the UI.
+                if not self._text_turn_started_at and self._text_buffer == "":
+                    self._text_turn_started_at = datetime.now().isoformat()
+
+                thinking_text = event.text
+                self._text_buffer += thinking_text
+                events.append(self._make_event("thinking", thinking_text))
                 return events
 
             elif isinstance(event, ToolUseStartEvent):

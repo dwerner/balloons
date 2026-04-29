@@ -5,15 +5,12 @@ from pathlib import Path
 
 from core.tool_prompts import (
     build_tool_prompts,
-    TOOL_CATEGORIES,
-    ALL_BALLOON_TOOLS,
     DEFAULT_ENABLED_TOOLS,
-    CORE_TOOLS,
+    get_core_tool_names,
     get_tools_in_category,
     get_all_categories,
     get_category_for_tool,
     discover_tool_categories,
-    clear_discovery_cache,
     get_all_balloon_tools,
     get_all_tools,
 )
@@ -23,11 +20,11 @@ class TestToolCategories:
     """Tests for tool category structure."""
 
     def test_all_categories_have_prompt_files(self):
-        """Each tool in TOOL_CATEGORIES should have a corresponding prompt file."""
+        """Each discovered tool should have a corresponding prompt file."""
         prompts_dir = Path(__file__).parent.parent / "prompts" / "tools"
 
         missing = []
-        for category, tools in TOOL_CATEGORIES.items():
+        for category, tools in discover_tool_categories().items():
             category_dir = prompts_dir / category
             for tool_name in tools:
                 tool_file = category_dir / f"{tool_name}.md"
@@ -37,16 +34,16 @@ class TestToolCategories:
         assert not missing, f"Missing prompt files: {missing}"
 
     def test_all_balloon_tools_computed_correctly(self):
-        """ALL_BALLOON_TOOLS should contain all tools from all categories."""
+        """get_all_balloon_tools() should contain all tools from all categories."""
         expected = set()
-        for tools in TOOL_CATEGORIES.values():
+        for tools in discover_tool_categories().values():
             expected.update(tools)
 
-        assert ALL_BALLOON_TOOLS == expected
+        assert get_all_balloon_tools() == expected
 
     def test_default_enabled_includes_core_tools(self):
         """Default enabled tools should include all core tools."""
-        for tool in CORE_TOOLS:
+        for tool in get_core_tool_names():
             assert tool in DEFAULT_ENABLED_TOOLS, f"Core tool {tool} not in defaults"
 
     def test_category_helper_functions(self):
@@ -154,10 +151,10 @@ class TestPromptFileStructure:
         assert (templates_dir / "tool_usage_critical.md").exists()
 
     def test_each_category_has_directory(self):
-        """Each category in TOOL_CATEGORIES should have a directory."""
+        """Each discovered category should have a directory."""
         prompts_dir = Path(__file__).parent.parent / "prompts" / "tools"
 
-        for category in TOOL_CATEGORIES:
+        for category in discover_tool_categories():
             category_dir = prompts_dir / category
             assert category_dir.exists(), f"Missing directory for category: {category}"
             assert category_dir.is_dir(), f"Not a directory: {category}"
@@ -237,18 +234,14 @@ class TestFilesystemDiscovery:
         for category, tools in categories.items():
             assert "_overview" not in tools, f"_overview should not be a tool in {category}"
 
-    def test_legacy_aliases_match_discovery(self):
-        """Legacy TOOL_CATEGORIES and ALL_BALLOON_TOOLS should match discovery."""
+    def test_discovery_helpers_match_discovery(self):
+        """Discovery helper functions should match direct discovery results."""
         discovered = discover_tool_categories()
 
-        # TOOL_CATEGORIES should equal discovered
-        assert TOOL_CATEGORIES == discovered
-
-        # ALL_BALLOON_TOOLS should equal union of all discovered tools
         expected_all = set()
         for tools in discovered.values():
             expected_all.update(tools)
-        assert ALL_BALLOON_TOOLS == expected_all
+        assert get_all_balloon_tools() == expected_all
 
     def test_get_all_balloon_tools_function(self):
         """get_all_balloon_tools() should return all discovered balloon tools."""
@@ -262,19 +255,8 @@ class TestFilesystemDiscovery:
         """get_all_tools() should include core tools plus balloon tools."""
         all_tools = get_all_tools()
         # Should include core tools
-        for core in CORE_TOOLS:
+        for core in get_core_tool_names():
             assert core in all_tools, f"Core tool {core} should be in all tools"
         # Should include balloon tools
         assert "ask_user" in all_tools
 
-    def test_cache_clearing(self):
-        """clear_discovery_cache() should allow re-discovery."""
-        # First discovery
-        cats1 = discover_tool_categories()
-
-        # Clear and re-discover
-        clear_discovery_cache()
-        cats2 = discover_tool_categories()
-
-        # Should be the same (filesystem unchanged)
-        assert cats1 == cats2

@@ -11,7 +11,7 @@ from typing import AsyncIterator, TYPE_CHECKING
 from openai import AsyncOpenAI
 
 from models import (
-    Message, TextDelta, ResultEvent, InitEvent,
+    Message, TextDelta, ThinkingDelta, ResultEvent, InitEvent,
     TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, InterruptionBlock, ErrorBlock, ArchiveBlock, ContextMode,
     ToolUseStartEvent, ToolInputDeltaEvent, ToolUseEvent, ToolResultDeltaEvent, ToolResultEvent, SteeringInjectedEvent,
 )
@@ -21,7 +21,11 @@ from .exceptions import InputRequiredError
 from .tools import get_tools_for_request
 from .tool_executor import execute_tool
 from .tool_result import ToolExecutionResult
-from .strict_openai_packaging import MISTRAL_STRICT_PROFILE, StrictOpenAIMessagePackager
+from .strict_openai_packaging import (
+    MISTRAL_STRICT_PROFILE,
+    StrictOpenAIMessagePackager,
+    StrictTranscriptValidator,
+)
 
 if TYPE_CHECKING:
     from session import Session
@@ -169,6 +173,7 @@ class StrictOpenAICompatibleRunner(BaseRunner):
         self._session: "Session | None" = None
         self._collected_chunks: list[dict] = []  # Raw chunks for dump on error
         self._strict_packager = StrictOpenAIMessagePackager(MISTRAL_STRICT_PROFILE)
+        self._strict_validator = StrictTranscriptValidator(MISTRAL_STRICT_PROFILE)
 
     @property
     def steering_capability(self) -> SteeringCapability:
@@ -401,26 +406,50 @@ class StrictOpenAICompatibleRunner(BaseRunner):
         else:
             openai_messages.append({"role": "user", "content": new_prompt})
 
-        # Strict runner uses canonical profile-driven packaging.
-        return self._strict_packager.package(openai_messages)
+        # Strict runner uses canonical profile-driven packaging and validates
+        # replay grammar plus the final generation boundary before send.
+        packaged = self._strict_packager.package(openai_messages)
+        self._strict_validator.validate(packaged, reasoning_enabled=True)
+        return packaged
 
 
     def _rebuild_strict_messages(self, messages: list[Message], prompt: str, openai_messages: list[dict]) -> list[dict]:
-        """Rebuild the strict transcript from current session history and latest user prompt.
-
-        Strict backends require canonical replay before each API call because the
-        effective system prompt and enabled tools can change during a session.
-        """
+        """Rebuild the strict transcript from canonical history plus live exchange state."""
         rebuilt = self.build_messages(messages, prompt)
 
-        # Preserve the live assistant/tool exchange that has happened since the
-        # initial history snapshot, then repackage canonically.
+        live_tail = []
+        saw_tool_or_assistant = False
+        saw_user_after_live_cycle = False
         for msg in openai_messages:
             if msg.get("role") == "system":
                 continue
-            rebuilt.append(dict(msg))
+            if msg.get("role") in {"assistant", "tool"} and not saw_user_after_live_cycle:
+                saw_tool_or_assistant = True
+                live_tail.append(dict(msg))
+            elif saw_tool_or_assistant and msg.get("role") == "user":
+                saw_user_after_live_cycle = True
+                break
 
-        return self._strict_packager.package(rebuilt)
+        if live_tail and live_tail[0].get("role") == "assistant" and live_tail[0].get("tool_calls"):
+            rebuilt_with_tail = [*rebuilt, *live_tail]
+            self._strict_validator.validate_replay(rebuilt_with_tail, allow_open_tool_cycle_at_end=True)
+            if rebuilt_with_tail and rebuilt_with_tail[-1].get("role") == "assistant" and not rebuilt_with_tail[-1].get("tool_calls"):
+                rebuilt_with_tail = rebuilt_with_tail[:-1]
+            return rebuilt_with_tail
+
+        rebuilt_with_tail = self._strict_packager.package([*rebuilt, *live_tail])
+        if live_tail:
+            self._strict_validator.validate_replay(rebuilt_with_tail, allow_open_tool_cycle_at_end=True)
+        else:
+            self._strict_validator.validate(rebuilt_with_tail, reasoning_enabled=True)
+
+        if rebuilt_with_tail:
+            non_system = [m for m in rebuilt_with_tail if m.get("role") != "system"]
+            if live_tail and non_system and non_system[-1].get("role") == "assistant" and not non_system[-1].get("tool_calls"):
+                last_index = max(i for i, m in enumerate(rebuilt_with_tail) if m.get("role") != "system")
+                rebuilt_with_tail = rebuilt_with_tail[:last_index] + rebuilt_with_tail[last_index + 1:]
+
+        return rebuilt_with_tail
 
     async def stream_response(
         self,
@@ -458,7 +487,11 @@ class StrictOpenAICompatibleRunner(BaseRunner):
                 effective_allowed_tools = enabled
 
         # Get tools for this request
-        tools = get_tools_for_request(effective_allowed_tools, disable_tools)
+        tools = get_tools_for_request(
+            effective_allowed_tools,
+            disable_tools,
+            include_browser_tools=True,
+        )
 
         debug_log.info(
             f"OpenAI request to {self.model}",
@@ -511,7 +544,7 @@ class StrictOpenAICompatibleRunner(BaseRunner):
                 # Execute tools and continue the loop
                 assistant_content = tool_calls_data.get("content", "")
 
-                # Add assistant message with tool calls
+                # Replace the mutable runtime transcript with the current live tool cycle.
                 assistant_msg = {
                     "role": "assistant",
                     "content": assistant_content or None,
@@ -527,7 +560,8 @@ class StrictOpenAICompatibleRunner(BaseRunner):
                         for tc in tool_calls
                     ]
                 }
-                openai_messages.append(assistant_msg)
+                openai_messages = [assistant_msg]
+                tool_cycle_completed = False
 
                 # Client-only tools - handled entirely by UI, no backend execution
                 # These tools are intercepted at the app/UI layer from the tool_use event
@@ -618,6 +652,7 @@ class StrictOpenAICompatibleRunner(BaseRunner):
                         "tool_call_id": tc["id"],
                         "content": result,
                     })
+                    tool_cycle_completed = True
 
                     # Check if the tool requested user input (ask_user tool)
                     if input_required:
@@ -646,26 +681,23 @@ class StrictOpenAICompatibleRunner(BaseRunner):
                                 injected_at_tool_id=tc["id"],
                             )
 
-                # Add accumulated steering after all tool results.
-                # For strict Jinja templates (e.g. Mistral), avoid creating a
-                # fresh user turn immediately after a user turn. Merge steering
-                # into the previous user message when possible.
+                if tool_cycle_completed and not any(
+                    msg.get("role") == "assistant" and not msg.get("tool_calls")
+                    for msg in openai_messages[1:]
+                ):
+                    openai_messages.append({"role": "assistant", "content": ""})
+
+                # Accumulated steering is folded into the next rebuilt user prompt
+                # through session history rather than appended to the mutable runtime
+                # transcript here. Strict backends require canonical user folding.
                 if accumulated_steering:
                     combined_steering = "\n\n".join(accumulated_steering)
                     debug_log.info(
-                        f"Adding accumulated steering as user message",
+                        f"Captured steering for next rebuild",
                         category=Category.RUNNER,
                         details={"num_messages": len(accumulated_steering), "total_len": len(combined_steering)},
                         run_id=self._run_id,
                     )
-                    if openai_messages and openai_messages[-1].get("role") == "user" and isinstance(openai_messages[-1].get("content"), str):
-                        prev = openai_messages[-1]["content"]
-                        openai_messages[-1]["content"] = f"{prev}\n\n{combined_steering}" if prev else combined_steering
-                    else:
-                        openai_messages.append({
-                            "role": "user",
-                            "content": combined_steering,
-                        })
 
             debug_log.info(
                 f"OpenAI stream complete",
@@ -851,11 +883,23 @@ class StrictOpenAICompatibleRunner(BaseRunner):
             if not delta:
                 continue
 
-            # Handle text content
+            # Handle visible text content
             if delta.content:
                 content_buffer += delta.content
                 events.append(TextDelta(text=delta.content))
                 await asyncio.sleep(0)  # Yield to event loop
+
+            # Handle reasoning / thinking text if the backend exposes it
+            reasoning_delta = None
+            if hasattr(delta, "reasoning_content") and getattr(delta, "reasoning_content"):
+                reasoning_delta = getattr(delta, "reasoning_content")
+            elif hasattr(delta, "reasoning") and getattr(delta, "reasoning"):
+                reasoning_delta = getattr(delta, "reasoning")
+
+            if reasoning_delta:
+                content_buffer += reasoning_delta
+                events.append(ThinkingDelta(text=reasoning_delta))
+                await asyncio.sleep(0)
 
             # Handle tool calls
             if delta.tool_calls:

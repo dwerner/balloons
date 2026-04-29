@@ -70,6 +70,7 @@ export type ContentBlock =
 export type ContentBlockType =
   | 'text'
   | 'markdown'
+  | 'thinking'
   | 'image'
   | 'tool_use'
   | 'tool_result'

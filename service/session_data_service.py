@@ -194,6 +194,7 @@ class SessionTurnDeltaEvent:
     turn_id: str  # Stable UUID for the turn
     delta: str
     accumulated_length: int
+    content_block_type: str = "text"
 
 
 @ws_type
@@ -2577,6 +2578,7 @@ class SessionDataService:
         turn_id: str,
         delta: str,
         accumulated_length: int,
+        content_block_type: str = "text",
     ) -> None:
         """Emit a turn delta event to subscribed clients.
 
@@ -2606,6 +2608,7 @@ class SessionDataService:
             turn_id=turn_id,
             delta=delta,
             accumulated_length=accumulated_length,
+            content_block_type=content_block_type,
         )
         self._emit_event("sessionDataTurnDelta", event_data.__dict__, subscribers)
 
@@ -3065,6 +3068,7 @@ class SessionDataService:
             turn_id=event.turn_id,
             delta=event.delta,
             accumulated_length=event.accumulated_length,
+            content_block_type=event.content_block_type,
         )
 
     async def on_turn_finished(self, event: TurnFinishedEvent) -> None:

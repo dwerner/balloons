@@ -1014,11 +1014,13 @@ class TestSessionDataServiceIntegration:
     @pytest.fixture
     def service_with_data_service(self, mock_manager, stream_state, session_data_service):
         """Create a SessionManagerService with SessionDataService."""
-        return SessionManagerService(
+        service = SessionManagerService(
             mock_manager,
             stream_state,
             session_data_service=session_data_service,
         )
+        service.add_observer(session_data_service)
+        return service
 
     @pytest.fixture
     def ctx(self):
@@ -1077,13 +1079,14 @@ class TestSessionDataServiceIntegration:
     ):
         """Test that text events are dispatched to SessionDataService."""
         # Subscribe a client to get events
-        await session_data_service.subscribe_session("test-123", "client-1")
+        await session_data_service.subscribe_add("test-123", "client-1", ["header", "delta", "body"])
 
         events = []
         def handler(event_name: str, data: dict, target_clients):
             events.append((event_name, data, target_clients))
         session_data_service.add_event_handler(handler)
 
+        ctx.last_progress_emit = 0.0
         event = mock_event("text", "Hello")
         await service_with_data_service._dispatch_event("test-123", event, ctx)
 
@@ -1101,7 +1104,7 @@ class TestSessionDataServiceIntegration:
     ):
         """Test that turn_started events are dispatched to SessionDataService."""
         # Subscribe a client to get events
-        await session_data_service.subscribe_session("test-123", "client-1")
+        await session_data_service.subscribe_add("test-123", "client-1", ["header", "delta", "body"])
 
         events = []
         def handler(event_name: str, data: dict, target_clients):
@@ -1125,7 +1128,7 @@ class TestSessionDataServiceIntegration:
     ):
         """Test that done events emit turn_finished to SessionDataService."""
         # Subscribe a client to get events
-        await session_data_service.subscribe_session("test-123", "client-1")
+        await session_data_service.subscribe_add("test-123", "client-1", ["header", "delta", "body"])
 
         # Set up context
         ctx.content = "Final response"
@@ -1160,9 +1163,10 @@ class TestSessionDataServiceIntegration:
             task_state_service=task_service,
             session_data_service=session_data_service,
         )
+        service.add_observer(session_data_service)
 
         # Subscribe to both services
-        await session_data_service.subscribe_session("test-123", "client-1")
+        await session_data_service.subscribe_add("test-123", "client-1", ["header", "delta", "body"])
 
         task_events = []
         def task_handler(event_name: str, data: dict):
@@ -1175,6 +1179,7 @@ class TestSessionDataServiceIntegration:
         session_data_service.add_event_handler(data_handler)
 
         # Dispatch a text event
+        ctx.last_progress_emit = 0.0
         event = mock_event("text", "Hello")
         await service._dispatch_event("test-123", event, ctx)
 
@@ -1192,7 +1197,7 @@ class TestSessionDataServiceIntegration:
     ):
         """Test dispatching with only SessionDataService (no TaskStateService)."""
         # Subscribe a client to get events
-        await session_data_service.subscribe_session("test-123", "client-1")
+        await session_data_service.subscribe_add("test-123", "client-1", ["header", "delta", "body"])
 
         events = []
         def handler(event_name: str, data: dict, target_clients):
@@ -1200,6 +1205,7 @@ class TestSessionDataServiceIntegration:
         session_data_service.add_event_handler(handler)
 
         # Dispatch a text event - should work with only SessionDataService
+        ctx.last_progress_emit = 0.0
         event = mock_event("text", "Hello")
         await service_with_data_service._dispatch_event("test-123", event, ctx)
 
@@ -1213,7 +1219,7 @@ class TestSessionDataServiceIntegration:
         self, service_with_data_service, session_data_service, ctx, mock_event
     ):
         """Test that tool_result_turn_started emits turnCreated to SessionDataService."""
-        await session_data_service.subscribe_session("test-123", "client-1")
+        await session_data_service.subscribe_add("test-123", "client-1", ["header", "delta", "body"])
 
         events = []
         def handler(event_name: str, data: dict, target_clients):
@@ -1244,7 +1250,7 @@ class TestSessionDataServiceIntegration:
         from service.session_events import TurnCreatedEvent, TurnDeltaEvent, TurnFinishedEvent
 
         # Subscribe a client to get events
-        await session_data_service.subscribe_session("test-123", "client-1")
+        await session_data_service.subscribe_add("test-123", "client-1", ["header", "delta", "body"])
 
         events = []
         def handler(event_name: str, data: dict, target_clients):
@@ -1267,7 +1273,8 @@ class TestSessionDataServiceIntegration:
             turn_id="turn-abc",
             turn_index=1,
             delta="Hello",
-            accumulated_length=5
+            accumulated_length=5,
+            content_block_type="text",
         )
         await service_with_data_service._notify_observers("on_turn_delta", turn_delta)
 

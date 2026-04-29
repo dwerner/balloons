@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-04-24T19:41:33.174531
+// Generated: 2026-04-28T19:02:21.903002
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -14,6 +14,11 @@ export interface TextBlock {
 }
 
 export interface MarkdownBlock {
+  type?: string;
+  text?: string;
+}
+
+export interface ThinkingBlock {
   type?: string;
   text?: string;
 }
@@ -229,6 +234,11 @@ export interface WatchSummaryBlock {
   targetSessionName?: string;
   exchangeIndex?: number;
   summary?: string;
+}
+
+export interface ThinkingBlock {
+  type?: string;
+  text?: string;
 }
 
 export interface QueuedMessageInfo {
@@ -742,6 +752,7 @@ export interface SessionTurnDeltaEvent {
   turnId: string;
   delta: string;
   accumulatedLength: number;
+  contentBlockType?: string;
 }
 
 export interface SessionTurnFinishedEvent {

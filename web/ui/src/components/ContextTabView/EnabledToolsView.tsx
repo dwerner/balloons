@@ -36,18 +36,10 @@ interface EnabledToolsViewProps {
   isGlobalSettings?: boolean;
 }
 
-// Category display names and order
-const CATEGORY_LABELS: Record<string, string> = {
-  core: 'Core',
-  balloon: 'Balloon',
-  domain: 'Domain',
-  supervisor: 'Supervisor',
-  watcher: 'Watcher',
-  midi: 'MIDI',
-  debug: 'Debug',
-};
-
-const CATEGORY_ORDER = ['core', 'balloon', 'domain', 'supervisor', 'watcher', 'midi', 'debug'];
+function formatCategoryLabel(category: string): string {
+  if (!category) return 'Other';
+  return category.charAt(0).toUpperCase() + category.slice(1);
+}
 
 // Tool descriptions for tooltips
 const TOOL_DESCRIPTIONS: Record<string, string> = {
@@ -438,26 +430,24 @@ export const EnabledToolsView = memo(function EnabledToolsView({
 
     const groups: Array<{ key: string; label: string; tools: string[] }> = [];
 
-    // Add core tools first
     if (availableTools.core.length > 0) {
       groups.push({
         key: 'core',
-        label: CATEGORY_LABELS.core || 'Core',
-        tools: availableTools.core,
+        label: 'Core',
+        tools: [...availableTools.core].sort((a, b) => a.localeCompare(b)),
       });
     }
 
-    // Add other categories in order
-    for (const cat of CATEGORY_ORDER) {
-      if (cat === 'core') continue;
-      const tools = availableTools.categories[cat];
-      if (tools && tools.length > 0) {
-        groups.push({
-          key: cat,
-          label: CATEGORY_LABELS[cat] || cat,
-          tools,
-        });
-      }
+    const discoveredCategories = Object.entries(availableTools.categories)
+      .filter(([, tools]) => tools && tools.length > 0)
+      .sort(([a], [b]) => a.localeCompare(b));
+
+    for (const [category, tools] of discoveredCategories) {
+      groups.push({
+        key: category,
+        label: formatCategoryLabel(category),
+        tools: [...tools].sort((a, b) => a.localeCompare(b)),
+      });
     }
 
     return groups;

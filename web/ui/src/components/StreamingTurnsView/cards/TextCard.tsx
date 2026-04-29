@@ -87,13 +87,14 @@ export const TextCard = React.memo(function TextCard({ turn }: TextCardProps) {
   const isUser = role === 'user';
   const isAssistant = role === 'assistant';
   const isMarkdownBlock = contentBlock?.type === 'markdown';
+  const isThinkingBlock = contentBlock?.type === 'thinking';
 
   // Display mode state - formatted (default) or raw JSON
   const [displayMode, setDisplayMode] = useState<DisplayMode>('formatted');
 
   // Extract text from content block (works for both 'text' and 'markdown' types)
-  const content = (contentBlock?.type === 'text' || contentBlock?.type === 'markdown')
-    ? ((contentBlock as TextBlock | MarkdownBlock).text ?? '')
+  const content = (contentBlock?.type === 'text' || contentBlock?.type === 'markdown' || contentBlock?.type === 'thinking')
+    ? ((contentBlock as TextBlock | MarkdownBlock | { text?: string }).text ?? '')
     : '';
 
   // Steering messages get a special visual treatment
@@ -125,6 +126,20 @@ export const TextCard = React.memo(function TextCard({ turn }: TextCardProps) {
         return (
           <div className="thinking-indicator">
             <span className="thinking-text">Loading...</span>
+          </div>
+        );
+      }
+      return null;
+    }
+
+    if (isThinkingBlock) {
+      if (content) {
+        return <div className="thinking-block"><MarkdownContent content={content} /></div>;
+      }
+      if (streaming) {
+        return (
+          <div className="thinking-indicator">
+            <span className="thinking-text">Thinking...</span>
           </div>
         );
       }

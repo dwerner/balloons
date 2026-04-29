@@ -348,6 +348,7 @@ class TestEventData:
             "exchange_id": "exchange-123",
             "content_block_type": "code",
             "parallel_group_id": None,
+            "is_steering": False,
         }
 
     @pytest.mark.asyncio
@@ -373,6 +374,7 @@ class TestEventData:
             "turn_id": "turn-uuid-3",
             "delta": "Hello, ",
             "accumulated_length": 7,
+            "content_block_type": "text",
         }
 
     @pytest.mark.asyncio

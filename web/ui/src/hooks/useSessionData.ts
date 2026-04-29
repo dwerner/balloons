@@ -570,13 +570,52 @@ export function useSessionData(
 
             const delta = event.delta ?? '';
             const turnId = event.turnId ?? '';
+            const blockType = event.contentBlockType === 'thinking' ? 'thinking' : 'text';
 
             if (!turnId) {
               debugLog('[useSessionData] turnDelta missing turnId:', event);
               return;
             }
 
-            // Accumulate delta instead of immediately updating state
+            // Thinking deltas need immediate block-typed updates so UI can render them distinctly.
+            if (blockType === 'thinking') {
+              setTurnsById((prev) => {
+                const next = new Map(prev);
+                const existing = next.get(turnId);
+                if (existing) {
+                  const currentText = getTextFromBlock(existing.contentBlock);
+                  next.set(turnId, {
+                    ...existing,
+                    contentBlock: {
+                      ...(existing.contentBlock || createInitialBlock('thinking')),
+                      type: 'thinking',
+                      text: currentText + delta,
+                    } as ContentBlock,
+                    streaming: true,
+                  });
+                } else {
+                  next.set(turnId, {
+                    turnId,
+                    order: 0,
+                    role: 'assistant',
+                    contentBlock: { type: 'thinking', text: delta } as ContentBlock,
+                    streaming: true,
+                    viewed: false,
+                    tokens: 0,
+                    contextMode: 'copy',
+                    exchangeId: undefined,
+                    parallelGroupId: undefined,
+                    timestamp: undefined,
+                    isSteering: false,
+                    respondsToSteering: false,
+                  });
+                }
+                return next;
+              });
+              return;
+            }
+
+            // Accumulate plain text delta instead of immediately updating state
             const existing = pendingDeltasRef.current.get(turnId) ?? '';
             pendingDeltasRef.current.set(turnId, existing + delta);
           })

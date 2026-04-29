@@ -27,6 +27,7 @@ from codegen import ws_type
 
 from models import (
     TextBlock,
+    ThinkingBlock,
     ToolUseBlock,
     ToolResultBlock,
     ImageBlock,
@@ -46,6 +47,7 @@ from models import (
 # ContentBlock union type
 ContentBlock = Union[
     TextBlock,
+    ThinkingBlock,
     ImageBlock,
     ToolUseBlock,
     ToolResultBlock,
@@ -86,7 +88,7 @@ class TurnCreatedEvent:
 
 @dataclass
 class TurnDeltaEvent:
-    """Emitted when text content is streamed to a turn.
+    """Emitted when content is streamed to a turn.
 
     Observers should accumulate deltas to build the full turn content.
     accumulated_length can be used to verify sync.
@@ -97,6 +99,7 @@ class TurnDeltaEvent:
     turn_index: int
     delta: str  # New text chunk
     accumulated_length: int  # Total content length so far
+    content_block_type: str = "text"  # "text" or "thinking"
 
 
 @dataclass
