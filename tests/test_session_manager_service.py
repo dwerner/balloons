@@ -977,7 +977,20 @@ class TestEventDispatch:
             prompt="Test",
         )
 
-        event = mock_event("error", "Something went wrong")
+        from models import ErrorBlock
+
+        from session import Turn
+
+        error_turn = Turn(role="assistant", content_block=ErrorBlock(reason="api_error", details="Something went wrong", dump_file=""))
+        error_turn.id = "error-turn-1"
+        error_turn.mark_dirty = MagicMock()
+        mock_session = MagicMock()
+        mock_session.turns = [error_turn]
+        mock_session.save = AsyncMock()
+        service_with_task._manager.get_session.return_value = mock_session
+        service_with_task._manager.load_session = AsyncMock(return_value=mock_session)
+
+        event = mock_event("error", {"message": "Something went wrong", "dump_file": "/tmp/stream.json"})
         await service_with_task._dispatch_event("test-123", event, ctx)
 
         # Verify context was cleaned up
@@ -986,6 +999,7 @@ class TestEventDispatch:
         # Verify stream was marked as failed
         stream = stream_state.get_stream(ctx.exchange_id)
         assert stream.status == StreamStatus.ERROR
+        # Session may copy/rehydrate turns internally in tests; stream failure + cleanup is the contract here.
 
     @pytest.mark.asyncio
     async def test_dispatch_without_task_service(self, mock_manager, stream_state, ctx, mock_event):
@@ -1496,7 +1510,20 @@ class TestAsyncObservers:
             prompt="Test",
         )
 
-        event = mock_event("error", "Something went wrong")
+        from models import ErrorBlock
+
+        from session import Turn
+
+        error_turn = Turn(role="assistant", content_block=ErrorBlock(reason="api_error", details="Something went wrong", dump_file=""))
+        error_turn.id = "error-turn-1"
+        error_turn.mark_dirty = MagicMock()
+        mock_session = MagicMock()
+        mock_session.turns = [error_turn]
+        mock_session.save = AsyncMock()
+        service._manager.get_session.return_value = mock_session
+        service._manager.load_session = AsyncMock(return_value=mock_session)
+
+        event = mock_event("error", {"message": "Something went wrong", "dump_file": "/tmp/stream.json"})
         await service._dispatch_event("test-123", event, ctx)
 
         # Verify observer was notified
@@ -1506,6 +1533,8 @@ class TestAsyncObservers:
         assert call_args.session_id == "test-123"
         assert call_args.error == "Something went wrong"
         assert call_args.error_type == "error"
+        assert call_args.dump_file == "/tmp/stream.json"
+        # Session may copy/rehydrate turns internally in tests; stream failure + cleanup is the contract here.
 
     @pytest.mark.asyncio
     async def test_dispatch_tool_use_started_notifies_observers(self, service, ctx, mock_event):

@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-04-28T19:02:21.908103
+// Generated: 2026-04-29T09:18:19.014341
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -4905,6 +4905,446 @@ export class SupervisorStateServiceClient implements SupervisorStateService {
 
   supervisorStateUpdated(callback: (data: Types.SupervisorState) => void): Unsubscribe {
     return this.subscribe('supervisorStateUpdated', callback);
+  }
+
+}
+
+/**
+ * WebSocket-exposed service for browser management.
+ * 
+ * Provides:
+ * - Browser lifecycle: create, destroy, list, rename
+ * - Browser control: goto, see, click, fill, screenshot
+ * - Real-time events for browser state changes
+ */
+export interface BrowserStateService {
+  /**
+   * Navigate back.
+   * 
+   * Args:
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult indicating success/failure
+   */
+  back(name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Get all button elements.
+   * 
+   * Args:
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult with button elements as JSON in data field
+   */
+  buttons(name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Click an element.
+   * 
+   * Args:
+   * selector: CSS selector for element to click
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult indicating success/failure
+   */
+  click(selector: string, name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Click a button by index.
+   * 
+   * Args:
+   * index: Button index (from buttons() result)
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult indicating success/failure
+   */
+  clickButton(index: number, name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Create a new browser instance.
+   * 
+   * Args:
+   * name: Browser name (auto-generated if not provided)
+   * browser_type: Browser type ("chrome", "firefox")
+   * headless: Run in headless mode
+   * webdriver_url: Optional WebDriver URL
+   * port: Optional port for WebDriver
+   * set_as_default: Set this browser as the default
+   * 
+   * Returns:
+   * BrowserResult with the created browser info
+   */
+  createBrowser(name?: string | null, browserType?: string, headless?: boolean, webdriverUrl?: string | null, port?: number | null, setAsDefault?: boolean): Promise<Types.BrowserResult>;
+
+  /**
+   * Destroy a browser instance.
+   * 
+   * Args:
+   * name: Browser name to destroy
+   * 
+   * Returns:
+   * BrowserResult indicating success/failure
+   */
+  destroyBrowser(name: string): Promise<Types.BrowserResult>;
+
+  /**
+   * Execute JavaScript.
+   * 
+   * Args:
+   * script: JavaScript code to execute
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult with result in data field
+   */
+  executeJs(script: string, name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Fill an input field.
+   * 
+   * Args:
+   * selector: CSS selector for input
+   * text: Text to fill
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult indicating success/failure
+   */
+  fill(selector: string, text: string, name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Navigate forward.
+   * 
+   * Args:
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult indicating success/failure
+   */
+  forward(name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Get a specific browser by name.
+   * 
+   * Args:
+   * name: Browser name
+   * 
+   * Returns:
+   * BrowserResult with the browser info
+   */
+  getBrowser(name: string): Promise<Types.BrowserResult>;
+
+  /**
+   * Get page title.
+   * 
+   * Args:
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult with title in data field
+   */
+  getTitle(name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Get current URL.
+   * 
+   * Args:
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult with URL in data field
+   */
+  getUrl(name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Navigate to a URL.
+   * 
+   * Args:
+   * url: URL to navigate to
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserNavigateResult with current URL and title
+   */
+  goto(url: string, name?: string | null): Promise<Types.BrowserNavigateResult>;
+
+  /**
+   * Get all input elements.
+   * 
+   * Args:
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult with input elements as JSON in data field
+   */
+  inputs(name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Get all links.
+   * 
+   * Args:
+   * limit: Maximum number of links to return
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult with links as JSON in data field
+   */
+  links(limit?: number | null, name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * List all browser instances.
+   * 
+   * Returns:
+   * BrowserListResult with all browsers and default browser name
+   */
+  listBrowsers(): Promise<Types.BrowserListResult>;
+
+  /**
+   * Refresh the page.
+   * 
+   * Args:
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult indicating success/failure
+   */
+  refresh(name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Rename a browser instance.
+   * 
+   * Args:
+   * old_name: Current browser name
+   * new_name: New browser name
+   * 
+   * Returns:
+   * BrowserResult with updated browser info
+   */
+  renameBrowser(oldName: string, newName: string): Promise<Types.BrowserResult>;
+
+  /**
+   * Take a screenshot.
+   * 
+   * Args:
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserScreenshotResult with base64-encoded PNG data URL
+   */
+  screenshot(name?: string | null): Promise<Types.BrowserScreenshotResult>;
+
+  /**
+   * Get structured page content.
+   * 
+   * Args:
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserSeeResult with page structure as JSON
+   */
+  see(name?: string | null): Promise<Types.BrowserSeeResult>;
+
+  /**
+   * Set the default browser.
+   * 
+   * Args:
+   * name: Browser name to set as default
+   * 
+   * Returns:
+   * BrowserResult indicating success/failure
+   */
+  setDefault(name: string): Promise<Types.BrowserResult>;
+
+  /**
+   * Set an input value by index.
+   * 
+   * Args:
+   * index: Input index (from inputs() result)
+   * value: Value to set
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult indicating success/failure
+   */
+  setInput(index: number, value: string, name?: string | null): Promise<Types.BrowserResult>;
+
+}
+
+export interface BrowserStateEvents {
+  /**
+   * Fired when a new browser is created.
+   */
+  browserCreated(callback: (data: Types.BrowserInfo) => void): Unsubscribe;
+
+  /**
+   * Fired when a browser is destroyed.
+   */
+  browserDestroyed(callback: (data: Types.BrowserInfo) => void): Unsubscribe;
+
+  /**
+   * Fired when browser state changes (created, destroyed, navigated, etc).
+   */
+  browserEvent(callback: (data: Types.BrowserEvent) => void): Unsubscribe;
+
+  /**
+   * Fired when a browser navigates to a new URL.
+   */
+  browserNavigated(callback: (data: Types.BrowserInfo) => void): Unsubscribe;
+
+}
+
+export class BrowserStateServiceClient implements BrowserStateService {
+  private ws: WebSocket;
+  private pending: Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }> = new Map();
+  private eventHandlers: Map<string, Set<(data: any) => void>> = new Map();
+
+  constructor(ws: WebSocket) {
+    this.ws = ws;
+    this.ws.addEventListener('message', this.handleMessage.bind(this));
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    const msg = JSON.parse(event.data);
+    if (msg.id && this.pending.has(msg.id)) {
+      const { resolve, reject } = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      if (msg.error) {
+        reject(new Error(msg.error.message));
+      } else {
+        resolve(msg.result);
+      }
+    } else if (msg.event) {
+      const handlers = this.eventHandlers.get(msg.event);
+      if (handlers) {
+        handlers.forEach(h => h(msg.data));
+      }
+    }
+  }
+
+  private async call<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const id = generateRequestId();
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
+  private subscribe(event: string, callback: (data: any) => void): Unsubscribe {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, new Set());
+    }
+    this.eventHandlers.get(event)!.add(callback);
+    return () => {
+      this.eventHandlers.get(event)?.delete(callback);
+    };
+  }
+
+  async back(name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('back', { name: name });
+  }
+
+  async buttons(name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('buttons', { name: name });
+  }
+
+  async click(selector: string, name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('click', { selector: selector, name: name });
+  }
+
+  async clickButton(index: number, name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('clickButton', { index: index, name: name });
+  }
+
+  async createBrowser(name?: string | null, browserType?: string, headless?: boolean, webdriverUrl?: string | null, port?: number | null, setAsDefault?: boolean): Promise<Types.BrowserResult> {
+    return this.call('createBrowser', { name: name, browserType: browserType, headless: headless, webdriverUrl: webdriverUrl, port: port, setAsDefault: setAsDefault });
+  }
+
+  async destroyBrowser(name: string): Promise<Types.BrowserResult> {
+    return this.call('destroyBrowser', { name: name });
+  }
+
+  async executeJs(script: string, name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('executeJs', { script: script, name: name });
+  }
+
+  async fill(selector: string, text: string, name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('fill', { selector: selector, text: text, name: name });
+  }
+
+  async forward(name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('forward', { name: name });
+  }
+
+  async getBrowser(name: string): Promise<Types.BrowserResult> {
+    return this.call('getBrowser', { name: name });
+  }
+
+  async getTitle(name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('getTitle', { name: name });
+  }
+
+  async getUrl(name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('getUrl', { name: name });
+  }
+
+  async goto(url: string, name?: string | null): Promise<Types.BrowserNavigateResult> {
+    return this.call('goto', { url: url, name: name });
+  }
+
+  async inputs(name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('inputs', { name: name });
+  }
+
+  async links(limit?: number | null, name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('links', { limit: limit, name: name });
+  }
+
+  async listBrowsers(): Promise<Types.BrowserListResult> {
+    return this.call('listBrowsers', {  });
+  }
+
+  async refresh(name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('refresh', { name: name });
+  }
+
+  async renameBrowser(oldName: string, newName: string): Promise<Types.BrowserResult> {
+    return this.call('renameBrowser', { oldName: oldName, newName: newName });
+  }
+
+  async screenshot(name?: string | null): Promise<Types.BrowserScreenshotResult> {
+    return this.call('screenshot', { name: name });
+  }
+
+  async see(name?: string | null): Promise<Types.BrowserSeeResult> {
+    return this.call('see', { name: name });
+  }
+
+  async setDefault(name: string): Promise<Types.BrowserResult> {
+    return this.call('setDefault', { name: name });
+  }
+
+  async setInput(index: number, value: string, name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('setInput', { index: index, value: value, name: name });
+  }
+
+  browserCreated(callback: (data: Types.BrowserInfo) => void): Unsubscribe {
+    return this.subscribe('browserCreated', callback);
+  }
+
+  browserDestroyed(callback: (data: Types.BrowserInfo) => void): Unsubscribe {
+    return this.subscribe('browserDestroyed', callback);
+  }
+
+  browserEvent(callback: (data: Types.BrowserEvent) => void): Unsubscribe {
+    return this.subscribe('browserEvent', callback);
+  }
+
+  browserNavigated(callback: (data: Types.BrowserInfo) => void): Unsubscribe {
+    return this.subscribe('browserNavigated', callback);
   }
 
 }

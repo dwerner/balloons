@@ -436,10 +436,20 @@ class SessionRunner:
         except Exception as e:
             self._status = RunnerStatus.ERROR
             debug_log.error(f"Stream error: {e}", session_id=self.session.id, category=Category.RUNNER)
+            dump_file = ""
+            if isinstance(e, RuntimeError):
+                error_text = str(e)
+                marker = "(debug dump: "
+                if marker in error_text:
+                    try:
+                        dump_file = error_text.split(marker, 1)[1].rstrip(")")
+                    except Exception:
+                        dump_file = ""
             # Create an error turn so the error is visible in the conversation
             error_block = ErrorBlock(
                 reason="api_error",
                 details=str(e),
+                dump_file=dump_file,
             )
             self._content_blocks.append(error_block)
             turn = self._create_turn("assistant", f"[Error: {e}]", [error_block])
@@ -454,7 +464,7 @@ class SessionRunner:
                 exchange_id=self._exchange_id,
                 turns=self._turns,
             )
-            yield self._make_event("error", str(e))
+            yield self._make_event("error", {"message": str(e), "dump_file": dump_file})
 
     def start_background(
         self,
@@ -594,13 +604,15 @@ class SessionRunner:
         except StreamTimeoutError as e:
             self._status = RunnerStatus.ERROR
             debug_log.error(f"Stream timeout: {e}", session_id=self.session.id, category=Category.RUNNER)
+            error_text = str(e)
             # Create an error turn with the timeout info
             error_block = ErrorBlock(
                 reason="timeout",
-                details=str(e),
+                details=error_text,
+                dump_file="",
             )
             self._content_blocks.append(error_block)
-            turn = self._create_turn("assistant", f"[Timeout: {e}]", [error_block])
+            turn = self._create_turn("assistant", f"[Timeout: {error_text}]", [error_block])
             self._turns.append(turn)
             self._save_turn_to_session(turn, save_now=True)
             await self._flush_pending_save()
@@ -608,21 +620,30 @@ class SessionRunner:
                 content=self._text_buffer,
                 content_blocks=self._content_blocks,
                 raw_events=self._raw_events,
-                error=str(e),
+                error=error_text,
                 exchange_id=self._exchange_id,
                 turns=self._turns,
             )
-            await self._event_queue.put(self._make_event("error", str(e)))
+            await self._event_queue.put(self._make_event("error", {"message": error_text, "dump_file": ""}))
         except Exception as e:
             self._status = RunnerStatus.ERROR
             debug_log.error(f"Stream error: {e}", session_id=self.session.id, category=Category.RUNNER)
+            dump_file = ""
+            error_text = str(e)
+            marker = "(debug dump: "
+            if marker in error_text:
+                try:
+                    dump_file = error_text.split(marker, 1)[1].rstrip(")")
+                except Exception:
+                    dump_file = ""
             # Create an error turn so the error is visible in the conversation
             error_block = ErrorBlock(
                 reason="api_error",
-                details=str(e),
+                details=error_text,
+                dump_file=dump_file,
             )
             self._content_blocks.append(error_block)
-            turn = self._create_turn("assistant", f"[Error: {e}]", [error_block])
+            turn = self._create_turn("assistant", f"[Error: {error_text}]", [error_block])
             self._turns.append(turn)
             self._save_turn_to_session(turn, save_now=True)
             await self._flush_pending_save()
@@ -630,11 +651,11 @@ class SessionRunner:
                 content=self._text_buffer,
                 content_blocks=self._content_blocks,
                 raw_events=self._raw_events,
-                error=str(e),
+                error=error_text,
                 exchange_id=self._exchange_id,
                 turns=self._turns,
             )
-            await self._event_queue.put(self._make_event("error", str(e)))
+            await self._event_queue.put(self._make_event("error", {"message": error_text, "dump_file": dump_file}))
 
     def drain_events(self) -> list[StreamEvent]:
         """Get all queued events without blocking.
@@ -1388,7 +1409,15 @@ class HelperRunner:
         except Exception as e:
             self._status = RunnerStatus.ERROR
             debug_log.error(f"Helper stream error: {e}", category=Category.RUNNER)
-            await self._event_queue.put(self._make_event("error", str(e)))
+            error_text = str(e)
+            dump_file = ""
+            marker = "(debug dump: "
+            if marker in error_text:
+                try:
+                    dump_file = error_text.split(marker, 1)[1].rstrip(")")
+                except Exception:
+                    dump_file = ""
+            await self._event_queue.put(self._make_event("error", {"message": error_text, "dump_file": dump_file}))
 
     def drain_events(self) -> list[StreamEvent]:
         """Get all queued events without blocking."""

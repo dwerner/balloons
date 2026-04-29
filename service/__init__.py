@@ -70,6 +70,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from service.auth_routes import AuthRoutes
+    from service.browser_state_service import BrowserStateService
     from service.debug_log_service import DebugLogService
     from service.file_state_service import FileStateService
     from service.goal_tree_state_service import GoalTreeStateService
@@ -108,6 +109,7 @@ __all__ = [
     "DebugLogService",
     "FileStateService",
     "SupervisorStateService",
+    "BrowserStateService",
     "LSPService",
     "KanbanWebSocketService",
     "WsServer",
@@ -144,6 +146,7 @@ _EXPORT_MAP = {
     "DebugLogService": ("service.debug_log_service", "DebugLogService"),
     "FileStateService": ("service.file_state_service", "FileStateService"),
     "SupervisorStateService": ("service.supervisor_state_service", "SupervisorStateService"),
+    "BrowserStateService": ("service.browser_state_service", "BrowserStateService"),
     "LSPService": ("service.lsp_service", "LSPService"),
     "KanbanWebSocketService": ("service.kanban_ws_service", "KanbanWebSocketService"),
     "WsServer": ("service.ws_server", "WsServer"),

@@ -185,6 +185,8 @@ function getTextFromBlock(block: ContentBlock): string {
   if (!block) return '';
   switch (block.type) {
     case 'text':
+    case 'markdown':
+    case 'thinking':
       return (block as TextBlock).text ?? '';
     case 'tool_result':
       return (block as ToolResultBlock).content ?? '';
@@ -202,6 +204,8 @@ function createInitialBlock(contentBlockType: string): ContentBlock {
       return { type: 'text', text: '' } as TextBlock;
     case 'markdown':
       return { type: 'markdown', text: '' } as MarkdownBlock;
+    case 'thinking':
+      return { type: 'thinking', text: '' } as TextBlock;
     case 'tool_use':
       return { type: 'tool_use', id: '', name: '', input: {} } as ToolUseBlock;
     case 'tool_result':
@@ -570,7 +574,11 @@ export function useSessionData(
 
             const delta = event.delta ?? '';
             const turnId = event.turnId ?? '';
-            const blockType = event.contentBlockType === 'thinking' ? 'thinking' : 'text';
+            const blockType = event.contentBlockType === 'thinking'
+              ? 'thinking'
+              : event.contentBlockType === 'markdown'
+              ? 'markdown'
+              : 'text';
 
             if (!turnId) {
               debugLog('[useSessionData] turnDelta missing turnId:', event);
@@ -615,7 +623,7 @@ export function useSessionData(
               return;
             }
 
-            // Accumulate plain text delta instead of immediately updating state
+            // Accumulate non-thinking text/markdown deltas instead of immediately updating state
             const existing = pendingDeltasRef.current.get(turnId) ?? '';
             pendingDeltasRef.current.set(turnId, existing + delta);
           })
@@ -751,7 +759,10 @@ export function useSessionData(
           client.sessionData.sessionDataStreamError((event: SessionStreamErrorEvent) => {
             if (event.sessionId !== newSessionId) return;
             setIsStreaming(false);
-            setStreamError(event.error);
+            const errorWithDump = event.dumpFile
+              ? `${event.error}\n\nDebug dump: ${event.dumpFile}`
+              : event.error;
+            setStreamError(errorWithDump);
             setStreamingProgress(null);
           })
         );

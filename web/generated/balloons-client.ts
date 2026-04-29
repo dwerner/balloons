@@ -31,6 +31,7 @@ import {
   GoalTreeStateServiceClient,
   SoundServiceClient,
   SupervisorStateServiceClient,
+  BrowserStateServiceClient,
   LSPServiceClient,
   KanbanWebSocketServiceClient,
   DomainRpcServiceClient,
@@ -83,6 +84,7 @@ export class BalloonsClient {
   private _goals: GoalTreeStateServiceClient | null = null;
   private _sounds: SoundServiceClient | null = null;
   private _supervisor: SupervisorStateServiceClient | null = null;
+  private _browser: BrowserStateServiceClient | null = null;
   private _lsp: LSPServiceClient | null = null;
   private _kanban: KanbanWebSocketServiceClient | null = null;
   private _domainRpc: DomainRpcServiceClient | null = null;
@@ -204,6 +206,14 @@ export class BalloonsClient {
       throw new Error('Not connected. Call connect() first.');
     }
     return this._supervisor;
+  }
+
+  /** Browser state service (browser instance management) */
+  get browser(): BrowserStateServiceClient {
+    if (!this._browser) {
+      throw new Error('Not connected. Call connect() first.');
+    }
+    return this._browser;
   }
 
   /** LSP service (language server management) */
@@ -370,6 +380,7 @@ export class BalloonsClient {
     this._goals = new GoalTreeStateServiceClient(this.ws);
     this._sounds = new SoundServiceClient(this.ws);
     this._supervisor = new SupervisorStateServiceClient(this.ws);
+    this._browser = new BrowserStateServiceClient(this.ws);
     this._lsp = new LSPServiceClient(this.ws);
     this._kanban = new KanbanWebSocketServiceClient(this.ws);
     this._domainRpc = new DomainRpcServiceClient(this.ws);
@@ -386,6 +397,7 @@ export class BalloonsClient {
     this._goals = null;
     this._sounds = null;
     this._supervisor = null;
+    this._browser = null;
     this._lsp = null;
     this._kanban = null;
     this._domainRpc = null;

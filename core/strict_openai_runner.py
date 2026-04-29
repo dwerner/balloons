@@ -433,6 +433,10 @@ class StrictOpenAICompatibleRunner(BaseRunner):
         if live_tail and live_tail[0].get("role") == "assistant" and live_tail[0].get("tool_calls"):
             rebuilt_with_tail = [*rebuilt, *live_tail]
             self._strict_validator.validate_replay(rebuilt_with_tail, allow_open_tool_cycle_at_end=True)
+            # If the live tail already contains a synthetic closing assistant from an
+            # older runtime path, trim it before sending. Reasoning-enabled strict
+            # backends treat trailing assistant text as prefill, and the open
+            # assistant+tool tail is the only valid in-flight state here.
             if rebuilt_with_tail and rebuilt_with_tail[-1].get("role") == "assistant" and not rebuilt_with_tail[-1].get("tool_calls"):
                 rebuilt_with_tail = rebuilt_with_tail[:-1]
             return rebuilt_with_tail
@@ -681,11 +685,11 @@ class StrictOpenAICompatibleRunner(BaseRunner):
                                 injected_at_tool_id=tc["id"],
                             )
 
-                if tool_cycle_completed and not any(
-                    msg.get("role") == "assistant" and not msg.get("tool_calls")
-                    for msg in openai_messages[1:]
-                ):
-                    openai_messages.append({"role": "assistant", "content": ""})
+                # Do not append a synthetic closing assistant into the live mutable tail.
+                # For reasoning-enabled strict backends, a trailing assistant is treated as
+                # assistant prefill and can also confuse alternation when the next rebuild
+                # appends a fresh user prompt. Canonical rebuild/packaging is responsible for
+                # synthesizing any required tool-cycle closing assistant.
 
                 # Accumulated steering is folded into the next rebuilt user prompt
                 # through session history rather than appended to the mutable runtime
@@ -737,6 +741,21 @@ class StrictOpenAICompatibleRunner(BaseRunner):
                     }
                     for i, m in enumerate(openai_messages)
                 ]
+                try:
+                    rebuilt_for_error = self._rebuild_strict_messages(messages, prompt, openai_messages)
+                    details["rebuilt_message_roles"] = [
+                        {
+                            "idx": i,
+                            "role": m.get("role"),
+                            "has_tool_calls": bool(m.get("tool_calls")),
+                            "tool_call_id": m.get("tool_call_id"),
+                            "content_type": type(m.get("content")).__name__ if "content" in m else None,
+                            "content_preview": (m.get("content")[:120] if isinstance(m.get("content"), str) else None),
+                        }
+                        for i, m in enumerate(rebuilt_for_error)
+                    ]
+                except Exception as rebuild_error:
+                    details["rebuilt_message_roles_error"] = str(rebuild_error)
 
             dump_path = _dump_interaction(
                 context="stream_error",
@@ -746,6 +765,18 @@ class StrictOpenAICompatibleRunner(BaseRunner):
                 chunks=self._collected_chunks,
                 error=f"{type(e).__name__}: {e}",
             )
+            try:
+                rebuilt_snapshot = self._rebuild_strict_messages(messages, prompt, openai_messages)
+                _dump_interaction(
+                    context="stream_error_rebuilt",
+                    model=self.model,
+                    messages=rebuilt_snapshot,
+                    tools=tools,
+                    chunks=self._collected_chunks,
+                    error=f"rebuilt snapshot for {type(e).__name__}: {e}",
+                )
+            except Exception:
+                pass
             if dump_path is not None:
                 details["dump_file"] = str(dump_path)
                 error_str = f"{error_str} (debug dump: {dump_path})"
@@ -756,7 +787,14 @@ class StrictOpenAICompatibleRunner(BaseRunner):
                 details=details,
                 run_id=self._run_id,
             )
-            raise RuntimeError(error_str) from e
+            yield {
+                "event_type": "error",
+                "data": {
+                    "message": error_str,
+                    "dump_file": details.get("dump_file", ""),
+                },
+            }
+            return
 
         finally:
             self._running = False

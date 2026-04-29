@@ -296,6 +296,7 @@ class SessionStreamErrorEvent:
     exchange_id: str
     error: str
     error_type: str  # "error", "rate_limit", "cancelled"
+    dump_file: str = ""
 
 
 @ws_type
@@ -3161,6 +3162,7 @@ class SessionDataService:
             "exchange_id": event.exchange_id,
             "error": event.error,
             "error_type": event.error_type,  # "error", "rate_limit", "cancelled"
+            "dump_file": event.dump_file,
         }
         self._emit_event("sessionDataStreamError", event_data, subscribers)
 

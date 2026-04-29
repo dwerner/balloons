@@ -220,7 +220,9 @@ function getDisplayContent(block: SessionDataTurn['contentBlock']): string {
     }
     case 'error': {
       const b = block as ErrorBlock;
-      return `**${b.reason}**\n\n${b.details || ''}`;
+      const details = b.details || '';
+      const dump = b.dumpFile ? `\n\nDebug dump: ${b.dumpFile}` : '';
+      return `**${b.reason}**\n\n${details}${dump}`;
     }
     case 'interruption': {
       const b = block as InterruptionBlock;

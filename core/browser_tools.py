@@ -5,10 +5,14 @@ The Browser class from balloons_storage provides async web automation.
 
 Tools are defined in prompts/tools/openai/browser_*.json and loaded
 via the tool_schemas module.
+
+Browser instances are managed by BrowserStateService for multi-browser support.
+Tools support an optional `browser_name` parameter to target a specific browser.
+If not specified, the default browser is used.
 """
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from .debug_log import debug_log, Category
 from .tool_schemas import get_balloon_tool_schema
@@ -101,6 +105,10 @@ async def execute_browser_tool(
 
     Returns:
         Tuple of (result_string, is_error)
+
+    Note:
+        Tools support an optional `browser_name` argument to target a specific
+        browser instance. If not specified, the default browser is used.
     """
     debug_log.info(
         f"Executing browser tool: {name}",
@@ -108,17 +116,22 @@ async def execute_browser_tool(
         details={"args": args},
     )
 
+    # Extract browser_name from args (optional targeting)
+    browser_name = args.pop("browser_name", None)
+
     try:
-        # Get or create browser instance from session
-        browser = await _get_browser(session)
+        # Get browser instance (from registry or session)
+        browser = await _get_browser(session, browser_name)
 
         if name == "browser_start":
-            return await _browser_start(args, session)
+            return await _browser_start(args, session, browser_name)
         elif name == "browser_stop":
-            return await _browser_stop(session)
+            return await _browser_stop(session, browser_name)
 
         # All other tools require an active browser
         if browser is None:
+            if browser_name:
+                return f"Error: Browser '{browser_name}' not found. Call browser_start first.", True
             return "Error: No browser session. Call browser_start first.", True
 
         if name == "browser_goto":
@@ -343,37 +356,99 @@ def _format_browser_links(result) -> str:
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
-async def _get_browser(session: "Session"):
-    """Get the browser instance from session, if any."""
-    return getattr(session, "_browser", None)
+def _get_browser_instance(name: Optional[str] = None):
+    """Get a browser instance by name from the global registry.
+
+    Args:
+        name: Browser name (uses default if not specified)
+
+    Returns:
+        BrowserInstance or None
+    """
+    try:
+        from service.browser_state_service import get_browser_by_name
+        return get_browser_by_name(name)
+    except ImportError:
+        return None
 
 
-async def _browser_start(args: dict, session: "Session") -> tuple[str, bool]:
-    """Start a new browser session."""
+async def _get_browser(session: "Session", browser_name: Optional[str] = None):
+    """Get the browser instance.
+
+    First checks the global browser registry (BrowserStateService).
+    Falls back to session._browser for backwards compatibility.
+
+    Args:
+        session: The session (legacy fallback)
+        browser_name: Optional browser name to target
+
+    Returns:
+        Browser instance or None
+    """
+    # Try global registry first
+    instance = _get_browser_instance(browser_name)
+    if instance:
+        return instance.browser
+
+    # Fall back to session browser (legacy)
+    if browser_name is None:
+        return getattr(session, "_browser", None)
+
+    return None
+
+
+async def _browser_start(
+    args: dict,
+    session: "Session",
+    browser_name: Optional[str] = None,
+) -> tuple[str, bool]:
+    """Start a new browser session.
+
+    Uses BrowserStateService if available, falls back to session storage.
+    """
+    browser_type = args.get("browser_type", "chrome")
+    requested_headless = args.get("headless")
+    headless = True if requested_headless is None else bool(requested_headless)
+    webdriver_url = args.get("webdriver_url")
+    port = args.get("port")
+
+    # Try using BrowserStateService first
+    try:
+        from service.browser_state_service import _service_instance
+
+        if _service_instance is not None:
+            result = await _service_instance.create_browser(
+                name=browser_name,
+                browser_type=browser_type,
+                headless=headless,
+                webdriver_url=webdriver_url,
+                port=port,
+                set_as_default=browser_name is None,  # Set as default if no name specified
+            )
+
+            if result.success and result.browser:
+                details = [
+                    f"name: {result.browser.name}",
+                    f"ID: {result.browser.browser_id[:8]}...",
+                    f"type: {browser_type}",
+                    f"headless: {headless}",
+                ]
+                if webdriver_url:
+                    details.append(f"webdriver_url: {webdriver_url}")
+                elif port is not None:
+                    details.append(f"port: {port}")
+                return f"Browser started ({', '.join(details)})", False
+            else:
+                return f"Error starting browser: {result.error}", True
+    except ImportError:
+        pass  # Fall back to legacy session storage
+
+    # Legacy fallback: store browser on session
     try:
         from balloons_storage import Browser, BrowserConfig
 
-        browser_type = args.get("browser_type", "chrome")
-        requested_headless = args.get("headless")
-        headless = True if requested_headless is None else bool(requested_headless)
-        webdriver_url = args.get("webdriver_url")
-        port = args.get("port")
-
-        # If the caller wants a visible browser but this process has no display,
-        # prefer using the system X server when available.
-        if not headless and not webdriver_url:
-            import os
-            display = os.environ.get("DISPLAY")
-            if not display and os.path.exists("/tmp/.X11-unix/X0"):
-                display = ":0"
-            if display:
-                os.environ["DISPLAY"] = display
-            else:
-                return (
-                    "Error starting browser: non-headless browser requested but no DISPLAY is available. "
-                    "Either run with headless=true, start Balloons with DISPLAY=:0, or provide webdriver_url to an existing GUI WebDriver.",
-                    True,
-                )
+        # X11 display detection is handled by surfer-rs when spawning the WebDriver process.
+        # It will auto-detect DISPLAY and XAUTHORITY for non-headless mode.
 
         config_kwargs = {
             "browser_type": browser_type,
@@ -381,6 +456,13 @@ async def _browser_start(args: dict, session: "Session") -> tuple[str, bool]:
         }
         if port is not None:
             config_kwargs["port"] = port
+        elif not webdriver_url:
+            # Use a unique port from the service if available
+            try:
+                from service.browser_state_service import _get_next_port
+                config_kwargs["port"] = _get_next_port()
+            except ImportError:
+                pass  # Use default port
         if webdriver_url:
             config_kwargs["webdriver_url"] = webdriver_url
 
@@ -412,8 +494,36 @@ async def _browser_start(args: dict, session: "Session") -> tuple[str, bool]:
         return f"Error starting browser: {str(e)}", True
 
 
-async def _browser_stop(session: "Session") -> tuple[str, bool]:
-    """Stop the browser session."""
+async def _browser_stop(
+    session: "Session",
+    browser_name: Optional[str] = None,
+) -> tuple[str, bool]:
+    """Stop a browser session.
+
+    Uses BrowserStateService if available, falls back to session storage.
+    """
+    # Try using BrowserStateService first
+    try:
+        from service.browser_state_service import (
+            _service_instance,
+            get_browser_by_name,
+            get_default_browser_name,
+        )
+
+        if _service_instance is not None:
+            # Determine which browser to stop
+            name_to_stop = browser_name or get_default_browser_name()
+            if name_to_stop:
+                result = await _service_instance.destroy_browser(name_to_stop)
+                if result.success:
+                    debug_log.info(f"Browser stopped: {name_to_stop}", category=Category.RUNNER)
+                    return f"Browser '{name_to_stop}' stopped", False
+                else:
+                    return f"Error stopping browser: {result.error}", True
+    except ImportError:
+        pass  # Fall back to legacy session storage
+
+    # Legacy fallback: use session browser
     browser = getattr(session, "_browser", None)
     if browser is None:
         return "No browser session to stop", False

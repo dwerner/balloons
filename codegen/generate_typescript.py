@@ -377,6 +377,7 @@ def main():
         import service.goal_tree_state_service  # GoalTreeStateService
         import service.sound_service  # SoundService
         import service.supervisor_state_service  # SupervisorStateService
+        import service.browser_state_service  # BrowserStateService
         import service.lsp_service  # LSPService
         import service.kanban_ws_service  # KanbanWebSocketService
         import plugins.rpc_service  # DomainRpcService - for plugin @ws_expose methods

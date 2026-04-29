@@ -7,6 +7,7 @@ import { SessionTreeView } from './components/SessionTreeView';
 import { HierarchyView } from './components/HierarchyView';
 import { FileBrowserView, type FileBrowserViewRef } from './components/FileBrowserView';
 import { SupervisorTab } from './components/SupervisorTab';
+import { BrowserTab } from './components/BrowserTab';
 import { DomainsTab } from './components/DomainsTab';
 import { OptionsTab } from './components/OptionsTab';
 import { SettingsTab } from './components/SettingsTab';
@@ -1293,8 +1294,8 @@ function AppContent() {
   const fileBrowserRef = useRef<FileBrowserViewRef>(null);
   const codeTabRef = useRef<CodeTabHandle>(null);
 
-  // Detail panel tab state ('files', 'supervisor', 'domains', or 'options')
-  type DetailTab = 'files' | 'supervisor' | 'domains' | 'options';
+  // Detail panel tab state ('files', 'supervisor', 'browsers', 'domains', or 'options')
+  type DetailTab = 'files' | 'supervisor' | 'browsers' | 'domains' | 'options';
   const [detailTab, setDetailTab] = useState<DetailTab>('files');
 
   // Track the session we're currently loading to handle race conditions
@@ -3985,6 +3986,12 @@ function AppContent() {
             Supervisor
           </button>
           <button
+            className={`detail-panel-tab ${detailTab === 'browsers' ? 'active' : ''}`}
+            onClick={() => setDetailTab('browsers')}
+          >
+            Browsers
+          </button>
+          <button
             className={`detail-panel-tab ${detailTab === 'domains' ? 'active' : ''}`}
             onClick={() => setDetailTab('domains')}
           >
@@ -4061,6 +4068,13 @@ function AppContent() {
                   }
                 }
               }}
+            />
+          )}
+
+          {detailTab === 'browsers' && (
+            <BrowserTab
+              browserClient={connectionState === 'connected' ? clientRef.current?.browser : undefined}
+              isLoading={connectionState !== 'connected'}
             />
           )}
 

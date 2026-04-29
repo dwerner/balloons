@@ -23,7 +23,7 @@ def test_strict_runner_error_text_mentions_debug_dump_path():
     assert "tool-call markup" in error_text
 
 
-def test_strict_runner_re_raises_stream_error_with_dump_path(monkeypatch):
+def test_strict_runner_emits_stream_error_event_with_dump_path(monkeypatch):
     runner = StrictOpenAICompatibleRunner(
         base_url="http://test",
         api_key="test",
@@ -45,9 +45,11 @@ def test_strict_runner_re_raises_stream_error_with_dump_path(monkeypatch):
             events.append(event)
         return events
 
-    with pytest.raises(RuntimeError, match=r"boom \(debug dump: /tmp/strict-built-session\.json\)"):
-        import asyncio
-        asyncio.run(consume())
+    import asyncio
+    events = asyncio.run(consume())
+    assert events[-1]["event_type"] == "error"
+    assert events[-1]["data"]["message"] == "boom (debug dump: /tmp/strict-built-session.json)"
+    assert events[-1]["data"]["dump_file"] == "/tmp/strict-built-session.json"
 
 
 def test_strict_runner_rejects_trailing_assistant_prefill(monkeypatch):

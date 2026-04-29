@@ -307,7 +307,7 @@ async def run_server(
     ws_server.register_service(kanban_ws_service)
 
     # Supervisor service for process/host management
-    from service import SupervisorStateService, LSPService
+    from service import SupervisorStateService, LSPService, BrowserStateService
     from service.supervisor_state_service import register_output_callback
     supervisor_service = SupervisorStateService()
     ws_server.register_service(supervisor_service)
@@ -315,6 +315,10 @@ async def run_server(
     # LSP service for language server management
     lsp_service = LSPService()
     ws_server.register_service(lsp_service)
+
+    # Browser service for browser instance management
+    browser_service = BrowserStateService()
+    ws_server.register_service(browser_service)
 
     # Domain RPC service - exposes domain @ws_expose methods for direct WebSocket calls
     from plugins.rpc_service import DomainRpcService

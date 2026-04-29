@@ -178,6 +178,7 @@ class StreamErrorEvent:
     exchange_id: str
     error: str
     error_type: str = "error"  # "error", "rate_limit", "cancelled"
+    dump_file: str = ""
 
 
 @dataclass

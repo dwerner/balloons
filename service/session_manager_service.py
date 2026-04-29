@@ -2652,7 +2652,11 @@ class SessionManagerService:
 
         elif event_type == "error":
             # Error - mark stream as failed
-            error_msg = data if isinstance(data, str) else str(data)
+            dump_file = data.get("dump_file", "") if isinstance(data, dict) else ""
+            if isinstance(data, dict):
+                error_msg = data.get("message") or data.get("error") or str(data)
+            else:
+                error_msg = data if isinstance(data, str) else str(data)
 
             # Notify observers with typed event
             await self._notify_observers(
@@ -2662,6 +2666,7 @@ class SessionManagerService:
                     exchange_id=ctx.exchange_id,
                     error=error_msg,
                     error_type="error",
+                    dump_file=dump_file,
                 ),
             )
 
@@ -2670,10 +2675,24 @@ class SessionManagerService:
             # The runner has already added an ErrorBlock turn to the session
             # Emit turn events so the UI displays it
             session = self._manager.get_session(session_id)
+            debug_log.info(
+                "stream error persistence patch",
+                category=Category.RUNNER,
+                details={
+                    "has_session": bool(session),
+                    "has_turns": bool(getattr(session, 'turns', None)) if session else False,
+                    "dump_file": dump_file,
+                    "last_turn_block_type": type(session.turns[-1].content_block).__name__ if session and getattr(session, 'turns', None) else None,
+                },
+            )
             if session and session.turns:
                 last_turn = session.turns[-1]
                 # Check if the last turn is an error turn
                 if isinstance(last_turn.content_block, ErrorBlock):
+                    if dump_file:
+                        setattr(last_turn.content_block, "dump_file", dump_file)
+                        last_turn.mark_dirty()
+                        asyncio.create_task(session.save())
                     turn_idx = len(session.turns) - 1
                     await self._notify_observers(
                         "on_turn_created",
@@ -2708,7 +2727,12 @@ class SessionManagerService:
 
         elif event_type == "rate_limit":
             # Rate limit error - mark stream as failed
-            error_msg = data if isinstance(data, str) else str(data)
+            dump_file = data.get("dump_file", "") if isinstance(data, dict) else ""
+            if isinstance(data, dict):
+                base_error = data.get("message") or data.get("error") or str(data)
+            else:
+                base_error = data if isinstance(data, str) else str(data)
+            error_msg = f"Rate limit: {base_error}"
 
             # Notify observers with typed event
             await self._notify_observers(
@@ -2716,8 +2740,9 @@ class SessionManagerService:
                 StreamErrorEvent(
                     session_id=session_id,
                     exchange_id=ctx.exchange_id,
-                    error=f"Rate limit: {error_msg}",
+                    error=error_msg,
                     error_type="rate_limit",
+                    dump_file=dump_file,
                 ),
             )
 
@@ -2730,6 +2755,10 @@ class SessionManagerService:
                 last_turn = session.turns[-1]
                 # Check if the last turn is an error turn
                 if isinstance(last_turn.content_block, ErrorBlock):
+                    if dump_file:
+                        setattr(last_turn.content_block, "dump_file", dump_file)
+                        last_turn.mark_dirty()
+                        asyncio.create_task(session.save())
                     turn_idx = len(session.turns) - 1
                     await self._notify_observers(
                         "on_turn_created",
@@ -2772,6 +2801,7 @@ class SessionManagerService:
                     exchange_id=ctx.exchange_id,
                     error="Stream cancelled",
                     error_type="cancelled",
+                    dump_file=(getattr(data, "dump_file", "") if not isinstance(data, str) else ""),
                 ),
             )
 

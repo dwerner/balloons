@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-04-28T19:02:21.903002
+// Generated: 2026-04-29T09:18:19.008575
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -812,6 +812,7 @@ export interface SessionStreamErrorEvent {
   exchangeId: string;
   error: string;
   errorType: string;
+  dumpFile?: string;
 }
 
 export interface SessionToolUseStartedEvent {
@@ -1366,6 +1367,67 @@ export interface SupervisorEvent {
 export interface EventHistoryResult {
   events: SupervisorEvent[];
   totalBuffered: number;
+}
+
+export interface BrowserInfo {
+  name: string;
+  browserId: string;
+  browserType: string;
+  headless: boolean;
+  status: string;
+  currentUrl?: string | null;
+  currentTitle?: string | null;
+  createdAt?: number;
+  error?: string | null;
+}
+
+export interface BrowserListResult {
+  browsers: BrowserInfo[];
+  defaultBrowser?: string | null;
+}
+
+export interface BrowserCreateRequest {
+  name?: string | null;
+  browserType?: string;
+  headless?: boolean;
+  webdriverUrl?: string | null;
+  port?: number | null;
+  setAsDefault?: boolean;
+}
+
+export interface BrowserResult {
+  success: boolean;
+  browser?: BrowserInfo | null;
+  error?: string | null;
+  data?: string | null;
+}
+
+export interface BrowserNavigateResult {
+  success: boolean;
+  url?: string | null;
+  title?: string | null;
+  error?: string | null;
+}
+
+export interface BrowserScreenshotResult {
+  success: boolean;
+  dataUrl?: string | null;
+  error?: string | null;
+}
+
+export interface BrowserSeeResult {
+  success: boolean;
+  content?: string | null;
+  error?: string | null;
+}
+
+export interface BrowserEvent {
+  browserName: string;
+  eventType: string;
+  browser?: BrowserInfo | null;
+  url?: string | null;
+  title?: string | null;
+  ts?: number;
 }
 
 export interface LSPServerConfig {

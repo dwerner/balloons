@@ -1476,6 +1476,7 @@ class Session:
                 partial_tool_name=data.get("partial_tool_name", ""),
                 partial_tool_input=data.get("partial_tool_input", ""),
                 details=data.get("details", ""),
+                dump_file=data.get("dump_file", ""),
             )
         elif block_type == "link":
             return LinkBlock(
