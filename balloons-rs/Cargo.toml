@@ -19,9 +19,6 @@ tiktoken-rs = "0.6"
 # Process management
 procstream = { path = "../../procstream", features = ["macros"] }
 
-# Browser automation
-surfer = { path = "../../surfer", default-features = false }
-
 # Storage
 heed = "0.21"
 postcard = { version = "1", features = ["alloc"] }
