@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_event decorators.
-// Generated: 2026-04-29T09:18:19.014341
+// Generated: 2026-04-29T09:55:23.301746
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -4965,6 +4965,20 @@ export interface BrowserStateService {
   clickButton(index: number, name?: string | null): Promise<Types.BrowserResult>;
 
   /**
+   * Close the current tab.
+   * 
+   * Args:
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult indicating success/failure
+   * 
+   * Note:
+   * If this is the last tab, the browser will be closed.
+   */
+  closeTab(name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
    * Create a new browser instance.
    * 
    * Args:
@@ -5104,6 +5118,29 @@ export interface BrowserStateService {
   listBrowsers(): Promise<Types.BrowserListResult>;
 
   /**
+   * List all tabs in a browser.
+   * 
+   * Args:
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * TabListResult with list of tabs
+   */
+  listTabs(name?: string | null): Promise<Types.TabListResult>;
+
+  /**
+   * Open a new tab.
+   * 
+   * Args:
+   * url: URL to navigate to (optional)
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult with the new tab handle in data field
+   */
+  newTab(url?: string | null, name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
    * Refresh the page.
    * 
    * Args:
@@ -5131,11 +5168,12 @@ export interface BrowserStateService {
    * 
    * Args:
    * name: Browser name (uses default if not specified)
+   * save_to_file: If True, save to a temp file and return path instead of data URL
    * 
    * Returns:
-   * BrowserScreenshotResult with base64-encoded PNG data URL
+   * BrowserScreenshotResult with base64-encoded PNG data URL or file path
    */
-  screenshot(name?: string | null): Promise<Types.BrowserScreenshotResult>;
+  screenshot(name?: string | null, saveToFile?: boolean): Promise<Types.BrowserScreenshotResult>;
 
   /**
    * Get structured page content.
@@ -5171,6 +5209,18 @@ export interface BrowserStateService {
    * BrowserResult indicating success/failure
    */
   setInput(index: number, value: string, name?: string | null): Promise<Types.BrowserResult>;
+
+  /**
+   * Switch to a specific tab.
+   * 
+   * Args:
+   * handle: Window handle of the tab to switch to
+   * name: Browser name (uses default if not specified)
+   * 
+   * Returns:
+   * BrowserResult indicating success/failure
+   */
+  switchTab(handle: string, name?: string | null): Promise<Types.BrowserResult>;
 
 }
 
@@ -5259,6 +5309,10 @@ export class BrowserStateServiceClient implements BrowserStateService {
     return this.call('clickButton', { index: index, name: name });
   }
 
+  async closeTab(name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('closeTab', { name: name });
+  }
+
   async createBrowser(name?: string | null, browserType?: string, headless?: boolean, webdriverUrl?: string | null, port?: number | null, setAsDefault?: boolean): Promise<Types.BrowserResult> {
     return this.call('createBrowser', { name: name, browserType: browserType, headless: headless, webdriverUrl: webdriverUrl, port: port, setAsDefault: setAsDefault });
   }
@@ -5307,6 +5361,14 @@ export class BrowserStateServiceClient implements BrowserStateService {
     return this.call('listBrowsers', {  });
   }
 
+  async listTabs(name?: string | null): Promise<Types.TabListResult> {
+    return this.call('listTabs', { name: name });
+  }
+
+  async newTab(url?: string | null, name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('newTab', { url: url, name: name });
+  }
+
   async refresh(name?: string | null): Promise<Types.BrowserResult> {
     return this.call('refresh', { name: name });
   }
@@ -5315,8 +5377,8 @@ export class BrowserStateServiceClient implements BrowserStateService {
     return this.call('renameBrowser', { oldName: oldName, newName: newName });
   }
 
-  async screenshot(name?: string | null): Promise<Types.BrowserScreenshotResult> {
-    return this.call('screenshot', { name: name });
+  async screenshot(name?: string | null, saveToFile?: boolean): Promise<Types.BrowserScreenshotResult> {
+    return this.call('screenshot', { name: name, saveToFile: saveToFile });
   }
 
   async see(name?: string | null): Promise<Types.BrowserSeeResult> {
@@ -5329,6 +5391,10 @@ export class BrowserStateServiceClient implements BrowserStateService {
 
   async setInput(index: number, value: string, name?: string | null): Promise<Types.BrowserResult> {
     return this.call('setInput', { index: index, value: value, name: name });
+  }
+
+  async switchTab(handle: string, name?: string | null): Promise<Types.BrowserResult> {
+    return this.call('switchTab', { handle: handle, name: name });
   }
 
   browserCreated(callback: (data: Types.BrowserInfo) => void): Unsubscribe {

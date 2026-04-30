@@ -14,6 +14,8 @@ import type { BrowserStateServiceClient } from '../../../../generated/client';
 import type {
   BrowserInfo,
   BrowserListResult,
+  TabInfo,
+  TabListResult,
 } from '../../../../generated/balloons-client';
 import { useDialog } from '../Dialog';
 import './BrowserTab.css';
@@ -71,24 +73,36 @@ interface BrowserItemProps {
   browser: BrowserInfo;
   isDefault: boolean;
   isSelected: boolean;
+  tabs: TabInfo[];
   onSelect: () => void;
   onSetDefault: () => void;
   onRename: (newName: string) => void;
   onDestroy: () => void;
   onRefresh: () => void;
   onScreenshot: () => void;
+  onNewTab: () => void;
+  onSwitchTab: (handle: string) => void;
+  onCloseTab: () => void;
+  onSeePreview?: () => void;
+  onScreenshotToChat?: () => void;
 }
 
 function BrowserItem({
   browser,
   isDefault,
   isSelected,
+  tabs,
   onSelect,
   onSetDefault,
   onRename,
   onDestroy,
   onRefresh,
   onScreenshot,
+  onNewTab,
+  onSwitchTab,
+  onCloseTab,
+  onSeePreview,
+  onScreenshotToChat,
 }: BrowserItemProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(browser.name);
@@ -167,6 +181,46 @@ function BrowserItem({
         </div>
       )}
 
+      {/* Tabs section - only show when connected and selected */}
+      {isSelected && browser.status === 'connected' && tabs.length > 0 && (
+        <div className="browser-item__tabs">
+          <div className="browser-item__tabs-header">
+            <span className="browser-item__tabs-label">Tabs ({tabs.length})</span>
+            <ActionButton
+              label="+"
+              onClick={onNewTab}
+              title="Open new tab"
+            />
+          </div>
+          <div className="browser-item__tabs-list">
+            {tabs.map((tab, index) => (
+              <div
+                key={tab.handle}
+                className={`browser-item__tab ${tab.isActive ? 'browser-item__tab--active' : ''}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSwitchTab(tab.handle);
+                }}
+                title={tab.url || `Tab ${index + 1}`}
+              >
+                <span className="browser-item__tab-index">{index + 1}</span>
+                <span className="browser-item__tab-title">
+                  {tab.title || tab.url || `Tab ${index + 1}`}
+                </span>
+                {tab.isActive && (
+                  <ActionButton
+                    label="✕"
+                    onClick={onCloseTab}
+                    variant="danger"
+                    title="Close tab"
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="browser-item__actions">
         {!isDefault && browser.status === 'connected' && (
           <ActionButton
@@ -185,8 +239,22 @@ function BrowserItem({
             <ActionButton
               label="📷"
               onClick={onScreenshot}
-              title="Take screenshot"
+              title="Take screenshot (preview)"
             />
+            {onSeePreview && (
+              <ActionButton
+                label="👁️"
+                onClick={onSeePreview}
+                title="View page structure"
+              />
+            )}
+            {onScreenshotToChat && (
+              <ActionButton
+                label="📷→💬"
+                onClick={onScreenshotToChat}
+                title="Save screenshot and send path to chat"
+              />
+            )}
           </>
         )}
         <ActionButton
@@ -205,20 +273,72 @@ function ScreenshotModal({
   dataUrl,
   browserName,
   onClose,
+  onSendToChat,
 }: {
   dataUrl: string;
   browserName: string;
   onClose: () => void;
+  onSendToChat?: () => void;
 }) {
   return (
     <div className="screenshot-modal-overlay" onClick={onClose}>
       <div className="screenshot-modal" onClick={(e) => e.stopPropagation()}>
         <div className="screenshot-modal__header">
           <span>Screenshot: {browserName}</span>
-          <button onClick={onClose}>✕</button>
+          <div className="screenshot-modal__header-actions">
+            {onSendToChat && (
+              <button onClick={onSendToChat} title="Save and send path to chat">
+                📷→💬
+              </button>
+            )}
+            <button onClick={onClose}>✕</button>
+          </div>
         </div>
         <div className="screenshot-modal__content">
           <img src={dataUrl} alt={`Screenshot of ${browserName}`} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Page structure preview modal (browser_see)
+function SeePreviewModal({
+  content,
+  browserName,
+  onClose,
+  onSendToChat,
+}: {
+  content: string;
+  browserName: string;
+  onClose: () => void;
+  onSendToChat?: () => void;
+}) {
+  // Try to parse and pretty-print JSON
+  let displayContent = content;
+  try {
+    const parsed = JSON.parse(content);
+    displayContent = JSON.stringify(parsed, null, 2);
+  } catch {
+    // Not JSON, use as-is
+  }
+
+  return (
+    <div className="see-modal-overlay" onClick={onClose}>
+      <div className="see-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="see-modal__header">
+          <span>Page Structure: {browserName}</span>
+          <div className="see-modal__header-actions">
+            {onSendToChat && (
+              <button onClick={onSendToChat} title="Send to chat">
+                →💬
+              </button>
+            )}
+            <button onClick={onClose}>✕</button>
+          </div>
+        </div>
+        <div className="see-modal__content">
+          <pre className="see-modal__json">{displayContent}</pre>
         </div>
       </div>
     </div>
@@ -385,11 +505,14 @@ export interface BrowserTabProps {
   browserClient?: BrowserStateServiceClient;
   /** Whether loading */
   isLoading?: boolean;
+  /** Callback to send a message to the chat (e.g., "browser_see result: ..." or screenshot path) */
+  sendMessage?: (message: string) => void;
 }
 
 export function BrowserTab({
   browserClient,
   isLoading = false,
+  sendMessage,
 }: BrowserTabProps) {
   const { confirm, alert } = useDialog();
   const [browsers, setBrowsers] = useState<BrowserInfo[]>([]);
@@ -398,7 +521,9 @@ export function BrowserTab({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedBrowser, setSelectedBrowser] = useState<string | null>(null);
   const [screenshot, setScreenshot] = useState<{ dataUrl: string; browserName: string } | null>(null);
+  const [seePreview, setSeePreview] = useState<{ content: string; browserName: string } | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [browserTabs, setBrowserTabs] = useState<Record<string, TabInfo[]>>({});
 
   // Load browser list
   const loadBrowsers = useCallback(async () => {
@@ -620,6 +745,137 @@ export function BrowserTab({
     [browserClient, alert]
   );
 
+  // Load tabs for a browser
+  const loadTabs = useCallback(
+    async (name: string) => {
+      if (!browserClient) return;
+
+      try {
+        const result = await browserClient.listTabs(name);
+        if (result.success && result.tabs) {
+          setBrowserTabs((prev) => ({ ...prev, [name]: result.tabs! }));
+        }
+      } catch (e) {
+        console.error('Failed to load tabs:', e);
+      }
+    },
+    [browserClient]
+  );
+
+  // Load tabs when selecting a browser
+  useEffect(() => {
+    if (selectedBrowser) {
+      loadTabs(selectedBrowser);
+    }
+  }, [selectedBrowser, loadTabs]);
+
+  // Tab actions
+  const handleNewTab = useCallback(
+    async (name: string) => {
+      if (!browserClient) return;
+
+      try {
+        const result = await browserClient.newTab(undefined, name);
+        if (result.success) {
+          // Reload tabs
+          loadTabs(name);
+        } else {
+          await alert({ title: 'Error', message: result.error || 'Failed to open new tab' });
+        }
+      } catch (e) {
+        await alert({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to open new tab' });
+      }
+    },
+    [browserClient, alert, loadTabs]
+  );
+
+  const handleSwitchTab = useCallback(
+    async (name: string, handle: string) => {
+      if (!browserClient) return;
+
+      try {
+        const result = await browserClient.switchTab(handle, name);
+        if (result.success) {
+          // Reload tabs to update active state
+          loadTabs(name);
+        } else {
+          await alert({ title: 'Error', message: result.error || 'Failed to switch tab' });
+        }
+      } catch (e) {
+        await alert({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to switch tab' });
+      }
+    },
+    [browserClient, alert, loadTabs]
+  );
+
+  const handleCloseTab = useCallback(
+    async (name: string) => {
+      if (!browserClient) return;
+
+      try {
+        const result = await browserClient.closeTab(name);
+        if (result.success) {
+          // Reload tabs
+          loadTabs(name);
+        } else {
+          await alert({ title: 'Error', message: result.error || 'Failed to close tab' });
+        }
+      } catch (e) {
+        await alert({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to close tab' });
+      }
+    },
+    [browserClient, alert, loadTabs]
+  );
+
+  // Show browser_see preview modal
+  const handleSeePreview = useCallback(
+    async (name: string) => {
+      if (!browserClient) return;
+
+      try {
+        const result = await browserClient.see(name);
+        if (result.success && result.content) {
+          setSeePreview({ content: result.content, browserName: name });
+        } else {
+          await alert({ title: 'Error', message: result.error || 'Failed to get page structure' });
+        }
+      } catch (e) {
+        await alert({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to get page structure' });
+      }
+    },
+    [browserClient, alert]
+  );
+
+  // Send see preview content to chat
+  const handleSendSeeToChat = useCallback(() => {
+    if (!seePreview || !sendMessage) return;
+    sendMessage(`Browser "${seePreview.browserName}" page structure:\n\`\`\`json\n${seePreview.content}\n\`\`\``);
+    setSeePreview(null);
+  }, [seePreview, sendMessage]);
+
+  // Take screenshot, save to temp file, send path to chat
+  const handleScreenshotToChat = useCallback(
+    async (name: string) => {
+      if (!browserClient || !sendMessage) return;
+
+      try {
+        // Pass true for saveToFile to get file path instead of data URL
+        const result = await browserClient.screenshot(name, true);
+        if (result.success && result.filePath) {
+          sendMessage(`Screenshot saved: ${result.filePath}`);
+        } else if (result.success && result.dataUrl) {
+          // Fallback to data URL if file path not available
+          sendMessage(`Screenshot of browser "${name}":\n${result.dataUrl}`);
+        } else {
+          await alert({ title: 'Error', message: result.error || 'Failed to take screenshot' });
+        }
+      } catch (e) {
+        await alert({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to take screenshot' });
+      }
+    },
+    [browserClient, sendMessage, alert]
+  );
+
   // Get selected browser info
   const selectedBrowserInfo = browsers.find((b) => b.name === selectedBrowser);
 
@@ -679,12 +935,18 @@ export function BrowserTab({
               browser={browser}
               isDefault={browser.name === defaultBrowser}
               isSelected={browser.name === selectedBrowser}
+              tabs={browserTabs[browser.name] || []}
               onSelect={() => setSelectedBrowser(browser.name)}
               onSetDefault={() => handleSetDefault(browser.name)}
               onRename={(newName) => handleRename(browser.name, newName)}
               onDestroy={() => handleDestroy(browser.name)}
               onRefresh={() => handleRefresh(browser.name)}
               onScreenshot={() => handleScreenshot(browser.name)}
+              onNewTab={() => handleNewTab(browser.name)}
+              onSwitchTab={(handle) => handleSwitchTab(browser.name, handle)}
+              onCloseTab={() => handleCloseTab(browser.name)}
+              onSeePreview={() => handleSeePreview(browser.name)}
+              onScreenshotToChat={sendMessage ? () => handleScreenshotToChat(browser.name) : undefined}
             />
           ))
         )}
@@ -714,6 +976,19 @@ export function BrowserTab({
           dataUrl={screenshot.dataUrl}
           browserName={screenshot.browserName}
           onClose={() => setScreenshot(null)}
+          onSendToChat={sendMessage ? async () => {
+            await handleScreenshotToChat(screenshot.browserName);
+            setScreenshot(null);
+          } : undefined}
+        />
+      )}
+
+      {seePreview && (
+        <SeePreviewModal
+          content={seePreview.content}
+          browserName={seePreview.browserName}
+          onClose={() => setSeePreview(null)}
+          onSendToChat={sendMessage ? handleSendSeeToChat : undefined}
         />
       )}
     </div>

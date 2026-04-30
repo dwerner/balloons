@@ -1,7 +1,7 @@
 // AUTO-GENERATED CODE - DO NOT EDIT
 //
 // Generated from Python @ws_expose and @ws_type decorators.
-// Generated: 2026-04-29T09:18:19.008575
+// Generated: 2026-04-29T09:55:23.295876
 //
 // To regenerate:
 //     python -m codegen.generate_typescript
@@ -1412,12 +1412,27 @@ export interface BrowserNavigateResult {
 export interface BrowserScreenshotResult {
   success: boolean;
   dataUrl?: string | null;
+  filePath?: string | null;
   error?: string | null;
 }
 
 export interface BrowserSeeResult {
   success: boolean;
   content?: string | null;
+  error?: string | null;
+}
+
+export interface TabInfo {
+  handle: string;
+  isActive: boolean;
+  url?: string | null;
+  title?: string | null;
+}
+
+export interface TabListResult {
+  success: boolean;
+  tabs?: TabInfo[];
+  activeTab?: string | null;
   error?: string | null;
 }
 

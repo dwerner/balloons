@@ -4075,6 +4075,11 @@ function AppContent() {
             <BrowserTab
               browserClient={connectionState === 'connected' ? clientRef.current?.browser : undefined}
               isLoading={connectionState !== 'connected'}
+              sendMessage={(msg) => {
+                if (selectedSessionId && clientRef.current) {
+                  clientRef.current.sessions.submitMessage(selectedSessionId, msg);
+                }
+              }}
             />
           )}
 

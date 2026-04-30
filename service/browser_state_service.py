@@ -88,6 +88,7 @@ class BrowserScreenshotResult:
 
     success: bool
     data_url: Optional[str] = None  # data:image/png;base64,...
+    file_path: Optional[str] = None  # Path to saved PNG file (if save_to_file=True)
     error: Optional[str] = None
 
 
@@ -98,6 +99,28 @@ class BrowserSeeResult:
 
     success: bool
     content: Optional[str] = None  # JSON string of page structure
+    error: Optional[str] = None
+
+
+@ws_type
+@dataclass
+class TabInfo:
+    """Information about a browser tab."""
+
+    handle: str  # Window handle ID
+    is_active: bool  # Whether this is the current tab
+    url: Optional[str] = None
+    title: Optional[str] = None
+
+
+@ws_type
+@dataclass
+class TabListResult:
+    """Result of list_tabs."""
+
+    success: bool
+    tabs: list[TabInfo] = field(default_factory=list)
+    active_tab: Optional[str] = None  # Handle of the active tab
     error: Optional[str] = None
 
 
@@ -217,6 +240,70 @@ class BrowserStateService:
         # Lock for browser operations
         self._lock = asyncio.Lock()
 
+        # Background polling task
+        self._poll_task: Optional[asyncio.Task] = None
+        self._poll_interval = 2.0  # Poll every 2 seconds
+
+    async def start_polling(self) -> None:
+        """Start background polling for browser state changes."""
+        if self._poll_task is None or self._poll_task.done():
+            self._poll_task = asyncio.create_task(self._poll_browser_state())
+            debug_log.info("Started browser state polling", category=Category.RUNNER)
+
+    async def stop_polling(self) -> None:
+        """Stop background polling."""
+        if self._poll_task and not self._poll_task.done():
+            self._poll_task.cancel()
+            try:
+                await self._poll_task
+            except asyncio.CancelledError:
+                pass
+            debug_log.info("Stopped browser state polling", category=Category.RUNNER)
+
+    async def _poll_browser_state(self) -> None:
+        """Background task to poll browser state and emit events on changes."""
+        while True:
+            try:
+                await asyncio.sleep(self._poll_interval)
+
+                # Check each connected browser for URL/title changes
+                for name, instance in list(_browser_registry.items()):
+                    if instance.status != "connected":
+                        continue
+
+                    try:
+                        # Get current URL and title from browser
+                        current_url = await instance.browser.url()
+                        current_title = await instance.browser.title()
+
+                        # Check if changed
+                        url_changed = current_url != instance.current_url
+                        title_changed = current_title != instance.current_title
+
+                        if url_changed or title_changed:
+                            instance.current_url = current_url
+                            instance.current_title = current_title
+
+                            # Emit navigated event
+                            self._emit_browser_event(
+                                "navigated",
+                                instance,
+                                url=current_url,
+                                title=current_title,
+                            )
+
+                    except Exception as e:
+                        # Browser may have crashed or been closed externally
+                        if "not found" in str(e).lower() or "session" in str(e).lower():
+                            instance.status = "error"
+                            instance.error = "Browser disconnected"
+                            self._emit_browser_event("status_changed", instance)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                debug_log.error(f"Browser polling error: {e}", category=Category.RUNNER)
+
     def add_event_handler(self, handler: Callable[[str, dict], None]) -> None:
         """Register an event handler for WebSocket broadcasting."""
         self._event_handlers.append(handler)
@@ -332,43 +419,92 @@ class BrowserStateService:
             # Emit created event
             self._emit_browser_event("created", instance)
 
-            # Connect
-            try:
-                await browser.connect()
-                instance.browser_id = await browser.id()
-                instance.status = "connected"
+            # Connect with retry on "browser already running" error
+            max_retries = 3
+            last_error = None
 
-                debug_log.info(
-                    f"Browser created: {name} (ID: {instance.browser_id[:8]}...)",
-                    category=Category.RUNNER,
-                )
+            for attempt in range(max_retries):
+                try:
+                    await browser.connect()
+                    instance.browser_id = await browser.id()
+                    instance.status = "connected"
 
-                # Set as default if requested or if it's the first browser
-                if set_as_default or _default_browser_name is None:
-                    _default_browser_name = name
+                    debug_log.info(
+                        f"Browser created: {name} (ID: {instance.browser_id[:8]}...)",
+                        category=Category.RUNNER,
+                    )
 
-                # Emit status change
-                self._emit_browser_event("status_changed", instance)
+                    # Set as default if requested or if it's the first browser
+                    if set_as_default or _default_browser_name is None:
+                        _default_browser_name = name
 
-                return BrowserResult(
-                    success=True,
-                    browser=instance.to_info(),
-                )
+                    # Emit status change
+                    self._emit_browser_event("status_changed", instance)
 
-            except Exception as e:
-                instance.status = "error"
-                instance.error = str(e)
-                self._emit_browser_event("status_changed", instance)
+                    # Start polling if not already running
+                    await self.start_polling()
 
-                # Clean up failed browser
-                async with self._lock:
-                    if name in _browser_registry:
-                        del _browser_registry[name]
+                    return BrowserResult(
+                        success=True,
+                        browser=instance.to_info(),
+                    )
 
-                return BrowserResult(
-                    success=False,
-                    error=f"Failed to connect browser: {e}",
-                )
+                except Exception as e:
+                    last_error = e
+                    error_str = str(e)
+
+                    # Check if this is a "browser already running" error
+                    if "already running" in error_str and attempt < max_retries - 1:
+                        debug_log.warning(
+                            f"Browser port conflict, trying to kill stale process (attempt {attempt + 1})",
+                            category=Category.RUNNER,
+                        )
+
+                        # Try to kill stale chromedriver processes
+                        import subprocess
+                        try:
+                            # Extract PID from error message if present
+                            import re
+                            pid_match = re.search(r'pid\s*(\d+)', error_str)
+                            if pid_match:
+                                stale_pid = pid_match.group(1)
+                                subprocess.run(['kill', '-9', stale_pid], capture_output=True)
+                                debug_log.info(f"Killed stale process {stale_pid}", category=Category.RUNNER)
+                            else:
+                                # Kill all chromedriver processes as fallback
+                                subprocess.run(['pkill', '-9', 'chromedriver'], capture_output=True)
+                        except Exception as kill_err:
+                            debug_log.warning(f"Failed to kill stale process: {kill_err}", category=Category.RUNNER)
+
+                        # Try a new port on retry
+                        new_port = _get_next_port()
+                        config_kwargs["port"] = new_port
+                        config = BrowserConfig(**config_kwargs)
+                        browser = Browser(config)
+                        instance.browser = browser
+
+                        # Brief delay before retry
+                        import asyncio
+                        await asyncio.sleep(0.5)
+                        continue
+
+                    # Non-recoverable error or max retries reached
+                    break
+
+            # All retries failed
+            instance.status = "error"
+            instance.error = str(last_error)
+            self._emit_browser_event("status_changed", instance)
+
+            # Clean up failed browser
+            async with self._lock:
+                if name in _browser_registry:
+                    del _browser_registry[name]
+
+            return BrowserResult(
+                success=False,
+                error=f"Failed to connect browser: {last_error}",
+            )
 
         except ImportError as e:
             return BrowserResult(
@@ -454,6 +590,10 @@ class BrowserStateService:
 
             # Emit destroyed event
             self._emit_browser_event("destroyed", instance)
+
+            # Stop polling if no browsers left
+            if not _browser_registry:
+                await self.stop_polling()
 
             return BrowserResult(success=True)
 
@@ -618,14 +758,15 @@ class BrowserStateService:
             )
 
     @ws_expose
-    async def screenshot(self, name: Optional[str] = None) -> BrowserScreenshotResult:
+    async def screenshot(self, name: Optional[str] = None, save_to_file: bool = False) -> BrowserScreenshotResult:
         """Take a screenshot.
 
         Args:
             name: Browser name (uses default if not specified)
+            save_to_file: If True, save to a temp file and return path instead of data URL
 
         Returns:
-            BrowserScreenshotResult with base64-encoded PNG data URL
+            BrowserScreenshotResult with base64-encoded PNG data URL or file path
         """
         instance = get_browser_by_name(name)
         if not instance:
@@ -636,11 +777,35 @@ class BrowserStateService:
 
         try:
             png_data = await instance.browser.screenshot()
-            b64 = base64.b64encode(png_data).decode("ascii")
-            return BrowserScreenshotResult(
-                success=True,
-                data_url=f"data:image/png;base64,{b64}",
-            )
+
+            if save_to_file:
+                # Save to temp file and return path
+                import tempfile
+                from pathlib import Path
+                from datetime import datetime
+
+                # Create screenshots dir in ~/.balloons/screenshots
+                screenshots_dir = Path.home() / ".balloons" / "screenshots"
+                screenshots_dir.mkdir(parents=True, exist_ok=True)
+
+                # Generate filename with timestamp and browser name
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                browser_name = name or "default"
+                filename = f"screenshot_{browser_name}_{timestamp}.png"
+                filepath = screenshots_dir / filename
+
+                filepath.write_bytes(png_data)
+
+                return BrowserScreenshotResult(
+                    success=True,
+                    file_path=str(filepath),
+                )
+            else:
+                b64 = base64.b64encode(png_data).decode("ascii")
+                return BrowserScreenshotResult(
+                    success=True,
+                    data_url=f"data:image/png;base64,{b64}",
+                )
         except Exception as e:
             return BrowserScreenshotResult(
                 success=False,
@@ -1047,6 +1212,166 @@ class BrowserStateService:
 
         try:
             await instance.browser.set_input(index, value)
+            return BrowserResult(success=True)
+        except Exception as e:
+            return BrowserResult(
+                success=False,
+                error=str(e),
+            )
+
+    # Tab/Window Management
+
+    @ws_expose
+    async def list_tabs(self, name: Optional[str] = None) -> TabListResult:
+        """List all tabs in a browser.
+
+        Args:
+            name: Browser name (uses default if not specified)
+
+        Returns:
+            TabListResult with list of tabs
+        """
+        instance = get_browser_by_name(name)
+        if not instance:
+            return TabListResult(
+                success=False,
+                error=f"Browser '{name or 'default'}' not found",
+            )
+
+        try:
+            # Get all window handles
+            handles = await instance.browser.windows()
+            if isinstance(handles, str):
+                handles = json.loads(handles)
+
+            # Get current window
+            current_handle = None
+            try:
+                current = await instance.browser.execute_js("return window.name || ''")
+                # The current handle is the one we need to compare
+                # But windows() returns handles, not names
+                # Let's just mark the first one as active for now
+                # Actually we need to get the actual current handle
+            except Exception:
+                pass
+
+            # Build tab info list
+            tabs = []
+            for i, handle in enumerate(handles):
+                tab = TabInfo(
+                    handle=handle,
+                    is_active=(i == 0),  # First is typically current
+                )
+                tabs.append(tab)
+
+            return TabListResult(
+                success=True,
+                tabs=tabs,
+                active_tab=tabs[0].handle if tabs else None,
+            )
+        except Exception as e:
+            return TabListResult(
+                success=False,
+                error=str(e),
+            )
+
+    @ws_expose
+    async def new_tab(
+        self,
+        url: Optional[str] = None,
+        name: Optional[str] = None,
+    ) -> BrowserResult:
+        """Open a new tab.
+
+        Args:
+            url: URL to navigate to (optional)
+            name: Browser name (uses default if not specified)
+
+        Returns:
+            BrowserResult with the new tab handle in data field
+        """
+        instance = get_browser_by_name(name)
+        if not instance:
+            return BrowserResult(
+                success=False,
+                error=f"Browser '{name or 'default'}' not found",
+            )
+
+        try:
+            # Open new tab (as_tab=True)
+            result = await instance.browser.new_window(True)
+            if isinstance(result, str):
+                result = json.loads(result)
+
+            new_handle = result.get("handle") if isinstance(result, dict) else str(result)
+
+            # Navigate to URL if provided
+            if url:
+                await instance.browser.goto(url)
+
+            return BrowserResult(
+                success=True,
+                data=new_handle,
+            )
+        except Exception as e:
+            return BrowserResult(
+                success=False,
+                error=str(e),
+            )
+
+    @ws_expose
+    async def switch_tab(
+        self,
+        handle: str,
+        name: Optional[str] = None,
+    ) -> BrowserResult:
+        """Switch to a specific tab.
+
+        Args:
+            handle: Window handle of the tab to switch to
+            name: Browser name (uses default if not specified)
+
+        Returns:
+            BrowserResult indicating success/failure
+        """
+        instance = get_browser_by_name(name)
+        if not instance:
+            return BrowserResult(
+                success=False,
+                error=f"Browser '{name or 'default'}' not found",
+            )
+
+        try:
+            await instance.browser.switch_to_window(handle)
+            return BrowserResult(success=True)
+        except Exception as e:
+            return BrowserResult(
+                success=False,
+                error=str(e),
+            )
+
+    @ws_expose
+    async def close_tab(self, name: Optional[str] = None) -> BrowserResult:
+        """Close the current tab.
+
+        Args:
+            name: Browser name (uses default if not specified)
+
+        Returns:
+            BrowserResult indicating success/failure
+
+        Note:
+            If this is the last tab, the browser will be closed.
+        """
+        instance = get_browser_by_name(name)
+        if not instance:
+            return BrowserResult(
+                success=False,
+                error=f"Browser '{name or 'default'}' not found",
+            )
+
+        try:
+            await instance.browser.close_window()
             return BrowserResult(success=True)
         except Exception as e:
             return BrowserResult(

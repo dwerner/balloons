@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use surfer_rs::{
     BrowserConfig as SurferConfig, BrowserType, ButtonInfo, InputInfo, LinkInfo, Surfer,
-    SurferError, WebDriverSurfer, start_driver, stop_driver,
+    SurferError, WebDriverSurfer, start_driver, stop_driver_by_pid,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -205,6 +205,8 @@ pub struct Browser {
     id: String,
     config: BrowserConfig,
     surfer: Option<WebDriverSurfer>,
+    /// PID of the WebDriver process (if we started it)
+    driver_pid: Option<u32>,
 }
 
 impl Browser {
@@ -214,6 +216,7 @@ impl Browser {
             id: Uuid::new_v4().to_string(),
             config,
             surfer: None,
+            driver_pid: None,
         }
     }
 
@@ -235,11 +238,14 @@ impl Browser {
     /// Connect to the browser (starts webdriver and browser)
     pub async fn connect(&mut self) -> Result<(), BrowserError> {
         let surfer_config = self.config.to_surfer_config();
+
         // Only start the WebDriver process if we're not connecting to a remote one
         if self.config.webdriver_url.is_none() {
-            start_driver(&surfer_config).await?;
+            let state = start_driver(&surfer_config).await?;
+            self.driver_pid = Some(state.pid);
         }
-        // Then connect to it
+
+        // Connect to the WebDriver
         let surfer = WebDriverSurfer::connect(&surfer_config).await?;
         self.surfer = Some(surfer);
         Ok(())
@@ -251,8 +257,8 @@ impl Browser {
             surfer.close().await?;
         }
         // Only stop the WebDriver process if we started it locally
-        if self.config.webdriver_url.is_none() {
-            stop_driver().await?;
+        if let Some(pid) = self.driver_pid.take() {
+            let _ = stop_driver_by_pid(pid);
         }
         Ok(())
     }

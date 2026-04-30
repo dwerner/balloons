@@ -176,6 +176,71 @@
   margin-top: 4px;
 }
 
+/* Tabs section */
+.browser-item__tabs {
+  margin-top: 8px;
+  border-top: 1px solid var(--color-border-primary);
+  padding-top: 8px;
+}
+
+.browser-item__tabs-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.browser-item__tabs-label {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.browser-item__tabs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.browser-item__tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.browser-item__tab:hover {
+  background: var(--bg-hover);
+  border-color: var(--color-border-secondary);
+}
+
+.browser-item__tab--active {
+  background: var(--color-bg-tertiary);
+  border-color: var(--color-accent-blue);
+}
+
+.browser-item__tab-index {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  min-width: 14px;
+  text-align: center;
+}
+
+.browser-item__tab-title {
+  flex: 1;
+  font-size: 11px;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .browser-item__actions {
   display: flex;
   gap: 4px;
@@ -415,6 +480,12 @@
   color: var(--color-text-primary);
 }
 
+.screenshot-modal__header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
 .screenshot-modal__header button {
   background: none;
   border: none;
@@ -437,4 +508,80 @@
 .screenshot-modal__content img {
   max-width: 100%;
   display: block;
+}
+
+/* See preview modal (page structure) */
+.see-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--color-overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.see-modal {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 6px;
+  width: 700px;
+  max-width: 90vw;
+  max-height: 90vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.see-modal__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border-primary);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  flex-shrink: 0;
+}
+
+.see-modal__header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.see-modal__header button {
+  background: none;
+  border: none;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 4px;
+}
+
+.see-modal__header button:hover {
+  color: var(--color-text-primary);
+}
+
+.see-modal__content {
+  padding: 16px;
+  overflow: auto;
+  flex: 1;
+}
+
+.see-modal__json {
+  margin: 0;
+  padding: 12px;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 4px;
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  overflow-x: auto;
+  white-space: pre;
 }
