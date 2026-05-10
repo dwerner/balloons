@@ -10,8 +10,6 @@ import './StreamingStatusBar.css';
 export interface StreamingStatusBarProps {
   /** Current streaming task info */
   task: TaskInfo;
-  /** Number of messages in the queue */
-  queuedMessageCount: number;
   /** Callback when stop button is clicked */
   onStop?: () => void;
   /** Whether the stop action is disabled */
@@ -149,12 +147,10 @@ function formatCwd(cwd: string | undefined): string {
  * - Token count with rate (tokens/sec)
  * - Current tool being executed
  * - Context usage progress bar
- * - Queue count badge
  * - Integrated stop button
  */
 export const StreamingStatusBar = memo(function StreamingStatusBar({
   task,
-  queuedMessageCount,
   onStop,
   stopDisabled = false,
   sessionContextTokens,
@@ -491,11 +487,6 @@ export const StreamingStatusBar = memo(function StreamingStatusBar({
               </span>
             </span>
 
-            {queuedMessageCount > 0 && (
-              <div className="streaming-status-bar__queue-badge">
-                +{queuedMessageCount}
-              </div>
-            )}
           </div>
         </>
       )}

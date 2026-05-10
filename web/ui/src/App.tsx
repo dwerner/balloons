@@ -1194,6 +1194,8 @@ function AppContent() {
   // Server slot (A=8765, B=8766) - persisted to localStorage
   const [serverSlot, setServerSlot] = useState<ServerSlot>(getInitialSlot);
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
+  const reconnectFnRef = useRef<(() => Promise<void>) | null>(null);
+  const reconnectInFlightRef = useRef(false);
 
   // Debug logging toggle - persisted to localStorage via debugLog module
   const [debugEnabled, setDebugEnabledState] = useState<boolean>(isDebugEnabled);
@@ -1228,7 +1230,6 @@ function AppContent() {
   // Raw SessionDataTurns for components that need rich contentBlock data (e.g., ContextTabView)
   const [rawTurns, setRawTurns] = useState<SessionDataTurn[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [queuedMessageCount, setQueuedMessageCount] = useState(0);
   const [streamingTask, setStreamingTask] = useState<TaskInfo | null>(null);
   const [toolUses, setToolUses] = useState<ToolUseState[]>([]);
   const [imageAttachments, setImageAttachments] = useState<ImageAttachment[]>([]);
@@ -1381,6 +1382,22 @@ function AppContent() {
     });
     clientRef.current = client;
 
+    reconnectFnRef.current = async () => {
+      if (reconnectInFlightRef.current) return;
+      reconnectInFlightRef.current = true;
+      try {
+        setError('Connection lost. Reconnecting...');
+        setConnectionState('connecting');
+        await client.connect();
+      } catch (err) {
+        console.error('Reconnect failed:', err);
+        setConnectionState('disconnected');
+        setError(`Reconnect failed: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        reconnectInFlightRef.current = false;
+      }
+    };
+
     // Track connection state
     const unsubState = client.onStateChange(setConnectionState);
 
@@ -1423,12 +1440,7 @@ function AppContent() {
 
             // Note: Turns will be loaded by StreamingTurnsView via useSessionData hook
             // and reported via onTurnsChange callback. This prevents duplicate subscriptions.
-            const [queueInfo, task] = await Promise.all([
-              client.queue.getQueue(sessionIdToLoad),
-              client.tasks.getSessionTask(sessionIdToLoad),
-            ]);
-
-            setQueuedMessageCount(queueInfo.messageCount);
+            const task = await client.tasks.getSessionTask(sessionIdToLoad);
             setStreamingTask(task);
             // Note: setIsLoadingTurns(false) is handled by handleTurnsChange
           }
@@ -1637,43 +1649,6 @@ function AppContent() {
               s.id === data.sessionId ? { ...s, isStreaming: false } : s
             );
           });
-        })
-      );
-
-      // Queue events - track queued messages for the selected session
-      unsubscribers.push(
-        client.queue.onMessageAdded(async (data) => {
-          if (data.sessionId === selectedSessionId) {
-            const queueInfo = await client.queue.getQueue(data.sessionId);
-            setQueuedMessageCount(queueInfo.messageCount);
-          }
-        })
-      );
-
-      unsubscribers.push(
-        client.queue.onMessageRemoved(async (data) => {
-          if (data.sessionId === selectedSessionId) {
-            const queueInfo = await client.queue.getQueue(data.sessionId);
-            setQueuedMessageCount(queueInfo.messageCount);
-          }
-        })
-      );
-
-      unsubscribers.push(
-        client.queue.onQueueDrained(async (data) => {
-          if (data.sessionId === selectedSessionId) {
-            // Queue was drained - messages are being processed
-            const queueInfo = await client.queue.getQueue(data.sessionId);
-            setQueuedMessageCount(queueInfo.messageCount);
-          }
-        })
-      );
-
-      unsubscribers.push(
-        client.queue.onQueueCleared(async (data) => {
-          if (data.sessionId === selectedSessionId) {
-            setQueuedMessageCount(0);
-          }
         })
       );
 
@@ -2110,7 +2085,6 @@ function AppContent() {
     setTurns([]);
     setToolUses([]);
     setStreamingTask(null);
-    setQueuedMessageCount(0);
     setError(null);
     // Clear archiving state - it's session-specific and shouldn't persist across session switches
     setArchivingByHelper(new Map());
@@ -2139,32 +2113,18 @@ function AppContent() {
     rawDebugLog('perf', `[handleSelectSession] setSelectedSessionId: ${(t3-t2).toFixed(1)}ms`, {});
 
     try {
-      // Fetch queue and task info (but NOT turns - those come from StreamingTurnsView)
+      // Fetch task info (turns come from StreamingTurnsView)
       const t4 = performance.now();
-      rawDebugLog('perf', `[handleSelectSession] starting queue+task fetch`, {});
+      rawDebugLog('perf', `[handleSelectSession] starting task fetch`, {});
 
-      // Wrap each call to track individual timing
-      const queuePromise = (async () => {
-        const start = performance.now();
-        rawDebugLog('perf', `[handleSelectSession] getQueue SENT`, {});
-        const result = await client.queue.getQueue(sessionId);
-        const elapsed = performance.now() - start;
-        rawDebugLog('perf', `[handleSelectSession] getQueue RECEIVED: ${elapsed.toFixed(1)}ms`, {});
-        return result;
-      })();
+      const start = performance.now();
+      rawDebugLog('perf', `[handleSelectSession] getSessionTask SENT`, {});
+      const task = await client.tasks.getSessionTask(sessionId);
+      const elapsed = performance.now() - start;
+      rawDebugLog('perf', `[handleSelectSession] getSessionTask RECEIVED: ${elapsed.toFixed(1)}ms`, {});
 
-      const taskPromise = (async () => {
-        const start = performance.now();
-        rawDebugLog('perf', `[handleSelectSession] getSessionTask SENT`, {});
-        const result = await client.tasks.getSessionTask(sessionId);
-        const elapsed = performance.now() - start;
-        rawDebugLog('perf', `[handleSelectSession] getSessionTask RECEIVED: ${elapsed.toFixed(1)}ms`, {});
-        return result;
-      })();
-
-      const [queueInfo, task] = await Promise.all([queuePromise, taskPromise]);
       const t5 = performance.now();
-      rawDebugLog('perf', `[handleSelectSession] queue+task fetch TOTAL: ${(t5-t4).toFixed(1)}ms`, {});
+      rawDebugLog('perf', `[handleSelectSession] task fetch TOTAL: ${(t5-t4).toFixed(1)}ms`, {});
 
       // Verify this is still the session we're supposed to load
       // (user might have switched again during the async fetch)
@@ -2173,7 +2133,6 @@ function AppContent() {
       }
 
       // Apply the loaded data (turns are set via onTurnsChange callback)
-      setQueuedMessageCount(queueInfo.messageCount);
       setStreamingTask(task);
       const t6 = performance.now();
       rawDebugLog('perf', `[handleSelectSession] TOTAL: ${(t6-t0).toFixed(1)}ms`, {});
@@ -2532,7 +2491,7 @@ function AppContent() {
     }
 
     const client = clientRef.current;
-    if (!client || connectionState !== 'connected' || !selectedSessionId) {
+    if (!client || !selectedSessionId) {
       return;
     }
 
@@ -2551,6 +2510,13 @@ function AppContent() {
     const content = message;
     const currentImages = [...imageAttachments];
 
+    if (connectionState !== 'connected') {
+      localStorage.setItem(`balloons:draft:${selectedSessionId}`, content);
+      setError('Connection unavailable. Reconnecting... your draft was kept.');
+      reconnectFnRef.current?.();
+      return;
+    }
+
     // Clear input state
     messageInputRef.current?.setValue('');
     voiceCommittedTextRef.current = ''; // Clear voice input buffer
@@ -2559,10 +2525,7 @@ function AppContent() {
     setHasVoiceContent(false); // Clear voice content flag
     setImageAttachments([]);
     setError(null);
-    // Clear draft from localStorage since we're sending
-    if (selectedSessionId) {
-      localStorage.removeItem(`balloons:draft:${selectedSessionId}`);
-    }
+    // Keep draft until send/steer succeeds; clear on success only
 
     // Check if session is currently streaming
     const session = sessions.find(s => s.id === selectedSessionId);
@@ -2570,15 +2533,18 @@ function AppContent() {
 
     try {
       if (isStreaming) {
-        // Session is streaming - add to queue instead of submitting directly
-        // Note: Image queueing not yet supported
+        // Session is streaming - only steer if the backend accepts it, otherwise fail visibly
         if (hasImages) {
-          setError('Cannot queue messages with images while streaming. Please wait.');
+          setError('Cannot send images while streaming. Please wait.');
           messageInputRef.current?.setValue(content);
           setImageAttachments(currentImages);
           return;
         }
-        await client.queue.addMessage(selectedSessionId, content);
+        const steerResult = await client.sessions.steerSession(selectedSessionId, content);
+        if (!steerResult?.success) {
+          throw new Error(steerResult?.error || 'Session is streaming and does not accept steering messages');
+        }
+        localStorage.removeItem(`balloons:draft:${selectedSessionId}`);
       } else if (hasImages) {
         // Submit with images - need to upload images first
         // Convert images to base64 and upload
@@ -2617,6 +2583,7 @@ function AppContent() {
           content || 'Please analyze this image.',
           imageData
         );
+        localStorage.removeItem(`balloons:draft:${selectedSessionId}`);
 
         // Clean up preview URLs
         currentImages.forEach(img => URL.revokeObjectURL(img.previewUrl));
@@ -2624,13 +2591,20 @@ function AppContent() {
         // Session is not streaming - submit directly (text only)
         debugLog('Submitting message', { sessionId: selectedSessionId, contentLength: content.length });
         await client.sessions.submitMessage(selectedSessionId, content);
+        localStorage.removeItem(`balloons:draft:${selectedSessionId}`);
       }
     } catch (err) {
       debugLog('Failed to send message', { sessionId: selectedSessionId, error: String(err) });
       console.error('Failed to send message:', err);
+      if (selectedSessionId) {
+        localStorage.setItem(`balloons:draft:${selectedSessionId}`, content);
+      }
       setError(`Failed to send message: ${err}`);
       messageInputRef.current?.setValue(content);
       setImageAttachments(currentImages);
+      if (connectionState !== 'connected') {
+        reconnectFnRef.current?.();
+      }
     }
   }, [connectionState, selectedSessionId, sessions, imageAttachments]);
 
@@ -3380,7 +3354,6 @@ function AppContent() {
             {selectedSession?.isStreaming && streamingTask ? (
               <StreamingStatusBar
                 task={streamingTask}
-                queuedMessageCount={queuedMessageCount}
                 onStop={handleStopStreaming}
                 stopDisabled={connectionState !== 'connected'}
                 sessionContextTokens={liveContextTokens > 0 ? liveContextTokens : selectedSession.cachedContextTokens}
@@ -3857,11 +3830,14 @@ function AppContent() {
               )}
             </div>
 
-            {/* Input area - show on streaming and context tabs */}
-            {(mainContentTab === 'streaming' || mainContentTab === 'context') && (
+            {/* Input area - keep mounted so draft text survives tab switches */}
+            {selectedSessionId && (
               <div
-                className={`input-area ${selectedSession?.isStreaming ? 'queue-mode' : ''}`}
-                style={{ minHeight: inputAreaHeight }}
+                className="input-area"
+                style={{
+                  minHeight: inputAreaHeight,
+                  display: (mainContentTab === 'streaming' || mainContentTab === 'context') ? undefined : 'none',
+                }}
               >
                 {/* Resize handle at top */}
                 <div
@@ -3948,7 +3924,7 @@ function AppContent() {
                                   : sendAction === 'merge'
                                     ? "Merge summary (optional)..."
                                     : "Type a message..."}
-                    disabled={connectionState !== 'connected' || isLoadingTurns}
+                    disabled={isLoadingTurns}
                     onSubmit={sendAction === 'send' ? handleSubmit : handleExecuteAction}
                     onPaste={handlePaste}
                     partialText={voicePartialText}
@@ -3968,7 +3944,7 @@ function AppContent() {
                     action={sendAction}
                     onActionChange={setSendAction}
                     onExecute={handleExecuteAction}
-                    disabled={connectionState !== 'connected' || isLoadingTurns}
+                    disabled={isLoadingTurns}
                     canMerge={!!selectedSession?.parentId}
                     isStreaming={selectedSession?.isStreaming}
                     isConcluded={selectedSession?.concluded}

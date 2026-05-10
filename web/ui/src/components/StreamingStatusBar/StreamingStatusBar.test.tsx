@@ -161,11 +161,9 @@ describe('StreamingStatusBar Props', () => {
     // Type check - these should compile
     const props = {
       task,
-      queuedMessageCount: 5,
     };
 
     expect(props.task.taskId).toBe('task-123');
-    expect(props.queuedMessageCount).toBe(5);
   });
 
   it('should support optional onStop callback', () => {
@@ -174,7 +172,6 @@ describe('StreamingStatusBar Props', () => {
 
     const props = {
       task,
-      queuedMessageCount: 0,
       onStop,
       stopDisabled: false,
     };
@@ -189,7 +186,6 @@ describe('StreamingStatusBar Props', () => {
 
     const props = {
       task,
-      queuedMessageCount: 0,
       sessionContextTokens: 50000,
     };
 
