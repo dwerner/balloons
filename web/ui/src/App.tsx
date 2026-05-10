@@ -1264,6 +1264,17 @@ function AppContent() {
   );
   const [creatingSessionFor, setCreatingSessionFor] = useState<string | null>(null); // "entityType:entityId" when creating bound session
   const [mainContentTab, setMainContentTab] = useState<MainContentTab>('streaming');
+  const setMainContentTabWithDraftSave = useCallback((tab: MainContentTab) => {
+    if (selectedSessionId) {
+      const currentDraft = messageInputRef.current?.getValue() || '';
+      if (currentDraft.trim()) {
+        localStorage.setItem(`balloons:draft:${selectedSessionId}`, currentDraft);
+      } else {
+        localStorage.removeItem(`balloons:draft:${selectedSessionId}`);
+      }
+    }
+    setMainContentTab(tab);
+  }, [selectedSessionId]);
   const [sendAction, setSendAction] = useState<SendAction>('send'); // Current action for send button dropdown
   const [gitStatus, setGitStatus] = useState<GitStatusInfo | null>(null);
 
@@ -3361,7 +3372,7 @@ function AppContent() {
             {/* Tabs and detail panel toggle */}
             <MainContentHeader
               activeTab={mainContentTab}
-              onTabChange={setMainContentTab}
+              onTabChange={setMainContentTabWithDraftSave}
               gitStatus={gitStatus}
             />
 
