@@ -1277,15 +1277,16 @@
 
   /* Taller horizontal file strip on mobile - 48px for easier touch targets */
   .code-tab__sidebar {
-    width: 100%;
-    min-width: unset;
-    max-width: unset;
+    width: 100% !important;
+    min-width: 100%;
+    max-width: 100%;
     border-right: none;
     border-bottom: 1px solid var(--color-border);
     height: 48px;
     max-height: 48px;
+    overflow-x: hidden;
     overflow-y: hidden;
-    flex-shrink: 0;
+    flex: 0 0 48px;
   }
 
   .code-file-list {
@@ -1302,11 +1303,16 @@
   .code-file-list__items {
     display: flex;
     flex-direction: row;
+    flex-wrap: nowrap;
+    flex: 1;
+    width: 100%;
+    min-width: 0;
     overflow-x: auto;
     overflow-y: hidden;
     gap: 0;
     height: 48px;
     align-items: stretch;
+    align-content: stretch;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
   }
@@ -1317,10 +1323,13 @@
 
   /* Taller file chips for better touch targets */
   .code-file-list__item {
+    display: flex;
+    flex: 0 0 auto;
     flex-direction: row;
     align-items: center;
     min-width: auto;
     max-width: none;
+    width: auto;
     padding: 0 12px;
     border-bottom: none;
     border-right: 1px solid var(--color-border-subtle, rgba(255,255,255,0.08));
@@ -1339,8 +1348,12 @@
   }
 
   .code-file-list__name {
+    flex: 1 1 auto;
     font-size: 0.8em;
+    min-width: 0;
     max-width: 80px;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   /* Hide directory, stats, and section headers on mobile */
@@ -1364,7 +1377,9 @@
 
   /* Main diff takes all remaining space */
   .code-tab__main {
-    flex: 1;
+    flex: 1 1 auto;
+    width: 100% !important;
+    min-width: 0;
     min-height: 0;
   }
 

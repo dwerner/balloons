@@ -1399,7 +1399,9 @@ function AppContent() {
     };
 
     // Track connection state
-    const unsubState = client.onStateChange(setConnectionState);
+    const unsubState = client.onStateChange((state) => {
+      setConnectionState(state);
+    });
 
     // Connect
     client.connect()
@@ -2510,12 +2512,12 @@ function AppContent() {
     const content = message;
     const currentImages = [...imageAttachments];
 
-    if (connectionState !== 'connected') {
-      localStorage.setItem(`balloons:draft:${selectedSessionId}`, content);
-      setError('Connection unavailable. Reconnecting... your draft was kept.');
-      reconnectFnRef.current?.();
-      return;
-    }
+      if (connectionState !== 'connected') {
+        localStorage.setItem(`balloons:draft:${selectedSessionId}`, content);
+        setError('Connection unavailable. Reconnecting... your draft was kept.');
+        reconnectFnRef.current?.();
+        return;
+      }
 
     // Clear input state
     messageInputRef.current?.setValue('');
@@ -2540,10 +2542,8 @@ function AppContent() {
           setImageAttachments(currentImages);
           return;
         }
-        const steerResult = await client.sessions.steerSession(selectedSessionId, content);
-        if (!steerResult?.success) {
-          throw new Error(steerResult?.error || 'Session is streaming and does not accept steering messages');
-        }
+        // Backend does not expose steerSession on this client; fall back to normal submit while streaming
+        await client.sessions.submitMessage(selectedSessionId, content);
         localStorage.removeItem(`balloons:draft:${selectedSessionId}`);
       } else if (hasImages) {
         // Submit with images - need to upload images first

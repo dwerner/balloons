@@ -1110,7 +1110,11 @@ export function useSessionData(
           // Cleanup handlers on failure
           handlers.forEach((unsub) => unsub());
           unsubscribersRef.current = [];
-          throw new Error(result.error || 'Subscription failed');
+          const message = result.error || 'Subscription failed';
+          if (/not, or is no longer, usable/i.test(message) || /subscription failed/i.test(message)) {
+            throw new Error(`Subscription unavailable during reconnect: ${message}`);
+          }
+          throw new Error(message);
         }
 
         // Layer-based subscription doesn't return a snapshot - history arrives via events
@@ -1128,6 +1132,12 @@ export function useSessionData(
         rawDebugLog('perf', `[useSessionData.subscribe] TOTAL: ${(tEnd-t0).toFixed(1)}ms`, {});
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        if (/not, or is no longer, usable/i.test(message) || /Subscription unavailable during reconnect/i.test(message)) {
+          debugLog('[useSessionData] transient subscription error during reconnect', { message });
+          setIsLoading(false);
+          setIsSubscribed(false);
+          return;
+        }
         setError(`Subscription failed: ${message}`);
         setIsLoading(false);
         setIsSubscribed(false);
